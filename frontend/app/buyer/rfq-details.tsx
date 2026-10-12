@@ -1,5 +1,5 @@
 'use client';
-import React, { useCallback, useEffect, useMemo, useState, startTransition } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
@@ -742,10 +742,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
   useEffect(() => {
     let mounted = true;
-    if (isVendor || !currentUserSession) {
-      return;
-    }
-
     const fetchPresence = async () => {
       const identifiers = vendorChannels.flatMap((c) =>
         [c.vendorEmail, c.vendorId, c.vendorName].filter(Boolean) as string[]
@@ -753,11 +749,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       if (identifiers.length === 0) return;
       const res = await getVendorPresence(identifiers);
       if (mounted && res.success && Array.isArray(res.onlineVendors)) {
-        startTransition(() => {
-          if (mounted) {
-            setOnlineVendors(new Set(res.onlineVendors.map((s) => s.toLowerCase())));
-          }
-        });
+        setOnlineVendors(new Set(res.onlineVendors.map((s) => s.toLowerCase())));
       }
     };
 
@@ -767,7 +759,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       mounted = false;
       clearInterval(timer);
     };
-  }, [vendorChannels, isVendor, currentUserSession]);
+  }, [vendorChannels]);
 
   // Set default selected vendor
   useEffect(() => {
