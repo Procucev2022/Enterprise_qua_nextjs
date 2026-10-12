@@ -268,7 +268,7 @@ export function validateFormData(schema: FormSchema, data: Record<string, any>):
 
 export interface PostOfficeDetail {
   Name: string;
-  Description?: string;
+  Description?: string | null;
   BranchType?: string;
   DeliveryStatus?: string;
   Circle?: string;
@@ -340,6 +340,8 @@ export async function validatePincode(
         isValid: true,
         postOffices: data[0].PostOffice || [],
       };
+    } else if (!Array.isArray(data)) {
+      return { isValid: true };
     } else {
       return {
         isValid: false,
@@ -349,5 +351,135 @@ export async function validatePincode(
   } catch (error) {
     return { isValid: true }; // Network fallback
   }
+}
+
+/**
+ * Returns a fallback city and state for valid Indian PIN codes when postal network API is unreachable.
+ */
+export function getFallbackLocationForPincode(pincode: string): string {
+  const pin = (pincode || '').trim();
+  if (pin.length < 2) return '';
+  const prefix2 = pin.slice(0, 2);
+  const prefix3 = pin.slice(0, 3);
+
+  // Exact known 3-digit city hubs
+  if (prefix3 === '400') {
+    if (pin.startsWith('4007')) return 'Navi Mumbai, Maharashtra';
+    return 'Mumbai, Maharashtra';
+  }
+  if (prefix3 === '411') return 'Pune, Maharashtra';
+  if (prefix3 === '440') return 'Nagpur, Maharashtra';
+  if (prefix3 === '110') return 'New Delhi, Delhi';
+  if (prefix3 === '560') return 'Bengaluru, Karnataka';
+  if (prefix3 === '600') return 'Chennai, Tamil Nadu';
+  if (prefix3 === '700') return 'Kolkata, West Bengal';
+  if (prefix3 === '500') return 'Hyderabad, Telangana';
+  if (prefix3 === '380') return 'Ahmedabad, Gujarat';
+  if (prefix3 === '390') return 'Vadodara, Gujarat';
+  if (prefix3 === '395') return 'Surat, Gujarat';
+  if (prefix3 === '302') return 'Jaipur, Rajasthan';
+  if (prefix3 === '226') return 'Lucknow, Uttar Pradesh';
+  if (prefix3 === '201') return 'Noida, Uttar Pradesh';
+  if (prefix3 === '122') return 'Gurugram, Haryana';
+  if (prefix3 === '160') return 'Chandigarh, Punjab';
+  if (prefix3 === '800') return 'Patna, Bihar';
+  if (prefix3 === '751') return 'Bhubaneswar, Odisha';
+  if (prefix3 === '781') return 'Guwahati, Assam';
+  if (prefix3 === '682') return 'Kochi, Kerala';
+  if (prefix3 === '695') return 'Thiruvananthapuram, Kerala';
+  if (prefix3 === '641') return 'Coimbatore, Tamil Nadu';
+  if (prefix3 === '530') return 'Visakhapatnam, Andhra Pradesh';
+  if (prefix3 === '452') return 'Indore, Madhya Pradesh';
+  if (prefix3 === '462') return 'Bhopal, Madhya Pradesh';
+
+  // State-level 2-digit fallbacks
+  switch (prefix2) {
+    case '11': return 'Delhi, Delhi';
+    case '12':
+    case '13': return 'Haryana';
+    case '14':
+    case '15': return 'Punjab';
+    case '16': return 'Chandigarh';
+    case '17': return 'Himachal Pradesh';
+    case '18':
+    case '19': return 'Jammu and Kashmir';
+    case '20':
+    case '21':
+    case '22':
+    case '23':
+    case '24':
+    case '25':
+    case '26':
+    case '27':
+    case '28': return 'Uttar Pradesh';
+    case '30':
+    case '31':
+    case '32':
+    case '33':
+    case '34': return 'Rajasthan';
+    case '36':
+    case '37':
+    case '38':
+    case '39': return 'Gujarat';
+    case '40':
+    case '41':
+    case '42':
+    case '43':
+    case '44': return 'Maharashtra';
+    case '45':
+    case '46':
+    case '47':
+    case '48': return 'Madhya Pradesh';
+    case '49': return 'Chhattisgarh';
+    case '50': return 'Telangana';
+    case '51':
+    case '52':
+    case '53': return 'Andhra Pradesh';
+    case '56':
+    case '57':
+    case '58':
+    case '59': return 'Karnataka';
+    case '60':
+    case '61':
+    case '62':
+    case '63':
+    case '64': return 'Tamil Nadu';
+    case '67':
+    case '68':
+    case '69': return 'Kerala';
+    case '70':
+    case '71':
+    case '72':
+    case '73':
+    case '74': return 'West Bengal';
+    case '75':
+    case '76':
+    case '77': return 'Odisha';
+    case '78': return 'Assam';
+    case '80':
+    case '81':
+    case '82':
+    case '83':
+    case '84':
+    case '85': return 'Bihar';
+    default: return '';
+  }
+}
+
+/**
+ * Resolves a city and state location string from postal validation post offices or fallback mapping.
+ */
+export function resolveLocationFromPostalResult(
+  pincode: string,
+  offices?: PostOfficeDetail[]
+): string {
+  if (offices && offices.length > 0) {
+    const po = offices[0];
+    const city = po.District || po.Division || po.Circle || po.Name || '';
+    const state = po.State || '';
+    const formatted = [city, state].filter(Boolean).join(', ');
+    if (formatted) return formatted;
+  }
+  return getFallbackLocationForPincode(pincode);
 }
 
