@@ -353,117 +353,119 @@ export async function validatePincode(
   }
 }
 
+const CITY_PREFIX_MAP: Record<string, string> = {
+  '4007': 'Navi Mumbai, Maharashtra',
+  '400': 'Mumbai, Maharashtra',
+  '411': 'Pune, Maharashtra',
+  '440': 'Nagpur, Maharashtra',
+  '110': 'New Delhi, Delhi',
+  '560': 'Bengaluru, Karnataka',
+  '600': 'Chennai, Tamil Nadu',
+  '700': 'Kolkata, West Bengal',
+  '500': 'Hyderabad, Telangana',
+  '380': 'Ahmedabad, Gujarat',
+  '390': 'Vadodara, Gujarat',
+  '395': 'Surat, Gujarat',
+  '302': 'Jaipur, Rajasthan',
+  '226': 'Lucknow, Uttar Pradesh',
+  '201': 'Noida, Uttar Pradesh',
+  '122': 'Gurugram, Haryana',
+  '160': 'Chandigarh, Punjab',
+  '800': 'Patna, Bihar',
+  '751': 'Bhubaneswar, Odisha',
+  '781': 'Guwahati, Assam',
+  '682': 'Kochi, Kerala',
+  '695': 'Thiruvananthapuram, Kerala',
+  '641': 'Coimbatore, Tamil Nadu',
+  '530': 'Visakhapatnam, Andhra Pradesh',
+  '452': 'Indore, Madhya Pradesh',
+  '462': 'Bhopal, Madhya Pradesh',
+};
+
+const STATE_PREFIX_MAP: Record<string, string> = {
+  '11': 'Delhi, Delhi',
+  '12': 'Haryana',
+  '13': 'Haryana',
+  '14': 'Punjab',
+  '15': 'Punjab',
+  '16': 'Chandigarh',
+  '17': 'Himachal Pradesh',
+  '18': 'Jammu and Kashmir',
+  '19': 'Jammu and Kashmir',
+  '20': 'Uttar Pradesh',
+  '21': 'Uttar Pradesh',
+  '22': 'Uttar Pradesh',
+  '23': 'Uttar Pradesh',
+  '24': 'Uttar Pradesh',
+  '25': 'Uttar Pradesh',
+  '26': 'Uttar Pradesh',
+  '27': 'Uttar Pradesh',
+  '28': 'Uttar Pradesh',
+  '30': 'Rajasthan',
+  '31': 'Rajasthan',
+  '32': 'Rajasthan',
+  '33': 'Rajasthan',
+  '34': 'Rajasthan',
+  '36': 'Gujarat',
+  '37': 'Gujarat',
+  '38': 'Gujarat',
+  '39': 'Gujarat',
+  '40': 'Maharashtra',
+  '41': 'Maharashtra',
+  '42': 'Maharashtra',
+  '43': 'Maharashtra',
+  '44': 'Maharashtra',
+  '45': 'Madhya Pradesh',
+  '46': 'Madhya Pradesh',
+  '47': 'Madhya Pradesh',
+  '48': 'Madhya Pradesh',
+  '49': 'Chhattisgarh',
+  '50': 'Telangana',
+  '51': 'Andhra Pradesh',
+  '52': 'Andhra Pradesh',
+  '53': 'Andhra Pradesh',
+  '56': 'Karnataka',
+  '57': 'Karnataka',
+  '58': 'Karnataka',
+  '59': 'Karnataka',
+  '60': 'Tamil Nadu',
+  '61': 'Tamil Nadu',
+  '62': 'Tamil Nadu',
+  '63': 'Tamil Nadu',
+  '64': 'Tamil Nadu',
+  '67': 'Kerala',
+  '68': 'Kerala',
+  '69': 'Kerala',
+  '70': 'West Bengal',
+  '71': 'West Bengal',
+  '72': 'West Bengal',
+  '73': 'West Bengal',
+  '74': 'West Bengal',
+  '75': 'Odisha',
+  '76': 'Odisha',
+  '77': 'Odisha',
+  '78': 'Assam',
+  '80': 'Bihar',
+  '81': 'Bihar',
+  '82': 'Bihar',
+  '83': 'Bihar',
+  '84': 'Bihar',
+  '85': 'Bihar',
+};
+
 /**
  * Returns a fallback city and state for valid Indian PIN codes when postal network API is unreachable.
  */
 export function getFallbackLocationForPincode(pincode: string): string {
   const pin = (pincode || '').trim();
   if (pin.length < 2) return '';
-  const prefix2 = pin.slice(0, 2);
+  if (pin.startsWith('4007')) return CITY_PREFIX_MAP['4007'];
   const prefix3 = pin.slice(0, 3);
-
-  // Exact known 3-digit city hubs
-  if (prefix3 === '400') {
-    if (pin.startsWith('4007')) return 'Navi Mumbai, Maharashtra';
-    return 'Mumbai, Maharashtra';
+  if (CITY_PREFIX_MAP[prefix3]) {
+    return CITY_PREFIX_MAP[prefix3];
   }
-  if (prefix3 === '411') return 'Pune, Maharashtra';
-  if (prefix3 === '440') return 'Nagpur, Maharashtra';
-  if (prefix3 === '110') return 'New Delhi, Delhi';
-  if (prefix3 === '560') return 'Bengaluru, Karnataka';
-  if (prefix3 === '600') return 'Chennai, Tamil Nadu';
-  if (prefix3 === '700') return 'Kolkata, West Bengal';
-  if (prefix3 === '500') return 'Hyderabad, Telangana';
-  if (prefix3 === '380') return 'Ahmedabad, Gujarat';
-  if (prefix3 === '390') return 'Vadodara, Gujarat';
-  if (prefix3 === '395') return 'Surat, Gujarat';
-  if (prefix3 === '302') return 'Jaipur, Rajasthan';
-  if (prefix3 === '226') return 'Lucknow, Uttar Pradesh';
-  if (prefix3 === '201') return 'Noida, Uttar Pradesh';
-  if (prefix3 === '122') return 'Gurugram, Haryana';
-  if (prefix3 === '160') return 'Chandigarh, Punjab';
-  if (prefix3 === '800') return 'Patna, Bihar';
-  if (prefix3 === '751') return 'Bhubaneswar, Odisha';
-  if (prefix3 === '781') return 'Guwahati, Assam';
-  if (prefix3 === '682') return 'Kochi, Kerala';
-  if (prefix3 === '695') return 'Thiruvananthapuram, Kerala';
-  if (prefix3 === '641') return 'Coimbatore, Tamil Nadu';
-  if (prefix3 === '530') return 'Visakhapatnam, Andhra Pradesh';
-  if (prefix3 === '452') return 'Indore, Madhya Pradesh';
-  if (prefix3 === '462') return 'Bhopal, Madhya Pradesh';
-
-  // State-level 2-digit fallbacks
-  switch (prefix2) {
-    case '11': return 'Delhi, Delhi';
-    case '12':
-    case '13': return 'Haryana';
-    case '14':
-    case '15': return 'Punjab';
-    case '16': return 'Chandigarh';
-    case '17': return 'Himachal Pradesh';
-    case '18':
-    case '19': return 'Jammu and Kashmir';
-    case '20':
-    case '21':
-    case '22':
-    case '23':
-    case '24':
-    case '25':
-    case '26':
-    case '27':
-    case '28': return 'Uttar Pradesh';
-    case '30':
-    case '31':
-    case '32':
-    case '33':
-    case '34': return 'Rajasthan';
-    case '36':
-    case '37':
-    case '38':
-    case '39': return 'Gujarat';
-    case '40':
-    case '41':
-    case '42':
-    case '43':
-    case '44': return 'Maharashtra';
-    case '45':
-    case '46':
-    case '47':
-    case '48': return 'Madhya Pradesh';
-    case '49': return 'Chhattisgarh';
-    case '50': return 'Telangana';
-    case '51':
-    case '52':
-    case '53': return 'Andhra Pradesh';
-    case '56':
-    case '57':
-    case '58':
-    case '59': return 'Karnataka';
-    case '60':
-    case '61':
-    case '62':
-    case '63':
-    case '64': return 'Tamil Nadu';
-    case '67':
-    case '68':
-    case '69': return 'Kerala';
-    case '70':
-    case '71':
-    case '72':
-    case '73':
-    case '74': return 'West Bengal';
-    case '75':
-    case '76':
-    case '77': return 'Odisha';
-    case '78': return 'Assam';
-    case '80':
-    case '81':
-    case '82':
-    case '83':
-    case '84':
-    case '85': return 'Bihar';
-    default: return '';
-  }
+  const prefix2 = pin.slice(0, 2);
+  return STATE_PREFIX_MAP[prefix2] || '';
 }
 
 /**
