@@ -24,6 +24,7 @@ jobs:
     steps:
       - name: Run PR Agent with Google Gemini
         uses: qodo-ai/pr-agent@main
+        continue-on-error: true
         env:
           # GitHub Actions token for posting PR reviews and comments
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -33,19 +34,20 @@ jobs:
           GOOGLE_AI_STUDIO__GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
-          # Model configuration (Free tier via Google AI Studio)
+          # Model configuration with distinct fallback models (each model has its own free quota)
           config.model: "gemini/gemini-3.8-flash"
-          config.fallback_models: '["gemini/gemini-3.8-flash", "gemini/gemini-3.8-flash"]'
+          config.fallback_models: '["gemini/gemini-3.1-flash-lite", "gemini/gemini-3.1-pro-preview"]'
 
           # Auto-triggers on Pull Request creation and updates
           github_action_config.auto_review: "true"
-          github_action_config.auto_describe: "true"
-          github_action_config.auto_improve: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
           github_action_config.handle_push_trigger: "true"
-          github_action_config.push_commands: '["/review", "/improve"]'
+          github_action_config.push_commands: '["/review"]'
+          github_action_config.fail_on_tool_errors: "false"
 
           # Review Quality Settings
-          pr_reviewer.num_code_suggestions: 5
+          pr_reviewer.num_code_suggestions: 3
           pr_reviewer.require_can_be_split_review: "false"
           pr_reviewer.enable_intro_text: "true"
           pr_reviewer.persistent_comment: "true"
