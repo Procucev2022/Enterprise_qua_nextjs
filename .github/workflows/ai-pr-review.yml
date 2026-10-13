@@ -1,0 +1,48 @@
+name: Automated AI PR Review (Gemini)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: ai-pr-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ai_review:
+    # Ignore bot comments and draft PRs
+    if: ${{ github.event.sender.type != 'Bot' && (github.event.pull_request == null || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+
+    steps:
+      - name: Run PR Agent with Google Gemini
+        uses: qodo-ai/pr-agent@main
+        env:
+          # GitHub Actions token for posting PR reviews and comments
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # Google AI Studio Gemini API Key
+          GOOGLE_AI_STUDIO.GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_AI_STUDIO__GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+          # Model configuration (Free tier via Google AI Studio)
+          config.model: "gemini/gemini-1.5-flash"
+          config.fallback_models: '["gemini/gemini-2.0-flash", "gemini/gemini-1.5-flash"]'
+
+          # Auto-triggers on Pull Request creation and updates
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "true"
+          github_action_config.auto_improve: "true"
+
+          # Review Quality Settings
+          pr_reviewer.num_code_suggestions: 5
+          pr_reviewer.require_can_be_split_review: "false"
+          pr_reviewer.enable_intro_text: "true"
