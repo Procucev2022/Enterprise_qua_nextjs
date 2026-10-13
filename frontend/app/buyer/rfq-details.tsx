@@ -1652,8 +1652,11 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         </div>
       </Panel>
 
-      {/* Assigned & Invited Suppliers (Buyer & Category Manager only — strictly hidden for Vendors and V0 RFQs) */}
-      {!isVendor && !isV0 && (() => {
+      {/* Assigned & Invited Suppliers. Hidden for vendors always, and for the
+          buyer on V0 (where sourcing is email-direct); the category manager —
+          an oversight role — always sees the invited suppliers with full
+          details, including on V0 RFQs. */}
+      {!isVendor && (!isV0 || isCategoryManager) && (() => {
         const rawAssigned = (activeRfq?.assignedVendors && activeRfq.assignedVendors.length > 0)
           ? activeRfq.assignedVendors
           : (activeRfq?.followUpData?.vendors && activeRfq.followUpData.vendors.length > 0)

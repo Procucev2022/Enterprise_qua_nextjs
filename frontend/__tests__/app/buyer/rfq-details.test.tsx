@@ -1153,6 +1153,45 @@ function makeInquiry(overrides: any = {}): any {
         // The Procucev vendor is not in this tab's list.
         expect(within(tabs).queryByText('Mamta Electrics')).not.toBeInTheDocument();
       });
+
+      it('shows the assigned-suppliers panel with full detail even for a V0 RFQ', () => {
+        // Buyer-side V0 hides this panel (email-direct sourcing), but the
+        // category manager must still see the invited vendors on V0.
+        renderAsCategoryManager(
+          buildRFQ({
+            sourcingMode: 'mode_0',
+            assignedVendors: [
+              {
+                id: 'v0-vendor',
+                name: 'V0 Network Supplier',
+                email: 'v0@network.in',
+                phone: '+91 90000 30003',
+                contactPerson: 'V0 Rep',
+                vendorCategory: 'Procucev Network',
+              } as any,
+            ],
+          })
+        );
+
+        expect(screen.getByText('Assigned & Invited Suppliers')).toBeInTheDocument();
+        const tabs = screen.getByTestId('cm-supplier-tabs');
+        expect(within(tabs).getByText('V0 Network Supplier')).toBeInTheDocument();
+        expect(within(tabs).getByText('v0@network.in')).toBeInTheDocument();
+        expect(within(tabs).getByText('+91 90000 30003')).toBeInTheDocument();
+      });
+
+      it('still hides the suppliers panel from the BUYER on a V0 RFQ', () => {
+        // Control: the gate change must not expose the panel to the buyer on V0.
+        renderDetails(
+          buildRFQ({
+            sourcingMode: 'mode_0',
+            assignedVendors: [
+              { id: 'v0-x', name: 'V0 X', vendorCategory: 'Procucev Network' } as any,
+            ],
+          })
+        );
+        expect(screen.queryByText('Assigned & Invited Suppliers')).not.toBeInTheDocument();
+      });
     });
 
     it('allows searching vendors and filtering by status tabs', () => {
