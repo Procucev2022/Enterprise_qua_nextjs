@@ -50,5 +50,5 @@ jobs:
           pr_reviewer.num_code_suggestions: 3
           pr_reviewer.require_can_be_split_review: "false"
           pr_reviewer.enable_intro_text: "true"
-          pr_reviewer.persistent_comment: "true"
-          pr_code_suggestions.persistent_comment: "true"
+          pr_reviewer.persistent_comment: "false"
+          pr_code_suggestions.persistent_comment: "false"
