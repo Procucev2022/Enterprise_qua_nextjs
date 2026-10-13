@@ -268,6 +268,7 @@ export function toRFQCreatePayload(
     email?: string | null;
     contactPerson?: string | null;
     phone?: string | null;
+    vendorCategory?: 'Client List' | 'Procucev Network';
   }>,
   source?: RFQSource
 ): RFQCreatePayload {

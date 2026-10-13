@@ -571,6 +571,12 @@ export interface RFQAssignedVendor {
   contactPerson?: string | null;
   phone?: string | null;
   city?: string | null;
+  /**
+   * Classifies the vendor for the RFQ details confidentiality gate. A
+   * 'Procucev Network' entry is double-blind — the details view shows only its
+   * company name and never its email, phone, or contact person.
+   */
+  vendorCategory?: 'Client List' | 'Procucev Network';
 }
 
 /** A candidate vendor for RFQ invitation — a VendorEntry plus invite state. */

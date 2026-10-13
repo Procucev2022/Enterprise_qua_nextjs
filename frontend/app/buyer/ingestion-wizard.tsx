@@ -1018,6 +1018,8 @@ export default function IngestionWizard({
         email?: string | null;
         contactPerson?: string | null;
         phone?: string | null;
+        /** Classifies the entry for the RFQ details view's confidentiality gate. */
+        vendorCategory?: 'Client List' | 'Procucev Network';
       };
       const toAssignedVendorEntry = (v: VendorEntry): AssignedVendorEntry => ({
         id: v.id,
@@ -1025,6 +1027,17 @@ export default function IngestionWizard({
         email: v.email || null,
         contactPerson: v.contactPerson || v.name || null,
         phone: v.phone || null,
+      });
+      // Procucev network vendors are double-blind: the RFQ details view must
+      // never expose their email/phone/contact, so a Procucev assignment carries
+      // only the company name plus a 'Procucev Network' tag the viewer gates on.
+      const toProcucevAssignedEntry = (v: VendorEntry): AssignedVendorEntry => ({
+        id: v.id,
+        name: v.name || 'Procucev Verified Supplier',
+        email: null,
+        contactPerson: null,
+        phone: null,
+        vendorCategory: 'Procucev Network',
       });
 
       let mode1AssignedVendors: AssignedVendorEntry[] | undefined = undefined;
@@ -1070,7 +1083,7 @@ export default function IngestionWizard({
         const alreadyAssigned = new Set((mode1AssignedVendors || []).map((v) => v.id));
         const picked = procucevV3Ranked
           .filter((r) => selectedProcucevV3Ids.includes(r.vendor.id) && !alreadyAssigned.has(r.vendor.id))
-          .map((r) => toAssignedVendorEntry(r.vendor));
+          .map((r) => toProcucevAssignedEntry(r.vendor));
         if (picked.length > 0) {
           mode1AssignedVendors = [...(mode1AssignedVendors || []), ...picked];
         }

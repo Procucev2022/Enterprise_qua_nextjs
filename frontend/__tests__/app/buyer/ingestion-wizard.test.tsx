@@ -1547,8 +1547,17 @@ describe('IngestionWizard: Mode 3 Top Procucev Network Vendors (360° ranking)',
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
     const assigned = mockCreateRFQ.mock.calls[0][0].assignedVendors || [];
-    expect(assigned.some((v: { id: string }) => v.id === 'proc-near')).toBe(true);
+    const near = assigned.find((v: { id: string }) => v.id === 'proc-near');
+    expect(near).toBeTruthy();
     expect(assigned.some((v: { id: string }) => v.id === 'proc-far')).toBe(false);
+
+    // Double-blind: the dispatched Procucev entry carries only the company name
+    // plus the 'Procucev Network' tag — never its email, phone, or contact.
+    expect(near.name).toBe('Nearby Pumps Pvt Ltd');
+    expect(near.vendorCategory).toBe('Procucev Network');
+    expect(near.email).toBeNull();
+    expect(near.phone).toBeNull();
+    expect(near.contactPerson).toBeNull();
   });
 
   it('shows an empty-state message when no Procucev network vendors match', async () => {

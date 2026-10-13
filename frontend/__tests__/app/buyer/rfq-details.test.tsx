@@ -1003,6 +1003,32 @@ function makeInquiry(overrides: any = {}): any {
       expect(within(panel as HTMLElement).queryByText('Assigned Network Supplier')).not.toBeInTheDocument();
     });
 
+    it('keeps a V3 Procucev vendor confidential: never shows its email or phone', () => {
+      // The exact reported leak: a V3 RFQ carrying a Procucev network vendor
+      // whose record still has an email/phone must not expose either in the
+      // buyer's details view — the double-blind panel hides the vendor entirely.
+      renderDetails(
+        buildRFQ({
+          sourcingMode: 'mode_3',
+          assignedVendors: [
+            {
+              id: 'proc-v3',
+              name: 'Confidential Procucev Supplier',
+              email: 'secret@procucev-vendor.in',
+              phone: '+91 90000 55555',
+              contactPerson: 'Hidden Contact',
+              vendorCategory: 'Procucev Network',
+            } as any,
+          ],
+        })
+      );
+
+      // The vendor's contact details appear nowhere on the page.
+      expect(screen.queryByText('secret@procucev-vendor.in')).not.toBeInTheDocument();
+      expect(screen.queryByText('+91 90000 55555')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Hidden Contact/)).not.toBeInTheDocument();
+    });
+
     it('allows searching vendors and filtering by status tabs', () => {
       renderDetails(
         buildRFQ({
