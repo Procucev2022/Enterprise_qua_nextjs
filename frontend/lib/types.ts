@@ -1979,6 +1979,8 @@ export interface RFQExtractionRequest {
   fileName: string;
   documentText?: string;
   inlineData?: string;
+  /** Preferred over inlineData for a binary document — see stageDocumentForExtraction. */
+  fileKey?: string;
   mimeType?: string;
 }
 
