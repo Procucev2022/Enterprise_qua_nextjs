@@ -29,9 +29,14 @@ import {
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
 import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, resolveLocationFromPostalResult } from '@/lib/validationSchemas';
-import { getMajorCategories, getMinorCategories, autoCategorizeItem, getDefaultMinorForMajor } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories, dominantMajorCategory } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
-import { extractRfqCategorySignals, matchVendorAgainstSignals } from '@/lib/vendorMatching';
+import {
+  extractRfqCategorySignals,
+  matchVendorAgainstSignals,
+  rankProcucevVendorsForV3,
+  type RankedProcucevVendor,
+} from '@/lib/vendorMatching';
 import type {
   ManualRFQForm,
   ManualRFQLineItem,
@@ -423,6 +428,11 @@ export default function IngestionWizard({
     router = null;
   }
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
+  // V3 (Autonomous) only — the top-ranked Procucev network vendors for this RFQ
+  // (by category relevance + delivery location) and the buyer's picks from them.
+  const [procucevV3Ranked, setProcucevV3Ranked] = useState<RankedProcucevVendor[]>([]);
+  const [procucevV3Loading, setProcucevV3Loading] = useState(false);
+  const [selectedProcucevV3Ids, setSelectedProcucevV3Ids] = useState<string[]>([]);
   const [confirmationRfq, setConfirmationRfq] = useState<any | null>(null);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
@@ -503,6 +513,56 @@ export default function IngestionWizard({
     });
   };
 
+  // ── V3 (Autonomous): top-10 Procucev network vendors by category + location ──
+  // Fetches the Procucev network pool for the RFQ's primary category (server
+  // paginated so it scales past the bootstrap snapshot), then ranks it 360°
+  // (category relevance + delivery proximity + rating) and keeps the top 10.
+  // Re-runs when the mode, category, or delivery location changes.
+  const procucevV3FetchSeqRef = useRef(0);
+  useEffect(() => {
+    if (form.sourcingMode !== 'mode_3') {
+      setProcucevV3Ranked([]);
+      return;
+    }
+    const { signals } = extractRfqCategorySignals(form);
+    const seq = ++procucevV3FetchSeqRef.current;
+    setProcucevV3Loading(true);
+    // Pull a generous page so the client-side 360° ranking has a real pool to
+    // order; the server narrows by category, the client picks the top 10.
+    void fetchAllVendors({
+      page: 1,
+      pageSize: 100,
+      search: '',
+      category: isAllCategories ? '' : selectedMajorCategory,
+    }).then((result) => {
+      if (seq !== procucevV3FetchSeqRef.current) return;
+      if (result.success) {
+        const ranked = rankProcucevVendorsForV3(
+          result.candidates,
+          signals,
+          { location: form.deliveryLocation, pincode: form.deliveryPincode },
+          10
+        );
+        setProcucevV3Ranked(ranked);
+        // Drop any prior selection that is no longer in the new top-10.
+        setSelectedProcucevV3Ids((prev) => prev.filter((id) => ranked.some((r) => r.vendor.id === id)));
+      } else {
+        setProcucevV3Ranked([]);
+      }
+      setProcucevV3Loading(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-rank only on the inputs that change the ranking
+  }, [form.sourcingMode, selectedMajorCategory, isAllCategories, form.deliveryLocation, form.deliveryPincode]);
+
+  const toggleProcucevV3 = (id: string) => {
+    setSelectedProcucevV3Ids((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+  const procucevV3AllSelected =
+    procucevV3Ranked.length > 0 && procucevV3Ranked.every((r) => selectedProcucevV3Ids.includes(r.vendor.id));
+  const toggleAllProcucevV3 = () => {
+    setSelectedProcucevV3Ids(procucevV3AllSelected ? [] : procucevV3Ranked.map((r) => r.vendor.id));
+  };
+
   /**
    * The "All Categories" branch of the marketplace-suppliers panel: a real
    * server-searched, paginated browse of the whole vendor directory, in
@@ -570,6 +630,9 @@ export default function IngestionWizard({
   const [isExtracting, setIsExtracting] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
   const [extractionError, setExtractionError] = useState<string | null>(null);
+  // The raw underlying failure cause from the server, shown beneath the friendly
+  // message in the failure banner so a failed extraction is easy to debug.
+  const [extractionDetail, setExtractionDetail] = useState<string | null>(null);
   const [extractionSummary, setExtractionSummary] = useState<{
     model: string;
     accepted: number;
@@ -591,26 +654,10 @@ export default function IngestionWizard({
   const lineItemErrors = submitAttempted ? validation.lineItemErrors : {};
 
   const patchForm = useCallback(<K extends keyof ManualRFQForm>(key: K, value: ManualRFQForm[K]) => {
-    setForm((prev) => {
-      const next = { ...prev, [key]: value };
-      if (key === 'title' && typeof value === 'string' && value.trim().length >= 3) {
-        const auto = autoCategorizeItem(value);
-        if (auto.majorCategory) {
-          if (!next.majorCategory) next.majorCategory = auto.majorCategory;
-          if (next.lineItems.length > 0 && !next.lineItems[0].majorCategory) {
-            next.lineItems = [
-              {
-                ...next.lineItems[0],
-                majorCategory: auto.majorCategory,
-                minorCategory: auto.minorCategory,
-              },
-              ...next.lineItems.slice(1),
-            ];
-          }
-        }
-      }
-      return next;
-    });
+    // Category is never guessed from the title in the browser: the local keyword
+    // table drifted out of sync with the real taxonomy. Categories come from
+    // document extraction or the server-backed Auto-Categorize action instead.
+    setForm((prev) => ({ ...prev, [key]: value }));
   }, []);
 
   useEffect(() => {
@@ -721,6 +768,7 @@ export default function IngestionWizard({
     if (validFiles.length > 0) {
       setUploadedFiles((prev) => [...prev, ...validFiles]);
       setExtractionError(null);
+      setExtractionDetail(null);
     }
   };
 
@@ -738,6 +786,7 @@ export default function IngestionWizard({
   const handleExtractFromFiles = async () => {
     setIsExtracting(true);
     setExtractionError(null);
+    setExtractionDetail(null);
     setExtractionSummary(null);
 
     const primaryFile = uploadedFiles[0];
@@ -749,7 +798,10 @@ export default function IngestionWizard({
         const extracted = result.data.extractedEntities.map(fromExtractedEntity);
         const derivedTitle = result.data.title || '';
         const derivedBudget = result.data.estimatedBudget ?? null;
-        const derivedMajor = extracted[0]?.majorCategory || '';
+        // Derive the RFQ header major from the dominant category across the
+        // extracted line items (not just the first row), and only when the
+        // document actually provided one — never a guess.
+        const derivedMajor = dominantMajorCategory(extracted, [ALL_CATEGORIES_OPTION]);
         const derivedLocation = result.data.deliveryLocation || '';
         const derivedPincode = result.data.deliveryPincode || '';
         const derivedDate = result.data.targetDeliveryDate || '';
@@ -780,11 +832,13 @@ export default function IngestionWizard({
       } else {
         const msg = extractionReasonMessage(result.reason, result.error);
         setExtractionError(msg);
+        setExtractionDetail(result.detail || result.error || null);
         showToast(EXTRACTION.fallbackTitle, msg, 'warning');
       }
-    } catch {
+    } catch (err) {
       const msg = EXTRACTION.unreadableResponse;
       setExtractionError(msg);
+      setExtractionDetail(err instanceof Error ? err.message : String(err));
       showToast(EXTRACTION.fallbackTitle, msg, 'warning');
     } finally {
       setIsExtracting(false);
@@ -799,82 +853,99 @@ export default function IngestionWizard({
   const handleEnterManually = () => {
     setForm((prev) => (prev.lineItems.length === 0 ? addManualRFQLineItem(prev) : prev));
     setExtractionError(null);
+    setExtractionDetail(null);
     showToast(EXTRACTION.fallbackTitle, EXTRACTION.manualEntryStarted, 'info');
     lineItemsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  /** Auto-categorize all line items with AI */
+  /**
+   * Auto-categorize all line items against the shared taxonomy.
+   *
+   * Classification is asked of the server (/api/rfqs/ingest via classifyLineItems),
+   * which owns the full category_division master and the same precedence rules the
+   * ingest pipeline uses. The browser does NOT guess with a local keyword table:
+   * that table drifted out of sync with the real taxonomy and produced category
+   * names ("Lighting", "IT Hardware & Peripherals", "Bricks & Blocks") that are
+   * not in the master, so no dropdown could render them and no vendor matched.
+   *
+   * Items that already carry a category (e.g. filled by document extraction) are
+   * left untouched; only the blanks are sent for classification. The server's
+   * result is authoritative for those rows — an item it cannot confidently place
+   * is returned blank and stays blank rather than being guessed.
+   */
   const handleAutoCategorizeAll = async () => {
     setIsCategorizing(true);
     try {
-      let detectedMajor = '';
-      const updatedLineItems = form.lineItems.map((item) => {
-        const auto = autoCategorizeItem(item.itemName, item.technicalSpecs || form.title);
-        const nextMajor = auto.majorCategory || item.majorCategory || form.majorCategory || 'Engineering Spares - Mechanical';
-        const nextMinor = auto.minorCategory || (nextMajor ? getDefaultMinorForMajor(nextMajor) : '') || 'Pumps & Accessories';
-        if (nextMajor && !detectedMajor) detectedMajor = nextMajor;
-        return {
-          ...item,
-          majorCategory: nextMajor,
-          minorCategory: nextMinor,
-        };
-      });
+      // Only the rows still missing a category are classified. Keep the rest.
+      const toClassify = form.lineItems.filter(
+        (item) => !item.majorCategory && item.itemName.trim() !== ''
+      );
 
-      setForm((prev) => ({
-        ...prev,
-        majorCategory: detectedMajor || prev.majorCategory || (prev.title ? autoCategorizeItem(prev.title).majorCategory : '') || 'Engineering Spares - Mechanical',
-        lineItems: updatedLineItems,
-      }));
+      if (toClassify.length === 0) {
+        showToast(
+          EXTRACTION.classifySuccessTitle,
+          'All line items already have a category.',
+          'info'
+        );
+        return;
+      }
 
-      // Also call backend classifyLineItems if items exist
-      const quotableEntities = form.lineItems
-        .map((item) => ({
+      const result = await classifyLineItems(
+        toClassify.map((item) => ({
           id: item.id,
           itemName: item.itemName,
           technicalSpecs: item.technicalSpecs,
           quantity: Number(item.quantity) || 1,
           unit: item.unit || 'nos',
           targetDate: item.targetDate || '',
-          category: item.minorCategory,
-          majorCategory: item.majorCategory,
-          minorCategory: item.minorCategory,
+          category: '',
+          majorCategory: '',
+          minorCategory: '',
           confidence: 0,
         }))
-        .filter((e) => e.itemName.trim() !== '');
+      );
 
-      if (quotableEntities.length > 0) {
-        try {
-          const result = await classifyLineItems(quotableEntities);
-          if (result.success && result.data && Array.isArray(result.data.extractedEntities)) {
-            const classified = new Map(result.data.extractedEntities.map((e) => [e.id, e]));
-            setForm((prev) => ({
-              ...prev,
-              lineItems: prev.lineItems.map((item) => {
-                const matched = classified.get(item.id);
-                if (!matched) return item;
-                const nextMajor = matched.majorCategory || item.majorCategory;
-                const nextMinor =
-                  matched.minorCategory ||
-                  item.minorCategory ||
-                  (nextMajor ? getDefaultMinorForMajor(nextMajor) : '');
-                return {
-                  ...item,
-                  majorCategory: nextMajor,
-                  minorCategory: nextMinor,
-                };
-              }),
-            }));
-          }
-        } catch {}
+      if (!result.success || !result.data || !Array.isArray(result.data.extractedEntities)) {
+        showToast(EXTRACTION.fallbackTitle, result.error || EXTRACTION.classifyFailed, 'warning');
+        return;
       }
 
+      // The server is the source of truth for the rows it was asked about.
+      const classified = new Map(result.data.extractedEntities.map((e) => [e.id, e]));
+      let detectedMajor = '';
+      const updatedLineItems = form.lineItems.map((item) => {
+        if (item.majorCategory) {
+          if (!detectedMajor) detectedMajor = item.majorCategory;
+          return item;
+        }
+        const matched = classified.get(item.id);
+        // Not asked about, or the server could not place it -> leave blank.
+        if (!matched || !matched.majorCategory) return item;
+        if (!detectedMajor) detectedMajor = matched.majorCategory;
+        return {
+          ...item,
+          majorCategory: matched.majorCategory,
+          minorCategory: matched.minorCategory || '',
+        };
+      });
+
+      setForm((prev) => ({
+        ...prev,
+        majorCategory: prev.majorCategory || detectedMajor,
+        lineItems: updatedLineItems,
+      }));
+
+      const categorizedCount = updatedLineItems.filter((item) => (item.majorCategory || '').trim() !== '').length;
+      const uncategorizedCount = updatedLineItems.length - categorizedCount;
       showToast(
         EXTRACTION.classifySuccessTitle,
-        `Auto-classified ${form.lineItems.length} line items with appropriate categories.`,
+        uncategorizedCount > 0
+          ? `Categorized ${categorizedCount} of ${updatedLineItems.length} line items. ${uncategorizedCount} could not be reliably categorized and were left empty.`
+          : `Categorized ${categorizedCount} line items with appropriate categories.`,
         'success'
       );
     } catch {
-      showToast(EXTRACTION.fallbackTitle, 'Category auto-classification updated.', 'info');
+      showToast(EXTRACTION.fallbackTitle, EXTRACTION.classifyFailed, 'warning');
     } finally {
       setIsCategorizing(false);
     }
@@ -991,6 +1062,20 @@ export default function IngestionWizard({
         }
       }
 
+      // V3 (Autonomous): fold in the Procucev network vendors the buyer explicitly
+      // picked from the 360°-ranked top-10 panel, de-duplicated against the private
+      // roster already assembled above. These are honoured on top of the backend's
+      // own autonomous category match for mode_3.
+      if (form.sourcingMode === 'mode_3' && selectedProcucevV3Ids.length > 0) {
+        const alreadyAssigned = new Set((mode1AssignedVendors || []).map((v) => v.id));
+        const picked = procucevV3Ranked
+          .filter((r) => selectedProcucevV3Ids.includes(r.vendor.id) && !alreadyAssigned.has(r.vendor.id))
+          .map((r) => toAssignedVendorEntry(r.vendor));
+        if (picked.length > 0) {
+          mode1AssignedVendors = [...(mode1AssignedVendors || []), ...picked];
+        }
+      }
+
       if (form.sourcingMode === 'mode_1' && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
         setSubmitError('Version 1 (Client Sourcing) requires at least one private vendor to be added/selected before creating the RFQ.');
         showToast('Private Vendor Required', 'Version 1 requires at least one private vendor in your roster before dispatching.', 'warning');
@@ -1048,6 +1133,7 @@ export default function IngestionWizard({
     setUploadedFiles([]);
     setExtractionSummary(null);
     setExtractionError(null);
+    setExtractionDetail(null);
     setSubmitAttempted(false);
     setSubmitError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -1235,6 +1321,14 @@ export default function IngestionWizard({
               <AlertCircle size={14} /> {EXTRACTION.fallbackTitle}
             </div>
             <p className="text-[11px] text-amber-900/90 dark:text-amber-200">{extractionError}</p>
+            {extractionDetail && extractionDetail !== extractionError && (
+              <div className="text-[10px] text-amber-900/85 dark:text-amber-200/90">
+                <span className="font-semibold">{EXTRACTION.errorDetailLabel}</span>
+                <pre className="mt-1 whitespace-pre-wrap break-words font-mono bg-amber-100/70 dark:bg-amber-950/50 rounded-md p-2 border border-amber-200 dark:border-amber-800/60">
+                  {extractionDetail}
+                </pre>
+              </div>
+            )}
             <button
               type="button"
               onClick={handleEnterManually}
@@ -1518,7 +1612,13 @@ export default function IngestionWizard({
                         <select
                           aria-label={MODAL.colMinor}
                           value={item.minorCategory}
-                          disabled={!item.majorCategory || item.majorCategory === ALL_CATEGORIES_OPTION}
+                          // Enabled when a major is chosen, or when the document
+                          // supplied a minor of its own (kept even without a
+                          // master major) so the buyer can see and keep it.
+                          disabled={
+                            (!item.majorCategory && !item.minorCategory) ||
+                            item.majorCategory === ALL_CATEGORIES_OPTION
+                          }
                           onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
                           className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium disabled:opacity-40 focus:ring-2 focus:ring-indigo-500"
                         >
@@ -2484,6 +2584,96 @@ export default function IngestionWizard({
                             </div>
                           </div>
                         ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ── Top 10 Procucev Network Vendors (360° category + location ranking) ── */}
+                  <div className="space-y-2 pt-1" data-testid="procucev-v3-panel">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
+                        <Sparkles size={13} className="text-indigo-600 dark:text-indigo-400" />
+                        <span>Top Procucev Network Vendors</span>
+                        <span className="text-[10px] font-semibold text-slate-500 dark:text-gray-400">
+                          (ranked by category &amp; delivery location)
+                        </span>
+                      </h4>
+                      {procucevV3Ranked.length > 0 && (
+                        <div className="flex items-center gap-3 text-[11px]">
+                          <span className="font-semibold text-indigo-600 dark:text-indigo-400">
+                            {selectedProcucevV3Ids.length} of {procucevV3Ranked.length} selected
+                          </span>
+                          <button
+                            type="button"
+                            data-testid="procucev-v3-select-all"
+                            onClick={toggleAllProcucevV3}
+                            className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                          >
+                            {procucevV3AllSelected ? 'Deselect all' : 'Select all'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {procucevV3Loading ? (
+                      <div className="p-3.5 text-center text-[11px] text-slate-400 dark:text-gray-500">
+                        Ranking Procucev network vendors…
+                      </div>
+                    ) : procucevV3Ranked.length === 0 ? (
+                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
+                        No Procucev network vendors matched this RFQ&apos;s category yet.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-60 overflow-y-auto pr-1">
+                        {procucevV3Ranked.map((r, i) => {
+                          const isSelected = selectedProcucevV3Ids.includes(r.vendor.id);
+                          return (
+                            <button
+                              type="button"
+                              key={r.vendor.id || i}
+                              data-testid="procucev-v3-vendor"
+                              aria-pressed={isSelected}
+                              onClick={() => toggleProcucevV3(r.vendor.id)}
+                              className={`text-left p-3 rounded-xl border space-y-1.5 shadow-2xs transition-colors ${
+                                isSelected
+                                  ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-400 dark:border-indigo-600'
+                                  : 'bg-white dark:bg-gray-900 border-indigo-200/70 dark:border-indigo-900/50 hover:border-indigo-300'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="flex items-center gap-1.5 min-w-0">
+                                  <span
+                                    className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                                      isSelected ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300 dark:border-gray-600'
+                                    }`}
+                                  >
+                                    {isSelected && <Check size={11} />}
+                                  </span>
+                                  {/* Double-blind: the vendor's name and sourcing
+                                      category are shown, not its contact details. */}
+                                  <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{r.vendor.name}</span>
+                                </span>
+                                <span className="badge badge-indigo text-[8px] font-bold shrink-0">#{i + 1}</span>
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span
+                                  data-testid="procucev-v3-vendor-category"
+                                  className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100/70 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800 truncate max-w-full"
+                                  title={r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial'}
+                                >
+                                  {r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial'}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-gray-400">
+                                <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                                  {r.overallScore}% match
+                                </span>
+                                <span aria-hidden="true">·</span>
+                                <span className="truncate">{r.locationReason}</span>
+                              </div>
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                   </div>

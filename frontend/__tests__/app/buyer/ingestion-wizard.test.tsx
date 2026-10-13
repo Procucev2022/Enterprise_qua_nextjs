@@ -472,6 +472,23 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(screen.getAllByPlaceholderText(MODAL.itemPlaceholder).length).toBeGreaterThan(0);
   });
 
+  it('surfaces the server-supplied technical detail for a failed extraction', async () => {
+    renderWizard();
+    uploadFile(new File(['dummy'], 'scan.pdf', { type: 'application/pdf' }));
+
+    const detail = 'gemini-3.8-flash: Gemini responded 400: API key not valid';
+    mockExtract.mockResolvedValueOnce({ success: false, reason: 'AI_FAILED', detail });
+    clickExtract();
+
+    // The friendly reason message leads the banner...
+    await waitFor(() =>
+      expect(screen.getByText(EXTRACTION.reasonMessages.AI_FAILED)).toBeInTheDocument()
+    );
+    // ...and the raw underlying cause is available beneath it for debugging.
+    expect(screen.getByText(EXTRACTION.errorDetailLabel)).toBeInTheDocument();
+    expect(screen.getByText(detail)).toBeInTheDocument();
+  });
+
   it('handles auto-categorization errors and empty line items', async () => {
     renderWizard();
 
@@ -603,7 +620,12 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
   it('applies the matched category onto its own line item when ids align', async () => {
     renderWizard();
 
-    // Extract first so the line item's id is deterministically "ent-1" (from the mock entity).
+    // Extract an item with NO category so Auto-Categorize sends it to the server.
+    // (Items that already carry a category are left untouched.) The id is
+    // deterministically "ent-1" from the mock entity so the response aligns.
+    mockExtract.mockResolvedValueOnce(
+      successResult([entity({ id: 'ent-1', category: '', majorCategory: '', minorCategory: '' })])
+    );
     uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
     clickExtract();
     await waitFor(() => expect(mockExtract).toHaveBeenCalled());
@@ -700,24 +722,30 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     await waitFor(() => expect(mockClassify).toHaveBeenCalled());
   });
 
-  it('keeps existing categories when a matched entity omits its own category fields', async () => {
+  it('leaves a blank item blank when the server cannot classify it', async () => {
     renderWizard();
+    // Extract a blank-category item so Auto-Categorize sends it to the server.
+    mockExtract.mockResolvedValueOnce(
+      successResult([entity({ id: 'ent-1', itemName: 'Mystery Item', category: '', majorCategory: '', minorCategory: '' })])
+    );
     uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
     clickExtract();
     await waitFor(() => expect(mockExtract).toHaveBeenCalled());
 
+    // Server returns the row with no category it could confidently assign.
     mockClassify.mockResolvedValueOnce({
       success: true,
       data: {
-        extractedEntities: [{ ...entity({ id: 'ent-1' }), majorCategory: '', minorCategory: '' }],
+        extractedEntities: [{ ...entity({ id: 'ent-1', itemName: 'Mystery Item' }), majorCategory: '', minorCategory: '' }],
       },
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Auto-Categorize All \(AI\)/i }));
     await waitFor(() => expect(mockClassify).toHaveBeenCalled());
 
-    // The originally-extracted major category should remain since the response's was blank.
-    expect(screen.getByDisplayValue(entity().majorCategory)).toBeInTheDocument();
+    // The item is still present and its major category select is left blank —
+    // never guessed into an unrelated category.
+    expect(screen.getByDisplayValue('Mystery Item')).toBeInTheDocument();
   });
 
   it('drops a failed attachment upload result but still dispatches the RFQ', async () => {
@@ -1399,4 +1427,135 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     });
   });
 
+});
+
+describe('IngestionWizard: Mode 3 Top Procucev Network Vendors (360° ranking)', () => {
+  const realFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  // The V3 panel fetches the Procucev network via GET /api/vendors?buyerId=all.
+  // Serve a small ranked-able pool for that URL; every other URL falls through
+  // to jest.setup.ts's default mock so the category dropdowns stay populated.
+  function serveProcucevNetwork(vendors: Array<Record<string, unknown>>) {
+    global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
+      if (typeof url === 'string' && url.includes('/api/vendors') && url.includes('buyerId=all')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: vendors,
+            pagination: { page: 1, pageSize: 100, total: vendors.length, totalPages: 1 },
+          }),
+        }) as any;
+      }
+      return (realFetch as any)(url, init);
+    }) as any;
+  }
+
+  const NEAR = {
+    id: 'proc-near',
+    name: 'Nearby Pumps Pvt Ltd',
+    source: 'procucev_network',
+    majorCategory: 'Engineering Spares - Mechanical',
+    minorCategories: ['Pumps & Accessories'],
+    pincode: '400702',
+    rating: 4.6,
+    email: 'sales@nearbypumps.in',
+    contactPerson: 'N. Rao',
+    phone: '+91 90000 11111',
+  };
+  const FAR = {
+    id: 'proc-far',
+    name: 'Distant Valves Co',
+    source: 'procucev_network',
+    majorCategory: 'Engineering Spares - Mechanical',
+    minorCategories: ['Pumps & Accessories'],
+    pincode: '110001',
+    rating: 4.9,
+    email: 'sales@distantvalves.in',
+    contactPerson: 'D. Singh',
+    phone: '+91 90000 22222',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCreateRFQ.mockResolvedValue({ success: true, rfq: mockCreatedRFQ() });
+  });
+
+  async function enterMode3WithCategoryAndLocation() {
+    renderWizard();
+    fireEvent.click(screen.getByTestId('mode-mode_3'));
+
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+      target: { value: 'Navi Mumbai Plant' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+      target: { value: '400701' },
+    });
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+      target: { value: 'Centrifugal Water Pump' },
+    });
+    const [majorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
+    fireEvent.change(majorSelect, { target: { value: 'Engineering Spares - Mechanical' } });
+  }
+
+  it('renders the top Procucev network vendors ranked by category and location, with their category on each card', async () => {
+    serveProcucevNetwork([FAR, NEAR]);
+    await enterMode3WithCategoryAndLocation();
+
+    await waitFor(() => expect(screen.getByTestId('procucev-v3-panel')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByTestId('procucev-v3-vendor').length).toBe(2));
+
+    // Both network vendors surface, each with their sourcing category on the card.
+    expect(screen.getByText('Nearby Pumps Pvt Ltd')).toBeInTheDocument();
+    expect(screen.getByText('Distant Valves Co')).toBeInTheDocument();
+    expect(screen.getAllByTestId('procucev-v3-vendor-category').length).toBe(2);
+
+    // The geographically closer vendor (same PIN district as 400701) ranks first.
+    const cards = screen.getAllByTestId('procucev-v3-vendor');
+    expect(within(cards[0]).getByText('Nearby Pumps Pvt Ltd')).toBeInTheDocument();
+  });
+
+  it('selects all / deselects all and dispatches the chosen Procucev vendors', async () => {
+    serveProcucevNetwork([NEAR, FAR]);
+    await enterMode3WithCategoryAndLocation();
+
+    await waitFor(() => expect(screen.getAllByTestId('procucev-v3-vendor').length).toBe(2));
+
+    // Select all → both selected.
+    fireEvent.click(screen.getByTestId('procucev-v3-select-all'));
+    expect(screen.getByText('2 of 2 selected')).toBeInTheDocument();
+
+    // Deselect all → none selected.
+    fireEvent.click(screen.getByTestId('procucev-v3-select-all'));
+    expect(screen.getByText('0 of 2 selected')).toBeInTheDocument();
+
+    // Single-select one vendor by clicking its card.
+    fireEvent.click(screen.getByText('Nearby Pumps Pvt Ltd'));
+    expect(screen.getByText('1 of 2 selected')).toBeInTheDocument();
+
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
+
+    await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+    const assigned = mockCreateRFQ.mock.calls[0][0].assignedVendors || [];
+    expect(assigned.some((v: { id: string }) => v.id === 'proc-near')).toBe(true);
+    expect(assigned.some((v: { id: string }) => v.id === 'proc-far')).toBe(false);
+  });
+
+  it('shows an empty-state message when no Procucev network vendors match', async () => {
+    serveProcucevNetwork([]);
+    await enterMode3WithCategoryAndLocation();
+
+    await waitFor(() => expect(screen.getByTestId('procucev-v3-panel')).toBeInTheDocument());
+    expect(screen.getByText(/No Procucev network vendors matched/i)).toBeInTheDocument();
+  });
 });

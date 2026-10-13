@@ -513,8 +513,10 @@ async function createRFQ(req, res, next) {
               error: 'Your 5 free trial RFQ credits for V1/V2/V3 have been fully used. Upgrade to a paid plan to raise more V1/V2/V3 RFQs, or continue using V0 Free Starter for Procucev Network RFQs.',
             });
           }
-          const consumeResult = storeService.tryConsumeFreeRFQ(requestingBuyerAccount.id);
-          if (!consumeResult.ok) {
+          // Same credit rule the email-ingestion path applies — kept in one
+          // place on the store so both RFQ-creation methods stay in agreement.
+          const consumeResult = storeService.consumeRFQCreditIfApplicable(requestingBuyerAccount, requestedMode);
+          if (!consumeResult.consumed) {
             logger.warn('Rejected RFQ creation: free trial exhausted', { buyerAccountId: requestingBuyerAccount.id }, 'RFQ_CONTROLLER');
             return res.status(403).json({
               success: false,
@@ -721,13 +723,17 @@ async function extractRFQFromDocument(req, res, next) {
     if (extraction.status !== geminiService.EXTRACTION_STATUS.SUCCESS) {
       logger.warn(
         `Document extraction produced no line items (${extraction.status})`,
-        { fileName: body.fileName, status: extraction.status },
+        { fileName: body.fileName, status: extraction.status, detail: extraction.error },
         'RFQ_CONTROLLER'
       );
       return res.status(422).json({
         success: false,
         reason: extraction.status,
         error: EXTRACTION_REASON_MESSAGES[extraction.status] || EXTRACTION_REASON_MESSAGES.AI_FAILED,
+        // The real underlying cause (model/key/parse failure), surfaced for
+        // debugging. The friendly `error` above is still what the banner leads
+        // with; `detail` is shown beneath it so the actual reason is visible.
+        ...(extraction.error ? { detail: extraction.error } : {}),
       });
     }
 
@@ -766,6 +772,10 @@ async function extractRFQFromDocument(req, res, next) {
       extraction: { model: extraction.model, deliveryDate: extraction.deliveryDate },
     });
   } catch (err) {
+    // An expected extraction failure is already reported above as a 422 with a
+    // reason and a `detail` the wizard surfaces. Reaching here means an
+    // UNEXPECTED fault (a thrown service/DB error), which stays a 500 via the
+    // global error handler rather than being disguised as an extraction result.
     logger.error('Error extracting RFQ line items from document', err, 'RFQ_CONTROLLER');
     next(err);
   }
