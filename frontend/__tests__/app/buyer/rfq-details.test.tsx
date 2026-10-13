@@ -1048,6 +1048,47 @@ function makeInquiry(overrides: any = {}): any {
       expect(within(card).queryByText(/Hidden Contact/)).not.toBeInTheDocument();
     });
 
+    it('treats an untagged assigned vendor on a V3 RFQ as confidential (hides its email, phone, contact)', () => {
+      // Reproduces the live leak: a V3 RFQ whose assigned vendor was populated
+      // by the backend and carries email/phone/contact but NO vendorCategory
+      // tag and no Procucev source. V3 routes only to the Procucev network, so
+      // the details view must still treat it as double-blind.
+      renderDetails(
+        buildRFQ({
+          sourcingMode: 'mode_3',
+          assignedVendors: [
+            {
+              id: 'v-untagged',
+              name: 'RFQ Procucev Vendor',
+              email: 'rfqprocucev@gmail.com',
+              phone: '+919866666667',
+              contactPerson: 'RFQ Procucev',
+            } as any,
+          ],
+        })
+      );
+
+      const card = screen.getAllByTestId('assigned-supplier-card').find((c) =>
+        within(c).queryByText('RFQ Procucev Vendor')
+      ) as HTMLElement;
+      expect(card).toBeTruthy();
+
+      // The company name shows; the double-blind badge is present.
+      expect(within(card).getByText('RFQ Procucev Vendor')).toBeInTheDocument();
+      expect(within(card).getByText(/Double-Blind/i)).toBeInTheDocument();
+
+      // Category, location, and a match row always render (category falls back to
+      // the RFQ's own category when the entry carries none).
+      expect(within(card).getByText(/Category:/)).toBeInTheDocument();
+      expect(within(card).getByText(/Location:/)).toBeInTheDocument();
+      expect(within(card).getByText(/match/i)).toBeInTheDocument();
+
+      // Contact details are hidden despite being present on the record.
+      expect(within(card).queryByText('rfqprocucev@gmail.com')).not.toBeInTheDocument();
+      expect(within(card).queryByText('+919866666667')).not.toBeInTheDocument();
+      expect(within(card).queryByText(/RFQ Procucev$/)).not.toBeInTheDocument();
+    });
+
     it('allows searching vendors and filtering by status tabs', () => {
       renderDetails(
         buildRFQ({

@@ -400,6 +400,13 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     activeRfq?.sourcingMode === 'mode_0' ||
     (activeRfq?.sourcingMode as any) === 'v0' ||
     (activeRfq?.sourcingMode as any) === 'version_0';
+  // V3 (Autonomous) routes exclusively to the Procucev network under the
+  // double-blind protocol, so every assigned supplier on a V3 RFQ is a
+  // Procucev vendor whose contact details must stay confidential.
+  const isV3 =
+    activeRfq?.sourcingMode === 'mode_3' ||
+    (activeRfq?.sourcingMode as any) === 'v3' ||
+    (activeRfq?.sourcingMode as any) === 'version_3';
 
   const handleCloseRFQ = async () => {
     if (!activeRfq || isClosing) return;
@@ -521,9 +528,18 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         return true;
       }
 
+      // 7. V3 (Autonomous) default: the mode sources only from the Procucev
+      // network under double-blind, so any assigned vendor that reached this
+      // point without being confirmed a client/buyer vendor (steps 1–5 already
+      // returned false for those) is a Procucev vendor and must be confidential.
+      // This covers backend-populated V3 assignments that carry no explicit tag.
+      if (isV3) {
+        return true;
+      }
+
       return false;
     },
-    [activeRfq, buyerVendors]
+    [activeRfq, buyerVendors, isV3]
   );
 
   const vendorChannels = useMemo<VendorChatChannel[]>(() => {
@@ -1658,6 +1674,29 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             (bv) => (v.id && bv.id === v.id) || (v.email && bv.email === v.email) || (v.name && bv.name === v.name)
           );
           const isProc = checkIsProcucevVendor(v.id, v.name, v.email, v);
+
+          // A Procucev card always shows category, location, and score — resolve
+          // each from the richest source available, so a backend-populated V3
+          // vendor (which carries none of these inline) still renders them.
+          const quoteForVendor = (activeRfq?.quotes || []).find(
+            (q: any) =>
+              (v.id && q.vendorId && String(q.vendorId) === String(v.id)) ||
+              (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
+          );
+          const resolvedCategory =
+            v.majorCategory || found?.majorCategory || (isProc ? activeRfq?.category || null : null);
+          const resolvedLocation =
+            v.location || found?.location || found?.city || found?.state || null;
+          let resolvedScore: number | null =
+            typeof v.matchScore === 'number' ? v.matchScore : null;
+          if (resolvedScore === null && typeof (quoteForVendor as any)?.aiMatchScore === 'number') {
+            resolvedScore = Math.round((quoteForVendor as any).aiMatchScore);
+          }
+          if (resolvedScore === null && isProc && typeof found?.rating === 'number' && found.rating > 0) {
+            // Rating is 0–5; present it on the same 0–100 scale as a match score.
+            resolvedScore = Math.round(Math.min(5, found.rating) * 20);
+          }
+
           return {
             id: v.id || `vendor-${idx}`,
             name: v.name || found?.name || v.contactPerson || v.email || 'Enterprise Supplier',
@@ -1665,9 +1704,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             email: v.email || found?.email || null,
             phone: v.phone || found?.phone || null,
             isProcucev: isProc,
-            majorCategory: v.majorCategory || found?.majorCategory || null,
-            location: v.location || found?.location || found?.city || null,
-            matchScore: typeof v.matchScore === 'number' ? v.matchScore : null,
+            majorCategory: resolvedCategory,
+            location: resolvedLocation,
+            matchScore: resolvedScore,
           };
         });
 
@@ -1721,12 +1760,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                       {v.isProcucev ? (
                         // Double-blind: category, location, and match score only —
                         // email, phone, and contact person are deliberately omitted.
+                        // Each row always renders (with a neutral placeholder when
+                        // the datum is unknown) so the card is never contact-only.
                         <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
-                          {v.majorCategory && <p className="truncate">Category: {v.majorCategory}</p>}
-                          {v.location && <p className="truncate">Location: {v.location}</p>}
-                          {typeof v.matchScore === 'number' && (
-                            <p className="font-semibold text-emerald-600 dark:text-emerald-400">{v.matchScore}% match</p>
-                          )}
+                          <p className="truncate">Category: {v.majorCategory || 'General Industrial'}</p>
+                          <p className="truncate">Location: {v.location || 'Procucev Network'}</p>
+                          <p className="font-semibold text-emerald-600 dark:text-emerald-400">
+                            {typeof v.matchScore === 'number' ? `${v.matchScore}% match` : 'Match: Verified'}
+                          </p>
                         </div>
                       ) : (
                         <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
