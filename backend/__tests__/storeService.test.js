@@ -1506,15 +1506,46 @@ describe('Store Service & Business Operations', () => {
         }
       });
 
-      test('no-ops for a V0 RFQ with no category signal', async () => {
+      test('a V0 RFQ with no category signal skips category matching and uses the network fallback', async () => {
         const originalPool = domainPool.pool;
         domainPool.pool = { query: jest.fn() };
-        const spy = jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories');
+        const catSpy = jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories');
+        // No category signal skips the category query but still falls back to the
+        // public network so a V0 RFQ is never left with no invited vendors.
+        const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
+          rows: [{ id: 'net-1', name: 'Network Vendor', source: 'procucev_network', rating: 4 }],
+          total: 1,
+        });
         try {
-          const rfq = { id: 'r2', sourcingMode: 'mode_0', category: '', extractedEntities: [] };
+          const rfq = { id: 'r2', sourcingMode: 'mode_0', category: '', extractedEntities: [], assignedVendors: [] };
           const result = await storeService.augmentV0AssignmentsFromDB(rfq);
-          expect(spy).not.toHaveBeenCalled();
-          expect(result).toBe(rfq);
+          expect(catSpy).not.toHaveBeenCalled();
+          expect(pageSpy).toHaveBeenCalledWith(expect.objectContaining({ publicOnly: true }));
+          expect(result.assignedVendors.map((v) => v.id)).toContain('net-1');
+        } finally {
+          domainPool.pool = originalPool;
+        }
+      });
+
+      test('falls back to the top public Procucev network when category matching finds nothing', async () => {
+        const originalPool = domainPool.pool;
+        domainPool.pool = { query: jest.fn() };
+        // The RFQ carries a category, but no vendor's tags match it (the real
+        // label-mismatch case that previously left assignedVendors empty).
+        jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([]);
+        const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
+          rows: [
+            { id: 'net-a', name: 'Net A', source: 'procucev_network', rating: 5 },
+            { id: 'net-b', name: 'Net B', source: 'procucev_network', rating: 3 },
+          ],
+          total: 2,
+        });
+        try {
+          const rfq = v0Rfq({ category: 'Totally-Unmatched-Category' });
+          const result = await storeService.augmentV0AssignmentsFromDB(rfq);
+          expect(pageSpy).toHaveBeenCalledWith(expect.objectContaining({ publicOnly: true }));
+          expect(result.assignedVendors.map((v) => v.id)).toEqual(expect.arrayContaining(['net-a', 'net-b']));
+          expect(result.procucevVendorCount).toBe(result.assignedVendors.length);
         } finally {
           domainPool.pool = originalPool;
         }
@@ -1524,6 +1555,7 @@ describe('Store Service & Business Operations', () => {
         const originalPool = domainPool.pool;
         domainPool.pool = { query: jest.fn() };
         jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockRejectedValue(new Error('ECONNREFUSED'));
+        jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValue(new Error('ECONNREFUSED'));
         try {
           const rfq = v0Rfq();
           const result = await storeService.augmentV0AssignmentsFromDB(rfq);

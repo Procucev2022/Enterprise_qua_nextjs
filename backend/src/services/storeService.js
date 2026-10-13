@@ -3066,21 +3066,45 @@ class StoreService {
     if (!isV0) return rfq;
     if (!pool.hasStorage()) return rfq;
 
-    const signals = this._rfqCategorySignals(rfq);
-    if (!Array.isArray(signals) || signals.length === 0) return rfq;
-
     const MAX_V0_CATEGORY_INVITES = 100;
+    const signals = this._rfqCategorySignals(rfq);
+
     let dbMatches = [];
-    try {
-      dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, MAX_V0_CATEGORY_INVITES);
-    } catch (err) {
-      logger.warn(
-        'V0 DB-backed vendor assignment query failed',
-        { rfqNumber: rfq.rfqNumber, error: err.message },
-        'STORE_SERVICE'
-      );
-      return rfq;
+    // 1. Category-matched public vendors from the whole directory.
+    if (Array.isArray(signals) && signals.length > 0) {
+      try {
+        dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, MAX_V0_CATEGORY_INVITES);
+      } catch (err) {
+        logger.warn(
+          'V0 DB-backed vendor assignment query failed',
+          { rfqNumber: rfq.rfqNumber, error: err.message },
+          'STORE_SERVICE'
+        );
+      }
     }
+
+    // 2. Fallback: if category matching found nothing (no signals, or the RFQ's
+    // category labels don't line up with how vendors are tagged — the common
+    // real-world case that left assignedVendors empty while the count showed a
+    // directory-wide tally like 16,350), assign the top public Procucev vendors
+    // the RFQ CAN reach, so it always has a real, displayable invited set.
+    if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+      try {
+        const page = await domainQueries.getVendorsPageFromDB({
+          limit: MAX_V0_CATEGORY_INVITES,
+          offset: 0,
+          publicOnly: true,
+        });
+        dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
+      } catch (err) {
+        logger.warn(
+          'V0 DB-backed network fallback query failed',
+          { rfqNumber: rfq.rfqNumber, error: err.message },
+          'STORE_SERVICE'
+        );
+      }
+    }
+
     if (!Array.isArray(dbMatches) || dbMatches.length === 0) return rfq;
 
     // Prefer vendors in the RFQ's delivery pincode, then by rating — same
