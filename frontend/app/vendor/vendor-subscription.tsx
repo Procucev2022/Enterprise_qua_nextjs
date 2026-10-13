@@ -158,7 +158,7 @@ export default function VendorSubscriptionCenter() {
       // (computeZohoPlanAmount in backend/src/config/constants.js), so the
       // payment button never promises an amount the backend won't collect.
       chargeAmount: '₹7,499',
-      billing: 'per year',
+      billing: 'per month',
       description: 'Expand your market reach. Access & download open RFQs across the entire Procucev Network Marketplace.',
       badge: 'Popular for Growth',
       colorClass: 'border-indigo-300 dark:border-indigo-800 shadow-indigo-500/10',
@@ -182,7 +182,7 @@ export default function VendorSubscriptionCenter() {
       originalPrice: '₹50,000',
       price: '₹14,999',
       chargeAmount: '₹14,999',
-      billing: 'per year',
+      billing: 'per month',
       description: 'Complete tier for high-volume suppliers. Build your Item Catalogue and capture maximum marketplace demand.',
       badge: 'Full Suite',
       colorClass: 'border-purple-300 dark:border-purple-800 shadow-purple-500/10',
