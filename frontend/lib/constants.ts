@@ -101,6 +101,19 @@ export function resolveBuyerSourcingMode(
 }
 
 /**
+ * Short RFQ version tag for a sourcing mode: mode_0 → "V0" … mode_3 → "V3".
+ *
+ * The version and the sourcing mode are the same concept (see SOURCING_MODES,
+ * whose codes read "Version 0".."Version 3"), so the tag is derived from the
+ * mode's trailing digit rather than stored separately. Used as a compact
+ * identifier beside the RFQ number on the operational kanban.
+ */
+export function rfqVersionLabel(mode?: SourcingMode | null): string {
+  const digit = typeof mode === 'string' ? mode.replace('mode_', '') : '';
+  return /^[0-9]+$/.test(digit) ? `V${digit}` : 'V0';
+}
+
+/**
  * Mirrors backend/src/controllers/rfqController.js's SUBSCRIPTION_MODE_ENTITLEMENTS
  * exactly: each paid tier adds one mode on top of the last. The backend already
  * enforces this on POST /api/rfqs (a request for an un-entitled mode 403s), so
@@ -343,6 +356,18 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       group: NAV_GROUPS.buyerAccount,
       route: '/buyer/profile',
     },
+    // Temporarily hidden: Vendor Email Templates
+    /*
+    {
+      id: 'vendor_email_templates',
+      screenTag: 'Screen 1.8b',
+      label: NAV_ITEMS.vendorEmailTemplates.label,
+      description: NAV_ITEMS.vendorEmailTemplates.description,
+      icon: 'Mail',
+      group: NAV_GROUPS.buyerAccount,
+      route: '/buyer/vendor-email-templates',
+    },
+    */
     // Temporarily hidden: Buyer Billing History
     /*
     {
@@ -862,6 +887,11 @@ export const ROLE_ROUTE_PREFIX: Record<UserRole, string> = {
   vendor: '/vendor',
   admin: '/admin',
 };
+
+/** Vendor live presence threshold & polling intervals (ms) */
+export const PRESENCE_ONLINE_THRESHOLD_MS = 10 * 60 * 1000;
+export const PRESENCE_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+export const PRESENCE_POLL_INTERVAL_MS = 30 * 1000;
 
 export {
   FORM_SCHEMAS,

@@ -130,6 +130,7 @@ describe('Store Service & Business Operations', () => {
           organizationName: 'Invited By Buyer Co',
           createdBy: 'buyer@example.com',
           resetExisting: false,
+          resetPasswordRequired: true,
         }));
         expect(sendSpy).toHaveBeenCalled();
         expect(storeService.getVendorById(v.id).onboardingEmailStatus).toBe('sent');
@@ -1227,6 +1228,152 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.getProcucevVendorCount({ sourcingMode: 'mode_0', assignedVendors: [{ id: vA.id }] })).toBe(1);
     });
 
+    describe('resolveProcucevVendorCountFromDB (DB-backed count for the V2/V3 success popup)', () => {
+      afterEach(() => {
+        jest.restoreAllMocks();
+      });
+
+      test('counts category-matched public Procucev vendors from the database, not the capped in-memory subset', async () => {
+        // The real directory lives in Postgres; the in-memory subset here has no
+        // matching vendor (count 0 — the exact bug). The DB total must win, and
+        // the match must include the minor-category signal, not just the header.
+        const originalPool = domainPool.pool;
+        domainPool.pool = { query: jest.fn() }; // truthy sentinel: a pool is configured
+        const countSpy = jest
+          .spyOn(domainQueries, 'countPublicVendorsMatchingCategories')
+          .mockResolvedValue(20);
+
+        try {
+          const rfqV2 = {
+            sourcingMode: 'mode_2',
+            category: null,
+            extractedEntities: [{ majorCategory: 'Raw Material', minorCategory: 'Steels' }],
+            assignedVendors: [],
+          };
+          const count = await storeService.resolveProcucevVendorCountFromDB(rfqV2);
+
+          expect(count).toBe(20);
+          // Called with every signal the RFQ carries, including the minor one.
+          const passedSignals = countSpy.mock.calls[0][0];
+          expect(passedSignals).toEqual(expect.arrayContaining(['Raw Material', 'Steels']));
+        } finally {
+          domainPool.pool = originalPool;
+        }
+      });
+
+      test('an explicit Procucev assignment wins over any DB count', async () => {
+        const originalPool = domainPool.pool;
+        domainPool.pool = { query: jest.fn() };
+        const countSpy = jest.spyOn(domainQueries, 'countPublicVendorsMatchingCategories');
+
+        try {
+          const rfqV2 = {
+            sourcingMode: 'mode_2',
+            category: 'Lighting',
+            extractedEntities: [],
+            assignedVendors: [{ name: 'Procucev Assigned', source: 'procucev_network' }],
+          };
+          const count = await storeService.resolveProcucevVendorCountFromDB(rfqV2);
+          expect(count).toBe(1);
+          expect(countSpy).not.toHaveBeenCalled();
+        } finally {
+          domainPool.pool = originalPool;
+        }
+      });
+
+      test('falls back to the in-memory count when no DB pool is configured', async () => {
+        const originalPool = domainPool.pool;
+        domainPool.pool = null; // no storage
+        try {
+          const rfqV2 = { sourcingMode: 'mode_2', category: 'Lighting', extractedEntities: [], assignedVendors: [] };
+          const count = await storeService.resolveProcucevVendorCountFromDB(rfqV2);
+          expect(typeof count).toBe('number');
+          expect(count).toBeGreaterThanOrEqual(0);
+        } finally {
+          domainPool.pool = originalPool;
+        }
+      });
+
+      test('returns 0 for non-network versions (V1) and for a null RFQ', async () => {
+        expect(await storeService.resolveProcucevVendorCountFromDB(null)).toBe(0);
+        expect(
+          await storeService.resolveProcucevVendorCountFromDB({ sourcingMode: 'mode_1', category: 'Lighting' })
+        ).toBe(0);
+      });
+
+      test('when the category match is 0, falls back to the public Procucev network total (never a misleading 0)', async () => {
+        // The real-world failure: an email/BOQ RFQ whose category labels do not
+        // line up with how vendors were tagged, so category matching yields 0.
+        // The popup must still show how large the reachable network is.
+        const originalPool = domainPool.pool;
+        domainPool.pool = { query: jest.fn() };
+        jest.spyOn(domainQueries, 'countPublicVendorsMatchingCategories').mockResolvedValue(0);
+        const pageSpy = jest
+          .spyOn(domainQueries, 'getVendorsPageFromDB')
+          .mockResolvedValue({ rows: [], total: 985 });
+
+        try {
+          const rfqV2 = {
+            sourcingMode: 'mode_2',
+            category: null,
+            extractedEntities: [{ majorCategory: 'Raw Material', minorCategory: 'Steels' }],
+            assignedVendors: [],
+          };
+          const count = await storeService.resolveProcucevVendorCountFromDB(rfqV2);
+          expect(count).toBe(985);
+          expect(pageSpy).toHaveBeenCalledWith(expect.objectContaining({ publicOnly: true }));
+        } finally {
+          domainPool.pool = originalPool;
+        }
+      });
+
+      test('falls back to the network total even when the RFQ carries no category signals at all', async () => {
+        const originalPool = domainPool.pool;
+        domainPool.pool = { query: jest.fn() };
+        const countSpy = jest.spyOn(domainQueries, 'countPublicVendorsMatchingCategories');
+        jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({ rows: [], total: 42 });
+        try {
+          const rfqV3 = { sourcingMode: 'mode_3', category: '', extractedEntities: [], assignedVendors: [] };
+          const count = await storeService.resolveProcucevVendorCountFromDB(rfqV3);
+          expect(count).toBe(42);
+          // No signals -> the category-match query is skipped entirely.
+          expect(countSpy).not.toHaveBeenCalled();
+        } finally {
+          domainPool.pool = originalPool;
+        }
+      });
+
+      test('prefers the category-matched count over the network total when it is non-zero', async () => {
+        const originalPool = domainPool.pool;
+        domainPool.pool = { query: jest.fn() };
+        jest.spyOn(domainQueries, 'countPublicVendorsMatchingCategories').mockResolvedValue(7);
+        const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB');
+        try {
+          const rfqV2 = { sourcingMode: 'mode_2', category: 'Lighting', extractedEntities: [], assignedVendors: [] };
+          const count = await storeService.resolveProcucevVendorCountFromDB(rfqV2);
+          expect(count).toBe(7);
+          // Category match succeeded, so the network-total fallback is not queried.
+          expect(pageSpy).not.toHaveBeenCalled();
+        } finally {
+          domainPool.pool = originalPool;
+        }
+      });
+
+      test('swallows a DB query failure and still returns a number', async () => {
+        const originalPool = domainPool.pool;
+        domainPool.pool = { query: jest.fn() };
+        jest.spyOn(domainQueries, 'countPublicVendorsMatchingCategories').mockRejectedValue(new Error('ECONNREFUSED'));
+        jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValue(new Error('ECONNREFUSED'));
+        try {
+          const rfqV3 = { sourcingMode: 'mode_3', category: 'Lighting', extractedEntities: [], assignedVendors: [] };
+          const count = await storeService.resolveProcucevVendorCountFromDB(rfqV3);
+          expect(typeof count).toBe('number');
+        } finally {
+          domainPool.pool = originalPool;
+        }
+      });
+    });
+
     test('createRFQ auto-invites category and sub-category matched vendors for an email-sourced RFQ in any sourcing mode', () => {
       const subCatVendor = storeService.addVendor({
         name: 'Email Sub-Category Vendor',
@@ -1314,6 +1461,43 @@ describe('Store Service & Business Operations', () => {
       expect(assignedIds).toContain(procucevVendor.id);
       expect(assignedIds).not.toContain(privateVendor.id);
     });
+
+    test('mode_2 excludes another buyer private vendors while preserving own and network vendors', () => {
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'Mode 2 Buyer',
+        corporateEmail: 'mode2-buyer@ex.com',
+      });
+      const ownVendor = storeService.addVendor({
+        name: 'Own Private Vendor',
+        majorCategory: 'Mode 2 Category',
+        buyerId: buyer.id,
+        source: 'buyer_uploaded',
+      });
+      const otherBuyerVendor = storeService.addVendor({
+        name: 'Other Private Vendor',
+        majorCategory: 'Mode 2 Category',
+        buyerId: 'different-buyer',
+        source: 'buyer_uploaded',
+      });
+      const networkVendor = storeService.addVendor({
+        name: 'Network Vendor',
+        majorCategory: 'Mode 2 Category',
+        source: 'procucev_network',
+      });
+
+      const rfq = storeService.createRFQ({
+        title: 'Buyer-private sourcing',
+        category: 'Mode 2 Category',
+        sourcingMode: 'mode_2',
+      }, buyer);
+      const assignedIds = rfq.assignedVendors.map((vendor) => vendor.id);
+
+      expect(assignedIds).toContain(ownVendor.id);
+      expect(assignedIds).toContain(networkVendor.id);
+      expect(assignedIds).not.toContain(otherBuyerVendor.id);
+      expect(storeService.candidateVendorsForRFQ(rfq).map((vendor) => vendor.id))
+        .not.toContain(otherBuyerVendor.id);
+    });
   });
 
   describe('inviteVendorsToRFQ (category manager invite flow)', () => {
@@ -1377,6 +1561,48 @@ describe('Store Service & Business Operations', () => {
       expect(result.invitedCount).toBe(0);
     });
 
+    test('rejects invitations to another buyer private vendor but permits this buyer private vendor', async () => {
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'Invite Owner Buyer',
+        corporateEmail: 'invite-owner@ex.com',
+      });
+      const rfq = storeService.createRFQ({
+        title: 'Private roster invite',
+        category: 'Private Invite Category',
+        sourcingMode: 'mode_3',
+      }, buyer);
+      const ownVendor = storeService.addVendor({
+        name: 'Owned Private Vendor',
+        email: 'owned-private@ex.com',
+        majorCategory: 'Private Invite Category',
+        buyerId: buyer.id,
+        source: 'buyer_uploaded',
+      });
+      const otherBuyerVendor = storeService.addVendor({
+        name: 'Foreign Private Vendor',
+        email: 'foreign-private@ex.com',
+        majorCategory: 'Private Invite Category',
+        buyerId: 'different-buyer',
+        source: 'buyer_uploaded',
+      });
+
+      const result = await storeService.inviteVendorsToRFQ(
+        rfq.id,
+        [ownVendor.id, otherBuyerVendor.id],
+        'cm@ex.com'
+      );
+
+      expect(result.invitedCount).toBe(1);
+      expect(result.excludedCount).toBe(1);
+      expect(result.excludedVendors).toEqual([
+        expect.objectContaining({ id: otherBuyerVendor.id }),
+      ]);
+      expect(result.updatedRFQ.assignedVendors.map((vendor) => vendor.id)).toContain(ownVendor.id);
+      expect(result.updatedRFQ.assignedVendors.map((vendor) => vendor.id)).not.toContain(otherBuyerVendor.id);
+      expect(inviteEmailSpy).toHaveBeenCalledTimes(1);
+      expect(inviteEmailSpy).toHaveBeenCalledWith(ownVendor.email, expect.any(Object));
+    });
+
     test('invites a vendor: grants access, fires the fake chaser feed, a real notification, a real email, and an audit entry', async () => {
       const vendor = storeService.addVendor({ name: 'Invite Flow Vendor', email: 'inviteflow@ex.com', majorCategory: 'Invite-Flow-Cat' });
       const rfq = storeService.createRFQ({ title: 'Invite Flow RFQ', category: 'Invite-Flow-Cat' , sourcingMode: 'mode_3' });
@@ -1420,7 +1646,10 @@ describe('Store Service & Business Operations', () => {
     test('vendorIds that is not an array is treated as empty — invitedCount 0', async () => {
       const rfq = storeService.createRFQ({ title: 'Non-Array Invite RFQ', category: 'Non-Array-Cat' , sourcingMode: 'mode_3' });
       const result = await storeService.inviteVendorsToRFQ(rfq.id, null, 'cm@ex.com');
-      expect(result).toEqual({ updatedRFQ: rfq, invitedCount: 0 });
+      expect(result.updatedRFQ).toEqual(rfq);
+      expect(result.invitedCount).toBe(0);
+      expect(result.excludedCount).toBe(0);
+      expect(result.excludedVendors).toEqual([]);
     });
 
     test('defaults the audit actor when no actorEmail is given', async () => {

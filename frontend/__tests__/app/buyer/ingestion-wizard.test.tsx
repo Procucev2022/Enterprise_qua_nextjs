@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import IngestionWizard, { resolveConfirmationVendorCount } from '@/app/buyer/ingestion-wizard';
+import IngestionWizard, { resolveConfirmationVendorCount, isV2OrV3SourcingMode } from '@/app/buyer/ingestion-wizard';
 import { AppProvider } from '@/lib/store';
 import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment, createRFQ } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -1130,6 +1130,13 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
       // Version 0: Procucev network vendors
       expect(resolveConfirmationVendorCount({ sourcingMode: 'mode_0', procucevVendorCount: 7 })).toBe(7);
       expect(resolveConfirmationVendorCount({ sourcingMode: 'v0', procucevVendorCount: 4 })).toBe(4);
+      expect(
+        resolveConfirmationVendorCount({
+          sourcingMode: 'mode_0',
+          procucevVendorCount: 0,
+          assignedVendors: [{ id: 'pv-existing', source: 'procucev_network' }],
+        })
+      ).toBe(0);
 
       // Version 2: Hybrid sourcing plan Procucev network vendors
       expect(resolveConfirmationVendorCount({ sourcingMode: 'mode_2', procucevVendorCount: 15 })).toBe(15);
@@ -1147,7 +1154,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
         })
       ).toBe(2);
 
-      // Fallback for Version 0 when procucevVendorCount not explicit: filters Procucev vendors
+      // Fallback for network sourcing modes filters out buyer-owned vendors.
       expect(
         resolveConfirmationVendorCount({
           sourcingMode: 'mode_0',
@@ -1158,10 +1165,45 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
           ],
         })
       ).toBe(2);
+      // Version 2 and 3 return only Procucev network vendors from fallback pool.
+      expect(
+        resolveConfirmationVendorCount({
+          sourcingMode: 'mode_2',
+          assignedVendors: [
+            { id: 'pv-3', source: 'procucev_network' },
+            { id: 'v-buyer-2', source: 'buyer_uploaded' },
+          ],
+        })
+      ).toBe(1);
+      expect(
+        resolveConfirmationVendorCount({
+          sourcingMode: 'mode_3',
+          assignedVendors: [
+            { id: 'pv-4', source: 'procucev_network' },
+            { id: 'v-buyer-3', source: 'buyer_uploaded' },
+          ],
+        })
+      ).toBe(1);
+      expect(
+        resolveConfirmationVendorCount({
+          sourcingMode: 'mode_1',
+          procucevVendorCount: 99,
+          assignedVendors: [{ id: 'pv-private-1' }],
+        })
+      ).toBe(1);
 
       // Null, empty, or missing rfq returns 0
       expect(resolveConfirmationVendorCount(null)).toBe(0);
       expect(resolveConfirmationVendorCount({})).toBe(0);
+    });
+
+    it('isV2OrV3SourcingMode is true only for V2/V3 aliases, false for everything else', () => {
+      for (const m of ['mode_2', 'v2', 'version_2', 'mode_3', 'v3', 'version_3']) {
+        expect(isV2OrV3SourcingMode(m)).toBe(true);
+      }
+      for (const m of ['mode_0', 'v0', 'version_0', 'mode_1', 'v1', 'version_1', '', null, undefined]) {
+        expect(isV2OrV3SourcingMode(m)).toBe(false);
+      }
     });
 
     it('displays the dynamically retrieved Procucev vendor count in the confirmation modal for Version 0, 2, and 3', async () => {
@@ -1206,6 +1248,12 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
       const countEl = screen.getByTestId('confirmation-vendor-count');
       expect(countEl).toHaveTextContent('6');
       expect(screen.queryByText('AI Blind')).not.toBeInTheDocument();
+
+      // V3 gets a dedicated "Procucev Vendors" box carrying the same count.
+      const procucevBox = screen.getByTestId('confirmation-procucev-vendor-box');
+      expect(procucevBox).toBeInTheDocument();
+      expect(screen.getByTestId('confirmation-procucev-vendor-count')).toHaveTextContent('6');
+      expect(within(procucevBox).getByText('Procucev Vendors')).toBeInTheDocument();
     });
 
     it('displays dynamically retrieved Procucev vendor count for Version 0 in confirmation modal', async () => {
@@ -1246,6 +1294,108 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
       const countEl = screen.getByTestId('confirmation-vendor-count');
       expect(countEl).toHaveTextContent('3');
       expect(screen.queryByText('1+ Supplier')).not.toBeInTheDocument();
+
+      // V0 is NOT a Procucev-network-expansion version, so the dedicated box is hidden.
+      expect(screen.queryByTestId('confirmation-procucev-vendor-box')).not.toBeInTheDocument();
+    });
+
+    it('displays the backend vendor count for Version 2 on the submitted RFQ', async () => {
+      mockCreateRFQ.mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          ...mockCreatedRFQ(),
+          sourcingMode: 'mode_2',
+          procucevVendorCount: 11,
+        },
+      });
+
+      renderWizard();
+
+      fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+        target: { value: 'Navi Mumbai Plant' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+        target: { value: '400701' },
+      });
+
+      const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+      fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+        target: { value: 'Precision Industrial Valve' },
+      });
+      fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
+        target: { value: '8' },
+      });
+      fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), {
+        target: { value: 'Nos' },
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
+
+      await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+      expect(await screen.findByText('RFQ Dispatched Successfully!')).toBeInTheDocument();
+      expect(screen.getByTestId('confirmation-vendor-count')).toHaveTextContent('11');
+
+      // V2 (Hybrid) shows the dedicated Procucev Vendors box with the same count.
+      expect(screen.getByTestId('confirmation-procucev-vendor-box')).toBeInTheDocument();
+      expect(screen.getByTestId('confirmation-procucev-vendor-count')).toHaveTextContent('11');
+    });
+  });
+
+  describe('PIN code auto-population of Delivery Location', () => {
+    test('auto-populates city and state into delivery location on entering a valid PIN code', async () => {
+      renderWizard();
+
+      const pincodeInput = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder);
+      const locationInput = screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder) as HTMLInputElement;
+
+      expect(locationInput.value).toBe('');
+
+      // Enter valid PIN code (e.g. 400701 -> Navi Mumbai, Maharashtra)
+      fireEvent.change(pincodeInput, { target: { value: '400701' } });
+      fireEvent.blur(pincodeInput);
+
+      await waitFor(() => {
+        expect(locationInput.value).toBe('Navi Mumbai, Maharashtra');
+      });
+    });
+
+    test('resolves delivery location from postal API response if available', async () => {
+      const realFetch = global.fetch;
+      global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
+        if (typeof url === 'string' && url.includes('api.postalpincode.in')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => [
+              {
+                Status: 'Success',
+                PostOffice: [
+                  {
+                    Name: 'Connaught Place',
+                    District: 'Central Delhi',
+                    State: 'Delhi',
+                  },
+                ],
+              },
+            ],
+          }) as any;
+        }
+        return (realFetch as any)(url, init);
+      });
+
+      renderWizard();
+
+      const pincodeInput = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder);
+      const locationInput = screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder) as HTMLInputElement;
+
+      fireEvent.change(pincodeInput, { target: { value: '110001' } });
+      fireEvent.blur(pincodeInput);
+
+      await waitFor(() => {
+        expect(locationInput.value).toBe('Central Delhi, Delhi');
+      });
+
+      global.fetch = realFetch;
     });
   });
 

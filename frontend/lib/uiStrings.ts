@@ -143,6 +143,10 @@ export const UI_STRINGS = {
         label: 'Buyer Profile',
         description: 'Organisation, tax identity & approvers',
       },
+      vendorEmailTemplates: {
+        label: 'Vendor Email Templates',
+        description: 'Customize vendor onboarding emails',
+      },
       buyerDbSync: {
         label: 'Buyer DB Sync',
         description: 'Integrated public database reconciliation',
@@ -366,6 +370,8 @@ export const UI_STRINGS = {
         'This file type cannot be read by AI extraction. Upload a spreadsheet (.xlsx/.csv), PDF or image, or enter the line items manually.',
       AI_FAILED:
         'The AI could not read this document — its layout may be unusual or the scan unclear. Try a spreadsheet or clearer PDF, or enter the line items manually.',
+      QUOTA_EXCEEDED:
+        'AI extraction reached the Gemini API quota or rate limit. Check the Google AI project quota or retry later, or enter the line items manually.',
       NO_ITEMS_FOUND:
         'No procurement line items could be identified in this document. Check that quantities are stated, or enter the line items manually.',
       NETWORK:
@@ -633,6 +639,10 @@ export const UI_STRINGS = {
     attachmentViewAria: 'Open {fileName} in a new tab',
     attachmentUploadedOn: 'Attached {date}',
     noAttachments: 'No supporting documents were attached to this RFQ.',
+
+    // Vendor Inquiries & Live Availability
+    vendorOnline: 'Online',
+    vendorOffline: 'Offline',
   },
 
   rfqSummary: {
@@ -666,7 +676,7 @@ export const UI_STRINGS = {
     // Intake source badges
     sourceEmailGateway: 'via Email Upload',
     sourceEmailUpload: 'Email File Upload',
-    sourceManualEntry: 'Manual Web Entry',
+    sourceManualEntry: 'Manual Entry',
     sourceAiExtraction: 'AI Extraction',
     sourceAiRfqCreate: 'AI RFQ Create',
     sourceWebPortal: 'Web App Portal',

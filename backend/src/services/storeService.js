@@ -134,7 +134,14 @@ class StoreService {
 
       this.vendors = vendorPage.rows;
       this.vendorsTotal = vendorPage.total;
-      this.rfqs = rfqs;
+      this.rfqs = rfqs.map((rfq) => {
+        if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
+          const corrected = { ...rfq, source: 'manual_entry' };
+          this._persistRFQ(corrected);
+          return corrected;
+        }
+        return rfq;
+      });
       this.evaluations = evaluations;
       this.vendorCatalogue = vendorCatalogue;
       this.notifications = notifications;
@@ -354,6 +361,38 @@ class StoreService {
       this.activeBuyerAccount = fresh;
     }
     return fresh;
+  }
+
+  /**
+   * The signed-in buyer's account, created on first use when none exists.
+   *
+   * A buyer inserted straight into the identity `user` table (bulk import,
+   * manual DB insert) can sign in but never went through the app's
+   * POST /api/buyer-accounts step, so getBuyerAccountByEmail found nothing:
+   * their RFQs were saved with no buyerAccountId and the scoped list always
+   * came back empty. The id is the user's own uuid (`sub`) — stable, so a
+   * racing second request upserts the same row instead of a duplicate, and
+   * the same value the vendor/bootstrap paths already fall back to for an
+   * account-less buyer, so vendors they uploaded before still match.
+   */
+  async ensureBuyerAccountForUser(user) {
+    if (!user || user.role !== 'buyer' || !user.email) return null;
+    const existing = await this.getBuyerAccountByEmail(user.email);
+    if (existing) return existing;
+
+    const id = user.sub || user.id;
+    if (!id) return null;
+    const cached = this.buyerAccounts.find((a) => a.id === id);
+    if (cached) return cached;
+
+    logger.info('Auto-creating missing buyer account', { id, email: user.email }, 'STORE_SERVICE');
+    return this.addBuyerAccount({
+      id,
+      organizationName: user.orgName || user.email,
+      corporateEmail: user.email.toLowerCase(),
+      contactPerson: user.name || '',
+      organizationId: user.orgId || null,
+    });
   }
 
   addBuyerAccount(accData) {
@@ -667,6 +706,7 @@ class StoreService {
           organizationName: vendor.name,
           createdBy: actorEmail || 'buyer-manual-add',
           resetExisting: false,
+          resetPasswordRequired: true,
         });
         identityCreated = result.created === true;
         if (!identityCreated) {
@@ -1045,6 +1085,25 @@ class StoreService {
     }
 
     return false;
+  }
+
+  isVendorPrivateToDifferentBuyer(vendor, rfq) {
+    if (!vendor || !rfq) return false;
+
+    const hasBuyerOwnership = Boolean(
+      vendor.buyerId ||
+      vendor.buyerAccountId ||
+      vendor.addedByBuyerCompany ||
+      vendor.buyerEmail ||
+      (Array.isArray(vendor.mappedBuyerIds) && vendor.mappedBuyerIds.length > 0) ||
+      (Array.isArray(vendor.buyerIds) && vendor.buyerIds.length > 0)
+    );
+    if (!hasBuyerOwnership) return false;
+
+    // Invitation is an access grant, not evidence that a buyer owns a private
+    // vendor. Ignore invitation lists while resolving the owning buyer.
+    const rfqWithoutInvitations = { ...rfq, assignedVendors: [], followUpData: null };
+    return !this.isVendorMappedToRfqBuyer(vendor, rfqWithoutInvitations);
   }
 
   /**
@@ -1695,7 +1754,13 @@ class StoreService {
 
   getRFQs() {
     this.checkAndClose48HourRFQs();
-    return this.rfqs.map((r) => (r.quotes ? { ...r, quotes: evaluateQuotes(r.quotes) } : r));
+    return this.rfqs.map((r) => {
+      let item = r;
+      if (r && r.source === 'ai_extraction' && !r.sourceFileName) {
+        item = { ...r, source: 'manual_entry' };
+      }
+      return item.quotes ? { ...item, quotes: evaluateQuotes(item.quotes) } : item;
+    });
   }
 
   /**
@@ -1709,6 +1774,10 @@ class StoreService {
       if (Array.isArray(allFromDB)) {
         const byId = new Map(this.rfqs.map((r) => [r.id, r]));
         for (const rfq of allFromDB) {
+          if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
+            rfq.source = 'manual_entry';
+            this._persistRFQ(rfq);
+          }
           byId.set(rfq.id, rfq);
         }
         this.rfqs = Array.from(byId.values()).sort(
@@ -1732,8 +1801,12 @@ class StoreService {
 
   getRFQById(id) {
     this.checkAndClose48HourRFQs();
-    const rfq = this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
-    if (!rfq) return undefined;
+    const found = this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
+    if (!found) return undefined;
+    let rfq = found;
+    if (found && found.source === 'ai_extraction' && !found.sourceFileName) {
+      rfq = { ...found, source: 'manual_entry' };
+    }
     return rfq.quotes
       ? {
         ...rfq,
@@ -1809,7 +1882,9 @@ class StoreService {
       // and the ingestion wizard's own documented fallback for the uploaded
       // document ("recorded as sourceFileName instead") could never have worked,
       // because the value never reached the database.
-      source: rfqData.source || null,
+      source: rfqData.source === 'ai_extraction' && !rfqData.sourceFileName
+        ? 'manual_entry'
+        : (rfqData.source !== undefined ? rfqData.source : null),
       sourceFileName: rfqData.sourceFileName || null,
       sourceEmail: rfqData.sourceEmail || null,
       raisedByEmail: requestingBuyerAccount ? requestingBuyerAccount.corporateEmail : rfqData.raisedByEmail || null,
@@ -1865,6 +1940,30 @@ class StoreService {
       },
     };
 
+    // Private vendor records belong only to the buyer account that uploaded
+    // them. Never carry another buyer's private roster entry onto this RFQ.
+    const foreignPrivateVendors = [];
+    newRFQ.assignedVendors = newRFQ.assignedVendors.filter((entry) => {
+      const vendor = entry && entry.id ? this.getVendorById(entry.id, 'all') : null;
+      if (!this.isVendorPrivateToDifferentBuyer(vendor || entry, newRFQ)) return true;
+      foreignPrivateVendors.push(vendor || entry);
+      return false;
+    });
+    if (foreignPrivateVendors.length > 0) {
+      logger.warn(
+        `Excluded ${foreignPrivateVendors.length} private vendor(s) owned by another buyer from RFQ ${newRFQ.rfqNumber}.`,
+        {
+          rfqNumber: newRFQ.rfqNumber,
+          vendorIds: foreignPrivateVendors.map((vendor) => vendor.id).filter(Boolean),
+        },
+        'STORE_SERVICE'
+      );
+      if (newRFQ.followUpData) {
+        newRFQ.followUpData.vendors = newRFQ.assignedVendors;
+        newRFQ.followUpData.totalInvited = newRFQ.assignedVendors.length;
+      }
+    }
+
     // Verify each vendor in assignedVendors against the RFQ's category signals.
     // If a vendor does not match the category:
     // 1. Exclude the vendor from the RFQ vendor shortlist (assignedVendors).
@@ -1905,7 +2004,7 @@ class StoreService {
     // Enterprise QUA – V0 (Free Starter Trial) Flow:
     // When buyer raises RFQ from V0 (mode_0), RFQ is sent ONLY to Procucev vendors.
     // Buyer-uploaded vendors are excluded from V0 RFQs.
-    if (newRFQ.sourcingMode === 'mode_0' || newRFQ.sourcingMode === 'v0') {
+    if (newRFQ.sourcingMode === 'mode_0' || newRFQ.sourcingMode === 'v0' || newRFQ.sourcingMode === 'version_0') {
       const MAX_V0_CATEGORY_INVITES = 100;
       // Filter existing assignedVendors to strictly Procucev vendors
       newRFQ.assignedVendors = (Array.isArray(newRFQ.assignedVendors) ? newRFQ.assignedVendors : []).filter((v) => {
@@ -1987,7 +2086,7 @@ class StoreService {
     // meant to stay strictly private). mode_1 now only ever gets whatever
     // the client-supplied assignedVendors already contains (the buyer's own
     // roster, category-filtered on the frontend).
-    if (newRFQ.sourcingMode === 'mode_2' || newRFQ.source === 'email_gateway') {
+    if (newRFQ.sourcingMode === 'mode_2' || newRFQ.sourcingMode === 'v2' || newRFQ.sourcingMode === 'version_2' || newRFQ.source === 'email_gateway') {
       // Capped: a bulk-imported category can match thousands of vendors (seen
       // live: 3000+ on a single RFQ, a 787KB payload) — embedding all of them
       // in assignedVendors on every future read of this RFQ is exactly the
@@ -2050,7 +2149,7 @@ class StoreService {
       newRFQ.sourcingMode === 'v3' ||
       newRFQ.sourcingMode === 'version_3'
     ) {
-      const MAX_V3_CATEGORY_INVITES = 200;
+      const MAX_V3_CATEGORY_INVITES = 100;
       let v3Matches = this.candidateVendorsForRFQ(newRFQ)
         .filter((v) => this.isProcucevVendor(v))
         .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
@@ -2071,30 +2170,38 @@ class StoreService {
       mode3ProcucevCount = v3Matches.length;
     }
 
-    // Dynamically calculate and attach Procucev vendor count for Version 0, Version 2, and Version 3:
+    // Dynamically calculate and attach vendor count for Version 0, Version 2, and Version 3.
+    // V0: Procucev-network-only count (all invited vendors ARE Procucev vendors for mode_0).
+    // V2: Total invited count = buyer private roster + Procucev network (hybrid mode).
+    // V3: Total invited count = buyer private roster (or category-matched pool if not supplied).
     let procucevVendorCount = 0;
     const isV0 = newRFQ.sourcingMode === 'mode_0' || newRFQ.sourcingMode === 'v0' || newRFQ.sourcingMode === 'version_0';
     const isV2 = newRFQ.sourcingMode === 'mode_2' || newRFQ.sourcingMode === 'v2' || newRFQ.sourcingMode === 'version_2';
     const isV3 = newRFQ.sourcingMode === 'mode_3' || newRFQ.sourcingMode === 'v3' || newRFQ.sourcingMode === 'version_3';
 
     if (isV0) {
-      const procucevAssigned = (newRFQ.assignedVendors || []).filter((v) => {
-        const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
-        return this.isProcucevVendor(resolved);
-      });
-      procucevVendorCount = procucevAssigned.length > 0
-        ? procucevAssigned.length
+      // V0: Every invited vendor is a Procucev network vendor — report total assigned.
+      procucevVendorCount = (newRFQ.assignedVendors || []).length > 0
+        ? (newRFQ.assignedVendors || []).length
         : this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v)).length;
     } else if (isV2) {
+      // V2 Hybrid: report the count of Procucev verified vendors that can assign / are assigned to this RFQ
+      const procucevAssigned = (newRFQ.assignedVendors || []).filter((v) => {
+        const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+        return this.isProcucevVendor(resolved);
+      });
+      const candidateProcucevCount = this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v)).length;
+      procucevVendorCount = procucevAssigned.length > 0
+        ? procucevAssigned.length
+        : candidateProcucevCount;
+    } else if (isV3) {
       const procucevAssigned = (newRFQ.assignedVendors || []).filter((v) => {
         const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
         return this.isProcucevVendor(resolved);
       });
       procucevVendorCount = procucevAssigned.length > 0
         ? procucevAssigned.length
-        : this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v)).length;
-    } else if (isV3) {
-      procucevVendorCount = mode3ProcucevCount > 0
+        : mode3ProcucevCount > 0
         ? mode3ProcucevCount
         : this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v)).length;
     }
@@ -2686,11 +2793,6 @@ class StoreService {
     );
   }
 
-  isProcucevVendor(vendor) {
-    if (!vendor) return false;
-    return !this.isBuyerUploaded(vendor);
-  }
-
   /**
    * Whether a vendor covers an RFQ's category.
    *
@@ -2803,6 +2905,98 @@ class StoreService {
   }
 
   /**
+   * Database-backed Procucev vendor count for an RFQ's version (V0/V2/V3).
+   *
+   * `getProcucevVendorCount` / `createRFQ` count against `this.vendors`, which
+   * is only a capped bootstrap-time *subset* of the directory (see
+   * getVendorsPageFromDB's own comment — the real table is 80k+ rows). When
+   * the category-matched Procucev vendors simply aren't on the loaded page the
+   * in-memory count comes back 0 even though vendors exist, which is exactly
+   * why the RFQ success popup showed "0" for V2/V3. This recomputes the count
+   * straight from Postgres so the popup reflects the whole directory.
+   *
+   * Reuses the existing getVendorsPageFromDB primitive (which already filters
+   * to public/Procucev vendors via `publicOnly` and counts in-DB via its
+   * `total`), one query per distinct major-category signal, and reports the
+   * largest — categories overlap, so summing would double-count; the dominant
+   * category is the honest "vendors available for this RFQ" figure. Falls back
+   * to the in-memory count when no DB pool is configured (dev/in-memory mode),
+   * and when a buyer explicitly assigned Procucev vendors that assignment wins,
+   * matching getProcucevVendorCount's precedence.
+   *
+   * @param {Object} rfq
+   * @returns {Promise<number>}
+   */
+  async resolveProcucevVendorCountFromDB(rfq) {
+    if (!rfq) return 0;
+    const mode = rfq.sourcingMode || '';
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
+    const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
+    if (!isV0 && !isV2 && !isV3) return 0;
+
+    // A buyer's own explicit Procucev assignment is authoritative and already
+    // in memory — no DB round-trip needed.
+    const assigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+    const procucevAssigned = assigned.filter((v) => {
+      const resolved = (v && v.id ? this.getVendorById(v.id, 'all') : null) || v;
+      return this.isProcucevVendor(resolved);
+    });
+    if (procucevAssigned.length > 0) return procucevAssigned.length;
+
+    // No DB configured (dev/in-memory): the capped-subset count is all we have.
+    if (!pool.hasStorage()) return this.getProcucevVendorCount(rfq);
+
+    // Every category string the RFQ carries — its header `category` plus each
+    // line item's major/minor/category (an email/BOQ-ingested RFQ often tags
+    // only the line items, with a null header category, which is exactly the
+    // shape that produced the zero).
+    const signals = this._rfqCategorySignals(rfq);
+
+    let dbCount = 0;
+    if (Array.isArray(signals) && signals.length > 0) {
+      try {
+        // One query: distinct public vendors matching ANY signal across major,
+        // minor, vendor-selected and client-mapped categories — the same four
+        // pools vendorCoversCategory checks, so it mirrors the in-memory
+        // candidate match over the whole directory instead of the capped page.
+        dbCount = await domainQueries.countPublicVendorsMatchingCategories(signals);
+      } catch (err) {
+        logger.warn(
+          'Procucev vendor count DB query failed',
+          { rfqNumber: rfq.rfqNumber, error: err.message },
+          'STORE_SERVICE'
+        );
+      }
+    }
+
+    // Fallback: if category matching found nothing (no signals, or the RFQ's
+    // category labels don't line up with how vendors were tagged — the common
+    // real-world case for an email/BOQ-ingested RFQ), report the size of the
+    // public Procucev network the RFQ CAN reach rather than a misleading 0.
+    // This is the same directory total the Operational Kanban already shows.
+    // Autonomous V3 and hybrid V2 both expand into this whole public network,
+    // so it is the honest "Procucev vendors available for this version" figure.
+    if (dbCount === 0) {
+      try {
+        const page = await domainQueries.getVendorsPageFromDB({ limit: 1, offset: 0, publicOnly: true });
+        if (page && typeof page.total === 'number') {
+          dbCount = page.total;
+        }
+      } catch (err) {
+        logger.warn(
+          'Procucev network total count DB query failed',
+          { rfqNumber: rfq.rfqNumber, error: err.message },
+          'STORE_SERVICE'
+        );
+      }
+    }
+
+    // Never regress below whatever the in-memory subset already counted.
+    return Math.max(dbCount || 0, this.getProcucevVendorCount(rfq));
+  }
+
+  /**
    * Whether an RFQ should reach a given vendor.
    *
    * True when the vendor was explicitly added by the RFQ's buyer
@@ -2883,6 +3077,7 @@ class StoreService {
   candidateVendorsForRFQ(rfq) {
     const signals = this._rfqCategorySignals(rfq);
     return this.vendors
+      .filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq))
       .filter((v) => signals.some((c) => this.vendorCoversCategory(v, c)))
       .map((v) => ({ ...v, alreadyInvited: this._isInvitedVendor(v, rfq) }));
   }
@@ -2909,10 +3104,11 @@ class StoreService {
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
     const newlyInvited = [];
     const overrideVendors = [];
+    const excludedVendors = [];
     const signals = this._rfqCategorySignals(rfq);
 
     for (const id of Array.isArray(vendorIds) ? vendorIds : []) {
-      let vendor = this.getVendorById(id);
+      let vendor = this.getVendorById(id, 'all');
       if (!vendor) {
         vendor = await domainQueries.getVendorByIdFromDB(id);
         if (vendor && !this.vendors.some((v) => v.id === vendor.id)) {
@@ -2920,6 +3116,19 @@ class StoreService {
         }
       }
       if (!vendor) continue;
+      if (this.isVendorPrivateToDifferentBuyer(vendor, rfq)) {
+        excludedVendors.push({
+          id: vendor.id,
+          name: vendor.name,
+          reason: 'This private vendor belongs to a different buyer account.',
+        });
+        logger.warn(
+          `Rejected invitation of private vendor ${vendor.id} owned by another buyer to RFQ ${rfq.rfqNumber}.`,
+          { rfqNumber: rfq.rfqNumber, vendorId: vendor.id },
+          'STORE_SERVICE'
+        );
+        continue;
+      }
       if (this._isInvitedVendor(vendor, rfq)) continue;
 
       const hasCategory = vendor.majorCategory || (Array.isArray(vendor.minorCategories) && vendor.minorCategories.length > 0);
@@ -2933,7 +3142,12 @@ class StoreService {
     }
 
     if (newlyInvited.length === 0) {
-      return { updatedRFQ: rfq, invitedCount: 0 };
+      return {
+        updatedRFQ: rfq,
+        invitedCount: 0,
+        excludedCount: excludedVendors.length,
+        excludedVendors,
+      };
     }
 
     const entries = newlyInvited.map((v) => ({
@@ -3006,6 +3220,8 @@ class StoreService {
       updatedRFQ,
       invitedCount: newlyInvited.length,
       overrideCount: overrideVendors.length,
+      excludedCount: excludedVendors.length,
+      excludedVendors,
     };
   }
 

@@ -8,6 +8,7 @@ const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
 const authSessionQueries = require('../db/authSessionQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
+const vendorPresenceService = require('./vendorPresenceService');
 
 const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
 
@@ -388,6 +389,10 @@ async function authenticateWithPassword(email, password, ipAddress, mobile) {
     ipAddress,
   });
 
+  if (user.role === 'vendor') {
+    vendorPresenceService.recordHeartbeat({ identifier: user.email, role: user.role, vendorId: user.id });
+  }
+
   return {
     success: true,
     token,
@@ -643,6 +648,10 @@ async function verifyOtp(email, code, ipAddress, mobile) {
     ipAddress,
   });
 
+  if (user.role === 'vendor') {
+    vendorPresenceService.recordHeartbeat({ identifier: user.email, role: user.role, vendorId: user.id });
+  }
+
   return {
     success: true,
     token,
@@ -747,17 +756,16 @@ async function registerUser(payload, ipAddress) {
     fullName: name,
     organizationName: orgName,
     companyName: orgName,
+    ...(isVendor ? { resetExisting: false, resetPasswordRequired: false } : {}),
   });
 
-  if (!result.created && !isVendor) {
+  if (!result.created) {
     throw new Error(AUTH_MESSAGES.ACCOUNT_ALREADY_EXISTS);
   }
 
-  // Vendor registration creates the account with reset_password enabled, so
-  // the first session must carry the same gate as a subsequent login.
   const newUser = {
     ...result.user,
-    ...(isVendor ? { resetPasswordRequired: true } : {}),
+    ...(isVendor ? { resetPasswordRequired: false } : {}),
   };
   const token = generateSessionToken(newUser);
   logger.audit(`New enterprise account registered: ${newUser.email} (${newUser.role})`, newUser.email, { ipAddress });

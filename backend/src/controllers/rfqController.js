@@ -75,7 +75,7 @@ const ATTACHMENT_ERRORS = {
 async function resolveRfqReadScope(req) {
   const role = req.user && req.user.role;
   if (role === 'buyer') {
-    const account = await storeService.getBuyerAccountByEmail(req.user.email);
+    const account = await storeService.ensureBuyerAccountForUser(req.user);
     return { role, restricted: true, buyerAccountId: account ? account.id : null };
   }
   if (role === 'vendor') {
@@ -454,7 +454,13 @@ async function createRFQ(req, res, next) {
     // Resolved server-side from the authenticated session, never trusted from
     // the request body, so the RFQ is attributed to whoever is actually
     // logged in rather than a client-supplied or globally-shared value.
-    requestingBuyerAccount = req.user ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
+    // ensureBuyerAccountForUser creates the account for a buyer who has none
+    // (e.g. bulk-imported) so the RFQ is never saved without an owner and
+    // left invisible in their own list. Non-buyers keep the plain lookup.
+    requestingBuyerAccount = req.user
+      ? (await storeService.ensureBuyerAccountForUser(req.user)) ||
+        (await storeService.getBuyerAccountByEmail(req.user.email))
+      : null;
 
     // Server-side re-validation of the buyer's subscription entitlement —
     // mirrors the vendor download-quota check below (generateEmailPreview).
@@ -532,6 +538,20 @@ async function createRFQ(req, res, next) {
     logger.info(`Creating new RFQ: ${body.title}`, { title: body.title, category: body.category, budget: body.budget }, 'RFQ_CONTROLLER');
 
     const created = storeService.createRFQ({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
+
+    // createRFQ counts matched Procucev vendors against the capped in-memory
+    // vendor subset, which undercounts (often to 0) once the directory grows
+    // past the bootstrap page — the cause of the RFQ success popup showing
+    // "0" matched Procucev vendors for V2/V3. Recompute from the database so
+    // the popup's "Mode & Vendors" figure reflects the whole directory.
+    try {
+      const dbCount = await storeService.resolveProcucevVendorCountFromDB(created);
+      if (typeof dbCount === 'number' && dbCount > (created.procucevVendorCount || 0)) {
+        created.procucevVendorCount = dbCount;
+      }
+    } catch (err) {
+      logger.warn('Could not resolve DB-backed Procucev vendor count', { error: err.message }, 'RFQ_CONTROLLER');
+    }
 
     // Dispatch real email notification to target gateway address (e.g. RFQ@procucev.com)
     if (body.source === 'email_gateway' || body.targetGatewayEmail) {

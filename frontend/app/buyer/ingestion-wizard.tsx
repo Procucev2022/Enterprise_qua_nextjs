@@ -28,7 +28,7 @@ import {
   updateManualRFQLineItem,
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
-import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail } from '@/lib/validationSchemas';
+import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, resolveLocationFromPostalResult } from '@/lib/validationSchemas';
 import { getMajorCategories, getMinorCategories, autoCategorizeItem, getDefaultMinorForMajor } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { extractRfqCategorySignals, matchVendorAgainstSignals } from '@/lib/vendorMatching';
@@ -38,6 +38,7 @@ import type {
   RFQAttachment,
   RFQExtractionResult,
   RFQVendorCandidate,
+  RFQSource,
   SourcingMode,
   VendorEntry,
   VendorPageMeta,
@@ -113,28 +114,73 @@ function withStoredValue(options: string[], value: string): string[] {
  * For Version 0, Version 2, and Version 3, it displays the actual number of Procucev
  * network vendors associated with that RFQ version based on the backend response.
  */
-export function resolveConfirmationVendorCount(rfq: any): number {
+type ConfirmationVendor = string | {
+  id?: string;
+  name?: string;
+  source?: string;
+  addedByBuyerCompany?: boolean;
+};
+
+interface ConfirmationRFQ {
+  sourcingMode?: string;
+  procucevVendorCount?: number;
+  assignedVendors?: ConfirmationVendor[];
+}
+
+export function resolveConfirmationVendorCount(rfq: ConfirmationRFQ | null | undefined): number {
   if (!rfq) return 0;
   const mode = rfq.sourcingMode;
-  const isNetworkMode =
-    mode === 'mode_0' || mode === 'v0' || mode === 'version_0' ||
-    mode === 'mode_2' || mode === 'v2' || mode === 'version_2' ||
-    mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
+  const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+  const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
+  const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
+  const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
 
-  if (isNetworkMode && typeof rfq.procucevVendorCount === 'number') {
-    return rfq.procucevVendorCount;
+  // If the backend dynamically returned the vendor count for this RFQ version, use it:
+  if (
+    (isV0 || isV2 || isV3) &&
+    typeof rfq.procucevVendorCount === 'number' &&
+    Number.isFinite(rfq.procucevVendorCount)
+  ) {
+    return Math.max(0, rfq.procucevVendorCount);
   }
-  if (typeof rfq.procucevVendorCount === 'number') {
-    return rfq.procucevVendorCount;
-  }
+
+  // Fallback: derive from assignedVendors when the backend field is absent:
   if (Array.isArray(rfq.assignedVendors)) {
-    if (mode === 'mode_0' || mode === 'v0' || mode === 'version_0') {
-      const pCount = rfq.assignedVendors.filter(isProcucevVendor).length;
-      return pCount > 0 ? pCount : rfq.assignedVendors.length;
+    if (isV0 || isV2 || isV3) {
+      // V0, V2, V3: only Procucev network vendors are counted.
+      return rfq.assignedVendors.filter((vendor) =>
+        isProcucevVendor(typeof vendor === 'string' ? { id: vendor } : vendor)
+      ).length;
     }
-    return rfq.assignedVendors.length;
+    if (isV1) {
+      // V1: all assigned vendors from the private roster.
+      return rfq.assignedVendors.length;
+    }
   }
+
   return 0;
+}
+
+/**
+ * Every alias the backend may send for V2 (Hybrid) and V3 (Autonomous) — the
+ * only two versions that expand an RFQ into the Procucev network. Single source
+ * of truth for both the exported helper and the inline modal check.
+ */
+export const V2_V3_SOURCING_MODES: readonly string[] = [
+  'mode_2',
+  'v2',
+  'version_2',
+  'mode_3',
+  'v3',
+  'version_3',
+];
+
+/**
+ * Whether a sourcing mode is V2 (Hybrid) or V3 (Autonomous) — the only versions
+ * for which a dedicated "Procucev Vendors" count is meaningful.
+ */
+export function isV2OrV3SourcingMode(mode: string | null | undefined): boolean {
+  return V2_V3_SOURCING_MODES.includes(String(mode || ''));
 }
 
 interface IngestionWizardProps {
@@ -603,7 +649,15 @@ export default function IngestionWizard({
             setPincodePostOffices([]);
           } else {
             setPincodeError(null);
-            setPincodePostOffices(res.postOffices || []);
+            const offices = res.postOffices || [];
+            setPincodePostOffices(offices);
+            const resolvedLoc = resolveLocationFromPostalResult(raw, offices);
+            if (resolvedLoc) {
+              setForm((prev) => ({
+                ...prev,
+                deliveryLocation: resolvedLoc,
+              }));
+            }
           }
         } catch {
           setPincodeError(null);
@@ -615,6 +669,29 @@ export default function IngestionWizard({
       setPincodeError(null);
       setPincodeValidating(false);
       setPincodePostOffices([]);
+    }
+  }, [form.deliveryPincode]);
+
+  const handlePincodeBlur = useCallback(async () => {
+    const raw = form.deliveryPincode.trim();
+    if (/^\d{6}$/.test(raw) && !isDummyPincode(raw)) {
+      try {
+        const res = await validatePincode(raw);
+        if (res.isValid) {
+          setPincodeError(null);
+          const offices = res.postOffices || [];
+          setPincodePostOffices(offices);
+          const resolvedLoc = resolveLocationFromPostalResult(raw, offices);
+          if (resolvedLoc) {
+            setForm((prev) => ({
+              ...prev,
+              deliveryLocation: resolvedLoc,
+            }));
+          }
+        }
+      } catch {
+        // silent
+      }
     }
   }, [form.deliveryPincode]);
 
@@ -648,7 +725,13 @@ export default function IngestionWizard({
   };
 
   const handleRemoveFile = (index: number) => {
-    setUploadedFiles((prev) => prev.filter((_, i) => i !== index));
+    setUploadedFiles((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      if (next.length === 0) {
+        setExtractionSummary(null);
+      }
+      return next;
+    });
   };
 
   /** AI Extraction: processes uploaded document (.eml, .msg, .xlsx, .pdf, .docx, .csv) into form */
@@ -875,8 +958,8 @@ export default function IngestionWizard({
 
       let mode1AssignedVendors: AssignedVendorEntry[] | undefined = undefined;
 
-      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2') && Array.isArray(buyerVendors)) {
-        const pool = form.sourcingMode === 'mode_1'
+      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') && Array.isArray(buyerVendors)) {
+        const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
           ? buyerVendors.filter((v) => isBuyerUploaded(v))
           : buyerVendors;
         const { signals: dispatchSignals } = extractRfqCategorySignals(updatedForm);
@@ -923,9 +1006,14 @@ export default function IngestionWizard({
           item.majorCategory === ALL_CATEGORIES_OPTION ? { ...item, majorCategory: '' } : item
         ),
       };
-      const rfqSource = 'ai_extraction';
+      const isAiExtracted = Boolean(
+        extractionSummary &&
+        extractionSummary.accepted > 0 &&
+        uploadedFiles.length > 0
+      );
+      const rfqSource: RFQSource = isAiExtracted ? 'ai_extraction' : 'manual_entry';
       const payload = toRFQCreatePayload(sanitizedForm, mode1AssignedVendors, rfqSource);
-      if (extractionSummary?.fileName) {
+      if (isAiExtracted && extractionSummary?.fileName) {
         payload.sourceFileName = extractionSummary.fileName;
       }
       const result = await createRFQ(payload);
@@ -1227,6 +1315,7 @@ export default function IngestionWizard({
                 required
                 value={form.deliveryPincode}
                 onChange={(e) => patchForm('deliveryPincode', e.target.value)}
+                onBlur={handlePincodeBlur}
                 placeholder={MODAL.deliveryPincodePlaceholder}
                 maxLength={10}
                 className="w-full px-3 py-2 pr-20 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white mono font-semibold focus:ring-2 focus:ring-indigo-500"
@@ -2769,6 +2858,25 @@ export default function IngestionWizard({
                   {resolveConfirmationVendorCount(confirmationRfq)}
                 </span>
               </div>
+              {/* Dedicated Procucev network vendor count — only V2 (Hybrid) and
+                  V3 (Autonomous) expand into the Procucev network, so this box
+                  is meaningful only for those versions and is hidden otherwise. */}
+              {V2_V3_SOURCING_MODES.includes(String(confirmationRfq.sourcingMode || '')) && (
+                <div
+                  data-testid="confirmation-procucev-vendor-box"
+                  className="p-3 bg-emerald-50/60 dark:bg-emerald-950/30 rounded-xl border border-emerald-200/60 dark:border-emerald-800/50"
+                >
+                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 block uppercase tracking-wider">
+                    Procucev Vendors
+                  </span>
+                  <span
+                    data-testid="confirmation-procucev-vendor-count"
+                    className="text-xs font-bold text-emerald-700 dark:text-emerald-300 font-mono"
+                  >
+                    {resolveConfirmationVendorCount(confirmationRfq)}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center justify-center gap-3 pt-4 border-t border-slate-200 dark:border-gray-800">
