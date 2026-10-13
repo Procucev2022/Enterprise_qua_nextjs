@@ -1089,6 +1089,72 @@ function makeInquiry(overrides: any = {}): any {
       expect(within(card).queryByText(/RFQ Procucev$/)).not.toBeInTheDocument();
     });
 
+    describe('category manager assigned-suppliers view (full details + tabs)', () => {
+      function renderAsCategoryManager(rfq: RFQItem) {
+        (useApp as jest.Mock).mockReturnValue({
+          currentRole: 'category_manager',
+          showToast: mockShowToast,
+          refreshFromDB: jest.fn().mockResolvedValue(undefined),
+          buyerVendors: [],
+          currentUserSession: { name: 'Cat Manager', email: 'cm@procucev.com', role: 'category_manager' },
+        });
+        return render(<RFQDetails rfq={rfq} onBack={onBack} />);
+      }
+
+      const mixedRfq = () =>
+        buildRFQ({
+          sourcingMode: 'mode_3',
+          assignedVendors: [
+            {
+              id: 'proc-1',
+              name: 'Mamta Electrics',
+              email: 'mamta@network.in',
+              phone: '+91 90000 10001',
+              contactPerson: 'Mamta Rep',
+              vendorCategory: 'Procucev Network',
+              majorCategory: 'lights',
+            } as any,
+            {
+              id: 'own-1',
+              name: 'Amma Solution',
+              email: 'amma@buyerco.in',
+              phone: '+91 90000 20002',
+              contactPerson: 'Amma Rep',
+              vendorCategory: 'Client List',
+            } as any,
+          ],
+        });
+
+      it('renders two tabs and defaults to the Procucev tab with full contact details', () => {
+        renderAsCategoryManager(mixedRfq());
+
+        const tabs = screen.getByTestId('cm-supplier-tabs');
+        expect(screen.getByTestId('cm-tab-procucev')).toHaveTextContent('Procucev Vendors (1)');
+        expect(screen.getByTestId('cm-tab-own')).toHaveTextContent("Buyer's Own Vendors (1)");
+
+        // Procucev tab is active by default and shows FULL details (no double-blind).
+        expect(within(tabs).getByText('Mamta Electrics')).toBeInTheDocument();
+        expect(within(tabs).getByText('mamta@network.in')).toBeInTheDocument();
+        expect(within(tabs).getByText('+91 90000 10001')).toBeInTheDocument();
+        expect(within(tabs).getByText(/Mamta Rep/)).toBeInTheDocument();
+        // No double-blind badge in the category-manager supplier panel.
+        expect(within(tabs).queryByText(/Double-Blind/i)).not.toBeInTheDocument();
+      });
+
+      it('switches to the Buyer Own Vendors tab and shows that vendor full detail', () => {
+        renderAsCategoryManager(mixedRfq());
+
+        fireEvent.click(screen.getByTestId('cm-tab-own'));
+
+        const tabs = screen.getByTestId('cm-supplier-tabs');
+        expect(within(tabs).getByText('Amma Solution')).toBeInTheDocument();
+        expect(within(tabs).getByText('amma@buyerco.in')).toBeInTheDocument();
+        expect(within(tabs).getByText('+91 90000 20002')).toBeInTheDocument();
+        // The Procucev vendor is not in this tab's list.
+        expect(within(tabs).queryByText('Mamta Electrics')).not.toBeInTheDocument();
+      });
+    });
+
     it('allows searching vendors and filtering by status tabs', () => {
       renderDetails(
         buildRFQ({

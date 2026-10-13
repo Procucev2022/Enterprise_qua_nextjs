@@ -373,9 +373,15 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   }
   const { currentRole, showToast, refreshFromDB, buyerVendors, currentUserSession } = useApp();
   const isVendor = Boolean(isVendorView || currentUserSession?.role === 'vendor');
+  // The category manager is an internal oversight role: it sees full vendor
+  // contact details (no double-blind) and a tabbed Procucev / Buyer's-own split
+  // in the assigned-suppliers panel. The buyer keeps the confidential view.
+  const isCategoryManager = currentRole === 'category_manager' && !isVendor;
   const [localRfq, setLocalRfq] = useState<RFQItem | null>(rfq);
   const [isClosing, setIsClosing] = useState(false);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
+  // Category-manager assigned-suppliers tab: 'procucev' | 'own'.
+  const [supplierTab, setSupplierTab] = useState<'procucev' | 'own'>('procucev');
   const [itemSearch, setItemSearch] = useState('');
   const [minorFilter, setMinorFilter] = useState<string>(ALL_MINORS);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -1710,10 +1716,76 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           };
         });
 
-        // Procucev Network vendors stay visible but double-blind: the card below
-        // shows their category, location, and match score while hiding email,
-        // phone, and contact person. Private/client vendors show full contact.
         const visibleAssigned = normalizedAssigned;
+        const procucevVendors = visibleAssigned.filter((v: any) => v.isProcucev);
+        const ownVendors = visibleAssigned.filter((v: any) => !v.isProcucev);
+
+        // Full-detail card (name + contact + email + phone + category). Used for
+        // the buyer's own vendors everywhere, and for ALL vendors in the
+        // category-manager view (an internal oversight role, no double-blind).
+        const renderFullCard = (v: any) => (
+          <div
+            key={v.id}
+            data-testid="assigned-supplier-card"
+            className="p-3 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/40 space-y-1"
+          >
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
+              <span
+                className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${
+                  v.isProcucev
+                    ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
+                    : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                }`}
+              >
+                {v.isProcucev ? 'Procucev' : 'Invited'}
+              </span>
+            </div>
+            <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
+              {v.majorCategory && <p className="truncate">Category: {v.majorCategory}</p>}
+              {v.contactPerson && <p className="truncate">Contact: {v.contactPerson}</p>}
+              {v.email && <p className="mono truncate">{v.email}</p>}
+              {v.phone && <p className="mono">{v.phone}</p>}
+              {typeof v.matchScore === 'number' && (
+                <p className="font-semibold text-emerald-600 dark:text-emerald-400">{v.matchScore}% match</p>
+              )}
+            </div>
+          </div>
+        );
+
+        // Confidential double-blind card (name + category + location + score, no
+        // contact). Used for Procucev vendors in the BUYER view only.
+        const renderConfidentialCard = (v: any) => (
+          <div
+            key={v.id}
+            data-testid="assigned-supplier-card"
+            className="p-3 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/40 space-y-1"
+          >
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
+              <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                🔒 Double-Blind
+              </span>
+            </div>
+            <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
+              <p className="truncate">Category: {v.majorCategory || 'General Industrial'}</p>
+              <p className="truncate">Location: {v.location || 'Procucev Network'}</p>
+              <p className="font-semibold text-emerald-600 dark:text-emerald-400">
+                {typeof v.matchScore === 'number' ? `${v.matchScore}% match` : 'Match: Verified'}
+              </p>
+            </div>
+          </div>
+        );
+
+        const emptyState = (
+          <div className="p-4 text-center rounded-xl bg-slate-50 dark:bg-gray-950/40 border border-slate-200 dark:border-gray-800 space-y-1">
+            <Users size={20} className="mx-auto text-slate-400 opacity-60" />
+            <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Suppliers Assigned Yet</p>
+            <p className="text-[11px] text-slate-500 dark:text-gray-400">
+              Click &quot;Invite Suppliers&quot; to select and dispatch invitations to approved category suppliers.
+            </p>
+          </div>
+        );
 
         return (
           <Panel
@@ -1730,54 +1802,61 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           >
             <div className="px-4 pb-4">
               {visibleAssigned.length === 0 ? (
-                <div className="p-4 text-center rounded-xl bg-slate-50 dark:bg-gray-950/40 border border-slate-200 dark:border-gray-800 space-y-1">
-                  <Users size={20} className="mx-auto text-slate-400 opacity-60" />
-                  <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Suppliers Assigned Yet</p>
-                  <p className="text-[11px] text-slate-500 dark:text-gray-400">
-                    Click &quot;Invite Suppliers&quot; to select and dispatch invitations to approved category suppliers.
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                  {visibleAssigned.map((v: any) => (
-                    <div
-                      key={v.id}
-                      data-testid="assigned-supplier-card"
-                      className="p-3 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/40 space-y-1"
+                emptyState
+              ) : isCategoryManager ? (
+                // ── Category Manager: two tabs, full details for every vendor ──
+                <div className="space-y-3" data-testid="cm-supplier-tabs">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      data-testid="cm-tab-procucev"
+                      onClick={() => setSupplierTab('procucev')}
+                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${
+                        supplierTab === 'procucev'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'
+                      }`}
                     >
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
-                        {v.isProcucev ? (
-                          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                            🔒 Double-Blind
-                          </span>
-                        ) : (
-                          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                            Invited
-                          </span>
-                        )}
-                      </div>
-                      {v.isProcucev ? (
-                        // Double-blind: category, location, and match score only —
-                        // email, phone, and contact person are deliberately omitted.
-                        // Each row always renders (with a neutral placeholder when
-                        // the datum is unknown) so the card is never contact-only.
-                        <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
-                          <p className="truncate">Category: {v.majorCategory || 'General Industrial'}</p>
-                          <p className="truncate">Location: {v.location || 'Procucev Network'}</p>
-                          <p className="font-semibold text-emerald-600 dark:text-emerald-400">
-                            {typeof v.matchScore === 'number' ? `${v.matchScore}% match` : 'Match: Verified'}
+                      Procucev Vendors ({procucevVendors.length})
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="cm-tab-own"
+                      onClick={() => setSupplierTab('own')}
+                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${
+                        supplierTab === 'own'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'
+                      }`}
+                    >
+                      Buyer&apos;s Own Vendors ({ownVendors.length})
+                    </button>
+                  </div>
+
+                  {(() => {
+                    const tabVendors = supplierTab === 'procucev' ? procucevVendors : ownVendors;
+                    if (tabVendors.length === 0) {
+                      return (
+                        <div className="p-4 text-center rounded-xl bg-slate-50 dark:bg-gray-950/40 border border-slate-200 dark:border-gray-800">
+                          <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                            {supplierTab === 'procucev'
+                              ? 'No Procucev network vendors on this RFQ.'
+                              : "No buyer's own vendors on this RFQ."}
                           </p>
                         </div>
-                      ) : (
-                        <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
-                          {v.contactPerson && <p className="truncate">Contact: {v.contactPerson}</p>}
-                          {v.email && <p className="mono truncate">{v.email}</p>}
-                          {v.phone && <p className="mono">{v.phone}</p>}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                      );
+                    }
+                    return (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                        {tabVendors.map((v: any) => renderFullCard(v))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              ) : (
+                // ── Buyer view: Procucev double-blind, own vendors full detail ──
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                  {visibleAssigned.map((v: any) => (v.isProcucev ? renderConfidentialCard(v) : renderFullCard(v)))}
                 </div>
               )}
             </div>
