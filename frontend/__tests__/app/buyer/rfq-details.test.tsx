@@ -977,7 +977,7 @@ function makeInquiry(overrides: any = {}): any {
       expect(screen.queryByText('Global Turbines Ltd')).not.toBeInTheDocument();
     });
 
-    it('filters Procucev vendors out of both buyer inquiry and assigned supplier sections', () => {
+    it('shows a Procucev vendor confidentially in the assigned supplier panel (name only, no contact)', () => {
       renderDetails(
         buildRFQ({
           sourcingMode: 'mode_2',
@@ -999,14 +999,17 @@ function makeInquiry(overrides: any = {}): any {
       const panelHeading = screen.getByText('Assigned & Invited Suppliers');
       const panel = panelHeading.closest('section');
       expect(panel).not.toBeNull();
+      // Both the client vendor and the Procucev vendor are now listed by name.
       expect(within(panel as HTMLElement).getAllByText('Client Approved Supplier').length).toBeGreaterThanOrEqual(1);
-      expect(within(panel as HTMLElement).queryByText('Assigned Network Supplier')).not.toBeInTheDocument();
+      expect(within(panel as HTMLElement).getAllByText('Assigned Network Supplier').length).toBeGreaterThanOrEqual(1);
+      // The Procucev card carries the double-blind badge.
+      expect(within(panel as HTMLElement).getAllByText(/Double-Blind/i).length).toBeGreaterThanOrEqual(1);
     });
 
-    it('keeps a V3 Procucev vendor confidential: never shows its email or phone', () => {
-      // The exact reported leak: a V3 RFQ carrying a Procucev network vendor
-      // whose record still has an email/phone must not expose either in the
-      // buyer's details view — the double-blind panel hides the vendor entirely.
+    it('keeps a V3 Procucev vendor confidential: shows name, category, location, score — hides email, phone, contact', () => {
+      // The reported requirement: a V3 Procucev vendor must appear in the panel
+      // with its category, location, and match score visible, but its email,
+      // phone, and contact person hidden.
       renderDetails(
         buildRFQ({
           sourcingMode: 'mode_3',
@@ -1018,15 +1021,31 @@ function makeInquiry(overrides: any = {}): any {
               phone: '+91 90000 55555',
               contactPerson: 'Hidden Contact',
               vendorCategory: 'Procucev Network',
+              majorCategory: 'Engineering Spares - Mechanical',
+              location: 'Pune, Maharashtra',
+              matchScore: 92,
             } as any,
           ],
         })
       );
 
-      // The vendor's contact details appear nowhere on the page.
-      expect(screen.queryByText('secret@procucev-vendor.in')).not.toBeInTheDocument();
-      expect(screen.queryByText('+91 90000 55555')).not.toBeInTheDocument();
-      expect(screen.queryByText(/Hidden Contact/)).not.toBeInTheDocument();
+      // Scope assertions to the Procucev supplier card so category text from
+      // the line-items table does not create ambiguous matches.
+      const card = screen.getAllByTestId('assigned-supplier-card').find((c) =>
+        within(c).queryByText('Confidential Procucev Supplier')
+      ) as HTMLElement;
+      expect(card).toBeTruthy();
+
+      // Visible: company name, category, location, and match score.
+      expect(within(card).getByText('Confidential Procucev Supplier')).toBeInTheDocument();
+      expect(within(card).getByText(/Engineering Spares - Mechanical/)).toBeInTheDocument();
+      expect(within(card).getByText(/Pune, Maharashtra/)).toBeInTheDocument();
+      expect(within(card).getByText(/92% match/)).toBeInTheDocument();
+
+      // Hidden: contact details appear nowhere in the card.
+      expect(within(card).queryByText('secret@procucev-vendor.in')).not.toBeInTheDocument();
+      expect(within(card).queryByText('+91 90000 55555')).not.toBeInTheDocument();
+      expect(within(card).queryByText(/Hidden Contact/)).not.toBeInTheDocument();
     });
 
     it('allows searching vendors and filtering by status tabs', () => {

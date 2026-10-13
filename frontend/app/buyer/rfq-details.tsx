@@ -1641,30 +1641,40 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         const normalizedAssigned = rawAssigned.map((v: any, idx: number) => {
           if (typeof v === 'string') {
             const found = (buyerVendors || []).find((bv) => bv.id === v || bv.name === v || bv.email === v);
+            const isProc = checkIsProcucevVendor(v, found?.name || v, found?.email || null, found);
             return {
               id: v || `vendor-${idx}`,
               name: found?.name || v,
               contactPerson: found?.contactPerson || null,
               email: found?.email || null,
               phone: found?.phone || null,
+              isProcucev: isProc,
+              majorCategory: found?.majorCategory || null,
+              location: found?.location || null,
+              matchScore: null,
             };
           }
           const found = (buyerVendors || []).find(
             (bv) => (v.id && bv.id === v.id) || (v.email && bv.email === v.email) || (v.name && bv.name === v.name)
           );
+          const isProc = checkIsProcucevVendor(v.id, v.name, v.email, v);
           return {
             id: v.id || `vendor-${idx}`,
             name: v.name || found?.name || v.contactPerson || v.email || 'Enterprise Supplier',
             contactPerson: v.contactPerson || found?.contactPerson || null,
             email: v.email || found?.email || null,
             phone: v.phone || found?.phone || null,
+            isProcucev: isProc,
+            majorCategory: v.majorCategory || found?.majorCategory || null,
+            location: v.location || found?.location || found?.city || null,
+            matchScore: typeof v.matchScore === 'number' ? v.matchScore : null,
           };
         });
 
-        // For V1, V2, V3: Strictly filter out Procucev Network vendors so buyer only sees private/invited suppliers
-        const visibleAssigned = normalizedAssigned.filter(
-          (v: any) => !checkIsProcucevVendor(v.id, v.name, v.email, v)
-        );
+        // Procucev Network vendors stay visible but double-blind: the card below
+        // shows their category, location, and match score while hiding email,
+        // phone, and contact person. Private/client vendors show full contact.
+        const visibleAssigned = normalizedAssigned;
 
         return (
           <Panel
@@ -1693,19 +1703,38 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   {visibleAssigned.map((v: any) => (
                     <div
                       key={v.id}
+                      data-testid="assigned-supplier-card"
                       className="p-3 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/40 space-y-1"
                     >
                       <div className="flex items-center justify-between gap-1">
                         <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
-                        <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                          Invited
-                        </span>
+                        {v.isProcucev ? (
+                          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                            🔒 Double-Blind
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                            Invited
+                          </span>
+                        )}
                       </div>
-                      <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
-                        {v.contactPerson && <p className="truncate">Contact: {v.contactPerson}</p>}
-                        {v.email && <p className="mono truncate">{v.email}</p>}
-                        {v.phone && <p className="mono">{v.phone}</p>}
-                      </div>
+                      {v.isProcucev ? (
+                        // Double-blind: category, location, and match score only —
+                        // email, phone, and contact person are deliberately omitted.
+                        <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
+                          {v.majorCategory && <p className="truncate">Category: {v.majorCategory}</p>}
+                          {v.location && <p className="truncate">Location: {v.location}</p>}
+                          {typeof v.matchScore === 'number' && (
+                            <p className="font-semibold text-emerald-600 dark:text-emerald-400">{v.matchScore}% match</p>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
+                          {v.contactPerson && <p className="truncate">Contact: {v.contactPerson}</p>}
+                          {v.email && <p className="mono truncate">{v.email}</p>}
+                          {v.phone && <p className="mono">{v.phone}</p>}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
