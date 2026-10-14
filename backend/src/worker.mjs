@@ -10,6 +10,7 @@ import { env, waitUntil } from 'cloudflare:workers';
 import app from './app.js';
 import emailGatewayService from './services/emailGatewayService.js';
 import zohoReconciliationService from './services/zohoReconciliationService.js';
+import rfqChaserScheduler from './services/rfqChaserScheduler.js';
 
 // d1Bridge.js (required by the CommonJS backend, deep under app.js) cannot
 // reach `env` itself: `require('cloudflare:workers')` at call time throws
@@ -69,18 +70,22 @@ async function scheduled(controller, workerEnv, ctx) {
   }
   const cron = controller.cron;
   if (cron === EMAIL_GATEWAY_CRON) {
-    await emailGatewayService.pollBothInboxesOnce();
+    await Promise.allSettled([
+      emailGatewayService.pollBothInboxesOnce(),
+      rfqChaserScheduler.dispatchDueChaserJobs(),
+    ]);
     return;
   }
   if (cron === ZOHO_RECONCILIATION_CRON) {
     await zohoReconciliationService.reconcileOnce();
     return;
   }
-  // Unrecognised cron pattern: run both rather than silently doing nothing,
+  // Unrecognised cron pattern: run all rather than silently doing nothing,
   // so a wrangler.jsonc edit that adds/renames a trigger doesn't go quiet.
-  await Promise.all([
+  await Promise.allSettled([
     emailGatewayService.pollBothInboxesOnce(),
     zohoReconciliationService.reconcileOnce(),
+    rfqChaserScheduler.dispatchDueChaserJobs(),
   ]);
 }
 

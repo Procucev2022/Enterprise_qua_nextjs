@@ -281,12 +281,32 @@ export class DocumentStagingError extends Error {
  * Worker's memory ceiling in production. Staging first means the extraction
  * request itself stays a few bytes of JSON regardless of document size.
  */
-async function stageForExtraction(file: File, mimeType: string): Promise<string> {
-  const result = await stageDocumentForExtraction(file, mimeType);
-  if (!result.success || !result.key) {
-    throw new DocumentStagingError(result.error || 'Document upload failed.', Boolean(result.tooLarge));
+/**
+ * Upload a binary document's raw bytes to R2 and return the reference
+ * /api/rfqs/extract expects in place of inlineData.
+ *
+ * If staging is unavailable or rejected by object storage, gracefully fall back
+ * to reading the file as base64 inlineData so extraction never fails due to
+ * temporary storage issues.
+ */
+async function resolveBinaryPayload(
+  file: File,
+  mimeType: string
+): Promise<{ fileKey?: string; inlineData?: string; mimeType: string }> {
+  try {
+    const result = await stageDocumentForExtraction(file, mimeType);
+    if (result.success && result.key) {
+      return { fileKey: result.key, mimeType };
+    }
+    if (result.tooLarge) {
+      throw new DocumentStagingError(result.error || 'This document is too large to extract from.', true);
+    }
+  } catch (err) {
+    if (err instanceof DocumentStagingError && err.tooLarge) throw err;
   }
-  return result.key;
+  // Graceful fallback: base64 inline data
+  const base64 = await readAsBase64(file);
+  return { inlineData: base64, mimeType };
 }
 
 /** Build the extraction request for whichever document the buyer supplied. */
@@ -311,11 +331,13 @@ export async function buildExtractionRequest(file: File): Promise<RFQExtractionR
       // fallback to staged inline data below
     }
     const mimeType = file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-    return { fileName: file.name, fileKey: await stageForExtraction(file, mimeType), mimeType };
+    const payload = await resolveBinaryPayload(file, mimeType);
+    return { fileName: file.name, ...payload };
   }
   if (isEmailFile(file.name)) {
     const mimeType = /\.msg$/i.test(file.name) ? 'application/vnd.ms-outlook' : 'message/rfc822';
-    return { fileName: file.name, fileKey: await stageForExtraction(file, mimeType), mimeType };
+    const payload = await resolveBinaryPayload(file, mimeType);
+    return { fileName: file.name, ...payload };
   }
   if (/\.pdf$/i.test(file.name)) {
     let pdfText = '';
@@ -325,14 +347,15 @@ export async function buildExtractionRequest(file: File): Promise<RFQExtractionR
       // fallback to staged inline data below
     }
     const mimeType = file.type || 'application/pdf';
+    const payload = await resolveBinaryPayload(file, mimeType);
     return {
       fileName: file.name,
-      fileKey: await stageForExtraction(file, mimeType),
-      mimeType,
+      ...payload,
       ...(pdfText && pdfText.length >= 15 ? { documentText: pdfText } : {}),
     };
   }
   // Browsers leave type empty for some uploads; PDF is the common default here.
   const mimeType = file.type || 'application/pdf';
-  return { fileName: file.name, fileKey: await stageForExtraction(file, mimeType), mimeType };
+  const payload = await resolveBinaryPayload(file, mimeType);
+  return { fileName: file.name, ...payload };
 }

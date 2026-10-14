@@ -570,21 +570,15 @@ const GEMINI_CONFIG = {
   // also means a model retirement upgrades us automatically instead of 404'ing.
   // Pin GEMINI_PRIMARY_MODEL in the environment if a reproducible exact version
   // is ever required.
-  PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.8-flash',
+  PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.1-flash-lite',
   // Tried in order when the primary model errors or is unavailable.
   //
-  // Ordered newest-and-fastest first: the newest pinned Flash models give the
-  // best extraction quality, and this endpoint answers a synchronous browser
-  // upload behind a proxy that cuts the request off at 30s, so a fallback must
-  // also finish in the seconds that remain once the primary has used most of the
-  // budget. The lite alias and lite model give a fast last resort.
-  //
-  // The chain still includes floating aliases on purpose. Google retires pinned
-  // models: when gemini-2.0-flash was withdrawn every entry in the old chain
-  // 404'd at once and extraction failed outright instead of degrading.
+  // Ordered fastest-and-highest-quota first: gemini-3.1-flash-lite and gemini-3.5-flash-lite
+  // have high request allowances and 1-2s response latency, preventing quota exhaustion
+  // and HTTP request timeouts on document uploads.
   FALLBACK_MODELS: (
     process.env.GEMINI_FALLBACK_MODELS ||
-    'gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-latest'
+    'gemini-3.5-flash-lite,gemini-3-flash-preview,gemini-3.8-flash,gemini-flash-latest'
   )
     .split(',')
     .map((m) => m.trim())

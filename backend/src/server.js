@@ -3,6 +3,7 @@ const pool = require('./db/pool');
 const storeService = require('./services/storeService');
 const emailGatewayService = require('./services/emailGatewayService');
 const zohoReconciliationService = require('./services/zohoReconciliationService');
+const rfqChaserScheduler = require('./services/rfqChaserScheduler');
 const { logger } = require('./services/loggerService');
 const PORT = process.env.PORT || 4000; // Reloaded with SMTP_FROM=manav.procucev@gmail.com
 
@@ -79,7 +80,9 @@ function installCrashHandlers(proc = process) {
 async function bootstrapServer(port = PORT) {
   await reportDatabaseHealth();
   await storeService.hydrateFromDB();
-
+  await rfqChaserScheduler.recoverChasersOnBoot().catch((err) => {
+    logger.warn('Failed to recover chasers on boot', { error: err.message }, 'SERVER');
+  });
 
   const server = app.listen(port);
   // Started after the store is hydrated: ingesting a requisition needs the buyer
@@ -93,6 +96,15 @@ async function bootstrapServer(port = PORT) {
   if (!zohoReconciliation.started) {
     logger.info(`Zoho payment-link reconciliation not started: ${zohoReconciliation.reason}`, {}, 'SERVER');
   }
+
+  // Periodic multi-channel chaser processor (SMS, Call, WhatsApp, Email)
+  const chaserInterval = setInterval(() => {
+    rfqChaserScheduler.dispatchDueChaserJobs().catch((err) => {
+      logger.error('Periodic chaser dispatch failed', err, 'SERVER');
+    });
+  }, 60000);
+  if (chaserInterval.unref) chaserInterval.unref();
+
   return server;
 }
 
