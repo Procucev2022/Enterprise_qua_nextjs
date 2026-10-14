@@ -54,6 +54,21 @@ function latestQuoteSubmittedAt(rfq: RFQItem): string | null {
   return times.reduce((latest, t) => (Date.parse(t) > Date.parse(latest) ? t : latest));
 }
 
+/** Check if RFQ has any category signal in header or line items */
+function rfqHasCategorySignal(rfq: RFQItem): boolean {
+  if (rfq.category && rfq.category.trim()) return true;
+  for (const ent of Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []) {
+    if (
+      (ent.majorCategory && ent.majorCategory.trim()) ||
+      (ent.minorCategory && ent.minorCategory.trim()) ||
+      (ent.category && ent.category.trim())
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Category-manager "All RFQs" console.
  *
@@ -299,7 +314,14 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-850">
-              {filtered.map((rfq) => (
+              {filtered.map((rfq) => {
+                const isUncategorizedV0 =
+                  (rfq.sourcingMode === 'mode_0' || (rfq.sourcingMode as any) === 'v0') &&
+                  !rfqHasCategorySignal(rfq) &&
+                  (!rfq.assignedVendors || rfq.assignedVendors.length === 0);
+                const needsAssignment = Boolean(rfq.needsCategoryManagerAssignment || isUncategorizedV0);
+
+                return (
                 <tr key={rfq.id} className="align-middle transition-colors hover:bg-slate-50 dark:hover:bg-gray-900/60">
                   <td className="px-3 py-3 font-mono text-xs font-bold text-slate-800 dark:text-gray-200">{rfq.rfqNumber}</td>
                   <td className="px-3 py-3">
@@ -314,7 +336,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                       <span className={`inline-flex whitespace-nowrap rounded-md px-2 py-1 text-[10px] font-bold ${STATUS_TONE[rfq.status]}`}>
                         {rfq.status}
                       </span>
-                      {((rfq as any).needsCategoryManagerAssignment || ((rfq.sourcingMode === 'mode_0' || (rfq.sourcingMode as any) === 'v0') && (!rfq.category && (!rfq.assignedVendors || rfq.assignedVendors.length === 0)))) && (
+                      {needsAssignment && (
                         <span className="inline-flex whitespace-nowrap rounded-md bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 px-1.5 py-0.5 text-[9px] font-bold">
                           Pending CM Assignment
                         </span>
@@ -345,10 +367,10 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                         onClick={() => setInviteTargetRfq(rfq)}
                         aria-label={formatString(S.inviteVendorsAria, { rfqNumber: rfq.rfqNumber })}
                         className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-bold hover:underline ${
-                          (rfq as any).needsCategoryManagerAssignment ? 'text-indigo-600 dark:text-indigo-400 font-extrabold' : 'text-slate-600 dark:text-gray-300'
+                          needsAssignment ? 'text-indigo-600 dark:text-indigo-400 font-extrabold' : 'text-slate-600 dark:text-gray-300'
                         }`}
                       >
-                        <UserPlus size={13} /> {(rfq as any).needsCategoryManagerAssignment ? 'Assign Vendors' : S.inviteVendorsAction}
+                        <UserPlus size={13} /> {needsAssignment ? 'Assign Vendors' : S.inviteVendorsAction}
                       </button>
                       <button
                         type="button"
@@ -369,7 +391,8 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     </div>
                   </td>
                 </tr>
-              ))}
+              );
+              })}
             </tbody>
           </table>
         </div>

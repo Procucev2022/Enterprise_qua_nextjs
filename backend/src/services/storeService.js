@@ -3394,7 +3394,20 @@ class StoreService {
       contactPerson: v.contactPerson || null,
       phone: v.phone || v.mobile || v.mobileNumber || null,
     }));
-    const updatedRFQ = this.updateRFQ(rfq.id, { assignedVendors: [...existing, ...entries] });
+    const allAssigned = [...existing, ...entries];
+    const updatePayload = {
+      assignedVendors: allAssigned,
+      needsCategoryManagerAssignment: false,
+      procucevVendorCount: allAssigned.length,
+    };
+    if (rfq.followUpData) {
+      updatePayload.followUpData = {
+        ...rfq.followUpData,
+        totalInvited: allAssigned.length,
+        vendors: allAssigned,
+      };
+    }
+    const updatedRFQ = this.updateRFQ(rfq.id, updatePayload);
 
     for (const vendor of newlyInvited) {
       const isOverride = overrideVendors.some((ov) => ov.id === vendor.id);

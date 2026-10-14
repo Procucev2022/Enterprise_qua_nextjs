@@ -162,6 +162,17 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
     expect(updatedRfq.status).not.toBe('Closed');
     expect(updatedRfq.autoClosedReason).toBeUndefined();
 
+    // Verify buyer receives quote email immediately with RFQ and quote payload
+    expect(quoteEmailSpy).toHaveBeenCalledTimes(1);
+    expect(quoteEmailSpy).toHaveBeenCalledWith(
+      buyerAccount.corporateEmail,
+      expect.objectContaining({
+        rfq: expect.objectContaining({ id: rfq.id, rfqNumber: rfq.rfqNumber }),
+        quote: expect.objectContaining({ totalPrice: 120000, vendorId: matchedVendor.id }),
+      })
+    );
+    quoteEmailSpy.mockRestore();
+
     // Step 6 & 7: Buyer portal view verification via API
     const buyerViewRes = await request(app)
       .get(`/api/rfqs/${rfq.id}`)
@@ -211,5 +222,7 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
     const refreshedRfq = storeService.getRFQById(uncategorizedRfq.id);
     expect(refreshedRfq.assignedVendors.some((v) => v.id === matchedVendor.id)).toBe(true);
     expect(storeService.vendorCoversRFQ(matchedVendor, refreshedRfq)).toBe(true);
+    expect(refreshedRfq.needsCategoryManagerAssignment).toBe(false);
+    expect(refreshedRfq.procucevVendorCount).toBe(refreshedRfq.assignedVendors.length);
   });
 });

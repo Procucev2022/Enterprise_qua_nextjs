@@ -3155,7 +3155,7 @@ export default function IngestionWizard({
                 {(() => {
                   const mode = confirmationRfq.sourcingMode as any;
                   const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
-                  const hasCat = Boolean(confirmationRfq.category || (Array.isArray(confirmationRfq.extractedEntities) && confirmationRfq.extractedEntities.some((e: any) => e.majorCategory || e.category)));
+                  const hasCat = rfqHasCategorySignal(confirmationRfq);
                   return (isV0 && !hasCat) ? 'RFQ Created & Forwarded to Category Manager' : 'RFQ Dispatched Successfully!';
                 })()}
               </h3>
@@ -3163,7 +3163,7 @@ export default function IngestionWizard({
                 {(() => {
                   const mode = confirmationRfq.sourcingMode as any;
                   const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
-                  const hasCat = Boolean(confirmationRfq.category || (Array.isArray(confirmationRfq.extractedEntities) && confirmationRfq.extractedEntities.some((e: any) => e.majorCategory || e.category)));
+                  const hasCat = rfqHasCategorySignal(confirmationRfq);
                   if (isV0 && !hasCat) {
                     return (
                       <>
@@ -3188,7 +3188,7 @@ export default function IngestionWizard({
               <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
                 <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Category</span>
                 <span className="text-xs font-bold text-slate-800 dark:text-gray-200 truncate block">
-                  {confirmationRfq.category || (((confirmationRfq.sourcingMode as any) === 'mode_0' || (confirmationRfq.sourcingMode as any) === 'v0' || (confirmationRfq.sourcingMode as any) === 'version_0') ? 'Uncategorized (Pending CM)' : confirmationRfq.title)}
+                  {confirmationRfq.category || (((confirmationRfq.sourcingMode as any) === 'mode_0' || (confirmationRfq.sourcingMode as any) === 'v0' || (confirmationRfq.sourcingMode as any) === 'version_0') ? (!rfqHasCategorySignal(confirmationRfq) ? 'Uncategorized (Pending CM)' : confirmationRfq.title) : confirmationRfq.title)}
                 </span>
               </div>
               <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
@@ -3207,7 +3207,7 @@ export default function IngestionWizard({
                   {(() => {
                     const mode = confirmationRfq.sourcingMode as any;
                     const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
-                    const hasCat = Boolean(confirmationRfq.category || (Array.isArray(confirmationRfq.extractedEntities) && confirmationRfq.extractedEntities.some((e: any) => e.majorCategory || e.category)));
+                    const hasCat = rfqHasCategorySignal(confirmationRfq);
                     if (isV0 && !hasCat && (!confirmationRfq.assignedVendors || confirmationRfq.assignedVendors.length === 0)) {
                       return '0 (Pending CM Assignment)';
                     }
