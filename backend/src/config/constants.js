@@ -768,24 +768,35 @@ function computeZohoPlanAmount(planId) {
   return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
 }
 
-// Same gap on the buyer side: BUYER_SUBSCRIPTION_PLANS above only carries a
-// display price ('$199' etc.). 'free_trial' is free/instant and never reaches
-// this table — only the three paid tiers are real Zoho charges.
-//
-// Base (pre-GST) amount, back-calculated so the 18% GST add-on lands on the
-// real annual offer price shown on the card (V1 ₹14,999, V2 ₹19,999,
-// V3 ₹24,999) — V2 lands at ₹19,999.01, a one-paisa rounding artifact.
+// Buyer subscription pricing supporting 12-month and 6-month durations.
+// Version 1: 12-Month ₹4,999 | 6-Month ₹5,499
+// Version 2: 12-Month ₹7,499 | 6-Month ₹7,999
+// Version 3: 12-Month ₹9,999 | 6-Month ₹10,499
 const ZOHO_BUYER_SUBSCRIPTION_PRICING = {
-  version_1: 12711.02,
-  version_2: 16948.31,
-  version_3: 21185.59,
+  version_1: {
+    '12_months': 4999,
+    '6_months': 5499,
+  },
+  version_2: {
+    '12_months': 7499,
+    '6_months': 7999,
+  },
+  version_3: {
+    '12_months': 9999,
+    '6_months': 10499,
+  },
 };
 
-/** GST-inclusive amount Zoho actually charges for a buyer plan, 2dp, or null if the plan isn't payable. */
-function computeZohoBuyerPlanAmount(planId) {
-  const base = ZOHO_BUYER_SUBSCRIPTION_PRICING[planId];
-  if (!Number.isFinite(base)) return null;
-  return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
+/** GST-inclusive amount Zoho actually charges for a buyer plan, or null if the plan isn't payable. */
+function computeZohoBuyerPlanAmount(planId, billingDuration = '12_months') {
+  const planPricing = ZOHO_BUYER_SUBSCRIPTION_PRICING[planId];
+  if (!planPricing) return null;
+  if (typeof planPricing === 'number') {
+    return Math.round(planPricing * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
+  }
+  const duration = billingDuration === '6_months' ? '6_months' : '12_months';
+  const amount = planPricing[duration];
+  return Number.isFinite(amount) ? amount : null;
 }
 
 // ==============================================================================

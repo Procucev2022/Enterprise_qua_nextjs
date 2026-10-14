@@ -1132,6 +1132,23 @@ describe('Modals.tsx', () => {
       expect(mockCreatePaymentLink).toHaveBeenCalledWith('plan-enterprise');
     });
 
+    it('renders billingDurationLabel when provided', () => {
+      render(
+        <SubscriptionPaymentModal
+          isOpen={true}
+          onClose={mockOnClose}
+          planId="version_1"
+          planName="Version 1 Plan"
+          price="₹4,999"
+          billingDurationLabel="12 Months (Recommended)"
+          createPaymentLink={mockCreatePaymentLink}
+        />
+      );
+
+      expect(screen.getByText('Billing Period')).toBeInTheDocument();
+      expect(screen.getByText('12 Months (Recommended)')).toBeInTheDocument();
+    });
+
     it('handles checkout error when payment link creation fails', async () => {
       mockCreatePaymentLink.mockResolvedValue(null);
 
