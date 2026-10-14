@@ -949,6 +949,28 @@ function makeInquiry(overrides: any = {}): any {
       expect(screen.queryByText('Vendor Inquiries & Clarifications')).not.toBeInTheDocument();
     });
 
+    it('hides Direct Clarification & Inquiry with Buyer for V0 RFQs in vendor view', () => {
+      render(
+        <RFQDetails
+          rfq={buildRFQ({
+            sourcingMode: 'mode_0',
+            inquiries: [
+              makeInquiry({
+                id: 'inq-v1',
+                vendorId: 'v-partner',
+                vendorName: 'Vendor Partner',
+                message: 'Existing vendor question',
+              }),
+            ],
+          })}
+          onBack={jest.fn()}
+          isVendorView={true}
+        />
+      );
+
+      expect(screen.queryByText('Direct Clarification & Inquiry with Buyer')).not.toBeInTheDocument();
+    });
+
     it('filters out Procucev Network vendors from Vendor Inquiries in buyer view', () => {
       renderDetails(
         buildRFQ({
@@ -1174,10 +1196,12 @@ function makeInquiry(overrides: any = {}): any {
         );
 
         expect(screen.getByText('Assigned & Invited Suppliers')).toBeInTheDocument();
-        const tabs = screen.getByTestId('cm-supplier-tabs');
-        expect(within(tabs).getByText('V0 Network Supplier')).toBeInTheDocument();
-        expect(within(tabs).getByText('v0@network.in')).toBeInTheDocument();
-        expect(within(tabs).getByText('+91 90000 30003')).toBeInTheDocument();
+        // For V0 RFQ, category manager side hides the tabs and renders vendor cards directly
+        expect(screen.queryByTestId('cm-supplier-tabs')).not.toBeInTheDocument();
+        const cards = screen.getByTestId('v0-cm-vendor-cards');
+        expect(within(cards).getByText('V0 Network Supplier')).toBeInTheDocument();
+        expect(within(cards).getByText('v0@network.in')).toBeInTheDocument();
+        expect(within(cards).getByText('+91 90000 30003')).toBeInTheDocument();
       });
 
       it('still hides the suppliers panel from the BUYER on a V0 RFQ', () => {

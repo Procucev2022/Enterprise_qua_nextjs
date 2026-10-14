@@ -310,9 +310,16 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     {rfq.buyerAccountName || <span className="italic text-slate-400">{S.buyerUnknown}</span>}
                   </td>
                   <td className="px-3 py-3">
-                    <span className={`inline-flex whitespace-nowrap rounded-md px-2 py-1 text-[10px] font-bold ${STATUS_TONE[rfq.status]}`}>
-                      {rfq.status}
-                    </span>
+                    <div className="flex flex-col items-start gap-1">
+                      <span className={`inline-flex whitespace-nowrap rounded-md px-2 py-1 text-[10px] font-bold ${STATUS_TONE[rfq.status]}`}>
+                        {rfq.status}
+                      </span>
+                      {((rfq as any).needsCategoryManagerAssignment || ((rfq.sourcingMode === 'mode_0' || (rfq.sourcingMode as any) === 'v0') && (!rfq.category && (!rfq.assignedVendors || rfq.assignedVendors.length === 0)))) && (
+                        <span className="inline-flex whitespace-nowrap rounded-md bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 px-1.5 py-0.5 text-[9px] font-bold">
+                          Pending CM Assignment
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-3 py-3 text-right font-mono text-slate-700 dark:text-gray-300">{rfq.quotesCount}</td>
                   <td className="px-3 py-3 text-right font-mono text-xs text-slate-700 dark:text-gray-300">
@@ -337,9 +344,11 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                         type="button"
                         onClick={() => setInviteTargetRfq(rfq)}
                         aria-label={formatString(S.inviteVendorsAria, { rfqNumber: rfq.rfqNumber })}
-                        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-bold text-slate-600 hover:underline dark:text-gray-300"
+                        className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-bold hover:underline ${
+                          (rfq as any).needsCategoryManagerAssignment ? 'text-indigo-600 dark:text-indigo-400 font-extrabold' : 'text-slate-600 dark:text-gray-300'
+                        }`}
                       >
-                        <UserPlus size={13} /> {S.inviteVendorsAction}
+                        <UserPlus size={13} /> {(rfq as any).needsCategoryManagerAssignment ? 'Assign Vendors' : S.inviteVendorsAction}
                       </button>
                       <button
                         type="button"
