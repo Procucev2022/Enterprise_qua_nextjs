@@ -27,22 +27,27 @@ function getWranglerVars(requestedEnv) {
   }
 }
 
-const wranglerVars = getWranglerVars();
+const isTest = process.env.NODE_ENV === 'test' || Boolean(process.env.JEST_WORKER_ID);
+const wranglerVars = isTest ? {} : getWranglerVars();
 const nodeBackendUrl = process.env.NODE_BACKEND_URL || wranglerVars.NODE_BACKEND_URL;
 const nextPublicBackendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || wranglerVars.NEXT_PUBLIC_BACKEND_URL;
 
-if (nodeBackendUrl && !process.env.NODE_BACKEND_URL) {
-  process.env.NODE_BACKEND_URL = nodeBackendUrl;
-}
-if (nextPublicBackendUrl && !process.env.NEXT_PUBLIC_BACKEND_URL) {
-  process.env.NEXT_PUBLIC_BACKEND_URL = nextPublicBackendUrl;
+if (!isTest) {
+  if (nodeBackendUrl && !process.env.NODE_BACKEND_URL) {
+    process.env.NODE_BACKEND_URL = nodeBackendUrl;
+  }
+  if (nextPublicBackendUrl && !process.env.NEXT_PUBLIC_BACKEND_URL) {
+    process.env.NEXT_PUBLIC_BACKEND_URL = nextPublicBackendUrl;
+  }
 }
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  env: {
-    NEXT_PUBLIC_BACKEND_URL: nextPublicBackendUrl || '',
-  },
+  ...(isTest ? {} : {
+    env: {
+      NEXT_PUBLIC_BACKEND_URL: nextPublicBackendUrl || '',
+    },
+  }),
   reactStrictMode: true,
   // Allow the build output directory to be overridden so a verification build
   // (e.g. the pre-commit quality gate) can run without colliding with a live
