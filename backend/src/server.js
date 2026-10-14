@@ -97,13 +97,6 @@ async function bootstrapServer(port = PORT) {
     logger.info(`Zoho payment-link reconciliation not started: ${zohoReconciliation.reason}`, {}, 'SERVER');
   }
 
-  // Periodic multi-channel chaser processor (SMS, Call, WhatsApp, Email)
-  const chaserInterval = setInterval(() => {
-    rfqChaserScheduler.dispatchDueChaserJobs().catch((err) => {
-      logger.error('Periodic chaser dispatch failed', err, 'SERVER');
-    });
-  }, 60000);
-  if (chaserInterval.unref) chaserInterval.unref();
 
   return server;
 }

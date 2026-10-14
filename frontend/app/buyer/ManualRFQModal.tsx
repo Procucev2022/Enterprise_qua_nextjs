@@ -447,10 +447,14 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       // upload has to resolve before the next is attempted.
       try {
         const result = await uploadRFQAttachment(file);
-        if (result.success && result.data) stored.push(result.data);
-        else failures.push(`${file.name}: ${result.error || ''}`.trim());
-      } catch (err: any) {
-        failures.push(`${file.name}: ${err.message || ''}`.trim());
+        if (result.success && result.data) {
+          stored.push(result.data);
+        } else {
+          failures.push(`${file.name}: ${result.error || ''}`.trim());
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err || '');
+        failures.push(`${file.name}: ${message}`.trim());
       }
     }
 

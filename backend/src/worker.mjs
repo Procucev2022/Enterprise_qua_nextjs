@@ -70,10 +70,12 @@ async function scheduled(controller, workerEnv, ctx) {
   }
   const cron = controller.cron;
   if (cron === EMAIL_GATEWAY_CRON) {
-    await Promise.allSettled([
+    const results = await Promise.allSettled([
       emailGatewayService.pollBothInboxesOnce(),
       rfqChaserScheduler.dispatchDueChaserJobs(),
     ]);
+    const rejected = results.find((r) => r.status === 'rejected');
+    if (rejected) throw rejected.reason;
     return;
   }
   if (cron === ZOHO_RECONCILIATION_CRON) {
@@ -82,11 +84,13 @@ async function scheduled(controller, workerEnv, ctx) {
   }
   // Unrecognised cron pattern: run all rather than silently doing nothing,
   // so a wrangler.jsonc edit that adds/renames a trigger doesn't go quiet.
-  await Promise.allSettled([
+  const results = await Promise.allSettled([
     emailGatewayService.pollBothInboxesOnce(),
     zohoReconciliationService.reconcileOnce(),
     rfqChaserScheduler.dispatchDueChaserJobs(),
   ]);
+  const rejected = results.find((r) => r.status === 'rejected');
+  if (rejected) throw rejected.reason;
 }
 
 // Must match the `crons` entries in wrangler.jsonc exactly — Cloudflare

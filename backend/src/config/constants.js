@@ -563,22 +563,12 @@ const RFQ_CATEGORY_CLASSIFICATION = {
 const GEMINI_CONFIG = {
   API_KEY: process.env.GEMINI_API_KEY || '',
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
-  // Primary is the floating "latest Flash" alias so document extraction always
-  // runs on Google's newest Flash model — currently Gemini 3.8 Flash — which
-  // reads unusual layouts and scanned/multimodal documents more reliably than the
-  // older pinned model this used to default to (gemini-3.1-flash-lite). The alias
-  // also means a model retirement upgrades us automatically instead of 404'ing.
-  // Pin GEMINI_PRIMARY_MODEL in the environment if a reproducible exact version
-  // is ever required.
-  PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.1-flash-lite',
-  // Tried in order when the primary model errors or is unavailable.
-  //
-  // Ordered fastest-and-highest-quota first: gemini-3.1-flash-lite and gemini-3.5-flash-lite
-  // have high request allowances and 1-2s response latency, preventing quota exhaustion
-  // and HTTP request timeouts on document uploads.
+  // Primary model for document extraction: Google Gemini 3.8 Flash
+  PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.8-flash',
+  // Tried in order when the primary model errors, reaches quota limits, or is unavailable.
   FALLBACK_MODELS: (
     process.env.GEMINI_FALLBACK_MODELS ||
-    'gemini-3.5-flash-lite,gemini-3-flash-preview,gemini-3.8-flash,gemini-flash-latest'
+    'gemini-3.7-flash,gemini-3.6-flash,gemini-flash-lite-latest'
   )
     .split(',')
     .map((m) => m.trim())

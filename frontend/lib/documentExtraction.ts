@@ -282,17 +282,25 @@ export class DocumentStagingError extends Error {
  * request itself stays a few bytes of JSON regardless of document size.
  */
 /**
+ * Maximum file size allowed for inline base64 fallback when R2 staging fails.
+ * Files larger than 4.5 MB produce ~6+ MB JSON request payloads that risk
+ * exceeding the Cloudflare Worker memory ceiling, so they require object storage.
+ */
+export const MAX_SAFE_INLINE_BYTES = 4.5 * 1024 * 1024;
+
+/**
  * Upload a binary document's raw bytes to R2 and return the reference
  * /api/rfqs/extract expects in place of inlineData.
  *
  * If staging is unavailable or rejected by object storage, gracefully fall back
- * to reading the file as base64 inlineData so extraction never fails due to
- * temporary storage issues.
+ * to reading the file as base64 inlineData (for files within MAX_SAFE_INLINE_BYTES)
+ * so extraction never fails due to temporary storage issues.
  */
 async function resolveBinaryPayload(
   file: File,
   mimeType: string
 ): Promise<{ fileKey?: string; inlineData?: string; mimeType: string }> {
+  let stagingError: string | undefined;
   try {
     const result = await stageDocumentForExtraction(file, mimeType);
     if (result.success && result.key) {
@@ -301,10 +309,22 @@ async function resolveBinaryPayload(
     if (result.tooLarge) {
       throw new DocumentStagingError(result.error || 'This document is too large to extract from.', true);
     }
+    stagingError = result.error;
   } catch (err) {
     if (err instanceof DocumentStagingError && err.tooLarge) throw err;
+    if (err instanceof Error) stagingError = err.message;
   }
-  // Graceful fallback: base64 inline data
+
+  // Only allow inline base64 fallback below the safe memory limit.
+  // Large files require staging to prevent Worker exceededMemory 503 errors.
+  if (file.size > MAX_SAFE_INLINE_BYTES) {
+    throw new DocumentStagingError(
+      stagingError || 'This document is too large to extract without object storage staging.',
+      true
+    );
+  }
+
+  // Graceful fallback for ordinary file sizes: base64 inline data
   const base64 = await readAsBase64(file);
   return { inlineData: base64, mimeType };
 }
