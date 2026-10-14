@@ -493,7 +493,9 @@ export default function LoginPage() {
         setRemainingFreeRFQs(5);
         setInitialSetupModalOpen(true);
       } else if (selectedRegRole === 'vendor') {
-        void refreshFromDB();
+        if (typeof refreshFromDB === 'function') {
+          void refreshFromDB();
+        }
       }
 
       showToast(
