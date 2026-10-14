@@ -460,7 +460,8 @@ async function dispatchDueChaserJobs(limit = 25) {
 function scheduleRFQChasers(rfq, vendors, getCreditInfo = () => ({})) {
   if (!rfq || !Array.isArray(vendors) || vendors.length === 0) return;
   vendors.forEach((vendor) => {
-    scheduleVendorChaser(rfq, vendor, getCreditInfo(vendor));
+    const credit = typeof getCreditInfo === 'function' ? getCreditInfo(vendor) : (getCreditInfo || {});
+    scheduleVendorChaser(rfq, vendor, credit);
   });
   logger.info(
     `[CHASER] Queued chaser sequence for ${vendors.length} vendor(s) on ${rfq.rfqNumber}`,
