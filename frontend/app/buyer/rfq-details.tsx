@@ -414,6 +414,10 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     activeRfq?.sourcingMode === 'mode_3' ||
     (activeRfq?.sourcingMode as any) === 'v3' ||
     (activeRfq?.sourcingMode as any) === 'version_3';
+  const isV2 =
+    activeRfq?.sourcingMode === 'mode_2' ||
+    (activeRfq?.sourcingMode as any) === 'v2' ||
+    (activeRfq?.sourcingMode as any) === 'version_2';
 
   const handleCloseRFQ = async () => {
     if (!activeRfq || isClosing) return;
@@ -1724,6 +1728,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         const procucevVendors = visibleAssigned.filter((v: any) => v.isProcucev);
         const ownVendors = visibleAssigned.filter((v: any) => !v.isProcucev);
 
+        // For V2 RFQs on the buyer side, hide Procucev network vendor details
+        const displayAssigned = (isV2 && !isCategoryManager) ? ownVendors : visibleAssigned;
+
         // Full-detail card (name + contact + email + phone + category). Used for
         // the buyer's own vendors everywhere, and for ALL vendors in the
         // category-manager view (an internal oversight role, no double-blind).
@@ -1794,7 +1801,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         return (
           <Panel
             title="Assigned & Invited Suppliers"
-            count={visibleAssigned.length}
+            count={isCategoryManager ? visibleAssigned.length : displayAssigned.length}
             toolbar={
               <button
                 onClick={() => setInviteModalOpen(true)}
@@ -1805,7 +1812,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             }
           >
             <div className="px-4 pb-4">
-              {visibleAssigned.length === 0 ? (
+              {displayAssigned.length === 0 ? (
                 emptyState
               ) : isCategoryManager ? (
                 isV0 ? (
@@ -1865,9 +1872,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   </div>
                 )
               ) : (
-                // ── Buyer view: Procucev double-blind, own vendors full detail ──
+                // ── Buyer view: Procucev double-blind, own vendors full detail (hidden if V2) ──
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                  {visibleAssigned.map((v: any) => (v.isProcucev ? renderConfidentialCard(v) : renderFullCard(v)))}
+                  {displayAssigned.map((v: any) => (v.isProcucev ? renderConfidentialCard(v) : renderFullCard(v)))}
                 </div>
               )}
             </div>
