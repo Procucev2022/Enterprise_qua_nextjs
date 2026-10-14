@@ -68,17 +68,7 @@ async function resolveVendorForUser(user) {
   if (!vendor) {
     vendor = await storeService.getVendorByIdWithDBFallback(user.email, 'all');
   }
-  if (!vendor && user.role === 'vendor') {
-    vendor = {
-      id: user.sub || user.id || `v-${user.email}`,
-      name: user.name || user.orgName || user.email,
-      email: user.email,
-      source: 'self_registration',
-      status: 'PREFERRED ENTERPRISE SUPPLIER',
-      subscriptionPlan: 'premium',
-    };
-  }
-  return vendor;
+  return vendor || null;
 }
 
 /**
