@@ -31,11 +31,17 @@ const wranglerVars = getWranglerVars();
 const nodeBackendUrl = process.env.NODE_BACKEND_URL || wranglerVars.NODE_BACKEND_URL;
 const nextPublicBackendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || wranglerVars.NEXT_PUBLIC_BACKEND_URL;
 
+if (nodeBackendUrl && !process.env.NODE_BACKEND_URL) {
+  process.env.NODE_BACKEND_URL = nodeBackendUrl;
+}
+if (nextPublicBackendUrl && !process.env.NEXT_PUBLIC_BACKEND_URL) {
+  process.env.NEXT_PUBLIC_BACKEND_URL = nextPublicBackendUrl;
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   env: {
     NEXT_PUBLIC_BACKEND_URL: nextPublicBackendUrl || '',
-    NODE_BACKEND_URL: nodeBackendUrl || '',
   },
   reactStrictMode: true,
   // Allow the build output directory to be overridden so a verification build
