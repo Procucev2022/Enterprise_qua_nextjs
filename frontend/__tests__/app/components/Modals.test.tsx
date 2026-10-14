@@ -1149,6 +1149,31 @@ describe('Modals.tsx', () => {
       expect(screen.getByText('12 Months (Recommended)')).toBeInTheDocument();
     });
 
+    it('renders base price and GST breakdown when provided', () => {
+      render(
+        <SubscriptionPaymentModal
+          isOpen={true}
+          onClose={mockOnClose}
+          planId="version_1"
+          planName="Version 1 Plan"
+          price="₹5,898.82"
+          billingDurationLabel="12 Months (Recommended)"
+          breakdown={{
+            basePrice: '₹4,999',
+            gstAmount: '₹899.82',
+          }}
+          createPaymentLink={mockCreatePaymentLink}
+        />
+      );
+
+      expect(screen.getByText('Base Plan Price')).toBeInTheDocument();
+      expect(screen.getByText('₹4,999')).toBeInTheDocument();
+      expect(screen.getByText('GST (18%)')).toBeInTheDocument();
+      expect(screen.getByText('₹899.82')).toBeInTheDocument();
+      expect(screen.getByText('Amount Due')).toBeInTheDocument();
+      expect(screen.getByText('₹5,898.82')).toBeInTheDocument();
+    });
+
     it('handles checkout error when payment link creation fails', async () => {
       mockCreatePaymentLink.mockResolvedValue(null);
 

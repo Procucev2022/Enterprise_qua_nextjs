@@ -3,8 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
-import { authClient } from '@/lib/authClient';
-import { Sparkles, ShieldCheck, Check, Zap, RefreshCw, Calendar, CheckCircle2 } from 'lucide-react';
+import { Sparkles, ShieldCheck, Check, Zap, Calendar, CheckCircle2 } from 'lucide-react';
 
 export type BillingDuration = '6_months' | '12_months';
 
@@ -17,21 +16,80 @@ export const PLAN_LABEL: Record<string, string> = {
 // Must match the actual GST-inclusive amount Zoho charges
 // (computeZohoBuyerPlanAmount in backend/src/config/constants.js), so the
 // checkout modal and cards never promise a different amount than what's billed.
-// 12-month: ₹4,999 (V1), ₹7,499 (V2), ₹9,999 (V3).
-// 6-month: ₹5,499 (V1), ₹7,999 (V2), ₹10,499 (V3) — ₹500 higher than 12-month.
+// 12-month: ₹4,999/mo (₹59,988 for 12m) + 18% GST = ₹70,785.84.
+// 6-month: ₹5,499/mo (₹32,994 for 6m) + 18% GST = ₹38,932.92.
 export const BUYER_PRICING: Record<
   BillingDuration,
-  Record<'version_1' | 'version_2' | 'version_3', { price: string; amount: number; label: string }>
+  Record<
+    'version_1' | 'version_2' | 'version_3',
+    {
+      price: string;
+      amount: number;
+      label: string;
+      baseDurationLabel: string;
+      gstAmount: string;
+      totalPriceWithGst: string;
+      totalAmountWithGst: number;
+    }
+  >
 > = {
   '12_months': {
-    version_1: { price: '₹4,999', amount: 4999, label: '/ 12 months' },
-    version_2: { price: '₹7,499', amount: 7499, label: '/ 12 months' },
-    version_3: { price: '₹9,999', amount: 9999, label: '/ 12 months' },
+    version_1: {
+      price: '₹4,999',
+      amount: 4999,
+      label: 'per month',
+      baseDurationLabel: '₹59,988 (₹4,999 × 12 months)',
+      gstAmount: '₹10,797.84',
+      totalPriceWithGst: '₹70,785.84',
+      totalAmountWithGst: 70785.84,
+    },
+    version_2: {
+      price: '₹7,499',
+      amount: 7499,
+      label: 'per month',
+      baseDurationLabel: '₹89,988 (₹7,499 × 12 months)',
+      gstAmount: '₹16,197.84',
+      totalPriceWithGst: '₹1,06,185.84',
+      totalAmountWithGst: 106185.84,
+    },
+    version_3: {
+      price: '₹9,999',
+      amount: 9999,
+      label: 'per month',
+      baseDurationLabel: '₹1,19,988 (₹9,999 × 12 months)',
+      gstAmount: '₹21,597.84',
+      totalPriceWithGst: '₹1,41,585.84',
+      totalAmountWithGst: 141585.84,
+    },
   },
   '6_months': {
-    version_1: { price: '₹5,499', amount: 5499, label: '/ 6 months' },
-    version_2: { price: '₹7,999', amount: 7999, label: '/ 6 months' },
-    version_3: { price: '₹10,499', amount: 10499, label: '/ 6 months' },
+    version_1: {
+      price: '₹5,499',
+      amount: 5499,
+      label: 'per month',
+      baseDurationLabel: '₹32,994 (₹5,499 × 6 months)',
+      gstAmount: '₹5,938.92',
+      totalPriceWithGst: '₹38,932.92',
+      totalAmountWithGst: 38932.92,
+    },
+    version_2: {
+      price: '₹7,999',
+      amount: 7999,
+      label: 'per month',
+      baseDurationLabel: '₹47,994 (₹7,999 × 6 months)',
+      gstAmount: '₹8,638.92',
+      totalPriceWithGst: '₹56,632.92',
+      totalAmountWithGst: 56632.92,
+    },
+    version_3: {
+      price: '₹10,499',
+      amount: 10499,
+      label: 'per month',
+      baseDurationLabel: '₹62,994 (₹10,499 × 6 months)',
+      gstAmount: '₹11,338.92',
+      totalPriceWithGst: '₹74,332.92',
+      totalAmountWithGst: 74332.92,
+    },
   },
 };
 
@@ -91,38 +149,6 @@ export default function SubscriptionCenter() {
     })();
   }, [activeBuyerAccount?.id, checkBuyerPaymentLinkStatus, refreshActiveBuyerAccount, showToast]);
 
-  const handleResetTrial = async () => {
-    if (!activeBuyerAccount?.id) {
-      showToast('Reset Failed', 'Could not find your buyer account.', 'warning');
-      return;
-    }
-    try {
-      const token = authClient.getToken();
-      const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(activeBuyerAccount.id)}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok || !json?.success) {
-        showToast('Reset Failed', json?.error || 'Could not reset your account. Please try again.', 'warning');
-        return;
-      }
-    } catch {
-      showToast('Reset Failed', 'Could not reach the server. Please try again.', 'warning');
-      return;
-    }
-    void refreshActiveBuyerAccount();
-    showToast(
-      'Free Account Restored',
-      'Free starter account reset: 5 Free RFQs available across Version 1, Version 2, and Version 3.',
-      'info'
-    );
-  };
-
   const plans = [
     {
       id: 'version_1' as const,
@@ -177,15 +203,6 @@ export default function SubscriptionCenter() {
 
   return (
     <div className="space-y-4 animate-fade-in pb-6">
-      {/* Top Action Bar */}
-      <div className="flex items-center justify-end">
-        <button
-          onClick={handleResetTrial}
-          className="btn btn-secondary btn-sm flex items-center gap-1.5 shrink-0"
-        >
-          <RefreshCw size={13} /> Reset to Free Account (5 Free RFQs)
-        </button>
-      </div>
 
       {/* Free Starter Account Quota Alert */}
       {activeSubscription === 'free_trial' ? (
@@ -329,8 +346,8 @@ export default function SubscriptionCenter() {
                       {priceInfo.label}
                     </span>
                   </div>
-                  <span className="text-[10px] font-semibold text-slate-400 dark:text-gray-500 shrink-0">
-                    GST Included
+                  <span className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 shrink-0">
+                    + 18% GST
                   </span>
                 </div>
 
@@ -385,8 +402,16 @@ export default function SubscriptionCenter() {
         onClose={() => setPendingPayment(null)}
         planId={pendingPayment?.planId || 'version_1'}
         planName={pendingPayment ? PLAN_LABEL[pendingPayment.planId] : ''}
-        price={pendingPayment ? BUYER_PRICING[billingDuration][pendingPayment.planId].price : ''}
+        price={pendingPayment ? BUYER_PRICING[billingDuration][pendingPayment.planId].totalPriceWithGst : ''}
         billingDurationLabel={billingDuration === '12_months' ? '12 Months (Recommended)' : '6 Months'}
+        breakdown={
+          pendingPayment
+            ? {
+                basePrice: BUYER_PRICING[billingDuration][pendingPayment.planId].baseDurationLabel,
+                gstAmount: BUYER_PRICING[billingDuration][pendingPayment.planId].gstAmount,
+              }
+            : undefined
+        }
         createPaymentLink={(planId) => createBuyerPaymentLink(planId, billingDuration)}
       />
     </div>

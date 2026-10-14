@@ -769,9 +769,12 @@ function computeZohoPlanAmount(planId) {
 }
 
 // Buyer subscription pricing supporting 12-month and 6-month durations.
-// Version 1: 12-Month ₹4,999 | 6-Month ₹5,499
-// Version 2: 12-Month ₹7,499 | 6-Month ₹7,999
-// Version 3: 12-Month ₹9,999 | 6-Month ₹10,499
+// Base monthly rates:
+// Version 1: 12-Month ₹4,999/mo | 6-Month ₹5,499/mo
+// Version 2: 12-Month ₹7,499/mo | 6-Month ₹7,999/mo
+// Version 3: 12-Month ₹9,999/mo | 6-Month ₹10,499/mo
+//
+// Total charged = (monthlyRate * months) + 18% GST.
 const ZOHO_BUYER_SUBSCRIPTION_PRICING = {
   version_1: {
     '12_months': 4999,
@@ -787,16 +790,16 @@ const ZOHO_BUYER_SUBSCRIPTION_PRICING = {
   },
 };
 
-/** GST-inclusive amount Zoho actually charges for a buyer plan, or null if the plan isn't payable. */
+/** GST-inclusive amount Zoho actually charges for a buyer plan (monthlyRate * durationMonths * 1.18), or null if the plan isn't payable. */
 function computeZohoBuyerPlanAmount(planId, billingDuration = '12_months') {
   const planPricing = ZOHO_BUYER_SUBSCRIPTION_PRICING[planId];
   if (!planPricing) return null;
-  if (typeof planPricing === 'number') {
-    return Math.round(planPricing * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
-  }
   const duration = billingDuration === '6_months' ? '6_months' : '12_months';
-  const amount = planPricing[duration];
-  return Number.isFinite(amount) ? amount : null;
+  const months = duration === '6_months' ? 6 : 12;
+  const monthlyRate = typeof planPricing === 'number' ? planPricing : planPricing[duration];
+  if (!Number.isFinite(monthlyRate)) return null;
+  const base = monthlyRate * months;
+  return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
 }
 
 // ==============================================================================
