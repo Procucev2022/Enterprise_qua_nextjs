@@ -7,7 +7,7 @@ on:
     types: [created]
 
 concurrency:
-  group: ai-pr-review-${{ github.event.pull_request.number || github.ref }}
+  group: ai-pr-review-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -23,8 +23,7 @@ jobs:
 
     steps:
       - name: Run PR Agent with Google Gemini
-        uses: qodo-ai/pr-agent@main
-        continue-on-error: true
+        uses: qodo-ai/pr-agent@8e5a9295973b24af4b70cafd0b660a230811ef9e
         env:
           # GitHub Actions token for posting PR reviews and comments
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,7 +43,7 @@ jobs:
           github_action_config.auto_improve: "false"
           github_action_config.handle_push_trigger: "true"
           github_action_config.push_commands: '["/review"]'
-          github_action_config.fail_on_tool_errors: "false"
+          github_action_config.fail_on_tool_errors: "true"
 
           # Review Quality Settings
           pr_reviewer.num_code_suggestions: 3

@@ -1,4 +1,3 @@
-jest.setTimeout(20000);
 const storeService = require('../src/services/storeService');
 
 describe('Store Service — remaining branch coverage', () => {
