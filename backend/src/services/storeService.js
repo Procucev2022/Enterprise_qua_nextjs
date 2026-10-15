@@ -33,6 +33,42 @@ const { logger } = require('./loggerService');
 // below), reused here rather than invented separately: this.vendors is one
 // shared in-memory cache used by both paths, so they should stay consistent.
 const MAX_HYDRATION_VENDORS = 500;
+const path = require('path');
+
+const SEEDED_INQUIRIES = [
+  {
+    id: 'ent-inq-1792066342226-1vkew',
+    companyName: 'Procucev  Navin Buyer',
+    email: 'navin.procucev@gmail.com',
+    mobile: '+919157154504',
+    buyerAccountId: '4fdcc92c-8421-4ab5-8258-0134375a3c86',
+    notes: '',
+    status: 'NEW',
+    createdAt: '2026-10-15T12:12:22.226Z',
+    updatedAt: '2026-10-15T12:12:22.226Z',
+  },
+];
+
+function loadPersistedInquiries() {
+  try {
+    const fs = require('fs');
+    if (fs.existsSync(INQUIRIES_PERSISTENCE_FILE)) {
+      const data = fs.readFileSync(INQUIRIES_PERSISTENCE_FILE, 'utf8');
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (_) {}
+  return [...SEEDED_INQUIRIES];
+}
+
+function savePersistedInquiries(list) {
+  try {
+    const fs = require('fs');
+    const dir = path.dirname(INQUIRIES_PERSISTENCE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(INQUIRIES_PERSISTENCE_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch (_) {}
+}
 
 class StoreService {
   constructor() {
@@ -61,6 +97,7 @@ class StoreService {
     this.notifications = [];
     this.vendorCatalogue = [];
     this.paymentLinks = [];
+    this.enterpriseInquiries = loadPersistedInquiries();
     this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
     this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
     this.isHydratedFromDB = false;
@@ -77,6 +114,7 @@ class StoreService {
     this.notifications = [];
     this.vendorCatalogue = [];
     this.paymentLinks = [];
+    this.enterpriseInquiries = loadPersistedInquiries();
     this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
     this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
     this.isHydratedFromDB = false;
@@ -5026,6 +5064,58 @@ class StoreService {
       azureHealth: this.azureHealth,
       vendorCatalogue: this.vendorCatalogue,
     };
+  }
+
+  addEnterpriseInquiry(inquiry) {
+    const id = `ent-inq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newRecord = {
+      id,
+      companyName: (inquiry.companyName || '').trim(),
+      email: (inquiry.email || '').trim(),
+      mobile: (inquiry.mobile || '').trim(),
+      buyerAccountId: inquiry.buyerAccountId || null,
+      notes: inquiry.notes || '',
+      status: inquiry.status || 'NEW',
+      createdAt: inquiry.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    if (!Array.isArray(this.enterpriseInquiries)) {
+      this.enterpriseInquiries = [];
+    }
+    this.enterpriseInquiries.unshift(newRecord);
+    savePersistedInquiries(this.enterpriseInquiries);
+
+    try {
+      this.addAuditLog(
+        `Enterprise contract enquiry submitted for ${newRecord.companyName} (${newRecord.email}, ${newRecord.mobile})`
+      );
+    } catch (_) {}
+
+    return newRecord;
+  }
+
+  getEnterpriseInquiries() {
+    if (!Array.isArray(this.enterpriseInquiries)) {
+      this.enterpriseInquiries = loadPersistedInquiries();
+    }
+    return this.enterpriseInquiries;
+  }
+
+  updateEnterpriseInquiry(id, updates) {
+    if (!Array.isArray(this.enterpriseInquiries)) {
+      this.enterpriseInquiries = loadPersistedInquiries();
+    }
+    const idx = this.enterpriseInquiries.findIndex((i) => i.id === id);
+    if (idx === -1) return null;
+    const target = this.enterpriseInquiries[idx];
+    const updated = {
+      ...target,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    this.enterpriseInquiries[idx] = updated;
+    savePersistedInquiries(this.enterpriseInquiries);
+    return updated;
   }
 }
 
