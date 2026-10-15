@@ -3,8 +3,9 @@ name: Deploy to Cloudflare (Test)
 on:
   push:
     branches:
-      - main
       - test
+      - 'test-*'
+      - 'test/**'
   workflow_dispatch:
 
 concurrency:
