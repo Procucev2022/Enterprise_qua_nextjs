@@ -691,7 +691,7 @@ function zohoLiveCredentials() {
     PAYMENTS_BASE_URL: process.env.ZOHO_LIVE_PAYMENTS_BASE_URL || 'https://payments.zoho.in/api/v1',
     ACCOUNT_ID: process.env.ZOHO_LIVE_PAYMENTS_ACCOUNT_ID || process.env.ZOHO_PAYMENTS_ACCOUNT_ID || '',
     WEBHOOK_SIGNING_KEY: process.env.ZOHO_LIVE_WEBHOOK_SIGNING_KEY || process.env.ZOHO_WEBHOOK_SIGNING_KEY || '',
-    RETURN_URL_BASE: process.env.ZOHO_LIVE_RETURN_URL_BASE || process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || 'http://localhost:3000',
+    RETURN_URL_BASE: process.env.ZOHO_LIVE_RETURN_URL_BASE || process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || process.env.PUBLIC_FRONTEND_URL || 'http://localhost:3000',
   };
 }
 
@@ -704,7 +704,7 @@ function zohoSandboxCredentials() {
     PAYMENTS_BASE_URL: process.env.ZOHO_SANDBOX_PAYMENTS_BASE_URL || 'https://paymentssandbox.zoho.in/api/v1',
     ACCOUNT_ID: process.env.ZOHO_SANDBOX_PAYMENTS_ACCOUNT_ID || process.env.ZOHO_PAYMENTS_ACCOUNT_ID || '',
     WEBHOOK_SIGNING_KEY: process.env.ZOHO_SANDBOX_WEBHOOK_SIGNING_KEY || '',
-    RETURN_URL_BASE: process.env.ZOHO_SANDBOX_RETURN_URL_BASE || process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || 'http://localhost:3000',
+    RETURN_URL_BASE: process.env.ZOHO_SANDBOX_RETURN_URL_BASE || process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || process.env.PUBLIC_FRONTEND_URL || 'http://localhost:3000',
   };
 }
 
