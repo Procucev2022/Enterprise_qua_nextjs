@@ -184,5 +184,71 @@ describe('Enterprise Inquiries Email Notification & Route', () => {
         .send({ companyName: 'No Mobile', email: 'a@b.com' })
         .expect(400);
     });
+
+    test('GET /api/enterprise-inquiries lists all inquiries', async () => {
+      const res = await supertest(app)
+        .get('/api/enterprise-inquiries')
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(typeof res.body.total).toBe('number');
+    });
+
+    test('PATCH /api/enterprise-inquiries/:id updates status, notes, contactedBy', async () => {
+      const created = storeService.addEnterpriseInquiry({
+        companyName: 'Patch Test Co',
+        email: 'patch@test.com',
+        mobile: '+919988776655',
+      });
+
+      const res = await supertest(app)
+        .patch(`/api/enterprise-inquiries/${created.id}`)
+        .send({
+          status: 'CONTACTED',
+          notes: 'Called buyer today',
+          contactedBy: 'Navin Manager',
+        })
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.status).toBe('CONTACTED');
+      expect(res.body.data.notes).toBe('Called buyer today');
+      expect(res.body.data.contactedBy).toBe('Navin Manager');
+      expect(res.body.data.contactedAt).toBeDefined();
+    });
+
+    test('PATCH /api/enterprise-inquiries/:id returns 404 for non-existent inquiry', async () => {
+      const res = await supertest(app)
+        .patch('/api/enterprise-inquiries/non-existent-id')
+        .send({ status: 'RESOLVED' })
+        .expect(404);
+
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toContain('not found');
+    });
+
+    test('GET and PATCH error handler branches pass to next', async () => {
+      const getSpy = jest.spyOn(storeService, 'getEnterpriseInquiries').mockImplementationOnce(() => {
+        throw new Error('Database read failure');
+      });
+
+      await supertest(app)
+        .get('/api/enterprise-inquiries')
+        .expect(500);
+
+      getSpy.mockRestore();
+
+      const patchSpy = jest.spyOn(storeService, 'updateEnterpriseInquiry').mockImplementationOnce(() => {
+        throw new Error('Database write failure');
+      });
+
+      await supertest(app)
+        .patch('/api/enterprise-inquiries/any-id')
+        .send({ status: 'CLOSED' })
+        .expect(500);
+
+      patchSpy.mockRestore();
+    });
   });
 });
