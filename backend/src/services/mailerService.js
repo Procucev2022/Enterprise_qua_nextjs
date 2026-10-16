@@ -2088,10 +2088,10 @@ async function sendRfqNotCreatedEmail(params = {}) {
 
 /**
  * Resolves the recipient email for new Enterprise Contracts inquiry alerts.
- * Configurable via ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL; defaults to navin.procucev@gmail.com.
+ * Configurable via ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL; defaults to info@procucev.com.
  */
 function getEnterpriseInquiryRecipient() {
-  return getEnv('ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL') || 'navin.procucev@gmail.com';
+  return getEnv('ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL') || 'info@procucev.com';
 }
 
 function buildEnterpriseInquiryNotificationEmail({ inquiry = {}, recipientEmail } = {}) {

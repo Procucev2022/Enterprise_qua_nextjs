@@ -37,7 +37,7 @@ router.post('/', async (req, res, next) => {
       'ENTERPRISE_INQUIRIES'
     );
 
-    // Send email alert to Category Manager / Enterprise Team (default: navin.procucev@gmail.com, configurable via ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL)
+    // Send email alert to Category Manager / Enterprise Team (default: info@procucev.com, configurable via ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL)
     try {
       await mailerService.sendEnterpriseInquiryNotificationEmail(inquiry);
     } catch (mailErr) {
