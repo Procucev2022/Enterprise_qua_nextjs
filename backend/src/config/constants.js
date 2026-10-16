@@ -631,6 +631,41 @@ const RFQ_ATTACHMENT_CONFIG = {
 };
 
 // ==============================================================================
+// RFQ VENDOR ASSIGNMENT LIMITS PER CATEGORY
+// ==============================================================================
+// Sets the maximum number of Client and Procucev vendors assigned per category on RFQs.
+// Configurable via environment variables (default: 5):
+// - MAX_CLIENT_VENDORS_PER_CATEGORY
+// - MAX_PROCUCEV_VENDORS_PER_CATEGORY
+function getEnvNumber(key, fallback = 5) {
+  let val = undefined;
+  if (
+    typeof globalThis !== 'undefined' &&
+    globalThis.__CF_ENV__ &&
+    globalThis.__CF_ENV__[key] !== undefined &&
+    globalThis.__CF_ENV__[key] !== ''
+  ) {
+    val = globalThis.__CF_ENV__[key];
+  } else if (typeof process !== 'undefined' && process.env && process.env[key] !== undefined && process.env[key] !== '') {
+    val = process.env[key];
+  }
+  if (val !== undefined && val !== null) {
+    const num = Number(val);
+    if (!Number.isNaN(num) && num > 0) return num;
+  }
+  return fallback;
+}
+
+const VENDOR_ASSIGNMENT_LIMITS = {
+  get MAX_CLIENT_PER_CATEGORY() {
+    return getEnvNumber('MAX_CLIENT_VENDORS_PER_CATEGORY', 5);
+  },
+  get MAX_PROCUCEV_PER_CATEGORY() {
+    return getEnvNumber('MAX_PROCUCEV_VENDORS_PER_CATEGORY', 5);
+  },
+};
+
+// ==============================================================================
 // EMAIL-TO-RFQ INGESTION
 // ==============================================================================
 // Shapes how an emailed requisition is turned into extractor input. See
@@ -1782,4 +1817,5 @@ module.exports = {
   CHASER_DELAYS,
   SMS_DLT_TEMPLATES,
   PRESENCE_ONLINE_THRESHOLD_MS,
+  VENDOR_ASSIGNMENT_LIMITS,
 };

@@ -30,11 +30,11 @@
     "NODE_ENV": "production",
     "WHATSAPP_USERNAME": "ProcucevWapp1",
     "WHATSAPP_PASSWORD": "ProcucevWapp@123",
-    "WHATSAPP_FROM_NUMBER": "919606848835",
+    "WHATSAPP_FROM_NUMBER": "917090170801",
     "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
     "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
     "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_reminder_notification_v2",
-    "WHATSAPP_SUPPORT_NUMBER": "+919606848835",
+    "WHATSAPP_SUPPORT_NUMBER": "+917090170801",
     "SMS_GATEWAY_URL": "https://sms.sendmsg.in/datasend",
     "SMS_GATEWAY_USER": "Procucev_OTP",
     "SMS_GATEWAY_RFQ_USER": "ProcucevWapp1",
@@ -52,7 +52,9 @@
     "ZOHO_OAUTH_TOKEN_URL": "https://accounts.zoho.in/oauth/v2/token",
     "ZOHO_PAYMENTS_RETURN_URL_BASE": "https://equa.procucev.com",
     "ZOHO_RECONCILIATION_ENABLED": "true",
-    "ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL": "info@procucev.com"
+    "ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL": "info@procucev.com",
+    "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
+    "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5"
   },
   "d1_databases": [
     {
@@ -94,11 +96,11 @@
         "NODE_ENV": "development",
         "WHATSAPP_USERNAME": "ProcucevWapp1",
         "WHATSAPP_PASSWORD": "ProcucevWapp@123",
-        "WHATSAPP_FROM_NUMBER": "919606848835",
+        "WHATSAPP_FROM_NUMBER": "917090170801",
         "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
         "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
         "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_reminder_notification_v2",
-        "WHATSAPP_SUPPORT_NUMBER": "+919606848835",
+        "WHATSAPP_SUPPORT_NUMBER": "+917090170801",
         "SMS_GATEWAY_URL": "https://sms.sendmsg.in/datasend",
         "SMS_GATEWAY_USER": "Procucev_OTP",
         "SMS_GATEWAY_RFQ_USER": "ProcucevWapp1",
@@ -107,7 +109,9 @@
         "SMS_GATEWAY_SENDER": "PROCUC",
         "SMS_GATEWAY_SMSGID": "1102294821",
         "SMS_GATEWAY_RFQ_SMSGID": "1777179076323440961",
-        "PUBLIC_FRONTEND_URL": "https://procucev-enterprise-frontend.procucev-enterprise.workers.dev"
+        "PUBLIC_FRONTEND_URL": "https://procucev-enterprise-frontend.procucev-enterprise.workers.dev",
+        "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
+        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5"
       },
       "d1_databases": [
         {
@@ -129,11 +133,11 @@
         "NODE_ENV": "production",
         "WHATSAPP_USERNAME": "ProcucevWapp1",
         "WHATSAPP_PASSWORD": "ProcucevWapp@123",
-        "WHATSAPP_FROM_NUMBER": "919606848835",
+        "WHATSAPP_FROM_NUMBER": "917090170801",
         "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
         "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
         "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_reminder_notification_v2",
-        "WHATSAPP_SUPPORT_NUMBER": "+919606848835",
+        "WHATSAPP_SUPPORT_NUMBER": "+917090170801",
         "SMS_GATEWAY_URL": "https://sms.sendmsg.in/datasend",
         "SMS_GATEWAY_USER": "Procucev_OTP",
         "SMS_GATEWAY_RFQ_USER": "ProcucevWapp1",
@@ -150,7 +154,9 @@
         "ZOHO_PAYMENTS_BASE_URL": "https://payments.zoho.in/api/v1",
         "ZOHO_OAUTH_TOKEN_URL": "https://accounts.zoho.in/oauth/v2/token",
         "ZOHO_PAYMENTS_RETURN_URL_BASE": "https://equa.procucev.com",
-        "ZOHO_RECONCILIATION_ENABLED": "true"
+        "ZOHO_RECONCILIATION_ENABLED": "true",
+        "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
+        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5"
       },
       "d1_databases": [
         {
@@ -172,11 +178,11 @@
         "NODE_ENV": "production",
         "WHATSAPP_USERNAME": "ProcucevWapp1",
         "WHATSAPP_PASSWORD": "ProcucevWapp@123",
-        "WHATSAPP_FROM_NUMBER": "919606848835",
+        "WHATSAPP_FROM_NUMBER": "917090170801",
         "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
         "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
         "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_reminder_notification_v2",
-        "WHATSAPP_SUPPORT_NUMBER": "+919606848835",
+        "WHATSAPP_SUPPORT_NUMBER": "+917090170801",
         "SMS_GATEWAY_URL": "https://sms.sendmsg.in/datasend",
         "SMS_GATEWAY_USER": "Procucev_OTP",
         "SMS_GATEWAY_RFQ_USER": "ProcucevWapp1",
@@ -193,7 +199,9 @@
         "ZOHO_PAYMENTS_BASE_URL": "https://payments.zoho.in/api/v1",
         "ZOHO_OAUTH_TOKEN_URL": "https://accounts.zoho.in/oauth/v2/token",
         "ZOHO_PAYMENTS_RETURN_URL_BASE": "https://equa.procucev.com",
-        "ZOHO_RECONCILIATION_ENABLED": "true"
+        "ZOHO_RECONCILIATION_ENABLED": "true",
+        "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
+        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5"
       },
       "d1_databases": [
         {

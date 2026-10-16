@@ -6,6 +6,7 @@ const {
   RFQ_DEFAULTS,
   resolveBuyerSourcingMode,
   VENDOR_FREE_CREDITS_LIMIT,
+  VENDOR_ASSIGNMENT_LIMITS,
 } = require('../config/constants');
 const crypto = require('crypto');
 const pool = require('../db/pool');
@@ -2073,6 +2074,9 @@ class StoreService {
     // 3. Record an audit log.
     const rfqCategorySignals = this._rfqCategorySignals(newRFQ);
     const buyerEmail = requestingBuyerAccount ? requestingBuyerAccount.corporateEmail : rfqData.raisedByEmail || null;
+    const maxClientPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY;
+    const distinctCategories = this._rfqDistinctCategories(newRFQ);
+
     if (rfqCategorySignals.length > 0 && Array.isArray(newRFQ.assignedVendors) && newRFQ.assignedVendors.length > 0) {
       const shortlisted = [];
       const mismatched = [];
@@ -2088,10 +2092,21 @@ class StoreService {
         }
       }
 
-      newRFQ.assignedVendors = shortlisted;
+      // Limit client vendors to MAX_CLIENT_PER_CATEGORY per category
+      if (distinctCategories.length > 0 && shortlisted.length > 0) {
+        newRFQ.assignedVendors = this.selectVendorsPerCategory(
+          shortlisted,
+          distinctCategories,
+          maxClientPerCat,
+          newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null
+        );
+      } else {
+        newRFQ.assignedVendors = shortlisted;
+      }
+
       if (newRFQ.followUpData) {
-        newRFQ.followUpData.totalInvited = shortlisted.length;
-        newRFQ.followUpData.vendors = shortlisted;
+        newRFQ.followUpData.totalInvited = newRFQ.assignedVendors.length;
+        newRFQ.followUpData.vendors = newRFQ.assignedVendors;
       }
 
       for (const vendor of mismatched) {
@@ -2107,7 +2122,7 @@ class StoreService {
     // When buyer raises RFQ from V0 (mode_0), RFQ is sent ONLY to Procucev vendors.
     // Buyer-uploaded vendors are excluded from V0 RFQs.
     if (newRFQ.sourcingMode === 'mode_0' || newRFQ.sourcingMode === 'v0' || newRFQ.sourcingMode === 'version_0') {
-      const MAX_V0_CATEGORY_INVITES = 100;
+      const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
       // Filter existing assignedVendors to strictly Procucev vendors
       newRFQ.assignedVendors = (Array.isArray(newRFQ.assignedVendors) ? newRFQ.assignedVendors : []).filter((v) => {
         const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
@@ -2115,7 +2130,8 @@ class StoreService {
       });
 
       const signals = this._rfqCategorySignals(newRFQ);
-      if (signals.length > 0) {
+      const categories = this._rfqDistinctCategories(newRFQ);
+      if (signals.length > 0 && categories.length > 0) {
         for (const v of this.vendors) {
           if (this.isProcucevVendor(v)) {
             const hasCategory = v.majorCategory || (Array.isArray(v.minorCategories) && v.minorCategories.length > 0);
@@ -2130,23 +2146,14 @@ class StoreService {
           }
         }
 
-        // Auto-populate category-matched Procucev verified vendors
-        let procucevMatches = this.candidateVendorsForRFQ(newRFQ)
-          .filter((v) => this.isProcucevVendor(v))
-          .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
-
-        if (newRFQ.deliveryPincode) {
-          const targetPincode = String(newRFQ.deliveryPincode).trim();
-          const pinMatches = procucevMatches.filter(
-            (v) => v.pincode && String(v.pincode).trim() === targetPincode
-          );
-          const pinNonMatches = procucevMatches.filter(
-            (v) => !(v.pincode && String(v.pincode).trim() === targetPincode)
-          );
-          procucevMatches = [...pinMatches, ...pinNonMatches].slice(0, MAX_V0_CATEGORY_INVITES);
-        } else {
-          procucevMatches = procucevMatches.slice(0, MAX_V0_CATEGORY_INVITES);
-        }
+        // Auto-populate category-matched Procucev verified vendors up to maxProcucevPerCat per category
+        const candidatePool = this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v));
+        const procucevMatches = this.selectVendorsPerCategory(
+          candidatePool,
+          categories,
+          maxProcucevPerCat,
+          newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null
+        );
 
         const existingKeys = new Set(
           (newRFQ.assignedVendors || []).map((v) => (v.id || v.email || v.name || '').toLowerCase())
@@ -2223,38 +2230,19 @@ class StoreService {
     // the client-supplied assignedVendors already contains (the buyer's own
     // roster, category-filtered on the frontend).
     if (newRFQ.sourcingMode === 'mode_2' || newRFQ.sourcingMode === 'v2' || newRFQ.sourcingMode === 'version_2' || newRFQ.source === 'email_gateway') {
-      // Capped: a bulk-imported category can match thousands of vendors (seen
-      // live: 3000+ on a single RFQ, a 787KB payload) — embedding all of them
-      // in assignedVendors on every future read of this RFQ is exactly the
-      // "crashes the browser at scale" problem this codebase has already hit
-      // and capped elsewhere (MAX_VENDOR_PAGE_SIZE, MAX_BOOTSTRAP_VENDORS).
-      const MAX_CATEGORY_MATCHED_INVITES = 200;
-      // Relevance (category match) decides who qualifies at all; rating
-      // breaks ties within that pool. mode_2 additionally reorders the
-      // qualified pool by delivery-pincode proximity before trimming to its
-      // own smaller cap — pincode is a re-sort of who's already relevant,
-      // never a replacement for relevance itself.
-      let categoryMatches = this.candidateVendorsForRFQ(newRFQ).sort(
-        (a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)
-      );
+      const maxClientPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY;
+      const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
+      const categories = this._rfqDistinctCategories(newRFQ);
+      const targetCategories = categories.length > 0 ? categories : (newRFQ.category ? [newRFQ.category] : []);
+      const targetPincode = newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null;
 
-      if (newRFQ.deliveryPincode) {
-        const MAX_MODE2_PINCODE_INVITES = 100;
-        const targetPincode = String(newRFQ.deliveryPincode).trim();
-        const pincodeMatches = categoryMatches.filter(
-          (v) => v.pincode && String(v.pincode).trim() === targetPincode
-        );
-        const pincodeNonMatches = categoryMatches.filter(
-          (v) => !(v.pincode && String(v.pincode).trim() === targetPincode)
-        );
-        // Pincode match ranked first (rating already sorted within each
-        // group from the sort above); non-matches backfill any remaining
-        // slots up to the cap so mode_2 never returns an under-filled list
-        // when pincode coverage in that area is thin.
-        categoryMatches = [...pincodeMatches, ...pincodeNonMatches].slice(0, MAX_MODE2_PINCODE_INVITES);
-      } else {
-        categoryMatches = categoryMatches.slice(0, MAX_CATEGORY_MATCHED_INVITES);
-      }
+      const allCandidates = this.candidateVendorsForRFQ(newRFQ);
+      const clientCandidates = allCandidates.filter((v) => !this.isProcucevVendor(v));
+      const procucevCandidates = allCandidates.filter((v) => this.isProcucevVendor(v));
+
+      const clientMatches = this.selectVendorsPerCategory(clientCandidates, targetCategories, maxClientPerCat, targetPincode);
+      const procucevMatches = this.selectVendorsPerCategory(procucevCandidates, targetCategories, maxProcucevPerCat, targetPincode);
+      const categoryMatches = [...clientMatches, ...procucevMatches];
 
       const existingKeys = new Set(
         (newRFQ.assignedVendors || []).map((v) => (v.id || v.email || v.name || '').toLowerCase())
@@ -2267,7 +2255,7 @@ class StoreService {
           email: v.email || null,
           contactPerson: v.contactPerson || null,
           phone: v.phone || null,
-          source: v.source || 'procucev_network',
+          source: v.source || (this.isProcucevVendor(v) ? 'procucev_network' : 'buyer_uploaded'),
         }));
       if (additions.length > 0) {
         newRFQ.assignedVendors = [...newRFQ.assignedVendors, ...additions];
@@ -2285,24 +2273,16 @@ class StoreService {
       newRFQ.sourcingMode === 'v3' ||
       newRFQ.sourcingMode === 'version_3'
     ) {
-      const MAX_V3_CATEGORY_INVITES = 100;
-      let v3Matches = this.candidateVendorsForRFQ(newRFQ)
-        .filter((v) => this.isProcucevVendor(v))
-        .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
-
-      if (newRFQ.deliveryPincode) {
-        const MAX_MODE3_PINCODE_INVITES = 100;
-        const targetPincode = String(newRFQ.deliveryPincode).trim();
-        const pinMatches = v3Matches.filter(
-          (v) => v.pincode && String(v.pincode).trim() === targetPincode
-        );
-        const pinNonMatches = v3Matches.filter(
-          (v) => !(v.pincode && String(v.pincode).trim() === targetPincode)
-        );
-        v3Matches = [...pinMatches, ...pinNonMatches].slice(0, MAX_MODE3_PINCODE_INVITES);
-      } else {
-        v3Matches = v3Matches.slice(0, MAX_V3_CATEGORY_INVITES);
-      }
+      const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
+      const categories = this._rfqDistinctCategories(newRFQ);
+      const targetCategories = categories.length > 0 ? categories : (newRFQ.category ? [newRFQ.category] : []);
+      const procucevCandidates = this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v));
+      const v3Matches = this.selectVendorsPerCategory(
+        procucevCandidates,
+        targetCategories,
+        maxProcucevPerCat,
+        newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null
+      );
       mode3ProcucevCount = v3Matches.length;
     }
 
@@ -2975,6 +2955,93 @@ class StoreService {
   }
 
   /**
+   * Returns distinct category strings representing the line item / RFQ categories.
+   * Priority:
+   * 1. Line item majorCategory or category
+   * 2. RFQ header category
+   * 3. Line item minorCategory (fallback if no major/category)
+   *
+   * @param {Object} rfq
+   * @returns {string[]} Unique trimmed category names.
+   */
+  _rfqDistinctCategories(rfq) {
+    if (!rfq) return [];
+    const cats = new Set();
+    const items = Array.isArray(rfq.extractedEntities)
+      ? rfq.extractedEntities
+      : Array.isArray(rfq.lineItems)
+      ? rfq.lineItems
+      : [];
+    for (const ent of items) {
+      const c = ent.majorCategory || ent.category;
+      if (c && typeof c === 'string' && c.trim()) {
+        cats.add(c.trim());
+      }
+    }
+    if (rfq.category && typeof rfq.category === 'string' && rfq.category.trim()) {
+      cats.add(rfq.category.trim());
+    }
+    if (cats.size === 0) {
+      for (const ent of items) {
+        if (ent.minorCategory && typeof ent.minorCategory === 'string' && ent.minorCategory.trim()) {
+          cats.add(ent.minorCategory.trim());
+        }
+      }
+    }
+    return Array.from(cats);
+  }
+
+  /**
+   * Selects candidate vendors for an RFQ ensuring balanced representation per category:
+   * Up to `maxPerCategory` vendors per distinct category signal, deduplicated across categories.
+   * Candidates within each category are prioritized by delivery pincode proximity and rating.
+   *
+   * @param {Array<Object>} candidatePool
+   * @param {Array<string>} categories
+   * @param {number} maxPerCategory
+   * @param {string|null} targetPincode
+   * @returns {Array<Object>}
+   */
+  selectVendorsPerCategory(candidatePool, categories, maxPerCategory = 5, targetPincode = null) {
+    if (!Array.isArray(candidatePool) || candidatePool.length === 0) return [];
+    const cats = Array.isArray(categories) ? categories.filter((c) => typeof c === 'string' && c.trim()) : [];
+    if (cats.length === 0) return candidatePool.slice(0, maxPerCategory);
+
+    const limit = typeof maxPerCategory === 'number' && maxPerCategory > 0 ? maxPerCategory : 5;
+    const selectedMap = new Map();
+
+    for (const cat of cats) {
+      const catCandidates = candidatePool.filter((v) => {
+        const hasCategory = v.majorCategory || (Array.isArray(v.minorCategories) && v.minorCategories.length > 0);
+        return !hasCategory || this.vendorCoversCategory(v, cat);
+      });
+
+      catCandidates.sort((a, b) => {
+        if (targetPincode) {
+          const aPin = a.pincode && String(a.pincode).trim() === targetPincode ? 1 : 0;
+          const bPin = b.pincode && String(b.pincode).trim() === targetPincode ? 1 : 0;
+          if (aPin !== bPin) return bPin - aPin;
+        }
+        return (Number(b.rating) || 0) - (Number(a.rating) || 0);
+      });
+
+      let count = 0;
+      for (const v of catCandidates) {
+        if (count >= limit) break;
+        const key = (v.id || v.email || v.name || '').toLowerCase().trim();
+        if (key) {
+          if (!selectedMap.has(key)) {
+            selectedMap.set(key, v);
+          }
+          count++;
+        }
+      }
+    }
+
+    return Array.from(selectedMap.values());
+  }
+
+  /**
    * Whether a vendor was uploaded privately by a buyer (via Excel, PO ingestion, ERP dump, or buyer roster).
    */
   isBuyerUploaded(vendor) {
@@ -3176,8 +3243,9 @@ class StoreService {
     if (!isV0) return rfq;
     if (!pool.hasStorage()) return rfq;
 
-    const MAX_V0_CATEGORY_INVITES = 100;
+    const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
     const signals = this._rfqCategorySignals(rfq);
+    const categories = this._rfqDistinctCategories(rfq);
 
     // If a V0 RFQ was submitted without selecting a category, do NOT automatically assign
     // vendors or fallback to the general public directory. It routes to Category Manager for manual assignment.
@@ -3187,11 +3255,14 @@ class StoreService {
       rfq.needsCategoryManagerAssignment = true;
       return rfq;
     }
+    const targetCategories = categories.length > 0 ? categories : signals;
+    const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
+
     let dbMatches = [];
     // 1. Category-matched public vendors from the whole directory.
     if (Array.isArray(signals) && signals.length > 0) {
       try {
-        dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, MAX_V0_CATEGORY_INVITES);
+        dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, limit);
       } catch (err) {
         logger.warn(
           'V0 DB-backed vendor assignment query failed',
@@ -3209,7 +3280,7 @@ class StoreService {
     if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
       try {
         const page = await domainQueries.getVendorsPageFromDB({
-          limit: MAX_V0_CATEGORY_INVITES,
+          limit,
           offset: 0,
           publicOnly: true,
         });
@@ -3225,20 +3296,28 @@ class StoreService {
 
     if (!Array.isArray(dbMatches) || dbMatches.length === 0) return rfq;
 
-    // Prefer vendors in the RFQ's delivery pincode, then by rating — same
-    // precedence as createRFQ's in-memory V0 ordering.
+    // Prefer vendors in the RFQ's delivery pincode, then by rating — select up to maxProcucevPerCat per category.
     const targetPincode = rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null;
-    const sorted = dbMatches
-      .filter((v) => this.isProcucevVendor(v))
-      .sort((a, b) => {
-        if (targetPincode) {
-          const aPin = a.pincode && String(a.pincode).trim() === targetPincode ? 1 : 0;
-          const bPin = b.pincode && String(b.pincode).trim() === targetPincode ? 1 : 0;
-          if (aPin !== bPin) return bPin - aPin;
-        }
-        return (Number(b.rating) || 0) - (Number(a.rating) || 0);
-      })
-      .slice(0, MAX_V0_CATEGORY_INVITES);
+    const candidatePool = dbMatches.filter((v) => this.isProcucevVendor(v));
+    let sorted = this.selectVendorsPerCategory(
+      candidatePool,
+      targetCategories,
+      maxProcucevPerCat,
+      targetPincode
+    );
+
+    if (!sorted || sorted.length === 0) {
+      sorted = candidatePool
+        .sort((a, b) => {
+          if (targetPincode) {
+            const aPin = a.pincode && String(a.pincode).trim() === targetPincode ? 1 : 0;
+            const bPin = b.pincode && String(b.pincode).trim() === targetPincode ? 1 : 0;
+            if (aPin !== bPin) return bPin - aPin;
+          }
+          return (Number(b.rating) || 0) - (Number(a.rating) || 0);
+        })
+        .slice(0, limit);
+    }
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
     const existingKeys = new Set(

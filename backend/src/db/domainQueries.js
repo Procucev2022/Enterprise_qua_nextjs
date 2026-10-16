@@ -259,6 +259,34 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
   return (result && result.rows) ? result.rows.map((row) => parseRaw(row.raw)) : [];
 }
 
+/**
+ * Retrieves public vendors for each specified category from the database,
+ * capped at `maxPerCategory` per category, and deduplicated across categories.
+ *
+ * @param {string[]} categories Array of category names.
+ * @param {number} maxPerCategory Max vendors per category.
+ * @returns {Promise<object[]>}
+ */
+async function getPublicVendorsPerCategoryFromDB(categories, maxPerCategory = 5) {
+  if (!pool.hasStorage()) return [];
+  const cleaned = Array.from(
+    new Set((Array.isArray(categories) ? categories : []).map((s) => String(s || '').trim()).filter(Boolean))
+  );
+  if (cleaned.length === 0) return [];
+
+  const resultsMap = new Map();
+  for (const cat of cleaned) {
+    const matches = await getPublicVendorsMatchingCategories([cat], maxPerCategory);
+    for (const v of matches) {
+      const key = (v.id || v.email || v.name || '').toLowerCase().trim();
+      if (key && !resultsMap.has(key)) {
+        resultsMap.set(key, v);
+      }
+    }
+  }
+  return Array.from(resultsMap.values());
+}
+
 /** Single-row lookup by email — used to guarantee a specific vendor is
  * present in a capped/paginated listing without fetching the whole table. */
 async function getVendorByEmailFromDB(email) {
@@ -1203,6 +1231,7 @@ module.exports = {
   getVendorsPageFromDB,
   countPublicVendorsMatchingCategories,
   getPublicVendorsMatchingCategories,
+  getPublicVendorsPerCategoryFromDB,
   getVendorByEmailFromDB,
   getVendorsByBuyerFromDB,
   getVendorByIdFromDB,

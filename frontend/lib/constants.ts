@@ -916,6 +916,20 @@ export const PRESENCE_ONLINE_THRESHOLD_MS = 10 * 60 * 1000;
 export const PRESENCE_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 export const PRESENCE_POLL_INTERVAL_MS = 30 * 1000;
 
+/** RFQ vendor assignment limits per category (configurable via env) */
+export const VENDOR_ASSIGNMENT_LIMITS = {
+  get MAX_CLIENT_PER_CATEGORY(): number {
+    const envVal = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_MAX_CLIENT_VENDORS_PER_CATEGORY : undefined;
+    const num = Number(envVal);
+    return !Number.isNaN(num) && num > 0 ? num : 5;
+  },
+  get MAX_PROCUCEV_PER_CATEGORY(): number {
+    const envVal = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_MAX_PROCUCEV_VENDORS_PER_CATEGORY : undefined;
+    const num = Number(envVal);
+    return !Number.isNaN(num) && num > 0 ? num : 5;
+  },
+};
+
 export {
   FORM_SCHEMAS,
   validateFormData,
