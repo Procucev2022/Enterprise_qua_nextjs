@@ -23,15 +23,15 @@ describe('Enterprise Inquiries Email Notification & Route', () => {
   });
 
   describe('mailerService enterprise inquiry helpers', () => {
-    test('getEnterpriseInquiryRecipient defaults to navin.procucev@gmail.com when env is unset', () => {
+    test('getEnterpriseInquiryRecipient defaults to info@procucev.com when env is unset', () => {
       delete process.env.ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL;
-      expect(mailerService.getEnterpriseInquiryRecipient()).toBe('navin.procucev@gmail.com');
+      expect(mailerService.getEnterpriseInquiryRecipient()).toBe('info@procucev.com');
     });
 
     test('getEnterpriseInquiryRecipient returns configured env email when set', () => {
       process.env.ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL = 'custom.manager@example.com';
       expect(mailerService.getEnterpriseInquiryRecipient()).toBe('custom.manager@example.com');
-      process.env.ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL = 'navin.procucev@gmail.com';
+      process.env.ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL = 'info@procucev.com';
     });
 
     test('buildEnterpriseInquiryNotificationEmail formats inquiry data with complete details', () => {
@@ -47,7 +47,7 @@ describe('Enterprise Inquiries Email Notification & Route', () => {
 
       const mail = mailerService.buildEnterpriseInquiryNotificationEmail({ inquiry });
 
-      expect(mail.to).toBe('navin.procucev@gmail.com');
+      expect(mail.to).toBe('info@procucev.com');
       expect(mail.replyTo).toBe('procurement@acme.com');
       expect(mail.subject).toContain('Acme Mega Corp');
       expect(mail.html).toContain('Acme Mega Corp');
