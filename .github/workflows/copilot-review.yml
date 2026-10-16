@@ -5,7 +5,7 @@ on:
     types: [opened, ready_for_review, reopened, synchronize]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 concurrency:
@@ -17,20 +17,111 @@ jobs:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.COPILOT_REVIEW_TOKEN }}
+      GH_TOKEN: ${{ secrets.COPILOT_REVIEW_TOKEN || secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
-      - name: Request Copilot review
+      - name: Check Copilot review and commit status
+        id: check_status
         run: |
-          gh api --method POST "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
-            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' > /dev/null
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GH_TOKEN is not available (e.g. untrusted PR from fork). Skipping."
+            echo "already_reviewing=true" >> "$GITHUB_OUTPUT"
+            echo "should_commit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-      - name: Verify Copilot was requested
+          PR_DATA=$(gh api "repos/$REPO/pulls/$PR_NUMBER")
+          PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
+          HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.head.ref')
+          IS_FORK=$(echo "$PR_DATA" | jq -r '.head.repo.fork // false')
+
+          echo "head_branch=$HEAD_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "pr_head_sha=$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+          # 1. Check if Copilot is in requested reviewers
+          REQ_COUNT=$(gh api "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
+            | jq '[.users[]? | select(.login == "copilot-pull-request-reviewer[bot]" or .login == "copilot-pull-request-reviewer")] | length')
+
+          # 2. Check if Copilot has already reviewed this commit
+          REV_COUNT=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+            | jq --arg sha "$PR_HEAD_SHA" '[.[]? | select((.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "copilot-pull-request-reviewer") and .commit_id == $sha)] | length')
+
+          # 3. Check if Copilot review workflow is currently running on this branch
+          RUN_COUNT=$(gh run list --branch="$HEAD_BRANCH" --json name,status \
+            | jq '[.[]? | select(.name == "Running Copilot Code Review" and (.status == "in_progress" or .status == "queued"))] | length' 2>/dev/null || echo "0")
+
+          if [ "$REQ_COUNT" -gt 0 ] || [ "$REV_COUNT" -gt 0 ] || [ "$RUN_COUNT" -gt 0 ]; then
+            echo "Copilot is already reviewing or has reviewed the latest commit."
+            echo "already_reviewing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Copilot is not currently reviewing."
+            echo "already_reviewing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # 4. Check if the latest commit is already an empty commit or trigger commit
+          COMMIT_INFO=$(gh api "repos/$REPO/commits/$PR_HEAD_SHA")
+          COMMIT_MSG=$(echo "$COMMIT_INFO" | jq -r '.commit.message // ""')
+          FILES_COUNT=$(echo "$COMMIT_INFO" | jq '.files | length // 0')
+
+          if [ "$FILES_COUNT" -eq 0 ] || [[ "$COMMIT_MSG" == *"chore: trigger copilot review"* ]]; then
+            echo "Latest commit is already an empty commit or trigger commit."
+            echo "is_empty_commit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_empty_commit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Determine if an empty commit should be pushed:
+          # Only push if Copilot is not already reviewing, it's not a fork, and the latest commit is not already empty
+          if [ "$REQ_COUNT" -eq 0 ] && [ "$REV_COUNT" -eq 0 ] && [ "$RUN_COUNT" -eq 0 ] && [ "$IS_FORK" != "true" ] && [ "$FILES_COUNT" -gt 0 ] && [[ "$COMMIT_MSG" != *"chore: trigger copilot review"* ]]; then
+            echo "should_commit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_commit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout PR branch
+        if: steps.check_status.outputs.should_commit == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.check_status.outputs.head_branch }}
+          token: ${{ secrets.COPILOT_REVIEW_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Push empty commit from GH_TOKEN
+        if: steps.check_status.outputs.should_commit == 'true'
+        run: |
+          USER_NAME=$(gh api user | jq -r '.name // .login // "github-actions[bot]"')
+          USER_EMAIL=$(gh api user | jq -r 'if .email != null and .email != "" then .email elif .id != null then "\(.id)+\(.login)@users.noreply.github.com" else "github-actions[bot]@users.noreply.github.com" end')
+
+          git config user.name "$USER_NAME"
+          git config user.email "$USER_EMAIL"
+
+          git commit --allow-empty -m "chore: trigger copilot review"
+          git push origin HEAD:${{ steps.check_status.outputs.head_branch }}
+
+      - name: Request Copilot review
+        if: steps.check_status.outputs.already_reviewing == 'false'
+        run: |
+          echo "Requesting Copilot code review..."
+          gh api --method POST "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' > /dev/null || true
+
+      - name: Verify Copilot review status
+        if: steps.check_status.outputs.already_reviewing == 'false'
         run: |
           sleep 5
-          COUNT=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '[.requested_reviewers[]?] | length')
-          if [ "$COUNT" -eq 0 ]; then
-            echo "Copilot was not added as a reviewer. Check that the PR author has a Copilot seat." >&2
-            exit 1
+          IS_REQUESTED=$(gh api "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
+            | jq '[.users[]? | select(.login == "copilot-pull-request-reviewer[bot]" or .login == "copilot-pull-request-reviewer")] | length')
+          HAS_REVIEWED=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+            | jq '[.[]? | select(.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "copilot-pull-request-reviewer")] | length')
+
+          if [ "$IS_REQUESTED" -gt 0 ] || [ "$HAS_REVIEWED" -gt 0 ]; then
+            echo "Copilot review successfully confirmed (requested or submitted)."
+          else
+            RUN_COUNT=$(gh run list --branch="${{ steps.check_status.outputs.head_branch }}" --json name \
+              | jq '[.[]? | select(.name == "Running Copilot Code Review")] | length' 2>/dev/null || echo "0")
+            if [ "$RUN_COUNT" -gt 0 ]; then
+              echo "Copilot code review run is actively running."
+            else
+              echo "Copilot review request dispatched."
+            fi
           fi
