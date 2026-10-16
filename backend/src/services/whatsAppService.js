@@ -24,8 +24,8 @@ const WHATSAPP_CONFIG = {
   // ── sendmsg.in (primary) ──────────────────────────────────────────────────
   get SENDMSG_BASE_URL() { return getEnv('WHATSAPP_BASE_URL', 'https://media.sendmsg.in'); },
   get SENDMSG_TEMPLATE_URL() { return getEnv('WHATSAPP_TEMPLATE_BASE_URL', 'https://wsapi.sendmsg.in'); },
-  get USERNAME() { return getEnv('WHATSAPP_USERNAME', 'procucevtestwapp'); },
-  get PASSWORD() { return getEnv('WHATSAPP_PASSWORD', 'procucevtestwapp'); },
+  get USERNAME() { return getEnv('WHATSAPP_USERNAME', 'ProcucevnewWapp'); },
+  get PASSWORD() { return getEnv('WHATSAPP_PASSWORD', 'ProcucevnewWapp@987'); },
   get FROM_NUMBER() { return getEnv('WHATSAPP_FROM_NUMBER', '917090170801'); },
   get TEMPLATE_RFQ_INVITE() { return getEnv('WHATSAPP_TEMPLATE_RFQ_NOTIFICATION', 'rfq_reminder_notification_v2'); },
 

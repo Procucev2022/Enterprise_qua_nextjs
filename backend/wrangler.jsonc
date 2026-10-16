@@ -28,8 +28,8 @@
   },
   "vars": {
     "NODE_ENV": "production",
-    "WHATSAPP_USERNAME": "ProcucevWapp1",
-    "WHATSAPP_PASSWORD": "ProcucevWapp@123",
+    "WHATSAPP_USERNAME": "ProcucevnewWapp",
+    "WHATSAPP_PASSWORD": "ProcucevnewWapp@987",
     "WHATSAPP_FROM_NUMBER": "917090170801",
     "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
     "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
@@ -94,8 +94,8 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "development",
-        "WHATSAPP_USERNAME": "ProcucevWapp1",
-        "WHATSAPP_PASSWORD": "ProcucevWapp@123",
+        "WHATSAPP_USERNAME": "ProcucevnewWapp",
+        "WHATSAPP_PASSWORD": "ProcucevnewWapp@987",
         "WHATSAPP_FROM_NUMBER": "917090170801",
         "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
         "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
@@ -131,8 +131,8 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "production",
-        "WHATSAPP_USERNAME": "ProcucevWapp1",
-        "WHATSAPP_PASSWORD": "ProcucevWapp@123",
+        "WHATSAPP_USERNAME": "ProcucevnewWapp",
+        "WHATSAPP_PASSWORD": "ProcucevnewWapp@987",
         "WHATSAPP_FROM_NUMBER": "917090170801",
         "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
         "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
@@ -176,8 +176,8 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "production",
-        "WHATSAPP_USERNAME": "ProcucevWapp1",
-        "WHATSAPP_PASSWORD": "ProcucevWapp@123",
+        "WHATSAPP_USERNAME": "ProcucevnewWapp",
+        "WHATSAPP_PASSWORD": "ProcucevnewWapp@987",
         "WHATSAPP_FROM_NUMBER": "917090170801",
         "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
         "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
