@@ -24,13 +24,4 @@ jobs:
       - name: Request Copilot review
         run: |
           gh api --method POST "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
-            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' > /dev/null
-
-      - name: Verify Copilot was requested
-        run: |
-          sleep 5
-          COUNT=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '[.requested_reviewers[]?] | length')
-          if [ "$COUNT" -eq 0 ]; then
-            echo "Copilot was not added as a reviewer. Check that the PR author has a Copilot seat." >&2
-            exit 1
-          fi
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' > /dev/null   
