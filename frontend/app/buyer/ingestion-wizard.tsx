@@ -8,6 +8,7 @@ import {
   CURRENCY,
   formatFileSize,
   RFQ_DOCUMENT_LIMITS,
+  VENDOR_ASSIGNMENT_LIMITS,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString, extractionReasonMessage } from '@/lib/uiStrings';
 import {
@@ -35,6 +36,7 @@ import {
   extractRfqCategorySignals,
   matchVendorAgainstSignals,
   rankProcucevVendorsForV3,
+  selectVendorsForCategories,
   type RankedProcucevVendor,
 } from '@/lib/vendorMatching';
 import type {
@@ -1166,8 +1168,12 @@ export default function IngestionWizard({
           );
         }
 
-        if (matchingVendors.length > 0) {
-          mode1AssignedVendors = matchingVendors.map(toAssignedVendorEntry);
+        const finalMatching = dispatchSignals.length > 0
+          ? selectVendorsForCategories(matchingVendors, dispatchSignals, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).map((r) => r.vendor)
+          : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+
+        if (finalMatching.length > 0) {
+          mode1AssignedVendors = finalMatching.map(toAssignedVendorEntry);
         }
       }
 

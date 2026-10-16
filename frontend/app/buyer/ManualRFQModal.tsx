@@ -17,7 +17,7 @@ import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { resolveConfirmationVendorCount } from './ingestion-wizard';
-import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors, matchVendorAgainstSignals } from '@/lib/vendorMatching';
+import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors, matchVendorAgainstSignals, selectVendorsForCategories } from '@/lib/vendorMatching';
 import {
   Plus,
   Trash2,
@@ -44,7 +44,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { getMajorCategories, getMinorCategories, dominantMajorCategory } from '@/lib/categoryTaxonomy';
-import { CURRENCY, SOURCING_MODES, entitledSourcingModes, RFQ_DOCUMENT_LIMITS } from '@/lib/constants';
+import { CURRENCY, SOURCING_MODES, entitledSourcingModes, RFQ_DOCUMENT_LIMITS, VENDOR_ASSIGNMENT_LIMITS } from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, classifyLineItems, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import {
@@ -597,8 +597,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           );
         }
 
-        if (matchingVendors.length > 0) {
-          mode1AssignedVendors = matchingVendors.map((v) => ({
+        const finalMatching = signals.length > 0
+          ? selectVendorsForCategories(matchingVendors, signals, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).map((r) => r.vendor)
+          : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+
+        if (finalMatching.length > 0) {
+          mode1AssignedVendors = finalMatching.map((v) => ({
             id: v.id,
             name: v.name || 'Enterprise Vendor',
             email: v.email || null,
