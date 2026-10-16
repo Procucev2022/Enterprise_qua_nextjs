@@ -24,4 +24,4 @@ jobs:
       - name: Request Copilot review
         run: |
           gh api --method POST "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
-            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' > /dev/null   
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' > /dev/null
