@@ -22,7 +22,12 @@
 
 const crypto = require('crypto');
 const pool = require('./pool');
-const { getD1Binding } = require('./d1Bridge');
+const { getD1Binding, getD1HttpClient } = require('./d1Bridge');
+
+function hasD1() {
+  return Boolean(getD1Binding() || getD1HttpClient());
+}
+
 const { BUYER_PROFILE_CONFIG } = require('../config/constants');
 
 /**
@@ -90,7 +95,7 @@ function mapRowToProfile(row) {
     street: text(row.address1),
     city: text(row.city),
     state: text(row.state),
-    pincode: text(row.zip_code),
+    pincode: text(row.zip_code) || text(row.pincode),
     country: text(row.country) || BUYER_PROFILE_CONFIG.DEFAULT_COUNTRY,
 
     // Section 3 — primary procurement contact. Name falls back to the account
@@ -119,7 +124,7 @@ const PROFILE_SELECT = `
          o.cin, o.crn,
          o.website,
          o.annual_turnover, o.others,
-         o.address1, o.city, o.state, o.zip_code, o.country,
+         o.address1, o.city, o.state, o.zip_code, o.pincode, o.country,
          o.contact_person,
          o.contact_designation, o.sub_category,
          o.email,
@@ -198,7 +203,7 @@ const PROFILE_COLUMN_MAP = [
   { field: 'street', column: 'address1' },
   { field: 'city', column: 'city' },
   { field: 'state', column: 'state' },
-  { field: 'pincode', column: 'zip_code' },
+  { field: 'pincode', column: 'zip_code', aliasColumn: 'pincode' },
   { field: 'country', column: 'country' },
   { field: 'contactName', column: 'contact_person' },
   { field: 'contactDesignation', column: 'contact_designation', aliasColumn: 'sub_category' },
@@ -352,7 +357,7 @@ async function updateProfile({ organizationId, userId, patch, categories, actor 
   // what to write" (see insertBuyerAccount's identical comment in
   // identityQueries.js for the fuller rationale). This runs the same steps
   // sequentially instead, via plain pool.query(..., { d1: true }) calls.
-  if (getD1Binding()) {
+  if (hasD1()) {
     const existing = await pool.query('select uuid from organization where uuid = $1 limit 1', [organizationId], {
       d1: true,
     });

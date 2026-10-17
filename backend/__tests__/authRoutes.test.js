@@ -931,7 +931,7 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
 
     test('POST /api/auth/register creates an account', async () => {
-      jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({
+      const insertSpy = jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({
         created: true,
         user: {
           id: 'new-uuid',
@@ -950,10 +950,23 @@ describe('Authentication against the account records (/api/auth)', () => {
         mobile: '9876543210',
         role: 'buyer',
         orgName: 'Brand New Ltd',
+        city: 'Pune',
+        state: 'Maharashtra',
+        pincode: '411001',
+        gstin: '27AAAAA0000A1Z5',
       });
 
       expect(res.statusCode).toBe(201);
       expect(res.body.success).toBe(true);
+      expect(insertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          city: 'Pune',
+          state: 'Maharashtra',
+          pincode: '411001',
+          gstin: '27AAAAA0000A1Z5',
+          pan: 'AAAAA0000A',
+        })
+      );
     });
 
     test('POST /api/auth/register reports a duplicate with 400', async () => {

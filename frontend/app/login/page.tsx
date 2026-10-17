@@ -443,6 +443,13 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       const email = regEmail.trim().toLowerCase();
+      const cleanGstin = regGstin.trim().toUpperCase();
+      const derivedPan = cleanGstin.length === 15 ? cleanGstin.slice(2, 12) : '';
+      const cleanCity = regCity.trim();
+      const cleanState = regState.trim();
+      const cleanPincode = regPincode.trim();
+      const plantLocation = `${cleanCity}, ${cleanState} (${cleanPincode})`;
+
       const response = await authClient.register({
         name: regName.trim(),
         email,
@@ -450,10 +457,12 @@ export default function LoginPage() {
         mobile: regMobile.trim(),
         role: selectedRegRole,
         orgName: regOrgName.trim() || regName.trim(),
-        city: regCity.trim(),
-        state: regState.trim(),
-        pincode: regPincode.trim(),
-        gstin: regGstin.trim().toUpperCase(),
+        city: cleanCity,
+        state: cleanState,
+        pincode: cleanPincode,
+        country: 'India',
+        gstin: cleanGstin,
+        pan: derivedPan,
         emailOtp,
         mobileOtp,
         code: mobileOtp || emailOtp,
@@ -472,11 +481,14 @@ export default function LoginPage() {
           contactPerson: regName.trim(),
           contactDesignation: 'Procurement Specialist',
           mobileNumber: regMobile.trim(),
-          gstin: regGstin.trim().toUpperCase(),
-          primaryPlantLocation: `${regCity.trim()}, ${regState.trim()} (${regPincode.trim()})`,
-          city: regCity.trim(),
-          state: regState.trim(),
-          pincode: regPincode.trim(),
+          gstin: cleanGstin,
+          pan: derivedPan,
+          city: cleanCity,
+          state: cleanState,
+          pincode: cleanPincode,
+          zip_code: cleanPincode,
+          country: 'India',
+          primaryPlantLocation: plantLocation,
           industrySector: 'Enterprise SCM & Manufacturing',
           sourcingMode: 'mode_2',
           subscriptionPlan: 'free_trial',
