@@ -565,6 +565,59 @@ describe('Gemini document extraction service', () => {
       ]);
     });
 
+    test('keeps retry cursors independent per model across repeated requests', async () => {
+      GEMINI_CONFIG.API_KEY = Array.from({ length: 12 }, (_, i) => `key-${i + 1}`).join(',');
+      GEMINI_CONFIG.MODELS = ['model-a', 'model-b'];
+      GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL = 3;
+      global.fetch = jest.fn((url, init) => {
+        if (url.includes('model-a') && init.headers['x-goog-api-key'] === 'key-4') {
+          return Promise.resolve(geminiReply('{"items":[{"itemDescription":"Pump"}]}'));
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          text: async () => 'quota exceeded',
+        });
+      });
+
+      const failedRequest = await gemini.extractLineItems({ documentText: 'Pump | 1' });
+      expect(failedRequest.status).toBe(EXTRACTION_STATUS.QUOTA_EXCEEDED);
+      expect(gemini.getActiveModelIndex()).toBe(1);
+
+      const recoveredRequest = await gemini.extractLineItems({ documentText: 'Pump | 1' });
+
+      expect(recoveredRequest.status).toBe(EXTRACTION_STATUS.SUCCESS);
+      expect(recoveredRequest.model).toBe('model-a');
+      expect(global.fetch.mock.calls.some(([url, init]) =>
+        url.includes('model-a') && init.headers['x-goog-api-key'] === 'key-4'
+      )).toBe(true);
+    });
+
+    test('resets every model key cursor when quota recovery starts', async () => {
+      GEMINI_CONFIG.API_KEY = 'key-1,key-2';
+      GEMINI_CONFIG.MODELS = ['model-a', 'model-b'];
+      GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL = 1;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        text: async () => 'quota exceeded',
+      });
+
+      await expect(gemini.callModel('model-a', {})).rejects.toThrow('responded 429');
+      await expect(gemini.callModel('model-b', {})).rejects.toThrow('responded 429');
+      gemini.setLastResetDate('2026-10-01');
+      expect(gemini.checkDailyModelReset()).toBe(true);
+
+      global.fetch = jest.fn().mockResolvedValue(geminiReply('{"items":[]}'));
+      await gemini.callModel('model-a', {});
+      await gemini.callModel('model-b', {});
+
+      expect(global.fetch.mock.calls.map(([, init]) => init.headers['x-goog-api-key'])).toEqual([
+        'key-1',
+        'key-1',
+      ]);
+    });
+
     describe('checkDailyModelReset and automatic recovery', () => {
       test('automatically restores activeModelIndex and activeKeyIndex to 0 when date advances to a new day', () => {
         gemini.setActiveModelIndex(2);
@@ -662,6 +715,46 @@ describe('Gemini document extraction service', () => {
 
         expect(result.status).toBe(EXTRACTION_STATUS.SUCCESS);
         expect(global.fetch.mock.calls[1][0]).toContain('model-b');
+      }
+    );
+
+    test.each(['extractLineItems', 'generateJson'])(
+      '%s does not overwrite a concurrent model selection after a late failure',
+      async (method) => {
+        const originalBudget = GEMINI_CONFIG.TOTAL_BUDGET_MS;
+        const originalMinAttempt = GEMINI_CONFIG.MIN_ATTEMPT_MS;
+        GEMINI_CONFIG.API_KEY = 'test-key';
+        GEMINI_CONFIG.MODELS = ['model-a', 'model-b'];
+        GEMINI_CONFIG.TOTAL_BUDGET_MS = 10;
+        GEMINI_CONFIG.MIN_ATTEMPT_MS = 5;
+        gemini.resetActiveModelIndex();
+
+        let now = 100000;
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+        let resolveFirstAttempt;
+        global.fetch = jest.fn(() => new Promise((resolve) => {
+          resolveFirstAttempt = resolve;
+        }));
+
+        try {
+          const pending = method === 'extractLineItems'
+            ? gemini.extractLineItems({ documentText: 'Pump | 1' })
+            : gemini.generateJson({ prompt: 'Summarise this' });
+          await Promise.resolve();
+
+          gemini.setActiveModelIndex(1);
+          now += GEMINI_CONFIG.TOTAL_BUDGET_MS;
+          resolveFirstAttempt({ ok: false, status: 503, text: async () => 'unavailable' });
+
+          const result = await pending;
+
+          expect(result.status).toBe(EXTRACTION_STATUS.AI_FAILED);
+          expect(global.fetch).toHaveBeenCalledTimes(1);
+          expect(gemini.getActiveModelIndex()).toBe(1);
+        } finally {
+          GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
+          GEMINI_CONFIG.MIN_ATTEMPT_MS = originalMinAttempt;
+        }
       }
     );
 
@@ -2073,5 +2166,3 @@ describe('geminiService.generateJson', () => {
     });
   });
 });
-
-

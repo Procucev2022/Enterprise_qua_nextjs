@@ -459,6 +459,7 @@ function buildRequestBody({ documentText, inlineData, mimeType, fileName }) {
 }
 
 let activeKeyIndex = 0;
+const modelKeyIndices = new Map();
 let activeModelIndex = 0;
 function getQuotaDate() {
   const dateParts = new Intl.DateTimeFormat('en-US', {
@@ -487,7 +488,8 @@ function checkDailyModelReset() {
   const isNewDay = lastResetDate !== today;
   const isTtlExpired = lastFailoverTimestamp > 0 && now - lastFailoverTimestamp >= ttlMs;
 
-  if ((isNewDay || isTtlExpired) && (activeModelIndex !== 0 || activeKeyIndex !== 0)) {
+  const hasRotatedModelKey = [...modelKeyIndices.values()].some((index) => index !== 0);
+  if ((isNewDay || isTtlExpired) && (activeModelIndex !== 0 || activeKeyIndex !== 0 || hasRotatedModelKey)) {
     const chain = resolveModelChain();
     logger.info(
       `Gemini daily quota reset: restoring active model index from ${activeModelIndex} to 0 (${chain[0]}) and active key index to 0.`,
@@ -496,6 +498,7 @@ function checkDailyModelReset() {
     );
     activeModelIndex = 0;
     activeKeyIndex = 0;
+    modelKeyIndices.clear();
     lastResetDate = today;
     lastFailoverTimestamp = 0;
     return true;
@@ -513,6 +516,10 @@ function getActiveKeyIndex() {
 
 function setActiveKeyIndex(idx) {
   activeKeyIndex = Number(idx) || 0;
+  modelKeyIndices.clear();
+  for (const model of resolveModelChain()) {
+    modelKeyIndices.set(model, activeKeyIndex);
+  }
 }
 
 function getActiveModelIndex() {
@@ -530,6 +537,7 @@ function setActiveModelIndex(idx) {
 function resetActiveModelIndex() {
   activeModelIndex = 0;
   activeKeyIndex = 0;
+  modelKeyIndices.clear();
   lastFailoverTimestamp = 0;
   lastResetDate = getQuotaDate();
 }
@@ -582,13 +590,17 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
       ? GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL
       : keys.length
   );
+  const chain = resolveModelChain();
+  const startKeyIndex = modelKeyIndices.has(model)
+    ? modelKeyIndices.get(model)
+    : chain.includes(model) ? 0 : activeKeyIndex;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (deadline && Date.now() >= deadline - (GEMINI_CONFIG.MIN_ATTEMPT_MS || 1000)) {
       throw new Error(`Extraction time budget exhausted while trying API keys for ${model}`);
     }
 
-    const keyIdx = (activeKeyIndex + attempt) % keys.length;
+    const keyIdx = (startKeyIndex + attempt) % keys.length;
     const apiKey = keys[keyIdx];
     const remainingTime = deadline ? Math.min(timeoutMs, Math.max(100, deadline - Date.now())) : timeoutMs;
     const controller = new AbortController();
@@ -616,6 +628,7 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
       if (!parsed) {
         throw new Error(`Gemini ${model} returned no parseable JSON`);
       }
+      modelKeyIndices.set(model, keyIdx);
       activeKeyIndex = keyIdx;
       if (attempt > 0) {
         logger.info(
@@ -638,6 +651,7 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
         continue;
       }
       activeKeyIndex = (keyIdx + 1) % keys.length;
+      modelKeyIndices.set(model, activeKeyIndex);
       throw err;
     } finally {
       clearTimeout(timer);
@@ -805,8 +819,12 @@ async function extractLineItems(input = {}) {
   }
 
   // If the failure was due to 503 (overload) or 429 (quota/rate limit), advance activeModelIndex so the next request starts with fallback models
-  if (failures.some((f) => /503|429|overloaded|unavailable|quota|resource_exhausted|rate.?limit/i.test(f)) && chain.length > 1) {
-    activeModelIndex = (activeModelIndex + 1) % chain.length;
+  if (
+    failures.some((f) => /503|429|overloaded|unavailable|quota|resource_exhausted|rate.?limit/i.test(f)) &&
+    chain.length > 1 &&
+    activeModelIndex === startModelIndex
+  ) {
+    activeModelIndex = (startModelIndex + 1) % chain.length;
     lastFailoverTimestamp = Date.now();
     logger.info(
       `Primary model encountered 503 overload or 429 rate limit. Setting next active model to index ${activeModelIndex} (${chain[activeModelIndex]}) for subsequent requests.`,
@@ -907,8 +925,12 @@ async function generateJson(input = {}) {
     }
   }
 
-  if (failures.some((f) => /503|429|overloaded|unavailable|quota|resource_exhausted|rate.?limit/i.test(f)) && chain.length > 1) {
-    activeModelIndex = (activeModelIndex + 1) % chain.length;
+  if (
+    failures.some((f) => /503|429|overloaded|unavailable|quota|resource_exhausted|rate.?limit/i.test(f)) &&
+    chain.length > 1 &&
+    activeModelIndex === startModelIndex
+  ) {
+    activeModelIndex = (startModelIndex + 1) % chain.length;
     lastFailoverTimestamp = Date.now();
   }
 
