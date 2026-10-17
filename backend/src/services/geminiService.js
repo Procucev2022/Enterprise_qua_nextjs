@@ -647,11 +647,14 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
         { keyIndex: keyIdx + 1, totalKeys: keys.length, model, error: err.message },
         'GEMINI'
       );
-      if (attempt < maxAttempts - 1) {
-        continue;
-      }
       activeKeyIndex = (keyIdx + 1) % keys.length;
       modelKeyIndices.set(model, activeKeyIndex);
+      if (
+        attempt < maxAttempts - 1 &&
+        (!deadline || Date.now() < deadline - (GEMINI_CONFIG.MIN_ATTEMPT_MS || 1000))
+      ) {
+        continue;
+      }
       throw err;
     } finally {
       clearTimeout(timer);
