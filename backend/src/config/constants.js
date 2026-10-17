@@ -562,6 +562,7 @@ const RFQ_CATEGORY_CLASSIFICATION = {
 // environment only and never leaves the server.
 const GEMINI_CONFIG = {
   API_KEY: process.env.GEMINI_API_KEY || '',
+  BACKUP_KEYS: process.env.GEMINI_BACKUP_KEYS || '',
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
   // Primary model for document extraction: Google Gemini 3.8 Flash
   PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.8-flash',
