@@ -453,7 +453,18 @@ function buildRequestBody({ documentText, inlineData, mimeType, fileName }) {
 
 let activeKeyIndex = 0;
 let activeModelIndex = 0;
-let lastResetDate = new Date().toISOString().slice(0, 10);
+function getQuotaDate() {
+  const dateParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const parts = Object.fromEntries(dateParts.map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+let lastResetDate = getQuotaDate();
 let lastFailoverTimestamp = 0;
 
 /**
@@ -462,7 +473,7 @@ let lastFailoverTimestamp = 0;
  * primary model can be used.
  */
 function checkDailyModelReset() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getQuotaDate();
   const now = Date.now();
   const ttlMs = GEMINI_CONFIG.MODEL_RESET_TTL_MS || 24 * 60 * 60 * 1000;
 
@@ -513,7 +524,7 @@ function resetActiveModelIndex() {
   activeModelIndex = 0;
   activeKeyIndex = 0;
   lastFailoverTimestamp = 0;
-  lastResetDate = new Date().toISOString().slice(0, 10);
+  lastResetDate = getQuotaDate();
 }
 
 function setLastResetDate(dateStr) {
@@ -612,6 +623,7 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
       if (attempt < maxAttempts - 1) {
         continue;
       }
+      activeKeyIndex = (keyIdx + 1) % keys.length;
       throw err;
     } finally {
       clearTimeout(timer);
@@ -689,8 +701,9 @@ async function extractLineItems(input = {}) {
   const deadline = Date.now() + GEMINI_CONFIG.TOTAL_BUDGET_MS;
 
   const chain = resolveModelChain();
+  const startModelIndex = activeModelIndex;
   for (let attempt = 0; attempt < chain.length; attempt++) {
-    const modelIdx = (activeModelIndex + attempt) % chain.length;
+    const modelIdx = (startModelIndex + attempt) % chain.length;
     const model = chain[modelIdx];
 
     const remainingMs = deadline - Date.now();
@@ -736,10 +749,10 @@ async function extractLineItems(input = {}) {
 
       // Retain the working model index so subsequent requests start directly with it
       // (crucial for 503 issues where the primary model is overloaded).
-      activeModelIndex = modelIdx;
-      if (activeModelIndex > 0) {
-        lastFailoverTimestamp = Date.now();
+      if (modelIdx !== activeModelIndex) {
+        lastFailoverTimestamp = modelIdx > 0 ? Date.now() : 0;
       }
+      activeModelIndex = modelIdx;
 
       return {
         status: EXTRACTION_STATUS.SUCCESS,
@@ -834,8 +847,9 @@ async function generateJson(input = {}) {
   const deadline = Date.now() + GEMINI_CONFIG.TOTAL_BUDGET_MS;
 
   const chain = resolveModelChain();
+  const startModelIndex = activeModelIndex;
   for (let attempt = 0; attempt < chain.length; attempt++) {
-    const modelIdx = (activeModelIndex + attempt) % chain.length;
+    const modelIdx = (startModelIndex + attempt) % chain.length;
     const model = chain[modelIdx];
 
     const remainingMs = deadline - Date.now();
@@ -852,10 +866,10 @@ async function generateJson(input = {}) {
         deadline
       );
       logger.info(`Gemini ${model} completed ${label}`, { model }, 'GEMINI');
-      activeModelIndex = modelIdx;
-      if (activeModelIndex > 0) {
-        lastFailoverTimestamp = Date.now();
+      if (modelIdx !== activeModelIndex) {
+        lastFailoverTimestamp = modelIdx > 0 ? Date.now() : 0;
       }
+      activeModelIndex = modelIdx;
       return { status: EXTRACTION_STATUS.SUCCESS, data: parsed, model, error: null };
     } catch (err) {
       failures.push(`${model}: ${err.message}`);

@@ -15,6 +15,17 @@ function geminiReply(jsonText) {
   };
 }
 
+function pacificDate(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 describe('Gemini category list in the extraction prompt', () => {
   const ingestion = require('../src/services/rfqIngestionService');
   const { CATEGORY_TAXONOMY_FIXTURE: taxonomy } = require('./fixtures/categoryTaxonomy');
@@ -41,10 +52,14 @@ describe('Gemini document extraction service', () => {
   const originalKey = GEMINI_CONFIG.API_KEY;
   const originalFetch = global.fetch;
   const originalModels = [...GEMINI_CONFIG.MODELS];
+  const originalMaxKeyAttempts = GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL;
+  const originalResetTtl = GEMINI_CONFIG.MODEL_RESET_TTL_MS;
 
   afterEach(() => {
     GEMINI_CONFIG.API_KEY = originalKey;
     GEMINI_CONFIG.MODELS = [...originalModels];
+    GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL = originalMaxKeyAttempts;
+    GEMINI_CONFIG.MODEL_RESET_TTL_MS = originalResetTtl;
     global.fetch = originalFetch;
     gemini.resetActiveModelIndex();
     gemini.setActiveKeyIndex(0);
@@ -530,6 +545,24 @@ describe('Gemini document extraction service', () => {
       expect(fallbackCalls).toHaveLength(1);
     });
 
+    test('advances the persistent key cursor after a capped batch fails', async () => {
+      GEMINI_CONFIG.API_KEY = 'key-1,key-2,key-3,key-4';
+      GEMINI_CONFIG.MODELS = ['only-model'];
+      GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL = 3;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        text: async () => 'rate limit exceeded',
+      });
+
+      await expect(gemini.callModel('only-model', {})).rejects.toThrow('responded 429');
+      await expect(gemini.callModel('only-model', {})).rejects.toThrow('responded 429');
+
+      expect(global.fetch.mock.calls.map(([, init]) => init.headers['x-goog-api-key'])).toEqual([
+        'key-1', 'key-2', 'key-3', 'key-4', 'key-1', 'key-2',
+      ]);
+    });
+
     describe('checkDailyModelReset and automatic recovery', () => {
       test('automatically restores activeModelIndex and activeKeyIndex to 0 when date advances to a new day', () => {
         gemini.setActiveModelIndex(2);
@@ -550,7 +583,7 @@ describe('Gemini document extraction service', () => {
       test('does not reset if date has not changed and TTL has not expired', () => {
         gemini.resetActiveModelIndex();
         gemini.setActiveModelIndex(1);
-        const today = new Date().toISOString().slice(0, 10);
+        const today = pacificDate();
         gemini.setLastResetDate(today);
 
         const didReset = gemini.checkDailyModelReset();
@@ -564,7 +597,7 @@ describe('Gemini document extraction service', () => {
           GEMINI_CONFIG.MODEL_RESET_TTL_MS = 60000; // 1 minute
           gemini.resetActiveModelIndex();
           gemini.setActiveModelIndex(2);
-          const today = new Date().toISOString().slice(0, 10);
+          const today = pacificDate();
           gemini.setLastResetDate(today);
 
           // Failover happened 2 minutes ago (exceeding 1 minute TTL)
@@ -577,7 +610,84 @@ describe('Gemini document extraction service', () => {
           GEMINI_CONFIG.MODEL_RESET_TTL_MS = originalTtl;
         }
       });
+
+      test('resets on the Pacific quota date boundary, not UTC midnight', () => {
+        jest.useFakeTimers().setSystemTime(new Date('2026-10-17T00:30:00.000Z'));
+        try {
+          gemini.resetActiveModelIndex();
+          gemini.setActiveModelIndex(2);
+          gemini.setActiveKeyIndex(4);
+          gemini.setLastResetDate('2026-10-16');
+
+          expect(gemini.checkDailyModelReset()).toBe(false);
+          expect(gemini.getActiveModelIndex()).toBe(2);
+
+          jest.setSystemTime(new Date('2026-10-17T07:30:00.000Z'));
+          expect(gemini.checkDailyModelReset()).toBe(true);
+          expect(gemini.getActiveModelIndex()).toBe(0);
+          expect(gemini.getActiveKeyIndex()).toBe(0);
+        } finally {
+          jest.useRealTimers();
+        }
+      });
     });
+
+    test.each(['extractLineItems', 'generateJson'])(
+      '%s keeps the model traversal snapshot when another request updates the active model',
+      async (method) => {
+        GEMINI_CONFIG.API_KEY = 'test-key';
+        GEMINI_CONFIG.MODELS = ['model-a', 'model-b', 'model-c'];
+        gemini.resetActiveModelIndex();
+
+        let resolveFirstAttempt;
+        global.fetch = jest.fn((url) => {
+          if (url.includes('model-a')) {
+            return new Promise((resolve) => {
+              resolveFirstAttempt = resolve;
+            });
+          }
+          return Promise.resolve(geminiReply('{"items":[{"itemDescription":"Pump"}]}'));
+        });
+
+        const pending = method === 'extractLineItems'
+          ? gemini.extractLineItems({ documentText: 'Pump | 1' })
+          : gemini.generateJson({ prompt: 'Summarise this' });
+        await Promise.resolve();
+        gemini.setActiveModelIndex(1);
+        resolveFirstAttempt({ ok: false, status: 503, text: async () => 'unavailable' });
+
+        const result = await pending;
+
+        expect(result.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(global.fetch.mock.calls[1][0]).toContain('model-b');
+      }
+    );
+
+    test.each(['extractLineItems', 'generateJson'])(
+      '%s does not extend the fallback cooldown after a same-model success',
+      async (method) => {
+        GEMINI_CONFIG.API_KEY = 'test-key';
+        GEMINI_CONFIG.MODEL_RESET_TTL_MS = 60000;
+        GEMINI_CONFIG.MODELS = ['model-a', 'model-b'];
+        let now = 100000;
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+        gemini.resetActiveModelIndex();
+        gemini.setActiveModelIndex(1);
+        gemini.setLastFailoverTimestamp(now);
+        global.fetch = jest.fn().mockResolvedValue(
+          geminiReply('{"items":[{"itemDescription":"Pump"}]}')
+        );
+
+        now += 30000;
+        const result = method === 'extractLineItems'
+          ? await gemini.extractLineItems({ documentText: 'Pump | 1' })
+          : await gemini.generateJson({ prompt: 'Summarise this' });
+
+        expect(result.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        now += 31000;
+        expect(gemini.getActiveModelIndex()).toBe(0);
+      }
+    );
 
     test('reports AI_FAILED once every model has been tried', async () => {
       GEMINI_CONFIG.API_KEY = 'test-key';
