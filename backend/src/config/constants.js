@@ -563,16 +563,30 @@ const RFQ_CATEGORY_CLASSIFICATION = {
 const GEMINI_CONFIG = {
   API_KEY: process.env.GEMINI_API_KEY || '',
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
-  // Primary model for document extraction: Google Gemini 3.8 Flash
-  PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.8-flash',
-  // Tried in order when the primary model errors, reaches quota limits, or is unavailable.
-  FALLBACK_MODELS: (
-    process.env.GEMINI_FALLBACK_MODELS ||
-    'gemini-3.7-flash,gemini-3.6-flash,gemini-flash-lite-latest'
+  // Ordered models attempted in sequence: gemini-3.8-flash down to gemini-3.1-flash-lite.
+  // Extraction automatically advances through the backup models upon error or 503 overload.
+  MODELS: (
+    process.env.GEMINI_MODELS ||
+    'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite'
   )
     .split(',')
-    .map((m) => m.trim())
+    .map((m) => m.trim().replace(/\s+/g, '-'))
     .filter(Boolean),
+  get PRIMARY_MODEL() {
+    return this.MODELS[0] || 'gemini-3.8-flash';
+  },
+  set PRIMARY_MODEL(val) {
+    if (val) {
+      this.MODELS = Array.from(new Set([val, ...this.MODELS]));
+    }
+  },
+  get FALLBACK_MODELS() {
+    return this.MODELS.slice(1);
+  },
+  set FALLBACK_MODELS(arr) {
+    const list = Array.isArray(arr) ? arr : (typeof arr === 'string' ? arr.split(',').map((m) => m.trim()) : []);
+    this.MODELS = Array.from(new Set([this.PRIMARY_MODEL, ...list].filter(Boolean)));
+  },
   // The primary model measured 12.5s on a small PDF and timed out at 15s on a
   // real one, so it needs more than the Java service's 15s read timeout to have a
   // fair chance before the chain moves on.
@@ -584,7 +598,12 @@ const GEMINI_CONFIG = {
   // Documents larger than this are rejected before a request is billed.
   MAX_DOCUMENT_BYTES: Number(process.env.GEMINI_MAX_DOCUMENT_BYTES || 25 * 1024 * 1024),
   MAX_DOCUMENT_TEXT_CHARS: Number(process.env.GEMINI_MAX_DOCUMENT_TEXT_CHARS || 300000),
-  // Deterministic output: extraction must not paraphrase or invent values.
+  // Maximum number of API keys attempted per individual model before advancing
+  // to the next fallback model in the chain (prevents long key-retry loops on rate limits).
+  MAX_KEY_ATTEMPTS_PER_MODEL: Number(process.env.GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL || 3),
+  // Automatic model recovery interval: resets active model index back to primary model (0)
+  // daily or after the cooldown period so refreshed daily quotas can be utilized.
+  MODEL_RESET_TTL_MS: Number(process.env.GEMINI_MODEL_RESET_TTL_MS || 24 * 60 * 60 * 1000),
   TEMPERATURE: 0,
 };
 

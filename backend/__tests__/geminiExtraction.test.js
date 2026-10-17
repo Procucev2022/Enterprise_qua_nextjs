@@ -40,10 +40,14 @@ describe('Gemini category list in the extraction prompt', () => {
 describe('Gemini document extraction service', () => {
   const originalKey = GEMINI_CONFIG.API_KEY;
   const originalFetch = global.fetch;
+  const originalModels = [...GEMINI_CONFIG.MODELS];
 
   afterEach(() => {
     GEMINI_CONFIG.API_KEY = originalKey;
+    GEMINI_CONFIG.MODELS = [...originalModels];
     global.fetch = originalFetch;
+    gemini.resetActiveModelIndex();
+    gemini.setActiveKeyIndex(0);
     jest.restoreAllMocks();
   });
 
@@ -331,6 +335,248 @@ describe('Gemini document extraction service', () => {
       expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
       expect(res.model).toBe(GEMINI_CONFIG.FALLBACK_MODELS[0]);
       expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    test('retains working fallback model after 503 error and starts with it on subsequent extraction', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      gemini.resetActiveModelIndex();
+
+      // First request: primary model returns 503 (overloaded), fallback model succeeds
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: false, status: 503, text: async () => 'The model is overloaded' })
+        .mockResolvedValueOnce(geminiReply('{"items":[{"itemDescription":"Valve","quantity":3}]}'));
+
+      const res1 = await gemini.extractLineItems({ documentText: 'Valve | 3' });
+      expect(res1.status).toBe(EXTRACTION_STATUS.SUCCESS);
+      expect(res1.model).toBe(GEMINI_CONFIG.FALLBACK_MODELS[0]);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(gemini.getActiveModelIndex()).toBe(1);
+
+      // Second request: starts directly with the retained fallback model, bypassing primary model
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce(geminiReply('{"items":[{"itemDescription":"Flange","quantity":5}]}'));
+
+      const res2 = await gemini.extractLineItems({ documentText: 'Flange | 5' });
+      expect(res2.status).toBe(EXTRACTION_STATUS.SUCCESS);
+      expect(res2.model).toBe(GEMINI_CONFIG.FALLBACK_MODELS[0]);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      expect(global.fetch.mock.calls[0][0]).toContain(GEMINI_CONFIG.FALLBACK_MODELS[0]);
+    });
+
+    test('resolveModelChain reflects ordered GEMINI_MODELS and syncs PRIMARY_MODEL and FALLBACK_MODELS', () => {
+      GEMINI_CONFIG.MODELS = [
+        'gemini-3.8-flash',
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
+      ];
+      const chain = gemini.resolveModelChain();
+      expect(chain).toEqual([
+        'gemini-3.8-flash',
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
+      ]);
+      expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-3.8-flash');
+      expect(GEMINI_CONFIG.FALLBACK_MODELS).toEqual([
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
+      ]);
+    });
+
+    test('GEMINI_CONFIG setters update MODELS list appropriately', () => {
+      GEMINI_CONFIG.PRIMARY_MODEL = 'gemini-custom-primary';
+      expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-custom-primary');
+      expect(GEMINI_CONFIG.MODELS[0]).toBe('gemini-custom-primary');
+
+      GEMINI_CONFIG.FALLBACK_MODELS = ['fb-1', 'fb-2'];
+      expect(GEMINI_CONFIG.FALLBACK_MODELS).toEqual(['fb-1', 'fb-2']);
+
+      GEMINI_CONFIG.FALLBACK_MODELS = 'fb-3,fb-4';
+      expect(GEMINI_CONFIG.FALLBACK_MODELS).toEqual(['fb-3', 'fb-4']);
+    });
+
+    test('startWithFallbackModels explicitly switches active model to first fallback model', () => {
+      gemini.resetActiveModelIndex();
+      expect(gemini.getActiveModelIndex()).toBe(0);
+
+      gemini.startWithFallbackModels();
+      expect(gemini.getActiveModelIndex()).toBe(1);
+
+      gemini.setActiveModelIndex(3);
+      expect(gemini.getActiveModelIndex()).toBe(3);
+
+      gemini.resetActiveModelIndex();
+      expect(gemini.getActiveModelIndex()).toBe(0);
+    });
+
+    test('advances activeModelIndex when all attempts encounter 503 overload', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      gemini.resetActiveModelIndex();
+      expect(gemini.getActiveModelIndex()).toBe(0);
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        text: async () => '{"error":{"status":"UNAVAILABLE","message":"The model is overloaded"}}',
+      });
+
+      const res = await gemini.extractLineItems({ documentText: 'Pump | 12' });
+      expect(res.status).toBe(EXTRACTION_STATUS.AI_FAILED);
+      expect(res.error).toContain('503');
+      // activeModelIndex advanced to next model index so next extraction starts with fallback
+      expect(gemini.getActiveModelIndex()).toBe(1);
+    });
+
+    test('falls back to next model when primary hits 429 rate limit and retains working model', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      gemini.resetActiveModelIndex();
+      expect(gemini.getActiveModelIndex()).toBe(0);
+
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 429,
+          text: async () => '{"error":{"status":"RESOURCE_EXHAUSTED","message":"Rate limit exceeded"}}',
+        })
+        .mockResolvedValueOnce(geminiReply('{"items":[{"itemDescription":"Gasket","quantity":10}]}'));
+
+      const res = await gemini.extractLineItems({ documentText: 'Gasket | 10' });
+      expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
+      expect(res.model).toBe(GEMINI_CONFIG.FALLBACK_MODELS[0]);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(gemini.getActiveModelIndex()).toBe(1);
+    });
+
+    test('returns QUOTA_EXCEEDED and advances activeModelIndex when all models return 429', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      gemini.resetActiveModelIndex();
+      expect(gemini.getActiveModelIndex()).toBe(0);
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        text: async () => '{"error":{"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded"}}',
+      });
+
+      const res = await gemini.extractLineItems({ documentText: 'Pump | 12' });
+      expect(res.status).toBe(EXTRACTION_STATUS.QUOTA_EXCEEDED);
+      expect(res.error).toContain('429');
+      expect(gemini.getActiveModelIndex()).toBe(1);
+    });
+
+    test('generateJson fails over on 429 and returns QUOTA_EXCEEDED if all models fail', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      gemini.resetActiveModelIndex();
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        text: async () => '{"error":{"status":"RESOURCE_EXHAUSTED","message":"Quota exhausted"}}',
+      });
+
+      const res = await gemini.generateJson({ prompt: 'Categorize RFQ' });
+      expect(res.status).toBe(EXTRACTION_STATUS.QUOTA_EXCEEDED);
+      expect(res.error).toContain('429');
+      expect(gemini.getActiveModelIndex()).toBe(1);
+    });
+
+    test('caps key retries at MAX_KEY_ATTEMPTS_PER_MODEL and fails over to next model on 429 when many keys exist', async () => {
+      // 50 simulated keys
+      const manyKeys = Array.from({ length: 50 }, (_, i) => `key-${i + 1}`).join(',');
+      GEMINI_CONFIG.API_KEY = manyKeys;
+      GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL = 3;
+      gemini.resetActiveModelIndex();
+
+      const primaryModel = GEMINI_CONFIG.PRIMARY_MODEL;
+      const fallbackModel = GEMINI_CONFIG.FALLBACK_MODELS[0];
+
+      global.fetch = jest.fn((url) => {
+        if (url.includes(primaryModel)) {
+          // All keys on primary model return 429 rate limit
+          return Promise.resolve({
+            ok: false,
+            status: 429,
+            text: async () => '{"error":{"status":"RESOURCE_EXHAUSTED","message":"Rate limit reached"}}',
+          });
+        }
+        if (url.includes(fallbackModel)) {
+          // Fallback model succeeds
+          return Promise.resolve(geminiReply('{"items":[{"itemDescription":"Centrifugal Pump","quantity":2}]}'));
+        }
+        return Promise.reject(new Error('Unknown model'));
+      });
+
+      const res = await gemini.extractLineItems({ documentText: 'Centrifugal Pump | 2' });
+
+      expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
+      expect(res.model).toBe(fallbackModel);
+      expect(res.lineItems).toHaveLength(1);
+      // Primary model was attempted exactly MAX_KEY_ATTEMPTS_PER_MODEL (3) times, NOT 50 times!
+      const primaryCalls = global.fetch.mock.calls.filter((call) => call[0].includes(primaryModel));
+      expect(primaryCalls).toHaveLength(3);
+      // Fallback model was then called and succeeded
+      const fallbackCalls = global.fetch.mock.calls.filter((call) => call[0].includes(fallbackModel));
+      expect(fallbackCalls).toHaveLength(1);
+    });
+
+    describe('checkDailyModelReset and automatic recovery', () => {
+      test('automatically restores activeModelIndex and activeKeyIndex to 0 when date advances to a new day', () => {
+        gemini.setActiveModelIndex(2);
+        gemini.setActiveKeyIndex(4);
+        expect(gemini.getActiveModelIndex()).toBe(2);
+        expect(gemini.getActiveKeyIndex()).toBe(4);
+
+        // Simulate yesterday's date
+        gemini.setLastResetDate('2026-10-01');
+
+        // Calling checkDailyModelReset (or getActiveModelIndex) detects the new calendar day
+        const didReset = gemini.checkDailyModelReset();
+        expect(didReset).toBe(true);
+        expect(gemini.getActiveModelIndex()).toBe(0);
+        expect(gemini.getActiveKeyIndex()).toBe(0);
+      });
+
+      test('does not reset if date has not changed and TTL has not expired', () => {
+        gemini.resetActiveModelIndex();
+        gemini.setActiveModelIndex(1);
+        const today = new Date().toISOString().slice(0, 10);
+        gemini.setLastResetDate(today);
+
+        const didReset = gemini.checkDailyModelReset();
+        expect(didReset).toBe(false);
+        expect(gemini.getActiveModelIndex()).toBe(1);
+      });
+
+      test('automatically restores activeModelIndex when TTL expires even on same day', () => {
+        const originalTtl = GEMINI_CONFIG.MODEL_RESET_TTL_MS;
+        try {
+          GEMINI_CONFIG.MODEL_RESET_TTL_MS = 60000; // 1 minute
+          gemini.resetActiveModelIndex();
+          gemini.setActiveModelIndex(2);
+          const today = new Date().toISOString().slice(0, 10);
+          gemini.setLastResetDate(today);
+
+          // Failover happened 2 minutes ago (exceeding 1 minute TTL)
+          gemini.setLastFailoverTimestamp(Date.now() - 120000);
+
+          const didReset = gemini.checkDailyModelReset();
+          expect(didReset).toBe(true);
+          expect(gemini.getActiveModelIndex()).toBe(0);
+        } finally {
+          GEMINI_CONFIG.MODEL_RESET_TTL_MS = originalTtl;
+        }
+      });
     });
 
     test('reports AI_FAILED once every model has been tried', async () => {
