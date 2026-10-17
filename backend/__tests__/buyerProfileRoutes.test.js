@@ -337,4 +337,66 @@ describe('Buyer Profile API (/api/buyer-profile)', () => {
       expect(next).toHaveBeenCalled();
     });
   });
+
+  // ── GET /api/buyer-profile/details ─────────────────────────────────────────
+  describe('GET /details', () => {
+    test('rejects unauthenticated request', async () => {
+      const res = await request(app).get('/api/buyer-profile/details');
+      expect(res.statusCode).toBe(401);
+    });
+
+    test('returns profile details for category_manager querying by email, name, and accountId', async () => {
+      const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+      jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockResolvedValue({
+        found: true,
+        profile: {
+          companyName: 'Larsen & Toubro Limited',
+          brandName: 'L&T Heavy Engineering',
+          organizationType: 'Public Limited',
+          gstNumber: '27AAACL1234F1Z5',
+          panNumber: 'AAACL1234F',
+          cinNumber: 'L28920MH1946PLC004768',
+          website: 'https://larsentoubro.com',
+          annualTurnover: 'INR 1,80,000 Cr+',
+          contactName: 'Rajesh Sharma',
+          contactDesignation: 'CPO',
+          contactEmail: 'buyer@procucev.com',
+          contactPhone: '+919820144820',
+          street: 'L&T House',
+          city: 'Mumbai',
+          state: 'Maharashtra',
+          pincode: '400001',
+          country: 'India',
+          categories: [{ major: 'IT', minor: 'Laptop' }],
+        },
+      });
+
+      const res = await request(app)
+        .get('/api/buyer-profile/details?email=buyer@procucev.com&name=Larsen%20%26%20Toubro&accountId=buyer-1')
+        .set(authHeader('category_manager'));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.organizationName).toBe('Larsen & Toubro Limited');
+      expect(res.body.data.contactPerson).toBe('Rajesh Sharma');
+      expect(res.body.data.corporateEmail).toBe('buyer@procucev.com');
+      expect(res.body.data.mobileNumber).toBe('+919820144820');
+      expect(res.body.data.city).toBe('Mumbai');
+    });
+
+    test('falls back gracefully when database lookup fails or finds nothing', async () => {
+      const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+      jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockRejectedValue(new Error('DB connection timeout'));
+
+      const res = await request(app)
+        .get('/api/buyer-profile/details?email=unknown@buyer.com&name=Acme%20Corp')
+        .set(authHeader('category_manager'));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.organizationName).toBe('Acme Corp');
+      expect(res.body.data.corporateEmail).toBe('unknown@buyer.com');
+    });
+  });
 });
+
