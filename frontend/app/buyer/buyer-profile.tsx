@@ -278,6 +278,33 @@ export default function BuyerProfilePage() {
     void loadProfile();
   }, [loadProfile]);
 
+  // Backfill any empty form fields if activeBuyerAccount loads or carries onboarding data
+  useEffect(() => {
+    if (!activeBuyerAccount) return;
+    if (!companyName && activeBuyerAccount.organizationName) setCompanyName(activeBuyerAccount.organizationName);
+    if (!brandName && (activeBuyerAccount.brandName || activeBuyerAccount.organizationName)) {
+      setBrandName(activeBuyerAccount.brandName || activeBuyerAccount.organizationName);
+    }
+    if (!city && activeBuyerAccount.city) setCity(activeBuyerAccount.city);
+    if (!state && activeBuyerAccount.state) setState(activeBuyerAccount.state);
+    if (!pincode && (activeBuyerAccount.pincode || activeBuyerAccount.zip_code)) {
+      setPincode(activeBuyerAccount.pincode || activeBuyerAccount.zip_code || '');
+    }
+    if (!country && activeBuyerAccount.country) setCountry(activeBuyerAccount.country);
+    if (!gstNumber && activeBuyerAccount.gstin) setGstNumber(activeBuyerAccount.gstin);
+    if (!panNumber) {
+      const derivedPan = activeBuyerAccount.panNumber || activeBuyerAccount.pan || (activeBuyerAccount.gstin && activeBuyerAccount.gstin.length === 15 ? activeBuyerAccount.gstin.slice(2, 12).toUpperCase() : '');
+      if (derivedPan) setPanNumber(derivedPan);
+    }
+    if (!street) {
+      const fallbackStreet = activeBuyerAccount.street || activeBuyerAccount.address1 || (activeBuyerAccount.city && activeBuyerAccount.state ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}` : activeBuyerAccount.city || '');
+      if (fallbackStreet) setStreet(fallbackStreet);
+    }
+    if (!contactName && activeBuyerAccount.contactPerson) setContactName(activeBuyerAccount.contactPerson);
+    if (!contactPhone && activeBuyerAccount.mobileNumber) setContactPhone(activeBuyerAccount.mobileNumber);
+    if (!contactEmail && activeBuyerAccount.corporateEmail) setContactEmail(activeBuyerAccount.corporateEmail);
+  }, [activeBuyerAccount, companyName, brandName, city, state, pincode, country, gstNumber, panNumber, street, contactName, contactPhone, contactEmail]);
+
   // PAN Validation Helper
   const isPanValid = (pan: string) => /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.toUpperCase());
   // GST Validation Helper

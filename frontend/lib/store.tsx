@@ -804,6 +804,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       createdDate: new Date().toISOString().substring(0, 10),
     };
     setBuyerAccounts((prev) => [newAcc, ...prev]);
+    setActiveBuyerAccount(newAcc);
 
     // Persist to PostgreSQL
     fetch('/api/buyer-accounts', {
