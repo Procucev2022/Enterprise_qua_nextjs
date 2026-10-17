@@ -77,7 +77,27 @@ async function verifyOtp(req, res, next) {
 
 async function register(req, res, next) {
   try {
-    const { name, email, password, mobile, role, orgName, city, state, pincode, gstin, emailOtp, mobileOtp, code } = req.body || {};
+    const {
+      name,
+      email,
+      password,
+      mobile,
+      role,
+      orgName,
+      street,
+      address,
+      city,
+      state,
+      pincode,
+      country,
+      gstin,
+      gstNumber,
+      pan,
+      panNumber,
+      emailOtp,
+      mobileOtp,
+      code,
+    } = req.body || {};
     const ipAddress = getClientIp(req);
 
     const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.register, {
@@ -87,10 +107,16 @@ async function register(req, res, next) {
       mobile,
       role,
       orgName,
+      street,
+      address,
       city,
       state,
       pincode,
+      country,
       gstin,
+      gstNumber,
+      pan,
+      panNumber,
       emailOtp,
       mobileOtp,
       code,
@@ -100,7 +126,25 @@ async function register(req, res, next) {
     }
 
     const result = await authService.registerUser(
-      { name, email, password, mobile, role, orgName, city, state, pincode, gstin, emailOtp, mobileOtp, code },
+      {
+        name,
+        email,
+        password,
+        mobile,
+        role,
+        orgName,
+        street,
+        address,
+        city,
+        state,
+        pincode,
+        country,
+        gstin: gstin || gstNumber,
+        pan: pan || panNumber,
+        emailOtp,
+        mobileOtp,
+        code,
+      },
       ipAddress
     );
     res.status(201).json(result);

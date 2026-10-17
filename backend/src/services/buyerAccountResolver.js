@@ -54,9 +54,14 @@ async function mapProfileToBuyerAccount(profile, extras = {}) {
     // than guessed from the organisation name, which is what the seed effectively
     // did by hardcoding 'Automotive & Heavy Commercial Vehicles'.
     industrySector: '',
-    gstin: profile.gstNumber,
-    panNumber: profile.panNumber,
-    primaryPlantLocation: [profile.city, profile.state].filter(Boolean).join(', '),
+    gstin: profile.gstNumber || legacyAccount?.gstin || '',
+    panNumber: profile.panNumber || legacyAccount?.pan || legacyAccount?.panNumber || '',
+    street: profile.street || legacyAccount?.street || legacyAccount?.address1 || (profile.city && profile.state ? `${profile.city}, ${profile.state}` : profile.city || ''),
+    city: profile.city || legacyAccount?.city || '',
+    state: profile.state || legacyAccount?.state || '',
+    pincode: profile.pincode || legacyAccount?.pincode || legacyAccount?.zip_code || '',
+    country: profile.country || legacyAccount?.country || 'India',
+    primaryPlantLocation: [profile.city || legacyAccount?.city, profile.state || legacyAccount?.state].filter(Boolean).join(', '),
     // `profile.categories` is a flat list of `{ major, minor }` pairs — one per
     // selected minor category — which is the shape org_division_category stores
     // and the shape loadCategories returns. This previously read `.majorCategory`

@@ -310,6 +310,14 @@ async function insertBuyerAccount({
   phone,
   fullName,
   organizationName,
+  street = '',
+  address = '',
+  city = '',
+  state = '',
+  pincode = '',
+  country = 'India',
+  gstin = '',
+  pan = '',
   createdBy = 'enterprise-workspace',
 }) {
   if (!pool.hasStorage()) {
@@ -323,6 +331,13 @@ async function insertBuyerAccount({
   const normalizedPhone = normalizePhone(phone);
   const orgName = organizationName || `${normalizedEmail.split('@')[0]} Enterprises`;
   const displayName = fullName || normalizedEmail.split('@')[0];
+  const addressCity = (city || '').trim();
+  const addressState = (state || '').trim();
+  const addressPincode = (pincode || '').trim();
+  const addressCountry = (country || 'India').trim();
+  const streetAddress = (street || address || (addressCity && addressState ? `${addressCity}, ${addressState}` : addressCity || '')).trim();
+  const taxGstin = (gstin || '').trim().toUpperCase();
+  const taxPan = (pan || (taxGstin.length === 15 ? taxGstin.slice(2, 12) : '')).trim().toUpperCase();
 
   const existing = await findUserByEmailAndPhone(normalizedEmail, normalizedPhone);
   if (existing) {
@@ -363,16 +378,56 @@ async function insertBuyerAccount({
       orgUuid = crypto.randomUUID();
       await pool.query(
         `insert into organization
-           (uuid, organization_name, contact_name, contact_email, contact_phone,
-            org_type_uuid, is_active, created_ts, last_modified_ts)
-         values ($1, $2, $3, $4, $5, $6, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+           (uuid, organization_name, contact_name, contact_person, contact_email, email,
+            contact_phone, organization_phonenumber, address1, city, state, zip_code, pincode,
+            country, gstin, pan, org_type_uuid, is_active, created_ts, last_modified_ts)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
         [
           orgUuid,
           orgName,
           displayName,
+          displayName,
+          normalizedEmail,
           normalizedEmail,
           normalizedPhone,
+          normalizedPhone,
+          streetAddress,
+          addressCity,
+          addressState,
+          addressPincode,
+          addressPincode,
+          addressCountry,
+          taxGstin,
+          taxPan,
           orgTypeUuid,
+        ],
+        { d1: true }
+      );
+    } else if (streetAddress || addressCity || addressState || addressPincode || taxGstin || taxPan) {
+      await pool.query(
+        `update organization
+            set address1 = case when coalesce($1, '') <> '' then $1 else address1 end,
+                city = case when coalesce($2, '') <> '' then $2 else city end,
+                state = case when coalesce($3, '') <> '' then $3 else state end,
+                zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end,
+                pincode = case when coalesce($5, '') <> '' then $5 else pincode end,
+                country = case when coalesce($6, '') <> '' then $6 else country end,
+                gstin = case when coalesce($7, '') <> '' then $7 else gstin end,
+                pan = case when coalesce($8, '') <> '' then $8 else pan end,
+                contact_person = case when coalesce($9, '') <> '' then $9 else contact_person end,
+                last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          where uuid = $10`,
+        [
+          streetAddress,
+          addressCity,
+          addressState,
+          addressPincode,
+          addressPincode,
+          addressCountry,
+          taxGstin,
+          taxPan,
+          displayName,
+          orgUuid,
         ],
         { d1: true }
       );
@@ -434,16 +489,24 @@ async function insertBuyerAccount({
       await client.query(
         `insert into organization
            (uuid, organization_name, email, organization_phonenumber, contact_person,
+            address1, city, state, zip_code, country, gstin, pan,
             org_type_uuid, client_status_uuid, self_client, source_type, company_id,
             gmt_name, bfs_name, is_india, upgrade_days, rfq_credits, rfq_used_count,
             quote_submitted, created_by, created_ts, last_modified_by, last_modified_ts)
-         values ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, true, 0, 0, 0, 0, $12, now(), $13, now())`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, true, $15, $16, $17, $18, true, 0, 0, 0, 0, $19, now(), $20, now())`,
         [
           orgUuid,
           orgName,
           normalizedEmail,
           normalizedPhone,
           displayName,
+          streetAddress,
+          addressCity,
+          addressState,
+          addressPincode,
+          addressCountry,
+          taxGstin,
+          taxPan,
           orgTypeUuid,
           statusUuid,
           IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
@@ -452,6 +515,33 @@ async function insertBuyerAccount({
           IDENTITY_MASTER_DATA.DEFAULT_BFS_PLAN,
           createdBy,
           createdBy,
+        ]
+      );
+    } else if (streetAddress || addressCity || addressState || addressPincode || taxGstin || taxPan) {
+      await client.query(
+        `update organization
+            set address1 = case when coalesce($1, '') <> '' then $1 else address1 end,
+                city = case when coalesce($2, '') <> '' then $2 else city end,
+                state = case when coalesce($3, '') <> '' then $3 else state end,
+                zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end,
+                country = case when coalesce($5, '') <> '' then $5 else country end,
+                gstin = case when coalesce($6, '') <> '' then $6 else gstin end,
+                pan = case when coalesce($7, '') <> '' then $7 else pan end,
+                contact_person = case when coalesce($8, '') <> '' then $8 else contact_person end,
+                last_modified_by = $9,
+                last_modified_ts = now()
+          where uuid = $10`,
+        [
+          streetAddress,
+          addressCity,
+          addressState,
+          addressPincode,
+          addressCountry,
+          taxGstin,
+          taxPan,
+          displayName,
+          createdBy,
+          orgUuid,
         ]
       );
     }
