@@ -63,6 +63,35 @@ describe('storeService.ensureBuyerAccountForUser', () => {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
+
+  test('enriches an existing account from DB profile when statutory details are missing', async () => {
+    const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+    const existing = storeService.addBuyerAccount({
+      organizationName: 'Basic Account',
+      corporateEmail: 'enrich-me@ex.com',
+    });
+
+    jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockResolvedValue({
+      found: true,
+      profile: {
+        companyName: 'Enriched Entity Ltd',
+        gstNumber: '27AABCE1234F1Z5',
+        panNumber: 'AABCE1234F',
+        contactPhone: '+919999988888',
+        city: 'Pune',
+      },
+    });
+
+    const got = await storeService.ensureBuyerAccountForUser({
+      role: 'buyer',
+      email: 'enrich-me@ex.com',
+      sub: existing.id,
+    });
+
+    expect(got.organizationName).toBe('Enriched Entity Ltd');
+    expect(got.gstin).toBe('27AABCE1234F1Z5');
+    expect(got.city).toBe('Pune');
+  });
 });
 
 describe('an imported buyer (no buyer_accounts row) can see the RFQ they create', () => {

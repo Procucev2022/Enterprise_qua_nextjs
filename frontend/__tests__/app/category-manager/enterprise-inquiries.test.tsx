@@ -209,4 +209,10 @@ describe('EnterpriseInquiriesConsole (Category Manager)', () => {
 
     expect(mockShowToast).toHaveBeenCalledWith('Lead Updated', 'Enterprise inquiry details saved.', 'success');
   });
+
+  it('renders CategoryManagerEnterpriseInquiriesPage wrapper correctly', () => {
+    const CategoryManagerEnterpriseInquiriesPage = require('@/app/category-manager/enterprise-inquiries/page').default;
+    const { container } = render(<CategoryManagerEnterpriseInquiriesPage />);
+    expect(container).toBeInTheDocument();
+  });
 });

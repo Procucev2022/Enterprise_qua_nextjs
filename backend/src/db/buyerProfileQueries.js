@@ -188,6 +188,55 @@ async function findProfileByUserId(userId) {
   return { found: true, profile };
 }
 
+/**
+ * Load the buyer profile by any known identifier (email, organization name, orgId, or userId).
+ * Used by Category Managers, Admins, and system lookups to inspect full buyer profile data.
+ */
+async function findProfileByIdentifier({ email, organizationName, organizationId, userId } = {}) {
+  if (!email && !organizationName && !organizationId && !userId) {
+    return { found: false, reason: 'NO_IDENTIFIER' };
+  }
+  const conditions = [];
+  const params = [];
+  let idx = 1;
+
+  if (userId) {
+    conditions.push(`u.uuid = $${idx++}`);
+    params.push(userId);
+  }
+  if (organizationId) {
+    conditions.push(`o.uuid = $${idx++}`);
+    params.push(organizationId);
+  }
+  if (email) {
+    conditions.push(`(lower(u.username) = lower($${idx}) or lower(u.email) = lower($${idx}) or lower(o.email) = lower($${idx}))`);
+    params.push(email.trim());
+    idx++;
+  }
+  if (organizationName) {
+    conditions.push(`lower(o.organization_name) = lower($${idx++})`);
+    params.push(organizationName.trim());
+  }
+
+  const query = `${PROFILE_SELECT} where ${conditions.join(' or ')} limit 1`;
+  let rows = [];
+  try {
+    rows = await pool.rows(query, params, { d1: true });
+  } catch (err) {
+    return { found: false, reason: 'DB_ERROR', error: err.message };
+  }
+
+  if (!rows || rows.length === 0) return { found: false, reason: 'USER_NOT_FOUND' };
+
+  const profile = mapRowToProfile(rows[0]);
+  try {
+    profile.categories = await loadCategories(profile.organizationId, profile.userId);
+  } catch (_) {
+    profile.categories = [];
+  }
+  return { found: true, profile };
+}
+
 // Columns written by a profile save, in the order the UPDATE below binds them.
 // Each entry maps one API field onto the column(s) that hold it. `aliasColumn`
 // is the legacy column that must be kept in step.
@@ -601,6 +650,7 @@ module.exports = {
   mapRowToProfile,
   loadCategories,
   findProfileByUserId,
+  findProfileByIdentifier,
   buildProfileUpdate,
   replaceCategories,
   updateProfile,

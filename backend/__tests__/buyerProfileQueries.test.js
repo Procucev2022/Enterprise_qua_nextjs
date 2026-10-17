@@ -782,4 +782,72 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       expect(options.d1).toBe(true);
     });
   });
+
+  // ── findProfileByIdentifier ────────────────────────────────────────────────
+  describe('findProfileByIdentifier', () => {
+    test('returns NO_IDENTIFIER when no identifier parameters are provided', async () => {
+      const res = await buyerProfileQueries.findProfileByIdentifier();
+      expect(res).toEqual({ found: false, reason: 'NO_IDENTIFIER' });
+
+      const resEmpty = await buyerProfileQueries.findProfileByIdentifier({});
+      expect(resEmpty).toEqual({ found: false, reason: 'NO_IDENTIFIER' });
+    });
+
+    test('returns USER_NOT_FOUND when database query returns no rows', async () => {
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
+
+      const res = await buyerProfileQueries.findProfileByIdentifier({
+        email: 'missing@buyer.com',
+        organizationName: 'Missing Corp',
+        organizationId: 'org-missing',
+        userId: 'u-missing',
+      });
+
+      expect(res).toEqual({ found: false, reason: 'USER_NOT_FOUND' });
+    });
+
+    test('successfully finds profile and loads categories by email and name', async () => {
+      const fakeRow = {
+        org_uuid: 'org-123',
+        user_uuid: 'user-456',
+        organization_name: 'Alpha Ltd',
+        brand_name: 'Alpha Brand',
+        type: 'Public Limited',
+        pan: 'AAACL1234F',
+        gstin: '27AAACL1234F1Z5',
+        cin: 'L28920MH1946PLC004768',
+        website: 'https://alpha.com',
+        annual_turnover: 'INR 100 Cr',
+        address1: '100 Alpha Road',
+        city: 'Mumbai',
+        state: 'Maharashtra',
+        zip_code: '400001',
+        country: 'India',
+        contact_person: 'Rajesh Sharma',
+        contact_designation: 'CPO',
+        user_email: 'rajesh@alpha.com',
+        phone: '+919820144820',
+      };
+
+      const rowsSpy = jest.spyOn(dbPool, 'rows').mockImplementation((sql) => {
+        if (sql.includes('from "user" u')) {
+          return Promise.resolve([fakeRow]);
+        }
+        return Promise.resolve([{ division: 'Industrial', category: 'Motors' }]);
+      });
+
+      const res = await buyerProfileQueries.findProfileByIdentifier({
+        email: 'rajesh@alpha.com',
+        organizationName: 'Alpha Ltd',
+      });
+
+      expect(res.found).toBe(true);
+      expect(res.profile.companyName).toBe('Alpha Ltd');
+      expect(res.profile.contactEmail).toBe('rajesh@alpha.com');
+      expect(res.profile.categories).toEqual([{ major: 'Industrial', minor: 'Motors' }]);
+      expect(rowsSpy).toHaveBeenCalled();
+    });
+  });
 });
+
+

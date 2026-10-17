@@ -1,12 +1,14 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { RFQItem } from '@/lib/types';
+import { RFQItem, QuoteComparison, RFQAssignedVendor } from '@/lib/types';
 import { formatCurrency, formatIndianDateTime } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { fetchAllRFQs } from '@/lib/rfqClient';
-import { ClipboardList, Search, ChevronRight, RefreshCw, AlertTriangle, FileText, UserPlus, X } from 'lucide-react';
+import { ClipboardList, Search, ChevronRight, RefreshCw, AlertTriangle, FileText, UserPlus, X, Building2, Store } from 'lucide-react';
 import InviteVendorsModal from './InviteVendorsModal';
+import BuyerDetailsModal from './BuyerDetailsModal';
+import VendorDetailsModal from './VendorDetailsModal';
 
 interface AllRFQsConsoleProps {
   /** Open the comparative quote matrix for one RFQ. */
@@ -87,6 +89,25 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
   const [buyerFilter, setBuyerFilter] = useState<string>('all');
   const [inviteTargetRfq, setInviteTargetRfq] = useState<RFQItem | null>(null);
 
+  const [selectedBuyerInfo, setSelectedBuyerInfo] = useState<{
+    name: string | null;
+    id?: string | null;
+    rfq: RFQItem;
+  } | null>(null);
+
+  const [selectedVendorInfo, setSelectedVendorInfo] = useState<{
+    name: string;
+    id?: string | null;
+    quote?: QuoteComparison | null;
+    assignedVendor?: RFQAssignedVendor | null;
+    rfq: RFQItem;
+  } | null>(null);
+
+  const [vendorListModalData, setVendorListModalData] = useState<{
+    rfq: RFQItem;
+    mode: 'quotes' | 'assigned';
+  } | null>(null);
+
   const load = async () => {
     setLoading(true);
     setError(null);
@@ -121,7 +142,9 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
         r.rfqNumber.toLowerCase().includes(q) ||
         r.title.toLowerCase().includes(q) ||
         (r.category || '').toLowerCase().includes(q) ||
-        (r.buyerAccountName || '').toLowerCase().includes(q)
+        (r.buyerAccountName || '').toLowerCase().includes(q) ||
+        (r.quotes || []).some((qt) => qt.vendorName?.toLowerCase().includes(q)) ||
+        (r.assignedVendors || []).some((av) => (av.name || '').toLowerCase().includes(q))
       );
     });
   }, [rfqs, search, statusFilter, buyerFilter]);
@@ -287,15 +310,16 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
 
       {!loading && !error && filtered.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-850 dark:bg-gray-950/40">
-          <table className="w-full min-w-[1420px] table-fixed text-sm">
+          <table className="w-full min-w-[1600px] table-fixed text-sm">
             <caption className="sr-only">{S.subtitle}</caption>
             <colgroup>
               <col className="w-[155px]" />
-              <col className="w-[230px]" />
+              <col className="w-[220px]" />
               <col className="w-[165px]" />
               <col className="w-[145px]" />
-              <col className="w-[80px]" />
-              <col className="w-[130px]" />
+              <col className="w-[75px]" />
+              <col className="w-[210px]" />
+              <col className="w-[125px]" />
               <col className="w-[105px]" />
               <col className="w-[180px]" />
               <col className="w-[300px]" />
@@ -307,6 +331,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colBuyer}</th>
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colStatus}</th>
                 <th scope="col" className="px-3 py-3 text-right font-bold">{S.colQuotes}</th>
+                <th scope="col" className="px-3 py-3 text-left font-bold">{S.colVendors}</th>
                 <th scope="col" className="px-3 py-3 text-right font-bold">{S.colBudget}</th>
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colCreated}</th>
                 <th scope="col" className="px-3 py-3 text-left font-bold">{S.colLatestQuote}</th>
@@ -329,7 +354,25 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     <div className="truncate text-[11px] text-slate-500 dark:text-gray-450" title={rfq.category || undefined}>{rfq.category || '—'}</div>
                   </td>
                   <td className="break-words px-3 py-3 text-slate-700 dark:text-gray-300">
-                    {rfq.buyerAccountName || <span className="italic text-slate-400">{S.buyerUnknown}</span>}
+                    {rfq.buyerAccountName ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedBuyerInfo({
+                            name: rfq.buyerAccountName || null,
+                            id: rfq.buyerAccountId || null,
+                            rfq,
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 text-left font-bold text-slate-800 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline transition-colors group cursor-pointer"
+                        title={`Click to view full buyer details for ${rfq.buyerAccountName}`}
+                      >
+                        <Building2 size={13} className="text-slate-400 group-hover:text-indigo-500 shrink-0 transition-colors" />
+                        <span>{rfq.buyerAccountName}</span>
+                      </button>
+                    ) : (
+                      <span className="italic text-slate-400">{S.buyerUnknown}</span>
+                    )}
                   </td>
                   <td className="px-3 py-3">
                     <div className="flex flex-col items-start gap-1">
@@ -344,6 +387,91 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     </div>
                   </td>
                   <td className="px-3 py-3 text-right font-mono text-slate-700 dark:text-gray-300">{rfq.quotesCount}</td>
+                  <td className="px-3 py-3">
+                    {rfq.quotes && rfq.quotes.length > 0 ? (
+                      <div className="flex flex-col items-start gap-1 max-w-full">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {rfq.quotes.slice(0, 2).map((q, idx) => (
+                            <button
+                              key={q.vendorId || `${q.vendorName}-${idx}`}
+                              type="button"
+                              onClick={() =>
+                                setSelectedVendorInfo({
+                                  name: q.vendorName,
+                                  id: q.vendorId,
+                                  quote: q,
+                                  rfq,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/70 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold hover:bg-teal-100 dark:hover:bg-teal-900 transition-colors max-w-[135px] truncate cursor-pointer shadow-2xs group"
+                              title={`Quoted vendor: ${q.vendorName}. Click to view quotation details.`}
+                            >
+                              <Store size={11} className="text-teal-600 dark:text-teal-400 shrink-0" />
+                              <span className="truncate">{q.vendorName}</span>
+                              {q.isBestPrice && (
+                                <span className="shrink-0 px-1 py-0.2 rounded text-[9px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                                  L1
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                          {rfq.quotes.length > 2 && (
+                            <button
+                              type="button"
+                              onClick={() => setVendorListModalData({ rfq, mode: 'quotes' })}
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 hover:bg-teal-100 dark:hover:bg-teal-900 transition border border-teal-200 dark:border-teal-800 cursor-pointer"
+                              title="Click to view all quoted vendors"
+                            >
+                              +{rfq.quotes.length - 2} more
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : rfq.assignedVendors && rfq.assignedVendors.length > 0 ? (
+                      <div className="flex flex-col items-start gap-1 max-w-full">
+                        <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 dark:text-gray-500">
+                          Invited ({rfq.assignedVendors.length})
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {rfq.assignedVendors.slice(0, 2).map((av, idx) => {
+                            const vName = av.name || (av as any).vendorName || 'Vendor';
+                            const vId = av.id || (av as any).vendorId || null;
+                            return (
+                              <button
+                                key={vId || idx}
+                                type="button"
+                                onClick={() =>
+                                  setSelectedVendorInfo({
+                                    name: vName,
+                                    id: vId,
+                                    assignedVendor: av,
+                                    rfq,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors max-w-[125px] truncate cursor-pointer"
+                                title={`Invited vendor: ${vName}. Click to view details.`}
+                              >
+                                <Store size={10} className="text-slate-400 shrink-0" />
+                                <span className="truncate">{vName}</span>
+                              </button>
+                            );
+                          })}
+                          {rfq.assignedVendors.length > 2 && (
+                            <button
+                              type="button"
+                              onClick={() => setVendorListModalData({ rfq, mode: 'assigned' })}
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900 transition border border-indigo-200 dark:border-indigo-800 cursor-pointer"
+                              title="Click to view all invited vendors"
+                            >
+                              +{rfq.assignedVendors.length - 2} more
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="italic text-slate-400 text-xs">{S.colVendorsNone}</span>
+                    )}
+                  </td>
                   <td className="px-3 py-3 text-right font-mono text-xs text-slate-700 dark:text-gray-300">
                     {rfq.budget > 0 ? formatCurrency(rfq.budget) : <span className="text-slate-400">{S.budgetUnset}</span>}
                   </td>
@@ -406,6 +534,155 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
           setRfqs((prev) => prev.map((r) => (r.id === updatedRfq.id ? updatedRfq : r)));
         }}
       />
+
+      <BuyerDetailsModal
+        isOpen={selectedBuyerInfo !== null}
+        buyerName={selectedBuyerInfo?.name}
+        buyerAccountId={selectedBuyerInfo?.id}
+        rfq={selectedBuyerInfo?.rfq}
+        onClose={() => setSelectedBuyerInfo(null)}
+      />
+
+      <VendorDetailsModal
+        isOpen={selectedVendorInfo !== null}
+        vendorName={selectedVendorInfo?.name}
+        vendorId={selectedVendorInfo?.id}
+        quote={selectedVendorInfo?.quote}
+        assignedVendor={selectedVendorInfo?.assignedVendor}
+        rfq={selectedVendorInfo?.rfq}
+        onClose={() => setSelectedVendorInfo(null)}
+        onNavigateToMatrix={onNavigateToMatrix}
+      />
+
+      {/* Multiple Vendors Overview Modal */}
+      {vendorListModalData && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setVendorListModalData(null);
+          }}
+        >
+          <div className="relative w-full max-w-lg max-h-[85vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 px-5 py-4 bg-white/95 dark:bg-gray-900/95">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="rounded-xl bg-teal-50 dark:bg-teal-950/70 p-2 text-teal-600 dark:text-teal-400 shrink-0">
+                  <Store size={20} />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-base font-black text-slate-900 dark:text-white truncate">
+                    {vendorListModalData.mode === 'quotes'
+                      ? `Quoted Vendors (${vendorListModalData.rfq.quotes?.length || 0})`
+                      : `Invited Vendors (${vendorListModalData.rfq.assignedVendors?.length || 0})`}
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-gray-450 truncate">
+                    {vendorListModalData.rfq.rfqNumber} • {vendorListModalData.rfq.title}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setVendorListModalData(null)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 transition"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto space-y-2 flex-1 divide-y divide-slate-100 dark:divide-slate-800/60">
+              {vendorListModalData.mode === 'quotes'
+                ? (vendorListModalData.rfq.quotes || []).map((q, idx) => (
+                    <div
+                      key={q.vendorId || idx}
+                      className="pt-2.5 first:pt-0 flex items-center justify-between gap-3 p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-gray-800/50 transition border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-slate-900 dark:text-white text-sm truncate">
+                            {q.vendorName}
+                          </span>
+                          {q.isBestPrice && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                              L1 Best Price
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-gray-450 mt-1">
+                          <span>Total: <strong className="text-slate-800 dark:text-gray-200">{formatCurrency(q.totalPrice)}</strong></span>
+                          <span>Lead: <strong>{q.leadTimeDays}d</strong></span>
+                          <span>Warranty: <strong>{q.warrantyYears || 0}y</strong></span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const targetRfq = vendorListModalData.rfq;
+                          setVendorListModalData(null);
+                          setSelectedVendorInfo({
+                            name: q.vendorName,
+                            id: q.vendorId,
+                            quote: q,
+                            rfq: targetRfq,
+                          });
+                        }}
+                        className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white transition shadow-xs cursor-pointer"
+                      >
+                        View Details
+                      </button>
+                    </div>
+                  ))
+                : (vendorListModalData.rfq.assignedVendors || []).map((av, idx) => {
+                    const vName = av.name || (av as any).vendorName || 'Vendor';
+                    const vId = av.id || (av as any).vendorId || null;
+                    return (
+                      <div
+                        key={vId || idx}
+                        className="pt-2.5 first:pt-0 flex items-center justify-between gap-3 p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-gray-800/50 transition border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                      >
+                        <div className="min-w-0">
+                          <span className="font-bold text-slate-900 dark:text-white text-sm truncate block">
+                            {vName}
+                          </span>
+                          <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-gray-450 mt-0.5 flex-wrap">
+                            {av.contactPerson && <span>Contact: {av.contactPerson}</span>}
+                            {av.city && <span>{av.city}</span>}
+                            <span className="italic text-amber-600 dark:text-amber-400">Awaiting Quotation</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const targetRfq = vendorListModalData.rfq;
+                            setVendorListModalData(null);
+                            setSelectedVendorInfo({
+                              name: vName,
+                              id: vId,
+                              assignedVendor: av,
+                              rfq: targetRfq,
+                            });
+                          }}
+                          className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition shadow-xs cursor-pointer"
+                        >
+                          View Details
+                        </button>
+                      </div>
+                    );
+                  })}
+            </div>
+
+            <div className="flex items-center justify-end border-t border-slate-200 dark:border-slate-800 px-5 py-3 bg-slate-50/80 dark:bg-gray-950/80">
+              <button
+                type="button"
+                onClick={() => setVendorListModalData(null)}
+                className="px-4 py-1.5 rounded-lg text-xs font-bold bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
