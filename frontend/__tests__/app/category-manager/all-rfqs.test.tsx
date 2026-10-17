@@ -270,6 +270,132 @@ describe('AllRFQsConsole', () => {
     fireEvent.click(screen.getByLabelText(S2.closeAria));
     await waitFor(() => expect(screen.queryByTestId('invite-vendors-modal')).not.toBeInTheDocument());
   });
+
+  it('opens BuyerDetailsModal when buyer name button is clicked and closes on Close button', async () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      showToast: mockShowToast,
+      buyerAccounts: [
+        {
+          id: 'b-1',
+          organizationName: 'Alpha Buyer Co',
+          brandName: 'Alpha Tech',
+          contactPerson: 'Alpha Officer',
+          contactDesignation: 'VP SCM',
+          corporateEmail: 'procure@alpha.com',
+          mobileNumber: '+91 9876543210',
+          gstin: '27AAAAA0000A1Z5',
+          city: 'Mumbai',
+          state: 'Maharashtra',
+        },
+      ],
+    });
+
+    render(<AllRFQsConsole />);
+    await waitFor(() => expect(screen.getByText('Copper Cable')).toBeInTheDocument());
+
+    const buyerBtn = screen.getByRole('button', { name: /Alpha Buyer Co/i });
+    fireEvent.click(buyerBtn);
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText(/Enterprise Buyer Account & Profile Details/)).toBeInTheDocument();
+    expect(screen.getByText('Alpha Officer')).toBeInTheDocument();
+    expect(screen.getByText('27AAAAA0000A1Z5')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Close modal/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('opens VendorDetailsModal when a quoted vendor button is clicked and closes on Close button', async () => {
+    const quotedRow = makeRfq({
+      id: '020',
+      title: 'Electrical Transformers',
+      status: 'Quotes Received',
+      quotesCount: 1,
+      quotes: [
+        {
+          vendorId: 'v-navin',
+          vendorName: 'Navin Electricals',
+          vendorCategory: 'Client List',
+          unitPrice: 45000,
+          totalPrice: 90000,
+          leadTimeDays: 14,
+          aiMatchScore: 94,
+          isBestPrice: true,
+          warrantyYears: 2,
+          complianceStatus: 'Fully Compliant',
+          paymentTerms: 'Net 30',
+          remarks: 'Standard testing included',
+        },
+      ] as any,
+    });
+    mockFetch.mockResolvedValue({ success: true, rfqs: [quotedRow] });
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      showToast: mockShowToast,
+      buyerVendors: [
+        {
+          id: 'v-navin',
+          name: 'Navin Electricals',
+          contactPerson: 'Navin Chaudhary',
+          phone: '+91 9157154504',
+          email: 'navin@electricals.com',
+          location: 'Ahmedabad, Gujarat',
+          rating: 4.9,
+          majorCategory: 'Electrical Equipment',
+        },
+      ],
+    });
+
+    render(<AllRFQsConsole />);
+    await waitFor(() => expect(screen.getByText('Electrical Transformers')).toBeInTheDocument());
+
+    const vendorBtn = screen.getByRole('button', { name: /Navin Electricals/i });
+    expect(vendorBtn).toBeInTheDocument();
+    fireEvent.click(vendorBtn);
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('Navin Chaudhary')).toBeInTheDocument();
+    expect(screen.getByText('navin@electricals.com')).toBeInTheDocument();
+    expect(screen.getByText('"Standard testing included"')).toBeInTheDocument();
+    expect(screen.getByText(/L1 Best Price/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Close modal/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('opens VendorListModal when +more button is clicked and selects a vendor', async () => {
+    const multiRow = makeRfq({
+      id: '030',
+      title: 'Power Cables',
+      status: 'Quotes Received',
+      quotesCount: 3,
+      quotes: [
+        { vendorId: 'v-1', vendorName: 'Vendor 1' },
+        { vendorId: 'v-2', vendorName: 'Vendor 2' },
+        { vendorId: 'v-3', vendorName: 'Vendor 3' },
+      ] as any,
+    });
+    mockFetch.mockResolvedValue({ success: true, rfqs: [multiRow] });
+
+    render(<AllRFQsConsole />);
+    await waitFor(() => expect(screen.getByText('Power Cables')).toBeInTheDocument());
+
+    const moreBtn = screen.getByRole('button', { name: /\+1 more/i });
+    expect(moreBtn).toBeInTheDocument();
+    fireEvent.click(moreBtn);
+
+    // Vendor list modal opens
+    expect(screen.getByText(/Quoted Vendors \(3\)/i)).toBeInTheDocument();
+    expect(screen.getByText('Vendor 3')).toBeInTheDocument();
+
+    // Click View Details button for Vendor 3
+    const viewDetailBtns = screen.getAllByRole('button', { name: /View Details/i });
+    fireEvent.click(viewDetailBtns[viewDetailBtns.length - 1]);
+    expect(screen.getByText(/Vendor Profile & Quotation Details/i)).toBeInTheDocument();
+
+    // Close VendorDetailsModal
+    fireEvent.click(screen.getByRole('button', { name: /Close modal/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
 });
 
 describe('CategoryManagerAllRFQsPage', () => {

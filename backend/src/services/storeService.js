@@ -383,23 +383,25 @@ class StoreService {
     if (!email) return null;
     const target = email.toLowerCase();
 
-    if (!pool.hasStorage()) {
-      return this.buyerAccounts.find((a) => (a.corporateEmail || '').toLowerCase() === target) || null;
+    if (pool.hasStorage()) {
+      try {
+        const fresh = await domainQueries.getBuyerAccountByEmailFromDB(email);
+        if (fresh) {
+          const idx = this.buyerAccounts.findIndex((a) => a.id === fresh.id);
+          if (idx === -1) {
+            this.buyerAccounts.unshift(fresh);
+          } else {
+            this.buyerAccounts[idx] = fresh;
+          }
+          if (this.activeBuyerAccount && this.activeBuyerAccount.id === fresh.id) {
+            this.activeBuyerAccount = fresh;
+          }
+          return fresh;
+        }
+      } catch (_) {}
     }
 
-    const fresh = await domainQueries.getBuyerAccountByEmailFromDB(email);
-    if (!fresh) return null;
-
-    const idx = this.buyerAccounts.findIndex((a) => a.id === fresh.id);
-    if (idx === -1) {
-      this.buyerAccounts.unshift(fresh);
-    } else {
-      this.buyerAccounts[idx] = fresh;
-    }
-    if (this.activeBuyerAccount && this.activeBuyerAccount.id === fresh.id) {
-      this.activeBuyerAccount = fresh;
-    }
-    return fresh;
+    return this.buyerAccounts.find((a) => (a.corporateEmail || '').toLowerCase() === target) || null;
   }
 
   /**
@@ -416,10 +418,51 @@ class StoreService {
    */
   async ensureBuyerAccountForUser(user) {
     if (!user || user.role !== 'buyer' || !user.email) return null;
-    const existing = await this.getBuyerAccountByEmail(user.email);
-    if (existing) return existing;
-
+    let existing = await this.getBuyerAccountByEmail(user.email);
     const id = user.sub || user.id;
+
+    if (!existing && id) {
+      existing = this.buyerAccounts.find((a) => a.id === id) || null;
+    }
+
+    let profile = null;
+    try {
+      const lookup = await buyerProfileQueries.findProfileByIdentifier({
+        email: user.email,
+        userId: id,
+        organizationId: user.orgId,
+      });
+      if (lookup && lookup.found) profile = lookup.profile;
+    } catch (_) {}
+
+    if (existing) {
+      if (profile && (!existing.gstin || !existing.mobileNumber || !existing.city)) {
+        const enriched = {
+          ...existing,
+          organizationName: profile.companyName || existing.organizationName,
+          brandName: profile.brandName || existing.brandName,
+          organizationType: profile.organizationType || existing.organizationType,
+          contactPerson: profile.contactName || existing.contactPerson,
+          contactDesignation: profile.contactDesignation || existing.contactDesignation,
+          mobileNumber: profile.contactPhone || existing.mobileNumber,
+          corporateEmail: profile.contactEmail || existing.corporateEmail,
+          gstin: profile.gstNumber || existing.gstin,
+          pan: profile.panNumber || existing.pan,
+          cinNumber: profile.cinNumber || existing.cinNumber,
+          website: profile.website || existing.website,
+          street: profile.street || existing.street,
+          city: profile.city || existing.city,
+          state: profile.state || existing.state,
+          pincode: profile.pincode || existing.pincode,
+          country: profile.country || existing.country,
+          categories: profile.categories || existing.categories,
+        };
+        this.updateBuyerAccount(existing.id, enriched);
+        return enriched;
+      }
+      return existing;
+    }
+
     if (!id) return null;
     const cached = this.buyerAccounts.find((a) => a.id === id);
     if (cached) return cached;
@@ -427,10 +470,24 @@ class StoreService {
     logger.info('Auto-creating missing buyer account', { id, email: user.email }, 'STORE_SERVICE');
     return this.addBuyerAccount({
       id,
-      organizationName: user.orgName || user.email,
-      corporateEmail: user.email.toLowerCase(),
-      contactPerson: user.name || '',
-      organizationId: user.orgId || null,
+      organizationName: profile?.companyName || user.orgName || user.email,
+      brandName: profile?.brandName || '',
+      organizationType: profile?.organizationType || 'Public Limited',
+      corporateEmail: profile?.contactEmail || user.email.toLowerCase(),
+      contactPerson: profile?.contactName || user.name || '',
+      contactDesignation: profile?.contactDesignation || 'Procurement Specialist',
+      mobileNumber: profile?.contactPhone || user.phone || '',
+      organizationId: user.orgId || profile?.organizationId || null,
+      gstin: profile?.gstNumber || '',
+      pan: profile?.panNumber || '',
+      cinNumber: profile?.cinNumber || '',
+      website: profile?.website || '',
+      street: profile?.street || '',
+      city: profile?.city || '',
+      state: profile?.state || '',
+      pincode: profile?.pincode || '',
+      country: profile?.country || 'India',
+      categories: profile?.categories || [],
     });
   }
 

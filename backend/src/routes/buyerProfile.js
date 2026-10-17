@@ -10,6 +10,14 @@ const { authenticate, requireRole } = require('../middleware/auth');
 router.get('/me', authenticate, requireRole('buyer'), buyerProfileController.getMyProfile);
 router.put('/me', authenticate, requireRole('buyer'), buyerProfileController.updateMyProfile);
 
+// Details lookup for Category Managers, Admins, and Buyers to inspect buyer account profile
+router.get(
+  '/details',
+  authenticate,
+  requireRole('category_manager', 'admin', 'buyer'),
+  buyerProfileController.getBuyerProfileDetails
+);
+
 // The category master is reference data with no organisation scope, but it is
 // still session-gated: it describes Procucev's sourcing taxonomy and there is no
 // reason for it to be readable anonymously.

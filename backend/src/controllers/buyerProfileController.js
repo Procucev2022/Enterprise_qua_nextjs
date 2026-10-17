@@ -128,6 +128,83 @@ async function updateDispatchTemplate(req, res, next) {
   }
 }
 
+/**
+ * GET /api/buyer-profile/details
+ * Retrieve complete buyer profile details by email, buyer name, or account ID.
+ * Returns legal entity, contact, statutory/tax (GSTIN/PAN/CIN), and registered address info.
+ */
+async function getBuyerProfileDetails(req, res, next) {
+  try {
+    const storeService = require('../services/storeService');
+    const buyerProfileQueries = require('../db/buyerProfileQueries');
+
+    const email = req.query.email ? String(req.query.email).trim() : null;
+    const name = req.query.name ? String(req.query.name).trim() : null;
+    const accountId = req.query.accountId ? String(req.query.accountId).trim() : null;
+
+    logger.info('Buyer profile details requested', { email, name, accountId }, LOG_CATEGORY);
+
+    // 1. Check in-memory storeService first
+    let account = null;
+    if (email) {
+      account = await storeService.getBuyerAccountByEmail(email);
+    }
+    if (!account && accountId) {
+      account = storeService.getBuyerAccounts().find((a) => a.id === accountId);
+    }
+    if (!account && name) {
+      account = storeService.getBuyerAccounts().find(
+        (a) => (a.organizationName || '').trim().toLowerCase() === name.trim().toLowerCase()
+      );
+    }
+
+    // 2. Query Postgres identity tables
+    let dbProfile = null;
+    try {
+      const lookup = await buyerProfileQueries.findProfileByIdentifier({
+        email: email || account?.corporateEmail,
+        organizationName: name || account?.organizationName,
+        organizationId: account?.organizationId,
+        userId: accountId,
+      });
+      if (lookup && lookup.found) {
+        dbProfile = lookup.profile;
+      }
+    } catch (dbErr) {
+      logger.warn('Failed querying buyer profile by identifier', { error: dbErr.message }, LOG_CATEGORY);
+    }
+
+    const merged = {
+      organizationName: dbProfile?.companyName || account?.organizationName || name || 'Buyer Organization',
+      brandName: dbProfile?.brandName || account?.brandName || '',
+      organizationType: dbProfile?.organizationType || account?.organizationType || 'Public Limited',
+      contactPerson: dbProfile?.contactName || account?.contactPerson || 'Procurement Officer',
+      contactDesignation: dbProfile?.contactDesignation || account?.contactDesignation || 'Procurement Specialist',
+      corporateEmail: dbProfile?.contactEmail || account?.corporateEmail || email || '',
+      mobileNumber: dbProfile?.contactPhone || account?.mobileNumber || account?.phone || '',
+      gstin: dbProfile?.gstNumber || account?.gstin || '',
+      panNumber: dbProfile?.panNumber || account?.panNumber || account?.pan || '',
+      cinNumber: dbProfile?.cinNumber || account?.cinNumber || '',
+      website: dbProfile?.website || account?.website || '',
+      annualTurnover: dbProfile?.annualTurnover || account?.annualTurnover || '',
+      street: dbProfile?.street || account?.street || account?.address1 || '',
+      city: dbProfile?.city || account?.city || '',
+      state: dbProfile?.state || account?.state || '',
+      pincode: dbProfile?.pincode || account?.pincode || account?.zip_code || '',
+      country: dbProfile?.country || account?.country || 'India',
+      categories: dbProfile?.categories || account?.categories || [],
+      sourcingMode: account?.sourcingMode || 'mode_1',
+      subscriptionPlan: account?.subscriptionPlan || 'free_trial',
+      totalRFQsCreated: account?.totalRFQsCreated || 0,
+      totalSpend: account?.totalSpend || '$0',
+    };
+
+    return res.json({ success: true, data: merged });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Unexpected error fetching buyer profile details');
+  }
+}
+
 module.exports = {
   getClientIp,
   respondWithError,
@@ -136,4 +213,5 @@ module.exports = {
   getCategoryTaxonomy,
   getDispatchTemplates,
   updateDispatchTemplate,
+  getBuyerProfileDetails,
 };
