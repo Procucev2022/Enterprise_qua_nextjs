@@ -47,7 +47,11 @@ import {
  * never names an organisation and a buyer can only ever reach their own record.
  */
 export default function BuyerProfilePage() {
-  const { addAuditLog, showToast } = useApp();
+  const { addAuditLog, showToast, activeBuyerAccount } = useApp();
+  const activeBuyerAccountRef = useRef(activeBuyerAccount);
+  useEffect(() => {
+    activeBuyerAccountRef.current = activeBuyerAccount;
+  }, [activeBuyerAccount]);
 
   const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
 
@@ -216,8 +220,25 @@ export default function BuyerProfilePage() {
     }
 
     const profile = profileResult.data;
-    setCompanyName(profile.companyName);
-    setBrandName(profile.brandName);
+    const activeAcc = activeBuyerAccountRef.current;
+    const resolvedCity = profile.city || activeAcc?.city || '';
+    const resolvedState = profile.state || activeAcc?.state || '';
+    const resolvedPincode = profile.pincode || activeAcc?.pincode || activeAcc?.zip_code || '';
+    const resolvedCountry = profile.country || activeAcc?.country || 'India';
+    const resolvedStreet =
+      profile.street ||
+      activeAcc?.street ||
+      activeAcc?.address1 ||
+      (resolvedCity && resolvedState ? `${resolvedCity}, ${resolvedState}` : resolvedCity || '');
+    const resolvedGst = profile.gstNumber || activeAcc?.gstin || '';
+    const resolvedPan =
+      profile.panNumber ||
+      activeAcc?.panNumber ||
+      activeAcc?.pan ||
+      (resolvedGst.length === 15 ? resolvedGst.slice(2, 12).toUpperCase() : '');
+
+    setCompanyName(profile.companyName || activeAcc?.organizationName || '');
+    setBrandName(profile.brandName || activeAcc?.brandName || '');
     // Guard against a stored constitution outside the offered set, which would
     // leave the select bound to a value none of its options carry.
     setOrgType(
@@ -225,20 +246,20 @@ export default function BuyerProfilePage() {
         ? (profile.organizationType as OrganizationType)
         : 'Public Limited'
     );
-    setPanNumber(profile.panNumber);
-    setGstNumber(profile.gstNumber);
-    setCinNumber(profile.cinNumber);
+    setPanNumber(resolvedPan);
+    setGstNumber(resolvedGst);
+    setCinNumber(profile.cinNumber || activeAcc?.cinNumber || '');
     setWebsite(profile.website);
     setAnnualTurnover(profile.annualTurnover);
-    setStreet(profile.street);
-    setCity(profile.city);
-    setState(profile.state);
-    setPincode(profile.pincode);
-    setCountry(profile.country);
-    setContactName(profile.contactName);
-    setContactDesignation(profile.contactDesignation);
-    setContactEmail(profile.contactEmail);
-    setContactPhone(profile.contactPhone);
+    setStreet(resolvedStreet);
+    setCity(resolvedCity);
+    setState(resolvedState);
+    setPincode(resolvedPincode);
+    setCountry(resolvedCountry);
+    setContactName(profile.contactName || activeAcc?.contactPerson || '');
+    setContactDesignation(profile.contactDesignation || activeAcc?.contactDesignation || '');
+    setContactEmail(profile.contactEmail || activeAcc?.corporateEmail || '');
+    setContactPhone(profile.contactPhone || activeAcc?.mobileNumber || '');
 
     const { selectedMajor: majors, selectedMinor: minors } = expandCategorySelection(profile.categories);
     setSelectedMajor(majors);

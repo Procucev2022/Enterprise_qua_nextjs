@@ -745,7 +745,25 @@ async function verifyOtp(email, code, ipAddress, mobile) {
  * Register a new user / enterprise entity. The only path that creates an account.
  */
 async function registerUser(payload, ipAddress) {
-  const { name, email, password, mobile, orgName, role, city, state, pincode, gstin, emailOtp, mobileOtp, code } = payload;
+  const {
+    name,
+    email,
+    password,
+    mobile,
+    orgName,
+    role,
+    street,
+    address,
+    city,
+    state,
+    pincode,
+    country,
+    gstin,
+    pan,
+    emailOtp,
+    mobileOtp,
+    code,
+  } = payload;
   if (!email) throw new Error(AUTH_MESSAGES.REGISTRATION_EMAIL_REQUIRED);
   if (!password) throw new Error(AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED);
   if (!mobile) throw new Error(AUTH_MESSAGES.MOBILE_REQUIRED);
@@ -756,6 +774,13 @@ async function registerUser(payload, ipAddress) {
 
   const normalizedEmail = email.trim().toLowerCase();
   const submittedMobile = String(mobile).trim();
+  const normalizedCity = (city || '').trim();
+  const normalizedState = (state || '').trim();
+  const normalizedPincode = (pincode || '').trim();
+  const normalizedCountry = (country || 'India').trim();
+  const streetAddress = (street || address || (normalizedCity && normalizedState ? `${normalizedCity}, ${normalizedState}` : normalizedCity || '')).trim();
+  const normalizedGstin = (gstin || '').trim().toUpperCase();
+  const normalizedPan = (pan || (normalizedGstin.length === 15 ? normalizedGstin.slice(2, 12) : '')).trim().toUpperCase();
 
   // If OTP codes were provided with registration, verify both email and mobile OTPs
   const submittedEmailOtp = emailOtp || code;
@@ -838,11 +863,62 @@ async function registerUser(payload, ipAddress) {
     fullName: name,
     organizationName: orgName,
     companyName: orgName,
+    street: streetAddress,
+    address: streetAddress,
+    city: normalizedCity,
+    state: normalizedState,
+    pincode: normalizedPincode,
+    country: normalizedCountry,
+    gstin: normalizedGstin,
+    pan: normalizedPan,
     ...(isVendor ? { resetExisting: false, resetPasswordRequired: false } : {}),
   });
 
   if (!result.created) {
     throw new Error(AUTH_MESSAGES.ACCOUNT_ALREADY_EXISTS);
+  }
+
+  if (!isVendor) {
+    try {
+      const existingBuyer = await storeService.getBuyerAccountByEmail(normalizedEmail);
+      const buyerData = {
+        organizationName: orgName || name,
+        brandName: orgName || name,
+        corporateEmail: normalizedEmail,
+        contactPerson: name,
+        contactDesignation: 'Procurement Specialist',
+        mobileNumber: mobile,
+        gstin: normalizedGstin,
+        pan: normalizedPan,
+        street: streetAddress,
+        address1: streetAddress,
+        city: normalizedCity,
+        state: normalizedState,
+        pincode: normalizedPincode,
+        zip_code: normalizedPincode,
+        country: normalizedCountry,
+        primaryPlantLocation: [normalizedCity, normalizedState && normalizedPincode ? `${normalizedState} (${normalizedPincode})` : normalizedState].filter(Boolean).join(', '),
+        industrySector: 'Enterprise SCM & Manufacturing',
+        sourcingMode: 'mode_2',
+        subscriptionPlan: 'free_trial',
+        remainingFreeRFQs: 5,
+        accountSource: 'web_registration',
+        status: 'ACTIVE_VERIFIED',
+        organizationId: result.user?.orgId || null,
+        id: result.user?.id || undefined,
+      };
+      if (!existingBuyer) {
+        storeService.addBuyerAccount(buyerData);
+      } else {
+        storeService.updateBuyerAccount(existingBuyer.id, buyerData);
+      }
+    } catch (buyerSyncErr) {
+      logger.warn(
+        'Failed to sync buyer registration profile into storeService',
+        { error: buyerSyncErr.message, email: normalizedEmail },
+        'AUTH_SERVICE'
+      );
+    }
   }
 
   if (isVendor) {

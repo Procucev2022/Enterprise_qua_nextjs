@@ -100,17 +100,84 @@ async function getProfile(sessionUser) {
     raiseLookupFailure(result.reason);
   }
 
-  logger.info(
-    'Buyer organization profile loaded',
-    {
-      userId,
-      organizationId: result.profile.organizationId,
-      categoryCount: result.profile.categories.length,
-    },
-    LOG_CATEGORY
-  );
+  const profile = result.profile;
 
-  return result.profile;
+  // Hydrate missing address / statutory tax details from storeService buyer account if present
+  try {
+    const buyerAcc = await storeService.getBuyerAccountByEmail(email);
+    if (buyerAcc) {
+      let needsDbUpdate = false;
+      const patch = {};
+
+      if (!profile.street) {
+        const fallbackStreet = buyerAcc.street || buyerAcc.address1 || buyerAcc.address || (buyerAcc.city && buyerAcc.state ? `${buyerAcc.city}, ${buyerAcc.state}` : buyerAcc.city || '');
+        if (fallbackStreet) {
+          profile.street = fallbackStreet;
+          patch.street = profile.street;
+          needsDbUpdate = true;
+        }
+      }
+      if (!profile.city && buyerAcc.city) {
+        profile.city = buyerAcc.city;
+        patch.city = profile.city;
+        needsDbUpdate = true;
+      }
+      if (!profile.state && buyerAcc.state) {
+        profile.state = buyerAcc.state;
+        patch.state = profile.state;
+        needsDbUpdate = true;
+      }
+      if (!profile.pincode && (buyerAcc.pincode || buyerAcc.zip_code || buyerAcc.zipCode)) {
+        profile.pincode = buyerAcc.pincode || buyerAcc.zip_code || buyerAcc.zipCode;
+        patch.pincode = profile.pincode;
+        needsDbUpdate = true;
+      }
+      if (!profile.gstNumber && (buyerAcc.gstin || buyerAcc.gstNumber || buyerAcc.gst)) {
+        profile.gstNumber = (buyerAcc.gstin || buyerAcc.gstNumber || buyerAcc.gst).toUpperCase();
+        patch.gstNumber = profile.gstNumber;
+        needsDbUpdate = true;
+      }
+      if (!profile.panNumber && (buyerAcc.pan || buyerAcc.panNumber || (profile.gstNumber && profile.gstNumber.length === 15))) {
+        profile.panNumber = (buyerAcc.pan || buyerAcc.panNumber || (profile.gstNumber && profile.gstNumber.length === 15 ? profile.gstNumber.slice(2, 12) : '')).toUpperCase();
+        if (profile.panNumber) {
+          patch.panNumber = profile.panNumber;
+          needsDbUpdate = true;
+        }
+      }
+      if (!profile.country || profile.country === '') {
+        profile.country = buyerAcc.country || 'India';
+      }
+
+      if (needsDbUpdate && profile.organizationId) {
+        buyerProfileQueries.updateProfile({
+          organizationId: profile.organizationId,
+          userId,
+          patch,
+          categories: profile.categories,
+          actor: email,
+        }).catch((err) => {
+          logger.warn('Failed to auto-heal buyer profile address in DB', { error: err.message }, LOG_CATEGORY);
+        });
+      }
+    } else if (!profile.panNumber && profile.gstNumber && profile.gstNumber.length === 15) {
+      profile.panNumber = profile.gstNumber.slice(2, 12).toUpperCase();
+      if (profile.organizationId) {
+        buyerProfileQueries.updateProfile({
+          organizationId: profile.organizationId,
+          userId,
+          patch: { panNumber: profile.panNumber },
+          categories: profile.categories,
+          actor: email,
+        }).catch((err) => {
+          logger.warn('Failed to auto-heal buyer profile PAN in DB', { error: err.message }, LOG_CATEGORY);
+        });
+      }
+    }
+  } catch (syncErr) {
+    logger.warn('Could not check buyer account fallback in getProfile', { error: syncErr.message }, LOG_CATEGORY);
+  }
+
+  return profile;
 }
 
 const DISPATCH_TEMPLATE_TYPES = ['category_mapped', 'self_map_required'];
