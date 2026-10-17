@@ -104,14 +104,21 @@ function isConfigured() {
   return resolveApiKeys().length > 0;
 }
 
-/** Resolve API keys pool from GEMINI_CONFIG.API_KEY (supports comma-separated multiple keys). */
+/** Resolve API keys pool from GEMINI_CONFIG.API_KEY and GEMINI_CONFIG.BACKUP_KEYS (supports comma-separated multiple keys). */
 function resolveApiKeys() {
   const raw = String(GEMINI_CONFIG.API_KEY || '').trim();
   if (!raw) return [];
-  return raw
+  const primaryKeys = raw
     .split(',')
     .map((k) => k.trim())
     .filter(Boolean);
+  const backupRaw = String(GEMINI_CONFIG.BACKUP_KEYS || '').trim();
+  if (!backupRaw) return primaryKeys;
+  const backupKeys = backupRaw
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean);
+  return Array.from(new Set([...primaryKeys, ...backupKeys]));
 }
 
 /**
@@ -610,6 +617,13 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
         throw new Error(`Gemini ${model} returned no parseable JSON`);
       }
       activeKeyIndex = keyIdx;
+      if (attempt > 0) {
+        logger.info(
+          `Gemini failover succeeded with backup key ${keyIdx + 1}/${keys.length} for ${model}`,
+          { keyIndex: keyIdx + 1, totalKeys: keys.length, model },
+          'GEMINI'
+        );
+      }
       return parsed;
     } catch (err) {
       if (err.name === 'AbortError') {

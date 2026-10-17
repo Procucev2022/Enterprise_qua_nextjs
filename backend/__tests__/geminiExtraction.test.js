@@ -50,6 +50,7 @@ describe('Gemini category list in the extraction prompt', () => {
 
 describe('Gemini document extraction service', () => {
   const originalKey = GEMINI_CONFIG.API_KEY;
+  const originalBackupKeys = GEMINI_CONFIG.BACKUP_KEYS;
   const originalFetch = global.fetch;
   const originalModels = [...GEMINI_CONFIG.MODELS];
   const originalMaxKeyAttempts = GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL;
@@ -57,6 +58,7 @@ describe('Gemini document extraction service', () => {
 
   afterEach(() => {
     GEMINI_CONFIG.API_KEY = originalKey;
+    GEMINI_CONFIG.BACKUP_KEYS = originalBackupKeys;
     GEMINI_CONFIG.MODELS = [...originalModels];
     GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL = originalMaxKeyAttempts;
     GEMINI_CONFIG.MODEL_RESET_TTL_MS = originalResetTtl;
@@ -894,6 +896,12 @@ describe('Gemini document extraction service', () => {
         expect(gemini.resolveApiKeys()).toEqual(['key1', 'key2', 'key3']);
       });
 
+      test('resolveApiKeys combines and deduplicates keys from API_KEY and BACKUP_KEYS', () => {
+        GEMINI_CONFIG.API_KEY = 'key-one, key-two';
+        GEMINI_CONFIG.BACKUP_KEYS = 'key-two, key-three';
+        expect(gemini.resolveApiKeys()).toEqual(['key-one', 'key-two', 'key-three']);
+      });
+
       test('isConfigured returns true when at least one key is present', () => {
         GEMINI_CONFIG.API_KEY = ' key1 ';
         expect(gemini.isConfigured()).toBe(true);
@@ -907,10 +915,12 @@ describe('Gemini document extraction service', () => {
 // ══════════════════════════════════════════════════════════════════════════════
 describe('POST /api/rfqs/extract', () => {
   const originalKey = GEMINI_CONFIG.API_KEY;
+  const originalBackupKeys = GEMINI_CONFIG.BACKUP_KEYS;
   const originalFetch = global.fetch;
 
   afterEach(() => {
     GEMINI_CONFIG.API_KEY = originalKey;
+    GEMINI_CONFIG.BACKUP_KEYS = originalBackupKeys;
     global.fetch = originalFetch;
   });
 
@@ -2063,6 +2073,5 @@ describe('geminiService.generateJson', () => {
     });
   });
 });
-
 
 
