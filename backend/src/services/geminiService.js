@@ -121,9 +121,15 @@ function resolveApiKeys() {
   return Array.from(new Set([...primaryKeys, ...backupKeys]));
 }
 
-/** Models to attempt, primary first, deduplicated. */
+/**
+ * Models to attempt in order, deduplicated.
+ * Reads the ordered model pool from GEMINI_CONFIG.MODELS with fallback to PRIMARY_MODEL/FALLBACK_MODELS.
+ */
 function resolveModelChain() {
-  return Array.from(new Set([GEMINI_CONFIG.PRIMARY_MODEL, ...GEMINI_CONFIG.FALLBACK_MODELS].filter(Boolean)));
+  const models = Array.isArray(GEMINI_CONFIG.MODELS) && GEMINI_CONFIG.MODELS.length > 0
+    ? GEMINI_CONFIG.MODELS
+    : [GEMINI_CONFIG.PRIMARY_MODEL, ...(GEMINI_CONFIG.FALLBACK_MODELS || [])].filter(Boolean);
+  return Array.from(new Set(models.filter(Boolean)));
 }
 
 /**
@@ -453,13 +459,107 @@ function buildRequestBody({ documentText, inlineData, mimeType, fileName }) {
 }
 
 let activeKeyIndex = 0;
+const modelKeyIndices = new Map();
+let activeModelIndex = 0;
+function getQuotaDate() {
+  const dateParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const parts = Object.fromEntries(dateParts.map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+let lastResetDate = getQuotaDate();
+let lastFailoverTimestamp = 0;
+
+/**
+ * Checks if a new day has arrived (or the TTL has expired) and automatically
+ * restores activeModelIndex and activeKeyIndex to 0 so fresh daily quotas on the
+ * primary model can be used.
+ */
+function checkDailyModelReset() {
+  const today = getQuotaDate();
+  const now = Date.now();
+  const ttlMs = GEMINI_CONFIG.MODEL_RESET_TTL_MS || 24 * 60 * 60 * 1000;
+
+  const isNewDay = lastResetDate !== today;
+  const isTtlExpired = lastFailoverTimestamp > 0 && now - lastFailoverTimestamp >= ttlMs;
+
+  const hasRotatedModelKey = [...modelKeyIndices.values()].some((index) => index !== 0);
+  if ((isNewDay || isTtlExpired) && (activeModelIndex !== 0 || activeKeyIndex !== 0 || hasRotatedModelKey)) {
+    const chain = resolveModelChain();
+    logger.info(
+      `Gemini daily quota reset: restoring active model index from ${activeModelIndex} to 0 (${chain[0]}) and active key index to 0.`,
+      { previousModelIndex: activeModelIndex, date: today, reason: isNewDay ? 'new_day' : 'ttl_expired' },
+      'GEMINI'
+    );
+    activeModelIndex = 0;
+    activeKeyIndex = 0;
+    modelKeyIndices.clear();
+    lastResetDate = today;
+    lastFailoverTimestamp = 0;
+    return true;
+  }
+  if (isNewDay) {
+    lastResetDate = today;
+  }
+  return false;
+}
 
 function getActiveKeyIndex() {
+  checkDailyModelReset();
   return activeKeyIndex;
 }
 
 function setActiveKeyIndex(idx) {
   activeKeyIndex = Number(idx) || 0;
+  modelKeyIndices.clear();
+  for (const model of resolveModelChain()) {
+    modelKeyIndices.set(model, activeKeyIndex);
+  }
+}
+
+function getActiveModelIndex() {
+  checkDailyModelReset();
+  return activeModelIndex;
+}
+
+function setActiveModelIndex(idx) {
+  activeModelIndex = Number(idx) || 0;
+  if (activeModelIndex > 0) {
+    lastFailoverTimestamp = Date.now();
+  }
+}
+
+function resetActiveModelIndex() {
+  activeModelIndex = 0;
+  activeKeyIndex = 0;
+  modelKeyIndices.clear();
+  lastFailoverTimestamp = 0;
+  lastResetDate = getQuotaDate();
+}
+
+function setLastResetDate(dateStr) {
+  lastResetDate = String(dateStr || '');
+}
+
+function setLastFailoverTimestamp(ts) {
+  lastFailoverTimestamp = Number(ts) || 0;
+}
+
+/**
+ * Configure extraction to start with fallback models.
+ * Used when the primary model encounters 503 or overload issues.
+ */
+function startWithFallbackModels() {
+  const chain = resolveModelChain();
+  if (chain.length > 1) {
+    activeModelIndex = 1;
+    lastFailoverTimestamp = Date.now();
+  }
 }
 
 function resolveExtractionFailureStatus(failures) {
@@ -477,18 +577,34 @@ function resolveExtractionFailureStatus(failures) {
  * Call one model, returning its parsed JSON or throwing so the caller can try
  * the next model in the chain. Supports multiple API keys with recursive loop failover.
  */
-async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_TIMEOUT_MS) {
+async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_TIMEOUT_MS, deadline = null) {
   const url = `${GEMINI_CONFIG.BASE_URL}/${model}:generateContent`;
   const keys = resolveApiKeys();
   if (keys.length === 0) {
     throw new Error('No Gemini API key available');
   }
 
-  for (let attempt = 0; attempt < keys.length; attempt++) {
-    const keyIdx = (activeKeyIndex + attempt) % keys.length;
+  const maxAttempts = Math.min(
+    keys.length,
+    GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL && GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL > 0
+      ? GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL
+      : keys.length
+  );
+  const chain = resolveModelChain();
+  const startKeyIndex = modelKeyIndices.has(model)
+    ? modelKeyIndices.get(model)
+    : chain.includes(model) ? 0 : activeKeyIndex;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (deadline && Date.now() >= deadline - (GEMINI_CONFIG.MIN_ATTEMPT_MS || 1000)) {
+      throw new Error(`Extraction time budget exhausted while trying API keys for ${model}`);
+    }
+
+    const keyIdx = (startKeyIndex + attempt) % keys.length;
     const apiKey = keys[keyIdx];
+    const remainingTime = deadline ? Math.min(timeoutMs, Math.max(100, deadline - Date.now())) : timeoutMs;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), remainingTime);
 
     try {
       const res = await fetch(url, {
@@ -512,6 +628,7 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
       if (!parsed) {
         throw new Error(`Gemini ${model} returned no parseable JSON`);
       }
+      modelKeyIndices.set(model, keyIdx);
       activeKeyIndex = keyIdx;
       if (attempt > 0) {
         logger.info(
@@ -530,7 +647,12 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
         { keyIndex: keyIdx + 1, totalKeys: keys.length, model, error: err.message },
         'GEMINI'
       );
-      if (attempt < keys.length - 1) {
+      activeKeyIndex = (keyIdx + 1) % keys.length;
+      modelKeyIndices.set(model, activeKeyIndex);
+      if (
+        attempt < maxAttempts - 1 &&
+        (!deadline || Date.now() < deadline - (GEMINI_CONFIG.MIN_ATTEMPT_MS || 1000))
+      ) {
         continue;
       }
       throw err;
@@ -556,6 +678,7 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
  */
 async function extractLineItems(input = {}) {
   const { documentText, inlineData, mimeType, fileName } = input;
+  checkDailyModelReset();
 
   const base = {
     lineItems: [],
@@ -608,7 +731,12 @@ async function extractLineItems(input = {}) {
   // into a reported fallback instead of a request nobody is still waiting on.
   const deadline = Date.now() + GEMINI_CONFIG.TOTAL_BUDGET_MS;
 
-  for (const model of resolveModelChain()) {
+  const chain = resolveModelChain();
+  const startModelIndex = activeModelIndex;
+  for (let attempt = 0; attempt < chain.length; attempt++) {
+    const modelIdx = (startModelIndex + attempt) % chain.length;
+    const model = chain[modelIdx];
+
     const remainingMs = deadline - Date.now();
     if (remainingMs < GEMINI_CONFIG.MIN_ATTEMPT_MS) {
       failures.push(`skipped ${model}: extraction time budget exhausted`);
@@ -622,7 +750,12 @@ async function extractLineItems(input = {}) {
 
     try {
       // Never overrun the shared deadline, even if the per-attempt timeout is larger.
-      const parsed = await callModel(model, requestBody, Math.min(GEMINI_CONFIG.REQUEST_TIMEOUT_MS, remainingMs));
+      const parsed = await callModel(
+        model,
+        requestBody,
+        Math.min(GEMINI_CONFIG.REQUEST_TIMEOUT_MS, remainingMs),
+        deadline
+      );
       let lineItems = toRawLineItems(parsed);
 
       if (tabularItems.length > lineItems.length) {
@@ -645,6 +778,13 @@ async function extractLineItems(input = {}) {
         'GEMINI'
       );
 
+      // Retain the working model index so subsequent requests start directly with it
+      // (crucial for 503 issues where the primary model is overloaded).
+      if (modelIdx !== activeModelIndex) {
+        lastFailoverTimestamp = modelIdx > 0 ? Date.now() : 0;
+      }
+      activeModelIndex = modelIdx;
+
       return {
         status: EXTRACTION_STATUS.SUCCESS,
         lineItems,
@@ -661,8 +801,39 @@ async function extractLineItems(input = {}) {
       };
     } catch (err) {
       failures.push(`${model}: ${err.message}`);
-      logger.warn(`Gemini extraction attempt failed on ${model}`, { error: err.message }, 'GEMINI');
+      const is503 = /503|overloaded|unavailable/i.test(err.message);
+      const is429 = /429|quota|resource_exhausted|rate.?limit/i.test(err.message);
+      if (is503) {
+        logger.warn(
+          `Gemini model ${model} failed with 503 (overloaded). Failing over to fallback models...`,
+          { model, error: err.message },
+          'GEMINI'
+        );
+      } else if (is429) {
+        logger.warn(
+          `Gemini model ${model} failed with 429 (quota or rate limit reached). Failing over to fallback models...`,
+          { model, error: err.message },
+          'GEMINI'
+        );
+      } else {
+        logger.warn(`Gemini extraction attempt failed on ${model}`, { error: err.message }, 'GEMINI');
+      }
     }
+  }
+
+  // If the failure was due to 503 (overload) or 429 (quota/rate limit), advance activeModelIndex so the next request starts with fallback models
+  if (
+    failures.some((f) => /503|429|overloaded|unavailable|quota|resource_exhausted|rate.?limit/i.test(f)) &&
+    chain.length > 1 &&
+    activeModelIndex === startModelIndex
+  ) {
+    activeModelIndex = (startModelIndex + 1) % chain.length;
+    lastFailoverTimestamp = Date.now();
+    logger.info(
+      `Primary model encountered 503 overload or 429 rate limit. Setting next active model to index ${activeModelIndex} (${chain[activeModelIndex]}) for subsequent requests.`,
+      { nextActiveModel: chain[activeModelIndex], activeModelIndex },
+      'GEMINI'
+    );
   }
 
   return {
@@ -687,6 +858,7 @@ async function extractLineItems(input = {}) {
  */
 async function generateJson(input = {}) {
   const { prompt, label = 'generation' } = input;
+  checkDailyModelReset();
 
   const base = { data: null, model: null, error: null };
 
@@ -709,7 +881,12 @@ async function generateJson(input = {}) {
   const failures = [];
   const deadline = Date.now() + GEMINI_CONFIG.TOTAL_BUDGET_MS;
 
-  for (const model of resolveModelChain()) {
+  const chain = resolveModelChain();
+  const startModelIndex = activeModelIndex;
+  for (let attempt = 0; attempt < chain.length; attempt++) {
+    const modelIdx = (startModelIndex + attempt) % chain.length;
+    const model = chain[modelIdx];
+
     const remainingMs = deadline - Date.now();
     if (remainingMs < GEMINI_CONFIG.MIN_ATTEMPT_MS) {
       failures.push(`skipped ${model}: time budget exhausted`);
@@ -720,17 +897,47 @@ async function generateJson(input = {}) {
       const parsed = await callModel(
         model,
         requestBody,
-        Math.min(GEMINI_CONFIG.REQUEST_TIMEOUT_MS, remainingMs)
+        Math.min(GEMINI_CONFIG.REQUEST_TIMEOUT_MS, remainingMs),
+        deadline
       );
       logger.info(`Gemini ${model} completed ${label}`, { model }, 'GEMINI');
+      if (modelIdx !== activeModelIndex) {
+        lastFailoverTimestamp = modelIdx > 0 ? Date.now() : 0;
+      }
+      activeModelIndex = modelIdx;
       return { status: EXTRACTION_STATUS.SUCCESS, data: parsed, model, error: null };
     } catch (err) {
       failures.push(`${model}: ${err.message}`);
-      logger.warn(`Gemini ${label} attempt failed on ${model}`, { error: err.message }, 'GEMINI');
+      const is503 = /503|overloaded|unavailable/i.test(err.message);
+      const is429 = /429|quota|resource_exhausted|rate.?limit/i.test(err.message);
+      if (is503) {
+        logger.warn(
+          `Gemini ${label} model ${model} failed with 503 (overloaded). Failing over to fallback models...`,
+          { model, error: err.message },
+          'GEMINI'
+        );
+      } else if (is429) {
+        logger.warn(
+          `Gemini ${label} model ${model} failed with 429 (quota or rate limit reached). Failing over to fallback models...`,
+          { model, error: err.message },
+          'GEMINI'
+        );
+      } else {
+        logger.warn(`Gemini ${label} attempt failed on ${model}`, { error: err.message }, 'GEMINI');
+      }
     }
   }
 
-  return { ...base, status: EXTRACTION_STATUS.AI_FAILED, error: failures.join(' | ') };
+  if (
+    failures.some((f) => /503|429|overloaded|unavailable|quota|resource_exhausted|rate.?limit/i.test(f)) &&
+    chain.length > 1 &&
+    activeModelIndex === startModelIndex
+  ) {
+    activeModelIndex = (startModelIndex + 1) % chain.length;
+    lastFailoverTimestamp = Date.now();
+  }
+
+  return { ...base, status: resolveExtractionFailureStatus(failures), error: failures.join(' | ') };
 }
 
 function cleanEmailText(text = '') {
@@ -1031,6 +1238,13 @@ module.exports = {
   resolveApiKeys,
   getActiveKeyIndex,
   setActiveKeyIndex,
+  getActiveModelIndex,
+  setActiveModelIndex,
+  resetActiveModelIndex,
+  checkDailyModelReset,
+  setLastResetDate,
+  setLastFailoverTimestamp,
+  startWithFallbackModels,
   callModel,
   generateJson,
   extractResponseText,

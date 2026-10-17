@@ -2822,3 +2822,23 @@ can you implement this easy task and dont create workflow and only direct code a
 category manager side implement single vendor invite features in this model and implement this direct and dont create workflow i need urgent
 
 first pass coverage and push and then start implement on bug
+
+## 2026-10-17
+
+Many gemini AI extraction issues are coming currently with this code such as 503, can you please what exactly is the gemini extraction processes here in this code, how we can fix it
+
+Implement fix 4 for 503, kind of issue, that it should start with fallback models then
+
+No need of flag, it is expected to happen always, please remove this flag, GEMINI_START_WITH_FALLBACK=false
+
+Also, no need of two gemini models env variables (GEMINI_PRIMARY_MODEL, GEMINI_FALLBACK_MODELS), use one env variable for "GEMINI_MODELS" where all models can be provided in order, such as gemini 3.8 flash, gemini 3.7 flash, gemini 3.6 flash, gemini 3.5 flash, gemini 3.5 flash lite, gemini 3.1 flash lite. 
+
+With these many backup, it is difficult for code to fail on 503.
+
+Is gemini base URL env variable needed?or , we need to add, this is not a variable, can be hardcoded in code, no env is needed for this
+
+What about 429, how is this scenario handled?
+
+Let's say if we have 1000 keys, & rate limit is over on all 1000 keys for gemini 3.8 flash, & other model it is available, how would the code would handle it?
+
+The rate limit is per day, i hope we are refreshing this active model index every day?
