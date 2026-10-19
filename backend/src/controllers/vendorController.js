@@ -160,7 +160,8 @@ async function getVendors(req, res, next) {
       const { rows, total } = await domainQueries.getVendorsPageFromDB({
         limit: pageSize,
         offset: (pageNumber - 1) * pageSize,
-        search: (search || email) ? String(search || email) : '',
+        search: search ? String(search).trim() : '',
+        email: email ? String(email).trim() : '',
         category: category ? String(category) : '',
         scopedBuyerId: buyerId && buyerId !== 'all' ? buyerId : '',
       });
@@ -176,7 +177,17 @@ async function getVendors(req, res, next) {
     if (search) {
       const q = String(search).toLowerCase();
       vendors = vendors.filter((v) =>
-        [v.name, v.email, v.majorCategory, ...(v.minorCategories || [])].some((field) =>
+        [
+          v.name,
+          v.email,
+          v.majorCategory,
+          ...(v.minorCategories || []),
+          v.contactPerson,
+          v.contact,
+          v.location,
+          v.city,
+          v.deliveryLocation,
+        ].some((field) =>
           String(field || '').toLowerCase().includes(q)
         )
       );

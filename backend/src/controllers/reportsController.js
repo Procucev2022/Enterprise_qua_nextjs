@@ -1,5 +1,6 @@
 const storeService = require('../services/storeService');
 const pool = require('../db/pool');
+const domainQueries = require('../db/domainQueries');
 const { logger } = require('../services/loggerService');
 const { RFQ_MODES, RFQ_MODE_LABELS } = require('../config/constants');
 
@@ -7,24 +8,15 @@ const LOG_CATEGORY = 'REPORTS_CONTROLLER';
 
 function parseDateRange(startDateStr, endDateStr) {
   const now = new Date();
-  let fromDate;
-  if (startDateStr) {
-    const s = String(startDateStr).trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-      const [y, m, d] = s.split('-').map(Number);
-      fromDate = new Date(y, m - 1, d, 0, 0, 0, 0);
-    } else {
-      const parsed = new Date(s);
-      fromDate = !isNaN(parsed.getTime()) ? parsed : new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      fromDate.setHours(0, 0, 0, 0);
-    }
-  } else {
-    fromDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    fromDate.setHours(0, 0, 0, 0);
-  }
+  const hasStart = startDateStr !== undefined && startDateStr !== null && String(startDateStr).trim() !== '' && String(startDateStr).trim().toLowerCase() !== 'all';
+  const hasEnd = endDateStr !== undefined && endDateStr !== null && String(endDateStr).trim() !== '' && String(endDateStr).trim().toLowerCase() !== 'all';
+
+  const isExplicitAll =
+    (startDateStr !== undefined && (startDateStr === '' || String(startDateStr).trim().toLowerCase() === 'all')) ||
+    (endDateStr !== undefined && (endDateStr === '' || String(endDateStr).trim().toLowerCase() === 'all'));
 
   let toDate;
-  if (endDateStr) {
+  if (hasEnd) {
     const s = String(endDateStr).trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
       const [y, m, d] = s.split('-').map(Number);
@@ -37,6 +29,31 @@ function parseDateRange(startDateStr, endDateStr) {
   } else {
     toDate = new Date(now);
     toDate.setHours(23, 59, 59, 999);
+  }
+
+  let fromDate;
+  if (hasStart) {
+    const s = String(startDateStr).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [y, m, d] = s.split('-').map(Number);
+      fromDate = new Date(y, m - 1, d, 0, 0, 0, 0);
+    } else {
+      const parsed = new Date(s);
+      fromDate = !isNaN(parsed.getTime()) ? parsed : new Date(0);
+      fromDate.setHours(0, 0, 0, 0);
+    }
+  } else if (hasEnd || isExplicitAll) {
+    // End-only or explicitly unbounded range (Clear dates / 'all'): start from beginning of time
+    fromDate = new Date(0);
+  } else {
+    // Default when no dates are specified at all (undefined / omitted)
+    fromDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    fromDate.setHours(0, 0, 0, 0);
+  }
+
+  if (hasStart && fromDate > toDate) {
+    fromDate = new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+    fromDate.setHours(0, 0, 0, 0);
   }
 
   return { fromDate, toDate };
@@ -78,10 +95,10 @@ function getBuyerLocation(buyer, rfq = null) {
 
 function getBuyerLastLogin(buyer, rfq = null) {
   if (buyer) {
-    const rawVal = buyer.lastLogin || buyer.lastLoginDate || buyer.syncTimestamp || buyer.createdDate || buyer.created_at || buyer.createdAt;
+    const rawVal = buyer.lastLogin || buyer.last_login_at || buyer.lastLoginDate;
     if (rawVal) return formatDateTimeISO(rawVal);
   }
-  return rfq && rfq.createdAt ? formatDateTimeISO(rfq.createdAt) : '';
+  return '';
 }
 
 function getVendorLocation(vendor, fallback = 'India') {
@@ -97,10 +114,10 @@ function getVendorLocation(vendor, fallback = 'India') {
 
 function getVendorLastLogin(vendor, fallbackDate = null) {
   if (vendor) {
-    const rawVal = vendor.lastLogin || vendor.last_login_at || vendor.lastLoginDate || vendor.updated_at || vendor.created_at || vendor.createdAt;
+    const rawVal = vendor.lastLogin || vendor.last_login_at || vendor.lastLoginDate;
     if (rawVal) return formatDateTimeISO(rawVal);
   }
-  return fallbackDate ? formatDateTimeISO(fallbackDate) : '';
+  return '';
 }
 
 function findBuyer(allBuyers, rfq) {
@@ -645,15 +662,21 @@ async function getDailyActivityReport(req, res, next) {
     const endDate = req.query.endDate || req.query.to;
     const { fromDate, toDate } = parseDateRange(startDate, endDate);
 
+    let newVendorsRegistered = 0;
     if (pool.hasStorage()) {
       await storeService.syncRFQsFromDB();
-      await storeService.getVendors('all');
       await storeService.getBuyerAccounts();
+      newVendorsRegistered = await domainQueries.countVendorsCreatedBetween(fromDate, toDate);
+    } else {
+      const allVendors = Array.isArray(storeService.vendors) ? storeService.vendors : [];
+      newVendorsRegistered = allVendors.filter((v) => {
+        const d = (v.created_at || v.createdAt) ? new Date(v.created_at || v.createdAt) : null;
+        return d && d >= fromDate && d <= toDate;
+      }).length;
     }
 
     const allRfqs = storeService.getRFQs();
     const allBuyers = Array.isArray(storeService.buyerAccounts) ? storeService.buyerAccounts : [];
-    const allVendors = Array.isArray(storeService.vendors) ? storeService.vendors : [];
     const allAuditLogs = Array.isArray(storeService.auditLogs) ? storeService.auditLogs : [];
 
     const rfqsInRange = allRfqs.filter((r) => {
@@ -663,11 +686,6 @@ async function getDailyActivityReport(req, res, next) {
 
     const buyersInRange = allBuyers.filter((b) => {
       const d = (b.createdDate || b.created_at) ? new Date(b.createdDate || b.created_at) : null;
-      return d && d >= fromDate && d <= toDate;
-    });
-
-    const vendorsInRange = allVendors.filter((v) => {
-      const d = (v.created_at || v.createdAt) ? new Date(v.created_at || v.createdAt) : null;
       return d && d >= fromDate && d <= toDate;
     });
 
@@ -697,7 +715,7 @@ async function getDailyActivityReport(req, res, next) {
         rfqsCreated: rfqsInRange.length,
         quotesReceived: totalQuotesReceived,
         newBuyersRegistered: buyersInRange.length,
-        newVendorsRegistered: vendorsInRange.length,
+        newVendorsRegistered,
         totalAuditEvents: auditLogsInRange.length,
       },
     });

@@ -37,7 +37,7 @@ async function getVendorsFromDB() {
  * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
  * a page request only ever touches the rows it actually returns.
  */
-async function getVendorsPageFromDB({ limit, offset, search = '', category = '', publicOnly = false, scopedBuyerId = '' } = {}) {
+async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', publicOnly = false, scopedBuyerId = '' } = {}) {
   if (!pool.hasStorage()) return { rows: [], total: 0 };
   const params = [];
   // Two parallel condition lists, not one translated after the fact: ILIKE
@@ -49,18 +49,32 @@ async function getVendorsPageFromDB({ limit, offset, search = '', category = '',
   const conditions = [];
   const d1Conditions = [];
   if (search) {
-    params.push(`%${search}%`);
-    // major_category/email/name/minorCategories are all backed by a trigram
-    // GIN index (idx_vendors_*_trgm in schema.sql) so this substring ILIKE
-    // doesn't force a sequential scan of the whole table at 600k+ rows.
+    params.push(`%${search.trim()}%`);
+    // major_category/email/name/minorCategories/contactPerson/location/deliveryLocation
+    // are queried so unified directory search matches all seller details.
     conditions.push(`(major_category ILIKE $${params.length}
       OR email ILIKE $${params.length}
       OR raw->>'name' ILIKE $${params.length}
-      OR (raw->'minorCategories')::text ILIKE $${params.length})`);
+      OR (raw->'minorCategories')::text ILIKE $${params.length}
+      OR raw->>'contactPerson' ILIKE $${params.length}
+      OR raw->>'contact' ILIKE $${params.length}
+      OR raw->>'location' ILIKE $${params.length}
+      OR raw->>'city' ILIKE $${params.length}
+      OR raw->>'deliveryLocation' ILIKE $${params.length})`);
     d1Conditions.push(`(lower(major_category) LIKE lower($${params.length})
       OR lower(email) LIKE lower($${params.length})
       OR lower(json_extract(raw,'$.name')) LIKE lower($${params.length})
-      OR lower(json_extract(raw,'$.minorCategories')) LIKE lower($${params.length}))`);
+      OR lower(json_extract(raw,'$.minorCategories')) LIKE lower($${params.length})
+      OR lower(json_extract(raw,'$.contactPerson')) LIKE lower($${params.length})
+      OR lower(json_extract(raw,'$.contact')) LIKE lower($${params.length})
+      OR lower(json_extract(raw,'$.location')) LIKE lower($${params.length})
+      OR lower(json_extract(raw,'$.city')) LIKE lower($${params.length})
+      OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${params.length}))`);
+  }
+  if (email) {
+    params.push(`%${email.trim()}%`);
+    conditions.push(`(email ILIKE $${params.length} OR raw->>'email' ILIKE $${params.length})`);
+    d1Conditions.push(`(lower(email) LIKE lower($${params.length}) OR lower(json_extract(raw,'$.email')) LIKE lower($${params.length}))`);
   }
   if (category) {
     // An exact-match category filter (the CM's category dropdown), separate
@@ -1226,9 +1240,35 @@ async function getVendorCreditTransactionsFromDB(vendorId) {
   return result && result.rows ? result.rows : [];
 }
 
+/**
+ * Fast DB aggregate counting vendors registered between two timestamps without
+ * hydrating 600k+ vendor profiles into application memory.
+ */
+async function countVendorsCreatedBetween(fromDate, toDate) {
+  if (!pool.hasStorage()) return 0;
+  const f = fromDate instanceof Date ? fromDate : new Date(fromDate);
+  const t = toDate instanceof Date ? toDate : new Date(toDate);
+  if (isNaN(f.getTime()) || isNaN(t.getTime())) return 0;
+
+  try {
+    const res = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM vendors WHERE created_at >= $1 AND created_at <= $2`,
+      [f.toISOString(), t.toISOString()],
+      {
+        d1: true,
+        d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS count FROM vendors WHERE created_at >= $1 AND created_at <= $2`,
+      }
+    );
+    return res && res.rows && res.rows[0] ? Number(res.rows[0].count) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
 module.exports = {
   getVendorsFromDB,
   getVendorsPageFromDB,
+  countVendorsCreatedBetween,
   countPublicVendorsMatchingCategories,
   getPublicVendorsMatchingCategories,
   getPublicVendorsPerCategoryFromDB,

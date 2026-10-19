@@ -57,6 +57,18 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(toDate).toBeInstanceOf(Date);
     });
 
+    test('parseDateRange with unbounded and end-only parameters', () => {
+      const unbounded = parseDateRange('', '');
+      expect(unbounded.fromDate.getTime()).toBe(0);
+
+      const unboundedAll = parseDateRange('all', 'all');
+      expect(unboundedAll.fromDate.getTime()).toBe(0);
+
+      const endOnly = parseDateRange(null, '2026-05-15');
+      expect(endOnly.fromDate.getTime()).toBe(0);
+      expect(endOnly.toDate.getDate()).toBe(15);
+    });
+
     test('formatMode handles valid, missing, and fallback modes', () => {
       expect(formatMode(null)).toBe('Mode 0');
       expect(formatMode('')).toBe('Mode 0');
@@ -130,11 +142,11 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(getBuyerLocation(null, null)).toBe('All India');
     });
 
-    test('getBuyerLastLogin covers lastLogin, lastLoginDate, syncTimestamp, and rfq createdAt fallbacks', () => {
+    test('getBuyerLastLogin covers authentic lastLogin and returns empty string when missing', () => {
       expect(getBuyerLastLogin({ lastLogin: '2026-03-01T12:00:00Z' })).toBe('2026-03-01 12:00:00');
       expect(getBuyerLastLogin({ lastLoginDate: '2026-03-02T12:00:00Z' })).toBe('2026-03-02 12:00:00');
-      expect(getBuyerLastLogin({ syncTimestamp: '2026-03-03T12:00:00Z' })).toBe('2026-03-03 12:00:00');
-      expect(getBuyerLastLogin(null, { createdAt: '2026-03-04T12:00:00Z' })).toBe('2026-03-04 12:00:00');
+      expect(getBuyerLastLogin({ last_login_at: '2026-03-03T12:00:00Z' })).toBe('2026-03-03 12:00:00');
+      expect(getBuyerLastLogin(null, { createdAt: '2026-03-04T12:00:00Z' })).toBe('');
       expect(getBuyerLastLogin(null, null)).toBe('');
     });
 
@@ -146,10 +158,11 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(getVendorLocation(null, 'Custom Fallback')).toBe('Custom Fallback');
     });
 
-    test('getVendorLastLogin covers lastLogin, fallbacks, and nulls', () => {
+    test('getVendorLastLogin covers authentic lastLogin and returns empty string when missing', () => {
       expect(getVendorLastLogin({ lastLogin: '2026-03-01T12:00:00Z' })).toBe('2026-03-01 12:00:00');
       expect(getVendorLastLogin({ lastLoginDate: '2026-03-02T12:00:00Z' })).toBe('2026-03-02 12:00:00');
-      expect(getVendorLastLogin(null, '2026-03-03T12:00:00Z')).toBe('2026-03-03 12:00:00');
+      expect(getVendorLastLogin({ last_login_at: '2026-03-03T12:00:00Z' })).toBe('2026-03-03 12:00:00');
+      expect(getVendorLastLogin(null, '2026-03-03T12:00:00Z')).toBe('');
       expect(getVendorLastLogin(null, null)).toBe('');
     });
   });
@@ -164,6 +177,7 @@ describe('Reports Controller & Endpoints Suite', () => {
           phone: '+919876543210',
           location: 'Pune',
           source: 'procucev_network',
+          lastLogin: '2026-03-01T10:00:00Z',
           updated_at: '2026-03-01T10:00:00Z',
         },
         {
@@ -298,6 +312,7 @@ describe('Reports Controller & Endpoints Suite', () => {
           contactPerson: 'Sunil Rao',
           majorCategory: 'Plastics & Polymers',
           minorCategories: ['Engineering Plastics', 'Nylon Rods'],
+          lastLogin: '2026-03-01T10:00:00Z',
           created_at: new Date().toISOString(),
         },
         {
@@ -373,6 +388,7 @@ describe('Reports Controller & Endpoints Suite', () => {
           mobileNumber: '+919123456789',
           city: 'Pune',
           sourcingMode: RFQ_MODES.MODE_2,
+          lastLogin: '2026-03-01T10:00:00Z',
         },
       ];
 
@@ -528,6 +544,7 @@ describe('Reports Controller & Endpoints Suite', () => {
           id: 'b-10',
           organizationName: 'Godrej Industries',
           corporateEmail: 'rfq@godrej.com',
+          lastLogin: '2026-03-01T10:00:00Z',
         },
       ];
 
@@ -590,6 +607,15 @@ describe('Reports Controller & Endpoints Suite', () => {
           email: 'quotes@precisiontools.com',
           city: 'Bangalore',
           majorCategory: 'Cutting Tools',
+          lastLogin: '2026-03-01T10:00:00Z',
+        },
+      ];
+
+      storeService.buyerAccounts = [
+        {
+          id: 'b-sq1',
+          organizationName: 'Enterprise Buyer Ltd',
+          lastLogin: '2026-03-01T10:00:00Z',
         },
       ];
 
@@ -597,6 +623,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         {
           id: 'rfq-sq1',
           rfqNumber: 'RFQ-SQ-01',
+          buyerAccountId: 'b-sq1',
           createdAt: new Date().toISOString(),
           sourcingMode: RFQ_MODES.MODE_2,
           quotes: [
@@ -640,7 +667,7 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(res.body.data[0].LastLogin).toBeTruthy();
       expect(res.body.data[1].SellerCompanyName).toBe('None Yet');
       expect(res.body.data[1].CompanyLocation).toBeTruthy();
-      expect(res.body.data[1].LastLogin).toBeTruthy();
+      expect(res.body.data[1].LastLogin).toBe('');
     });
 
     test('GET /api/reports/rfq-report?requestType=dailyRfqDispatchReport returns dispatch stats', async () => {
@@ -683,11 +710,11 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(res.body.data[0].ChaserActive).toBe('YES');
       expect(res.body.data[0].Budget).toContain('80,000');
       expect(res.body.data[0].CompanyLocation).toBeTruthy();
-      expect(res.body.data[0].LastLogin).toBeTruthy();
+      expect(res.body.data[0].LastLogin).toBe('');
       expect(res.body.data[1].ChaserActive).toBe('NO');
       expect(res.body.data[1].Budget).toBe('');
       expect(res.body.data[1].CompanyLocation).toBeTruthy();
-      expect(res.body.data[1].LastLogin).toBeTruthy();
+      expect(res.body.data[1].LastLogin).toBe('');
     });
 
     test('GET /api/reports/rfq-report with invalid requestType returns 400', async () => {
@@ -903,8 +930,9 @@ describe('Reports Controller & Endpoints Suite', () => {
     test('getDailyActivityReport with pool.hasStorage and auditLogs with timestamp in range', async () => {
       const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       const syncSpy = jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue(true);
-      const vendorsSpy = jest.spyOn(storeService, 'getVendors').mockResolvedValue([]);
       const buyersSpy = jest.spyOn(storeService, 'getBuyerAccounts').mockResolvedValue([]);
+      const domainQueries = require('../src/db/domainQueries');
+      const countSpy = jest.spyOn(domainQueries, 'countVendorsCreatedBetween').mockResolvedValue(5);
 
       storeService.auditLogs = [
         { action: 'LOGIN', timestamp: '2026-03-02T10:00:00Z' },
@@ -916,11 +944,12 @@ describe('Reports Controller & Endpoints Suite', () => {
         .expect(200);
 
       expect(res.body.success).toBe(true);
+      expect(res.body.summary.newVendorsRegistered).toBe(5);
 
       hasStorageSpy.mockRestore();
       syncSpy.mockRestore();
-      vendorsSpy.mockRestore();
       buyersSpy.mockRestore();
+      countSpy.mockRestore();
     });
   });
 });

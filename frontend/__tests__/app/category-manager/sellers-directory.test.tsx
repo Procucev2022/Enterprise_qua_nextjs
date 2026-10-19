@@ -51,6 +51,7 @@ describe('SellersDirectory Component Suite', () => {
       rfqDownloadsUsed: 6,
       gstNumber: '24AAACA1111A1Z1',
       panNumber: 'AAACA1111A',
+      lastLogin: '2026-03-02T11:00:00Z',
     },
   ];
 
@@ -199,8 +200,8 @@ describe('SellersDirectory Component Suite', () => {
       expect(screen.getByText('Precision Forgings Pvt Ltd')).toBeInTheDocument();
     });
 
-    // Check that sellers render actual dynamic Indian date/time and NOT a uniform "Never"
-    expect(screen.queryByText('Never')).not.toBeInTheDocument();
+    // Apex Fasteners has genuine login timestamp, Precision Forgings displays "Never"
+    expect(screen.getByText('Never')).toBeInTheDocument();
 
     const searchInput = screen.getByPlaceholderText(/Search company/i);
     // Unified search by email
@@ -213,6 +214,31 @@ describe('SellersDirectory Component Suite', () => {
     fireEvent.click(clearBtn);
     expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     expect(screen.getByText('Precision Forgings Pvt Ltd')).toBeInTheDocument();
+  });
+
+  test('categoryOptions retains options when a category is selected', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: mockBuyerVendors,
+      rfqs: mockRfqs,
+      auditLogs: mockAuditLogs,
+      categoryTaxonomy: [
+        { majorCategory: 'Industrial Fasteners', minorCategories: [] },
+        { majorCategory: 'Electrical Supplies', minorCategories: [] },
+      ],
+      setSelectedRFQForMatrix: jest.fn(),
+    });
+
+    render(<SellersDirectory />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+    });
+
+    const categorySelect = screen.getByDisplayValue('All Categories');
+    fireEvent.change(categorySelect, { target: { value: 'Industrial Fasteners' } });
+
+    // Ensure the other category options are still present in the dropdown
+    expect(screen.getByRole('option', { name: 'Electrical Supplies' })).toBeInTheDocument();
   });
 
   test('displays empty state when query matches no suppliers', async () => {

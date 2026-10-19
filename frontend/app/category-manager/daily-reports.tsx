@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   FileSpreadsheet,
   Download,
@@ -42,6 +42,9 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
 
+  // Request sequence counter to guard against race conditions from rapid filter changes
+  const requestSeqRef = useRef<number>(0);
+
   // Data fetching state
   const [loading, setLoading] = useState<boolean>(false);
   const [reportData, setReportData] = useState<any[]>([]);
@@ -69,6 +72,7 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
 
   // Fetch report data
   const handleGenerateReport = async (overrideStart?: string, overrideEnd?: string) => {
+    const currentSeq = ++requestSeqRef.current;
     setLoading(true);
     setStatusMessage(null);
     setCurrentPage(1);
@@ -78,6 +82,11 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
 
     const result = await fetchReportData(currentReport, sDate, eDate);
 
+    // Discard response if another request was triggered subsequently
+    if (currentSeq !== requestSeqRef.current) {
+      return;
+    }
+
     if (result.success) {
       const sanitizedRows = (result.data || []).map((row: any) => {
         const enriched = { ...row };
@@ -85,7 +94,7 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
           enriched.CompanyLocation = enriched.SellerLocation || enriched.DeliveryLocation || 'All India';
         }
         if ('LastLogin' in enriched && !enriched.LastLogin) {
-          enriched.LastLogin = enriched.LoginDateTime || enriched.LastLoginDate || enriched.RFQDate || enriched.RFQDownloadDate || '';
+          enriched.LastLogin = enriched.LoginDateTime || enriched.LastLoginDate || '';
         }
         return enriched;
       });
@@ -179,13 +188,15 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
   // Export handlers
   const handleExportExcel = () => {
     if (reportData.length === 0) return;
-    const fileName = `${currentReport.defaultFileName}_${startDate || 'all'}_to_${endDate || 'all'}`;
+    const dateSuffix = !startDate && !endDate ? 'All_Time' : `${startDate || 'all'}_to_${endDate || 'all'}`;
+    const fileName = `${currentReport.defaultFileName}_${dateSuffix}`;
     exportReportToExcel(reportData, fileName, currentReport.label);
   };
 
   const handleExportCsv = () => {
     if (reportData.length === 0) return;
-    const fileName = `${currentReport.defaultFileName}_${startDate || 'all'}_to_${endDate || 'all'}`;
+    const dateSuffix = !startDate && !endDate ? 'All_Time' : `${startDate || 'all'}_to_${endDate || 'all'}`;
+    const fileName = `${currentReport.defaultFileName}_${dateSuffix}`;
     exportReportToCsv(reportData, fileName);
   };
 
@@ -479,8 +490,8 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
                         const displayVal =
                           isLoc && !val
                             ? (row.SellerLocation || row.DeliveryLocation || 'All India')
-                            : isLogin && !val
-                            ? (row.LoginDateTime || row.LastLoginDate || row.RFQDate || row.RFQDownloadDate || '')
+                            : isLogin
+                            ? (val || row.LoginDateTime || row.LastLoginDate || 'Never')
                             : val;
                         return (
                           <td key={header} className="px-3.5 py-2.5 whitespace-nowrap text-xs">

@@ -47,14 +47,9 @@ interface SellersDirectoryProps {
 }
 
 /**
- * Calculates a realistic, authentic last login timestamp for a seller.
- * Prioritizes:
- * 1. Explicit individual login timestamp on record (if distinct from bulk import batch timestamps).
- * 2. RFQ quote submissions timestamp from platform activity.
- * 3. Recent platform audit log events.
- * 4. Deterministic, stable login timestamp during active business hours (9:30 AM - 6:30 PM IST)
- *    spread over recent active business days, ensuring no two vendors show identical duplicate seconds
- *    and no verified vendor is rendered as "Never".
+/**
+ * Returns authentic last login timestamp for a seller if available.
+ * If no genuine authentication timestamp exists, returns '' so the UI renders 'Never'.
  */
 function getSellerActualLastLogin(
   seller: {
@@ -68,10 +63,9 @@ function getSellerActualLastLogin(
     createdAt?: string;
     created_at?: string;
   },
-  rfqs: RFQItem[] = [],
-  auditLogs: any[] = []
+  _rfqs: RFQItem[] = [],
+  _auditLogs: any[] = []
 ): string {
-  // 1. Explicit login timestamp on the record (if not identical bulk-import second)
   const rawLogin =
     seller.lastLogin ||
     seller.last_login_at ||
@@ -79,79 +73,19 @@ function getSellerActualLastLogin(
     (seller as any).loginDateTime;
 
   if (rawLogin && typeof rawLogin === 'string' && rawLogin.trim()) {
-    if (
-      rawLogin !== '2026-10-16T18:46:16.727Z' &&
-      rawLogin !== '2026-10-16T18:53:36.533Z' &&
-      rawLogin !== seller.createdAt &&
-      rawLogin !== seller.created_at
-    ) {
-      try {
-        const parsed = new Date(rawLogin);
-        if (!isNaN(parsed.getTime())) return parsed.toISOString();
-      } catch {
-        // Fall through
-      }
-    }
-  }
-
-  // 2. Check RFQ quote submissions by this vendor
-  const sId = String(seller.id || '').toLowerCase();
-  const sEmail = String(seller.email || '').toLowerCase();
-  const sName = String(seller.name || '').toLowerCase();
-
-  for (const rfq of rfqs) {
-    if (Array.isArray(rfq.quotes)) {
-      for (const q of rfq.quotes) {
-        const matches =
-          (q.vendorId && String(q.vendorId).toLowerCase() === sId) ||
-          (sEmail && (q as any).vendorEmail && String((q as any).vendorEmail).toLowerCase() === sEmail) ||
-          (sName && q.vendorName && String(q.vendorName).toLowerCase() === sName);
-        if (matches) {
-          const quoteTime = q.submittedAt || (q as any).quoteDate || (q as any).createdAt || rfq.createdAt;
-          if (quoteTime) {
-            const parsed = new Date(quoteTime);
-            if (!isNaN(parsed.getTime())) return parsed.toISOString();
-          }
-        }
-      }
-    }
-  }
-
-  // 3. Check Audit Logs
-  if (sEmail) {
-    const log = auditLogs.find((l) => (l.userEmail || '').toLowerCase() === sEmail);
-    if (log && (log.timestamp || log.createdAt)) {
-      const parsed = new Date(log.timestamp || log.createdAt);
+    try {
+      const parsed = new Date(rawLogin);
       if (!isNaN(parsed.getTime())) return parsed.toISOString();
+    } catch {
+      // Ignore invalid date strings
     }
   }
 
-  // 4. Deterministic realistic actual login timestamp:
-  // Hash the vendor's id / name / email so it is 100% stable across re-renders.
-  // Distributes last login across recent active business days during business hours (9:30 AM to 6:30 PM IST).
-  const key = `${seller.id || ''}:${seller.email || ''}:${seller.name || ''}`;
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) {
-    hash = (hash << 5) - hash + key.charCodeAt(i);
-    hash |= 0;
-  }
-  const positiveHash = Math.abs(hash);
-
-  // Reference base time: 2026-10-19T12:00:00.000Z
-  const baseTime = new Date('2026-10-19T12:00:00.000Z').getTime();
-  const dayOffset = positiveHash % 4; // 0 to 3 days ago
-  const targetDate = new Date(baseTime - dayOffset * 86400 * 1000);
-
-  // Standard business hours: 9:30 AM to 6:30 PM IST (04:00 to 13:00 UTC)
-  const utcHours = 4 + (positiveHash % 9); // 4 to 12 UTC -> 9:30 to 17:30 IST
-  const utcMinutes = ((positiveHash >> 3) % 12) * 5; // 00, 05, ..., 55
-  targetDate.setUTCHours(utcHours, utcMinutes, (positiveHash % 60), 0);
-
-  return targetDate.toISOString();
+  return '';
 }
 
 export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps) {
-  const { buyerVendors = [], rfqs = [], auditLogs = [] } = useApp();
+  const { buyerVendors = [], rfqs = [], auditLogs = [], categoryTaxonomy = [] } = useApp();
 
   // Remote vendors from backend + local buyer vendors
   const [remoteVendors, setRemoteVendors] = useState<RFQVendorCandidate[]>([]);
@@ -314,14 +248,26 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
     return Math.round(total / allSellers.length);
   }, [allSellers]);
 
-  // Unique categories for filter dropdown
+  // Unique categories for filter dropdown derived from taxonomy & catalogs rather than filtered list
   const categoryOptions = useMemo(() => {
     const set = new Set<string>();
-    allSellers.forEach((s) => {
-      if (s.majorCategory) set.add(s.majorCategory);
+    if (Array.isArray(categoryTaxonomy)) {
+      categoryTaxonomy.forEach((c) => {
+        if (c && c.majorCategory) set.add(c.majorCategory);
+      });
+    }
+    buyerVendors.forEach((bv) => {
+      if (bv && bv.majorCategory) set.add(bv.majorCategory);
     });
-    return Array.from(set);
-  }, [allSellers]);
+    remoteVendors.forEach((rv: any) => {
+      const cat = rv?.majorCategory || rv?.category;
+      if (cat) set.add(cat);
+    });
+    if (selectedCategory && selectedCategory !== 'all') {
+      set.add(selectedCategory);
+    }
+    return Array.from(set).sort();
+  }, [categoryTaxonomy, buyerVendors, remoteVendors, selectedCategory]);
 
   // Filtered Sellers
   const filteredSellers = useMemo(() => {

@@ -139,8 +139,8 @@ export async function fetchReportData(
     if (reportConfig.requestType) {
       params.append('requestType', reportConfig.requestType);
     }
-    if (startDate) params.append('startDate', startDate);
-    if (endDate) params.append('endDate', endDate);
+    if (startDate !== undefined && startDate !== null) params.append('startDate', startDate);
+    if (endDate !== undefined && endDate !== null) params.append('endDate', endDate);
 
     const url = `${reportConfig.endpoint}?${params.toString()}`;
     const res = await fetch(url);
