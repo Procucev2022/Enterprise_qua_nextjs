@@ -382,25 +382,25 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
       </div>
 
       {/* Toolbar / Search & Filter Controls */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-wrap items-center gap-2 sm:gap-2.5">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
           <input
             type="text"
             placeholder="Search company, contact, category, city..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            className="w-full pl-8 pr-3 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Source Filter */}
           <select
             aria-label="Filter by source"
             value={selectedSource}
             onChange={(e) => setSelectedSource(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            className="h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
           >
             <option value="all">All Sources</option>
             <option value="network">Procucev Network</option>
@@ -412,7 +412,7 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
             aria-label="Filter by category"
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 max-w-[200px] focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            className="h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 max-w-[200px] focus:outline-none focus:ring-1 focus:ring-emerald-500"
           >
             <option value="all">All Categories</option>
             {categoryOptions.map((cat) => (
@@ -427,7 +427,7 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
             aria-label="Filter by rating"
             value={selectedRating}
             onChange={(e) => setSelectedRating(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            className="h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
           >
             <option value="all">All Ratings</option>
             <option value="4plus">★ 4.0+ Stars</option>
@@ -738,12 +738,12 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
             {/* Dossier Tabs Navigation */}
             <div className="flex items-center gap-1 px-5 border-b border-slate-200 dark:border-slate-800 overflow-x-auto bg-slate-50/30 dark:bg-slate-900">
               {[
-                { id: 'profile', label: '1. Basic Profile', icon: Building2 },
-                { id: 'rfqs', label: `2. RFQ & Quotes (${sellerRfqs.length})`, icon: Layers },
-                { id: 'credits', label: '3. Credits & Quotas', icon: CreditCard },
-                { id: 'communications', label: `4. Communications (${sellerCommunications.length})`, icon: MessageSquare },
-                { id: 'payments', label: `5. Payments (${sellerPayments.length})`, icon: Receipt },
-                { id: 'activity', label: '6. 360° AI Review & Activity', icon: Award },
+                { id: 'profile', label: 'Profile', icon: Building2 },
+                { id: 'rfqs', label: `Quote (${sellerRfqs.length})`, icon: Layers },
+                { id: 'credits', label: 'Credit', icon: CreditCard },
+                { id: 'communications', label: `Messages (${sellerCommunications.length})`, icon: MessageSquare },
+                { id: 'payments', label: `Payments (${sellerPayments.length})`, icon: Receipt },
+                { id: 'activity', label: 'Activity', icon: Award },
               ].map((tab) => {
                 const Icon = tab.icon;
                 return (

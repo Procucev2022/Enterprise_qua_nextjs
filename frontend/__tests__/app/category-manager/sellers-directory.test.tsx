@@ -232,8 +232,8 @@ describe('SellersDirectory Component Suite', () => {
     expect(screen.getByText('Contact Details')).toBeInTheDocument();
     expect(screen.getByText('24AAACA1111A1Z1')).toBeInTheDocument();
 
-    // Tab 2: RFQ & Quotes
-    const rfqTab = screen.getByText(/2. RFQ & Quotes/);
+    // Tab 2: Quote
+    const rfqTab = screen.getByRole('button', { name: /Quote/i });
     fireEvent.click(rfqTab);
     expect(screen.getByText('RFQ-NET-001')).toBeInTheDocument();
     expect(screen.getByText('M16 Galvanized Bolts')).toBeInTheDocument();
@@ -243,24 +243,24 @@ describe('SellersDirectory Component Suite', () => {
     fireEvent.click(matrixBtn);
     expect(onSelectRFQ).toHaveBeenCalled();
 
-    // Tab 3: Credits & Quotas
-    const creditsTab = screen.getByText('3. Credits & Quotas');
+    // Tab 3: Credit
+    const creditsTab = screen.getByRole('button', { name: /^Credit$/i });
     fireEvent.click(creditsTab);
     expect(screen.getByText('Free Quotation Credits')).toBeInTheDocument();
     expect(screen.getByText('20')).toBeInTheDocument();
 
-    // Tab 4: Communications
-    const commsTab = screen.getByText(/4. Communications/);
+    // Tab 4: Messages
+    const commsTab = screen.getByRole('button', { name: /Messages/i });
     fireEvent.click(commsTab);
     expect(screen.getByText(/Procucev Supplier Network Onboarding/)).toBeInTheDocument();
 
     // Tab 5: Payments
-    const payTab = screen.getByText(/5. Payments/);
+    const payTab = screen.getByRole('button', { name: /Payments/i });
     fireEvent.click(payTab);
     expect(screen.getAllByText(/Preferred Partner/).length).toBeGreaterThanOrEqual(1);
 
-    // Tab 6: 360 AI Review & Activity
-    const actTab = screen.getByText(/6. 360° AI Review & Activity/);
+    // Tab 6: Activity
+    const actTab = screen.getByRole('button', { name: /^Activity$/i });
     fireEvent.click(actTab);
     expect(screen.getByText('Category Manager Rating Revision')).toBeInTheDocument();
 
@@ -302,27 +302,27 @@ describe('SellersDirectory Component Suite', () => {
     expect(screen.getAllByText('Precision Forgings Pvt Ltd').length).toBeGreaterThanOrEqual(1);
 
     // Tab 2: Empty RFQs
-    const emptyRfqTab = screen.getByText(/2. RFQ & Quotes/);
+    const emptyRfqTab = screen.getByRole('button', { name: /Quote/i });
     fireEvent.click(emptyRfqTab);
     expect(screen.getByText(/No active RFQs or bids found for this supplier/)).toBeInTheDocument();
 
     // Tab 3: Credits
-    const creditsTab2 = screen.getByText('3. Credits & Quotas');
+    const creditsTab2 = screen.getByRole('button', { name: /^Credit$/i });
     fireEvent.click(creditsTab2);
     expect(screen.getAllByText('10').length).toBeGreaterThanOrEqual(1);
 
     // Tab 4: Communications
-    const commsTab2 = screen.getByText(/4. Communications/);
+    const commsTab2 = screen.getByRole('button', { name: /Messages/i });
     fireEvent.click(commsTab2);
     expect(screen.getByText(/Procucev Supplier Network Onboarding/)).toBeInTheDocument();
 
     // Tab 5: Payments
-    const payTab2 = screen.getByText(/5. Payments/);
+    const payTab2 = screen.getByRole('button', { name: /Payments/i });
     fireEvent.click(payTab2);
     expect(screen.getByText(/SUP-INV/)).toBeInTheDocument();
 
     // Tab 6: Save revision without custom remarks (uses default remark)
-    const actTab2 = screen.getByText(/6. 360° AI Review & Activity/);
+    const actTab2 = screen.getByRole('button', { name: /^Activity$/i });
     fireEvent.click(actTab2);
     const saveRatingBtn2 = screen.getByText('Save Rating Revision');
     fireEvent.click(saveRatingBtn2);
@@ -386,7 +386,7 @@ describe('SellersDirectory Component Suite', () => {
     fireEvent.click(dossierBtns[0]);
 
     // Go to RFQ tab
-    const rfqTab = screen.getByText(/2. RFQ & Quotes/);
+    const rfqTab = screen.getByRole('button', { name: /Quote/i });
     fireEvent.click(rfqTab);
 
     // Click Matrix button
