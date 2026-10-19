@@ -942,7 +942,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
-    await waitFor(() => expect(screen.getByText(/Version 1 \(Client Sourcing\) requires at least one private vendor/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/(Mode 1|Version 1).*requires at least one private vendor/i)).toBeInTheDocument());
     expect(mockCreateRFQ).not.toHaveBeenCalled();
   });
 

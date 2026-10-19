@@ -574,8 +574,8 @@ describe('ManualRFQModal: sourcing mode', () => {
       activeBuyerAccount: { subscriptionPlan: 'version_3' },
     });
     renderModal();
-    const mode1 = screen.getByLabelText('Version 1');
-    const mode3 = screen.getByLabelText('Version 3');
+    const mode1 = screen.getByLabelText(/(Mode 1|Version 1)/i);
+    const mode3 = screen.getByLabelText(/(Mode 3|Version 3)/i);
     expect(mode1).toBeChecked();
 
     fireEvent.click(mode3);
@@ -595,9 +595,9 @@ describe('ManualRFQModal: sourcing mode', () => {
       activeBuyerAccount: { subscriptionPlan: 'free_trial' },
     });
     renderModal();
-    const mode1 = screen.getByLabelText('Version 1');
-    const mode2 = screen.getByLabelText('Version 2');
-    const mode3 = screen.getByLabelText('Version 3');
+    const mode1 = screen.getByLabelText(/(Mode 1|Version 1)/i);
+    const mode2 = screen.getByLabelText(/(Mode 2|Version 2)/i);
+    const mode3 = screen.getByLabelText(/(Mode 3|Version 3)/i);
     expect(mode1).not.toBeDisabled();
     expect(mode2).not.toBeDisabled();
     expect(mode3).not.toBeDisabled();
@@ -610,9 +610,9 @@ describe('ManualRFQModal: sourcing mode', () => {
       activeBuyerAccount: { subscriptionPlan: 'version_1' },
     });
     renderModal();
-    const mode1 = screen.getByLabelText('Version 1');
-    const mode2 = screen.getByLabelText('Version 2');
-    const mode3 = screen.getByLabelText('Version 3');
+    const mode1 = screen.getByLabelText(/(Mode 1|Version 1)/i);
+    const mode2 = screen.getByLabelText(/(Mode 2|Version 2)/i);
+    const mode3 = screen.getByLabelText(/(Mode 3|Version 3)/i);
 
     expect(mode1).not.toBeDisabled();
     expect(mode2).toBeDisabled();
@@ -636,9 +636,9 @@ describe('ManualRFQModal: sourcing mode', () => {
       activeBuyerAccount: { subscriptionPlan: 'version_3' },
     });
     renderModal();
-    const mode1 = screen.getByLabelText('Version 1');
-    const mode2 = screen.getByLabelText('Version 2');
-    const mode3 = screen.getByLabelText('Version 3');
+    const mode1 = screen.getByLabelText(/(Mode 1|Version 1)/i);
+    const mode2 = screen.getByLabelText(/(Mode 2|Version 2)/i);
+    const mode3 = screen.getByLabelText(/(Mode 3|Version 3)/i);
 
     expect(mode1).not.toBeDisabled();
     expect(mode2).not.toBeDisabled();
@@ -667,9 +667,9 @@ describe('ManualRFQModal: sourcing mode', () => {
     // indistinguishable on this screen before.
     expect(new Set(summaries).size).toBe(SOURCING_MODES.length);
     // The summaries are cumulative: each tier includes the ones beneath it.
-    expect(screen.getByTestId('manual-mode-mode_1')).toHaveTextContent('Features of Version 1');
-    expect(screen.getByTestId('manual-mode-mode_2')).toHaveTextContent('Features of Version 1 & 2');
-    expect(screen.getByTestId('manual-mode-mode_3')).toHaveTextContent('Features of Version 1, 2 & 3');
+    expect(screen.getByTestId('manual-mode-mode_1')).toHaveTextContent(/Features of (Mode 1|Version 1)/i);
+    expect(screen.getByTestId('manual-mode-mode_2')).toHaveTextContent(/Features of (Mode 1 & 2|Version 1 & 2)/i);
+    expect(screen.getByTestId('manual-mode-mode_3')).toHaveTextContent(/Features of (Mode 1, 2 & 3|Version 1, 2 & 3)/i);
   });
 
   // The bullet is a visual marker, not content, so it must not be announced.
@@ -905,7 +905,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     clickSave();
 
     await waitFor(() => {
-      expect(screen.getByText(/Version 1 \(Client Sourcing\) requires at least one private vendor/i)).toBeInTheDocument();
+      expect(screen.getByText(/(Mode 1|Version 1) \(Client Sourcing\) requires at least one private vendor/i)).toBeInTheDocument();
     });
     expect(rfqClient.createRFQ).not.toHaveBeenCalled();
   });
@@ -968,7 +968,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     });
     renderModal();
 
-    const mode3Checkbox = screen.getByLabelText('Version 3');
+    const mode3Checkbox = screen.getByLabelText(/(Mode 3|Version 3)/i);
     fireEvent.click(mode3Checkbox);
 
     fillRow();
@@ -1005,7 +1005,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     clickSave();
 
     await waitFor(() => {
-      expect(screen.getByText(/Version 1 \(Client Sourcing\) requires at least one private vendor/i)).toBeInTheDocument();
+      expect(screen.getByText(/(Mode 1|Version 1) \(Client Sourcing\) requires at least one private vendor/i)).toBeInTheDocument();
     });
     // Must NOT have silently fallen back to dispatching to the mismatched vendor.
     expect(rfqClient.createRFQ).not.toHaveBeenCalled();
@@ -1033,7 +1033,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
 
       // Select Mode 2
-      const mode2Checkbox = screen.getByLabelText('Version 2');
+      const mode2Checkbox = screen.getByLabelText(/(Mode 2|Version 2)/i);
       fireEvent.click(mode2Checkbox); // Mode 2
 
       expect(screen.getByText(/Mode 2: Hybrid Sourcing Pool/i)).toBeInTheDocument();
@@ -1047,7 +1047,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       expect(screen.getByText(/BOQ & Line-Item Classification/i)).toBeInTheDocument();
 
       // Select Mode 3
-      const mode3Checkbox = screen.getByLabelText('Version 3');
+      const mode3Checkbox = screen.getByLabelText(/(Mode 3|Version 3)/i);
       fireEvent.click(mode3Checkbox); // Mode 3
       expect(screen.getByText(/Mode 3: Double-Blind Autonomous Sourcing/i)).toBeInTheDocument();
       expect(screen.getByText('Private Vendor')).toBeInTheDocument();

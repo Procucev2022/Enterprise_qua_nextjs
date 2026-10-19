@@ -68,6 +68,7 @@ describe('Header', () => {
       // tests below isn't itself restricted by the entitlement gate — that
       // gate has its own dedicated test with an explicit free_trial fixture.
       activeBuyerAccount: { organizationName: 'Tata Motors', subscriptionPlan: 'version_3' },
+      activeSubscription: undefined,
       currentUserSession: {
         id: 'usr-1',
         email: 'navinchaudhary.dev@gmail.com',
@@ -157,7 +158,7 @@ describe('Header', () => {
     render(<Header />);
     expect(screen.queryByText('Sourcing Credits:')).not.toBeInTheDocument();
     expect(screen.getByText('Active Plan:')).toBeInTheDocument();
-    expect(screen.getByText('Version 1')).toBeInTheDocument();
+    expect(screen.getByText('Mode 1')).toBeInTheDocument();
   });
 
   it('renders the notification bell, opening the buyer notification inbox', async () => {

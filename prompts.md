@@ -2842,3 +2842,76 @@ What about 429, how is this scenario handled?
 Let's say if we have 1000 keys, & rate limit is over on all 1000 keys for gemini 3.8 flash, & other model it is available, how would the code would handle it?
 
 The rate limit is per day, i hope we are refreshing this active model index every day?
+
+## 2026-10-19
+
+In the project:
+
+Enterprise_qua_nextjs
+Path: C:\Users\navin\OneDrive\Desktop\procucev\Enterprise_qua_nextjs
+
+First, create a new branch from the latest main branch and implement the following tasks.
+
+1. Buyers & Sellers Directory
+
+Add Buyers Directory and Sellers Directory to the Category Manager dashboard.
+
+The directories should provide complete and useful information for each buyer/seller, including:
+
+Basic profile/company information
+
+RFQ history
+
+Credit/credits history
+
+Communication logs
+
+Payment/transaction history
+
+Relevant activity/history
+
+Any other information currently available or required for Category Manager operations
+
+Before implementing, review the existing Category Manager functionality and follow the current application's UI, components, API patterns, and coding conventions.
+
+2. Daily Downloadable Reports
+
+Implement Daily Downloadable Reports for the Category Manager.
+
+For reference, review the old application's Category Manager implementation and identify:
+
+What reports are available
+
+What data is included
+
+How reports are generated
+
+Available filters/date-wise functionality
+
+Download/export format
+
+UI/UX flow
+
+Reference projects:
+
+p2pservices_v1_qua
+C:\Users\navin\OneDrive\Desktop\procucev\p2pservices_v1_qua
+
+p2pui_v1
+C:\Users\navin\OneDrive\Desktop\procucev\p2pui_v1
+
+Use the old application only as a reference and adapt the functionality to the architecture and patterns of Enterprise_qua_nextjs. Do not blindly copy the old implementation.
+
+3. V1/V2/V3 Centralized Enum/Constants
+
+Create a centralized enum/constant for the RFQ modes:
+
+V1 → Mode 1
+
+V2 → Mode 2
+
+V3 → Mode 3
+
+Use this centralized enum/constant everywhere these values are displayed, compared, stored, or referenced.
+
+Search the entire application for existing hardcoded V1/V2/V3 or old version strings and replace them with the centralized constants wherever appropriate.

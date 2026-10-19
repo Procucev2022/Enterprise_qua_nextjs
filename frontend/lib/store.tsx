@@ -53,6 +53,8 @@ import {
 } from './rfqClient';
 import {
   SOURCING_MODES,
+  RFQ_MODES,
+  RFQ_MODE_LABELS,
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
   formatCurrency,
@@ -2296,27 +2298,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (activeSubscription === 'free_trial') {
-      if (rfqData.sourcingMode === 'mode_0') {
-        showToast('V0 RFQ Dispatched', 'Created RFQ via V0 (Procucev Network Vendors). 0 free RFQ credits used.', 'success');
+      if (rfqData.sourcingMode === RFQ_MODES.MODE_0) {
+        showToast('Mode 0 RFQ Dispatched', 'Created RFQ via Mode 0 (Procucev Network Vendors). 0 free RFQ credits used.', 'success');
       } else {
         if (remainingFreeRFQs <= 0) {
-          showToast('Free RFQ Quota Exhausted', 'You have hit your limit on V1, V2, and V3, but you can create multiple RFQs with V0 (Procucev Network Vendors). Upgrade your plan to continue creating RFQs with V1, V2, or V3.', 'warning');
+          showToast('Free RFQ Quota Exhausted', 'You have hit your limit on Mode 1, Mode 2, and Mode 3, but you can create multiple RFQs with Mode 0 (Procucev Network Vendors). Upgrade your plan to continue creating RFQs with Mode 1, Mode 2, or Mode 3.', 'warning');
           throw new Error('Free account quota exhausted');
         }
         setRemainingFreeRFQs(prev => {
           const next = Math.max(0, prev - 1);
-          const modeName = rfqData.sourcingMode === 'mode_1' ? 'Version 1 (Client Roster)' : rfqData.sourcingMode === 'mode_2' ? 'Version 2 (Hybrid Network)' : 'Version 3 (Autonomous AI)';
+          const modeName = rfqData.sourcingMode === RFQ_MODES.MODE_1 ? `${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} (Client Roster)` : rfqData.sourcingMode === RFQ_MODES.MODE_2 ? `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} (Hybrid Network)` : `${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]} (Autonomous AI)`;
           showToast('Free RFQ Dispatched', `Used 1 Free RFQ via ${modeName}. You have ${next} free RFQs remaining across all versions.`, 'success');
           return next;
         });
       }
     } else {
-      if (rfqData.sourcingMode === 'mode_2' && activeSubscription === 'version_1') {
-        showToast('Upgrade Required', 'Version 2 (Mode 2) Sourcing requires a Version 2 (Hybrid Network) Plan subscription.', 'warning');
+      if (rfqData.sourcingMode === RFQ_MODES.MODE_2 && activeSubscription === 'version_1') {
+        showToast('Upgrade Required', `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} Sourcing requires a ${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} (Hybrid Network) Plan subscription.`, 'warning');
         throw new Error('Subscription required');
       }
-      if (rfqData.sourcingMode === 'mode_3' && activeSubscription !== 'version_3') {
-        showToast('Upgrade Required', 'Version 3 (Mode 3) Sourcing requires a Version 3 (Autonomous AI) Plan subscription.', 'warning');
+      if (rfqData.sourcingMode === RFQ_MODES.MODE_3 && activeSubscription !== 'version_3') {
+        showToast('Upgrade Required', `${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]} Sourcing requires a ${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]} (Autonomous AI) Plan subscription.`, 'warning');
         throw new Error('Subscription required');
       }
     }

@@ -1,5 +1,9 @@
 import {
   SOURCING_MODES,
+  RFQ_MODES,
+  RFQ_MODE_LABELS,
+  RFQ_MODE_MAP,
+  rfqVersionLabel,
   CURRENCY,
   formatCurrency,
   formatFileSize,
@@ -26,26 +30,48 @@ import {
 
 
 describe('lib/constants', () => {
+  it('should export valid RFQ_MODES and RFQ_MODE_LABELS', () => {
+    expect(RFQ_MODES.MODE_0).toBe('mode_0');
+    expect(RFQ_MODES.MODE_1).toBe('mode_1');
+    expect(RFQ_MODES.MODE_2).toBe('mode_2');
+    expect(RFQ_MODES.MODE_3).toBe('mode_3');
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_1]).toBe('Mode 1');
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_2]).toBe('Mode 2');
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_3]).toBe('Mode 3');
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_0]).toBe('Mode 0');
+
+    expect(RFQ_MODE_MAP['v1']).toBe('mode_1');
+    expect(RFQ_MODE_MAP['v2']).toBe('mode_2');
+    expect(RFQ_MODE_MAP['v3']).toBe('mode_3');
+    expect(RFQ_MODE_MAP['mode 1']).toBe('mode_1');
+
+    expect(rfqVersionLabel('mode_1')).toBe('Mode 1');
+    expect(rfqVersionLabel('mode_2')).toBe('Mode 2');
+    expect(rfqVersionLabel('mode_3')).toBe('Mode 3');
+    expect(rfqVersionLabel('mode_0')).toBe('Mode 0');
+    expect(rfqVersionLabel(null)).toBe('Mode 0');
+  });
+
   it('should export valid SOURCING_MODES', () => {
     expect(Array.isArray(SOURCING_MODES)).toBe(true);
     expect(SOURCING_MODES.length).toBe(4);
 
     const mode0 = SOURCING_MODES.find(m => m.id === 'mode_0');
     expect(mode0).toBeDefined();
-    expect(mode0?.code).toBe('Version 0');
+    expect(mode0?.code).toBe('Mode 0');
 
     const mode1 = SOURCING_MODES.find(m => m.id === 'mode_1');
     expect(mode1).toBeDefined();
-    expect(mode1?.code).toBe('Version 1');
+    expect(mode1?.code).toBe('Mode 1');
     expect(mode1?.name).toContain('Client Roster');
 
     const mode2 = SOURCING_MODES.find(m => m.id === 'mode_2');
     expect(mode2).toBeDefined();
-    expect(mode2?.code).toBe('Version 2');
+    expect(mode2?.code).toBe('Mode 2');
 
     const mode3 = SOURCING_MODES.find(m => m.id === 'mode_3');
     expect(mode3).toBeDefined();
-    expect(mode3?.code).toBe('Version 3');
+    expect(mode3?.code).toBe('Mode 3');
   });
 
   it('should export valid subscription plans', () => {
