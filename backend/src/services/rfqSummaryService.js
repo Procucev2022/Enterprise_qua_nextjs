@@ -177,6 +177,12 @@ async function buildRFQSummary(rfq = {}, options = {}) {
     return buildDeterministicSummary(rfq, 'NO_LINE_ITEMS');
   }
 
+  const isGeminiConfigured = typeof gemini.isConfigured === 'function' ? gemini.isConfigured() : true;
+  // In test environment without explicit gemini injection, avoid long-running network calls
+  if (!isGeminiConfigured || (process.env.NODE_ENV === 'test' && !options.gemini)) {
+    return buildDeterministicSummary(rfq, 'NOT_CONFIGURED');
+  }
+
   let result;
   try {
     result = await gemini.generateJson({

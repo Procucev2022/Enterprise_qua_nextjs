@@ -584,6 +584,7 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
     throw new Error('No Gemini API key available');
   }
 
+  const isTimeoutDisabled = GEMINI_CONFIG.DISABLE_TIMEOUT || (timeoutMs <= 0 && (!deadline || deadline < 0));
   const maxAttempts = Math.min(
     keys.length,
     GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL && GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL > 0
@@ -596,15 +597,19 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
     : chain.includes(model) ? 0 : activeKeyIndex;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (deadline && Date.now() >= deadline - (GEMINI_CONFIG.MIN_ATTEMPT_MS || 1000)) {
+    if (!isTimeoutDisabled && deadline && Date.now() >= deadline - (GEMINI_CONFIG.MIN_ATTEMPT_MS || 1000)) {
       throw new Error(`Extraction time budget exhausted while trying API keys for ${model}`);
     }
 
     const keyIdx = (startKeyIndex + attempt) % keys.length;
     const apiKey = keys[keyIdx];
-    const remainingTime = deadline ? Math.min(timeoutMs, Math.max(100, deadline - Date.now())) : timeoutMs;
+    const remainingTime = isTimeoutDisabled
+      ? 0
+      : (deadline ? Math.min(timeoutMs, Math.max(100, deadline - Date.now())) : timeoutMs);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), remainingTime);
+    const timer = (!isTimeoutDisabled && remainingTime > 0 && remainingTime < Infinity)
+      ? setTimeout(() => controller.abort(), remainingTime)
+      : null;
 
     try {
       const res = await fetch(url, {
@@ -651,13 +656,15 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
       modelKeyIndices.set(model, activeKeyIndex);
       if (
         attempt < maxAttempts - 1 &&
-        (!deadline || Date.now() < deadline - (GEMINI_CONFIG.MIN_ATTEMPT_MS || 1000))
+        (isTimeoutDisabled || !deadline || Date.now() < deadline - (GEMINI_CONFIG.MIN_ATTEMPT_MS || 1000))
       ) {
         continue;
       }
       throw err;
     } finally {
-      clearTimeout(timer);
+      if (timer) {
+        clearTimeout(timer);
+      }
     }
   }
 }
@@ -727,9 +734,10 @@ async function extractLineItems(input = {}) {
   });
 
   const failures = [];
-  // One shared deadline for the whole chain, so a run of slow failures degrades
-  // into a reported fallback instead of a request nobody is still waiting on.
-  const deadline = Date.now() + GEMINI_CONFIG.TOTAL_BUDGET_MS;
+  const isBudgetDisabled = GEMINI_CONFIG.DISABLE_TIMEOUT || (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined && GEMINI_CONFIG.TOTAL_BUDGET_MS < 0);
+  const deadline = isBudgetDisabled
+    ? null
+    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 300000);
 
   const chain = resolveModelChain();
   const startModelIndex = activeModelIndex;
@@ -737,23 +745,28 @@ async function extractLineItems(input = {}) {
     const modelIdx = (startModelIndex + attempt) % chain.length;
     const model = chain[modelIdx];
 
-    const remainingMs = deadline - Date.now();
-    if (remainingMs < GEMINI_CONFIG.MIN_ATTEMPT_MS) {
-      failures.push(`skipped ${model}: extraction time budget exhausted`);
-      logger.warn(
-        `Gemini extraction budget exhausted before trying ${model}`,
-        { budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS },
-        'GEMINI'
-      );
-      break;
+    if (deadline !== null) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs < (GEMINI_CONFIG.MIN_ATTEMPT_MS || 0)) {
+        failures.push(`skipped ${model}: extraction time budget exhausted`);
+        logger.warn(
+          `Gemini extraction budget exhausted before trying ${model}`,
+          { budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS },
+          'GEMINI'
+        );
+        break;
+      }
     }
 
     try {
-      // Never overrun the shared deadline, even if the per-attempt timeout is larger.
+      const attemptTimeout = deadline !== null
+        ? Math.min(GEMINI_CONFIG.REQUEST_TIMEOUT_MS, Math.max(100, deadline - Date.now()))
+        : (GEMINI_CONFIG.DISABLE_TIMEOUT ? 0 : GEMINI_CONFIG.REQUEST_TIMEOUT_MS);
+
       const parsed = await callModel(
         model,
         requestBody,
-        Math.min(GEMINI_CONFIG.REQUEST_TIMEOUT_MS, remainingMs),
+        attemptTimeout,
         deadline
       );
       let lineItems = toRawLineItems(parsed);
@@ -879,7 +892,10 @@ async function generateJson(input = {}) {
   };
 
   const failures = [];
-  const deadline = Date.now() + GEMINI_CONFIG.TOTAL_BUDGET_MS;
+  const isBudgetDisabled = GEMINI_CONFIG.DISABLE_TIMEOUT || (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined && GEMINI_CONFIG.TOTAL_BUDGET_MS < 0);
+  const deadline = isBudgetDisabled
+    ? null
+    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 300000);
 
   const chain = resolveModelChain();
   const startModelIndex = activeModelIndex;
@@ -887,17 +903,23 @@ async function generateJson(input = {}) {
     const modelIdx = (startModelIndex + attempt) % chain.length;
     const model = chain[modelIdx];
 
-    const remainingMs = deadline - Date.now();
-    if (remainingMs < GEMINI_CONFIG.MIN_ATTEMPT_MS) {
-      failures.push(`skipped ${model}: time budget exhausted`);
-      break;
+    if (deadline !== null) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs < (GEMINI_CONFIG.MIN_ATTEMPT_MS || 0)) {
+        failures.push(`skipped ${model}: time budget exhausted`);
+        break;
+      }
     }
 
     try {
+      const attemptTimeout = deadline !== null
+        ? Math.min(GEMINI_CONFIG.REQUEST_TIMEOUT_MS, Math.max(100, deadline - Date.now()))
+        : (GEMINI_CONFIG.DISABLE_TIMEOUT ? 0 : GEMINI_CONFIG.REQUEST_TIMEOUT_MS);
+
       const parsed = await callModel(
         model,
         requestBody,
-        Math.min(GEMINI_CONFIG.REQUEST_TIMEOUT_MS, remainingMs),
+        attemptTimeout,
         deadline
       );
       logger.info(`Gemini ${model} completed ${label}`, { model }, 'GEMINI');

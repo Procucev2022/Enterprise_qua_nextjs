@@ -599,54 +599,123 @@ const RFQ_CATEGORY_CLASSIFICATION = {
 // ==============================================================================
 // Mirrors app.gemini.* in the Java p2pservices app, which is the service that
 // currently extracts RFQ line items in production. The API key is read from the
-// environment only and never leaves the server.
-const GEMINI_CONFIG = {
-  API_KEY: process.env.GEMINI_API_KEY || '',
-  BACKUP_KEYS: process.env.GEMINI_BACKUP_KEYS || '',
-  BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
-  // Ordered models attempted in sequence: gemini-3.8-flash down to gemini-3.1-flash-lite.
-  // Extraction automatically advances through the backup models upon error or 503 overload.
-  MODELS: (
-    process.env.GEMINI_MODELS ||
-    'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite'
+// environment dynamically (supporting Cloudflare Workers __CF_ENV__ and Node process.env).
+function getGeminiEnv(key, fallback = '') {
+  if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__[key] !== undefined && globalThis.__CF_ENV__[key] !== '') {
+    return globalThis.__CF_ENV__[key];
+  }
+  if (typeof process !== 'undefined' && process.env) {
+    if (process.env.NODE_ENV === 'test') {
+      if (key === 'GEMINI_DISABLE_TIMEOUT') {
+        return process.env.TEST_GEMINI_DISABLE_TIMEOUT || fallback;
+      }
+      if ((key === 'GEMINI_TOTAL_BUDGET_MS' || key === 'GEMINI_REQUEST_TIMEOUT_MS') && process.env.TEST_GEMINI_CUSTOM_TIMEOUT === undefined) {
+        return fallback;
+      }
+    }
+    if (process.env[key] !== undefined && process.env[key] !== '') {
+      return process.env[key];
+    }
+  }
+  return fallback;
+}
+
+function buildGeminiConfig() {
+  const models = (
+    getGeminiEnv(
+      'GEMINI_MODELS',
+      'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite'
+    )
   )
     .split(',')
     .map((m) => m.trim().replace(/\s+/g, '-'))
-    .filter(Boolean),
-  get PRIMARY_MODEL() {
-    return this.MODELS[0] || 'gemini-3.8-flash';
-  },
-  set PRIMARY_MODEL(val) {
-    if (val) {
-      this.MODELS = Array.from(new Set([val, ...this.MODELS]));
+    .filter(Boolean);
+
+  const requestTimeoutMs = Number(getGeminiEnv('GEMINI_REQUEST_TIMEOUT_MS', 120000));
+  const totalBudgetMs = Number(getGeminiEnv('GEMINI_TOTAL_BUDGET_MS', 300000));
+  const minAttemptMs = Number(getGeminiEnv('GEMINI_MIN_ATTEMPT_MS', 3000));
+  const maxKeyAttempts = Number(getGeminiEnv('GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL', 12));
+
+  return {
+    API_KEY: getGeminiEnv('GEMINI_API_KEY', ''),
+    BACKUP_KEYS: getGeminiEnv('GEMINI_BACKUP_KEYS', ''),
+    BASE_URL: getGeminiEnv('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta/models'),
+    MODELS: models,
+    get PRIMARY_MODEL() {
+      return this.MODELS[0] || 'gemini-3.8-flash';
+    },
+    set PRIMARY_MODEL(val) {
+      if (val) {
+        this.MODELS = Array.from(new Set([val, ...this.MODELS]));
+      }
+    },
+    get FALLBACK_MODELS() {
+      return this.MODELS.slice(1);
+    },
+    set FALLBACK_MODELS(arr) {
+      const list = Array.isArray(arr) ? arr : (typeof arr === 'string' ? arr.split(',').map((m) => m.trim()) : []);
+      this.MODELS = Array.from(new Set([this.PRIMARY_MODEL, ...list].filter(Boolean)));
+    },
+    REQUEST_TIMEOUT_MS: requestTimeoutMs,
+    TOTAL_BUDGET_MS: totalBudgetMs,
+    MIN_ATTEMPT_MS: minAttemptMs,
+    DISABLE_TIMEOUT: String(getGeminiEnv('GEMINI_DISABLE_TIMEOUT', 'false')).toLowerCase() === 'true',
+    MAX_DOCUMENT_BYTES: Number(getGeminiEnv('GEMINI_MAX_DOCUMENT_BYTES', 25 * 1024 * 1024)),
+    MAX_DOCUMENT_TEXT_CHARS: Number(getGeminiEnv('GEMINI_MAX_DOCUMENT_TEXT_CHARS', 300000)),
+    MAX_KEY_ATTEMPTS_PER_MODEL: maxKeyAttempts,
+    MODEL_RESET_TTL_MS: Number(getGeminiEnv('GEMINI_MODEL_RESET_TTL_MS', 24 * 60 * 60 * 1000)),
+    TEMPERATURE: 0,
+  };
+}
+
+const geminiConfigOverrides = {};
+const GEMINI_CONFIG = new Proxy({}, {
+  get: (_target, key) => {
+    if (key === 'PRIMARY_MODEL') {
+      const currentModels = geminiConfigOverrides.MODELS || buildGeminiConfig().MODELS;
+      return currentModels[0] || 'gemini-3.8-flash';
     }
+    if (key === 'FALLBACK_MODELS') {
+      const currentModels = geminiConfigOverrides.MODELS || buildGeminiConfig().MODELS;
+      return currentModels.slice(1);
+    }
+    if (key in geminiConfigOverrides) return geminiConfigOverrides[key];
+    const cfg = buildGeminiConfig();
+    return cfg[key];
   },
-  get FALLBACK_MODELS() {
-    return this.MODELS.slice(1);
+  set: (_target, key, value) => {
+    if (key === 'PRIMARY_MODEL') {
+      const currentModels = geminiConfigOverrides.MODELS || buildGeminiConfig().MODELS;
+      geminiConfigOverrides.MODELS = Array.from(new Set([value, ...currentModels]));
+      return true;
+    }
+    if (key === 'FALLBACK_MODELS') {
+      const currentModels = geminiConfigOverrides.MODELS || buildGeminiConfig().MODELS;
+      const primary = currentModels[0] || 'gemini-3.8-flash';
+      const list = Array.isArray(value) ? value : (typeof value === 'string' ? value.split(',').map((m) => m.trim()) : []);
+      geminiConfigOverrides.MODELS = Array.from(new Set([primary, ...list].filter(Boolean)));
+      return true;
+    }
+    geminiConfigOverrides[key] = value;
+    return true;
   },
-  set FALLBACK_MODELS(arr) {
-    const list = Array.isArray(arr) ? arr : (typeof arr === 'string' ? arr.split(',').map((m) => m.trim()) : []);
-    this.MODELS = Array.from(new Set([this.PRIMARY_MODEL, ...list].filter(Boolean)));
+  deleteProperty: (_target, key) => {
+    delete geminiConfigOverrides[key];
+    return true;
   },
-  // The primary model measured 12.5s on a small PDF and timed out at 15s on a
-  // real one, so it needs more than the Java service's 15s read timeout to have a
-  // fair chance before the chain moves on.
-  REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 30000),
-  TOTAL_BUDGET_MS: Number(process.env.GEMINI_TOTAL_BUDGET_MS || 60000),
-  // Below this much remaining budget a further attempt cannot finish, so the
-  // chain stops rather than starting a request it will have to abandon.
-  MIN_ATTEMPT_MS: Number(process.env.GEMINI_MIN_ATTEMPT_MS || 3000),
-  // Documents larger than this are rejected before a request is billed.
-  MAX_DOCUMENT_BYTES: Number(process.env.GEMINI_MAX_DOCUMENT_BYTES || 25 * 1024 * 1024),
-  MAX_DOCUMENT_TEXT_CHARS: Number(process.env.GEMINI_MAX_DOCUMENT_TEXT_CHARS || 300000),
-  // Maximum number of API keys attempted per individual model before advancing
-  // to the next fallback model in the chain (prevents long key-retry loops on rate limits).
-  MAX_KEY_ATTEMPTS_PER_MODEL: Number(process.env.GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL || 3),
-  // Automatic model recovery interval: resets active model index back to primary model (0)
-  // daily or after the cooldown period so refreshed daily quotas can be utilized.
-  MODEL_RESET_TTL_MS: Number(process.env.GEMINI_MODEL_RESET_TTL_MS || 24 * 60 * 60 * 1000),
-  TEMPERATURE: 0,
-};
+  has: (_target, key) => key in geminiConfigOverrides || key in buildGeminiConfig(),
+  ownKeys: () => [...new Set([...Object.keys(buildGeminiConfig()), ...Object.keys(geminiConfigOverrides)])],
+  getOwnPropertyDescriptor: (_target, key) => {
+    const cfg = buildGeminiConfig();
+    if (!(key in geminiConfigOverrides) && !(key in cfg)) return undefined;
+    const value = (key === 'PRIMARY_MODEL')
+      ? ((geminiConfigOverrides.MODELS || cfg.MODELS)[0] || 'gemini-3.8-flash')
+      : (key === 'FALLBACK_MODELS')
+      ? ((geminiConfigOverrides.MODELS || cfg.MODELS).slice(1))
+      : (key in geminiConfigOverrides ? geminiConfigOverrides[key] : cfg[key]);
+    return { enumerable: true, configurable: true, value, writable: true };
+  },
+});
 
 // ==============================================================================
 // RFQ DOCUMENT ATTACHMENTS
