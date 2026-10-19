@@ -1226,6 +1226,106 @@ async function getVendorCreditTransactionsFromDB(vendorId) {
   return result && result.rows ? result.rows : [];
 }
 
+/**
+ * Public vendor directory — paginated, filtered, indexed exclusively on
+ * the Procucev-network (no buyerId / buyerAccountId in raw). Mirrors
+ * getVendorsPageFromDB's structure but always enforces the public-only
+ * guard and never requires an authenticated scope.
+ *
+ * Uses the existing pg_trgm GIN indexes (idx_vendors_name_trgm,
+ * idx_vendors_major_category_trgm, idx_vendors_minor_categories_trgm)
+ * so substring ILIKE across 600k+ rows never forces a sequential scan.
+ */
+async function getPublicVendorsPageFromDB({
+  limit = 24,
+  offset = 0,
+  search = '',
+  category = '',
+  state = '',
+  minRating = 0,
+} = {}) {
+  if (!pool.hasStorage()) return { rows: [], total: 0 };
+
+  const params = [];
+  // Rule: public listing NEVER exposes private buyer rosters.
+  const pgConditions = [
+    `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`,
+  ];
+  const d1Conditions = [
+    `json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL`,
+  ];
+
+  if (search) {
+    params.push(`%${search}%`);
+    const p = params.length;
+    // Trigram GIN indexes keep this O(log n) at scale.
+    pgConditions.push(`(
+      major_category ILIKE $${p}
+      OR raw->>'name' ILIKE $${p}
+      OR raw->>'brandName' ILIKE $${p}
+      OR (raw->'products')::text ILIKE $${p}
+      OR (raw->'minorCategories')::text ILIKE $${p}
+    )`);
+    d1Conditions.push(`(
+      lower(major_category) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.name')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.brandName')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.products')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.minorCategories')) LIKE lower($${p})
+    )`);
+  }
+
+  if (category && category !== 'all') {
+    params.push(category);
+    pgConditions.push(`major_category = $${params.length}`);
+    d1Conditions.push(`major_category = $${params.length}`);
+  }
+
+  if (state && state !== 'all') {
+    params.push(state.toLowerCase());
+    pgConditions.push(`lower(raw->>'state') = $${params.length}`);
+    d1Conditions.push(`lower(json_extract(raw,'$.state')) = $${params.length}`);
+  }
+
+  if (minRating > 0) {
+    params.push(minRating);
+    pgConditions.push(`COALESCE((raw->>'rating')::numeric, 0) >= $${params.length}`);
+    d1Conditions.push(`COALESCE(CAST(json_extract(raw,'$.rating') AS REAL), 0) >= $${params.length}`);
+  }
+
+  const pgWhere = `WHERE ${pgConditions.join(' AND ')}`;
+  const d1Where = `WHERE ${d1Conditions.join(' AND ')}`;
+
+  const countResult = await pool.query(
+    `SELECT COUNT(*)::int AS total FROM vendors ${pgWhere}`,
+    [...params],
+    { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}` }
+  );
+  const total = countResult.rows[0]?.total || 0;
+
+  const dataParams = [...params, limit, offset];
+  const limitIdx = dataParams.length - 1;
+  const offsetIdx = dataParams.length;
+  const dataResult = await pool.query(
+    `SELECT id, major_category, status, created_at, raw
+     FROM vendors ${pgWhere}
+     ORDER BY created_at DESC
+     LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    dataParams,
+    {
+      d1: true,
+      d1Text: `SELECT id, major_category, status, created_at, raw
+     FROM vendors ${d1Where}
+     ORDER BY created_at DESC
+     LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    }
+  );
+  return {
+    rows: (dataResult && dataResult.rows) ? dataResult.rows.map((row) => ({ ...parseRaw(row.raw), _status: row.status, _createdAt: row.created_at, _majorCategory: row.major_category })) : [],
+    total,
+  };
+}
+
 module.exports = {
   getVendorsFromDB,
   getVendorsPageFromDB,
@@ -1280,5 +1380,6 @@ module.exports = {
   getVendorUnlocksFromDB,
   recordCreditTransactionInDB,
   getVendorCreditTransactionsFromDB,
+  getPublicVendorsPageFromDB,
 };
 

@@ -550,6 +550,16 @@ const VALIDATION_SCHEMAS = {
   vendorPresenceQuery: {
     identifiers: { type: 'string', required: false, maxLength: 2000 },
   },
+
+  // Public vendor directory — unauthenticated search/filter parameters
+  vendorPublicSearch: {
+    page: { type: 'number', required: false, min: 1 },
+    pageSize: { type: 'number', required: false, min: 1, max: 100 },
+    search: { type: 'string', required: false, maxLength: 200 },
+    category: { type: 'string', required: false, maxLength: 200 },
+    state: { type: 'string', required: false, maxLength: 100 },
+    minRating: { type: 'number', required: false, min: 0, max: 5 },
+  },
 };
 
 

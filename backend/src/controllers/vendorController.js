@@ -121,6 +121,52 @@ function withoutTemporaryPassword(vendor) {
   return safeVendor;
 }
 
+/**
+ * Strips all fields a public/anonymous visitor should never receive:
+ * internal auth credentials, private buyer ownership tags, system
+ * notes. Everything else (category, contacts, compliance creds,
+ * rating) is safe to expose in the public directory.
+ */
+function sanitizePublicVendor(vendor) {
+  if (!vendor || typeof vendor !== 'object') return null;
+  const rawObj = vendor.raw && typeof vendor.raw === 'object' ? vendor.raw : {};
+  const v = { ...rawObj, ...vendor };
+  const majorCategory = v._majorCategory || v.major_category || v.majorCategory || rawObj.majorCategory || 'General Industrial';
+  const rating = typeof v.rating === 'number' ? v.rating :
+    (typeof v.score === 'number' ? Math.round((v.score / 20) * 10) / 10 : null);
+  return {
+    id: v.id || null,
+    name: v.name || 'Unnamed Supplier',
+    brandName: v.brandName || null,
+    email: v.email || null,
+    phone: v.phone || null,
+    contactPerson: v.contactPerson || null,
+    contactDesignation: v.contactDesignation || null,
+    website: v.website || null,
+    majorCategory,
+    minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
+    products: Array.isArray(v.products) ? v.products : [],
+    location: v.location || v.city || null,
+    city: v.city || null,
+    state: v.state || null,
+    pincode: v.pincode || null,
+    country: v.country || 'India',
+    factoryAddress: v.factoryAddress || null,
+    // Compliance — PAN is partially masked for privacy
+    gstin: v.gstin || v.gst || null,
+    pan: v.pan ? `${v.pan.slice(0, 3)}****${v.pan.slice(-2)}` : null,
+    msme: v.msme || null,
+    orgType: v.orgType || null,
+    annualTurnover: v.annualTurnover || null,
+    // Badges
+    status: v._status || v.status || null,
+    rating,
+    isVerified: Boolean(v.gstin || v.gst),
+    isProcucevNetwork: true,
+    createdAt: v._createdAt || v.created_at || v.createdAt || null,
+  };
+}
+
 async function getVendors(req, res, next) {
   try {
     const user = req.user;
@@ -884,6 +930,75 @@ async function recordVendorHeartbeat(req, res, next) {
   }
 }
 
+/**
+ * GET /api/vendors/public
+ * No authentication required. Returns a paginated, sanitized listing of
+ * Procucev-network vendors only (no private buyer roster rows exposed).
+ */
+async function getPublicVendors(req, res, next) {
+  try {
+    const { page, pageSize, search, category, state, minRating } = req.query || {};
+    const pageNumber = Math.max(1, parseInt(page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(pageSize, 10) || 24));
+    const offset = (pageNumber - 1) * limit;
+
+    const { rows, total } = await domainQueries.getPublicVendorsPageFromDB({
+      limit,
+      offset,
+      search: String(search || '').trim().slice(0, 200),
+      category: String(category || '').trim().slice(0, 200),
+      state: String(state || '').trim().slice(0, 100),
+      minRating: Math.min(5, Math.max(0, parseFloat(minRating) || 0)),
+    });
+
+    const sanitized = rows.map(sanitizePublicVendor).filter(Boolean);
+    logger.info('Public vendor directory fetched', { page: pageNumber, limit, total, search: search || '' }, 'PUBLIC_VENDOR_CONTROLLER');
+    res.json({
+      success: true,
+      data: sanitized,
+      pagination: {
+        page: pageNumber,
+        pageSize: limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    });
+  } catch (err) {
+    logger.error('Error fetching public vendors', err, 'PUBLIC_VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * GET /api/vendors/public/:id
+ * No authentication required. Returns a single sanitized vendor by id,
+ * only if it belongs to the public Procucev network (not a buyer's roster).
+ */
+async function getPublicVendorById(req, res, next) {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'Vendor id is required.' });
+    }
+    const vendor = await domainQueries.getVendorByIdFromDB(id);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: 'Vendor not found.' });
+    }
+    // Do not expose private buyer rosters via public endpoint
+    if (vendor.buyerId || vendor.buyerAccountId) {
+      return res.status(404).json({ success: false, error: 'Vendor not found.' });
+    }
+    const sanitized = sanitizePublicVendor(vendor);
+    if (!sanitized) {
+      return res.status(404).json({ success: false, error: 'Vendor not found.' });
+    }
+    res.json({ success: true, data: sanitized });
+  } catch (err) {
+    logger.error('Error fetching public vendor by id', err, 'PUBLIC_VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getVendors,
   getVendorById,
@@ -902,4 +1017,6 @@ module.exports = {
   getBulkImportSessionStatus,
   getVendorsPresence,
   recordVendorHeartbeat,
+  getPublicVendors,
+  getPublicVendorById,
 };

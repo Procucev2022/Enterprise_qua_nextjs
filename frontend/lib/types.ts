@@ -2159,3 +2159,64 @@ export interface RoleNavigationProps {
   /** Optional sign-out handler rendered in the rail footer. */
   onLogout?: () => void;
 }
+
+// ── Public Vendor Directory ────────────────────────────────────────────────────
+
+/**
+ * Publicly visible vendor profile.
+ * Excludes sensitive internal credentials; all industrial & compliance fields
+ * are present. PAN is partially masked by the backend before delivery.
+ */
+export interface PublicVendor {
+  id: string | null;
+  name: string;
+  brandName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  contactPerson?: string | null;
+  contactDesignation?: string | null;
+  website?: string | null;
+  majorCategory: string;
+  minorCategories: string[];
+  products?: string[];
+  location?: string | null;
+  city?: string | null;
+  state?: string | null;
+  pincode?: string | null;
+  country?: string | null;
+  factoryAddress?: string | null;
+  gstin?: string | null;
+  pan?: string | null;
+  msme?: string | null;
+  orgType?: string | null;
+  annualTurnover?: string | null;
+  status?: string | null;
+  rating?: number | null;
+  isVerified?: boolean;
+  isProcucevNetwork?: boolean;
+  createdAt?: string | null;
+}
+
+/** Paginated public vendor API response */
+export interface PublicVendorPageResult {
+  success: boolean;
+  data: PublicVendor[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
+  error?: string;
+}
+
+/** Search & filter state for the Public Vendor Directory page */
+export interface PublicVendorFilterState {
+  search: string;
+  category: string;
+  state: string;
+  minRating: number;
+  verifiedOnly: boolean;
+  page: number;
+  pageSize: number;
+}

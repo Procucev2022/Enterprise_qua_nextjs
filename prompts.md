@@ -2823,6 +2823,7 @@ category manager side implement single vendor invite features in this model and 
 
 first pass coverage and push and then start implement on bug
 
+<<<<<<< Updated upstream
 ## 2026-10-17
 
 Many gemini AI extraction issues are coming currently with this code such as 503, can you please what exactly is the gemini extraction processes here in this code, how we can fix it
@@ -2842,3 +2843,57 @@ What about 429, how is this scenario handled?
 Let's say if we have 1000 keys, & rate limit is over on all 1000 keys for gemini 3.8 flash, & other model it is available, how would the code would handle it?
 
 The rate limit is per day, i hope we are refreshing this active model index every day?
+=======
+## 2026-10-14 — Public Vendor Directory Page with Search and Filter
+
+docs in docs file I have create a page where we have list down all the vendor's and have search and filter option give me how can we do that and also we need to show all vendor information and this page does not required authentication and need to go and view all the data give proper format we can do that
+
+docs\PUBLIC_VENDOR_DIRECTORY_GUIDE.md take referenve from this docs and build this page
+
+complete the rest task
+
+docs\PUBLIC_VENDOR_DIRECTORY_GUIDE.md take referenve from this docs and build this page  what I have said
+
+[FRONTEND] 
+[FRONTEND] > procucev-enterprise-frontend@2.1.0 dev
+[FRONTEND] > next dev -p 3000
+[FRONTEND]
+[BACKEND] 
+[BACKEND] > procucev-enterprise-node@2.1.0 dev
+[BACKEND] > nodemon src/server.js
+[BACKEND]
+[BACKEND] [nodemon] 3.1.14
+[BACKEND] [nodemon] to restart at any time, enter `rs`
+[BACKEND] [nodemon] watching path(s): *.*
+[BACKEND] [nodemon] watching extensions: js,mjs,cjs,json
+[BACKEND] [nodemon] starting `node src/server.js`
+[FRONTEND]   ▲ Next.js 14.2.35
+[FRONTEND]   - Local:        http://localhost:3000
+[FRONTEND]   - Environments: .env.local, .env.development
+[FRONTEND]   - Experiments (use with caution):
+[FRONTEND]     · staleTimes
+[FRONTEND]
+[BACKEND] [INFO] [STORE_SERVICE] Domain records loaded from PostgreSQL {"vendors":500,"vendorsTotal":20097,"rfqs":246,"evaluations":1,"vendorCatalogue":2,"buyerAccounts":13,"aiFeed":100,"auditLogs":5548,"notifications":2456,"paymentLinks":57}
+[BACKEND] [INFO] [SERVER] Email ingestion gateway not started: undefined
+[BACKEND] [INFO] [ZOHO_RECONCILIATION] Zoho payment-link reconciliation polling every 600s
+[FRONTEND]  ✓ Compiled /vendors in 17.2s (651 modules)
+[FRONTEND]  ✓ Compiled in 2.6s (330 modules)
+[FRONTEND]  GET /vendors 200 in 19960ms
+[FRONTEND]  GET /vendors 200 in 740ms
+[FRONTEND]  ○ Compiling /_not-found ...
+[FRONTEND]  ✓ Compiled /_not-found in 4.6s (640 modules)
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 7125ms
+[FRONTEND]  GET /vendors 200 in 661ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 164ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 335ms
+[FRONTEND]    Reload env: .env.development
+[FRONTEND]  ✓ Compiled in 7.5s (651 modules)
+[FRONTEND]    Reload env: .env.development
+[FRONTEND]  ✓ Compiled in 1736ms (637 modules)
+[FRONTEND]  GET /vendors 200 in 2880ms
+[FRONTEND]  ○ Compiling /_not-found ...
+[FRONTEND]  ✓ Compiled /_not-found in 8s (654 modules)
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 10030ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 381ms
+
+>>>>>>> Stashed changes
