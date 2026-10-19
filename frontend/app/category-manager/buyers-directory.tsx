@@ -338,7 +338,7 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
       </div>
 
       {/* Toolbar / Search & Filter Controls */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-wrap items-center gap-2 sm:gap-2.5">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
           <input
@@ -350,32 +350,30 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Mode Filter */}
-          <select
-            value={selectedMode}
-            onChange={(e) => setSelectedMode(e.target.value)}
-            className="h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            <option value="all">All Sourcing Modes</option>
-            <option value={RFQ_MODES.MODE_1}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_1]}</option>
-            <option value={RFQ_MODES.MODE_2}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_2]}</option>
-            <option value={RFQ_MODES.MODE_3}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_3]}</option>
-            <option value={RFQ_MODES.MODE_0}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_0]}</option>
-          </select>
+        {/* Mode Filter */}
+        <select
+          value={selectedMode}
+          onChange={(e) => setSelectedMode(e.target.value)}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">All Sourcing Modes</option>
+          <option value={RFQ_MODES.MODE_1}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_1]}</option>
+          <option value={RFQ_MODES.MODE_2}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_2]}</option>
+          <option value={RFQ_MODES.MODE_3}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_3]}</option>
+          <option value={RFQ_MODES.MODE_0}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_0]}</option>
+        </select>
 
-          {/* Status Filter */}
-          <select
-            value={selectedStatus}
-            onChange={(e) => setSelectedStatus(e.target.value)}
-            className="h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            <option value="all">All Statuses</option>
-            <option value="ACTIVE_VERIFIED">Active & Verified</option>
-            <option value="ACTIVE">Active</option>
-            <option value="PENDING_VERIFICATION">Pending Verification</option>
-          </select>
-        </div>
+        {/* Status Filter */}
+        <select
+          value={selectedStatus}
+          onChange={(e) => setSelectedStatus(e.target.value)}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">All Statuses</option>
+          <option value="ACTIVE_VERIFIED">Active & Verified</option>
+          <option value="ACTIVE">Active</option>
+          <option value="PENDING_VERIFICATION">Pending Verification</option>
+        </select>
       </div>
 
       {/* Buyers Data Table */}
