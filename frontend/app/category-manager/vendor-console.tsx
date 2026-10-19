@@ -1228,7 +1228,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                                   <div className="space-y-1.5 text-[11px]">
                                     <div className="flex justify-between">
                                       <span className="text-slate-500">Unit Sourced Price:</span>
-                                      <span className="font-bold text-slate-900 dark:text-white">${matchingQuote.unitPrice?.toLocaleString()}</span>
+                                      <span className="font-bold text-slate-900 dark:text-white">{formatCurrency(matchingQuote.unitPrice)}</span>
                                     </div>
                                     <div className="flex justify-between">
                                       <span className="text-slate-500">Total Bidded Price:</span>

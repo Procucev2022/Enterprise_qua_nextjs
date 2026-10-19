@@ -27,7 +27,7 @@ const WHATSAPP_CONFIG = {
   get USERNAME() { return getEnv('WHATSAPP_USERNAME', 'ProcucevnewWapp'); },
   get PASSWORD() { return getEnv('WHATSAPP_PASSWORD', 'ProcucevnewWapp@987'); },
   get FROM_NUMBER() { return getEnv('WHATSAPP_FROM_NUMBER', '917090170801'); },
-  get TEMPLATE_RFQ_INVITE() { return getEnv('WHATSAPP_TEMPLATE_RFQ_NOTIFICATION', 'rfq_reminder_notification_v2'); },
+  get TEMPLATE_RFQ_INVITE() { return getEnv('WHATSAPP_TEMPLATE_RFQ_NOTIFICATION', 'rfq_notification_for_sellers_for_rfq_feb_5'); },
 
   // ── Meta Cloud API (secondary) ────────────────────────────────────────────
   get META_API_URL() { return getEnv('WHATSAPP_API_URL', 'https://graph.facebook.com/v19.0'); },
@@ -151,11 +151,20 @@ function _buildRfqTemplatePlaceholders({ vendorName, contactPerson, rfqNumber, r
     };
   }
 
-  // Legacy 5-placeholder template: rfq_notification_for_sellers_for_rfq_feb_5
+  // Approved 5-placeholder template: rfq_notification_for_sellers_for_rfq_feb_5
+  // Body (sendmsg.in dashboard, status: Approved):
+  //   An RFQ is available on Procucev Portal (QUA AI).
+  //
+  //   *RFQ ID:* {{1}}
+  //   *Delivery Date:* {{2}}
+  //   *Delivery Location:* {{3}}
+  //   *Description:* {{4}}
+  //
+  //   Click on the Procucev Portal {{5}} link to view or submit your quote.
   const lp1 = String(rfqNumber || 'N/A');
-  const lp2 = deliveryDate ? String(deliveryDate) : 'N/A';
-  const lp3 = deliveryLocation ? String(deliveryLocation) : 'N/A';
-  const lp4 = rfqTitle ? String(rfqTitle) : 'N/A';
+  const lp2 = deliveryDate ? String(deliveryDate) : 'As per RFQ';
+  const lp3 = deliveryLocation ? String(deliveryLocation) : 'As per RFQ';
+  const lp4 = rfqTitle ? String(rfqTitle) : 'Procurement Requisition';
   const lp5 = resolvedPortalLink;
 
   return {
@@ -337,7 +346,7 @@ async function sendRFQInvitationWhatsApp({
   const bidUrl = generateOneClickBidUrl(rfqNumber, vendorEmail);
   const directLink = buildDirectWhatsAppLink(
     formattedPhone,
-    `💬 Procucev RFQ Alert — ${rfqNumber}: ${bidUrl}`,
+    `An RFQ is available on Procucev Portal (QUA AI).\n\n*RFQ ID:* ${rfqNumber}\n*Delivery Date:* ${deliveryDate || 'As per RFQ'}\n*Delivery Location:* ${deliveryLocation || 'As per RFQ'}\n*Description:* ${rfqTitle || 'Procurement Requisition'}\n\nClick on the Procucev Portal ${bidUrl} link to view or submit your quote.`,
   );
 
   // ── 1. sendmsg.in (primary) ────────────────────────────────────────────────
@@ -375,7 +384,7 @@ async function sendRFQInvitationWhatsApp({
     process.env.NODE_ENV !== 'test'
   ) {
     try {
-      const waMessage = `💬 *Procucev Enterprise RFQ Alert*\n\nHello ${contactPerson} (${vendorName}),\n\nYou have been invited to quote for:\n📌 *${rfqTitle || rfqNumber}*\n🔖 RFQ Ref: ${rfqNumber}\n\n⚡ Submit your line-item quote with 1-click:\n👉 ${bidUrl}\n\nFor support reply to this message or contact ${WHATSAPP_CONFIG.SUPPORT_NUMBER}.`;
+      const waMessage = `An RFQ is available on Procucev Portal (QUA AI).\n\n*RFQ ID:* ${rfqNumber}\n*Delivery Date:* ${deliveryDate || 'As per RFQ'}\n*Delivery Location:* ${deliveryLocation || 'As per RFQ'}\n*Description:* ${rfqTitle || 'Procurement Requisition'}\n\nClick on the Procucev Portal ${bidUrl} link to view or submit your quote.`;
       const result = await _sendViaMeta(formattedPhone, waMessage);
       if (result.success) {
         return { success: true, messageId: result.messageId, link: directLink, bidUrl };

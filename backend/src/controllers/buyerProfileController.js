@@ -196,7 +196,7 @@ async function getBuyerProfileDetails(req, res, next) {
       sourcingMode: account?.sourcingMode || 'mode_1',
       subscriptionPlan: account?.subscriptionPlan || 'free_trial',
       totalRFQsCreated: account?.totalRFQsCreated || 0,
-      totalSpend: account?.totalSpend || '$0',
+      totalSpend: account?.totalSpend ? String(account.totalSpend).replace('$', '₹') : '₹0',
     };
 
     return res.json({ success: true, data: merged });
