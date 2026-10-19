@@ -864,6 +864,8 @@ export default function IngestionWizard({
       const next = prev.filter((_, i) => i !== index);
       if (next.length === 0) {
         setExtractionSummary(null);
+        setExtractionError(null);
+        setExtractionDetail(null);
       }
       return next;
     });
@@ -871,6 +873,9 @@ export default function IngestionWizard({
 
   /** AI Extraction: processes uploaded document (.eml, .msg, .xlsx, .pdf, .docx, .csv) into form */
   const handleExtractFromFiles = async () => {
+    if (uploadedFiles.length === 0) {
+      return;
+    }
     setIsExtracting(true);
     setExtractionError(null);
     setExtractionDetail(null);

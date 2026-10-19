@@ -17,7 +17,6 @@ import {
   FileCheck,
   Building2,
   Truck,
-  Activity,
 } from 'lucide-react';
 import {
   REPORT_OPTIONS,
@@ -38,44 +37,20 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
   const initialReport = REPORT_OPTIONS.find((r) => r.category === initialCategory);
   const [selectedReportId, setSelectedReportId] = useState<string>(initialReport ? initialReport.id : 'seller_detailed');
   
-  // Date range state
-  const [datePreset, setDatePreset] = useState<'today' | '7days' | '30days' | 'thisMonth' | 'custom'>('30days');
+  // Date range state (default: no dates selected)
+  const [datePreset, setDatePreset] = useState<'today' | '7days' | '30days' | 'thisMonth' | 'custom' | null>(null);
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
 
   // Data fetching state
   const [loading, setLoading] = useState<boolean>(false);
   const [reportData, setReportData] = useState<any[]>([]);
-  const [summaryData, setSummaryData] = useState<any>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Table pagination and search
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
-
-  // Set default dates on preset change
-  useEffect(() => {
-    const now = new Date();
-    const toDateStr = now.toISOString().split('T')[0];
-
-    if (datePreset === 'today') {
-      setStartDate(toDateStr);
-      setEndDate(toDateStr);
-    } else if (datePreset === '7days') {
-      const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      setStartDate(past.toISOString().split('T')[0]);
-      setEndDate(toDateStr);
-    } else if (datePreset === '30days') {
-      const past = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      setStartDate(past.toISOString().split('T')[0]);
-      setEndDate(toDateStr);
-    } else if (datePreset === 'thisMonth') {
-      const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      setStartDate(firstOfMonth.toISOString().split('T')[0]);
-      setEndDate(toDateStr);
-    }
-  }, [datePreset]);
 
   // Keep selected report aligned when active category changes
   const categoryReports = useMemo(() => {
@@ -93,24 +68,31 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
   }, [selectedReportId]);
 
   // Fetch report data
-  const handleGenerateReport = async () => {
+  const handleGenerateReport = async (overrideStart?: string, overrideEnd?: string) => {
     setLoading(true);
     setStatusMessage(null);
     setCurrentPage(1);
 
-    const result = await fetchReportData(currentReport, startDate, endDate);
+    const sDate = overrideStart !== undefined ? overrideStart : startDate;
+    const eDate = overrideEnd !== undefined ? overrideEnd : endDate;
+
+    const result = await fetchReportData(currentReport, sDate, eDate);
 
     if (result.success) {
-      if (currentReport.category === 'daily_activity' && result.summary) {
-        setSummaryData(result.summary);
-        setReportData([]);
-      } else {
-        setReportData(result.data || []);
-        setSummaryData(null);
-      }
+      const sanitizedRows = (result.data || []).map((row: any) => {
+        const enriched = { ...row };
+        if ('CompanyLocation' in enriched && !enriched.CompanyLocation) {
+          enriched.CompanyLocation = enriched.SellerLocation || enriched.DeliveryLocation || 'All India';
+        }
+        if ('LastLogin' in enriched && !enriched.LastLogin) {
+          enriched.LastLogin = enriched.LoginDateTime || enriched.LastLoginDate || enriched.RFQDate || enriched.RFQDownloadDate || '';
+        }
+        return enriched;
+      });
+      setReportData(sanitizedRows);
       setStatusMessage({
         type: 'success',
-        text: `Report loaded successfully (${result.totalRecords ?? (result.data ? result.data.length : 'Summary ready')} records).`,
+        text: `Report loaded successfully (${result.totalRecords ?? (result.data ? result.data.length : 0)} records).`,
       });
     } else {
       setStatusMessage({
@@ -118,14 +100,58 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
         text: result.error || 'Failed to generate report.',
       });
       setReportData([]);
-      setSummaryData(null);
     }
     setLoading(false);
   };
 
-  // Run initial fetch on mount
+  // Preset selection handler
+  const handleSelectPreset = (preset: 'today' | '7days' | '30days' | 'thisMonth') => {
+    const now = new Date();
+    const toDateStr = now.toISOString().split('T')[0];
+    let fromDateStr = '';
+
+    if (preset === 'today') {
+      fromDateStr = toDateStr;
+    } else if (preset === '7days') {
+      const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      fromDateStr = past.toISOString().split('T')[0];
+    } else if (preset === '30days') {
+      const past = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      fromDateStr = past.toISOString().split('T')[0];
+    } else if (preset === 'thisMonth') {
+      const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      fromDateStr = firstOfMonth.toISOString().split('T')[0];
+    }
+
+    setDatePreset(preset);
+    setStartDate(fromDateStr);
+    setEndDate(toDateStr);
+    handleGenerateReport(fromDateStr, toDateStr);
+  };
+
+  const handleStartDateChange = (val: string) => {
+    setStartDate(val);
+    setDatePreset('custom');
+    handleGenerateReport(val, endDate);
+  };
+
+  const handleEndDateChange = (val: string) => {
+    setEndDate(val);
+    setDatePreset('custom');
+    handleGenerateReport(startDate, val);
+  };
+
+  const handleClearDates = () => {
+    setDatePreset(null);
+    setStartDate('');
+    setEndDate('');
+    handleGenerateReport('', '');
+  };
+
+  // Run initial fetch on mount and whenever selected report changes
   useEffect(() => {
-    handleGenerateReport();
+    handleGenerateReport(startDate, endDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedReportId]);
 
   // Filtered rows based on search
@@ -152,21 +178,15 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
 
   // Export handlers
   const handleExportExcel = () => {
-    if (reportData.length === 0 && !summaryData) return;
-    const rowsToExport = summaryData
-      ? [summaryData]
-      : reportData;
+    if (reportData.length === 0) return;
     const fileName = `${currentReport.defaultFileName}_${startDate || 'all'}_to_${endDate || 'all'}`;
-    exportReportToExcel(rowsToExport, fileName, currentReport.label);
+    exportReportToExcel(reportData, fileName, currentReport.label);
   };
 
   const handleExportCsv = () => {
-    if (reportData.length === 0 && !summaryData) return;
-    const rowsToExport = summaryData
-      ? [summaryData]
-      : reportData;
+    if (reportData.length === 0) return;
     const fileName = `${currentReport.defaultFileName}_${startDate || 'all'}_to_${endDate || 'all'}`;
-    exportReportToCsv(rowsToExport, fileName);
+    exportReportToCsv(reportData, fileName);
   };
 
   return (
@@ -193,7 +213,7 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
         <div className="flex items-center gap-2.5">
           <button
             onClick={handleExportExcel}
-            disabled={loading || (reportData.length === 0 && !summaryData)}
+            disabled={loading || reportData.length === 0}
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Download className="w-4 h-4" />
@@ -201,7 +221,7 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
           </button>
           <button
             onClick={handleExportCsv}
-            disabled={loading || (reportData.length === 0 && !summaryData)}
+            disabled={loading || reportData.length === 0}
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 text-white text-xs sm:text-sm font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Download className="w-4 h-4" />
@@ -247,18 +267,6 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
           <Building2 className="w-4 h-4" />
           <span>Buyer Reports</span>
         </button>
-
-        <button
-          onClick={() => setActiveCategory('daily_activity')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${
-            activeCategory === 'daily_activity'
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-          }`}
-        >
-          <Activity className="w-4 h-4" />
-          <span>Daily Operations Overview</span>
-        </button>
       </div>
 
       {/* Filter and Configuration Card */}
@@ -287,42 +295,64 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
 
           {/* Quick Date Presets */}
           <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Date Filter Preset
-            </label>
-            <div className="grid grid-cols-4 gap-1.5">
-              {(['today', '7days', '30days', 'thisMonth'] as const).map((preset) => (
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Date Filter Preset
+              </label>
+              {(startDate || endDate || datePreset) && (
                 <button
-                  key={preset}
-                  onClick={() => setDatePreset(preset)}
+                  type="button"
+                  onClick={handleClearDates}
+                  className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-200 underline transition-colors"
+                >
+                  Clear dates
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {(
+                [
+                  { key: 'today', label: 'Today' },
+                  { key: '7days', label: '7 Days' },
+                  { key: '30days', label: '30 Days' },
+                  { key: 'thisMonth', label: 'Month' },
+                ] as const
+              ).map(({ key, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => handleSelectPreset(key)}
                   className={`px-2 py-1.5 text-xs font-medium rounded border transition-colors ${
-                    datePreset === preset
-                      ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300'
+                    datePreset === key
+                      ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-semibold shadow-xs'
                       : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
                   }`}
                 >
-                  {preset === 'today' && 'Today'}
-                  {preset === '7days' && '7 Days'}
-                  {preset === '30days' && '30 Days'}
-                  {preset === 'thisMonth' && 'Month'}
+                  {label}
                 </button>
               ))}
             </div>
+            <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+              {datePreset === 'today' && 'Filtering records for today'}
+              {datePreset === '7days' && 'Filtering records for last 7 days'}
+              {datePreset === '30days' && 'Filtering records for last 30 days'}
+              {datePreset === 'thisMonth' && 'Filtering records for this calendar month'}
+              {datePreset === 'custom' && 'Custom manual date range active'}
+              {!datePreset && 'No dates selected by default'}
+            </p>
           </div>
 
           {/* Custom Date Pickers */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-start gap-2">
             <div className="flex-1">
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                 Start Date
               </label>
               <input
                 type="date"
+                aria-label="Start Date"
                 value={startDate}
-                onChange={(e) => {
-                  setDatePreset('custom');
-                  setStartDate(e.target.value);
-                }}
+                onChange={(e) => handleStartDateChange(e.target.value)}
                 className="w-full px-3 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
@@ -332,11 +362,9 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
               </label>
               <input
                 type="date"
+                aria-label="End Date"
                 value={endDate}
-                onChange={(e) => {
-                  setDatePreset('custom');
-                  setEndDate(e.target.value);
-                }}
+                onChange={(e) => handleEndDateChange(e.target.value)}
                 className="w-full px-3 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
@@ -347,7 +375,7 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <button
-              onClick={handleGenerateReport}
+              onClick={() => handleGenerateReport()}
               disabled={loading}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs sm:text-sm font-semibold shadow-sm transition-all disabled:opacity-50"
             >
@@ -375,45 +403,8 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
         </div>
       </div>
 
-      {/* Daily Activity Summary Cards (when daily_activity selected) */}
-      {currentReport.category === 'daily_activity' && summaryData && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
-            <p className="text-xs font-medium text-slate-500 dark:text-slate-400">RFQs Dispatched</p>
-            <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-              {summaryData.rfqsCreated ?? 0}
-            </p>
-          </div>
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
-            <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Quotes Received</p>
-            <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-              {summaryData.quotesReceived ?? 0}
-            </p>
-          </div>
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
-            <p className="text-xs font-medium text-slate-500 dark:text-slate-400">New Buyers Onboarded</p>
-            <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">
-              {summaryData.newBuyersRegistered ?? 0}
-            </p>
-          </div>
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
-            <p className="text-xs font-medium text-slate-500 dark:text-slate-400">New Vendors Registered</p>
-            <p className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">
-              {summaryData.newVendorsRegistered ?? 0}
-            </p>
-          </div>
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
-            <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Audit Trail Events</p>
-            <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-              {summaryData.totalAuditEvents ?? 0}
-            </p>
-          </div>
-        </div>
-      )}
-
       {/* Report Data Table Preview */}
-      {currentReport.category !== 'daily_activity' && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm overflow-hidden">
           {/* Table Toolbar */}
           <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="relative w-full sm:w-72">
@@ -483,14 +474,22 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
                       {tableHeaders.map((header) => {
                         const val = row[header];
                         const isMode = header === 'SourcingMode';
+                        const isLoc = header === 'CompanyLocation';
+                        const isLogin = header === 'LastLogin';
+                        const displayVal =
+                          isLoc && !val
+                            ? (row.SellerLocation || row.DeliveryLocation || 'All India')
+                            : isLogin && !val
+                            ? (row.LoginDateTime || row.LastLoginDate || row.RFQDate || row.RFQDownloadDate || '')
+                            : val;
                         return (
                           <td key={header} className="px-3.5 py-2.5 whitespace-nowrap text-xs">
                             {isMode ? (
                               <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                                {val || 'Mode 0'}
+                                {displayVal || 'Mode 0'}
                               </span>
                             ) : (
-                              String(val ?? '')
+                              String(displayVal ?? '')
                             )}
                           </td>
                         );
@@ -529,7 +528,6 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
             </div>
           )}
         </div>
-      )}
     </div>
   );
 }

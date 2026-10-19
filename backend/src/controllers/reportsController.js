@@ -1,4 +1,5 @@
 const storeService = require('../services/storeService');
+const pool = require('../db/pool');
 const { logger } = require('../services/loggerService');
 const { RFQ_MODES, RFQ_MODE_LABELS } = require('../config/constants');
 
@@ -6,23 +7,37 @@ const LOG_CATEGORY = 'REPORTS_CONTROLLER';
 
 function parseDateRange(startDateStr, endDateStr) {
   const now = new Date();
-  let fromDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  let fromDate;
   if (startDateStr) {
-    const parsed = new Date(startDateStr);
-    if (!isNaN(parsed.getTime())) {
-      fromDate = parsed;
+    const s = String(startDateStr).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [y, m, d] = s.split('-').map(Number);
+      fromDate = new Date(y, m - 1, d, 0, 0, 0, 0);
+    } else {
+      const parsed = new Date(s);
+      fromDate = !isNaN(parsed.getTime()) ? parsed : new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      fromDate.setHours(0, 0, 0, 0);
     }
+  } else {
+    fromDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    fromDate.setHours(0, 0, 0, 0);
   }
-  fromDate.setHours(0, 0, 0, 0);
 
-  let toDate = new Date(now);
+  let toDate;
   if (endDateStr) {
-    const parsed = new Date(endDateStr);
-    if (!isNaN(parsed.getTime())) {
-      toDate = parsed;
+    const s = String(endDateStr).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [y, m, d] = s.split('-').map(Number);
+      toDate = new Date(y, m - 1, d, 23, 59, 59, 999);
+    } else {
+      const parsed = new Date(s);
+      toDate = !isNaN(parsed.getTime()) ? parsed : new Date(now);
+      toDate.setHours(23, 59, 59, 999);
     }
+  } else {
+    toDate = new Date(now);
+    toDate.setHours(23, 59, 59, 999);
   }
-  toDate.setHours(23, 59, 59, 999);
 
   return { fromDate, toDate };
 }
@@ -48,21 +63,140 @@ function str(val, fallback = '') {
   return val ? String(val) : fallback;
 }
 
+function getBuyerLocation(buyer, rfq = null) {
+  if (buyer) {
+    if (buyer.city) {
+      return `${buyer.city}${buyer.state ? ', ' + buyer.state : ''}`;
+    }
+    if (buyer.primaryPlantLocation) return String(buyer.primaryPlantLocation);
+    if (buyer.location) return String(buyer.location);
+    if (buyer.address) return String(buyer.address);
+    if (buyer.country) return String(buyer.country);
+  }
+  return rfq && rfq.deliveryLocation ? String(rfq.deliveryLocation) : 'All India';
+}
+
+function getBuyerLastLogin(buyer, rfq = null) {
+  if (buyer) {
+    const rawVal = buyer.lastLogin || buyer.lastLoginDate || buyer.syncTimestamp || buyer.createdDate || buyer.created_at || buyer.createdAt;
+    if (rawVal) return formatDateTimeISO(rawVal);
+  }
+  return rfq && rfq.createdAt ? formatDateTimeISO(rfq.createdAt) : '';
+}
+
+function getVendorLocation(vendor, fallback = 'India') {
+  if (vendor) {
+    if (vendor.location) return String(vendor.location);
+    if (vendor.city) {
+      return `${vendor.city}${vendor.state ? ', ' + vendor.state : ''}`;
+    }
+    if (vendor.country) return String(vendor.country);
+  }
+  return fallback;
+}
+
+function getVendorLastLogin(vendor, fallbackDate = null) {
+  if (vendor) {
+    const rawVal = vendor.lastLogin || vendor.last_login_at || vendor.lastLoginDate || vendor.updated_at || vendor.created_at || vendor.createdAt;
+    if (rawVal) return formatDateTimeISO(rawVal);
+  }
+  return fallbackDate ? formatDateTimeISO(fallbackDate) : '';
+}
+
 function findBuyer(allBuyers, rfq) {
   return allBuyers.find((b) => {
     if (rfq.buyerAccountId && b.id === rfq.buyerAccountId) return true;
-    if (rfq.buyerAccountName && b.organizationName === rfq.buyerAccountName) return true;
-    if (rfq.raisedByEmail && b.corporateEmail === rfq.raisedByEmail) return true;
+    if (rfq.buyerAccountName && b.organizationName && b.organizationName.toLowerCase() === String(rfq.buyerAccountName).toLowerCase()) return true;
+    if (rfq.raisedByEmail && b.corporateEmail && b.corporateEmail.toLowerCase() === String(rfq.raisedByEmail).toLowerCase()) return true;
     return false;
   }) || null;
 }
 
-function findVendor(allVendors, id, name) {
-  return allVendors.find((v) => {
-    if (id && v.id === id) return true;
-    if (name && v.name === name) return true;
-    return false;
-  }) || null;
+function findVendor(allVendorsOrMap, id, name, email) {
+  if (!allVendorsOrMap) return null;
+  if (allVendorsOrMap instanceof Map) {
+    if (id && allVendorsOrMap.has(String(id))) return allVendorsOrMap.get(String(id));
+    if (email && allVendorsOrMap.has(String(email).toLowerCase())) return allVendorsOrMap.get(String(email).toLowerCase());
+    if (name && allVendorsOrMap.has(String(name).toLowerCase())) return allVendorsOrMap.get(String(name).toLowerCase());
+    return null;
+  }
+  if (Array.isArray(allVendorsOrMap)) {
+    return allVendorsOrMap.find((v) => {
+      if (id && v.id === id) return true;
+      if (email && v.email && v.email.toLowerCase() === String(email).toLowerCase()) return true;
+      if (name && v.name && v.name.toLowerCase() === String(name).toLowerCase()) return true;
+      return false;
+    }) || null;
+  }
+  return null;
+}
+
+async function enrichVendorsForRfqs(rfqs, existingVendors = []) {
+  const vendorMap = new Map();
+  if (Array.isArray(existingVendors)) {
+    for (const v of existingVendors) {
+      if (v.id) vendorMap.set(String(v.id), v);
+      if (v.email) vendorMap.set(String(v.email).toLowerCase(), v);
+      if (v.name) vendorMap.set(String(v.name).toLowerCase(), v);
+    }
+  }
+
+  const missingIds = new Set();
+  for (const rfq of rfqs) {
+    for (const av of rfq.assignedVendors || []) {
+      const hasId = av.id && vendorMap.has(String(av.id));
+      const hasEmail = av.email && vendorMap.has(String(av.email).toLowerCase());
+      const hasName = av.name && vendorMap.has(String(av.name).toLowerCase());
+      if (!hasId && !hasEmail && !hasName) {
+        if (av.id) missingIds.add(String(av.id));
+      }
+    }
+    for (const q of rfq.quotes || []) {
+      const hasId = q.vendorId && vendorMap.has(String(q.vendorId));
+      const hasName = q.vendorName && vendorMap.has(String(q.vendorName).toLowerCase());
+      if (!hasId && !hasName) {
+        if (q.vendorId) missingIds.add(String(q.vendorId));
+      }
+    }
+  }
+
+  if (pool.hasStorage() && missingIds.size > 0) {
+    const idsArray = Array.from(missingIds);
+    const chunkSize = 100;
+    for (let i = 0; i < idsArray.length; i += chunkSize) {
+      const chunk = idsArray.slice(i, i + chunkSize);
+      const placeholders = chunk.map((_, idx) => '$' + (idx + 1)).join(', ');
+      try {
+        const res = await pool.query(
+          `SELECT id, email, created_at, updated_at, raw FROM vendors WHERE id IN (${placeholders})`,
+          chunk,
+          { d1: true }
+        );
+        for (const r of (res.rows || [])) {
+          const v = typeof r.raw === 'string' ? JSON.parse(r.raw) : (r.raw || {});
+          if (r.created_at && !v.created_at) v.created_at = r.created_at;
+          if (r.updated_at && !v.updated_at) v.updated_at = r.updated_at;
+          if (!v.lastLogin) {
+            v.lastLogin = v.last_login_at || v.lastLoginDate || v.loginDateTime || null;
+          }
+          if (!v.location && v.city) {
+            v.location = `${v.city}${v.state ? ', ' + v.state : ''}`;
+          }
+          vendorMap.set(String(r.id), v);
+          if (v.email) vendorMap.set(String(v.email).toLowerCase(), v);
+          if (v.name) vendorMap.set(String(v.name).toLowerCase(), v);
+
+          if (Array.isArray(storeService.vendors) && !storeService.vendors.some((ev) => ev.id === v.id)) {
+            storeService.vendors.push(v);
+          }
+        }
+      } catch (err) {
+        logger.warn('Failed to batch load missing vendors for report', { error: err.message }, LOG_CATEGORY);
+      }
+    }
+  }
+
+  return vendorMap;
 }
 
 /**
@@ -75,12 +209,18 @@ async function getSellerReports(req, res, next) {
 
     logger.info('Generating seller report', { requestType, startDate, endDate }, LOG_CATEGORY);
 
+    if (pool.hasStorage()) {
+      await storeService.syncRFQsFromDB();
+    }
+
     const allVendors = Array.isArray(storeService.vendors) ? storeService.vendors : [];
-    const allRfqs = Array.isArray(storeService.rfqs) ? storeService.rfqs : [];
+    const allRfqs = storeService.getRFQs();
 
     const rows = [];
 
     if (requestType === 'sellerReport') {
+      const vendorMap = await enrichVendorsForRfqs(allRfqs, allVendors);
+
       for (const rfq of allRfqs) {
         const rfqDate = rfq.createdAt ? new Date(rfq.createdAt) : null;
         if (rfqDate && (rfqDate < fromDate || rfqDate > toDate)) continue;
@@ -88,30 +228,30 @@ async function getSellerReports(req, res, next) {
         const assigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
         const quotes = Array.isArray(rfq.quotes) ? rfq.quotes : [];
 
-        const vendorMap = new Map();
+        const rfqVendorMap = new Map();
         assigned.forEach((av) => {
-          vendorMap.set(str(av.id, av.name || av.email), { assigned: av, quote: null });
+          rfqVendorMap.set(str(av.id, av.name || av.email), { assigned: av, quote: null });
         });
         quotes.forEach((q) => {
           const key = str(q.vendorId, q.vendorName);
-          const existing = vendorMap.get(key);
+          const existing = rfqVendorMap.get(key);
           if (existing) {
             existing.quote = q;
           } else {
-            vendorMap.set(key, { assigned: null, quote: q });
+            rfqVendorMap.set(key, { assigned: null, quote: q });
           }
         });
 
-        if (vendorMap.size === 0) {
+        if (rfqVendorMap.size === 0) {
           rows.push({
             RFQDate: formatDateISO(rfq.createdAt),
             RFQID: str(rfq.rfqNumber, rfq.id),
             SellerCompanyName: 'Open Network',
             Email: '',
             MobileNo: '',
-            CompanyLocation: '',
-            DeliveryLocation: str(rfq.deliveryLocation),
-            LastLogin: '',
+            CompanyLocation: str(rfq.deliveryLocation, 'India'),
+            DeliveryLocation: str(rfq.deliveryLocation, 'All India'),
+            LastLogin: formatDateISO(rfq.createdAt),
             SourceType: str(rfq.source, 'web_portal'),
             RFQDownloadDate: '',
             QuoteSubmittedDate: '',
@@ -120,20 +260,29 @@ async function getSellerReports(req, res, next) {
             Query: str(rfq.title),
           });
         } else {
-          for (const [_, item] of vendorMap) {
+          for (const [_, item] of rfqVendorMap) {
             const vId = item.quote ? item.quote.vendorId : (item.assigned ? item.assigned.id : null);
             const vName = item.quote ? item.quote.vendorName : (item.assigned ? item.assigned.name : null);
-            const vProfile = findVendor(allVendors, vId, vName);
+            const vEmail = item.assigned ? item.assigned.email : null;
+            const vProfile = findVendor(vendorMap, vId, vName, vEmail);
+
+            const vendorLoc = vProfile
+              ? getVendorLocation(vProfile, item.assigned ? getVendorLocation(item.assigned, str(rfq.deliveryLocation, 'India')) : str(rfq.deliveryLocation, 'India'))
+              : (item.assigned ? getVendorLocation(item.assigned, str(rfq.deliveryLocation, 'India')) : str(rfq.deliveryLocation, 'India'));
+
+            const vendorLastLogin = vProfile
+              ? getVendorLastLogin(vProfile, item.assigned?.createdAt || item.assigned?.created_at || rfq.createdAt)
+              : (item.assigned ? getVendorLastLogin(item.assigned, rfq.createdAt) : formatDateTimeISO(rfq.createdAt));
 
             rows.push({
               RFQDate: formatDateISO(rfq.createdAt),
               RFQID: str(rfq.rfqNumber, rfq.id),
-              SellerCompanyName: str(vName, str(vProfile ? vProfile.name : null, 'Verified Vendor')),
+              SellerCompanyName: str(vName, str(vProfile ? vProfile.name : (item.assigned ? item.assigned.name : 'Verified Vendor'))),
               Email: str(vProfile ? vProfile.email : (item.assigned ? item.assigned.email : '')),
-              MobileNo: str(vProfile ? vProfile.phone : (item.assigned ? item.assigned.phone : '')),
-              CompanyLocation: str(vProfile ? vProfile.location || vProfile.city : (item.assigned ? item.assigned.city : '')),
-              DeliveryLocation: str(rfq.deliveryLocation),
-              LastLogin: formatDateTimeISO(vProfile ? (vProfile.updated_at || vProfile.created_at) : null),
+              MobileNo: str(vProfile ? (vProfile.phone || vProfile.mobile) : (item.assigned ? (item.assigned.phone || item.assigned.mobile) : '')),
+              CompanyLocation: vendorLoc,
+              DeliveryLocation: str(rfq.deliveryLocation, str(vProfile ? (vProfile.deliveryLocation || vProfile.location) : 'All India')),
+              LastLogin: vendorLastLogin,
               SourceType: str(vProfile ? vProfile.source : rfq.source, 'procucev_network'),
               RFQDownloadDate: formatDateISO(rfq.createdAt),
               QuoteSubmittedDate: formatDateISO(item.quote ? item.quote.submittedAt : null),
@@ -146,15 +295,19 @@ async function getSellerReports(req, res, next) {
       }
     } else if (requestType === 'sellerSummary') {
       for (const vendor of allVendors) {
-        const vDate = vendor.created_at ? new Date(vendor.created_at) : new Date(0);
+        const vDate = vendor.created_at ? new Date(vendor.created_at) : (vendor.createdAt ? new Date(vendor.createdAt) : new Date(0));
         if (vDate >= fromDate && vDate <= toDate) {
+          const lastLoginVal = getVendorLastLogin(vendor, vendor.created_at || vendor.createdAt);
+          const deliveryLoc = vendor.deliveryLocation || vendor.serviceLocations || vendor.location || vendor.city || 'India';
           rows.push({
-            LoginDateTime: formatDateTimeISO(vendor.created_at),
+            LoginDateTime: lastLoginVal,
+            LastLogin: lastLoginVal,
             Name: str(vendor.contactPerson, str(vendor.name)),
-            MobileNo: str(vendor.phone),
+            MobileNo: str(vendor.phone || vendor.mobile),
             CompanyName: str(vendor.name),
             EmailID: str(vendor.email),
-            CompanyLocation: str(vendor.location, str(vendor.city)),
+            CompanyLocation: getVendorLocation(vendor, 'India'),
+            DeliveryLocation: typeof deliveryLoc === 'string' ? deliveryLoc : (Array.isArray(deliveryLoc) ? deliveryLoc.join(', ') : 'India'),
             MajorCategory: str(vendor.majorCategory),
             SubscriptionPlan: str(vendor.subscriptionPlan, 'standard'),
             RFQDownloadsUsed: vendor.rfqDownloadsUsed !== undefined ? vendor.rfqDownloadsUsed : 0,
@@ -167,12 +320,17 @@ async function getSellerReports(req, res, next) {
         const cats = Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [];
         const hasMajor = Boolean(vendor.majorCategory);
         const subCats = hasMajor ? cats : cats.slice(1);
+        const lastLoginVal = getVendorLastLogin(vendor, vendor.created_at || vendor.createdAt);
+        const deliveryLoc = vendor.deliveryLocation || vendor.serviceLocations || vendor.location || vendor.city || 'India';
         rows.push({
           CompanyName: str(vendor.name),
           Email: str(vendor.email),
-          Mobile: str(vendor.phone),
+          Mobile: str(vendor.phone || vendor.mobile),
           SellerPerson: str(vendor.contactPerson, str(vendor.name)),
-          LastLogin: formatDateTimeISO(vendor.created_at),
+          CompanyLocation: getVendorLocation(vendor, 'India'),
+          DeliveryLocation: typeof deliveryLoc === 'string' ? deliveryLoc : (Array.isArray(deliveryLoc) ? deliveryLoc.join(', ') : 'India'),
+          LastLogin: lastLoginVal,
+          LastLoginDate: lastLoginVal,
           Category1: str(vendor.majorCategory, str(cats[0])),
           Category2: str(subCats[0]),
           Category3: str(subCats[1]),
@@ -182,11 +340,14 @@ async function getSellerReports(req, res, next) {
       }
     } else if (requestType === 'sellerSubscriptionReport') {
       for (const vendor of allVendors) {
+        const lastLoginVal = getVendorLastLogin(vendor, vendor.created_at || vendor.createdAt);
         rows.push({
           CompanyName: str(vendor.name),
           ContactPerson: str(vendor.contactPerson),
           Email: str(vendor.email),
-          Phone: str(vendor.phone),
+          Phone: str(vendor.phone || vendor.mobile),
+          CompanyLocation: getVendorLocation(vendor, 'India'),
+          LastLogin: lastLoginVal,
           Plan: str(vendor.subscriptionPlan, 'premium'),
           DownloadsUsed: vendor.rfqDownloadsUsed !== undefined ? vendor.rfqDownloadsUsed : 0,
           FreeQuotationCredits: vendor.freeQuotationCredits !== undefined ? vendor.freeQuotationCredits : 10,
@@ -239,14 +400,14 @@ async function getBuyerReports(req, res, next) {
           RFQID: str(rfq.rfqNumber, rfq.id),
           BuyerName: str(buyer ? buyer.contactPerson : rfq.buyerAccountName, 'Enterprise Buyer'),
           EmailID: str(buyer ? buyer.corporateEmail : rfq.raisedByEmail),
-          MobileNo: str(buyer ? buyer.mobileNumber : ''),
+          MobileNo: str(buyer ? (buyer.mobileNumber || buyer.phone) : ''),
           CompanyName: str(buyer ? buyer.organizationName : rfq.buyerAccountName, 'Enterprise Corp'),
-          CompanyLocation: str(buyer ? (buyer.city || buyer.primaryPlantLocation) : ''),
+          CompanyLocation: getBuyerLocation(buyer, rfq),
           ItemDescription: str(rfq.title, str(firstEntity ? firstEntity.itemName : '')),
           ItemCategory: str(rfq.category, str(firstEntity ? firstEntity.majorCategory : '')),
           SourcingMode: formatMode(rfq.sourcingMode),
-          DeliveryLocation: str(rfq.deliveryLocation),
-          LastLogin: formatDateTimeISO(buyer ? (buyer.syncTimestamp || buyer.createdDate) : null),
+          DeliveryLocation: str(rfq.deliveryLocation, 'All India'),
+          LastLogin: getBuyerLastLogin(buyer, rfq),
           RFQSource: str(rfq.source, 'web_portal'),
           RFQQueriesCount: Array.isArray(rfq.inquiries) ? rfq.inquiries.length : 0,
           Status: str(rfq.status, 'Quotes Pending'),
@@ -254,15 +415,17 @@ async function getBuyerReports(req, res, next) {
       }
     } else if (requestType === 'buyerSummary') {
       for (const buyer of allBuyers) {
-        const bDate = buyer.createdDate ? new Date(buyer.createdDate) : new Date(0);
+        const bDate = buyer.createdDate ? new Date(buyer.createdDate) : (buyer.created_at ? new Date(buyer.created_at) : new Date(0));
         if (bDate >= fromDate && bDate <= toDate) {
+          const lastLoginVal = getBuyerLastLogin(buyer);
           rows.push({
-            LoginDateTime: formatDateTimeISO(buyer.syncTimestamp || buyer.createdDate),
+            LoginDateTime: lastLoginVal,
+            LastLogin: lastLoginVal,
             BuyerName: str(buyer.contactPerson, str(buyer.organizationName)),
-            MobileNo: str(buyer.mobileNumber),
+            MobileNo: str(buyer.mobileNumber || buyer.phone),
             CompanyName: str(buyer.organizationName),
             EmailID: str(buyer.corporateEmail),
-            CompanyLocation: str(buyer.city, str(buyer.primaryPlantLocation)),
+            CompanyLocation: getBuyerLocation(buyer),
             SourcingMode: formatMode(buyer.sourcingMode),
             SubscriptionPlan: str(buyer.subscriptionPlan, 'standard'),
             TotalRFQsCreated: buyer.totalRFQsCreated !== undefined ? buyer.totalRFQsCreated : 0,
@@ -274,13 +437,15 @@ async function getBuyerReports(req, res, next) {
     } else if (requestType === 'buyerCategoryReport') {
       for (const buyer of allBuyers) {
         const majors = Array.isArray(buyer.supportedMajorCategories) ? buyer.supportedMajorCategories : [];
+        const lastLoginVal = getBuyerLastLogin(buyer);
         rows.push({
           BuyerName: str(buyer.contactPerson, str(buyer.organizationName)),
           EmailID: str(buyer.corporateEmail),
-          MobileNo: str(buyer.mobileNumber),
+          MobileNo: str(buyer.mobileNumber || buyer.phone),
           CompanyName: str(buyer.organizationName),
-          CompanyLocation: str(buyer.city, str(buyer.primaryPlantLocation)),
-          LastLoginDate: formatDateTimeISO(buyer.syncTimestamp || buyer.createdDate),
+          CompanyLocation: getBuyerLocation(buyer),
+          LastLogin: lastLoginVal,
+          LastLoginDate: lastLoginVal,
           Category1: str(majors[0]),
           Category2: str(majors[1]),
           Category3: str(majors[2]),
@@ -291,11 +456,14 @@ async function getBuyerReports(req, res, next) {
     } else if (requestType === 'buyerCreditsReport') {
       for (const buyer of allBuyers) {
         const remFree = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 5;
+        const lastLoginVal = getBuyerLastLogin(buyer);
         rows.push({
           OrganizationName: str(buyer.organizationName),
           ContactPerson: str(buyer.contactPerson),
           CorporateEmail: str(buyer.corporateEmail),
-          MobileNumber: str(buyer.mobileNumber),
+          MobileNumber: str(buyer.mobileNumber || buyer.phone),
+          CompanyLocation: getBuyerLocation(buyer),
+          LastLogin: lastLoginVal,
           Plan: str(buyer.subscriptionPlan, 'free_trial'),
           SourcingMode: formatMode(buyer.sourcingMode),
           RemainingFreeRFQs: remFree,
@@ -352,13 +520,14 @@ async function getRfqReports(req, res, next) {
           RFQID: str(rfq.rfqNumber, rfq.id),
           BuyerName: str(buyer ? buyer.contactPerson : rfq.buyerAccountName, 'Enterprise Buyer'),
           EmailID: str(buyer ? buyer.corporateEmail : rfq.raisedByEmail),
-          MobileNo: str(buyer ? buyer.mobileNumber : ''),
+          MobileNo: str(buyer ? (buyer.mobileNumber || buyer.phone) : ''),
           CompanyName: str(buyer ? buyer.organizationName : rfq.buyerAccountName),
-          CompanyLocation: str(buyer ? (buyer.city || buyer.primaryPlantLocation) : ''),
+          CompanyLocation: getBuyerLocation(buyer, rfq),
+          DeliveryLocation: str(rfq.deliveryLocation, 'All India'),
+          LastLogin: getBuyerLastLogin(buyer, rfq),
           ItemDescription: str(rfq.title),
           ItemCategory: str(rfq.category),
           SourcingMode: formatMode(rfq.sourcingMode),
-          DeliveryLocation: str(rfq.deliveryLocation),
           TotalVendors: Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors.length : 0,
           NumberOfQuotesReceived: quotes.length,
           FirstQuoteDate: firstQuoteDate,
@@ -367,6 +536,8 @@ async function getRfqReports(req, res, next) {
         });
       }
     } else if (requestType === 'rfqSummaryReport') {
+      const vendorMap = await enrichVendorsForRfqs(allRfqs, allVendors);
+
       for (const rfq of allRfqs) {
         const rDate = rfq.createdAt ? new Date(rfq.createdAt) : null;
         if (rDate && (rDate < fromDate || rDate > toDate)) continue;
@@ -380,10 +551,12 @@ async function getRfqReports(req, res, next) {
             RFQID: str(rfq.rfqNumber, rfq.id),
             BuyerName: str(buyer ? buyer.contactPerson : rfq.buyerAccountName),
             EmailID: str(buyer ? buyer.corporateEmail : rfq.raisedByEmail),
-            MobileNo: str(buyer ? buyer.mobileNumber : ''),
+            MobileNo: str(buyer ? (buyer.mobileNumber || buyer.phone) : ''),
             CompanyName: str(buyer ? buyer.organizationName : rfq.buyerAccountName),
+            CompanyLocation: getBuyerLocation(buyer, rfq),
+            DeliveryLocation: str(rfq.deliveryLocation, 'All India'),
+            LastLogin: getBuyerLastLogin(buyer, rfq),
             SourcingMode: formatMode(rfq.sourcingMode),
-            DeliveryLocation: str(rfq.deliveryLocation),
             SellerCompanyName: 'None Yet',
             SellerMobile: '',
             SellerEmailID: '',
@@ -397,20 +570,22 @@ async function getRfqReports(req, res, next) {
           });
         } else {
           for (const q of quotes) {
-            const vProfile = findVendor(allVendors, q.vendorId, q.vendorName);
+            const vProfile = findVendor(vendorMap, q.vendorId, q.vendorName);
             rows.push({
               RFQDate: formatDateISO(rfq.createdAt),
               RFQID: str(rfq.rfqNumber, rfq.id),
               BuyerName: str(buyer ? buyer.contactPerson : rfq.buyerAccountName),
               EmailID: str(buyer ? buyer.corporateEmail : rfq.raisedByEmail),
-              MobileNo: str(buyer ? buyer.mobileNumber : ''),
+              MobileNo: str(buyer ? (buyer.mobileNumber || buyer.phone) : ''),
               CompanyName: str(buyer ? buyer.organizationName : rfq.buyerAccountName),
+              CompanyLocation: getBuyerLocation(buyer, rfq),
+              DeliveryLocation: str(rfq.deliveryLocation, 'All India'),
+              LastLogin: getBuyerLastLogin(buyer, rfq),
               SourcingMode: formatMode(rfq.sourcingMode),
-              DeliveryLocation: str(rfq.deliveryLocation),
               SellerCompanyName: str(q.vendorName, str(vProfile ? vProfile.name : '')),
-              SellerMobile: str(vProfile ? vProfile.phone : ''),
+              SellerMobile: str(vProfile ? (vProfile.phone || vProfile.mobile) : ''),
               SellerEmailID: str(vProfile ? vProfile.email : ''),
-              SellerLocation: str(vProfile ? (vProfile.location || vProfile.city) : ''),
+              SellerLocation: getVendorLocation(vProfile, str(q.vendorLocation, 'India')),
               SellerCategories: str(vProfile ? vProfile.majorCategory : ''),
               RFQDownloadDate: formatDateISO(rfq.createdAt),
               RFQForwardDate: formatDateISO(rfq.createdAt),
@@ -426,11 +601,15 @@ async function getRfqReports(req, res, next) {
         const rDate = rfq.createdAt ? new Date(rfq.createdAt) : null;
         if (rDate && (rDate < fromDate || rDate > toDate)) continue;
 
+        const buyer = findBuyer(allBuyers, rfq);
         rows.push({
           RFQDate: formatDateISO(rfq.createdAt),
           RFQID: str(rfq.rfqNumber, rfq.id),
           Title: str(rfq.title),
           BuyerName: str(rfq.buyerAccountName),
+          CompanyLocation: getBuyerLocation(buyer, rfq),
+          DeliveryLocation: str(rfq.deliveryLocation, 'All India'),
+          LastLogin: getBuyerLastLogin(buyer, rfq),
           SourcingMode: formatMode(rfq.sourcingMode),
           Category: str(rfq.category),
           Budget: rfq.budget ? `₹${Number(rfq.budget).toLocaleString('en-IN')}` : '',
@@ -462,10 +641,17 @@ async function getRfqReports(req, res, next) {
  */
 async function getDailyActivityReport(req, res, next) {
   try {
-    const { startDate, endDate } = req.query;
+    const startDate = req.query.startDate || req.query.from;
+    const endDate = req.query.endDate || req.query.to;
     const { fromDate, toDate } = parseDateRange(startDate, endDate);
 
-    const allRfqs = Array.isArray(storeService.rfqs) ? storeService.rfqs : [];
+    if (pool.hasStorage()) {
+      await storeService.syncRFQsFromDB();
+      await storeService.getVendors('all');
+      await storeService.getBuyerAccounts();
+    }
+
+    const allRfqs = storeService.getRFQs();
     const allBuyers = Array.isArray(storeService.buyerAccounts) ? storeService.buyerAccounts : [];
     const allVendors = Array.isArray(storeService.vendors) ? storeService.vendors : [];
     const allAuditLogs = Array.isArray(storeService.auditLogs) ? storeService.auditLogs : [];
@@ -476,20 +662,32 @@ async function getDailyActivityReport(req, res, next) {
     });
 
     const buyersInRange = allBuyers.filter((b) => {
-      const d = b.createdDate ? new Date(b.createdDate) : null;
+      const d = (b.createdDate || b.created_at) ? new Date(b.createdDate || b.created_at) : null;
       return d && d >= fromDate && d <= toDate;
     });
 
     const vendorsInRange = allVendors.filter((v) => {
-      const d = v.created_at ? new Date(v.created_at) : null;
+      const d = (v.created_at || v.createdAt) ? new Date(v.created_at || v.createdAt) : null;
       return d && d >= fromDate && d <= toDate;
     });
 
     let totalQuotesReceived = 0;
-    rfqsInRange.forEach((r) => {
+    allRfqs.forEach((r) => {
       if (Array.isArray(r.quotes)) {
-        totalQuotesReceived += r.quotes.length;
+        r.quotes.forEach((q) => {
+          const qDate = q.submittedAt ? new Date(q.submittedAt) : (r.createdAt ? new Date(r.createdAt) : null);
+          if (qDate && qDate >= fromDate && qDate <= toDate) {
+            totalQuotesReceived++;
+          }
+        });
       }
+    });
+
+    const auditLogsInRange = allAuditLogs.filter((l) => {
+      const rawDate = l.timestamp || l.createdAt;
+      if (!rawDate) return true;
+      const d = new Date(rawDate);
+      return !isNaN(d.getTime()) && d >= fromDate && d <= toDate;
     });
 
     return res.json({
@@ -500,7 +698,7 @@ async function getDailyActivityReport(req, res, next) {
         quotesReceived: totalQuotesReceived,
         newBuyersRegistered: buyersInRange.length,
         newVendorsRegistered: vendorsInRange.length,
-        totalAuditEvents: allAuditLogs.length,
+        totalAuditEvents: auditLogsInRange.length,
       },
     });
   } catch (err) {
@@ -519,6 +717,10 @@ module.exports = {
   formatDateISO,
   formatDateTimeISO,
   str,
+  getBuyerLocation,
+  getBuyerLastLogin,
+  getVendorLocation,
+  getVendorLastLogin,
   findBuyer,
   findVendor,
 };

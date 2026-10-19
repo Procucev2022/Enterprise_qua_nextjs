@@ -48,7 +48,7 @@ describe('DailyDownloadableReports Component Suite', () => {
     expect(screen.getByText('Seller Reports')).toBeInTheDocument();
     expect(screen.getByText('RFQ Reports')).toBeInTheDocument();
     expect(screen.getByText('Buyer Reports')).toBeInTheDocument();
-    expect(screen.getByText('Daily Operations Overview')).toBeInTheDocument();
+    expect(screen.queryByText('Daily Operations Overview')).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText('Alpha Supplies')).toBeInTheDocument();
@@ -75,53 +75,58 @@ describe('DailyDownloadableReports Component Suite', () => {
     await waitFor(() => {
       expect(reportsClient.fetchReportData).toHaveBeenCalled();
     });
-
-    // Switch to Daily Operations tab
-    (reportsClient.fetchReportData as jest.Mock).mockResolvedValueOnce({
-      success: true,
-      summary: {
-        rfqsCreated: 12,
-        quotesReceived: 25,
-        newBuyersRegistered: 4,
-        newVendorsRegistered: 7,
-        totalAuditEvents: 88,
-      },
-    });
-
-    const dailyTab = screen.getByText('Daily Operations Overview');
-    fireEvent.click(dailyTab);
-
-    await waitFor(() => {
-      expect(screen.getByText('RFQs Dispatched')).toBeInTheDocument();
-      expect(screen.getByText('12')).toBeInTheDocument();
-      expect(screen.getByText('25')).toBeInTheDocument();
-    });
   });
 
-  test('changing date filter presets and custom date inputs', async () => {
+  test('default empty dates, date filter presets, manual dates and clear dates', async () => {
     render(<DailyDownloadableReports initialCategory="seller" />);
 
+    const startDateInput = screen.getByLabelText('Start Date');
+    const endDateInput = screen.getByLabelText('End Date');
+
+    // Default: no dates selected
+    expect(startDateInput).toHaveValue('');
+    expect(endDateInput).toHaveValue('');
+
+    // Test clicking presets
     const todayBtn = screen.getByText('Today');
     fireEvent.click(todayBtn);
+    expect(startDateInput.getAttribute('value')).toBeTruthy();
+    expect(reportsClient.fetchReportData).toHaveBeenCalled();
 
     const weekBtn = screen.getByText('7 Days');
     fireEvent.click(weekBtn);
+    expect(reportsClient.fetchReportData).toHaveBeenCalled();
 
     const monthBtn = screen.getByText('Month');
     fireEvent.click(monthBtn);
+    expect(reportsClient.fetchReportData).toHaveBeenCalled();
 
-    // Custom date changes
-    const dateInputs = screen.getAllByDisplayValue(/\d{4}-\d{2}-\d{2}/);
-    if (dateInputs.length >= 2) {
-      fireEvent.change(dateInputs[0], { target: { value: '2026-05-01' } });
-      fireEvent.change(dateInputs[1], { target: { value: '2026-05-20' } });
-    }
+    const thirtyDaysBtn = screen.getByText('30 Days');
+    fireEvent.click(thirtyDaysBtn);
+    expect(reportsClient.fetchReportData).toHaveBeenCalled();
+
+    // Clear dates
+    const clearBtn = screen.getByText('Clear dates');
+    fireEvent.click(clearBtn);
+    expect(startDateInput).toHaveValue('');
+    expect(endDateInput).toHaveValue('');
+
+    // Custom manual date inputs
+    fireEvent.change(startDateInput, { target: { value: '2026-05-01' } });
+    fireEvent.change(endDateInput, { target: { value: '2026-05-20' } });
+
+    expect(startDateInput).toHaveValue('2026-05-01');
+    expect(endDateInput).toHaveValue('2026-05-20');
 
     const refreshBtn = await screen.findByText(/Refresh \/ Query Report/);
     fireEvent.click(refreshBtn);
 
     await waitFor(() => {
-      expect(reportsClient.fetchReportData).toHaveBeenCalled();
+      expect(reportsClient.fetchReportData).toHaveBeenCalledWith(
+        expect.anything(),
+        '2026-05-01',
+        '2026-05-20'
+      );
     });
   });
 
@@ -208,26 +213,7 @@ describe('DailyDownloadableReports Component Suite', () => {
     expect(reportsClient.exportReportToCsv).toHaveBeenCalled();
   });
 
-  test('exports summary data when in daily activity mode', async () => {
-    (reportsClient.fetchReportData as jest.Mock).mockResolvedValueOnce({
-      success: true,
-      summary: { rfqsCreated: 10 },
-    });
 
-    render(<DailyDownloadableReports initialCategory="daily_activity" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('RFQs Dispatched')).toBeInTheDocument();
-    });
-
-    const excelBtn = screen.getByText('Excel (.xlsx)');
-    fireEvent.click(excelBtn);
-    expect(reportsClient.exportReportToExcel).toHaveBeenCalled();
-
-    const csvBtn = screen.getByText('CSV (.csv)');
-    fireEvent.click(csvBtn);
-    expect(reportsClient.exportReportToCsv).toHaveBeenCalled();
-  });
 
   test('renders empty state when report has no data', async () => {
     (reportsClient.fetchReportData as jest.Mock).mockResolvedValueOnce({

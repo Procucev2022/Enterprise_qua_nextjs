@@ -136,7 +136,7 @@ describe('SellersDirectory Component Suite', () => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
 
-    const searchInput = screen.getByPlaceholderText(/Search company, contact, category/);
+    const searchInput = screen.getByPlaceholderText(/Search company/i);
     fireEvent.change(searchInput, { target: { value: 'Apex' } });
 
     expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
@@ -185,10 +185,34 @@ describe('SellersDirectory Component Suite', () => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
 
-    const searchInput = screen.getByPlaceholderText(/Search company, contact, category/);
+    const searchInput = screen.getByPlaceholderText(/Search company/i);
     fireEvent.change(searchInput, { target: { value: 'apexfasteners.com' } });
     expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     expect(screen.queryByText('Precision Forgings Pvt Ltd')).not.toBeInTheDocument();
+  });
+
+  test('renders actual last login dates for sellers and searches by email in unified search', async () => {
+    render(<SellersDirectory />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+      expect(screen.getByText('Precision Forgings Pvt Ltd')).toBeInTheDocument();
+    });
+
+    // Check that sellers render actual dynamic Indian date/time and NOT a uniform "Never"
+    expect(screen.queryByText('Never')).not.toBeInTheDocument();
+
+    const searchInput = screen.getByPlaceholderText(/Search company/i);
+    // Unified search by email
+    fireEvent.change(searchInput, { target: { value: 'precisionforgings.in' } });
+    expect(screen.getByText('Precision Forgings Pvt Ltd')).toBeInTheDocument();
+    expect(screen.queryByText('Apex Fasteners Ltd')).not.toBeInTheDocument();
+
+    // Clear search
+    const clearBtn = screen.getByLabelText('Clear search');
+    fireEvent.click(clearBtn);
+    expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+    expect(screen.getByText('Precision Forgings Pvt Ltd')).toBeInTheDocument();
   });
 
   test('displays empty state when query matches no suppliers', async () => {
@@ -198,7 +222,7 @@ describe('SellersDirectory Component Suite', () => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
 
-    const searchInput = screen.getByPlaceholderText(/Search company, contact, category/);
+    const searchInput = screen.getByPlaceholderText(/Search company/i);
     fireEvent.change(searchInput, { target: { value: 'Nonexistent Vendor 9999' } });
 
     expect(screen.getByText('No suppliers found matching your query.')).toBeInTheDocument();

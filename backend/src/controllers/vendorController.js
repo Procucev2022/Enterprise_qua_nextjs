@@ -135,7 +135,7 @@ async function getVendors(req, res, next) {
 
     // Pagination is opt-in (passing `page`) so existing callers that expect
     // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
-    const { page, search, category } = req.query || {};
+    const { page, search, email, category } = req.query || {};
 
     // Any paginated request is answered straight from Postgres with
     // LIMIT/OFFSET — it must never route through storeService.getVendors(),
@@ -160,7 +160,7 @@ async function getVendors(req, res, next) {
       const { rows, total } = await domainQueries.getVendorsPageFromDB({
         limit: pageSize,
         offset: (pageNumber - 1) * pageSize,
-        search: search ? String(search) : '',
+        search: (search || email) ? String(search || email) : '',
         category: category ? String(category) : '',
         scopedBuyerId: buyerId && buyerId !== 'all' ? buyerId : '',
       });
@@ -180,6 +180,10 @@ async function getVendors(req, res, next) {
           String(field || '').toLowerCase().includes(q)
         )
       );
+    }
+    if (email) {
+      const eq = String(email).toLowerCase().trim();
+      vendors = vendors.filter((v) => String(v.email || '').toLowerCase().includes(eq));
     }
     if (category) {
       vendors = vendors.filter((v) => v.majorCategory === category);

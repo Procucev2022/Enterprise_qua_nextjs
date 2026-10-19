@@ -59,10 +59,6 @@ const { INGESTION_OUTCOME } = emailGatewayQueries;
 // going silent.
 const POLL_STALE_AFTER_MS = 2 * 60 * 1000;
 const POLL_CALL_TIMEOUT_MS = 20 * 1000;
-// Gemini gets longer than the other calls: it retries across models inside its
-// own budget, and a 20s cap cut off ordinary extractions mid-answer (live:
-// "Gemini line-item extraction timed out after 20000ms" on a plain requisition).
-const EXTRACTION_TIMEOUT_MS = 45 * 1000;
 // No new message is started once a poll has run this long, so a poll that hits
 // slow extractions still ends well inside POLL_STALE_AFTER_MS (worst case ≈
 // this + one message fetch + one extraction + creation) and never overlaps the
@@ -1488,11 +1484,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
   const giveUpNotice = () => notifyRfqNotCreated(message, 'PROCESSING_FAILED', notifyContext);
   let extraction;
   try {
-    extraction = await withTimeout(
-      geminiService.extractLineItems(prepared.extractionInput),
-      EXTRACTION_TIMEOUT_MS,
-      'Gemini line-item extraction'
-    );
+    extraction = await geminiService.extractLineItems(prepared.extractionInput);
   } catch (err) {
     throw new RetryableIngestionError(err.message, { message, onGiveUp: giveUpNotice });
   }
