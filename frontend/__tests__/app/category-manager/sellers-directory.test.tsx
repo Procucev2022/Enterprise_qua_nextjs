@@ -395,4 +395,35 @@ describe('SellersDirectory Component Suite', () => {
 
     expect(mockSetSelected).toHaveBeenCalledWith(mockRfqs[0]);
   });
+
+  test('safely handles seller with null email when opening dossier and filtering audit logs', async () => {
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'v-null-email',
+          name: 'Null Email Supplier',
+          contactPerson: 'No Email Contact',
+          email: null,
+          location: 'Kolkata, West Bengal',
+          source: 'procucev_network',
+          majorCategory: 'Packaging',
+          score: 80,
+          rating: 4.0,
+          status: 'ACTIVE',
+        },
+      ],
+    });
+
+    render(<SellersDirectory />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Null Email Supplier')).toBeInTheDocument();
+    });
+
+    const dossierBtns = screen.getAllByText('360° Dossier');
+    // Clicking dossier must not throw "TypeError: can't access property toLowerCase, activeSeller.email is null"
+    expect(() => fireEvent.click(dossierBtns[0])).not.toThrow();
+    expect(screen.getByText('No email on file')).toBeInTheDocument();
+  });
 });

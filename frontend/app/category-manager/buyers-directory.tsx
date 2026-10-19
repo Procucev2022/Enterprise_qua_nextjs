@@ -181,12 +181,14 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
 
   const buyerAuditLogs = useMemo(() => {
     if (!activeBuyer) return [];
+    const buyerEmail = (activeBuyer.corporateEmail || '').toLowerCase();
+    const buyerOrg = (activeBuyer.organizationName || '').toLowerCase();
     return auditLogs.filter((log) => {
-      const actor = (log as any).actorEmail || log.user;
-      const details = (log as any).details || log.action;
+      const actor = ((log as any).actorEmail || log.user || '').toLowerCase();
+      const details = ((log as any).details || log.action || '').toLowerCase();
       return (
-        (actor && actor.toLowerCase() === activeBuyer.corporateEmail.toLowerCase()) ||
-        (details && details.toLowerCase().includes(activeBuyer.organizationName.toLowerCase()))
+        (buyerEmail && actor && actor === buyerEmail) ||
+        (buyerOrg && details && details.includes(buyerOrg))
       );
     });
   }, [activeBuyer, auditLogs]);

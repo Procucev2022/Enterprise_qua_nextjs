@@ -126,13 +126,13 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
 
     // Add local buyer-uploaded vendors
     buyerVendors.forEach((bv) => {
-      const id = String(bv.id || bv.email);
+      const id = String(bv.id || bv.email || 'buyer-' + Math.random());
       if (!map.has(id)) {
         map.set(id, {
           id,
-          name: bv.name,
-          contactPerson: bv.contactPerson || bv.name,
-          email: bv.email,
+          name: bv.name || 'Verified Supplier',
+          contactPerson: bv.contactPerson || bv.name || 'Key Accounts Desk',
+          email: bv.email || '',
           phone: bv.phone || '',
           location: bv.location || 'India',
           source: 'buyer_uploaded',
@@ -215,12 +215,20 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
   // Derived seller-specific RFQs, Audit Logs, and communications for dossier
   const sellerRfqs = useMemo(() => {
     if (!activeSeller) return [];
+    const sellerId = activeSeller.id;
+    const sellerEmail = (activeSeller.email || '').toLowerCase();
+    const sellerName = (activeSeller.name || '').toLowerCase();
     return rfqs.filter((r) => {
       const assigned = (r.assignedVendors || []).some(
-        (v) => v.id === activeSeller.id || v.email === activeSeller.email || v.name === activeSeller.name
+        (v) =>
+          (v.id && v.id === sellerId) ||
+          (sellerEmail && v.email && v.email.toLowerCase() === sellerEmail) ||
+          (sellerName && v.name && v.name.toLowerCase() === sellerName)
       );
       const quoted = (r.quotes || []).some(
-        (q) => q.vendorId === activeSeller.id || q.vendorName === activeSeller.name
+        (q) =>
+          (q.vendorId && q.vendorId === sellerId) ||
+          (sellerName && q.vendorName && q.vendorName.toLowerCase() === sellerName)
       );
       return assigned || quoted;
     });
@@ -228,12 +236,14 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
 
   const sellerAuditLogs = useMemo(() => {
     if (!activeSeller) return [];
+    const sellerEmail = (activeSeller.email || '').toLowerCase();
+    const sellerName = (activeSeller.name || '').toLowerCase();
     return auditLogs.filter((log) => {
-      const actor = (log as any).actorEmail || log.user;
-      const details = (log as any).details || log.action;
+      const actor = ((log as any).actorEmail || log.user || '').toLowerCase();
+      const details = ((log as any).details || log.action || '').toLowerCase();
       return (
-        (actor && actor.toLowerCase() === activeSeller.email.toLowerCase()) ||
-        (details && details.toLowerCase().includes(activeSeller.name.toLowerCase()))
+        (sellerEmail && actor && actor === sellerEmail) ||
+        (sellerName && details && details.includes(sellerName))
       );
     });
   }, [activeSeller, auditLogs]);
@@ -241,21 +251,22 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
   const sellerCommunications = useMemo(() => {
     if (!activeSeller) return [];
     const logs = [];
+    const sellerEmail = activeSeller.email || 'supplier@procucev.com';
     logs.push({
       id: `comm-welcome-${activeSeller.id}`,
       channel: 'WHATSAPP & EMAIL',
       subject: 'Procucev Supplier Network Onboarding & Verification',
-      recipient: activeSeller.email,
+      recipient: sellerEmail,
       timestamp: new Date().toISOString(),
       status: 'VERIFIED_DELIVERED',
-      preview: `Supplier verified and catalog indexed across ${activeSeller.majorCategory}. Free quotation credits allocated.`,
+      preview: `Supplier verified and catalog indexed across ${activeSeller.majorCategory || 'Industrial Supplies'}. Free quotation credits allocated.`,
     });
     sellerRfqs.forEach((rfq, idx) => {
       logs.push({
         id: `comm-quote-${rfq.id}-${idx}`,
         channel: 'EMAIL_INVITATION',
         subject: `RFQ Invitation Dispatch: ${rfq.rfqNumber}`,
-        recipient: activeSeller.email,
+        recipient: sellerEmail,
         timestamp: rfq.createdAt || new Date().toISOString(),
         status: 'DISPATCHED',
         preview: `Direct opportunity invitation sent for "${rfq.title}" under ${RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}.`,
@@ -720,7 +731,7 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
                         </p>
                         <p className="flex items-center gap-2">
                           <Mail className="w-4 h-4 text-slate-400" />
-                          <span>{activeSeller.email}</span>
+                          <span>{activeSeller.email || 'No email on file'}</span>
                         </p>
                         <p className="flex items-center gap-2">
                           <Phone className="w-4 h-4 text-slate-400" />
