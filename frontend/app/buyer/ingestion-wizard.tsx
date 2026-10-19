@@ -1472,14 +1472,25 @@ export default function IngestionWizard({
                 </pre>
               </div>
             )}
-            <button
-              type="button"
-              onClick={handleEnterManually}
-              className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
-            >
-              <Plus size={13} />
-              <span>{EXTRACTION.manualEntryAction}</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExtractFromFiles}
+                disabled={isExtracting}
+                className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
+              >
+                {isExtracting ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+                <span>{isExtracting ? EXTRACTION.extractingLabel : EXTRACTION.retryAction}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleEnterManually}
+                className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
+              >
+                <Plus size={13} />
+                <span>{EXTRACTION.manualEntryAction}</span>
+              </button>
+            </div>
           </div>
         )}
       </section>

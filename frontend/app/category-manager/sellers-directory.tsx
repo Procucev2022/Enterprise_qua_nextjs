@@ -600,7 +600,6 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
             </option>
           ))}
         </select>
-
         {/* Rating Filter */}
         <select
           aria-label="Filter by rating"
@@ -705,7 +704,6 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
                       <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">
                         {seller.freeQuotationCredits} Credits
                       </td>
-
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${
