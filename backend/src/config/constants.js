@@ -600,6 +600,13 @@ const RFQ_CATEGORY_CLASSIFICATION = {
 // Mirrors app.gemini.* in the Java p2pservices app, which is the service that
 // currently extracts RFQ line items in production. The API key is read from the
 // environment only and never leaves the server.
+// Gemini extraction policy is intentionally code-owned rather than environment
+// configurable: one operation may run for up to five minutes, with fixed input
+// limits that protect memory and provider payload size.
+const GEMINI_TOTAL_BUDGET_MS = 5 * 60 * 1000;
+const GEMINI_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+const GEMINI_MAX_DOCUMENT_TEXT_CHARS = 300000;
+
 const GEMINI_CONFIG = {
   API_KEY: process.env.GEMINI_API_KEY || '',
   BACKUP_KEYS: process.env.GEMINI_BACKUP_KEYS || '',
@@ -628,17 +635,13 @@ const GEMINI_CONFIG = {
     const list = Array.isArray(arr) ? arr : (typeof arr === 'string' ? arr.split(',').map((m) => m.trim()) : []);
     this.MODELS = Array.from(new Set([this.PRIMARY_MODEL, ...list].filter(Boolean)));
   },
-  // The primary model measured 12.5s on a small PDF and timed out at 15s on a
-  // real one, so it needs more than the Java service's 15s read timeout to have a
-  // fair chance before the chain moves on.
-  REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 30000),
-  TOTAL_BUDGET_MS: Number(process.env.GEMINI_TOTAL_BUDGET_MS || 60000),
-  // Below this much remaining budget a further attempt cannot finish, so the
-  // chain stops rather than starting a request it will have to abandon.
-  MIN_ATTEMPT_MS: Number(process.env.GEMINI_MIN_ATTEMPT_MS || 3000),
-  // Documents larger than this are rejected before a request is billed.
-  MAX_DOCUMENT_BYTES: Number(process.env.GEMINI_MAX_DOCUMENT_BYTES || 25 * 1024 * 1024),
-  MAX_DOCUMENT_TEXT_CHARS: Number(process.env.GEMINI_MAX_DOCUMENT_TEXT_CHARS || 300000),
+  // Kept as a mutable compatibility field for tests and old callers, but zero
+  // means there is no per-model timeout. Production uses only TOTAL_BUDGET_MS.
+  REQUEST_TIMEOUT_MS: 0,
+  TOTAL_BUDGET_MS: GEMINI_TOTAL_BUDGET_MS,
+  MIN_ATTEMPT_MS: 0,
+  MAX_DOCUMENT_BYTES: GEMINI_MAX_DOCUMENT_BYTES,
+  MAX_DOCUMENT_TEXT_CHARS: GEMINI_MAX_DOCUMENT_TEXT_CHARS,
   // Maximum number of API keys attempted per individual model before advancing
   // to the next fallback model in the chain (prevents long key-retry loops on rate limits).
   MAX_KEY_ATTEMPTS_PER_MODEL: Number(process.env.GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL || 3),

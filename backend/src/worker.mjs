@@ -7,10 +7,6 @@
 // truth for local dev and the current Render deploy; this file is additive.
 import { httpServerHandler } from 'cloudflare:node';
 import { env, waitUntil } from 'cloudflare:workers';
-import app from './app.js';
-import emailGatewayService from './services/emailGatewayService.js';
-import zohoReconciliationService from './services/zohoReconciliationService.js';
-import rfqChaserScheduler from './services/rfqChaserScheduler.js';
 
 // d1Bridge.js (required by the CommonJS backend, deep under app.js) cannot
 // reach `env` itself: `require('cloudflare:workers')` at call time throws
@@ -43,6 +39,20 @@ if (env && typeof env === 'object') {
 // without threading `ctx` through Express — stashed on globalThis for the
 // same require/import reason __CF_ENV__ is.
 globalThis.__CF_WAIT_UNTIL__ = waitUntil;
+
+// Load the CommonJS application only after the Worker bindings have been copied
+// into process.env. Static ESM imports are evaluated before this module body, so
+// the old imports froze GEMINI_CONFIG before GEMINI_API_KEY and timeout/model
+// variables existed in the Worker runtime. That produced stale model chains and
+// immediate aborts when an old deployment supplied 0/negative timeout values.
+const appModule = await import('./app.js');
+const emailGatewayModule = await import('./services/emailGatewayService.js');
+const zohoReconciliationModule = await import('./services/zohoReconciliationService.js');
+const rfqChaserSchedulerModule = await import('./services/rfqChaserScheduler.js');
+const app = appModule.default || appModule;
+const emailGatewayService = emailGatewayModule.default || emailGatewayModule;
+const zohoReconciliationService = zohoReconciliationModule.default || zohoReconciliationModule;
+const rfqChaserScheduler = rfqChaserSchedulerModule.default || rfqChaserSchedulerModule;
 
 const PORT = 4000;
 app.listen(PORT);
