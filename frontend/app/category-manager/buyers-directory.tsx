@@ -181,12 +181,14 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
 
   const buyerAuditLogs = useMemo(() => {
     if (!activeBuyer) return [];
+    const buyerEmail = (activeBuyer.corporateEmail || '').toLowerCase();
+    const buyerOrg = (activeBuyer.organizationName || '').toLowerCase();
     return auditLogs.filter((log) => {
-      const actor = (log as any).actorEmail || log.user;
-      const details = (log as any).details || log.action;
+      const actor = ((log as any).actorEmail || log.user || '').toLowerCase();
+      const details = ((log as any).details || log.action || '').toLowerCase();
       return (
-        (actor && actor.toLowerCase() === activeBuyer.corporateEmail.toLowerCase()) ||
-        (details && details.toLowerCase().includes(activeBuyer.organizationName.toLowerCase()))
+        (buyerEmail && actor && actor === buyerEmail) ||
+        (buyerOrg && details && details.includes(buyerOrg))
       );
     });
   }, [activeBuyer, auditLogs]);
@@ -244,7 +246,7 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
       const metrics = buyerMetricsMap.get(b.id);
       const rfqCount = metrics?.rfqCount ?? (b.totalRFQsCreated || 0);
       const spendNumeric = metrics?.spendNumeric ?? 0;
-      const spendDisplay = spendNumeric > 0 ? formatCurrency(spendNumeric) : (b.totalSpend || '₹0');
+      const spendDisplay = spendNumeric > 0 ? formatCurrency(spendNumeric) : String(b.totalSpend || '₹0').replace('$', '₹');
       return {
         OrganizationName: b.organizationName,
         ContactPerson: b.contactPerson || '',
@@ -300,7 +302,7 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3.5">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Total Buyers</p>
           <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{totalBuyers}</p>
@@ -313,14 +315,6 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">RFQs Sourced</p>
           <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">{totalRFQs}</p>
           <span className="text-[11px] text-slate-500">Across all enterprise accounts</span>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Total Sourcing Spend</p>
-          <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-            {formatCurrency(totalSpendNumeric)}
-          </p>
-          <span className="text-[11px] text-slate-500">Procurement run-rate</span>
         </div>
 
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
@@ -338,7 +332,7 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
           </div>
         </div>
 
-        <div className="col-span-2 sm:col-span-4 lg:col-span-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Category Governance</p>
           <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">100%</p>
           <span className="text-[11px] text-slate-500">Standardized mode alignment</span>
@@ -346,44 +340,42 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
       </div>
 
       {/* Toolbar / Search & Filter Controls */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm flex flex-col md:flex-row items-center justify-between gap-3">
-        <div className="relative w-full md:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
           <input
             type="text"
             placeholder="Search company, contact person, email, city..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full pl-8 pr-3 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
-          {/* Mode Filter */}
-          <select
-            value={selectedMode}
-            onChange={(e) => setSelectedMode(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300"
-          >
-            <option value="all">All Sourcing Modes</option>
-            <option value={RFQ_MODES.MODE_1}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_1]}</option>
-            <option value={RFQ_MODES.MODE_2}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_2]}</option>
-            <option value={RFQ_MODES.MODE_3}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_3]}</option>
-            <option value={RFQ_MODES.MODE_0}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_0]}</option>
-          </select>
+        {/* Mode Filter */}
+        <select
+          value={selectedMode}
+          onChange={(e) => setSelectedMode(e.target.value)}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">All Sourcing Modes</option>
+          <option value={RFQ_MODES.MODE_1}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_1]}</option>
+          <option value={RFQ_MODES.MODE_2}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_2]}</option>
+          <option value={RFQ_MODES.MODE_3}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_3]}</option>
+          <option value={RFQ_MODES.MODE_0}>{RFQ_MODE_LABELS[RFQ_MODES.MODE_0]}</option>
+        </select>
 
-          {/* Status Filter */}
-          <select
-            value={selectedStatus}
-            onChange={(e) => setSelectedStatus(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300"
-          >
-            <option value="all">All Statuses</option>
-            <option value="ACTIVE_VERIFIED">Active & Verified</option>
-            <option value="ACTIVE">Active</option>
-            <option value="PENDING_VERIFICATION">Pending Verification</option>
-          </select>
-        </div>
+        {/* Status Filter */}
+        <select
+          value={selectedStatus}
+          onChange={(e) => setSelectedStatus(e.target.value)}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">All Statuses</option>
+          <option value="ACTIVE_VERIFIED">Active & Verified</option>
+          <option value="ACTIVE">Active</option>
+          <option value="PENDING_VERIFICATION">Pending Verification</option>
+        </select>
       </div>
 
       {/* Buyers Data Table */}
@@ -392,13 +384,13 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
           <table className="w-full text-left text-xs border-collapse">
             <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
               <tr>
-                <th className="px-4 py-3 font-semibold">Enterprise / Buyer</th>
-                <th className="px-4 py-3 font-semibold">Contact & Location</th>
-                <th className="px-4 py-3 font-semibold">Sourcing Mode</th>
-                <th className="px-4 py-3 font-semibold">Plan & Free Quota</th>
-                <th className="px-4 py-3 font-semibold">RFQs & Spend</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 font-semibold text-right">Actions</th>
+                <th className="px-4 py-2.5 font-semibold">Buyer</th>
+                <th className="px-4 py-2.5 font-semibold">Location</th>
+                <th className="px-4 py-2.5 font-semibold">Mode</th>
+                <th className="px-4 py-2.5 font-semibold">Plan</th>
+                <th className="px-4 py-2.5 font-semibold">RFQs</th>
+                <th className="px-4 py-2.5 font-semibold">Status</th>
+                <th className="px-4 py-2.5 font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-800 dark:text-slate-200">
@@ -414,59 +406,41 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
                   const modeLabel = RFQ_MODE_LABELS[buyer.sourcingMode] || 'Mode 0';
                   const metrics = buyerMetricsMap.get(buyer.id);
                   const rfqCount = metrics?.rfqCount ?? (buyer.totalRFQsCreated || 0);
-                  const spendNumeric = metrics?.spendNumeric ?? 0;
-                  const spendDisplay = spendNumeric > 0 ? formatCurrency(spendNumeric) : (buyer.totalSpend || '₹0');
                   return (
                     <tr
                       key={buyer.id}
                       className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
                     >
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 font-bold flex items-center justify-center text-sm">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 font-bold flex items-center justify-center text-xs shrink-0">
                             {buyer.organizationName.charAt(0)}
                           </div>
-                          <div>
-                            <p className="font-semibold text-slate-900 dark:text-white">
-                              {buyer.organizationName}
-                            </p>
-                            <p className="text-[11px] text-slate-500">{buyer.corporateEmail}</p>
-                          </div>
+                          <span className="font-semibold text-slate-900 dark:text-white truncate">
+                            {buyer.organizationName}
+                          </span>
                         </div>
                       </td>
 
-                      <td className="px-4 py-3.5">
-                        <p className="font-medium text-slate-800 dark:text-slate-200">
-                          {buyer.contactPerson || 'Procurement Desk'}
-                        </p>
-                        <p className="text-[11px] text-slate-500">
-                          {buyer.city || buyer.primaryPlantLocation || 'India'}
-                        </p>
+                      <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">
+                        {buyer.city || buyer.primaryPlantLocation || 'India'}
                       </td>
 
-                      <td className="px-4 py-3.5">
+                      <td className="px-4 py-3">
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
                           {modeLabel}
                         </span>
                       </td>
 
-                      <td className="px-4 py-3.5">
-                        <p className="font-medium text-slate-800 dark:text-slate-200 capitalize">
-                          {buyer.subscriptionPlan || 'Enterprise Trial'}
-                        </p>
-                        <p className="text-[11px] text-emerald-600 dark:text-emerald-400">
-                          {buyer.remainingFreeRFQs ?? 5} free RFQs remaining
-                        </p>
+                      <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200 capitalize">
+                        {buyer.subscriptionPlan || 'Free Trial'}
                       </td>
 
-                      <td className="px-4 py-3.5">
-                        <p className="font-semibold text-slate-800 dark:text-slate-200">
-                          {rfqCount} {rfqCount === 1 ? 'RFQ' : 'RFQs'}
-                        </p>
-                        <p className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">{spendDisplay}</p>
+                      <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-200">
+                        {rfqCount} {rfqCount === 1 ? 'RFQ' : 'RFQs'}
                       </td>
 
-                      <td className="px-4 py-3.5">
+                      <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                             buyer.status === 'ACTIVE_VERIFIED' || (buyer.status as string) === 'ACTIVE'
@@ -478,13 +452,13 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
                         </span>
                       </td>
 
-                      <td className="px-4 py-3.5 text-right">
+                      <td className="px-4 py-3 text-right">
                         <button
                           onClick={() => {
                             setActiveBuyer(buyer);
                             setDossierTab('profile');
                           }}
-                          className="px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-semibold text-xs transition-colors inline-flex items-center gap-1"
+                          className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-semibold text-xs transition-colors inline-flex items-center gap-1"
                         >
                           <span>360° Dossier</span>
                           <ChevronRight className="w-3.5 h-3.5" />
@@ -632,12 +606,12 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
             {/* Dossier Tabs Navigation */}
             <div className="flex items-center gap-1 px-5 border-b border-slate-200 dark:border-slate-800 overflow-x-auto bg-slate-50/30 dark:bg-slate-900">
               {[
-                { id: 'profile', label: '1. Basic Profile', icon: Building2 },
-                { id: 'rfqs', label: `2. RFQ History (${buyerRfqs.length})`, icon: Layers },
-                { id: 'credits', label: '3. Credits & Quotas', icon: CreditCard },
-                { id: 'communications', label: `4. Communications (${buyerCommunications.length})`, icon: MessageSquare },
-                { id: 'payments', label: `5. Payments (${buyerPayments.length})`, icon: Receipt },
-                { id: 'activity', label: `6. Audit Activity (${buyerAuditLogs.length})`, icon: History },
+                { id: 'profile', label: 'Profile', icon: Building2 },
+                { id: 'rfqs', label: `RFQs (${buyerRfqs.length})`, icon: Layers },
+                { id: 'credits', label: 'Credit', icon: CreditCard },
+                { id: 'communications', label: `Messages (${buyerCommunications.length})`, icon: MessageSquare },
+                { id: 'payments', label: `Payments (${buyerPayments.length})`, icon: Receipt },
+                { id: 'activity', label: 'Audit', icon: History },
               ].map((tab) => {
                 const Icon = tab.icon;
                 return (
@@ -667,7 +641,7 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
                     const activeMetrics = buyerMetricsMap.get(activeBuyer.id);
                     const activeRfqCount = activeMetrics?.rfqCount ?? (activeBuyer.totalRFQsCreated || 0);
                     const activeSpendNumeric = activeMetrics?.spendNumeric ?? 0;
-                    const activeSpendDisplay = activeSpendNumeric > 0 ? formatCurrency(activeSpendNumeric) : (activeBuyer.totalSpend || '₹0');
+                    const activeSpendDisplay = activeSpendNumeric > 0 ? formatCurrency(activeSpendNumeric) : String(activeBuyer.totalSpend || '₹0').replace('$', '₹');
                     return (
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">

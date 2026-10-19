@@ -186,6 +186,13 @@ class StoreService {
       this.notifications = notifications;
       this.paymentLinks = paymentLinks;
       this.buyerAccounts = buyerAccountsResult.accounts;
+      if (Array.isArray(this.buyerAccounts)) {
+        for (const a of this.buyerAccounts) {
+          if (a && typeof a.totalSpend === 'string' && a.totalSpend.includes('$')) {
+            a.totalSpend = a.totalSpend.replace('$', '₹');
+          }
+        }
+      }
       // activeBuyerAccount must stay a reference into this.buyerAccounts (the
       // same invariant every mutator keeps), not a separately-hydrated duplicate.
       this.activeBuyerAccount =
@@ -496,7 +503,7 @@ class StoreService {
       ...accData,
       id: accData.id || `buyer-acc-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
       totalRFQsCreated: accData.totalRFQsCreated || 0,
-      totalSpend: accData.totalSpend || '$0',
+      totalSpend: accData.totalSpend ? String(accData.totalSpend).replace('$', '₹') : '₹0',
       syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
       createdDate: accData.createdDate || new Date().toISOString().substring(0, 10),
       status: accData.status || 'ACTIVE_VERIFIED',
