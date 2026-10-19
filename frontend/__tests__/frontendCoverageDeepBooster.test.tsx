@@ -372,8 +372,8 @@ describe('Frontend Deep Coverage Booster Test Suite', () => {
       rfq: mockRfqs[0],
     });
 
-    // Switch to Version 0 sourcing mode
-    const v0Checkbox = screen.queryByLabelText(/Version 0/i);
+    // Switch to Mode 0 / Version 0 sourcing mode
+    const v0Checkbox = screen.queryByLabelText(/(Mode 0|Version 0)/i);
     if (v0Checkbox) fireEvent.click(v0Checkbox);
 
     // Submit RFQ Form

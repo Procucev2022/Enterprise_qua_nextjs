@@ -342,3 +342,32 @@ describe('formatMessage', () => {
     expect(formatMessage('Plain {x}')).toBe('Plain {x}');
   });
 });
+
+describe('RFQ_MODES and centralized constants', () => {
+  const { RFQ_MODES, RFQ_MODE_LABELS, RFQ_MODE_MAP, SOURCING_MODES } = require('../src/config/constants');
+
+  test('exports RFQ_MODES enum and RFQ_MODE_LABELS', () => {
+    expect(RFQ_MODES.MODE_0).toBe('mode_0');
+    expect(RFQ_MODES.MODE_1).toBe('mode_1');
+    expect(RFQ_MODES.MODE_2).toBe('mode_2');
+    expect(RFQ_MODES.MODE_3).toBe('mode_3');
+
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_1]).toBe('Mode 1');
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_2]).toBe('Mode 2');
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_3]).toBe('Mode 3');
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_0]).toBe('Mode 0');
+
+    expect(RFQ_MODE_MAP['v1']).toBe('mode_1');
+    expect(RFQ_MODE_MAP['v2']).toBe('mode_2');
+    expect(RFQ_MODE_MAP['v3']).toBe('mode_3');
+    expect(RFQ_MODE_MAP['mode 1']).toBe('mode_1');
+  });
+
+  test('SOURCING_MODES uses centralized Mode 0..3 codes and labels', () => {
+    expect(SOURCING_MODES).toHaveLength(4);
+    expect(SOURCING_MODES[0].code).toBe('Mode 0');
+    expect(SOURCING_MODES[1].code).toBe('Mode 1');
+    expect(SOURCING_MODES[2].code).toBe('Mode 2');
+    expect(SOURCING_MODES[3].code).toBe('Mode 3');
+  });
+});

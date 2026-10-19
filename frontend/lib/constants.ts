@@ -10,69 +10,112 @@ import type {
 } from './types';
 import { UI_STRINGS } from './uiStrings';
 
+/**
+ * Centralized RFQ Modes Enum / Constants
+ * V1 → Mode 1
+ * V2 → Mode 2
+ * V3 → Mode 3
+ * V0 → Mode 0
+ */
+export const RFQ_MODES = {
+  MODE_0: 'mode_0',
+  MODE_1: 'mode_1',
+  MODE_2: 'mode_2',
+  MODE_3: 'mode_3',
+} as const;
+
+export type RfqModeKey = keyof typeof RFQ_MODES;
+export type RfqModeValue = (typeof RFQ_MODES)[RfqModeKey];
+
+export const RFQ_MODE_LABELS: Record<SourcingMode, string> = {
+  [RFQ_MODES.MODE_0]: 'Mode 0',
+  [RFQ_MODES.MODE_1]: 'Mode 1',
+  [RFQ_MODES.MODE_2]: 'Mode 2',
+  [RFQ_MODES.MODE_3]: 'Mode 3',
+};
+
+export const RFQ_MODE_MAP: Record<string, SourcingMode> = {
+  v0: RFQ_MODES.MODE_0,
+  v1: RFQ_MODES.MODE_1,
+  v2: RFQ_MODES.MODE_2,
+  v3: RFQ_MODES.MODE_3,
+  'mode 0': RFQ_MODES.MODE_0,
+  'mode 1': RFQ_MODES.MODE_1,
+  'mode 2': RFQ_MODES.MODE_2,
+  'mode 3': RFQ_MODES.MODE_3,
+  mode_0: RFQ_MODES.MODE_0,
+  mode_1: RFQ_MODES.MODE_1,
+  mode_2: RFQ_MODES.MODE_2,
+  mode_3: RFQ_MODES.MODE_3,
+  version_0: RFQ_MODES.MODE_0,
+  version_1: RFQ_MODES.MODE_1,
+  version_2: RFQ_MODES.MODE_2,
+  version_3: RFQ_MODES.MODE_3,
+};
+
 export const SOURCING_MODES: SourcingModeDetail[] = [
   {
-    id: 'mode_0',
-    code: 'Version 0',
-    name: 'Version 0: Free Starter Trial Plan',
-    shortLabel: 'Version 0',
+    id: RFQ_MODES.MODE_0,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_0],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_0]}: Free Starter Trial Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_0],
     description:
       'Free Starter Trial mode. RFQs are circulated only to verified Procucev network vendors (0 credits deducted).',
     featureSummary: 'Procucev Network Vendors Only (Free Starter Plan - 0 credits deducted)',
     badgeColor: 'border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10',
   },
   {
-    id: 'mode_1',
-    code: 'Version 1',
-    name: 'Version 1: Client Roster Sourcing Plan',
-    shortLabel: 'Version 1',
+    id: RFQ_MODES.MODE_1,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_1],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]}: Client Roster Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_1],
     description:
       'Private empanelled vendor network. RFQs are strictly circulated only to your pre-verified approved vendor list.',
-    featureSummary: 'Private buyer roster only (Features of Version 1)',
+    featureSummary: 'Private buyer roster only (Features of Mode 1)',
     badgeColor: 'border-blue-500/40 text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-500/10',
   },
   {
-    id: 'mode_2',
-    code: 'Version 2',
-    name: 'Version 2: Hybrid Sourcing Plan',
-    shortLabel: 'Version 2',
+    id: RFQ_MODES.MODE_2,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_2],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]}: Hybrid Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_2],
     description:
       'Circulate to your private empanelled list first. If quotes or responses are insufficient, AI expands to Procucev Base Network.',
-    featureSummary: 'Buyer roster + Procucev Hybrid pool (Features of Version 1 & 2)',
+    featureSummary: 'Buyer roster + Procucev Hybrid pool (Features of Mode 1 & 2)',
     badgeColor: 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10',
   },
   {
-    id: 'mode_3',
-    code: 'Version 3',
-    name: 'Version 3: AI Autonomous Sourcing Plan',
-    shortLabel: 'Version 3',
+    id: RFQ_MODES.MODE_3,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_3],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]}: AI Autonomous Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_3],
     description:
       'Autonomous Procucev Network Sourcing with double-blind supplier identity shielding, continuous AI evaluation, and best-fit routing.',
-    featureSummary: 'Autonomous AI + 360° Qualification (Features of Version 1, 2 & 3)',
+    featureSummary: 'Autonomous AI + 360° Qualification (Features of Mode 1, 2 & 3)',
     badgeColor: 'border-purple-500/40 text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-500/10',
   },
 ];
 
 /**
  * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
- * - version_0 / free_trial: mode_0 (Version 0: Free Starter Trial Plan)
- * - version_1: mode_1 (Version 1: Client Roster Sourcing Plan)
- * - version_2: mode_2 (Version 2: Hybrid Sourcing Plan)
- * - version_3: mode_3 (Version 3: AI Autonomous Sourcing Plan)
+ * - version_0 / free_trial: mode_0 (Mode 0: Free Starter Trial Plan)
+ * - version_1: mode_1 (Mode 1: Client Roster Sourcing Plan)
+ * - version_2: mode_2 (Mode 2: Hybrid Sourcing Plan)
+ * - version_3: mode_3 (Mode 3: AI Autonomous Sourcing Plan)
  */
 export const BUYER_SUBSCRIPTION_TO_SOURCING_MODE: Record<string, SourcingMode> = {
-  version_0: 'mode_0',
-  mode_0: 'mode_0',
-  v0: 'mode_0',
-  version_1: 'mode_1',
-  version_2: 'mode_2',
-  version_3: 'mode_3',
-  v1: 'mode_1',
-  v2: 'mode_2',
-  v3: 'mode_3',
-  mode_1: 'mode_1',
-  mode_2: 'mode_2',
-  mode_3: 'mode_3',
+  version_0: RFQ_MODES.MODE_0,
+  mode_0: RFQ_MODES.MODE_0,
+  v0: RFQ_MODES.MODE_0,
+  version_1: RFQ_MODES.MODE_1,
+  version_2: RFQ_MODES.MODE_2,
+  version_3: RFQ_MODES.MODE_3,
+  v1: RFQ_MODES.MODE_1,
+  v2: RFQ_MODES.MODE_2,
+  v3: RFQ_MODES.MODE_3,
+  mode_1: RFQ_MODES.MODE_1,
+  mode_2: RFQ_MODES.MODE_2,
+  mode_3: RFQ_MODES.MODE_3,
 };
 
 /**
@@ -96,7 +139,7 @@ export function resolveBuyerSourcingMode(
   }
 
   // 1. Subscription-based version assignment takes priority:
-  // V1 for V1 subscribers, V2 for V2 subscribers, V3 for V3 subscribers, V0 for V0 subscribers.
+  // Mode 1 for Mode 1 subscribers, Mode 2 for Mode 2 subscribers, Mode 3 for Mode 3 subscribers, Mode 0 for Mode 0 subscribers.
   if (typeof plan === 'string') {
     const normalized = plan.trim().toLowerCase();
     if (BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized]) {
@@ -105,25 +148,21 @@ export function resolveBuyerSourcingMode(
   }
 
   // 2. For buyers without a subscription (free trial / no active plan):
-  // Assign V2 for the first 5 free RFQs and switch to V0 after free credits are exhausted.
+  // Assign Mode 2 for the first 5 free RFQs and switch to Mode 0 after free credits are exhausted.
   if (remainingFreeRFQs !== undefined && Number(remainingFreeRFQs) <= 0) {
-    return 'mode_0';
+    return RFQ_MODES.MODE_0;
   }
 
-  return 'mode_2';
+  return RFQ_MODES.MODE_2;
 }
 
 /**
- * Short RFQ version tag for a sourcing mode: mode_0 → "V0" … mode_3 → "V3".
- *
- * The version and the sourcing mode are the same concept (see SOURCING_MODES,
- * whose codes read "Version 0".."Version 3"), so the tag is derived from the
- * mode's trailing digit rather than stored separately. Used as a compact
- * identifier beside the RFQ number on the operational kanban.
+ * Short RFQ version tag for a sourcing mode: mode_0 → "Mode 0" … mode_3 → "Mode 3".
+ * Centralized mapping ensuring consistency across Kanban, directories, and tables.
  */
 export function rfqVersionLabel(mode?: SourcingMode | null): string {
-  const digit = typeof mode === 'string' ? mode.replace('mode_', '') : '';
-  return /^[0-9]+$/.test(digit) ? `V${digit}` : 'V0';
+  if (!mode) return RFQ_MODE_LABELS[RFQ_MODES.MODE_0];
+  return RFQ_MODE_LABELS[mode] || RFQ_MODE_LABELS[RFQ_MODES.MODE_0];
 }
 
 /**
@@ -135,12 +174,12 @@ export function rfqVersionLabel(mode?: SourcingMode | null): string {
  * being the source of truth for access control.
  */
 export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
-  free_trial: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
-  version_0: ['mode_0'],
-  v0: ['mode_0'],
-  version_1: ['mode_0', 'mode_1'],
-  version_2: ['mode_0', 'mode_1', 'mode_2'],
-  version_3: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
+  free_trial: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3],
+  version_0: [RFQ_MODES.MODE_0],
+  v0: [RFQ_MODES.MODE_0],
+  version_1: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1],
+  version_2: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2],
+  version_3: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3],
 };
 
 /**
@@ -486,6 +525,36 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       icon: 'Building2',
       group: NAV_GROUPS.categoryGovernance,
       route: '/category-manager/enterprise-inquiries',
+    },
+    {
+      id: 'buyers_directory',
+      screenTag: 'Screen 2.9',
+      shortTag: '2.9',
+      label: NAV_ITEMS.buyersDirectory.label,
+      description: NAV_ITEMS.buyersDirectory.description,
+      icon: 'Building2',
+      group: NAV_GROUPS.categoryGovernance,
+      route: '/category-manager/buyers-directory',
+    },
+    {
+      id: 'sellers_directory',
+      screenTag: 'Screen 2.10',
+      shortTag: '2.10',
+      label: NAV_ITEMS.sellersDirectory.label,
+      description: NAV_ITEMS.sellersDirectory.description,
+      icon: 'Truck',
+      group: NAV_GROUPS.categoryGovernance,
+      route: '/category-manager/sellers-directory',
+    },
+    {
+      id: 'daily_reports',
+      screenTag: 'Screen 2.11',
+      shortTag: '2.11',
+      label: NAV_ITEMS.dailyReports.label,
+      description: NAV_ITEMS.dailyReports.description,
+      icon: 'FileSpreadsheet',
+      group: NAV_GROUPS.categoryGovernance,
+      route: '/category-manager/daily-reports',
     },
   ],
   vendor: [

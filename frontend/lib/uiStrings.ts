@@ -187,6 +187,18 @@ export const UI_STRINGS = {
         label: 'Enterprise Inquiries',
         description: 'Buyer enterprise customization & bulk contracts leads',
       },
+      buyersDirectory: {
+        label: 'Buyers Directory',
+        description: 'Complete profiles, RFQ history, credits & transaction governance',
+      },
+      sellersDirectory: {
+        label: 'Sellers Directory',
+        description: 'Verified supplier profiles, quotes, catalog & communication logs',
+      },
+      dailyReports: {
+        label: 'Daily Reports',
+        description: 'Downloadable operational, buyer, seller & RFQ Excel/CSV reports',
+      },
       opportunityFeed: {
         label: 'Dashboard',
         description: 'Your enquiries, quotes, and sourcing activity',
@@ -314,12 +326,12 @@ export const UI_STRINGS = {
     extractingAction: 'Reading…',
     removeAttachmentAria: 'Remove {fileName}',
 
-    quotaExhaustedTitle: 'Free RFQ Limit Reached for V1, V2 & V3 (0 of 5 Remaining)',
+    quotaExhaustedTitle: 'Free RFQ Limit Reached for Mode 1, Mode 2 & Mode 3 (0 of 5 Remaining)',
     quotaExhaustedMessage:
-      'You have consumed all 5 free credits for V1, V2, and V3. You can still create multiple free RFQs using V0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
+      'You have consumed all 5 free credits for Mode 1, Mode 2, and Mode 3. You can still create multiple free RFQs using Mode 0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
     upgradePlanAction: 'Upgrade Plan',
-    useV0Action: 'Switch to V0 (Free)',
-    v0FreeBadge: '⚡ Unlimited Free RFQs with V0',
+    useV0Action: 'Switch to Mode 0 (Free)',
+    v0FreeBadge: '⚡ Unlimited Free RFQs with Mode 0',
 
     serverAllocatesNumber: 'The RFQ number is allocated when you save.',
     cancelAction: 'Cancel',
@@ -328,12 +340,12 @@ export const UI_STRINGS = {
   },
 
   rfqExtraction: {
-    quotaExhaustedTitle: 'Free RFQ Quota Exhausted for V1, V2 & V3 (0 of 5 Remaining)',
+    quotaExhaustedTitle: 'Free RFQ Quota Exhausted for Mode 1, Mode 2 & Mode 3 (0 of 5 Remaining)',
     quotaExhaustedMessage:
-      'You have consumed all 5 free credits for V1, V2, and V3. You can still create multiple free RFQs using V0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
+      'You have consumed all 5 free credits for Mode 1, Mode 2, and Mode 3. You can still create multiple free RFQs using Mode 0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
     upgradePlanAction: 'Upgrade Plan',
-    useV0Action: 'Switch to V0 (Free)',
-    v0FreeBadge: '⚡ Unlimited Free RFQs with V0',
+    useV0Action: 'Switch to Mode 0 (Free)',
+    v0FreeBadge: '⚡ Unlimited Free RFQs with Mode 0',
 
     // Step 1
     noFileTitle: 'No Document Selected',
@@ -1549,10 +1561,10 @@ export const UI_STRINGS = {
   },
 
   sourcingModeVersions: {
-    mode_0: 'V0 – Procucev Network Vendors',
-    mode_1: 'V1 – Internal Vendors',
-    mode_2: 'V2 – Internal + Procucev Vetted Vendors',
-    mode_3: 'V3 – Autonomous AI + 360 Qualification',
+    mode_0: 'Mode 0 – Procucev Network Vendors',
+    mode_1: 'Mode 1 – Internal Vendors',
+    mode_2: 'Mode 2 – Internal + Procucev Vetted Vendors',
+    mode_3: 'Mode 3 – Autonomous AI + 360 Qualification',
   },
 };
 

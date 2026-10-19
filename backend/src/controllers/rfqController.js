@@ -18,6 +18,9 @@ const {
   EXTRACTION_REASON_MESSAGES,
   RFQ_ATTACHMENT_CONFIG,
   EMAIL_INGESTION_STATUS,
+  RFQ_MODES,
+  RFQ_MODE_LABELS,
+  RFQ_MODE_MAP,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
@@ -27,15 +30,19 @@ const RFQ_DEFAULT_STATUS = 'Quotes Pending';
 // each paid tier adds one mode on top of the last, matching store.tsx's
 // existing client-side gate (addNewRFQ) that this mirrors server-side.
 const SUBSCRIPTION_MODE_ENTITLEMENTS = {
-  free_trial: ['mode_0', 'mode_1', 'mode_2', 'mode_3', 'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3'],
-  version_0: ['mode_0', 'v0', 'version_0'],
-  v0: ['mode_0', 'v0', 'version_0'],
-  version_1: ['mode_0', 'mode_1', 'v0', 'v1', 'version_0', 'version_1'],
-  v1: ['mode_0', 'mode_1', 'v0', 'v1', 'version_0', 'version_1'],
-  version_2: ['mode_0', 'mode_1', 'mode_2', 'v0', 'v1', 'v2', 'version_0', 'version_1', 'version_2'],
-  v2: ['mode_0', 'mode_1', 'mode_2', 'v0', 'v1', 'v2', 'version_0', 'version_1', 'version_2'],
-  version_3: ['mode_0', 'mode_1', 'mode_2', 'mode_3', 'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3'],
-  v3: ['mode_0', 'mode_1', 'mode_2', 'mode_3', 'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3'],
+  free_trial: [
+    RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3,
+    'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3',
+    'mode 0', 'mode 1', 'mode 2', 'mode 3',
+  ],
+  version_0: [RFQ_MODES.MODE_0, 'v0', 'version_0', 'mode 0'],
+  v0: [RFQ_MODES.MODE_0, 'v0', 'version_0', 'mode 0'],
+  version_1: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, 'v0', 'v1', 'version_0', 'version_1', 'mode 0', 'mode 1'],
+  v1: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, 'v0', 'v1', 'version_0', 'version_1', 'mode 0', 'mode 1'],
+  version_2: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, 'v0', 'v1', 'v2', 'version_0', 'version_1', 'version_2', 'mode 0', 'mode 1', 'mode 2'],
+  v2: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, 'v0', 'v1', 'v2', 'version_0', 'version_1', 'version_2', 'mode 0', 'mode 1', 'mode 2'],
+  version_3: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3, 'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3', 'mode 0', 'mode 1', 'mode 2', 'mode 3'],
+  v3: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3, 'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3', 'mode 0', 'mode 1', 'mode 2', 'mode 3'],
 };
 
 /**

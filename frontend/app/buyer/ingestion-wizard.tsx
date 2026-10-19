@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import {
   SOURCING_MODES,
+  RFQ_MODES,
+  RFQ_MODE_LABELS,
   CURRENCY,
   formatFileSize,
   RFQ_DOCUMENT_LIMITS,
@@ -257,10 +259,10 @@ export function resolveOwnVendorCount(rfq: ConfirmationRFQ | null | undefined): 
  * of truth for both the exported helper and the inline modal check.
  */
 export const V2_V3_SOURCING_MODES: readonly string[] = [
-  'mode_2',
+  RFQ_MODES.MODE_2,
   'v2',
   'version_2',
-  'mode_3',
+  RFQ_MODES.MODE_3,
   'v3',
   'version_3',
 ];
@@ -1191,9 +1193,9 @@ export default function IngestionWizard({
         }
       }
 
-      if (form.sourcingMode === 'mode_1' && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
-        setSubmitError('Version 1 (Client Sourcing) requires at least one private vendor to be added/selected before creating the RFQ.');
-        showToast('Private Vendor Required', 'Version 1 requires at least one private vendor in your roster before dispatching.', 'warning');
+      if (form.sourcingMode === RFQ_MODES.MODE_1 && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
+        setSubmitError(`${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} (Client Sourcing) requires at least one private vendor to be added/selected before creating the RFQ.`);
+        showToast('Private Vendor Required', `${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} requires at least one private vendor in your roster before dispatching.`, 'warning');
         return;
       }
 

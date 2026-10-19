@@ -2,39 +2,79 @@
 // PROCUCEV ENTERPRISE (QUA AI 2.0) - CONSTANTS, TAXONOMIES & SYSTEM DEFAULTS
 // ==============================================================================
 
+/**
+ * Centralized RFQ Modes Enum / Constants
+ * V1 → Mode 1
+ * V2 → Mode 2
+ * V3 → Mode 3
+ * V0 → Mode 0
+ */
+const RFQ_MODES = Object.freeze({
+  MODE_0: 'mode_0',
+  MODE_1: 'mode_1',
+  MODE_2: 'mode_2',
+  MODE_3: 'mode_3',
+});
+
+const RFQ_MODE_LABELS = Object.freeze({
+  [RFQ_MODES.MODE_0]: 'Mode 0',
+  [RFQ_MODES.MODE_1]: 'Mode 1',
+  [RFQ_MODES.MODE_2]: 'Mode 2',
+  [RFQ_MODES.MODE_3]: 'Mode 3',
+});
+
+const RFQ_MODE_MAP = Object.freeze({
+  v0: RFQ_MODES.MODE_0,
+  v1: RFQ_MODES.MODE_1,
+  v2: RFQ_MODES.MODE_2,
+  v3: RFQ_MODES.MODE_3,
+  'mode 0': RFQ_MODES.MODE_0,
+  'mode 1': RFQ_MODES.MODE_1,
+  'mode 2': RFQ_MODES.MODE_2,
+  'mode 3': RFQ_MODES.MODE_3,
+  mode_0: RFQ_MODES.MODE_0,
+  mode_1: RFQ_MODES.MODE_1,
+  mode_2: RFQ_MODES.MODE_2,
+  mode_3: RFQ_MODES.MODE_3,
+  version_0: RFQ_MODES.MODE_0,
+  version_1: RFQ_MODES.MODE_1,
+  version_2: RFQ_MODES.MODE_2,
+  version_3: RFQ_MODES.MODE_3,
+});
+
 const SOURCING_MODES = [
   {
-    id: 'mode_0',
-    code: 'Version 0',
-    name: 'Version 0: Free Starter Trial Plan (Procucev Network Only)',
-    shortLabel: 'Version 0',
+    id: RFQ_MODES.MODE_0,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_0],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_0]}: Free Starter Trial Plan (Procucev Network Only)`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_0],
     description:
       'Free Starter Trial mode. RFQs are strictly circulated only to verified Procucev network vendors without consuming free credits.',
     badgeColor: 'border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10',
   },
   {
-    id: 'mode_1',
-    code: 'Version 1',
-    name: 'Version 1: Client Roster Sourcing Plan',
-    shortLabel: 'Version 1',
+    id: RFQ_MODES.MODE_1,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_1],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]}: Client Roster Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_1],
     description:
       'Private empanelled vendor network. RFQs are strictly circulated only to your pre-verified approved vendor list.',
     badgeColor: 'border-blue-500/40 text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-500/10',
   },
   {
-    id: 'mode_2',
-    code: 'Version 2',
-    name: 'Version 2: Hybrid Sourcing Plan',
-    shortLabel: 'Version 2',
+    id: RFQ_MODES.MODE_2,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_2],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]}: Hybrid Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_2],
     description:
       'Circulate to your private empanelled list first. If quotes or responses are insufficient, AI expands to Procucev Base Network.',
     badgeColor: 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10',
   },
   {
-    id: 'mode_3',
-    code: 'Version 3',
-    name: 'Version 3: AI Autonomous Sourcing Plan',
-    shortLabel: 'Version 3',
+    id: RFQ_MODES.MODE_3,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_3],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]}: AI Autonomous Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_3],
     description:
       'Autonomous Procucev Network Sourcing with double-blind supplier identity shielding, continuous AI evaluation, and best-fit routing.',
     badgeColor: 'border-purple-500/40 text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-500/10',
@@ -1838,4 +1878,7 @@ module.exports = {
   SMS_DLT_TEMPLATES,
   PRESENCE_ONLINE_THRESHOLD_MS,
   VENDOR_ASSIGNMENT_LIMITS,
+  RFQ_MODES,
+  RFQ_MODE_LABELS,
+  RFQ_MODE_MAP,
 };

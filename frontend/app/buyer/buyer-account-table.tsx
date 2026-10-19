@@ -911,9 +911,9 @@ export default function BuyerAccountTable() {
                     className="w-full text-xs"
                   >
                     <option value="free_trial">Free Trial (5 RFQs)</option>
-                    <option value="version_1">Version 1 (Mode 1)</option>
-                    <option value="version_2">Version 2 (Mode 2)</option>
-                    <option value="version_3">Version 3 (Mode 3)</option>
+                    <option value="version_1">Mode 1</option>
+                    <option value="version_2">Mode 2</option>
+                    <option value="version_3">Mode 3</option>
                   </select>
                 </div>
                 <div>
