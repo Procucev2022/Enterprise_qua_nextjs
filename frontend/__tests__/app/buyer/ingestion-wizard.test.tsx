@@ -476,6 +476,26 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(screen.getAllByPlaceholderText(MODAL.itemPlaceholder).length).toBeGreaterThan(0);
   });
 
+  it('retries a failed extraction with the selected document', async () => {
+    renderWizard();
+    uploadFile(new File(['dummy'], 'scan.pdf', { type: 'application/pdf' }));
+
+    mockExtract.mockResolvedValueOnce({ success: false, reason: 'AI_FAILED' });
+    mockExtract.mockResolvedValueOnce(successResult());
+    clickExtract();
+
+    await waitFor(() => {
+      expect(screen.getByText(EXTRACTION.reasonMessages.AI_FAILED)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: EXTRACTION.retryAction }));
+
+    await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.queryByText(EXTRACTION.reasonMessages.AI_FAILED)).not.toBeInTheDocument();
+    });
+  });
+
   it('surfaces the server-supplied technical detail for a failed extraction', async () => {
     renderWizard();
     uploadFile(new File(['dummy'], 'scan.pdf', { type: 'application/pdf' }));
