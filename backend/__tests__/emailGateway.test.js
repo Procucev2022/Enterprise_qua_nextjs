@@ -529,8 +529,7 @@ describe('emailGatewayService.pollViaGmailApi', () => {
 
   test('a stale in-flight flag from a hung run does not block later polls', async () => {
     emailGatewayService.runtime.isPolling = true;
-    emailGatewayService.runtime.pollStartedAt = Date.now();
-    emailGatewayService.runtime.pollStartedAt = Date.now() - 5 * 60 * 1000;
+    emailGatewayService.runtime.pollStartedAt = Date.now() - 7 * 60 * 1000;
     jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
     jest.spyOn(googleapis.google, 'gmail').mockReturnValue(gmailApi());
 

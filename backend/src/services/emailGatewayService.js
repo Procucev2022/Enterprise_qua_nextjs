@@ -49,20 +49,11 @@ const { INGESTION_OUTCOME } = emailGatewayQueries;
 // A poll that never clears its flag (a Gmail or Gemini call that hangs) must not
 // block every later run on a warm Worker isolate. The flag only counts as held
 // for this long; each external call is also bounded so a hang ends the poll.
-//
-// Live cron tails show the lock being SET and then nothing further logging for
-// that cycle at all -- not even this timeout's own rejection -- which points at
-// the platform's own cron invocation duration limit killing the isolate before
-// a 60s timer ever fires, leaving withTimeout's setTimeout (and the `finally`
-// that clears the lock) orphaned. Lowered well under that ceiling so our own
-// timeout wins the race and actually logs the real Gmail error instead of
-// going silent.
-const POLL_STALE_AFTER_MS = 2 * 60 * 1000;
+// Coordinated with Gemini's 5-minute operation budget (plus headroom) so the lock
+// is not abandoned mid-extraction.
+const POLL_STALE_AFTER_MS = 6 * 60 * 1000;
 const POLL_CALL_TIMEOUT_MS = 20 * 1000;
-// Gemini gets longer than the other calls: it retries across models inside its
-// own budget, and a 20s cap cut off ordinary extractions mid-answer (live:
-// "Gemini line-item extraction timed out after 20000ms" on a plain requisition).
-const EXTRACTION_TIMEOUT_MS = 45 * 1000;
+const EXTRACTION_TIMEOUT_MS = 5 * 60 * 1000;
 // No new message is started once a poll has run this long, so a poll that hits
 // slow extractions still ends well inside POLL_STALE_AFTER_MS (worst case ≈
 // this + one message fetch + one extraction + creation) and never overlaps the
@@ -1486,11 +1477,12 @@ async function processMessage(rawSource, config = resolveConfig()) {
   // recorded as "no line items" and dropped after one try.
   const notifyContext = { buyerAccount: authorisation.buyerAccount, config };
   const giveUpNotice = () => notifyRfqNotCreated(message, 'PROCESSING_FAILED', notifyContext);
+  const extractionTimeoutMs = Number(config?.extractionTimeoutMs || EXTRACTION_TIMEOUT_MS);
   let extraction;
   try {
     extraction = await withTimeout(
       geminiService.extractLineItems(prepared.extractionInput),
-      EXTRACTION_TIMEOUT_MS,
+      extractionTimeoutMs,
       'Gemini line-item extraction'
     );
   } catch (err) {
@@ -1740,9 +1732,11 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
   const { google } = require('googleapis');
   const gmail = google.gmail({ version: 'v1', auth });
 
+  const pollId = (state.currentPollId || 0) + 1;
+  state.currentPollId = pollId;
   state.isPolling = true;
   state.pollStartedAt = Date.now();
-  logger.info('Buyer poll lock SET', { site: 'pollViaGmailApi', startedAt: state.pollStartedAt }, 'EMAIL_GATEWAY');
+  logger.info('Buyer poll lock SET', { site: 'pollViaGmailApi', pollId, startedAt: state.pollStartedAt }, 'EMAIL_GATEWAY');
   state.consideredThisRun = 0;
   state.ingestedThisRun = 0;
   const startedAt = Date.now();
@@ -1868,6 +1862,9 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             continue;
           }
 
+          if (state.currentPollId === pollId) {
+            state.pollStartedAt = Date.now();
+          }
           const result = await emailGateway.processMessage(rawSource, config);
           const resolvedMessageId = (result.message && result.message.messageId) || dedupeKey;
 
@@ -1960,9 +1957,11 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
     logger.error(`Email gateway poll failed (Gmail API): ${err.message}`, err, 'EMAIL_GATEWAY');
     return { skipped: false, error: err.message, considered: state.consideredThisRun, outcomes };
   } finally {
-    state.isPolling = false;
-    state.lastPollAt = new Date().toISOString();
-    state.lastPollDurationMs = Date.now() - startedAt;
+    if (state.currentPollId === pollId) {
+      state.isPolling = false;
+      state.lastPollAt = new Date().toISOString();
+      state.lastPollDurationMs = Date.now() - startedAt;
+    }
   }
 }
 

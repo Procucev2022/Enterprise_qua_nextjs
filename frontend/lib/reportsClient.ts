@@ -118,14 +118,14 @@ export const REPORT_OPTIONS: ReportConfig[] = [
     defaultFileName: 'Buyer_Credits_Report',
   },
 
-  // Daily Activity Overview
+  // Daily Activity Reports
   {
     id: 'daily_activity',
     category: 'daily_activity',
-    label: 'Daily System Activity & Operations Overview',
-    description: 'Consolidated overview of RFQs created, quotes received, new registrations, and audit trail events.',
+    label: 'Daily Operations Activity Report',
+    description: 'System-wide summary of daily RFQs, active suppliers, dispatched requisitions, and audit actions.',
     endpoint: '/api/reports/daily-activity',
-    defaultFileName: 'Daily_Operations_Activity',
+    defaultFileName: 'Daily_Operations_Activity_Report',
   },
 ];
 
@@ -139,8 +139,8 @@ export async function fetchReportData(
     if (reportConfig.requestType) {
       params.append('requestType', reportConfig.requestType);
     }
-    if (startDate) params.append('startDate', startDate);
-    if (endDate) params.append('endDate', endDate);
+    if (startDate !== undefined && startDate !== null) params.append('startDate', startDate);
+    if (endDate !== undefined && endDate !== null) params.append('endDate', endDate);
 
     const url = `${reportConfig.endpoint}?${params.toString()}`;
     const res = await fetch(url);

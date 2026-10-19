@@ -887,7 +887,16 @@ describe('Gemini document extraction service', () => {
       global.fetch = jest.fn(
         (_url, init) =>
           new Promise((_resolve, reject) => {
-            init.signal.addEventListener('abort', () => reject(new Error('The operation was aborted')));
+            if (init?.signal?.aborted) {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              return reject(err);
+            }
+            init?.signal?.addEventListener('abort', () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
           })
       );
 

@@ -85,7 +85,7 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'free_trial',
     name: 'Free Trial Starter (V0)',
-    price: '$0',
+    price: '₹0',
     billing: '5 Free RFQ Credits included for V1/V2/V3 + Unlimited V0',
     description: 'Create unlimited V0 RFQs sent to Procucev verified vendors (0 credits deducted), plus 5 free RFQ credits for V1, V2, or V3.',
     features: [
@@ -99,7 +99,7 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_1',
     name: 'Version 1 Plan: Client Roster Only',
-    price: '$199',
+    price: '₹199',
     billing: 'per user / month',
     description: 'Streamline procurement across your private pre-approved vendor roster with automated working-hour follow-ups.',
     features: [
@@ -112,7 +112,7 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_2',
     name: 'Version 2 Plan: Hybrid Sourcing',
-    price: '$499',
+    price: '₹499',
     billing: 'per user / month',
     description: 'Cumulative plan giving full access to BOTH Mode 1 and Mode 2 with hybrid platform network discovery.',
     features: [
@@ -125,7 +125,7 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_3',
     name: 'Version 3 Plan: Autonomous AI Enterprise',
-    price: '$999',
+    price: '₹999',
     billing: 'per user / month',
     description: 'Ultimate all-inclusive tier giving full access to Mode 1, Mode 2, AND Mode 3 with autonomous AI governance.',
     features: [
@@ -154,13 +154,13 @@ const VENDOR_SUBSCRIPTION_PLANS = [
   {
     id: 'connect',
     name: 'Connect Model (Marketplace Expansion)',
-    price: '$149',
+    price: '₹149',
     billing: 'per 3 months (90 days)',
     description: 'Expand your market reach. Access & download open RFQs across the entire Procucev Network Marketplace.',
     features: [
       'All Premium Client-Uploaded features included',
       'Download up to 50 RFQs within 3 months (90-day period)',
-      '🎁 360° AI Self-Evaluation Fee: $0 FREE (Waived from $5)',
+      '🎁 360° AI Self-Evaluation Fee: ₹0 FREE (Waived from ₹5)',
       'Access to full Open Network Marketplace RFQs',
       'Instant email dispatch of technical BOQ spreadsheets & specifications',
     ],
@@ -168,13 +168,13 @@ const VENDOR_SUBSCRIPTION_PLANS = [
   {
     id: 'select',
     name: 'Select Model (Catalogue & High Volume)',
-    price: '$349',
+    price: '₹349',
     billing: 'per 3 months (90 days)',
     description: 'Complete tier for high-volume suppliers. Build your Item Catalogue and capture maximum marketplace demand.',
     features: [
       'Download up to 100 RFQs within 3 months',
       'Published Item SKU Catalogue with direct buyer visibility',
-      '🎁 360° AI Self-Evaluation Fee: $0 FREE (Waived from $5)',
+      '🎁 360° AI Self-Evaluation Fee: ₹0 FREE (Waived from ₹5)',
       'Priority AI routing in Mode 2 & Mode 3 matching algorithms',
     ],
   },
