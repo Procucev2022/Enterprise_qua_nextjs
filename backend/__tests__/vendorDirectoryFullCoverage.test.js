@@ -808,7 +808,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
           next
         );
 
-        expect(pageSpy).toHaveBeenCalledWith({ limit: 25, offset: 50, search: 'sql', category: '', scopedBuyerId: '' });
+        expect(pageSpy).toHaveBeenCalledWith({ limit: 25, offset: 50, search: 'sql', email: '', category: '', scopedBuyerId: '' });
         // The expensive full-table resync path must not run at all for this case.
         expect(getVendorsSpy).not.toHaveBeenCalled();
         expect(res.json).toHaveBeenCalledWith({
@@ -896,6 +896,30 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
         expect(pageSpy).toHaveBeenCalledWith(
           expect.objectContaining({ category: 'Fasteners' })
+        );
+      } finally {
+        pool.pool = originalPool;
+        pageSpy.mockRestore();
+      }
+    });
+
+    test('getVendors: an email query param is passed through to the SQL fast path', async () => {
+      const next = jest.fn();
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { query: jest.fn() };
+      const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({ rows: [], total: 0 });
+
+      try {
+        const res = mockRes();
+        await vendorController.getVendors(
+          { query: { buyerId: 'all', page: '1', pageSize: '10', email: 'test@vendor.com' } },
+          res,
+          next
+        );
+
+        expect(pageSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ email: 'test@vendor.com' })
         );
       } finally {
         pool.pool = originalPool;

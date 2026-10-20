@@ -3031,3 +3031,22 @@ PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>  npm run dev
 
  or any thing missing just tell me I will add in env
 ```
+### 2026-10-19T13:03:44.7692728+05:30
+
+```text
+What could be the issue for this issue, gemini extraction failure. & fix it
+```
+
+### 2026-10-19T13:39:40.6632222+05:30
+
+```text
+if there is timeout issue per model, can we remove time limit per model, Sometimes gemini may take some long
+
+Let's have complete operation time limit to 5 minute only. Also can we give re-try button as well in case of failure for this if not provided
+```
+
+### 2026-10-19T14:03:00.4883019+05:30
+
+```text
+Remove this gemini timeout related env variable, gemini size related from here, move it to constants or something file, We don't need these in env
+```

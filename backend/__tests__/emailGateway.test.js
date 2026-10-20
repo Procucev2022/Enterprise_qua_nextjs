@@ -56,6 +56,8 @@ function buyerAccount(overrides = {}) {
     id: 'buyer-acc-101',
     organizationName: 'L&T Heavy Engineering',
     corporateEmail: SENDER,
+    subscriptionPlan: 'version_2',
+    remainingFreeRFQs: 5,
     city: 'Bangalore',
     state: 'Karnataka',
     pincode: '560001',
@@ -529,8 +531,7 @@ describe('emailGatewayService.pollViaGmailApi', () => {
 
   test('a stale in-flight flag from a hung run does not block later polls', async () => {
     emailGatewayService.runtime.isPolling = true;
-    emailGatewayService.runtime.pollStartedAt = Date.now();
-    emailGatewayService.runtime.pollStartedAt = Date.now() - 5 * 60 * 1000;
+    emailGatewayService.runtime.pollStartedAt = Date.now() - 7 * 60 * 1000;
     jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
     jest.spyOn(googleapis.google, 'gmail').mockReturnValue(gmailApi());
 
@@ -1606,13 +1607,40 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       expect(resolveBuyerSourcingMode('mode_3')).toBe('mode_3');
     });
 
-    test('defaults to mode_2 for free_trial, unknown plan, or empty account', () => {
-      expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial' })).toBe('mode_2');
-      expect(resolveBuyerSourcingMode({ subscriptionPlan: 'unknown_plan' })).toBe('mode_2');
-      expect(resolveBuyerSourcingMode({})).toBe('mode_2');
-      expect(resolveBuyerSourcingMode(null)).toBe('mode_2');
-      expect(resolveBuyerSourcingMode(undefined)).toBe('mode_2');
-      expect(resolveBuyerSourcingMode(42)).toBe('mode_2');
+    test('defaults to mode_0 for free_trial, unknown plan, or empty account', () => {
+      expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial' })).toBe('mode_0');
+      expect(resolveBuyerSourcingMode({ subscriptionPlan: 'unknown_plan' })).toBe('mode_0');
+      expect(resolveBuyerSourcingMode({})).toBe('mode_0');
+      expect(resolveBuyerSourcingMode(null)).toBe('mode_0');
+      expect(resolveBuyerSourcingMode(undefined)).toBe('mode_0');
+      expect(resolveBuyerSourcingMode(42)).toBe('mode_0');
+    });
+
+    test('selects highest active subscribed version when multiple subscriptions exist', () => {
+      expect(resolveBuyerSourcingMode({
+        subscriptions: [
+          { plan: 'version_1', status: 'active' },
+          { plan: 'version_2', status: 'active' },
+        ],
+      })).toBe('mode_2');
+      expect(resolveBuyerSourcingMode({
+        subscriptions: [
+          { plan: 'version_2', status: 'active' },
+          { plan: 'version_3', status: 'active' },
+        ],
+      })).toBe('mode_3');
+    });
+
+    test('ignores expired/inactive subscriptions and falls back to mode_0', () => {
+      expect(resolveBuyerSourcingMode({
+        subscriptionPlan: 'version_1',
+        subscriptionStatus: 'expired',
+      })).toBe('mode_0');
+      expect(resolveBuyerSourcingMode({
+        subscriptions: [
+          { plan: 'version_3', status: 'expired' },
+        ],
+      })).toBe('mode_0');
     });
 
     test('processMessage assigns mode_1 for buyer on version_1 plan', async () => {
@@ -1639,16 +1667,16 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       expect(payload.sourcingMode).toBe('mode_3');
     });
 
-    test('processMessage defaults to mode_2 for buyer on free_trial plan', async () => {
+    test('processMessage defaults to mode_0 for buyer on free_trial plan', async () => {
       mockExtraction();
-      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount({ subscriptionPlan: 'free_trial' }));
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 0 }));
       const created = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-trial', rfqNumber: 'RFQ-TRIAL-0001' });
 
       const result = await emailGatewayService.processMessage(raw(), config());
 
       expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
       const [payload] = created.mock.calls[0];
-      expect(payload.sourcingMode).toBe('mode_2');
+      expect(payload.sourcingMode).toBe('mode_0');
     });
   });
 

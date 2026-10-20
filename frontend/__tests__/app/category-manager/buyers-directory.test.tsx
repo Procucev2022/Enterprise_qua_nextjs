@@ -222,7 +222,7 @@ describe('BuyersDirectory Component Suite', () => {
     expect(screen.getAllByText('suresh@tatamotors.com').length).toBeGreaterThanOrEqual(1);
 
     // Check Tab 2: RFQ History
-    const rfqTab = screen.getByText(/2. RFQ History/);
+    const rfqTab = screen.getByRole('button', { name: /RFQs/i });
     fireEvent.click(rfqTab);
     expect(screen.getByText('RFQ-TM-001')).toBeInTheDocument();
     expect(screen.getByText('Precision Alloy Wheels')).toBeInTheDocument();
@@ -233,23 +233,23 @@ describe('BuyersDirectory Component Suite', () => {
     expect(onSelectRFQ).toHaveBeenCalled();
 
     // Check Tab 3: Credits & Quotas
-    const creditsTab = screen.getByText('3. Credits & Quotas');
+    const creditsTab = screen.getByRole('button', { name: /^Credit$/i });
     fireEvent.click(creditsTab);
     expect(screen.getByText('Remaining Free RFQs')).toBeInTheDocument();
     expect(screen.getAllByText('4').length).toBeGreaterThanOrEqual(1);
 
     // Check Tab 4: Communications
-    const commsTab = screen.getByText(/4. Communications/);
+    const commsTab = screen.getByRole('button', { name: /Messages/i });
     fireEvent.click(commsTab);
     expect(screen.getByText(/Enterprise Onboarding Confirmation/)).toBeInTheDocument();
 
     // Check Tab 5: Payments
-    const payTab = screen.getByText(/5. Payments/);
+    const payTab = screen.getByRole('button', { name: /Payments/i });
     fireEvent.click(payTab);
     expect(screen.getAllByText(/Growth Enterprise/).length).toBeGreaterThanOrEqual(1);
 
     // Check Tab 6: Audit Activity
-    const actTab = screen.getByText(/6. Audit Activity/);
+    const actTab = screen.getByRole('button', { name: /^Audit$/i });
     fireEvent.click(actTab);
     expect(screen.getByText('BUYER_RFQ_CREATED')).toBeInTheDocument();
 
@@ -272,7 +272,7 @@ describe('BuyersDirectory Component Suite', () => {
     expect(screen.getAllByText('Bharat Electronics').length).toBeGreaterThanOrEqual(1);
 
     // Tab 2: RFQ with 0 budget
-    const belRfqTab = screen.getByText(/2. RFQ History/);
+    const belRfqTab = screen.getByRole('button', { name: /RFQs/i });
     fireEvent.click(belRfqTab);
     expect(screen.getByText('RFQ-BEL-002')).toBeInTheDocument();
     expect(screen.getByText('Open')).toBeInTheDocument();
@@ -290,12 +290,12 @@ describe('BuyersDirectory Component Suite', () => {
     expect(screen.getAllByText('L&T Heavy Engineering').length).toBeGreaterThanOrEqual(1);
 
     // Tab 2: Empty RFQs
-    const emptyRfqTab = screen.getByText(/2. RFQ History/);
+    const emptyRfqTab = screen.getByRole('button', { name: /RFQs/i });
     fireEvent.click(emptyRfqTab);
     expect(screen.getByText('No RFQs created by this buyer yet.')).toBeInTheDocument();
 
     // Tab 6: Empty Audit Logs
-    const emptyActTab = screen.getByText(/6. Audit Activity/);
+    const emptyActTab = screen.getByRole('button', { name: /^Audit$/i });
     fireEvent.click(emptyActTab);
     expect(screen.getByText('No audit events logged for this enterprise buyer.')).toBeInTheDocument();
 
@@ -334,7 +334,7 @@ describe('BuyersDirectory Component Suite', () => {
     fireEvent.click(dossierBtns[0]);
 
     // Go to RFQ tab
-    const rfqTab = screen.getByText(/2. RFQ History/);
+    const rfqTab = screen.getByRole('button', { name: /RFQs/i });
     fireEvent.click(rfqTab);
 
     // Click Open RFQ Matrix
@@ -364,8 +364,8 @@ describe('BuyersDirectory Component Suite', () => {
     expect(prevBtn).toBeDisabled();
     expect(nextBtn).toBeDisabled(); // 4 items with page size 25
 
-    // Total Spend KPI card displays calculated spend
-    expect(screen.getByText('Total Sourcing Spend')).toBeInTheDocument();
+    // Total Spend KPI card removed
+    expect(screen.queryByText('Total Sourcing Spend')).not.toBeInTheDocument();
   });
 });
 

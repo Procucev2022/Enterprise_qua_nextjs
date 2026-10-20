@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Truck,
   Search,
@@ -29,6 +29,7 @@ import {
   Award,
   Zap,
   Building2,
+  Loader2,
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { RFQItem, RFQVendorCandidate, VendorEntry } from '@/lib/types';
@@ -45,15 +46,54 @@ interface SellersDirectoryProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
 }
 
+/**
+/**
+ * Returns authentic last login timestamp for a seller if available.
+ * If no genuine authentication timestamp exists, returns '' so the UI renders 'Never'.
+ */
+function getSellerActualLastLogin(
+  seller: {
+    id?: string;
+    email?: string;
+    name?: string;
+    lastLogin?: string;
+    last_login_at?: string;
+    lastLoginDate?: string;
+    loginDateTime?: string;
+    createdAt?: string;
+    created_at?: string;
+  },
+  _rfqs: RFQItem[] = [],
+  _auditLogs: any[] = []
+): string {
+  const rawLogin =
+    seller.lastLogin ||
+    seller.last_login_at ||
+    seller.lastLoginDate ||
+    (seller as any).loginDateTime;
+
+  if (rawLogin && typeof rawLogin === 'string' && rawLogin.trim()) {
+    try {
+      const parsed = new Date(rawLogin);
+      if (!isNaN(parsed.getTime())) return parsed.toISOString();
+    } catch {
+      // Ignore invalid date strings
+    }
+  }
+
+  return '';
+}
+
 export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps) {
-  const { buyerVendors = [], rfqs = [], auditLogs = [] } = useApp();
+  const { buyerVendors = [], rfqs = [], auditLogs = [], categoryTaxonomy = [] } = useApp();
 
   // Remote vendors from backend + local buyer vendors
   const [remoteVendors, setRemoteVendors] = useState<RFQVendorCandidate[]>([]);
   const [loadingVendors, setLoadingVendors] = useState<boolean>(true);
 
-  // Search & Filters
+  // Search & Filters (Single unified search field for company, contact, email, category, city)
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedSource, setSelectedSource] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedRating, setSelectedRating] = useState<string>('all');
@@ -78,22 +118,45 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
   const [ratingRevisionRemarks, setRatingRevisionRemarks] = useState<string>('');
   const [ratingSuccessToast, setRatingSuccessToast] = useState<string | null>(null);
 
-  // Load vendors from API on mount
+  // Debounce search input for backend querying
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+    }, 350);
+    return () => clearTimeout(handler);
+  }, [searchTerm]);
+
+  // Load vendors from API dynamically (supports deep DB search across 600k+ vendors)
+  const fetchSeqRef = useRef(0);
   useEffect(() => {
     let active = true;
+    const query = debouncedSearch.trim();
+    const seq = ++fetchSeqRef.current;
+    setLoadingVendors(true);
+
     async function load() {
-      setLoadingVendors(true);
-      const res = await fetchAllVendors({ pageSize: 150 });
-      if (active && res.success && (res.candidates || (res as any).data)) {
-        setRemoteVendors(res.candidates || (res as any).data);
+      try {
+        const res = await fetchAllVendors({
+          pageSize: 150,
+          search: query || undefined,
+          category: selectedCategory !== 'all' ? selectedCategory : undefined,
+        });
+        if (active && seq === fetchSeqRef.current && res.success && (res.candidates || (res as any).data)) {
+          setRemoteVendors(res.candidates || (res as any).data);
+        }
+      } catch {
+        // Keep current vendors on network error
+      } finally {
+        if (active && seq === fetchSeqRef.current) {
+          setLoadingVendors(false);
+        }
       }
-      if (active) setLoadingVendors(false);
     }
     load();
     return () => {
       active = false;
     };
-  }, []);
+  }, [debouncedSearch, selectedCategory]);
 
   // Merge remote vendors and buyer-uploaded vendors into unified seller entities
   const allSellers = useMemo(() => {
@@ -102,6 +165,14 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
     // Add remote network vendors
     remoteVendors.forEach((v) => {
       const id = String(v.id || v.email);
+      const deliveryLocation =
+        (v as any).deliveryLocation ||
+        (v as any).serviceLocations ||
+        (v as any).preferredLocations ||
+        (v as any).location ||
+        (v as any).city ||
+        'India';
+      const lastLogin = getSellerActualLastLogin(v, rfqs, auditLogs);
       map.set(id, {
         id,
         name: v.name || 'Verified Supplier',
@@ -109,6 +180,8 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
         email: v.email || '',
         phone: (v as any).phone || '',
         location: (v as any).location || (v as any).city || 'India',
+        deliveryLocation: typeof deliveryLocation === 'string' ? deliveryLocation : (Array.isArray(deliveryLocation) ? deliveryLocation.join(', ') : 'India'),
+        lastLogin,
         source: (v as any).source || 'procucev_network',
         majorCategory: (v as any).majorCategory || (v as any).category || 'Industrial Supplies',
         minorCategories: Array.isArray((v as any).minorCategories) ? (v as any).minorCategories : [],
@@ -126,15 +199,24 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
 
     // Add local buyer-uploaded vendors
     buyerVendors.forEach((bv) => {
-      const id = String(bv.id || bv.email);
+      const id = String(bv.id || bv.email || 'buyer-' + Math.random());
       if (!map.has(id)) {
+        const deliveryLocation =
+          (bv as any).deliveryLocation ||
+          (bv as any).serviceLocations ||
+          (bv as any).preferredLocations ||
+          bv.location ||
+          'India';
+        const lastLogin = getSellerActualLastLogin(bv, rfqs, auditLogs);
         map.set(id, {
           id,
-          name: bv.name,
-          contactPerson: bv.contactPerson || bv.name,
-          email: bv.email,
+          name: bv.name || 'Verified Supplier',
+          contactPerson: bv.contactPerson || bv.name || 'Key Accounts Desk',
+          email: bv.email || '',
           phone: bv.phone || '',
           location: bv.location || 'India',
+          deliveryLocation: typeof deliveryLocation === 'string' ? deliveryLocation : (Array.isArray(deliveryLocation) ? deliveryLocation.join(', ') : 'India'),
+          lastLogin,
           source: 'buyer_uploaded',
           majorCategory: bv.majorCategory || 'Custom Client Category',
           minorCategories: Array.isArray(bv.minorCategories) ? bv.minorCategories : [],
@@ -152,7 +234,7 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
     });
 
     return Array.from(map.values());
-  }, [remoteVendors, buyerVendors]);
+  }, [remoteVendors, buyerVendors, rfqs, auditLogs]);
 
   // KPI Metrics Calculation
   const totalSellersCount = allSellers.length;
@@ -166,25 +248,39 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
     return Math.round(total / allSellers.length);
   }, [allSellers]);
 
-  // Unique categories for filter dropdown
+  // Unique categories for filter dropdown derived from taxonomy & catalogs rather than filtered list
   const categoryOptions = useMemo(() => {
     const set = new Set<string>();
-    allSellers.forEach((s) => {
-      if (s.majorCategory) set.add(s.majorCategory);
+    if (Array.isArray(categoryTaxonomy)) {
+      categoryTaxonomy.forEach((c) => {
+        if (c && c.majorCategory) set.add(c.majorCategory);
+      });
+    }
+    buyerVendors.forEach((bv) => {
+      if (bv && bv.majorCategory) set.add(bv.majorCategory);
     });
-    return Array.from(set);
-  }, [allSellers]);
+    remoteVendors.forEach((rv: any) => {
+      const cat = rv?.majorCategory || rv?.category;
+      if (cat) set.add(cat);
+    });
+    if (selectedCategory && selectedCategory !== 'all') {
+      set.add(selectedCategory);
+    }
+    return Array.from(set).sort();
+  }, [categoryTaxonomy, buyerVendors, remoteVendors, selectedCategory]);
 
   // Filtered Sellers
   const filteredSellers = useMemo(() => {
     return allSellers.filter((seller) => {
-      const q = searchTerm.toLowerCase();
+      const q = searchTerm.toLowerCase().trim();
+
       const matchesSearch =
         !q ||
         seller.name?.toLowerCase().includes(q) ||
         seller.contactPerson?.toLowerCase().includes(q) ||
         seller.email?.toLowerCase().includes(q) ||
         seller.location?.toLowerCase().includes(q) ||
+        seller.deliveryLocation?.toLowerCase().includes(q) ||
         seller.majorCategory?.toLowerCase().includes(q);
 
       const matchesSource =
@@ -215,12 +311,20 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
   // Derived seller-specific RFQs, Audit Logs, and communications for dossier
   const sellerRfqs = useMemo(() => {
     if (!activeSeller) return [];
+    const sellerId = activeSeller.id;
+    const sellerEmail = (activeSeller.email || '').toLowerCase();
+    const sellerName = (activeSeller.name || '').toLowerCase();
     return rfqs.filter((r) => {
       const assigned = (r.assignedVendors || []).some(
-        (v) => v.id === activeSeller.id || v.email === activeSeller.email || v.name === activeSeller.name
+        (v) =>
+          (v.id && v.id === sellerId) ||
+          (sellerEmail && v.email && v.email.toLowerCase() === sellerEmail) ||
+          (sellerName && v.name && v.name.toLowerCase() === sellerName)
       );
       const quoted = (r.quotes || []).some(
-        (q) => q.vendorId === activeSeller.id || q.vendorName === activeSeller.name
+        (q) =>
+          (q.vendorId && q.vendorId === sellerId) ||
+          (sellerName && q.vendorName && q.vendorName.toLowerCase() === sellerName)
       );
       return assigned || quoted;
     });
@@ -228,12 +332,14 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
 
   const sellerAuditLogs = useMemo(() => {
     if (!activeSeller) return [];
+    const sellerEmail = (activeSeller.email || '').toLowerCase();
+    const sellerName = (activeSeller.name || '').toLowerCase();
     return auditLogs.filter((log) => {
-      const actor = (log as any).actorEmail || log.user;
-      const details = (log as any).details || log.action;
+      const actor = ((log as any).actorEmail || log.user || '').toLowerCase();
+      const details = ((log as any).details || log.action || '').toLowerCase();
       return (
-        (actor && actor.toLowerCase() === activeSeller.email.toLowerCase()) ||
-        (details && details.toLowerCase().includes(activeSeller.name.toLowerCase()))
+        (sellerEmail && actor && actor === sellerEmail) ||
+        (sellerName && details && details.includes(sellerName))
       );
     });
   }, [activeSeller, auditLogs]);
@@ -241,21 +347,22 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
   const sellerCommunications = useMemo(() => {
     if (!activeSeller) return [];
     const logs = [];
+    const sellerEmail = activeSeller.email || 'supplier@procucev.com';
     logs.push({
       id: `comm-welcome-${activeSeller.id}`,
       channel: 'WHATSAPP & EMAIL',
       subject: 'Procucev Supplier Network Onboarding & Verification',
-      recipient: activeSeller.email,
+      recipient: sellerEmail,
       timestamp: new Date().toISOString(),
       status: 'VERIFIED_DELIVERED',
-      preview: `Supplier verified and catalog indexed across ${activeSeller.majorCategory}. Free quotation credits allocated.`,
+      preview: `Supplier verified and catalog indexed across ${activeSeller.majorCategory || 'Industrial Supplies'}. Free quotation credits allocated.`,
     });
     sellerRfqs.forEach((rfq, idx) => {
       logs.push({
         id: `comm-quote-${rfq.id}-${idx}`,
         channel: 'EMAIL_INVITATION',
         subject: `RFQ Invitation Dispatch: ${rfq.rfqNumber}`,
-        recipient: activeSeller.email,
+        recipient: sellerEmail,
         timestamp: rfq.createdAt || new Date().toISOString(),
         status: 'DISPATCHED',
         preview: `Direct opportunity invitation sent for "${rfq.title}" under ${RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}.`,
@@ -285,7 +392,9 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
       ContactPerson: s.contactPerson || '',
       Email: s.email,
       Phone: s.phone,
-      Location: s.location,
+      CompanyLocation: s.location,
+      DeliveryLocation: s.deliveryLocation || s.location || 'All India',
+      LastLogin: s.lastLogin ? formatIndianDateTime(s.lastLogin) : 'Never',
       Source: s.source === 'procucev_network' ? 'Procucev Network' : 'Buyer Uploaded',
       MajorCategory: s.majorCategory,
       AIScore: s.score,
@@ -382,58 +491,72 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
       </div>
 
       {/* Toolbar / Search & Filter Controls */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto">
+        <div className="relative flex-1 min-w-[240px] max-w-md">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
           <input
             type="text"
-            placeholder="Search company, contact, category, city..."
+            placeholder="Search company, contact, email, category, city..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            className="w-full pl-8 pr-7 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
           />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm('')}
+              className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              title="Clear search"
+              aria-label="Clear search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Source Filter */}
-          <select
-            aria-label="Filter by source"
-            value={selectedSource}
-            onChange={(e) => setSelectedSource(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-          >
-            <option value="all">All Sources</option>
-            <option value="network">Procucev Network</option>
-            <option value="buyer">Buyer Uploaded</option>
-          </select>
+        {loadingVendors && (
+          <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 shrink-0 px-1">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <span className="hidden sm:inline text-[11px] font-medium">Searching...</span>
+          </div>
+        )}
 
-          {/* Category Filter */}
-          <select
-            aria-label="Filter by category"
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 max-w-[200px] focus:outline-none focus:ring-1 focus:ring-emerald-500"
-          >
-            <option value="all">All Categories</option>
-            {categoryOptions.map((cat) => (
-              <option key={cat} value={cat}>
-                {cat}
-              </option>
-            ))}
-          </select>
+        {/* Source Filter */}
+        <select
+          aria-label="Filter by source"
+          value={selectedSource}
+          onChange={(e) => setSelectedSource(e.target.value)}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">All Sources</option>
+          <option value="network">Procucev Network</option>
+          <option value="buyer">Buyer Uploaded</option>
+        </select>
 
-          {/* Rating Filter */}
-          <select
-            aria-label="Filter by rating"
-            value={selectedRating}
-            onChange={(e) => setSelectedRating(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-          >
-            <option value="all">All Ratings</option>
-            <option value="4plus">★ 4.0+ Stars</option>
-            <option value="4.5plus">★ 4.5+ Stars</option>
-          </select>
-        </div>
+        {/* Category Filter */}
+        <select
+          aria-label="Filter by category"
+          value={selectedCategory}
+          onChange={(e) => setSelectedCategory(e.target.value)}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 max-w-[200px] focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">All Categories</option>
+          {categoryOptions.map((cat) => (
+            <option key={cat} value={cat}>
+              {cat}
+            </option>
+          ))}
+        </select>
+        {/* Rating Filter */}
+        <select
+          aria-label="Filter by rating"
+          value={selectedRating}
+          onChange={(e) => setSelectedRating(e.target.value)}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">All Ratings</option>
+          <option value="4plus">★ 4.0+ Stars</option>
+          <option value="4.5plus">★ 4.5+ Stars</option>
+        </select>
       </div>
 
       {/* Sellers Data Table */}
@@ -442,29 +565,27 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
           <table className="w-full text-left text-xs border-collapse">
             <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
               <tr>
-                <th className="px-4 py-3 font-semibold">Supplier / Company</th>
-                <th className="px-4 py-3 font-semibold">Contact & Location</th>
-                <th className="px-4 py-3 font-semibold">Category & Source</th>
-                <th className="px-4 py-3 font-semibold">360° AI Score & Rating</th>
-                <th className="px-4 py-3 font-semibold">Credits & Quotas</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 font-semibold text-right">Actions</th>
+                <th className="px-4 py-2.5 font-semibold">Supplier</th>
+                <th className="px-4 py-2.5 font-semibold">Location</th>
+                <th className="px-4 py-2.5 font-semibold">Delivery Location</th>
+                <th className="px-4 py-2.5 font-semibold">Category</th>
+                <th className="px-4 py-2.5 font-semibold">Last Login</th>
+                <th className="px-4 py-2.5 font-semibold">Rating</th>
+                <th className="px-4 py-2.5 font-semibold">Credits</th>
+                <th className="px-4 py-2.5 font-semibold">Status</th>
+                <th className="px-4 py-2.5 font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-800 dark:text-slate-200">
               {filteredSellers.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-slate-500">
+                  <td colSpan={9} className="px-4 py-12 text-center text-slate-500">
                     <Filter className="w-8 h-8 text-slate-300 dark:text-slate-700 mx-auto mb-2" />
                     <p className="font-medium">No suppliers found matching your query.</p>
                   </td>
                 </tr>
               ) : (
                 paginatedSellers.map((seller) => {
-                  const contactDisplay =
-                    seller.contactPerson && seller.contactPerson !== seller.name
-                      ? seller.contactPerson
-                      : 'Key Accounts Desk';
                   const isVerified =
                     seller.status?.includes('ACTIVE') ||
                     seller.status?.includes('VERIFIED');
@@ -474,10 +595,10 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
                       key={seller.id}
                       className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
                     >
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-3">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
                           <div
-                            className={`w-9 h-9 rounded-xl font-bold flex items-center justify-center text-sm shadow-xs ${
+                            className={`w-8 h-8 rounded-lg font-bold flex items-center justify-center text-xs shrink-0 ${
                               seller.source === 'procucev_network'
                                 ? 'bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/50'
                                 : 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/50'
@@ -485,88 +606,53 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
                           >
                             {seller.name.charAt(0).toUpperCase()}
                           </div>
-                          <div>
-                            <p className="font-semibold text-slate-900 dark:text-white leading-tight">
-                              {seller.name}
-                            </p>
-                            <p className="text-[11px] text-slate-500 leading-tight mt-0.5">{seller.email}</p>
-                          </div>
+                          <span className="font-semibold text-slate-900 dark:text-white truncate">
+                            {seller.name}
+                          </span>
                         </div>
                       </td>
 
-                      <td className="px-4 py-3.5">
-                        <p className="font-medium text-slate-800 dark:text-slate-200">
-                          {contactDisplay}
-                        </p>
-                        <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
-                          <MapPin className="w-3 h-3 text-slate-400" />
-                          <span>{seller.location || 'India'}</span>
-                        </p>
+                      <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">
+                        {seller.location || 'India'}
                       </td>
 
-                      <td className="px-4 py-3.5">
-                        <p
-                          className="font-medium text-slate-800 dark:text-slate-200 max-w-[200px] truncate"
-                          title={seller.majorCategory}
-                        >
-                          {seller.majorCategory}
-                        </p>
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold mt-1 border ${
-                            seller.source === 'procucev_network'
-                              ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border-indigo-200/70 dark:border-indigo-800'
-                              : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200/70 dark:border-amber-800'
-                          }`}
-                        >
-                          {seller.source === 'procucev_network' ? 'Procucev Network' : 'Buyer Uploaded'}
+                      <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">
+                        <span className="inline-flex items-center gap-1">
+                          <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span className="truncate max-w-[140px]" title={seller.deliveryLocation || seller.location || 'All India'}>
+                            {seller.deliveryLocation || seller.location || 'All India'}
+                          </span>
                         </span>
                       </td>
 
-                      <td className="px-4 py-3.5">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <div className="flex items-center gap-0.5">
-                              <span className="font-bold text-slate-900 dark:text-white text-xs">
-                                {seller.score}
-                              </span>
-                              <span className="text-[10px] text-slate-400">/100</span>
-                            </div>
-                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40">
-                              <Star className="w-2.5 h-2.5 fill-current text-amber-500" />
-                              {seller.rating}
-                            </span>
-                          </div>
-                          {/* Micro-progress bar */}
-                          <div className="w-24 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full transition-all duration-300 ${
-                                seller.score >= 85
-                                  ? 'bg-emerald-500'
-                                  : seller.score >= 70
-                                  ? 'bg-indigo-500'
-                                  : 'bg-amber-500'
-                              }`}
-                              style={{ width: `${Math.min(100, Math.max(10, seller.score))}%` }}
-                            />
-                          </div>
-                          <p className="text-[10px] text-slate-400 capitalize">
-                            {seller.subscriptionPlan || 'Preferred Partner'}
-                          </p>
-                        </div>
+                      <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200 max-w-[160px] truncate" title={seller.majorCategory}>
+                        {seller.majorCategory || 'General'}
                       </td>
 
-                      <td className="px-4 py-3.5">
-                        <p className="font-semibold text-slate-800 dark:text-slate-200">
-                          {seller.freeQuotationCredits} Quote Credits
-                        </p>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          {seller.rfqDownloadsUsed} RFQs downloaded
-                        </p>
+                      <td className="px-4 py-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                        {seller.lastLogin ? (
+                          <span className="inline-flex items-center gap-1 text-[11px]">
+                            <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span>{formatIndianDateTime(seller.lastLogin)}</span>
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-[11px]">Never</span>
+                        )}
                       </td>
 
-                      <td className="px-4 py-3.5">
+                      <td className="px-4 py-3">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40">
+                          <Star className="w-3 h-3 fill-current text-amber-500" />
+                          {seller.rating}
+                        </span>
+                      </td>
+
+                      <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">
+                        {seller.freeQuotationCredits} Credits
+                      </td>
+                      <td className="px-4 py-3">
                         <span
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border ${
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${
                             isVerified
                               ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60'
                               : 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
@@ -581,7 +667,7 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
                         </span>
                       </td>
 
-                      <td className="px-4 py-3.5 text-right">
+                      <td className="px-4 py-3 text-right">
                         <button
                           onClick={() => {
                             setActiveSeller(seller);
@@ -738,12 +824,12 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
             {/* Dossier Tabs Navigation */}
             <div className="flex items-center gap-1 px-5 border-b border-slate-200 dark:border-slate-800 overflow-x-auto bg-slate-50/30 dark:bg-slate-900">
               {[
-                { id: 'profile', label: '1. Basic Profile', icon: Building2 },
-                { id: 'rfqs', label: `2. RFQ & Quotes (${sellerRfqs.length})`, icon: Layers },
-                { id: 'credits', label: '3. Credits & Quotas', icon: CreditCard },
-                { id: 'communications', label: `4. Communications (${sellerCommunications.length})`, icon: MessageSquare },
-                { id: 'payments', label: `5. Payments (${sellerPayments.length})`, icon: Receipt },
-                { id: 'activity', label: '6. 360° AI Review & Activity', icon: Award },
+                { id: 'profile', label: 'Profile', icon: Building2 },
+                { id: 'rfqs', label: `Quote (${sellerRfqs.length})`, icon: Layers },
+                { id: 'credits', label: 'Credit', icon: CreditCard },
+                { id: 'communications', label: `Messages (${sellerCommunications.length})`, icon: MessageSquare },
+                { id: 'payments', label: `Payments (${sellerPayments.length})`, icon: Receipt },
+                { id: 'activity', label: 'Activity', icon: Award },
               ].map((tab) => {
                 const Icon = tab.icon;
                 return (
@@ -780,7 +866,7 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
                         </p>
                         <p className="flex items-center gap-2">
                           <Mail className="w-4 h-4 text-slate-400" />
-                          <span>{activeSeller.email}</span>
+                          <span>{activeSeller.email || 'No email on file'}</span>
                         </p>
                         <p className="flex items-center gap-2">
                           <Phone className="w-4 h-4 text-slate-400" />
@@ -788,7 +874,15 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
                         </p>
                         <p className="flex items-center gap-2">
                           <MapPin className="w-4 h-4 text-slate-400" />
-                          <span>{activeSeller.location || 'India'}</span>
+                          <span>Company Location: {activeSeller.location || 'India'}</span>
+                        </p>
+                        <p className="flex items-center gap-2">
+                          <Truck className="w-4 h-4 text-slate-400" />
+                          <span>Delivery Location: {activeSeller.deliveryLocation || activeSeller.location || 'All India'}</span>
+                        </p>
+                        <p className="flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-slate-400" />
+                          <span>Last Login: {activeSeller.lastLogin ? formatIndianDateTime(activeSeller.lastLogin) : 'Never logged in'}</span>
                         </p>
                       </div>
                     </div>

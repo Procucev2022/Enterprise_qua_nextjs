@@ -51,6 +51,7 @@ describe('SellersDirectory Component Suite', () => {
       rfqDownloadsUsed: 6,
       gstNumber: '24AAACA1111A1Z1',
       panNumber: 'AAACA1111A',
+      lastLogin: '2026-03-02T11:00:00Z',
     },
   ];
 
@@ -136,7 +137,7 @@ describe('SellersDirectory Component Suite', () => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
 
-    const searchInput = screen.getByPlaceholderText(/Search company, contact, category/);
+    const searchInput = screen.getByPlaceholderText(/Search company/i);
     fireEvent.change(searchInput, { target: { value: 'Apex' } });
 
     expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
@@ -185,10 +186,59 @@ describe('SellersDirectory Component Suite', () => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
 
-    const searchInput = screen.getByPlaceholderText(/Search company, contact, category/);
+    const searchInput = screen.getByPlaceholderText(/Search company/i);
     fireEvent.change(searchInput, { target: { value: 'apexfasteners.com' } });
     expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     expect(screen.queryByText('Precision Forgings Pvt Ltd')).not.toBeInTheDocument();
+  });
+
+  test('renders actual last login dates for sellers and searches by email in unified search', async () => {
+    render(<SellersDirectory />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+      expect(screen.getByText('Precision Forgings Pvt Ltd')).toBeInTheDocument();
+    });
+
+    // Apex Fasteners has genuine login timestamp, Precision Forgings displays "Never"
+    expect(screen.getByText('Never')).toBeInTheDocument();
+
+    const searchInput = screen.getByPlaceholderText(/Search company/i);
+    // Unified search by email
+    fireEvent.change(searchInput, { target: { value: 'precisionforgings.in' } });
+    expect(screen.getByText('Precision Forgings Pvt Ltd')).toBeInTheDocument();
+    expect(screen.queryByText('Apex Fasteners Ltd')).not.toBeInTheDocument();
+
+    // Clear search
+    const clearBtn = screen.getByLabelText('Clear search');
+    fireEvent.click(clearBtn);
+    expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+    expect(screen.getByText('Precision Forgings Pvt Ltd')).toBeInTheDocument();
+  });
+
+  test('categoryOptions retains options when a category is selected', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: mockBuyerVendors,
+      rfqs: mockRfqs,
+      auditLogs: mockAuditLogs,
+      categoryTaxonomy: [
+        { majorCategory: 'Industrial Fasteners', minorCategories: [] },
+        { majorCategory: 'Electrical Supplies', minorCategories: [] },
+      ],
+      setSelectedRFQForMatrix: jest.fn(),
+    });
+
+    render(<SellersDirectory />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+    });
+
+    const categorySelect = screen.getByDisplayValue('All Categories');
+    fireEvent.change(categorySelect, { target: { value: 'Industrial Fasteners' } });
+
+    // Ensure the other category options are still present in the dropdown
+    expect(screen.getByRole('option', { name: 'Electrical Supplies' })).toBeInTheDocument();
   });
 
   test('displays empty state when query matches no suppliers', async () => {
@@ -198,7 +248,7 @@ describe('SellersDirectory Component Suite', () => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
 
-    const searchInput = screen.getByPlaceholderText(/Search company, contact, category/);
+    const searchInput = screen.getByPlaceholderText(/Search company/i);
     fireEvent.change(searchInput, { target: { value: 'Nonexistent Vendor 9999' } });
 
     expect(screen.getByText('No suppliers found matching your query.')).toBeInTheDocument();
@@ -232,8 +282,8 @@ describe('SellersDirectory Component Suite', () => {
     expect(screen.getByText('Contact Details')).toBeInTheDocument();
     expect(screen.getByText('24AAACA1111A1Z1')).toBeInTheDocument();
 
-    // Tab 2: RFQ & Quotes
-    const rfqTab = screen.getByText(/2. RFQ & Quotes/);
+    // Tab 2: Quote
+    const rfqTab = screen.getByRole('button', { name: /Quote/i });
     fireEvent.click(rfqTab);
     expect(screen.getByText('RFQ-NET-001')).toBeInTheDocument();
     expect(screen.getByText('M16 Galvanized Bolts')).toBeInTheDocument();
@@ -243,24 +293,24 @@ describe('SellersDirectory Component Suite', () => {
     fireEvent.click(matrixBtn);
     expect(onSelectRFQ).toHaveBeenCalled();
 
-    // Tab 3: Credits & Quotas
-    const creditsTab = screen.getByText('3. Credits & Quotas');
+    // Tab 3: Credit
+    const creditsTab = screen.getByRole('button', { name: /^Credit$/i });
     fireEvent.click(creditsTab);
     expect(screen.getByText('Free Quotation Credits')).toBeInTheDocument();
     expect(screen.getByText('20')).toBeInTheDocument();
 
-    // Tab 4: Communications
-    const commsTab = screen.getByText(/4. Communications/);
+    // Tab 4: Messages
+    const commsTab = screen.getByRole('button', { name: /Messages/i });
     fireEvent.click(commsTab);
     expect(screen.getByText(/Procucev Supplier Network Onboarding/)).toBeInTheDocument();
 
     // Tab 5: Payments
-    const payTab = screen.getByText(/5. Payments/);
+    const payTab = screen.getByRole('button', { name: /Payments/i });
     fireEvent.click(payTab);
     expect(screen.getAllByText(/Preferred Partner/).length).toBeGreaterThanOrEqual(1);
 
-    // Tab 6: 360 AI Review & Activity
-    const actTab = screen.getByText(/6. 360° AI Review & Activity/);
+    // Tab 6: Activity
+    const actTab = screen.getByRole('button', { name: /^Activity$/i });
     fireEvent.click(actTab);
     expect(screen.getByText('Category Manager Rating Revision')).toBeInTheDocument();
 
@@ -302,27 +352,27 @@ describe('SellersDirectory Component Suite', () => {
     expect(screen.getAllByText('Precision Forgings Pvt Ltd').length).toBeGreaterThanOrEqual(1);
 
     // Tab 2: Empty RFQs
-    const emptyRfqTab = screen.getByText(/2. RFQ & Quotes/);
+    const emptyRfqTab = screen.getByRole('button', { name: /Quote/i });
     fireEvent.click(emptyRfqTab);
     expect(screen.getByText(/No active RFQs or bids found for this supplier/)).toBeInTheDocument();
 
     // Tab 3: Credits
-    const creditsTab2 = screen.getByText('3. Credits & Quotas');
+    const creditsTab2 = screen.getByRole('button', { name: /^Credit$/i });
     fireEvent.click(creditsTab2);
     expect(screen.getAllByText('10').length).toBeGreaterThanOrEqual(1);
 
     // Tab 4: Communications
-    const commsTab2 = screen.getByText(/4. Communications/);
+    const commsTab2 = screen.getByRole('button', { name: /Messages/i });
     fireEvent.click(commsTab2);
     expect(screen.getByText(/Procucev Supplier Network Onboarding/)).toBeInTheDocument();
 
     // Tab 5: Payments
-    const payTab2 = screen.getByText(/5. Payments/);
+    const payTab2 = screen.getByRole('button', { name: /Payments/i });
     fireEvent.click(payTab2);
     expect(screen.getByText(/SUP-INV/)).toBeInTheDocument();
 
     // Tab 6: Save revision without custom remarks (uses default remark)
-    const actTab2 = screen.getByText(/6. 360° AI Review & Activity/);
+    const actTab2 = screen.getByRole('button', { name: /^Activity$/i });
     fireEvent.click(actTab2);
     const saveRatingBtn2 = screen.getByText('Save Rating Revision');
     fireEvent.click(saveRatingBtn2);
@@ -386,7 +436,7 @@ describe('SellersDirectory Component Suite', () => {
     fireEvent.click(dossierBtns[0]);
 
     // Go to RFQ tab
-    const rfqTab = screen.getByText(/2. RFQ & Quotes/);
+    const rfqTab = screen.getByRole('button', { name: /Quote/i });
     fireEvent.click(rfqTab);
 
     // Click Matrix button
@@ -394,5 +444,36 @@ describe('SellersDirectory Component Suite', () => {
     fireEvent.click(matrixBtn);
 
     expect(mockSetSelected).toHaveBeenCalledWith(mockRfqs[0]);
+  });
+
+  test('safely handles seller with null email when opening dossier and filtering audit logs', async () => {
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'v-null-email',
+          name: 'Null Email Supplier',
+          contactPerson: 'No Email Contact',
+          email: null,
+          location: 'Kolkata, West Bengal',
+          source: 'procucev_network',
+          majorCategory: 'Packaging',
+          score: 80,
+          rating: 4.0,
+          status: 'ACTIVE',
+        },
+      ],
+    });
+
+    render(<SellersDirectory />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Null Email Supplier')).toBeInTheDocument();
+    });
+
+    const dossierBtns = screen.getAllByText('360° Dossier');
+    // Clicking dossier must not throw "TypeError: can't access property toLowerCase, activeSeller.email is null"
+    expect(() => fireEvent.click(dossierBtns[0])).not.toThrow();
+    expect(screen.getByText('No email on file')).toBeInTheDocument();
   });
 });

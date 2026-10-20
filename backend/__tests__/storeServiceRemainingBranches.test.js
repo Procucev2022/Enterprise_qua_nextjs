@@ -592,7 +592,7 @@ describe('Store Service — remaining branch coverage', () => {
         addedByBuyerCompany: 'Fanout Buyer',
       });
       freshStore.createRFQ(
-        { rfqNumber: 'RFQ-NTF-1', category: 'Fanout-Cat' },
+        { rfqNumber: 'RFQ-NTF-1', category: 'Fanout-Cat', sourcingMode: 'mode_1' },
         { organizationName: 'Fanout Buyer' }
       );
       await flush();

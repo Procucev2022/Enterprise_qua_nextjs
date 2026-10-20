@@ -1,5 +1,4 @@
-import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import InviteVendorsModal from '@/app/category-manager/InviteVendorsModal';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
@@ -485,6 +484,160 @@ describe('InviteVendorsModal — All Vendors tab', () => {
         })
       );
       expect(screen.getByText('Global Hardware Supply')).toBeInTheDocument();
+    });
+  });
+
+  describe('InviteVendorsModal — Add New Vendor (V0 & V2 feature)', () => {
+    test('renders Add New Vendor button for V0 and V2 RFQs, but not for V1 RFQs', () => {
+      const v0Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_0' };
+      const { rerender } = render(
+        <InviteVendorsModal isOpen={true} rfq={v0Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />
+      );
+      expect(screen.getByTestId('add-new-vendor-button')).toBeInTheDocument();
+
+      const v2Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_2' };
+      rerender(<InviteVendorsModal isOpen={true} rfq={v2Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      expect(screen.getByTestId('add-new-vendor-button')).toBeInTheDocument();
+
+      const v1Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_1' };
+      rerender(<InviteVendorsModal isOpen={true} rfq={v1Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      expect(screen.queryByTestId('add-new-vendor-button')).not.toBeInTheDocument();
+    });
+
+    test('opens Add New Vendor modal, validates input, handles duplicate (409) and successful vendor creation', async () => {
+      const v0Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_0' };
+      render(
+        <InviteVendorsModal isOpen={true} rfq={v0Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />
+      );
+
+      // Open Add New Vendor sub-modal
+      fireEvent.click(screen.getByTestId('add-new-vendor-button'));
+      expect(screen.getByTestId('add-vendor-modal')).toBeInTheDocument();
+
+      const form = screen.getByTestId('add-vendor-modal').querySelector('form')!;
+
+      // Submit empty form triggers validation error
+      fireEvent.submit(form);
+      expect(screen.getByText(/Please fill in all required fields/i)).toBeInTheDocument();
+
+      // Fill in fields
+      fireEvent.change(screen.getByPlaceholderText(/e.g. Apex Industrial Supplies Pvt Ltd/i), {
+        target: { value: 'New Test Vendor' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(/e.g. Rajesh Kumar/i), {
+        target: { value: 'Amit Sharma' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(/e.g. \+91 98765 43210/i), {
+        target: { value: '+91 98765 99999' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(/e.g. Valves & Pipes/i), {
+        target: { value: 'Special Pipes' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(/e.g. Mumbai/i), {
+        target: { value: 'Mumbai' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(/e.g. Maharashtra/i), {
+        target: { value: 'Maharashtra' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(/e.g. 400001/i), {
+        target: { value: '400001' },
+      });
+      const categorySelect = screen.getByTestId('add-vendor-modal').querySelector('select')!;
+      fireEvent.change(categorySelect, { target: { value: categorySelect.options[0]?.value || 'General' } });
+
+      fireEvent.change(screen.getByPlaceholderText(/e.g. sales@apexindustrial.com/i), {
+        target: { value: 'invalid-email' },
+      });
+
+      // Submit with invalid email
+      fireEvent.submit(form);
+      expect(screen.getByText(/Please enter a valid email address/i)).toBeInTheDocument();
+
+      // Valid email
+      fireEvent.change(screen.getByPlaceholderText(/e.g. sales@apexindustrial.com/i), {
+        target: { value: 'valid@testvendor.com' },
+      });
+
+      // Test cancel button
+      const cancelBtn = within(screen.getByTestId('add-vendor-modal')).getByRole('button', { name: /Cancel/i });
+      fireEvent.click(cancelBtn);
+      expect(screen.queryByTestId('add-vendor-modal')).not.toBeInTheDocument();
+
+      // Re-open modal
+      fireEvent.click(screen.getByTestId('add-new-vendor-button'));
+      const reopenedForm = screen.getByTestId('add-vendor-modal').querySelector('form')!;
+      fireEvent.change(screen.getByPlaceholderText(/e.g. Apex Industrial Supplies Pvt Ltd/i), {
+        target: { value: 'New Test Vendor' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(/e.g. Rajesh Kumar/i), {
+        target: { value: 'Amit Sharma' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(/e.g. \+91 98765 43210/i), {
+        target: { value: '+91 98765 99999' },
+      });
+      fireEvent.change(screen.getByPlaceholderText(/e.g. sales@apexindustrial.com/i), {
+        target: { value: 'valid@testvendor.com' },
+      });
+
+      // Mock duplicate 409 response
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        status: 409,
+        ok: false,
+        json: async () => ({ success: false, error: 'A vendor with this email is already registered.' }),
+      } as any);
+
+      await act(async () => {
+        fireEvent.submit(reopenedForm);
+      });
+      expect(screen.getByText(/A vendor with this email is already registered/i)).toBeInTheDocument();
+
+      // Mock 500 error response
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        status: 500,
+        ok: false,
+        json: async () => ({ success: false, error: 'Server error creating vendor' }),
+      } as any);
+
+      await act(async () => {
+        fireEvent.submit(reopenedForm);
+      });
+      expect(screen.getByText(/Server error creating vendor/i)).toBeInTheDocument();
+
+      // Mock network throw error
+      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network offline'));
+
+      await act(async () => {
+        fireEvent.submit(reopenedForm);
+      });
+      expect(screen.getByText(/Network offline/i)).toBeInTheDocument();
+
+      // Mock successful 201 response
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        status: 201,
+        ok: true,
+        json: async () => ({
+          success: true,
+          vendor: {
+            id: 'v-newly-created',
+            name: 'New Test Vendor',
+            email: 'valid@testvendor.com',
+            phone: '+91 98765 99999',
+            contactPerson: 'Amit Sharma',
+            majorCategory: 'Mechanical & Fluid Equipment',
+            minorCategories: [],
+          },
+        }),
+      } as any);
+
+      await act(async () => {
+        fireEvent.submit(reopenedForm);
+      });
+
+      // Modal closed and candidate added & selected
+      await waitFor(() => {
+        expect(screen.queryByTestId('add-vendor-modal')).not.toBeInTheDocument();
+        expect(screen.getByText('New Test Vendor')).toBeInTheDocument();
+      });
     });
   });
 });

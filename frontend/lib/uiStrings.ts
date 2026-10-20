@@ -367,6 +367,7 @@ export const UI_STRINGS = {
 
     // Explicit recovery action shown on the failure banner so the buyer is not
     // left to guess that the table below is the fallback.
+    retryAction: 'Retry extraction',
     manualEntryAction: 'Enter line items manually',
     manualEntryStarted: 'Add your line items in the table below.',
 

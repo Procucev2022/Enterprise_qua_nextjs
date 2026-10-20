@@ -56,7 +56,8 @@ describe('UI Strings Constants & i18n Format Tests', () => {
   });
 
   describe('extraction failure strings and extractionReasonMessage', () => {
-    test('exposes a manual-entry action and a reason-specific message for every reason', () => {
+    test('exposes retry and manual-entry actions for extraction failures', () => {
+      expect(UI_STRINGS.rfqExtraction.retryAction).toBe('Retry extraction');
       expect(UI_STRINGS.rfqExtraction.manualEntryAction).toBe('Enter line items manually');
       expect(UI_STRINGS.rfqExtraction.manualEntryStarted).toBeDefined();
       const reasons = [

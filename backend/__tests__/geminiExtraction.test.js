@@ -809,22 +809,55 @@ describe('Gemini document extraction service', () => {
       expect(global.fetch).toHaveBeenCalledTimes(gemini.resolveModelChain().length);
     });
 
-    // A model that never responds must not hang the request forever.
-    test('aborts a model that exceeds the configured timeout', async () => {
+    // A model that never responds must not hang the operation beyond its shared deadline.
+    test('aborts a model when the shared operation budget expires', async () => {
       GEMINI_CONFIG.API_KEY = 'test-key';
       global.fetch = jest.fn((_url, init) =>
         new Promise((_resolve, reject) => {
-          init.signal.addEventListener('abort', () => reject(new Error('The operation was aborted')));
+          init.signal.addEventListener('abort', () => {
+            const error = new Error('The operation was aborted');
+            error.name = 'AbortError';
+            reject(error);
+          });
         })
       );
 
-      const originalTimeout = GEMINI_CONFIG.REQUEST_TIMEOUT_MS;
-      GEMINI_CONFIG.REQUEST_TIMEOUT_MS = 5;
+      const originalBudget = GEMINI_CONFIG.TOTAL_BUDGET_MS;
+      const originalMin = GEMINI_CONFIG.MIN_ATTEMPT_MS;
+      GEMINI_CONFIG.TOTAL_BUDGET_MS = 5;
+      GEMINI_CONFIG.MIN_ATTEMPT_MS = 1;
       try {
         const res = await gemini.extractLineItems({ documentText: 'Pump' });
         expect(res.status).toBe(EXTRACTION_STATUS.AI_FAILED);
-        expect(res.error).toContain('abort');
+        expect(res.error).toContain('shared extraction time budget');
       } finally {
+        GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
+        GEMINI_CONFIG.MIN_ATTEMPT_MS = originalMin;
+      }
+    });
+
+    test('does not apply a per-model timeout while the shared budget remains', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      const originalModels = [...GEMINI_CONFIG.MODELS];
+      const originalBudget = GEMINI_CONFIG.TOTAL_BUDGET_MS;
+      const originalMin = GEMINI_CONFIG.MIN_ATTEMPT_MS;
+      const originalTimeout = GEMINI_CONFIG.REQUEST_TIMEOUT_MS;
+      GEMINI_CONFIG.MODELS = ['model-a'];
+      GEMINI_CONFIG.TOTAL_BUDGET_MS = 100;
+      GEMINI_CONFIG.MIN_ATTEMPT_MS = 1;
+      GEMINI_CONFIG.REQUEST_TIMEOUT_MS = 1;
+      global.fetch = jest.fn().mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve(geminiReply('{"items":[{"itemDescription":"Pump"}]}')), 10))
+      );
+
+      try {
+        const res = await gemini.extractLineItems({ documentText: 'Pump' });
+        expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        GEMINI_CONFIG.MODELS = originalModels;
+        GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
+        GEMINI_CONFIG.MIN_ATTEMPT_MS = originalMin;
         GEMINI_CONFIG.REQUEST_TIMEOUT_MS = originalTimeout;
       }
     });
@@ -854,7 +887,16 @@ describe('Gemini document extraction service', () => {
       global.fetch = jest.fn(
         (_url, init) =>
           new Promise((_resolve, reject) => {
-            init.signal.addEventListener('abort', () => reject(new Error('The operation was aborted')));
+            if (init?.signal?.aborted) {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              return reject(err);
+            }
+            init?.signal?.addEventListener('abort', () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
           })
       );
 

@@ -345,6 +345,13 @@ describe('Buyer Profile API (/api/buyer-profile)', () => {
       expect(res.statusCode).toBe(401);
     });
 
+    test('rejects buyer role with 403 Forbidden', async () => {
+      const res = await request(app)
+        .get('/api/buyer-profile/details?email=someone@othercompany.com')
+        .set(authHeader('buyer'));
+      expect(res.statusCode).toBe(403);
+    });
+
     test('returns profile details for category_manager querying by email, name, and accountId', async () => {
       const buyerProfileQueries = require('../src/db/buyerProfileQueries');
       jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockResolvedValue({

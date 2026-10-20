@@ -10,11 +10,11 @@ const { authenticate, requireRole } = require('../middleware/auth');
 router.get('/me', authenticate, requireRole('buyer'), buyerProfileController.getMyProfile);
 router.put('/me', authenticate, requireRole('buyer'), buyerProfileController.updateMyProfile);
 
-// Details lookup for Category Managers, Admins, and Buyers to inspect buyer account profile
+// Details lookup for Category Managers and Admins to inspect buyer account profile
 router.get(
   '/details',
   authenticate,
-  requireRole('category_manager', 'admin', 'buyer'),
+  requireRole('category_manager', 'admin'),
   buyerProfileController.getBuyerProfileDetails
 );
 

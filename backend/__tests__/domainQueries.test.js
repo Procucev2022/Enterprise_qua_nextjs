@@ -269,6 +269,36 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         expect(countParams).toEqual(['%steel%', 'Fasteners']);
       });
 
+      test('adds an email-specific filter when email parameter is provided', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+          .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-1', email: 'specific@vendor.com' } }] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, email: 'specific@vendor.com' });
+
+        const [countSql, countParams] = query.mock.calls[0];
+        expect(countSql).toContain("email ILIKE $1 OR raw->>'email' ILIKE $1");
+        expect(countParams).toEqual(['%specific@vendor.com%']);
+      });
+
+      test('search includes contactPerson, location, city, and deliveryLocation', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+          .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-1' } }] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'mumbai' });
+
+        const [countSql] = query.mock.calls[0];
+        expect(countSql).toContain("raw->>'contactPerson'");
+        expect(countSql).toContain("raw->>'location'");
+        expect(countSql).toContain("raw->>'city'");
+        expect(countSql).toContain("raw->>'deliveryLocation'");
+      });
+
       test('defaults total to 0 when the count query returns no row', async () => {
         const query = jest
           .fn()
@@ -277,6 +307,40 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         pool.pool = { query };
 
         await expect(domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0 })).resolves.toEqual({ rows: [], total: 0 });
+      });
+    });
+
+    describe('countVendorsCreatedBetween', () => {
+      test('returns 0 when pool is not configured', async () => {
+        pool.pool = null;
+        await expect(domainQueries.countVendorsCreatedBetween(new Date(), new Date())).resolves.toBe(0);
+      });
+
+      test('returns 0 when dates are invalid', async () => {
+        pool.pool = { query: jest.fn() };
+        await expect(domainQueries.countVendorsCreatedBetween('not-a-date', 'invalid')).resolves.toBe(0);
+        expect(pool.pool.query).not.toHaveBeenCalled();
+      });
+
+      test('queries database for vendor count within date range', async () => {
+        const fromDate = new Date('2026-01-01T00:00:00Z');
+        const toDate = new Date('2026-01-31T23:59:59Z');
+        const query = jest.fn().mockResolvedValue({ rows: [{ count: 42 }] });
+        pool.pool = { query };
+
+        const count = await domainQueries.countVendorsCreatedBetween(fromDate, toDate);
+        expect(count).toBe(42);
+
+        const [sql, params] = query.mock.calls[0];
+        expect(sql).toContain('SELECT COUNT(*)::int AS count FROM vendors');
+        expect(sql).toContain('created_at >= $1 AND created_at <= $2');
+        expect(params).toEqual([fromDate.toISOString(), toDate.toISOString()]);
+      });
+
+      test('returns 0 when database query throws error', async () => {
+        pool.pool = { query: jest.fn().mockRejectedValue(new Error('Connection failed')) };
+        const count = await domainQueries.countVendorsCreatedBetween(new Date(), new Date());
+        expect(count).toBe(0);
       });
     });
 

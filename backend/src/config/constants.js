@@ -85,7 +85,7 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'free_trial',
     name: 'Free Trial Starter (V0)',
-    price: '$0',
+    price: '₹0',
     billing: '5 Free RFQ Credits included for V1/V2/V3 + Unlimited V0',
     description: 'Create unlimited V0 RFQs sent to Procucev verified vendors (0 credits deducted), plus 5 free RFQ credits for V1, V2, or V3.',
     features: [
@@ -99,7 +99,7 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_1',
     name: 'Version 1 Plan: Client Roster Only',
-    price: '$199',
+    price: '₹199',
     billing: 'per user / month',
     description: 'Streamline procurement across your private pre-approved vendor roster with automated working-hour follow-ups.',
     features: [
@@ -112,7 +112,7 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_2',
     name: 'Version 2 Plan: Hybrid Sourcing',
-    price: '$499',
+    price: '₹499',
     billing: 'per user / month',
     description: 'Cumulative plan giving full access to BOTH Mode 1 and Mode 2 with hybrid platform network discovery.',
     features: [
@@ -125,7 +125,7 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_3',
     name: 'Version 3 Plan: Autonomous AI Enterprise',
-    price: '$999',
+    price: '₹999',
     billing: 'per user / month',
     description: 'Ultimate all-inclusive tier giving full access to Mode 1, Mode 2, AND Mode 3 with autonomous AI governance.',
     features: [
@@ -154,13 +154,13 @@ const VENDOR_SUBSCRIPTION_PLANS = [
   {
     id: 'connect',
     name: 'Connect Model (Marketplace Expansion)',
-    price: '$149',
+    price: '₹149',
     billing: 'per 3 months (90 days)',
     description: 'Expand your market reach. Access & download open RFQs across the entire Procucev Network Marketplace.',
     features: [
       'All Premium Client-Uploaded features included',
       'Download up to 50 RFQs within 3 months (90-day period)',
-      '🎁 360° AI Self-Evaluation Fee: $0 FREE (Waived from $5)',
+      '🎁 360° AI Self-Evaluation Fee: ₹0 FREE (Waived from ₹5)',
       'Access to full Open Network Marketplace RFQs',
       'Instant email dispatch of technical BOQ spreadsheets & specifications',
     ],
@@ -168,13 +168,13 @@ const VENDOR_SUBSCRIPTION_PLANS = [
   {
     id: 'select',
     name: 'Select Model (Catalogue & High Volume)',
-    price: '$349',
+    price: '₹349',
     billing: 'per 3 months (90 days)',
     description: 'Complete tier for high-volume suppliers. Build your Item Catalogue and capture maximum marketplace demand.',
     features: [
       'Download up to 100 RFQs within 3 months',
       'Published Item SKU Catalogue with direct buyer visibility',
-      '🎁 360° AI Self-Evaluation Fee: $0 FREE (Waived from $5)',
+      '🎁 360° AI Self-Evaluation Fee: ₹0 FREE (Waived from ₹5)',
       'Priority AI routing in Mode 2 & Mode 3 matching algorithms',
     ],
   },
@@ -604,6 +604,13 @@ const RFQ_CATEGORY_CLASSIFICATION = {
 // Mirrors app.gemini.* in the Java p2pservices app, which is the service that
 // currently extracts RFQ line items in production. The API key is read from the
 // environment only and never leaves the server.
+// Gemini extraction policy is intentionally code-owned rather than environment
+// configurable: one operation may run for up to five minutes, with fixed input
+// limits that protect memory and provider payload size.
+const GEMINI_TOTAL_BUDGET_MS = 5 * 60 * 1000;
+const GEMINI_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+const GEMINI_MAX_DOCUMENT_TEXT_CHARS = 300000;
+
 const GEMINI_CONFIG = {
   API_KEY: process.env.GEMINI_API_KEY || '',
   BACKUP_KEYS: process.env.GEMINI_BACKUP_KEYS || '',
@@ -632,17 +639,13 @@ const GEMINI_CONFIG = {
     const list = Array.isArray(arr) ? arr : (typeof arr === 'string' ? arr.split(',').map((m) => m.trim()) : []);
     this.MODELS = Array.from(new Set([this.PRIMARY_MODEL, ...list].filter(Boolean)));
   },
-  // The primary model measured 12.5s on a small PDF and timed out at 15s on a
-  // real one, so it needs more than the Java service's 15s read timeout to have a
-  // fair chance before the chain moves on.
-  REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 30000),
-  TOTAL_BUDGET_MS: Number(process.env.GEMINI_TOTAL_BUDGET_MS || 60000),
-  // Below this much remaining budget a further attempt cannot finish, so the
-  // chain stops rather than starting a request it will have to abandon.
-  MIN_ATTEMPT_MS: Number(process.env.GEMINI_MIN_ATTEMPT_MS || 3000),
-  // Documents larger than this are rejected before a request is billed.
-  MAX_DOCUMENT_BYTES: Number(process.env.GEMINI_MAX_DOCUMENT_BYTES || 25 * 1024 * 1024),
-  MAX_DOCUMENT_TEXT_CHARS: Number(process.env.GEMINI_MAX_DOCUMENT_TEXT_CHARS || 300000),
+  // Kept as a mutable compatibility field for tests and old callers, but zero
+  // means there is no per-model timeout. Production uses only TOTAL_BUDGET_MS.
+  REQUEST_TIMEOUT_MS: 0,
+  TOTAL_BUDGET_MS: GEMINI_TOTAL_BUDGET_MS,
+  MIN_ATTEMPT_MS: 0,
+  MAX_DOCUMENT_BYTES: GEMINI_MAX_DOCUMENT_BYTES,
+  MAX_DOCUMENT_TEXT_CHARS: GEMINI_MAX_DOCUMENT_TEXT_CHARS,
   // Maximum number of API keys attempted per individual model before advancing
   // to the next fallback model in the chain (prevents long key-retry loops on rate limits).
   MAX_KEY_ATTEMPTS_PER_MODEL: Number(process.env.GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL || 3),
@@ -1079,31 +1082,91 @@ const BUYER_SUBSCRIPTION_TO_SOURCING_MODE = {
  */
 function resolveBuyerSourcingMode(buyerAccountOrPlan) {
   let plan = null;
+  let subscriptions = [];
+  let isExpired = false;
+  let isInactive = false;
   let remainingFreeRFQs = undefined;
 
   if (typeof buyerAccountOrPlan === 'object' && buyerAccountOrPlan !== null) {
-    plan = buyerAccountOrPlan.subscriptionPlan;
+    plan = buyerAccountOrPlan.subscriptionPlan || buyerAccountOrPlan.activeSubscription || null;
     remainingFreeRFQs = buyerAccountOrPlan.remainingFreeRFQs;
+    if (Array.isArray(buyerAccountOrPlan.subscriptions)) {
+      subscriptions = buyerAccountOrPlan.subscriptions;
+    }
+    const status = String(buyerAccountOrPlan.subscriptionStatus || buyerAccountOrPlan.status || '').toLowerCase();
+    if (status === 'expired' || status === 'inactive') {
+      isExpired = true;
+    }
+    const expiry = buyerAccountOrPlan.subscriptionExpiry || buyerAccountOrPlan.expiresAt;
+    if (expiry && !isNaN(new Date(expiry).getTime()) && new Date(expiry).getTime() < Date.now()) {
+      isExpired = true;
+    }
   } else if (typeof buyerAccountOrPlan === 'string') {
     plan = buyerAccountOrPlan;
   }
 
-  // 1. Subscription-based version assignment takes priority:
-  // V1 for V1 subscribers, V2 for V2 subscribers, V3 for V3 subscribers, V0 for V0 subscribers.
-  if (typeof plan === 'string') {
-    const normalized = plan.trim().toLowerCase();
-    if (BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized]) {
-      return BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized];
+  // Handle multiple active subscriptions (V3 > V2 > V1 > V0)
+  if (Array.isArray(subscriptions) && subscriptions.length > 0) {
+    const activeSubs = subscriptions.filter((sub) => {
+      if (!sub) return false;
+      const subStatus = String(sub.status || '').toLowerCase();
+      if (subStatus === 'expired' || subStatus === 'inactive' || sub.active === false) return false;
+      const subExpiry = sub.expiresAt || sub.expiryDate || sub.validUntil;
+      if (subExpiry && !isNaN(new Date(subExpiry).getTime()) && new Date(subExpiry).getTime() < Date.now()) {
+        return false;
+      }
+      return true;
+    });
+
+    if (activeSubs.length > 0) {
+      const activePlans = activeSubs.map((s) => String(s.plan || s.subscriptionPlan || s.id || '').trim().toLowerCase());
+      if (activePlans.some((p) => p === 'version_3' || p === 'v3' || p === 'mode_3')) {
+        return 'mode_3';
+      }
+      if (activePlans.some((p) => p === 'version_2' || p === 'v2' || p === 'mode_2')) {
+        return 'mode_2';
+      }
+      if (activePlans.some((p) => p === 'version_1' || p === 'v1' || p === 'mode_1')) {
+        return 'mode_1';
+      }
+      if (activePlans.some((p) => p === 'version_0' || p === 'v0' || p === 'mode_0')) {
+        return 'mode_0';
+      }
     }
   }
 
-  // 2. For buyers without a subscription (free trial / no active plan):
-  // Assign V2 for the first 5 free RFQs and switch to V0 after free credits are exhausted.
-  if (remainingFreeRFQs !== undefined && Number(remainingFreeRFQs) <= 0) {
+  // Expired or inactive subscriptions are not considered; default to mode_0
+  if (isExpired || isInactive) {
     return 'mode_0';
   }
 
-  return EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE || 'mode_2';
+  // Check single active subscription
+  if (typeof plan === 'string') {
+    const normalized = plan.trim().toLowerCase();
+    if (['version_1', 'v1', 'mode_1'].includes(normalized)) {
+      return 'mode_1';
+    }
+    if (['version_2', 'v2', 'mode_2'].includes(normalized)) {
+      return 'mode_2';
+    }
+    if (['version_3', 'v3', 'mode_3'].includes(normalized)) {
+      return 'mode_3';
+    }
+    if (['version_0', 'v0', 'mode_0'].includes(normalized)) {
+      return 'mode_0';
+    }
+  }
+
+  // Preserve existing V1/V2/V3 credit logic for buyers on free trial with credits remaining
+  if (remainingFreeRFQs !== undefined && Number(remainingFreeRFQs) > 0) {
+    const requestedMode = (buyerAccountOrPlan.sourcingMode || buyerAccountOrPlan.sourcing_mode || '').trim().toLowerCase();
+    if (['mode_1', 'v1', 'version_1'].includes(requestedMode)) return 'mode_1';
+    if (['mode_3', 'v3', 'version_3'].includes(requestedMode)) return 'mode_3';
+    return 'mode_2';
+  }
+
+  // No active V1/V2/V3 subscription -> default to mode_0 (V0)
+  return 'mode_0';
 }
 
 /** Connection state reported to the gateway panel. */

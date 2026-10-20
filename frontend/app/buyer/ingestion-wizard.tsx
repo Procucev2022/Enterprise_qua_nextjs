@@ -864,6 +864,8 @@ export default function IngestionWizard({
       const next = prev.filter((_, i) => i !== index);
       if (next.length === 0) {
         setExtractionSummary(null);
+        setExtractionError(null);
+        setExtractionDetail(null);
       }
       return next;
     });
@@ -871,6 +873,9 @@ export default function IngestionWizard({
 
   /** AI Extraction: processes uploaded document (.eml, .msg, .xlsx, .pdf, .docx, .csv) into form */
   const handleExtractFromFiles = async () => {
+    if (uploadedFiles.length === 0) {
+      return;
+    }
     setIsExtracting(true);
     setExtractionError(null);
     setExtractionDetail(null);
@@ -1467,14 +1472,25 @@ export default function IngestionWizard({
                 </pre>
               </div>
             )}
-            <button
-              type="button"
-              onClick={handleEnterManually}
-              className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
-            >
-              <Plus size={13} />
-              <span>{EXTRACTION.manualEntryAction}</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExtractFromFiles}
+                disabled={isExtracting}
+                className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
+              >
+                {isExtracting ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+                <span>{isExtracting ? EXTRACTION.extractingLabel : EXTRACTION.retryAction}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleEnterManually}
+                className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
+              >
+                <Plus size={13} />
+                <span>{EXTRACTION.manualEntryAction}</span>
+              </button>
+            </div>
           </div>
         )}
       </section>

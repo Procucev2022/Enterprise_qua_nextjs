@@ -186,6 +186,13 @@ class StoreService {
       this.notifications = notifications;
       this.paymentLinks = paymentLinks;
       this.buyerAccounts = buyerAccountsResult.accounts;
+      if (Array.isArray(this.buyerAccounts)) {
+        for (const a of this.buyerAccounts) {
+          if (a && typeof a.totalSpend === 'string' && a.totalSpend.includes('$')) {
+            a.totalSpend = a.totalSpend.replace('$', '₹');
+          }
+        }
+      }
       // activeBuyerAccount must stay a reference into this.buyerAccounts (the
       // same invariant every mutator keeps), not a separately-hydrated duplicate.
       this.activeBuyerAccount =
@@ -496,7 +503,7 @@ class StoreService {
       ...accData,
       id: accData.id || `buyer-acc-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
       totalRFQsCreated: accData.totalRFQsCreated || 0,
-      totalSpend: accData.totalSpend || '$0',
+      totalSpend: accData.totalSpend ? String(accData.totalSpend).replace('$', '₹') : '₹0',
       syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
       createdDate: accData.createdDate || new Date().toISOString().substring(0, 10),
       status: accData.status || 'ACTIVE_VERIFIED',
@@ -757,6 +764,8 @@ class StoreService {
         ? Number(vendorData.freeQuotationCredits)
         : VENDOR_FREE_CREDITS_LIMIT,
       quotedRfqIds: Array.isArray(vendorData.quotedRfqIds) ? vendorData.quotedRfqIds : [],
+      createdAt: vendorData.createdAt || vendorData.created_at || new Date().toISOString(),
+      created_at: vendorData.createdAt || vendorData.created_at || new Date().toISOString(),
     };
 
     this.vendors.unshift(newVendor);
@@ -5082,19 +5091,57 @@ class StoreService {
     const rfq = this.rfqs.find((r) => r.rfqNumber === rfqNumber || r.id === rfqNumber);
     if (!rfq) return null;
 
+    const poNumber = rfq.poNumber || (`PO-2026-` + (rfqNumber || '').replace('RFQ-2026-', ''));
+    const issueDate = rfq.poIssueDate || new Date().toISOString().substring(0, 10);
+
+    // Prevent duplicate PPO submission if already finalised
+    if (rfq.status === 'PO Generated' && rfq.poFinalised) {
+      return {
+        success: true,
+        alreadyFinalised: true,
+        poNumber,
+        rfqNumber,
+        vendorId: rfq.awardedVendorId || vendorId || null,
+        vendorName: rfq.awardedVendor || vendorName,
+        totalAmount: rfq.awardedAmount || totalAmount,
+        issueDate,
+        lineItems: (rfq.extractedEntities || []).map((ent) => ({
+          description: ent.itemName,
+          quantity: ent.quantity,
+          unit: ent.unit,
+        })),
+        shaSignature: rfq.poShaSignature || '',
+      };
+    }
+
     rfq.status = 'PO Generated';
     rfq.awardedVendorId = vendorId || null;
     rfq.awardedVendor = vendorName;
     rfq.awardedAmount = totalAmount;
-    this._persistRFQ(rfq);
+    rfq.poNumber = poNumber;
+    rfq.poIssueDate = issueDate;
+    rfq.poFinalised = true;
 
-    const poNumber = `PO-2026-` + (rfqNumber || '').replace('RFQ-2026-', '');
-    const issueDate = new Date().toISOString().substring(0, 10);
+    // Update quotes status in rfq.quotes
+    if (Array.isArray(rfq.quotes)) {
+      rfq.quotes = rfq.quotes.map((q) => {
+        const isAwarded = (vendorId && q.vendorId === vendorId) ||
+          (vendorName && q.vendorName && q.vendorName.toLowerCase().trim() === vendorName.toLowerCase().trim());
+        return {
+          ...q,
+          status: isAwarded ? 'Awarded' : (q.status || 'Submitted'),
+          awarded: isAwarded,
+        };
+      });
+    }
+
     const auditRecord = this.addAuditLog({
       userEmail: approverEmail || (this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : SYSTEM_ACTOR_EMAIL),
-      action: `Formally approved & sealed Pre-Purchase Order ${poNumber} awarded to ${vendorName} ($${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`,
+      action: `Formally approved & sealed Pre-Purchase Order ${poNumber} awarded to ${vendorName} (₹${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`,
       rfqNumber,
     });
+    rfq.poShaSignature = auditRecord.shaSignature;
+    this._persistRFQ(rfq);
 
     // Notify the buyer of PO generation / award
     this.notifyBuyer(rfq.buyerAccountId || approverEmail, {

@@ -135,7 +135,7 @@ async function getVendors(req, res, next) {
 
     // Pagination is opt-in (passing `page`) so existing callers that expect
     // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
-    const { page, search, category } = req.query || {};
+    const { page, search, email, category } = req.query || {};
 
     // Any paginated request is answered straight from Postgres with
     // LIMIT/OFFSET — it must never route through storeService.getVendors(),
@@ -160,7 +160,8 @@ async function getVendors(req, res, next) {
       const { rows, total } = await domainQueries.getVendorsPageFromDB({
         limit: pageSize,
         offset: (pageNumber - 1) * pageSize,
-        search: search ? String(search) : '',
+        search: search ? String(search).trim() : '',
+        email: email ? String(email).trim() : '',
         category: category ? String(category) : '',
         scopedBuyerId: buyerId && buyerId !== 'all' ? buyerId : '',
       });
@@ -176,10 +177,24 @@ async function getVendors(req, res, next) {
     if (search) {
       const q = String(search).toLowerCase();
       vendors = vendors.filter((v) =>
-        [v.name, v.email, v.majorCategory, ...(v.minorCategories || [])].some((field) =>
+        [
+          v.name,
+          v.email,
+          v.majorCategory,
+          ...(v.minorCategories || []),
+          v.contactPerson,
+          v.contact,
+          v.location,
+          v.city,
+          v.deliveryLocation,
+        ].some((field) =>
           String(field || '').toLowerCase().includes(q)
         )
       );
+    }
+    if (email) {
+      const eq = String(email).toLowerCase().trim();
+      vendors = vendors.filter((v) => String(v.email || '').toLowerCase().includes(eq));
     }
     if (category) {
       vendors = vendors.filter((v) => v.majorCategory === category);
@@ -280,6 +295,10 @@ async function createVendor(req, res, next) {
       body.source = 'self_registration';
     } else if (req.user.role === 'admin') {
       buyerId = (req.query && req.query.buyerId) || null;
+    } else if (req.user.role === 'category_manager') {
+      buyerId = null;
+      addedByBuyerCompany = null;
+      body.source = 'procucev_network';
     } else if (req.user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
       if (!buyerAccount) {
@@ -298,7 +317,7 @@ async function createVendor(req, res, next) {
       logger.warn('Failed to create vendor: Missing name or majorCategory', { body }, 'VENDOR_CONTROLLER');
       return res.status(400).json({ success: false, error: 'Vendor name and majorCategory are required.' });
     }
-    if (req.user.role === 'buyer' && !body.email) {
+    if ((req.user.role === 'buyer' || req.user.role === 'category_manager') && !body.email) {
       return res.status(400).json({ success: false, error: 'Vendor email is required.' });
     }
     if (addedByBuyerCompany) {
@@ -315,7 +334,16 @@ async function createVendor(req, res, next) {
     if (body.email && storeService.getVendorById(body.email, 'all')) {
       return res.status(409).json({ success: false, error: `A vendor with the email ${body.email} already exists.` });
     }
-    logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory, buyerId }, 'VENDOR_CONTROLLER');
+    const phone = body.contactPhone || body.phone;
+    if (phone && Array.isArray(storeService.vendors)) {
+      const existingByPhone = storeService.vendors.find(
+        (v) => (v.contactPhone && v.contactPhone === phone) || (v.phone && v.phone === phone)
+      );
+      if (existingByPhone) {
+        return res.status(409).json({ success: false, error: `A vendor with the contact number ${phone} already exists.` });
+      }
+    }
+    logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory, buyerId, role: req.user.role }, 'VENDOR_CONTROLLER');
     const created = storeService.addVendor(body, req.user && req.user.email, buyerId);
     // Confirms the write actually landed in Postgres before reporting
     // success — a duplicate email (vendors.email is UNIQUE) used to fail

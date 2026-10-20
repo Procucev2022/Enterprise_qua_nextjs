@@ -307,9 +307,9 @@ describe('resolveBuyerSourcingMode', () => {
     expect(resolveBuyerSourcingMode('mode_0')).toBe('mode_0');
   });
 
-  test('falls back to the ingested mode for unknown or missing plans', () => {
+  test('defaults to mode_0 for unknown, missing or free_trial plans', () => {
     for (const value of ['free_trial', null, undefined, {}, { subscriptionPlan: 7 }, 42]) {
-      expect(resolveBuyerSourcingMode(value)).toBe('mode_2');
+      expect(resolveBuyerSourcingMode(value)).toBe('mode_0');
     }
   });
 
@@ -319,11 +319,29 @@ describe('resolveBuyerSourcingMode', () => {
     expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_3', remainingFreeRFQs: 0 })).toBe('mode_3');
   });
 
-  test('for buyers without a subscription, assigns mode_2 for free credits and switches to mode_0 when exhausted', () => {
-    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 })).toBe('mode_2');
-    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 1 })).toBe('mode_2');
-    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 0 })).toBe('mode_0');
-    expect(resolveBuyerSourcingMode({ remainingFreeRFQs: 0 })).toBe('mode_0');
+  test('handles multiple active subscriptions by selecting the highest active tier (V3 > V2 > V1)', () => {
+    expect(resolveBuyerSourcingMode({
+      subscriptions: [
+        { plan: 'version_1', status: 'active' },
+        { plan: 'version_2', status: 'active' },
+      ],
+    })).toBe('mode_2');
+
+    expect(resolveBuyerSourcingMode({
+      subscriptions: [
+        { plan: 'version_1', status: 'active' },
+        { plan: 'version_3', status: 'active' },
+      ],
+    })).toBe('mode_3');
+  });
+
+  test('disregards expired or inactive subscriptions and falls back to mode_0', () => {
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_2', subscriptionStatus: 'expired' })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_3', subscriptionStatus: 'inactive' })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({
+      subscriptionPlan: 'version_1',
+      subscriptionExpiry: new Date(Date.now() - 100000).toISOString(),
+    })).toBe('mode_0');
   });
 });
 

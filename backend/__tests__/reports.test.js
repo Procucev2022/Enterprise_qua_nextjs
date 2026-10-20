@@ -7,6 +7,10 @@ const {
   formatDateISO,
   formatDateTimeISO,
   str,
+  getBuyerLocation,
+  getBuyerLastLogin,
+  getVendorLocation,
+  getVendorLastLogin,
   findBuyer,
   findVendor,
   getSellerReports,
@@ -15,6 +19,7 @@ const {
   getDailyActivityReport,
 } = require('../src/controllers/reportsController');
 const { RFQ_MODES, RFQ_MODE_LABELS } = require('../src/config/constants');
+const { authHeader } = require('./testHelpers');
 
 describe('Reports Controller & Endpoints Suite', () => {
   beforeEach(() => {
@@ -51,6 +56,18 @@ describe('Reports Controller & Endpoints Suite', () => {
       const { fromDate, toDate } = parseDateRange(undefined, undefined);
       expect(fromDate).toBeInstanceOf(Date);
       expect(toDate).toBeInstanceOf(Date);
+    });
+
+    test('parseDateRange with unbounded and end-only parameters', () => {
+      const unbounded = parseDateRange('', '');
+      expect(unbounded.fromDate.getTime()).toBe(0);
+
+      const unboundedAll = parseDateRange('all', 'all');
+      expect(unboundedAll.fromDate.getTime()).toBe(0);
+
+      const endOnly = parseDateRange(null, '2026-05-15');
+      expect(endOnly.fromDate.getTime()).toBe(0);
+      expect(endOnly.toDate.getDate()).toBe(15);
     });
 
     test('formatMode handles valid, missing, and fallback modes', () => {
@@ -93,14 +110,61 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(findBuyer(buyers, { buyerAccountId: 'none' })).toBeNull();
     });
 
-    test('findVendor matches by id or name or returns null', () => {
+    test('findVendor matches by id, email, or name across arrays, Maps, and fallbacks', () => {
       const vendors = [
-        { id: 'v1', name: 'Vendor 1' },
-        { id: 'v2', name: 'Vendor 2' },
+        { id: 'v1', name: 'Vendor 1', email: 'v1@test.com' },
+        { id: 'v2', name: 'Vendor 2', email: 'v2@test.com' },
       ];
       expect(findVendor(vendors, 'v1', null)?.name).toBe('Vendor 1');
       expect(findVendor(vendors, null, 'Vendor 2')?.id).toBe('v2');
+      expect(findVendor(vendors, null, null, 'v1@test.com')?.id).toBe('v1');
       expect(findVendor(vendors, 'unknown', 'unknown')).toBeNull();
+      expect(findVendor(null, 'v1')).toBeNull();
+      expect(findVendor({}, 'v1')).toBeNull();
+
+      const map = new Map();
+      map.set('v1', vendors[0]);
+      map.set('v1@test.com', vendors[0]);
+      map.set('vendor 1', vendors[0]);
+      expect(findVendor(map, 'v1')).toBe(vendors[0]);
+      expect(findVendor(map, null, null, 'v1@test.com')).toBe(vendors[0]);
+      expect(findVendor(map, null, 'Vendor 1')).toBe(vendors[0]);
+      expect(findVendor(map, 'none', 'none', 'none')).toBeNull();
+    });
+
+    test('getBuyerLocation covers city, state, primaryPlantLocation, location, address, country, and rfq fallbacks', () => {
+      expect(getBuyerLocation({ city: 'Pune', state: 'MH' })).toBe('Pune, MH');
+      expect(getBuyerLocation({ city: 'Pune' })).toBe('Pune');
+      expect(getBuyerLocation({ primaryPlantLocation: 'Noida' })).toBe('Noida');
+      expect(getBuyerLocation({ location: 'Gurgaon' })).toBe('Gurgaon');
+      expect(getBuyerLocation({ address: 'Delhi' })).toBe('Delhi');
+      expect(getBuyerLocation({ country: 'India' })).toBe('India');
+      expect(getBuyerLocation(null, { deliveryLocation: 'Kolkata' })).toBe('Kolkata');
+      expect(getBuyerLocation(null, null)).toBe('All India');
+    });
+
+    test('getBuyerLastLogin covers authentic lastLogin and returns empty string when missing', () => {
+      expect(getBuyerLastLogin({ lastLogin: '2026-03-01T12:00:00Z' })).toBe('2026-03-01 12:00:00');
+      expect(getBuyerLastLogin({ lastLoginDate: '2026-03-02T12:00:00Z' })).toBe('2026-03-02 12:00:00');
+      expect(getBuyerLastLogin({ last_login_at: '2026-03-03T12:00:00Z' })).toBe('2026-03-03 12:00:00');
+      expect(getBuyerLastLogin(null, { createdAt: '2026-03-04T12:00:00Z' })).toBe('');
+      expect(getBuyerLastLogin(null, null)).toBe('');
+    });
+
+    test('getVendorLocation covers location, city, state, country, and fallback', () => {
+      expect(getVendorLocation({ location: 'Chennai' })).toBe('Chennai');
+      expect(getVendorLocation({ city: 'Pune', state: 'MH' })).toBe('Pune, MH');
+      expect(getVendorLocation({ city: 'Pune' })).toBe('Pune');
+      expect(getVendorLocation({ country: 'Germany' })).toBe('Germany');
+      expect(getVendorLocation(null, 'Custom Fallback')).toBe('Custom Fallback');
+    });
+
+    test('getVendorLastLogin covers authentic lastLogin and returns empty string when missing', () => {
+      expect(getVendorLastLogin({ lastLogin: '2026-03-01T12:00:00Z' })).toBe('2026-03-01 12:00:00');
+      expect(getVendorLastLogin({ lastLoginDate: '2026-03-02T12:00:00Z' })).toBe('2026-03-02 12:00:00');
+      expect(getVendorLastLogin({ last_login_at: '2026-03-03T12:00:00Z' })).toBe('2026-03-03 12:00:00');
+      expect(getVendorLastLogin(null, '2026-03-03T12:00:00Z')).toBe('');
+      expect(getVendorLastLogin(null, null)).toBe('');
     });
   });
 
@@ -114,6 +178,7 @@ describe('Reports Controller & Endpoints Suite', () => {
           phone: '+919876543210',
           location: 'Pune',
           source: 'procucev_network',
+          lastLogin: '2026-03-01T10:00:00Z',
           updated_at: '2026-03-01T10:00:00Z',
         },
         {
@@ -187,12 +252,14 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/seller-report?requestType=sellerReport').expect(200);
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.reportType).toBe('sellerReport');
       expect(res.body.totalRecords).toBe(5); // 3 vendors on rfq-1 + 1 empty rfq-2 + 1 nodate rfq
       expect(res.body.data[0].SellerCompanyName).toBe('Apex Industrial');
       expect(res.body.data[0].SourcingMode).toBe('Mode 1');
+      expect(res.body.data[0].CompanyLocation).toBe('Pune');
+      expect(res.body.data[0].LastLogin).toBeTruthy();
     });
 
     test('GET /api/reports/seller-report?requestType=sellerSummary returns vendor registration and plan data', async () => {
@@ -228,7 +295,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/seller-report?requestType=sellerSummary').expect(200);
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerSummary').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(2);
       expect(res.body.data[0].CompanyName).toBe('Steel Dynamics');
@@ -246,6 +313,7 @@ describe('Reports Controller & Endpoints Suite', () => {
           contactPerson: 'Sunil Rao',
           majorCategory: 'Plastics & Polymers',
           minorCategories: ['Engineering Plastics', 'Nylon Rods'],
+          lastLogin: '2026-03-01T10:00:00Z',
           created_at: new Date().toISOString(),
         },
         {
@@ -261,11 +329,13 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/seller-report?requestType=sellerCategoryReport').expect(200);
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerCategoryReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].Category1).toBe('Plastics & Polymers');
       expect(res.body.data[0].Category2).toBe('Engineering Plastics');
+      expect(res.body.data[0].CompanyLocation).toBeTruthy();
+      expect(res.body.data[0].LastLogin).toBeTruthy();
       expect(res.body.data[1].Category1).toBe('Fasteners');
       expect(res.body.data[1].Category2).toBe('Bolts');
       expect(res.body.data[2].Category1).toBe('');
@@ -291,16 +361,18 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/seller-report?requestType=sellerSubscriptionReport').expect(200);
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerSubscriptionReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data[0].FreeQuotationCredits).toBe(15);
       expect(res.body.data[0].QuotedRFQsCount).toBe(2);
+      expect(res.body.data[0].CompanyLocation).toBeTruthy();
+      expect(res.body.data[0].LastLogin).toBeDefined();
       expect(res.body.data[1].FreeQuotationCredits).toBe(10);
       expect(res.body.data[1].QuotedRFQsCount).toBe(0);
     });
 
     test('GET /api/reports/seller-report with invalid requestType returns 400', async () => {
-      const res = await request(app).get('/api/reports/seller-report?requestType=unknownType').expect(400);
+      const res = await request(app).get('/api/reports/seller-report?requestType=unknownType').set(authHeader('category_manager')).expect(400);
       expect(res.body.success).toBe(false);
       expect(res.body.error).toContain('Invalid requestType');
     });
@@ -317,6 +389,7 @@ describe('Reports Controller & Endpoints Suite', () => {
           mobileNumber: '+919123456789',
           city: 'Pune',
           sourcingMode: RFQ_MODES.MODE_2,
+          lastLogin: '2026-03-01T10:00:00Z',
         },
       ];
 
@@ -354,12 +427,14 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerReport').expect(200);
+      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].BuyerName).toBe('Suresh Patel');
       expect(res.body.data[0].CompanyName).toBe('Tata Motors Corp');
       expect(res.body.data[0].SourcingMode).toBe('Mode 2');
+      expect(res.body.data[0].CompanyLocation).toBe('Pune');
+      expect(res.body.data[0].LastLogin).toBeTruthy();
       expect(res.body.data[1].ItemDescription).toBe('Specialty Gasket');
       expect(res.body.data[1].ItemCategory).toBe('Rubber Parts');
     });
@@ -399,7 +474,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerSummary').expect(200);
+      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerSummary').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(2);
       expect(res.body.data[0].TotalRFQsCreated).toBe(24);
@@ -423,7 +498,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerCategoryReport').expect(200);
+      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerCategoryReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data[0].Category1).toBe('Forgings');
       expect(res.body.data[0].Category2).toBe('Castings');
@@ -448,7 +523,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerCreditsReport').expect(200);
+      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerCreditsReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data[0].RemainingFreeRFQs).toBe(2);
       expect(res.body.data[0].CreditsConsumed).toBe(3);
@@ -457,7 +532,7 @@ describe('Reports Controller & Endpoints Suite', () => {
     });
 
     test('GET /api/reports/buyer-report with invalid requestType returns 400', async () => {
-      const res = await request(app).get('/api/reports/buyer-report?requestType=badType').expect(400);
+      const res = await request(app).get('/api/reports/buyer-report?requestType=badType').set(authHeader('category_manager')).expect(400);
       expect(res.body.success).toBe(false);
       expect(res.body.error).toContain('Invalid requestType');
     });
@@ -470,6 +545,7 @@ describe('Reports Controller & Endpoints Suite', () => {
           id: 'b-10',
           organizationName: 'Godrej Industries',
           corporateEmail: 'rfq@godrej.com',
+          lastLogin: '2026-03-01T10:00:00Z',
         },
       ];
 
@@ -511,12 +587,14 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/rfq-report?requestType=rfqReport').expect(200);
+      const res = await request(app).get('/api/reports/rfq-report?requestType=rfqReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].TotalVendors).toBe(2);
       expect(res.body.data[0].NumberOfQuotesReceived).toBe(1);
       expect(res.body.data[0].AwardedAmount).toContain('4,50,000');
+      expect(res.body.data[0].CompanyLocation).toBeTruthy();
+      expect(res.body.data[0].LastLogin).toBeTruthy();
       expect(res.body.data[1].NumberOfQuotesReceived).toBe(0);
       expect(res.body.data[1].FirstQuoteDate).toBe('');
     });
@@ -530,6 +608,15 @@ describe('Reports Controller & Endpoints Suite', () => {
           email: 'quotes@precisiontools.com',
           city: 'Bangalore',
           majorCategory: 'Cutting Tools',
+          lastLogin: '2026-03-01T10:00:00Z',
+        },
+      ];
+
+      storeService.buyerAccounts = [
+        {
+          id: 'b-sq1',
+          organizationName: 'Enterprise Buyer Ltd',
+          lastLogin: '2026-03-01T10:00:00Z',
         },
       ];
 
@@ -537,6 +624,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         {
           id: 'rfq-sq1',
           rfqNumber: 'RFQ-SQ-01',
+          buyerAccountId: 'b-sq1',
           createdAt: new Date().toISOString(),
           sourcingMode: RFQ_MODES.MODE_2,
           quotes: [
@@ -570,12 +658,17 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/rfq-report?requestType=rfqSummaryReport').expect(200);
+      const res = await request(app).get('/api/reports/rfq-report?requestType=rfqSummaryReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].SellerCompanyName).toBe('Precision Tools Pvt Ltd');
       expect(res.body.data[0].QuotedPrice).toContain('1,25,000');
+      expect(res.body.data[0].SellerLocation).toBe('Bangalore');
+      expect(res.body.data[0].CompanyLocation).toBeTruthy();
+      expect(res.body.data[0].LastLogin).toBeTruthy();
       expect(res.body.data[1].SellerCompanyName).toBe('None Yet');
+      expect(res.body.data[1].CompanyLocation).toBeTruthy();
+      expect(res.body.data[1].LastLogin).toBe('');
     });
 
     test('GET /api/reports/rfq-report?requestType=dailyRfqDispatchReport returns dispatch stats', async () => {
@@ -612,17 +705,21 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/rfq-report?requestType=dailyRfqDispatchReport').expect(200);
+      const res = await request(app).get('/api/reports/rfq-report?requestType=dailyRfqDispatchReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].ChaserActive).toBe('YES');
       expect(res.body.data[0].Budget).toContain('80,000');
+      expect(res.body.data[0].CompanyLocation).toBeTruthy();
+      expect(res.body.data[0].LastLogin).toBe('');
       expect(res.body.data[1].ChaserActive).toBe('NO');
       expect(res.body.data[1].Budget).toBe('');
+      expect(res.body.data[1].CompanyLocation).toBeTruthy();
+      expect(res.body.data[1].LastLogin).toBe('');
     });
 
     test('GET /api/reports/rfq-report with invalid requestType returns 400', async () => {
-      const res = await request(app).get('/api/reports/rfq-report?requestType=invalid').expect(400);
+      const res = await request(app).get('/api/reports/rfq-report?requestType=invalid').set(authHeader('category_manager')).expect(400);
       expect(res.body.success).toBe(false);
       expect(res.body.error).toContain('Invalid requestType');
     });
@@ -689,15 +786,48 @@ describe('Reports Controller & Endpoints Suite', () => {
           created_at: null,
         },
       ];
-      storeService.auditLogs = [{ id: 'audit-1' }, { id: 'audit-2' }];
+      storeService.auditLogs = [
+        { id: 'audit-1', timestamp: new Date().toISOString() },
+        { id: 'audit-2', timestamp: new Date().toISOString() },
+        { id: 'audit-old', timestamp: '2020-01-01T00:00:00Z' },
+      ];
 
-      const res = await request(app).get('/api/reports/daily-activity').expect(200);
+      const res = await request(app).get('/api/reports/daily-activity').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.summary.rfqsCreated).toBe(2);
       expect(res.body.summary.quotesReceived).toBe(2);
       expect(res.body.summary.newBuyersRegistered).toBe(1);
       expect(res.body.summary.newVendorsRegistered).toBe(1);
       expect(res.body.summary.totalAuditEvents).toBe(2);
+    });
+    test('counts quote submissions in range on older RFQ and excludes out-of-range quotes', async () => {
+      storeService.rfqs = [
+        {
+          id: 'rfq-older',
+          createdAt: '2026-01-01T00:00:00Z',
+          quotes: [
+            { id: 'q-1', submittedAt: '2026-03-05T12:00:00Z' },
+            { id: 'q-2', submittedAt: '2026-03-08T15:00:00Z' },
+            { id: 'q-3', submittedAt: '2026-01-02T10:00:00Z' },
+          ],
+        },
+        {
+          id: 'rfq-in-range',
+          createdAt: '2026-03-02T00:00:00Z',
+          quotes: [
+            { id: 'q-4', submittedAt: '2026-04-10T00:00:00Z' },
+          ],
+        },
+      ];
+
+      const res = await request(app)
+        .get('/api/reports/daily-activity?startDate=2026-03-01&endDate=2026-03-10')
+        .set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.summary.rfqsCreated).toBe(1);
+      expect(res.body.summary.quotesReceived).toBe(2);
     });
   });
 
@@ -744,6 +874,113 @@ describe('Reports Controller & Endpoints Suite', () => {
       const next = jest.fn();
       await getDailyActivityReport(badReq, {}, next);
       expect(next).toHaveBeenCalledWith(expect.any(Error));
+    });
+  });
+
+  describe('Storage & Vendor Enrichment Branches', () => {
+    const pool = require('../src/db/pool');
+
+    test('getSellerReports enriches vendors from storage and populates Location & LastLogin', async () => {
+      storeService.reset();
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (typeof sql === 'string' && sql.includes('SELECT id, email, created_at, updated_at, raw FROM vendors')) {
+          return {
+            rows: [
+              {
+                id: 'v-storage-1',
+                email: 'storage@example.com',
+                created_at: '2026-03-01T10:00:00Z',
+                updated_at: '2026-03-02T10:00:00Z',
+                raw: JSON.stringify({
+                  name: 'Storage Vendor',
+                  city: 'Bengaluru',
+                  state: 'Karnataka',
+                  lastLogin: '2026-03-05T12:00:00Z',
+                }),
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      });
+
+      const syncSpy = jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue([]);
+
+      const mockStorageRfqs = [
+        {
+          id: 'rfq-storage-1',
+          rfqNumber: 'RFQ-STORE-1',
+          title: 'Storage Bearing Inquiry',
+          sourcingMode: RFQ_MODES.MODE_1,
+          status: 'Quotes Submitted',
+          deliveryLocation: 'Bengaluru',
+          createdAt: new Date().toISOString(),
+          assignedVendors: [{ id: 'v-storage-1', name: 'Storage Vendor' }],
+          quotes: [{ vendorId: 'v-storage-1', vendorName: 'Storage Vendor', totalPrice: 1000, submittedAt: new Date().toISOString() }],
+        },
+      ];
+      const getRfqsSpy = jest.spyOn(storeService, 'getRFQs').mockReturnValue(mockStorageRfqs);
+
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerReport').set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.length).toBeGreaterThan(0);
+      expect(res.body.data[0].CompanyLocation).toBe('Bengaluru, Karnataka');
+      expect(res.body.data[0].LastLogin).toContain('2026');
+
+      hasStorageSpy.mockRestore();
+      querySpy.mockRestore();
+      syncSpy.mockRestore();
+      getRfqsSpy.mockRestore();
+    });
+
+    test('enrichVendors handles storage query errors gracefully', async () => {
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockRejectedValue(new Error('DB Timeout'));
+      const syncSpy = jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue(true);
+
+      storeService.rfqs = [
+        {
+          id: 'rfq-err-1',
+          createdAt: '2026-03-01T10:00:00Z',
+          assignedVendors: [{ id: 'v-err-1' }],
+        },
+      ];
+
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerReport').set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+
+      hasStorageSpy.mockRestore();
+      querySpy.mockRestore();
+      syncSpy.mockRestore();
+    });
+
+    test('getDailyActivityReport with pool.hasStorage and auditLogs with timestamp in range', async () => {
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const syncSpy = jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue(true);
+      const buyersSpy = jest.spyOn(storeService, 'getBuyerAccounts').mockResolvedValue([]);
+      const domainQueries = require('../src/db/domainQueries');
+      const countSpy = jest.spyOn(domainQueries, 'countVendorsCreatedBetween').mockResolvedValue(5);
+
+      storeService.auditLogs = [
+        { action: 'LOGIN', timestamp: '2026-03-02T10:00:00Z' },
+        { action: 'NO_DATE' },
+      ];
+
+      const res = await request(app).get('/api/reports/daily-activity?startDate=2026-03-01&endDate=2026-03-10').set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.summary.newVendorsRegistered).toBe(5);
+
+      hasStorageSpy.mockRestore();
+      syncSpy.mockRestore();
+      buyersSpy.mockRestore();
+      countSpy.mockRestore();
     });
   });
 });
