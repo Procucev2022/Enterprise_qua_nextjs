@@ -855,6 +855,31 @@ export function formatIndianDate(value?: string): string {
   }).format(new Date(parsed));
 }
 
+export const ALLOWED_EXTENSION_HOURS = [24, 48] as const;
+export const DEFAULT_EXTENSION_HOURS = 24 as const;
+
+/**
+ * Calculates a revised RFQ deadline extended by 24 or 48 hours.
+ * If the current deadline is in the past, extensions are measured from now.
+ */
+export function calculateExtendedDeadline(
+  currentDeadline?: string,
+  hours: 24 | 48 = 24,
+  baseCreatedAt?: string
+): string {
+  let baseMs: number;
+  if (currentDeadline && !Number.isNaN(Date.parse(currentDeadline))) {
+    baseMs = Math.max(new Date(currentDeadline).getTime(), Date.now());
+  } else if (baseCreatedAt && !Number.isNaN(Date.parse(baseCreatedAt))) {
+    const createdMs = new Date(baseCreatedAt).getTime();
+    const default7Days = createdMs + 7 * 24 * 60 * 60 * 1000;
+    baseMs = Math.max(default7Days, Date.now());
+  } else {
+    baseMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  }
+  return new Date(baseMs + hours * 60 * 60 * 1000).toISOString();
+}
+
 /**
  * Normalizes any date value (Excel numeric serial, Date instance, ISO string, DD-MM-YYYY, etc.)
  * into a clean standard ISO date string (YYYY-MM-DD).

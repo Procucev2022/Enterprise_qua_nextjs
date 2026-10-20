@@ -660,6 +660,29 @@ export const UI_STRINGS = {
     // Vendor Inquiries & Live Availability
     vendorOnline: 'Online',
     vendorOffline: 'Offline',
+
+    // Extend RFQ (one-time 24h or 48h deadline extension for open RFQs)
+    extendRfqAction: 'Extend RFQ',
+    extendRfqAria: 'Extend deadline for RFQ {rfqNumber} by 24 or 48 hours',
+    extendModalTitle: 'Extend RFQ Closing Deadline',
+    extendModalSubtitle: 'Grant suppliers a one-time extension of 24 or 48 hours for {rfqNumber}.',
+    currentDeadlineLabel: 'Current Closing Deadline',
+    revisedDeadlineLabel: 'Revised Closing Deadline',
+    closingDeadlineLabel: 'Closing Deadline',
+    selectExtensionDurationLabel: 'Select Extension Duration',
+    hoursUnit: 'Hours',
+    oneDayLabel: '24 Hours (+1 Day)',
+    twoDaysLabel: '48 Hours (+2 Days)',
+    oneTimeNotice: 'This is a strictly one-time extension. Once confirmed, this RFQ deadline cannot be extended again.',
+    confirmExtensionAction: 'Confirm Extension (+{hours}h)',
+    extendingAction: 'Extending Deadline…',
+    extensionSuccessTitle: 'RFQ Deadline Extended',
+    extensionSuccessMessage: 'Closing deadline for {rfqNumber} has been extended by {hours} hours to {newDeadline}.',
+    extensionFailedTitle: 'Extension Failed',
+    extendedBadge: 'Extended (+{hours}h)',
+    alreadyExtendedTooltip: 'A one-time extension of {hours} hours has already been applied to this RFQ.',
+    revisedDeadlineNote: 'One-time extension applied',
+    oneTimeExtensionAvailable: 'One-time extension (+24h / +48h) available',
   },
 
   rfqSummary: {

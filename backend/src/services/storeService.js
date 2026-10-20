@@ -2483,6 +2483,48 @@ class StoreService {
     return updated;
   }
 
+  extendRFQ(id, { hours, userEmail } = {}) {
+    const rfq = this.getRFQById(id);
+    if (!rfq) return { success: false, reason: 'NOT_FOUND', error: `RFQ with ID ${id} not found.` };
+
+    if (rfq.status === 'Closed' || rfq.status === 'Expired') {
+      return { success: false, reason: 'INVALID_STATUS', error: 'Cannot extend a closed or expired RFQ.' };
+    }
+
+    if (rfq.isExtended || rfq.extendedAt || rfq.extensionHours) {
+      return { success: false, reason: 'ALREADY_EXTENDED', error: 'This RFQ has already received its one-time deadline extension.' };
+    }
+
+    const extHours = Number(hours);
+    if (![24, 48].includes(extHours)) {
+      return { success: false, reason: 'VALIDATION', error: 'Extension duration must be either 24 or 48 hours.' };
+    }
+
+    const currentDeadlineStr = rfq.closingDeadline || rfq.deadline || rfq.targetDeliveryDate;
+    let baseMs = Date.now();
+    if (currentDeadlineStr && !isNaN(Date.parse(currentDeadlineStr))) {
+      baseMs = Math.max(Date.parse(currentDeadlineStr), Date.now());
+    } else if (rfq.createdAt && !isNaN(Date.parse(rfq.createdAt))) {
+      baseMs = Math.max(new Date(rfq.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000, Date.now());
+    }
+
+    const newDeadlineMs = baseMs + extHours * 60 * 60 * 1000;
+    const newDeadlineIso = new Date(newDeadlineMs).toISOString();
+
+    const updates = {
+      closingDeadline: newDeadlineIso,
+      deadline: newDeadlineIso,
+      isExtended: true,
+      extensionHours: extHours,
+      extendedAt: new Date().toISOString(),
+      extendedByEmail: userEmail || rfq.raisedByEmail || null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const updated = this.updateRFQ(rfq.id, updates);
+    return { success: true, rfq: updated };
+  }
+
   addQuoteToRFQ(rfqId, quote) {
     const rfq = this.getRFQById(rfqId);
     if (!rfq) return null;

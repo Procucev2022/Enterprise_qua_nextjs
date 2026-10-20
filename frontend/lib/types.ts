@@ -538,7 +538,21 @@ export interface RFQItem {
   quotesHidden?: boolean;
   quotesHiddenUntil?: string;
   quotesHiddenReason?: string;
+  deadline?: string;
+  closingDeadline?: string;
+  isExtended?: boolean;
+  extensionHours?: 24 | 48;
+  extendedAt?: string;
+  extendedByEmail?: string | null;
 }
+
+export interface RFQExtensionPayload {
+  hours: 24 | 48;
+}
+
+export type RFQExtensionResult =
+  | { success: true; rfq: RFQItem }
+  | { success: false; reason: RFQTransportFailure; error: string };
 
 export interface RFQChatMessage {
   id: string;

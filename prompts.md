@@ -2915,3 +2915,119 @@ V3 → Mode 3
 Use this centralized enum/constant everywhere these values are displayed, compared, stored, or referenced.
 
 Search the entire application for existing hardcoded V1/V2/V3 or old version strings and replace them with the centralized constants wherever appropriate.
+
+## 2026-10-19T15:58:55+05:30
+
+```text
+Buyer Portal	RFQ Details	Add an Extend RFQ option beside Close RFQ, allowing buyers to extend the RFQ deadline by 24 or 48 hours. Update and display the revised closing deadline.				Anurag 
+
+om buyer porter only on oper RFA we are giving an only ome time exptention of  24 to 48 hrs only can extentend theri RFA button right complete this feature the button will be above close RFA only for the RFA tha are open 
+```
+
+
+```text
+search where I need to  chnage the backend I dont't most of the api calling are happending form the production link check 
+
+--prefix backend" "npm run dev --prefix frontend"
+
+[FRONTEND] 
+[FRONTEND] > procucev-enterprise-frontend@2.1.0 dev
+[FRONTEND] > next dev -p 3000
+[FRONTEND]
+[BACKEND]
+[BACKEND] > procucev-enterprise-node@2.1.0 dev
+[BACKEND] > nodemon src/server.js
+[BACKEND]
+[FRONTEND]   ▲ Next.js 14.2.35
+[FRONTEND]   - Local:        http://localhost:3000
+[FRONTEND]   - Environments: .env.local, .env.development
+[FRONTEND]   - Experiments (use with caution):
+[FRONTEND]     · staleTimes
+[FRONTEND]
+[FRONTEND]  ✓ Starting...
+[BACKEND] [nodemon] 3.1.14
+[BACKEND] [nodemon] to restart at any time, enter `rs`
+[BACKEND] [nodemon] watching path(s): *.*
+[BACKEND] [nodemon] watching extensions: js,mjs,cjs,json
+[BACKEND] [nodemon] starting `node src/server.js`
+[FRONTEND]  ✓ Ready in 9.2s
+[BACKEND] [INFO] [SERVER] Database connected: PostgreSQL (defaultdb) — 104 active accounts, 20069 vendors, 35 RFQs, 2231ms
+[BACKEND] [INFO] [STORE_SERVICE] Domain records loaded from PostgreSQL {"vendors":500,"vendorsTotal":610016,"rfqs":268,"evaluations":1,"vendorCatalogue":2,"buyerAccounts":17,"aiFeed":100,"auditLogs":5909,"notifications":2789,"paymentLinks":74}      
+[BACKEND] [INFO] [RFQ_CHASER] [CHASER] Boot recovery: no pending chasers in D1.
+[BACKEND] [INFO] [SERVER] Email ingestion gateway not started: undefined
+[BACKEND] [INFO] [ZOHO_RECONCILIATION] Zoho payment-link reconciliation polling every 600s
+[FRONTEND]  ○ Compiling / ...
+[FRONTEND]  ✓ Compiled / in 29.5s (592 modules)
+[FRONTEND]  GET / 200 in 34524ms
+[FRONTEND]  ✓ Compiled in 4.5s (302 modules)
+[FRONTEND]  ○ Compiling /login ...
+[FRONTEND]  ✓ Compiled /login in 4s (602 modules)
+[FRONTEND]  ○ Compiling /_not-found ...
+[FRONTEND]  ✓ Compiled /buyer/dashboard in 11.8s (741 modules)
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 19431ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 110ms
+[FRONTEND]  ○ Compiling /buyer/rfq-summary ...
+[FRONTEND]  ✓ Compiled /buyer/rfq-summary in 1556ms (755 modules)
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 399ms
+[FRONTEND]  ○ Compiling /buyer/rfq-details ...
+[FRONTEND]  ✓ Compiled /buyer/rfq-details in 4.6s (827 modules)
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 189ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 63ms
+[FRONTEND]  ○ Compiling /buyer/ingestion-wizard ...
+[FRONTEND]  ✓ Compiled /buyer/ingestion-wizard in 3.3s (843 modules)
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 162ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 504ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 131ms
+[BACKEND] ^CTerminate batch job (Y/N)? 
+[FRONTEND] Terminate batch job (Y/N)?
+
+
+ *  History restored 
+
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>  npm run dev
+
+> procucev-enterprise-root@2.1.0 dev
+> concurrently -k -n "BACKEND,FRONTEND" -c "bgBlue.bold,bgGreen.bold" "npm run dev --prefix backend" "npm run dev --prefix frontend"
+
+[FRONTEND] 
+[FRONTEND] > procucev-enterprise-frontend@2.1.0 dev
+[FRONTEND] > next dev -p 3000
+[FRONTEND] 
+[BACKEND] 
+[BACKEND] > procucev-enterprise-node@2.1.0 dev
+[BACKEND] > nodemon src/server.js
+[BACKEND] 
+[BACKEND] [nodemon] 3.1.14
+[BACKEND] [nodemon] to restart at any time, enter `rs`
+[BACKEND] [nodemon] watching path(s): *.*
+[BACKEND] [nodemon] watching extensions: js,mjs,cjs,json
+[BACKEND] [nodemon] starting `node src/server.js`
+[FRONTEND]   ▲ Next.js 14.2.35
+[FRONTEND]   - Local:        http://localhost:3000
+[FRONTEND]   - Environments: .env.local
+[FRONTEND]   - Experiments (use with caution):
+[FRONTEND]     · staleTimes
+[FRONTEND]
+[FRONTEND]  ✓ Starting...
+[FRONTEND]  ✓ Ready in 28s
+[FRONTEND]  ○ Compiling / ...
+[FRONTEND]  ✓ Compiled / in 51.4s (592 modules)
+[FRONTEND]  ✓ Compiled in 4.6s (302 modules)
+[FRONTEND]  GET / 200 in 56367ms
+[FRONTEND]  ○ Compiling /buyer/dashboard ...
+[FRONTEND]  ✓ Compiled /buyer/dashboard in 8.6s (724 modules)
+[FRONTEND]  ○ Compiling /_not-found ...
+[BACKEND] [ERROR] [SERVER] Database UNAVAILABLE (PostgreSQL): getaddrinfo ENOTFOUND enterprise-qua-dev-anshulstartups-bcb8.k.aivencloud.com. Logins and all data-backed requests will be rejected until this is resolved.
+[FRONTEND]  ✓ Compiled /_not-found in 1180ms (727 modules)
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 2372ms
+[BACKEND] [INFO] [STORE_SERVICE] Domain records loaded from PostgreSQL {"vendors":500,"vendorsTotal":610016,"rfqs":268,"evaluations":1,"vendorCatalogue":2,"buyerAccounts":17,"aiFeed":100,"auditLogs":5916,"notifications":2789,"paymentLinks":74}      
+[FRONTEND]  GET /buyer/dashboard 200 in 681ms
+[FRONTEND]  ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 108ms
+[BACKEND] [INFO] [RFQ_CHASER] [CHASER] Boot recovery: no pending chasers in D1.
+[BACKEND] [INFO] [SERVER] Email ingestion gateway not started: undefined
+[BACKEND] [INFO] [ZOHO_RECONCILIATION] Zoho payment-link reconciliation polling every 600s
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 
+
+ or any thing missing just tell me I will add in env
+```

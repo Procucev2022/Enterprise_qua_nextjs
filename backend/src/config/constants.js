@@ -203,7 +203,11 @@ const SYSTEM_ACTOR_EMAIL = 'system@procucev.ai';
 const RFQ_DEFAULTS = {
   ALLOCATED_TIME: '24 hrs',
   ELAPSED_TIME: '0 hrs',
+  ALLOWED_EXTENSION_HOURS: Object.freeze([24, 48]),
+  DEFAULT_EXTENSION_HOURS: 24,
 };
+const ALLOWED_EXTENSION_HOURS = Object.freeze([24, 48]);
+const DEFAULT_EXTENSION_HOURS = 24;
 // Infrastructure rows the admin screen renders. The database row is replaced at
 // runtime with the live result of pool.checkDatabaseHealth() (see
 // storeService.refreshInfrastructureHealth), so the entry below is only the
@@ -1881,4 +1885,6 @@ module.exports = {
   RFQ_MODES,
   RFQ_MODE_LABELS,
   RFQ_MODE_MAP,
+  ALLOWED_EXTENSION_HOURS,
+  DEFAULT_EXTENSION_HOURS,
 };

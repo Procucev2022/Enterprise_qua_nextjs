@@ -6,13 +6,16 @@ import { authClient } from '@/lib/authClient';
 import {
   SOURCING_MODES,
   PRESENCE_POLL_INTERVAL_MS,
+  ALLOWED_EXTENSION_HOURS,
+  DEFAULT_EXTENSION_HOURS,
+  calculateExtendedDeadline,
   formatCurrency,
   formatFileSize,
   formatIndianDate,
   formatIndianDateTime,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { rfqAttachmentUrl, updateRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
+import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
 import { getVendorPresence } from '@/lib/vendorPresenceClient';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
 import InviteVendorsModal from '@/app/category-manager/InviteVendorsModal';
@@ -380,6 +383,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   const isCategoryManager = currentRole === 'category_manager' && !isVendor;
   const [localRfq, setLocalRfq] = useState<RFQItem | null>(rfq);
   const [isClosing, setIsClosing] = useState(false);
+  const [extendModalOpen, setExtendModalOpen] = useState(false);
+  const [extensionHours, setExtensionHours] = useState<24 | 48>(DEFAULT_EXTENSION_HOURS);
+  const [isExtending, setIsExtending] = useState(false);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   // Category-manager assigned-suppliers tab: 'procucev' | 'own'.
   const [supplierTab, setSupplierTab] = useState<'procucev' | 'own'>('procucev');
@@ -435,6 +441,36 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       showToast('Action Failed', err?.message || 'Failed to close RFQ.', 'warning');
     } finally {
       setIsClosing(false);
+    }
+  };
+
+  const handleExtendRFQ = async () => {
+    if (!activeRfq || isExtending) return;
+    setIsExtending(true);
+    try {
+      const result = await extendRFQ(activeRfq.id, extensionHours);
+      if (result.success) {
+        setLocalRfq(result.rfq);
+        const deadlineStr = result.rfq.closingDeadline || result.rfq.deadline || '';
+        const formattedDeadline = deadlineStr ? formatIndianDateTime(deadlineStr) : '';
+        showToast(
+          DETAILS.extensionSuccessTitle,
+          formatString(DETAILS.extensionSuccessMessage, {
+            rfqNumber: activeRfq.rfqNumber,
+            hours: extensionHours,
+            newDeadline: formattedDeadline,
+          }),
+          'success'
+        );
+        setExtendModalOpen(false);
+        await refreshFromDB();
+      } else {
+        throw new Error(result.error || DETAILS.extensionFailedTitle);
+      }
+    } catch (err: any) {
+      showToast(DETAILS.extensionFailedTitle, err?.message || DETAILS.extensionFailedTitle, 'warning');
+    } finally {
+      setIsExtending(false);
     }
   };
 
@@ -1231,8 +1267,31 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <span className="text-xs text-slate-600 dark:text-gray-300 font-medium">{activeRfq.title}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {activeRfq.status !== 'Closed' && activeRfq.status !== 'Expired' && !isVendor && (
+              <>
+                {activeRfq.isExtended ? (
+                  <span
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700/60"
+                    title={formatString(DETAILS.alreadyExtendedTooltip, { hours: activeRfq.extensionHours || 24 })}
+                  >
+                    <Clock size={12} className="text-amber-600 dark:text-amber-400" />
+                    {formatString(DETAILS.extendedBadge, { hours: activeRfq.extensionHours || 24 })}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setExtendModalOpen(true)}
+                    className="btn btn-xs font-bold inline-flex items-center gap-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-xs"
+                    title={formatString(DETAILS.extendRfqAria, { rfqNumber: activeRfq.rfqNumber })}
+                  >
+                    <Clock size={12} /> {DETAILS.extendRfqAction}
+                  </button>
+                )}
+              </>
+            )}
             {activeRfq.status !== 'Closed' && (
               <button
+                type="button"
                 onClick={handleCloseRFQ}
                 disabled={isClosing}
                 className="btn btn-xs font-bold inline-flex items-center gap-1.5 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-50"
@@ -1317,6 +1376,21 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             ) : (
               <span className="text-slate-400 dark:text-gray-500 font-normal">{DETAILS.unsetValue}</span>
             )}
+          </Row>
+          <Row label={DETAILS.closingDeadlineLabel}>
+            <span>
+              <span className="inline-flex items-center gap-1.5 mono">
+                <Clock size={12} className="text-slate-400 shrink-0" />
+                {activeRfq.closingDeadline || activeRfq.deadline
+                  ? formatIndianDateTime(activeRfq.closingDeadline || activeRfq.deadline)
+                  : DETAILS.unsetValue}
+              </span>
+              {activeRfq.isExtended && (
+                <span className="block text-[10px] font-semibold text-amber-700 dark:text-amber-400 mt-0.5">
+                  {formatString(DETAILS.extendedBadge, { hours: activeRfq.extensionHours || 24 })} — {DETAILS.revisedDeadlineNote}
+                </span>
+              )}
+            </span>
           </Row>
           <Row label={DETAILS.targetDateLabel}>
             <span>
@@ -2799,6 +2873,124 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             showToast('Suppliers Added', `Invited suppliers have been assigned to RFQ ${updatedRfq.rfqNumber}.`, 'success');
           }}
         />
+      )}
+
+      {/* Extend RFQ Modal */}
+      {extendModalOpen && activeRfq && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="extend-rfq-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
+        >
+          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden p-6 space-y-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+                  <Clock size={20} />
+                </div>
+                <div>
+                  <h3 id="extend-rfq-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
+                    {DETAILS.extendModalTitle}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                    {formatString(DETAILS.extendModalSubtitle, { rfqNumber: activeRfq.rfqNumber })}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExtendModalOpen(false)}
+                disabled={isExtending}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-gray-200 hover:bg-slate-100 dark:hover:bg-gray-800"
+                aria-label={UI_STRINGS.actions.cancel}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Current & Revised Deadline Summary */}
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200/80 dark:border-gray-700/60 space-y-2 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 dark:text-gray-400 font-medium">{DETAILS.currentDeadlineLabel}</span>
+                <span className="mono font-semibold text-slate-700 dark:text-gray-300">
+                  {formatIndianDateTime(activeRfq.closingDeadline || activeRfq.deadline || activeRfq.createdAt)}
+                </span>
+              </div>
+              <div className="flex justify-between items-center pt-2 border-t border-slate-200 dark:border-gray-700">
+                <span className="text-amber-600 dark:text-amber-400 font-semibold">{DETAILS.revisedDeadlineLabel}</span>
+                <span className="mono font-bold text-amber-600 dark:text-amber-400">
+                  {formatIndianDateTime(
+                    calculateExtendedDeadline(activeRfq.closingDeadline || activeRfq.deadline, extensionHours)
+                  )}
+                </span>
+              </div>
+            </div>
+
+            {/* Duration Selector */}
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-gray-300">
+                {DETAILS.selectExtensionDurationLabel}
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                {ALLOWED_EXTENSION_HOURS.map((hours) => {
+                  const isSelected = extensionHours === hours;
+                  const label = hours === 24 ? DETAILS.oneDayLabel : DETAILS.twoDaysLabel;
+                  return (
+                    <button
+                      key={hours}
+                      type="button"
+                      onClick={() => setExtensionHours(hours)}
+                      disabled={isExtending}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        isSelected
+                          ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 ring-2 ring-amber-500/30'
+                          : 'border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-sm">+{hours}h</span>
+                        {isSelected && <Check size={14} className="text-amber-600 dark:text-amber-400" />}
+                      </div>
+                      <span className="text-[11px] text-slate-500 dark:text-gray-400 block mt-1">{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* One-time Warning Alert */}
+            <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60 text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+              <AlertCircle size={14} className="shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <span>{DETAILS.oneTimeNotice}</span>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setExtendModalOpen(false)}
+                disabled={isExtending}
+                className="btn btn-ghost btn-sm text-xs font-semibold"
+              >
+                {UI_STRINGS.actions.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={handleExtendRFQ}
+                disabled={isExtending}
+                className="btn btn-sm text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-xs inline-flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Clock size={12} />
+                <span>
+                  {isExtending
+                    ? DETAILS.extendingAction
+                    : formatString(DETAILS.confirmExtensionAction, { hours: extensionHours })}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
