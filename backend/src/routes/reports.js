@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const reportsController = require('../controllers/reportsController');
+const { authenticate, requireRole } = require('../middleware/auth');
+
+// All report endpoints expose cross-account data and require oversight permissions
+router.use(authenticate, requireRole('category_manager', 'admin'));
 
 // GET /api/reports/seller-report
 router.get('/seller-report', reportsController.getSellerReports);

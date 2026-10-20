@@ -1078,31 +1078,91 @@ const BUYER_SUBSCRIPTION_TO_SOURCING_MODE = {
  */
 function resolveBuyerSourcingMode(buyerAccountOrPlan) {
   let plan = null;
+  let subscriptions = [];
+  let isExpired = false;
+  let isInactive = false;
   let remainingFreeRFQs = undefined;
 
   if (typeof buyerAccountOrPlan === 'object' && buyerAccountOrPlan !== null) {
-    plan = buyerAccountOrPlan.subscriptionPlan;
+    plan = buyerAccountOrPlan.subscriptionPlan || buyerAccountOrPlan.activeSubscription || null;
     remainingFreeRFQs = buyerAccountOrPlan.remainingFreeRFQs;
+    if (Array.isArray(buyerAccountOrPlan.subscriptions)) {
+      subscriptions = buyerAccountOrPlan.subscriptions;
+    }
+    const status = String(buyerAccountOrPlan.subscriptionStatus || buyerAccountOrPlan.status || '').toLowerCase();
+    if (status === 'expired' || status === 'inactive') {
+      isExpired = true;
+    }
+    const expiry = buyerAccountOrPlan.subscriptionExpiry || buyerAccountOrPlan.expiresAt;
+    if (expiry && !isNaN(new Date(expiry).getTime()) && new Date(expiry).getTime() < Date.now()) {
+      isExpired = true;
+    }
   } else if (typeof buyerAccountOrPlan === 'string') {
     plan = buyerAccountOrPlan;
   }
 
-  // 1. Subscription-based version assignment takes priority:
-  // V1 for V1 subscribers, V2 for V2 subscribers, V3 for V3 subscribers, V0 for V0 subscribers.
-  if (typeof plan === 'string') {
-    const normalized = plan.trim().toLowerCase();
-    if (BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized]) {
-      return BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized];
+  // Handle multiple active subscriptions (V3 > V2 > V1 > V0)
+  if (Array.isArray(subscriptions) && subscriptions.length > 0) {
+    const activeSubs = subscriptions.filter((sub) => {
+      if (!sub) return false;
+      const subStatus = String(sub.status || '').toLowerCase();
+      if (subStatus === 'expired' || subStatus === 'inactive' || sub.active === false) return false;
+      const subExpiry = sub.expiresAt || sub.expiryDate || sub.validUntil;
+      if (subExpiry && !isNaN(new Date(subExpiry).getTime()) && new Date(subExpiry).getTime() < Date.now()) {
+        return false;
+      }
+      return true;
+    });
+
+    if (activeSubs.length > 0) {
+      const activePlans = activeSubs.map((s) => String(s.plan || s.subscriptionPlan || s.id || '').trim().toLowerCase());
+      if (activePlans.some((p) => p === 'version_3' || p === 'v3' || p === 'mode_3')) {
+        return 'mode_3';
+      }
+      if (activePlans.some((p) => p === 'version_2' || p === 'v2' || p === 'mode_2')) {
+        return 'mode_2';
+      }
+      if (activePlans.some((p) => p === 'version_1' || p === 'v1' || p === 'mode_1')) {
+        return 'mode_1';
+      }
+      if (activePlans.some((p) => p === 'version_0' || p === 'v0' || p === 'mode_0')) {
+        return 'mode_0';
+      }
     }
   }
 
-  // 2. For buyers without a subscription (free trial / no active plan):
-  // Assign V2 for the first 5 free RFQs and switch to V0 after free credits are exhausted.
-  if (remainingFreeRFQs !== undefined && Number(remainingFreeRFQs) <= 0) {
+  // Expired or inactive subscriptions are not considered; default to mode_0
+  if (isExpired || isInactive) {
     return 'mode_0';
   }
 
-  return EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE || 'mode_2';
+  // Check single active subscription
+  if (typeof plan === 'string') {
+    const normalized = plan.trim().toLowerCase();
+    if (['version_1', 'v1', 'mode_1'].includes(normalized)) {
+      return 'mode_1';
+    }
+    if (['version_2', 'v2', 'mode_2'].includes(normalized)) {
+      return 'mode_2';
+    }
+    if (['version_3', 'v3', 'mode_3'].includes(normalized)) {
+      return 'mode_3';
+    }
+    if (['version_0', 'v0', 'mode_0'].includes(normalized)) {
+      return 'mode_0';
+    }
+  }
+
+  // Preserve existing V1/V2/V3 credit logic for buyers on free trial with credits remaining
+  if (remainingFreeRFQs !== undefined && Number(remainingFreeRFQs) > 0) {
+    const requestedMode = (buyerAccountOrPlan.sourcingMode || buyerAccountOrPlan.sourcing_mode || '').trim().toLowerCase();
+    if (['mode_1', 'v1', 'version_1'].includes(requestedMode)) return 'mode_1';
+    if (['mode_3', 'v3', 'version_3'].includes(requestedMode)) return 'mode_3';
+    return 'mode_2';
+  }
+
+  // No active V1/V2/V3 subscription -> default to mode_0 (V0)
+  return 'mode_0';
 }
 
 /** Connection state reported to the gateway panel. */

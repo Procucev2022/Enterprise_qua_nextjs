@@ -32,6 +32,13 @@ interface DailyReportsProps {
   initialCategory?: ReportCategoryKey;
 }
 
+function formatLocalDate(d: Date): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export default function DailyDownloadableReports({ initialCategory = 'seller' }: DailyReportsProps) {
   const [activeCategory, setActiveCategory] = useState<ReportCategoryKey>(initialCategory);
   const initialReport = REPORT_OPTIONS.find((r) => r.category === initialCategory);
@@ -48,6 +55,11 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
   // Data fetching state
   const [loading, setLoading] = useState<boolean>(false);
   const [reportData, setReportData] = useState<any[]>([]);
+  const [appliedMetadata, setAppliedMetadata] = useState<{
+    reportConfig: ReportConfig;
+    startDate: string;
+    endDate: string;
+  } | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Table pagination and search
@@ -79,8 +91,9 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
 
     const sDate = overrideStart !== undefined ? overrideStart : startDate;
     const eDate = overrideEnd !== undefined ? overrideEnd : endDate;
+    const requestedConfig = currentReport;
 
-    const result = await fetchReportData(currentReport, sDate, eDate);
+    const result = await fetchReportData(requestedConfig, sDate, eDate);
 
     // Discard response if another request was triggered subsequently
     if (currentSeq !== requestSeqRef.current) {
@@ -99,6 +112,11 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
         return enriched;
       });
       setReportData(sanitizedRows);
+      setAppliedMetadata({
+        reportConfig: requestedConfig,
+        startDate: sDate,
+        endDate: eDate,
+      });
       setStatusMessage({
         type: 'success',
         text: `Report loaded successfully (${result.totalRecords ?? (result.data ? result.data.length : 0)} records).`,
@@ -116,20 +134,20 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
   // Preset selection handler
   const handleSelectPreset = (preset: 'today' | '7days' | '30days' | 'thisMonth') => {
     const now = new Date();
-    const toDateStr = now.toISOString().split('T')[0];
+    const toDateStr = formatLocalDate(now);
     let fromDateStr = '';
 
     if (preset === 'today') {
       fromDateStr = toDateStr;
     } else if (preset === '7days') {
-      const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      fromDateStr = past.toISOString().split('T')[0];
+      const past = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+      fromDateStr = formatLocalDate(past);
     } else if (preset === '30days') {
-      const past = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      fromDateStr = past.toISOString().split('T')[0];
+      const past = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
+      fromDateStr = formatLocalDate(past);
     } else if (preset === 'thisMonth') {
       const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      fromDateStr = firstOfMonth.toISOString().split('T')[0];
+      fromDateStr = formatLocalDate(firstOfMonth);
     }
 
     setDatePreset(preset);
@@ -188,15 +206,21 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
   // Export handlers
   const handleExportExcel = () => {
     if (reportData.length === 0) return;
-    const dateSuffix = !startDate && !endDate ? 'All_Time' : `${startDate || 'all'}_to_${endDate || 'all'}`;
-    const fileName = `${currentReport.defaultFileName}_${dateSuffix}`;
-    exportReportToExcel(reportData, fileName, currentReport.label);
+    const exportConfig = appliedMetadata?.reportConfig || currentReport;
+    const exportStart = appliedMetadata ? appliedMetadata.startDate : startDate;
+    const exportEnd = appliedMetadata ? appliedMetadata.endDate : endDate;
+    const dateSuffix = !exportStart && !exportEnd ? 'All_Time' : `${exportStart || 'all'}_to_${exportEnd || 'all'}`;
+    const fileName = `${exportConfig.defaultFileName}_${dateSuffix}`;
+    exportReportToExcel(reportData, fileName, exportConfig.label);
   };
 
   const handleExportCsv = () => {
     if (reportData.length === 0) return;
-    const dateSuffix = !startDate && !endDate ? 'All_Time' : `${startDate || 'all'}_to_${endDate || 'all'}`;
-    const fileName = `${currentReport.defaultFileName}_${dateSuffix}`;
+    const exportConfig = appliedMetadata?.reportConfig || currentReport;
+    const exportStart = appliedMetadata ? appliedMetadata.startDate : startDate;
+    const exportEnd = appliedMetadata ? appliedMetadata.endDate : endDate;
+    const dateSuffix = !exportStart && !exportEnd ? 'All_Time' : `${exportStart || 'all'}_to_${exportEnd || 'all'}`;
+    const fileName = `${exportConfig.defaultFileName}_${dateSuffix}`;
     exportReportToCsv(reportData, fileName);
   };
 
@@ -245,7 +269,8 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
       <div className="flex flex-wrap gap-2 border-b border-slate-200 dark:border-slate-800 pb-2">
         <button
           onClick={() => setActiveCategory('seller')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${
+          disabled={loading}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
             activeCategory === 'seller'
               ? 'bg-indigo-600 text-white shadow-sm'
               : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -257,7 +282,8 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
 
         <button
           onClick={() => setActiveCategory('rfq')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${
+          disabled={loading}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
             activeCategory === 'rfq'
               ? 'bg-indigo-600 text-white shadow-sm'
               : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -269,7 +295,8 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
 
         <button
           onClick={() => setActiveCategory('buyer')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${
+          disabled={loading}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
             activeCategory === 'buyer'
               ? 'bg-indigo-600 text-white shadow-sm'
               : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -290,8 +317,9 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
             </label>
             <select
               value={selectedReportId}
+              disabled={loading}
               onChange={(e) => setSelectedReportId(e.target.value)}
-              className="w-full px-3 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full px-3 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {categoryReports.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -314,7 +342,8 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
                 <button
                   type="button"
                   onClick={handleClearDates}
-                  className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-200 underline transition-colors"
+                  disabled={loading}
+                  className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-200 underline transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Clear dates
                 </button>
@@ -333,7 +362,8 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
                   key={key}
                   type="button"
                   onClick={() => handleSelectPreset(key)}
-                  className={`px-2 py-1.5 text-xs font-medium rounded border transition-colors ${
+                  disabled={loading}
+                  className={`px-2 py-1.5 text-xs font-medium rounded border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                     datePreset === key
                       ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-semibold shadow-xs'
                       : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -363,8 +393,9 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
                 type="date"
                 aria-label="Start Date"
                 value={startDate}
+                disabled={loading}
                 onChange={(e) => handleStartDateChange(e.target.value)}
-                className="w-full px-3 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
               />
             </div>
             <div className="flex-1">
@@ -375,8 +406,9 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
                 type="date"
                 aria-label="End Date"
                 value={endDate}
+                disabled={loading}
                 onChange={(e) => handleEndDateChange(e.target.value)}
-                className="w-full px-3 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
               />
             </div>
           </div>

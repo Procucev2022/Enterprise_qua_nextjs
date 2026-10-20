@@ -19,11 +19,19 @@ const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
 async function getVendorsFromDB() {
   if (!pool.hasStorage()) return [];
   const result = await pool.query(
-    'SELECT raw FROM vendors ORDER BY created_at DESC',
+    'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC',
     [],
     { d1: true }
   );
-  return (result && result.rows) ? result.rows.map((row) => parseRaw(row.raw)) : [];
+  return (result && result.rows)
+    ? result.rows.map((row) => {
+        const v = parseRaw(row.raw);
+        if (row.created_at && !v.created_at) v.created_at = row.created_at;
+        if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+        if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+        return v;
+      })
+    : [];
 }
 
 /**
@@ -134,14 +142,23 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
 
   const dataParams = [...params, limit, offset];
   const dataResult = await pool.query(
-    `SELECT raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+    `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
     dataParams,
     {
       d1: true,
-      d1Text: `SELECT raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
     }
   );
-  return { rows: dataResult.rows.map((row) => parseRaw(row.raw)), total };
+  return {
+    rows: dataResult.rows.map((row) => {
+      const v = parseRaw(row.raw);
+      if (row.created_at && !v.created_at) v.created_at = row.created_at;
+      if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+      if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+      return v;
+    }),
+    total,
+  };
 }
 
 /**

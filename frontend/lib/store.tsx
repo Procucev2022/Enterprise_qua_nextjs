@@ -103,12 +103,16 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     mode === 'v0' ||
     mode === 'version_0';
 
+  const isBuyerHidden = Boolean(rfq.buyerDetailsHidden);
+
   return {
     id: `opp-${rfq.id}`,
     rfqNumber: rfq.rfqNumber,
     title: rfq.title,
-    buyer: rfq.buyerAccountName || 'Buyer identity not disclosed',
-    buyerAccountId: rfq.buyerAccountId,
+    buyer: isBuyerHidden ? 'Buyer details protected for 48 hours' : (rfq.buyerAccountName || 'Buyer identity not disclosed'),
+    buyerAccountId: isBuyerHidden ? undefined : rfq.buyerAccountId,
+    buyerDetailsHidden: isBuyerHidden,
+    buyerDetailsHiddenUntil: rfq.buyerDetailsHiddenUntil,
     deadline: rfq.targetDeliveryDate || '',
     daysRemaining: daysUntilDate(rfq.targetDeliveryDate),
     type: isNetwork ? 'network_marketplace' : 'direct_invitation',

@@ -129,6 +129,136 @@ describe('Modals.tsx', () => {
       expect(mockOnClose).toHaveBeenCalled();
       jest.useRealTimers();
     });
+
+    it('handles onFinalized callback, lineItemQuotes, vendor/buyer mapping, and validation errors', async () => {
+      jest.useFakeTimers();
+      const mockOnFinalized = jest.fn();
+      const mockPrintOpen = jest.fn();
+      const mockPrintWrite = jest.fn();
+      const mockPrintClose = jest.fn();
+      const mockPrintFocus = jest.fn();
+      const mockPrintPrint = jest.fn();
+      window.open = jest.fn().mockReturnValue({
+        document: { open: mockPrintOpen, write: mockPrintWrite, close: mockPrintClose },
+        focus: mockPrintFocus,
+        print: mockPrintPrint,
+      });
+
+      const { rerender } = render(
+        <PurchaseOrderModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqNumber="RFQ-2026-002"
+          vendorId=""
+          vendorName=""
+          totalAmount={0}
+          unitPrice={0}
+          leadTime={10}
+          deliveryDate="2026-10-15"
+          lineItems={[]}
+        />
+      );
+
+      // Validation error when vendorName or totalAmount missing
+      const approveBtn = screen.getByText(/APPROVE & GENERATE PRE-PURCHASE ORDER/);
+      fireEvent.click(approveBtn);
+      expect(mockShowToast).toHaveBeenCalledWith('Validation Error', expect.any(String), 'warning');
+
+      // Now render with rich props
+      const quoteWithLines = {
+        vendorName: 'Global Valves Ltd',
+        vendorEmail: 'sales@globalvalves.com',
+        paymentTerms: 'Net 45 Days',
+        warrantyYears: 2,
+        leadTimeDays: 20,
+        lineItemQuotes: [
+          { lineItemId: 'li-1', itemName: 'Gate Valve 100mm', quantity: 10, unitPrice: 2500, totalPrice: 25000 },
+        ],
+      } as any;
+
+      const buyerAccount = {
+        name: 'ACME Corp',
+        address: 'Sector 5, Airoli',
+        city: 'Navi Mumbai',
+        state: 'Maharashtra',
+        pincode: '400708',
+        taxId: '27ACME1234F1Z1',
+      } as any;
+
+      const vendorRecord = {
+        name: 'Global Valves Ltd',
+        contactPerson: 'Suresh Patel',
+        email: 'suresh@globalvalves.com',
+        phone: '+91 91234 56789',
+        address: 'MIDC Rabale',
+        city: 'Thane',
+        state: 'Maharashtra',
+        pincode: '400701',
+        gstin: '27AABCG9876K1Z9',
+      } as any;
+
+      const rfqItem: RFQItem = {
+        id: 'rfq-2',
+        rfqNumber: 'RFQ-2026-002',
+        title: 'High Pressure Valves',
+        category: 'Mechanical',
+        sourcingMode: 'mode_2',
+        status: 'Quotes Received',
+        quotesCount: 3,
+        targetDeliveryDate: '2026-11-01',
+        deliveryLocation: 'Warehouse 4B',
+        deliveryPincode: '400708',
+        budget: 50000,
+        createdAt: '2026-09-01T00:00:00.000Z',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: false,
+      };
+
+      rerender(
+        <PurchaseOrderModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqNumber="RFQ-2026-002"
+          vendorId="v-002"
+          vendorName="Global Valves Ltd"
+          totalAmount={25000}
+          unitPrice={2500}
+          leadTime={20}
+          deliveryDate="2026-10-15"
+          lineItems={baseLineItems}
+          quote={quoteWithLines}
+          rfq={rfqItem}
+          buyerAccount={buyerAccount}
+          vendorRecord={vendorRecord}
+          onFinalized={mockOnFinalized}
+        />
+      );
+
+      expect(screen.getByText('Global Valves Ltd')).toBeInTheDocument();
+      expect(screen.getByText(/Gate Valve 100mm/)).toBeInTheDocument();
+
+      // Export PDF with window.open
+      const exportPdfBtn = screen.getByText(/Export PDF/);
+      fireEvent.click(exportPdfBtn);
+      expect(window.open).toHaveBeenCalled();
+      expect(mockPrintWrite).toHaveBeenCalled();
+
+      // Approve PO
+      const validApproveBtn = screen.getByText(/APPROVE & GENERATE PRE-PURCHASE ORDER/);
+      await act(async () => {
+        fireEvent.click(validApproveBtn);
+        await Promise.resolve();
+      });
+
+      act(() => {
+        jest.advanceTimersByTime(1900);
+      });
+
+      expect(mockOnFinalized).toHaveBeenCalledWith('PO-2026-001');
+      expect(mockOnClose).toHaveBeenCalled();
+      jest.useRealTimers();
+    });
   });
 
   describe('MultiChannelChaserModal & WhatsAppChaserModal', () => {

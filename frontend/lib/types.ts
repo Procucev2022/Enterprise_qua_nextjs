@@ -538,6 +538,15 @@ export interface RFQItem {
   quotesHidden?: boolean;
   quotesHiddenUntil?: string;
   quotesHiddenReason?: string;
+  buyerDetailsHidden?: boolean;
+  buyerDetailsHiddenUntil?: string;
+  buyerName?: string;
+  buyerCompany?: string;
+  buyerEmail?: string;
+  buyerContact?: string;
+  poFinalised?: boolean;
+  poNumber?: string;
+  poIssueDate?: string;
 }
 
 export interface RFQChatMessage {
@@ -691,6 +700,8 @@ export interface VendorOpportunity {
   minorCategory: string;
   /** The buyer account ID that owns this RFQ, used for buyer-specific vendor access verification. */
   buyerAccountId?: string | null;
+  buyerDetailsHidden?: boolean;
+  buyerDetailsHiddenUntil?: string;
 }
 
 export interface AuditLogEntry {

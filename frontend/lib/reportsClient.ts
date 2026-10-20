@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { authClient } from './authClient';
 
 export type ReportCategoryKey = 'seller' | 'rfq' | 'buyer' | 'daily_activity';
 
@@ -143,7 +144,11 @@ export async function fetchReportData(
     if (endDate !== undefined && endDate !== null) params.append('endDate', endDate);
 
     const url = `${reportConfig.endpoint}?${params.toString()}`;
-    const res = await fetch(url);
+    const token = authClient.getToken();
+    const headers: Record<string, string> = {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+    const res = await fetch(url, { headers });
     if (!res.ok) {
       const errJson = await res.json().catch(() => ({}));
       throw new Error(errJson.error || `HTTP ${res.status}: Failed to generate report`);

@@ -83,6 +83,11 @@ describe('DailyDownloadableReports Component Suite', () => {
     const startDateInput = screen.getByLabelText('Start Date');
     const endDateInput = screen.getByLabelText('End Date');
 
+    // Wait for initial fetch to settle so loading is false
+    await waitFor(() => {
+      expect(screen.getByText('Alpha Supplies')).toBeInTheDocument();
+    });
+
     // Default: no dates selected
     expect(startDateInput).toHaveValue('');
     expect(endDateInput).toHaveValue('');
@@ -102,10 +107,15 @@ describe('DailyDownloadableReports Component Suite', () => {
     expect(reportsClient.fetchReportData).toHaveBeenCalled();
 
     const thirtyDaysBtn = screen.getByText('30 Days');
+    await waitFor(() => expect(thirtyDaysBtn).not.toBeDisabled());
     fireEvent.click(thirtyDaysBtn);
     expect(reportsClient.fetchReportData).toHaveBeenCalled();
 
     // Clear dates
+    await waitFor(() => {
+      const clearBtn = screen.getByText('Clear dates');
+      expect(clearBtn).not.toBeDisabled();
+    });
     const clearBtn = screen.getByText('Clear dates');
     fireEvent.click(clearBtn);
     expect(startDateInput).toHaveValue('');

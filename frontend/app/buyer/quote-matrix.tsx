@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { formatCurrency, formatIndianDate } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -39,7 +39,27 @@ interface QuoteMatrixProps {
 }
 
 export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount = false }: QuoteMatrixProps) {
-  const { currentRole, rfqs: allRfqs, selectedRFQForMatrix, setSelectedRFQForMatrix, showToast, openRFQDeepDive, deepDiveModalOpen, setDeepDiveModalOpen, selectedRFQForDeepDive } = useApp();
+  const {
+    currentRole,
+    rfqs: allRfqs,
+    selectedRFQForMatrix,
+    setSelectedRFQForMatrix,
+    showToast,
+    openRFQDeepDive,
+    deepDiveModalOpen,
+    setDeepDiveModalOpen,
+    selectedRFQForDeepDive,
+    activeBuyerAccount,
+    buyerVendors,
+    refreshRFQs,
+  } = useApp();
+  let router: any = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    router = useRouter();
+  } catch {
+    router = null;
+  }
   const searchParams = useSearchParams();
   const rfqParam = searchParams?.get('rfq');
 
@@ -109,6 +129,17 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
     setPoModalOpen(true);
   };
 
+  const handlePOFinalized = async (poNumber: string) => {
+    setPoModalOpen(false);
+    showToast('PPO Finalised', `Purchase Order ${poNumber} has been finalised and saved successfully.`, 'success');
+    await refreshRFQs?.();
+    if (router?.push) {
+      router.push(`/buyer/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`);
+    } else if (typeof window !== 'undefined') {
+      window.location.href = `/buyer/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`;
+    }
+  };
+
   return (
     <div className="space-y-2.5 animate-fade-in pb-4">
       {/* Top Bar with Back Link and RFQ Selector */}
@@ -141,6 +172,33 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           </select>
         </div>
       </div>
+
+      {/* Finalised PO Banner */}
+      {(currentRFQ.status === 'PO Generated' || (currentRFQ as any).poFinalised) && (
+        <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-350 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 text-xs flex items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <ShieldCheck size={18} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <div>
+              <span className="font-bold">Purchase Order Finalised:</span>{' '}
+              <span>
+                PO {(currentRFQ as any).poNumber || 'Generated'} was officially finalised and recorded for {currentRFQ.awardedVendor || 'awarded vendor'}.
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              if (router?.push) {
+                router.push(`/buyer/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`);
+              } else if (typeof window !== 'undefined') {
+                window.location.href = `/buyer/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`;
+              }
+            }}
+            className="btn btn-emerald btn-xs px-3 py-1 font-bold shrink-0"
+          >
+            View RFQ Details ↗
+          </button>
+        </div>
+      )}
 
       {/* RFQ Context Strip with Multi-Channel Follow-Up Badges */}
       <div className="p-3 sm:p-3.5 rounded-xl glass-panel space-y-2.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm">
@@ -668,10 +726,17 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           unitPrice={selectedVendorForPO.unitPrice}
           leadTime={selectedVendorForPO.leadTimeDays}
           deliveryDate={currentRFQ.targetDeliveryDate}
+          rfq={currentRFQ}
+          quote={selectedVendorForPO}
+          buyerAccount={activeBuyerAccount}
+          vendorRecord={buyerVendors?.find((v) => v.id === selectedVendorForPO.vendorId || v.name === selectedVendorForPO.vendorName)}
+          onFinalized={handlePOFinalized}
           lineItems={(currentRFQ.extractedEntities || []).map((ent) => ({
             description: ent.itemName,
             quantity: ent.quantity,
             unit: ent.unit,
+            unitPrice: selectedVendorForPO.unitPrice,
+            totalPrice: selectedVendorForPO.totalPrice,
           }))}
         />
       )}

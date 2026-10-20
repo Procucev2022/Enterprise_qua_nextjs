@@ -226,7 +226,7 @@ describe('BuyerDetailsModal', () => {
     await waitFor(() => {
       expect(screen.getByText('Unknown Buyer')).toBeInTheDocument();
     });
-    expect(screen.getAllByText(/Mumbai/i)[0]).toBeInTheDocument();
+    expect(screen.getByText(/Location Not Provided|Unverified Buyer/i)).toBeInTheDocument();
   });
 
   test('matches account via buyerName, rfq.buyerAccountName, and rfq.raisedByEmail', async () => {

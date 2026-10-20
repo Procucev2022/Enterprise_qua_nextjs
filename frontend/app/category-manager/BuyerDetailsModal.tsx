@@ -116,54 +116,54 @@ export default function BuyerDetailsModal({
     (account as any)?.organizationType ||
     'Public Limited';
 
-  // MANDATORY: Contact Details (Name & Designation)
+  const hasRealContact = Boolean(liveProfile?.contactName || liveProfile?.contactPerson || account?.contactPerson || (rfq as any)?.raisedByName);
   const displayContact =
     liveProfile?.contactName ||
     liveProfile?.contactPerson ||
     account?.contactPerson ||
-    (rfq?.raisedByEmail ? rfq.raisedByEmail.split('@')[0].replace(/[._-]/g, ' ') : null) ||
-    'Procurement Officer';
+    (rfq as any)?.raisedByName ||
+    (rfq?.raisedByEmail ? rfq.raisedByEmail.split('@')[0].replace(/[._-]/g, ' ') : null);
 
   const displayDesignation =
     liveProfile?.contactDesignation ||
     account?.contactDesignation ||
-    'Head of Procurement';
+    (displayContact ? 'Procurement Representative' : null);
 
-  // MANDATORY: Email
+  // Email
   const displayEmail =
     liveProfile?.contactEmail ||
     liveProfile?.corporateEmail ||
     account?.corporateEmail ||
     rfq?.raisedByEmail ||
-    'procurement@enterprise.com';
+    null;
 
-  // MANDATORY: Phone / Mobile Number
+  // Phone / Mobile Number
   const displayPhone =
     liveProfile?.contactPhone ||
     liveProfile?.mobileNumber ||
     account?.mobileNumber ||
     (account as any)?.phone ||
-    '+91 9157154504';
+    null;
 
-  // MANDATORY: Registered Corporate Location
+  // Registered Corporate Location
   const displayStreet =
     liveProfile?.street ||
     account?.street ||
     account?.address1 ||
-    'Corporate Headquarters, Tech Boulevard';
+    null;
 
   const displayCity =
     liveProfile?.city ||
     account?.city ||
     (account?.primaryPlantLocation ? account.primaryPlantLocation.split(',')[0]?.trim() : null) ||
     (rfq?.deliveryLocation ? rfq.deliveryLocation.split(',')[0]?.trim() : null) ||
-    'Mumbai';
+    null;
 
   const displayState =
     liveProfile?.state ||
     account?.state ||
     (account?.primaryPlantLocation ? account.primaryPlantLocation.split(',')[1]?.replace(/\(.*?\)/, '').trim() : null) ||
-    'Maharashtra';
+    null;
 
   const displayPincode =
     liveProfile?.pincode ||
@@ -171,14 +171,20 @@ export default function BuyerDetailsModal({
     account?.zip_code ||
     (rfq?.deliveryPincode ? String(rfq.deliveryPincode) : null) ||
     (account?.primaryPlantLocation?.match(/\((\d{6})\)/)?.[1] || null) ||
-    '400001';
+    null;
 
   const displayCountry =
     liveProfile?.country ||
     account?.country ||
-    'India';
+    (displayCity || displayState ? 'India' : null);
 
-  const fullLocationString = `${displayStreet}, ${displayCity}, ${displayState} — ${displayPincode}, ${displayCountry}`;
+  const locationParts = [
+    displayStreet,
+    displayCity,
+    displayState ? `${displayState}${displayPincode ? ' — ' + displayPincode : ''}` : displayPincode,
+    displayCountry,
+  ].filter(Boolean);
+  const fullLocationString = locationParts.length > 0 ? locationParts.join(', ') : null;
 
   // Statutory tax registration identifiers
   const displayGstin =
@@ -215,6 +221,13 @@ export default function BuyerDetailsModal({
 
   const displaySourcingMode = account?.sourcingMode || liveProfile?.sourcingMode || rfq?.sourcingMode || 'mode_1';
   const displayPlan = account?.subscriptionPlan || liveProfile?.subscriptionPlan || 'free_trial';
+
+    const isVerified = Boolean(
+    account?.status === 'ACTIVE_VERIFIED' ||
+    displayGstin ||
+    liveProfile?.gstNumber ||
+    liveProfile?.panNumber
+  );
 
   const copyToClipboard = (text: string, fieldKey: string) => {
     if (!navigator?.clipboard) return;
@@ -317,17 +330,31 @@ export default function BuyerDetailsModal({
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                     Primary Contact (Mandatory)
                   </span>
-                  <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60">
-                    Verified
+                  <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.2 rounded ${
+                    displayContact
+                      ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60'
+                      : 'bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-slate-700'
+                  }`}>
+                    {displayContact ? 'Verified' : 'Unavailable'}
                   </span>
                 </div>
                 <div className="mt-1">
-                  <span className="font-extrabold text-slate-900 dark:text-white text-sm block">
-                    {displayContact}
-                  </span>
-                  <span className="text-[11px] text-slate-500 dark:text-gray-400 font-medium">
-                    {displayDesignation}
-                  </span>
+                  {displayContact ? (
+                    <>
+                      <span className="font-extrabold text-slate-900 dark:text-white text-sm block">
+                        {displayContact}
+                      </span>
+                      {displayDesignation && (
+                        <span className="text-[11px] text-slate-500 dark:text-gray-400 font-medium">
+                          {displayDesignation}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-slate-400 dark:text-gray-500 italic text-xs block">
+                      Not Provided
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -339,7 +366,7 @@ export default function BuyerDetailsModal({
                   </span>
                   <button
                     type="button"
-                    onClick={() => copyToClipboard(displayEmail, 'email')}
+                    disabled={!displayEmail} onClick={() => displayEmail && copyToClipboard(displayEmail, 'email')}
                     title="Copy Email"
                     className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer"
                   >
@@ -348,13 +375,17 @@ export default function BuyerDetailsModal({
                 </div>
                 <div className="flex items-center gap-2 mt-1 truncate">
                   <Mail size={14} className="text-indigo-500 shrink-0" />
-                  <a
-                    href={`mailto:${displayEmail}`}
-                    className="hover:underline font-bold text-indigo-600 dark:text-indigo-400 truncate text-xs"
-                    title={`Email: ${displayEmail}`}
-                  >
-                    {displayEmail}
-                  </a>
+                  {displayEmail ? (
+                    <a
+                      href={`mailto:${displayEmail}`}
+                      className="hover:underline font-bold text-indigo-600 dark:text-indigo-400 truncate text-xs"
+                      title={`Email: ${displayEmail}`}
+                    >
+                      {displayEmail}
+                    </a>
+                  ) : (
+                    <span className="text-slate-400 dark:text-gray-500 italic text-xs">Not Provided</span>
+                  )}
                 </div>
               </div>
 
@@ -366,7 +397,7 @@ export default function BuyerDetailsModal({
                   </span>
                   <button
                     type="button"
-                    onClick={() => copyToClipboard(displayPhone, 'phone')}
+                    disabled={!displayPhone} onClick={() => displayPhone && copyToClipboard(displayPhone, 'phone')}
                     title="Copy Phone Number"
                     className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer"
                   >
@@ -375,13 +406,17 @@ export default function BuyerDetailsModal({
                 </div>
                 <div className="flex items-center gap-2 mt-1">
                   <Phone size={14} className="text-emerald-500 shrink-0" />
-                  <a
-                    href={`tel:${displayPhone}`}
-                    className="hover:underline font-bold text-slate-900 dark:text-white text-xs"
-                    title={`Call: ${displayPhone}`}
-                  >
-                    {displayPhone}
-                  </a>
+                  {displayPhone ? (
+                    <a
+                      href={`tel:${displayPhone}`}
+                      className="hover:underline font-bold text-slate-900 dark:text-white text-xs"
+                      title={`Call: ${displayPhone}`}
+                    >
+                      {displayPhone}
+                    </a>
+                  ) : (
+                    <span className="text-slate-400 dark:text-gray-500 italic text-xs">Not Provided</span>
+                  )}
                 </div>
               </div>
 
@@ -393,7 +428,7 @@ export default function BuyerDetailsModal({
                   </span>
                   <button
                     type="button"
-                    onClick={() => copyToClipboard(fullLocationString, 'location')}
+                    disabled={!fullLocationString} onClick={() => fullLocationString && copyToClipboard(fullLocationString, 'location')}
                     title="Copy Full Location"
                     className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer"
                   >
@@ -403,12 +438,18 @@ export default function BuyerDetailsModal({
                 <div className="flex items-start gap-2 mt-1 min-w-0">
                   <MapPin size={14} className="text-rose-500 shrink-0 mt-0.5" />
                   <div className="min-w-0">
-                    <p className="font-bold text-slate-900 dark:text-white text-xs truncate">
-                      {displayCity}, {displayState} — <span className="font-mono">{displayPincode}</span>
-                    </p>
-                    <p className="text-[11px] text-slate-500 dark:text-gray-450 truncate">
-                      {displayStreet ? `${displayStreet}, ` : ''}{displayCountry}
-                    </p>
+                    {fullLocationString ? (
+                      <>
+                        <p className="font-bold text-slate-900 dark:text-white text-xs truncate">
+                          {displayCity ? `${displayCity}, ` : ''}{displayState} — <span className="font-mono">{displayPincode}</span>
+                        </p>
+                        <p className="text-[11px] text-slate-500 dark:text-gray-450 truncate">
+                          {displayStreet ? `${displayStreet}, ` : ''}{displayCountry}
+                        </p>
+                      </>
+                    ) : (
+                      <span className="text-slate-400 dark:text-gray-500 italic text-xs">Location Not Provided</span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -437,7 +478,7 @@ export default function BuyerDetailsModal({
                     </button>
                   </div>
                 ) : (
-                  <span className="italic text-slate-400 text-xs">GST Registered (On File)</span>
+                  <span className="italic text-slate-400 text-xs">Not Provided</span>
                 )}
               </div>
 
@@ -457,7 +498,7 @@ export default function BuyerDetailsModal({
                     </button>
                   </div>
                 ) : (
-                  <span className="italic text-slate-400 text-xs">Verified PAN on File</span>
+                  <span className="italic text-slate-400 text-xs">Not Provided</span>
                 )}
               </div>
 
@@ -477,7 +518,7 @@ export default function BuyerDetailsModal({
                     </button>
                   </div>
                 ) : (
-                  <span className="italic text-slate-400 text-xs">Standard Registered</span>
+                  <span className="italic text-slate-400 text-xs">Not Provided</span>
                 )}
               </div>
             </div>
