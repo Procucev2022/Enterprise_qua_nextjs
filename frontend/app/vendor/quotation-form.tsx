@@ -539,24 +539,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         biddingOn.rfqNumber,
         currentUserSession?.email
       );
-      showToast('Quote Submitted', `Your quotation for ${biddingOn.rfqNumber} was submitted successfully.`, 'success');
+      showToast('Quote Submitted', `Your quotation for ${biddingOn.rfqNumber} was submitted successfully. Buyer details remain confidential for 48 hours in accordance with procurement privacy rules.`, 'success');
       
-      const isDirect = isOwnBuyerRfq(biddingOn.rfqNumber);
-      const targetRfqNum = biddingOn.rfqNumber;
-      const baseBuyer = BUYER_CONTACTS_MAP[biddingOn.rfqNumber] || {
-        companyName: biddingOn.buyer,
-        contactPerson: isDirect ? 'Rajesh Sharma (Lead Procurement)' : 'Strategic Procurement Lead',
-        email: isDirect ? 'client@procucev.com' : `procurement@${(biddingOn.buyer || 'buyer').toLowerCase().replace(/[^a-z]/g, '')}.com`,
-        phone: '+91 98201 44520',
-      };
-      const buyerDetails: BuyerContactInfo = {
-        ...baseBuyer,
-        source: isDirect ? 'buyer_uploaded' : 'quote_submitted',
-      };
       setBiddingOn(null);
       setBidDocuments([]);
       setUploadedBidDocuments([]);
-      setSelectedBuyerModal({ ...buyerDetails, rfqNumber: targetRfqNum });
       await refreshFromDB();
       if (onSubmitSuccess) onSubmitSuccess();
     } catch (err: any) {
@@ -794,17 +781,20 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 const freeCredits = effectiveFreeCredits;
                 const isLocked = !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
                 
-                // Condition: If buyer uploaded this vendor (isOwnBuyerRfq), show even before quote is submitted.
-                // Otherwise, show only after quote is submitted and updated in the system (quote !== undefined || opp.status === 'submitted').
+                // Condition: Buyer details remain hidden for 48 hours after bid submission.
+                // After 48 hours, buyer details automatically become visible.
                 const isUploadedByBuyer = isOwnBuyerRfq(opp.rfqNumber);
                 const isQuoteSubmitted = !!quote || opp.status === 'submitted';
-                const canViewBuyerDetails = isUploadedByBuyer || isQuoteSubmitted;
+                const quoteSubmittedAt = (quote as any)?.submittedAt || (quote as any)?.createdAt;
+                const isWithin48h = isQuoteSubmitted && quoteSubmittedAt && (Date.now() - new Date(quoteSubmittedAt).getTime() < 48 * 60 * 60 * 1000);
+                const isBuyerProtected48h = isWithin48h || Boolean((opp as any).buyerDetailsHidden) || Boolean((rfqRecord as any)?.buyerDetailsHidden);
+                const canViewBuyerDetails = !isBuyerProtected48h && (isUploadedByBuyer || (isQuoteSubmitted && !isWithin48h));
 
-                const baseBuyerData = BUYER_CONTACTS_MAP[opp.rfqNumber] || {
-                  companyName: parentCompany,
-                  contactPerson: isUploadedByBuyer ? 'Rajesh Sharma (Lead Procurement)' : 'Strategic Procurement Lead',
-                  email: isUploadedByBuyer ? 'client@procucev.com' : `procurement@${parentCompany.toLowerCase().replace(/[^a-z]/g, '')}.com`,
-                  phone: '+91 98201 44520',
+                const baseBuyerData = {
+                  companyName: (rfqRecord as any)?.buyerCompany || (rfqRecord as any)?.buyerAccountName || opp.buyer || parentCompany,
+                  contactPerson: (rfqRecord as any)?.buyerContactPerson || (rfqRecord as any)?.buyerName || (isUploadedByBuyer ? 'Rajesh Sharma (Lead Procurement)' : 'Strategic Procurement Lead'),
+                  email: (rfqRecord as any)?.buyerEmail || (rfqRecord as any)?.sourceEmail || BUYER_CONTACTS_MAP[opp.rfqNumber]?.email || (isUploadedByBuyer ? 'client@procucev.com' : `procurement@${parentCompany.toLowerCase().replace(/[^a-z]/g, '')}.com`),
+                  phone: (rfqRecord as any)?.buyerContact || (rfqRecord as any)?.buyerPhone || BUYER_CONTACTS_MAP[opp.rfqNumber]?.phone || '+91 98201 44520',
                 };
 
                 const buyerInfo: BuyerContactInfo = {
@@ -862,12 +852,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                             <Info size={12} className="text-indigo-600 dark:text-indigo-400" />
                           </button>
                         </div>
+                      ) : isBuyerProtected48h ? (
+                        <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                          <span className="font-semibold text-xs text-slate-500 dark:text-gray-400 italic">Protected (48h privacy)</span>
+                          <span
+                            className="p-1 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 cursor-help inline-flex items-center"
+                            title="Buyer details remain confidential for 48 hours following quotation submission in accordance with procurement privacy rules."
+                          >
+                            <Lock size={11} />
+                          </span>
+                        </div>
                       ) : (
                         <div className="flex items-center gap-1.5 text-slate-400 dark:text-gray-500">
                           <span className="italic text-[10px]">Procucev Network Sourced</span>
                           <span
                             className="p-1 rounded-md bg-slate-100 dark:bg-gray-800 text-slate-400 cursor-help inline-flex items-center"
-                            title="Buyer details will be revealed after quote is submitted and updated in the system."
+                            title="Buyer details will be revealed 48 hours after quotation submission."
                           >
                             <Lock size={11} />
                           </span>

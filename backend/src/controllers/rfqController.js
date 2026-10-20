@@ -191,11 +191,74 @@ function applyQuotesVisibility(rfq, role) {
   };
 }
 
+/**
+ * Vendor Dashboard — Hide Buyer Details for 48 Hours.
+ * When a vendor submits a bid/quote for an RFQ, the buyer's details must remain hidden
+ * for 48 hours after the bid submission (server-side security enforcement).
+ */
+function applyVendorBuyerPrivacy(rfq, vendorRecord) {
+  if (!rfq) return rfq;
+  if (!vendorRecord) return rfq;
+
+  const vendorQuotes = (Array.isArray(rfq.quotes) ? rfq.quotes : []).filter(
+    (q) => (vendorRecord.id && q.vendorId === vendorRecord.id) ||
+           (vendorRecord.email && q.vendorEmail && q.vendorEmail.toLowerCase() === vendorRecord.email.toLowerCase())
+  );
+
+  if (vendorQuotes.length === 0) {
+    return {
+      ...rfq,
+      quotes: vendorQuotes,
+      buyerDetailsHidden: false,
+    };
+  }
+
+  const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+  const submissionTimes = vendorQuotes
+    .map((q) => {
+      const ts = q.submittedAt || q.createdAt || q.timestamp;
+      return ts ? new Date(ts).getTime() : 0;
+    })
+    .filter((t) => t > 0);
+
+  const bidSubmittedAt = submissionTimes.length > 0 ? Math.min(...submissionTimes) : 0;
+  const isWithin48h = bidSubmittedAt > 0 && Date.now() - bidSubmittedAt < FORTY_EIGHT_HOURS_MS;
+
+  if (isWithin48h) {
+    const unhideAt = new Date(bidSubmittedAt + FORTY_EIGHT_HOURS_MS).toISOString();
+    return {
+      ...rfq,
+      quotes: vendorQuotes,
+      buyerName: '',
+      buyerAccountName: '',
+      buyerCompany: '',
+      buyerEmail: '',
+      sourceEmail: '',
+      buyerContact: '',
+      buyerPhone: '',
+      buyerContactPerson: '',
+      buyerDetailsHidden: true,
+      buyerDetailsHiddenUntil: unhideAt,
+      buyerDetailsHiddenReason: 'Buyer contact details are protected for 48 hours following bid submission.',
+    };
+  }
+
+  return {
+    ...rfq,
+    quotes: vendorQuotes,
+    buyerDetailsHidden: false,
+  };
+}
+
 /** Apply a read scope to the full RFQ list. */
 function scopedRfqList(scope) {
   const all = storeService.getRFQs();
   if (!scope.restricted) return all;
-  if (scope.role === 'vendor') return all.filter((rfq) => canVendorViewRfq(scope.vendor, rfq));
+  if (scope.role === 'vendor') {
+    return all
+      .filter((rfq) => canVendorViewRfq(scope.vendor, rfq))
+      .map((rfq) => applyVendorBuyerPrivacy(rfq, scope.vendor));
+  }
   const buyerRfqs = all.filter((rfq) => !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId);
   return buyerRfqs.map((rfq) => applyQuotesVisibility(rfq, scope.role));
 }
@@ -444,7 +507,12 @@ async function getRFQById(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     const role = req.user && req.user.role;
-    res.json({ success: true, data: applyQuotesVisibility(rfq, role) });
+    let data = applyQuotesVisibility(rfq, role);
+    if (role === 'vendor') {
+      const vendorRecord = await resolveVendorForUser(req.user);
+      data = applyVendorBuyerPrivacy(data, vendorRecord);
+    }
+    res.json({ success: true, data });
   } catch (err) {
     logger.error(`Error fetching RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);
@@ -1295,7 +1363,8 @@ async function addQuote(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     storeService.consumeVendorQuotationCredit(vendorRecord.id, targetRfq.id);
-    res.json({ success: true, data: updatedRFQ });
+    const finalData = applyVendorBuyerPrivacy(updatedRFQ, vendorRecord);
+    res.json({ success: true, data: finalData });
   } catch (err) {
     logger.error(`Error adding quote to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);

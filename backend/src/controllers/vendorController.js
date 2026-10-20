@@ -295,6 +295,10 @@ async function createVendor(req, res, next) {
       body.source = 'self_registration';
     } else if (req.user.role === 'admin') {
       buyerId = (req.query && req.query.buyerId) || null;
+    } else if (req.user.role === 'category_manager') {
+      buyerId = null;
+      addedByBuyerCompany = null;
+      body.source = 'procucev_network';
     } else if (req.user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
       if (!buyerAccount) {
@@ -313,7 +317,7 @@ async function createVendor(req, res, next) {
       logger.warn('Failed to create vendor: Missing name or majorCategory', { body }, 'VENDOR_CONTROLLER');
       return res.status(400).json({ success: false, error: 'Vendor name and majorCategory are required.' });
     }
-    if (req.user.role === 'buyer' && !body.email) {
+    if ((req.user.role === 'buyer' || req.user.role === 'category_manager') && !body.email) {
       return res.status(400).json({ success: false, error: 'Vendor email is required.' });
     }
     if (addedByBuyerCompany) {
@@ -330,7 +334,16 @@ async function createVendor(req, res, next) {
     if (body.email && storeService.getVendorById(body.email, 'all')) {
       return res.status(409).json({ success: false, error: `A vendor with the email ${body.email} already exists.` });
     }
-    logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory, buyerId }, 'VENDOR_CONTROLLER');
+    const phone = body.contactPhone || body.phone;
+    if (phone && Array.isArray(storeService.vendors)) {
+      const existingByPhone = storeService.vendors.find(
+        (v) => (v.contactPhone && v.contactPhone === phone) || (v.phone && v.phone === phone)
+      );
+      if (existingByPhone) {
+        return res.status(409).json({ success: false, error: `A vendor with the contact number ${phone} already exists.` });
+      }
+    }
+    logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory, buyerId, role: req.user.role }, 'VENDOR_CONTROLLER');
     const created = storeService.addVendor(body, req.user && req.user.email, buyerId);
     // Confirms the write actually landed in Postgres before reporting
     // success — a duplicate email (vendors.email is UNIQUE) used to fail
