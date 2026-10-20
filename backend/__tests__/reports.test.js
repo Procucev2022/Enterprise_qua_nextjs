@@ -19,6 +19,7 @@ const {
   getDailyActivityReport,
 } = require('../src/controllers/reportsController');
 const { RFQ_MODES, RFQ_MODE_LABELS } = require('../src/config/constants');
+const { authHeader } = require('./testHelpers');
 
 describe('Reports Controller & Endpoints Suite', () => {
   beforeEach(() => {
@@ -251,7 +252,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/seller-report?requestType=sellerReport').expect(200);
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.reportType).toBe('sellerReport');
       expect(res.body.totalRecords).toBe(5); // 3 vendors on rfq-1 + 1 empty rfq-2 + 1 nodate rfq
@@ -294,7 +295,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/seller-report?requestType=sellerSummary').expect(200);
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerSummary').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(2);
       expect(res.body.data[0].CompanyName).toBe('Steel Dynamics');
@@ -328,7 +329,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/seller-report?requestType=sellerCategoryReport').expect(200);
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerCategoryReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].Category1).toBe('Plastics & Polymers');
@@ -360,7 +361,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/seller-report?requestType=sellerSubscriptionReport').expect(200);
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerSubscriptionReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data[0].FreeQuotationCredits).toBe(15);
       expect(res.body.data[0].QuotedRFQsCount).toBe(2);
@@ -371,7 +372,7 @@ describe('Reports Controller & Endpoints Suite', () => {
     });
 
     test('GET /api/reports/seller-report with invalid requestType returns 400', async () => {
-      const res = await request(app).get('/api/reports/seller-report?requestType=unknownType').expect(400);
+      const res = await request(app).get('/api/reports/seller-report?requestType=unknownType').set(authHeader('category_manager')).expect(400);
       expect(res.body.success).toBe(false);
       expect(res.body.error).toContain('Invalid requestType');
     });
@@ -426,7 +427,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerReport').expect(200);
+      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].BuyerName).toBe('Suresh Patel');
@@ -473,7 +474,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerSummary').expect(200);
+      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerSummary').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(2);
       expect(res.body.data[0].TotalRFQsCreated).toBe(24);
@@ -497,7 +498,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerCategoryReport').expect(200);
+      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerCategoryReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data[0].Category1).toBe('Forgings');
       expect(res.body.data[0].Category2).toBe('Castings');
@@ -522,7 +523,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerCreditsReport').expect(200);
+      const res = await request(app).get('/api/reports/buyer-report?requestType=buyerCreditsReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data[0].RemainingFreeRFQs).toBe(2);
       expect(res.body.data[0].CreditsConsumed).toBe(3);
@@ -531,7 +532,7 @@ describe('Reports Controller & Endpoints Suite', () => {
     });
 
     test('GET /api/reports/buyer-report with invalid requestType returns 400', async () => {
-      const res = await request(app).get('/api/reports/buyer-report?requestType=badType').expect(400);
+      const res = await request(app).get('/api/reports/buyer-report?requestType=badType').set(authHeader('category_manager')).expect(400);
       expect(res.body.success).toBe(false);
       expect(res.body.error).toContain('Invalid requestType');
     });
@@ -586,7 +587,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/rfq-report?requestType=rfqReport').expect(200);
+      const res = await request(app).get('/api/reports/rfq-report?requestType=rfqReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].TotalVendors).toBe(2);
@@ -657,7 +658,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/rfq-report?requestType=rfqSummaryReport').expect(200);
+      const res = await request(app).get('/api/reports/rfq-report?requestType=rfqSummaryReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].SellerCompanyName).toBe('Precision Tools Pvt Ltd');
@@ -704,7 +705,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app).get('/api/reports/rfq-report?requestType=dailyRfqDispatchReport').expect(200);
+      const res = await request(app).get('/api/reports/rfq-report?requestType=dailyRfqDispatchReport').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.totalRecords).toBe(3);
       expect(res.body.data[0].ChaserActive).toBe('YES');
@@ -718,7 +719,7 @@ describe('Reports Controller & Endpoints Suite', () => {
     });
 
     test('GET /api/reports/rfq-report with invalid requestType returns 400', async () => {
-      const res = await request(app).get('/api/reports/rfq-report?requestType=invalid').expect(400);
+      const res = await request(app).get('/api/reports/rfq-report?requestType=invalid').set(authHeader('category_manager')).expect(400);
       expect(res.body.success).toBe(false);
       expect(res.body.error).toContain('Invalid requestType');
     });
@@ -785,15 +786,48 @@ describe('Reports Controller & Endpoints Suite', () => {
           created_at: null,
         },
       ];
-      storeService.auditLogs = [{ id: 'audit-1' }, { id: 'audit-2' }];
+      storeService.auditLogs = [
+        { id: 'audit-1', timestamp: new Date().toISOString() },
+        { id: 'audit-2', timestamp: new Date().toISOString() },
+        { id: 'audit-old', timestamp: '2020-01-01T00:00:00Z' },
+      ];
 
-      const res = await request(app).get('/api/reports/daily-activity').expect(200);
+      const res = await request(app).get('/api/reports/daily-activity').set(authHeader('category_manager')).expect(200);
       expect(res.body.success).toBe(true);
       expect(res.body.summary.rfqsCreated).toBe(2);
       expect(res.body.summary.quotesReceived).toBe(2);
       expect(res.body.summary.newBuyersRegistered).toBe(1);
       expect(res.body.summary.newVendorsRegistered).toBe(1);
       expect(res.body.summary.totalAuditEvents).toBe(2);
+    });
+    test('counts quote submissions in range on older RFQ and excludes out-of-range quotes', async () => {
+      storeService.rfqs = [
+        {
+          id: 'rfq-older',
+          createdAt: '2026-01-01T00:00:00Z',
+          quotes: [
+            { id: 'q-1', submittedAt: '2026-03-05T12:00:00Z' },
+            { id: 'q-2', submittedAt: '2026-03-08T15:00:00Z' },
+            { id: 'q-3', submittedAt: '2026-01-02T10:00:00Z' },
+          ],
+        },
+        {
+          id: 'rfq-in-range',
+          createdAt: '2026-03-02T00:00:00Z',
+          quotes: [
+            { id: 'q-4', submittedAt: '2026-04-10T00:00:00Z' },
+          ],
+        },
+      ];
+
+      const res = await request(app)
+        .get('/api/reports/daily-activity?startDate=2026-03-01&endDate=2026-03-10')
+        .set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.summary.rfqsCreated).toBe(1);
+      expect(res.body.summary.quotesReceived).toBe(2);
     });
   });
 
@@ -888,8 +922,7 @@ describe('Reports Controller & Endpoints Suite', () => {
       ];
       const getRfqsSpy = jest.spyOn(storeService, 'getRFQs').mockReturnValue(mockStorageRfqs);
 
-      const res = await request(app)
-        .get('/api/reports/seller-report?requestType=sellerReport')
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerReport').set(authHeader('category_manager'))
         .expect(200);
 
       expect(res.body.success).toBe(true);
@@ -916,8 +949,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         },
       ];
 
-      const res = await request(app)
-        .get('/api/reports/seller-report?requestType=sellerReport')
+      const res = await request(app).get('/api/reports/seller-report?requestType=sellerReport').set(authHeader('category_manager'))
         .expect(200);
 
       expect(res.body.success).toBe(true);
@@ -939,8 +971,7 @@ describe('Reports Controller & Endpoints Suite', () => {
         { action: 'NO_DATE' },
       ];
 
-      const res = await request(app)
-        .get('/api/reports/daily-activity?startDate=2026-03-01&endDate=2026-03-10')
+      const res = await request(app).get('/api/reports/daily-activity?startDate=2026-03-01&endDate=2026-03-10').set(authHeader('category_manager'))
         .expect(200);
 
       expect(res.body.success).toBe(true);

@@ -502,6 +502,12 @@ async function createRFQ(req, res, next) {
         (await storeService.getBuyerAccountByEmail(req.user.email))
       : null;
 
+    // Canonicalize sourcingMode through RFQ_MODE_MAP before entitlement checks and persistence
+    if (body.sourcingMode) {
+      const normalizedKey = String(body.sourcingMode).trim().toLowerCase();
+      body.sourcingMode = RFQ_MODE_MAP[normalizedKey] || body.sourcingMode;
+    }
+
     // Server-side re-validation of the buyer's subscription entitlement —
     // mirrors the vendor download-quota check below (generateEmailPreview).
     // The frontend already gates on the same rules (store.tsx's addNewRFQ) for

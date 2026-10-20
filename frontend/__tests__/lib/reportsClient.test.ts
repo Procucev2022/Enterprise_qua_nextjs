@@ -58,7 +58,30 @@ describe('reportsClient Suite', () => {
       expect(res.success).toBe(true);
       expect(res.data).toHaveLength(1);
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/reports/seller-report?requestType=sellerReport&startDate=2026-01-01&endDate=2026-01-31')
+        expect.stringContaining('/api/reports/seller-report?requestType=sellerReport&startDate=2026-01-01&endDate=2026-01-31'),
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: 'Bearer test-session-token' }),
+        })
+      );
+    });
+
+    test('omits Authorization header when no session token is held', async () => {
+      const { authClient } = require('@/lib/authClient');
+      jest.spyOn(authClient, 'getToken').mockReturnValue(null);
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: [] }),
+      } as Response);
+
+      const config = REPORT_OPTIONS[0];
+      await fetchReportData(config);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          headers: {},
+        })
       );
     });
 

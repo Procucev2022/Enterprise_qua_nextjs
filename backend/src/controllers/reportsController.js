@@ -216,6 +216,20 @@ async function enrichVendorsForRfqs(rfqs, existingVendors = []) {
   return vendorMap;
 }
 
+async function loadAllVendorsForReport() {
+  if (pool.hasStorage()) {
+    try {
+      const res = await domainQueries.getVendorsPageFromDB({ limit: 5000, offset: 0 });
+      if (res && Array.isArray(res.rows) && res.rows.length > 0) {
+        return res.rows;
+      }
+    } catch (err) {
+      logger.warn('Failed to load vendors from DB for report, falling back to cache', { error: err.message }, LOG_CATEGORY);
+    }
+  }
+  return Array.isArray(storeService.vendors) ? storeService.vendors : [];
+}
+
 /**
  * GET /api/reports/seller-report
  */
@@ -230,7 +244,9 @@ async function getSellerReports(req, res, next) {
       await storeService.syncRFQsFromDB();
     }
 
-    const allVendors = Array.isArray(storeService.vendors) ? storeService.vendors : [];
+    const allVendors = (requestType === 'sellerReport')
+      ? (Array.isArray(storeService.vendors) ? storeService.vendors : [])
+      : await loadAllVendorsForReport();
     const allRfqs = storeService.getRFQs();
 
     const rows = [];
@@ -693,9 +709,12 @@ async function getDailyActivityReport(req, res, next) {
     allRfqs.forEach((r) => {
       if (Array.isArray(r.quotes)) {
         r.quotes.forEach((q) => {
-          const qDate = q.submittedAt ? new Date(q.submittedAt) : (r.createdAt ? new Date(r.createdAt) : null);
-          if (qDate && qDate >= fromDate && qDate <= toDate) {
-            totalQuotesReceived++;
+          const rawDate = q.submittedAt || q.createdAt || r.createdAt;
+          if (rawDate) {
+            const qDate = new Date(rawDate);
+            if (!isNaN(qDate.getTime()) && qDate >= fromDate && qDate <= toDate) {
+              totalQuotesReceived++;
+            }
           }
         });
       }
@@ -703,7 +722,7 @@ async function getDailyActivityReport(req, res, next) {
 
     const auditLogsInRange = allAuditLogs.filter((l) => {
       const rawDate = l.timestamp || l.createdAt;
-      if (!rawDate) return true;
+      if (!rawDate) return false;
       const d = new Date(rawDate);
       return !isNaN(d.getTime()) && d >= fromDate && d <= toDate;
     });

@@ -847,6 +847,36 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       expect(res.profile.categories).toEqual([{ major: 'Industrial', minor: 'Motors' }]);
       expect(rowsSpy).toHaveBeenCalled();
     });
+
+    test('prioritizes exact user identity over organization fallback', async () => {
+      const calls = [];
+      jest.spyOn(dbPool, 'rows').mockImplementation((sql, params) => {
+        calls.push({ sql, params });
+        if (sql.includes('u.uuid = $1')) {
+          return Promise.resolve([
+            {
+              org_uuid: 'org-123',
+              user_uuid: 'user-exact',
+              organization_name: 'Alpha Ltd',
+              user_email: 'exact@alpha.com',
+            },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const res = await buyerProfileQueries.findProfileByIdentifier({
+        userId: 'user-exact',
+        organizationName: 'Alpha Ltd',
+      });
+
+      expect(res.found).toBe(true);
+      expect(res.profile.contactEmail).toBe('exact@alpha.com');
+      // Verify first query was user-scoped (u.uuid)
+      expect(calls[0].sql).toContain('u.uuid = $1');
+      // Should NOT have run the fallback query for organization since exact user matched
+      expect(calls.some((c) => c.sql.includes('lower(o.organization_name)'))).toBe(false);
+    });
   });
 });
 

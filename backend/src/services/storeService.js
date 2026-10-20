@@ -764,6 +764,8 @@ class StoreService {
         ? Number(vendorData.freeQuotationCredits)
         : VENDOR_FREE_CREDITS_LIMIT,
       quotedRfqIds: Array.isArray(vendorData.quotedRfqIds) ? vendorData.quotedRfqIds : [],
+      createdAt: vendorData.createdAt || vendorData.created_at || new Date().toISOString(),
+      created_at: vendorData.createdAt || vendorData.created_at || new Date().toISOString(),
     };
 
     this.vendors.unshift(newVendor);

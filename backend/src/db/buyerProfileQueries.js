@@ -196,45 +196,70 @@ async function findProfileByIdentifier({ email, organizationName, organizationId
   if (!email && !organizationName && !organizationId && !userId) {
     return { found: false, reason: 'NO_IDENTIFIER' };
   }
-  const conditions = [];
-  const params = [];
-  let idx = 1;
 
-  if (userId) {
-    conditions.push(`u.uuid = $${idx++}`);
-    params.push(userId);
-  }
-  if (organizationId) {
-    conditions.push(`o.uuid = $${idx++}`);
-    params.push(organizationId);
-  }
-  if (email) {
-    conditions.push(`(lower(u.username) = lower($${idx}) or lower(u.email) = lower($${idx}) or lower(o.email) = lower($${idx}))`);
-    params.push(email.trim());
-    idx++;
-  }
-  if (organizationName) {
-    conditions.push(`lower(o.organization_name) = lower($${idx++})`);
-    params.push(organizationName.trim());
+  // 1. Resolve exact user identity first (userId or email) to prevent multi-user organization bleeding
+  if (userId || email) {
+    const userConditions = [];
+    const userParams = [];
+    let idx = 1;
+    if (userId) {
+      userConditions.push(`u.uuid = $${idx++}`);
+      userParams.push(userId);
+    }
+    if (email) {
+      userConditions.push(`(lower(u.username) = lower($${idx}) or lower(u.email) = lower($${idx}) or lower(o.email) = lower($${idx}))`);
+      userParams.push(email.trim());
+      idx++;
+    }
+    const query = `${PROFILE_SELECT} where ${userConditions.join(' or ')} limit 1`;
+    try {
+      const rows = await pool.rows(query, userParams, { d1: true });
+      if (rows && rows.length > 0) {
+        const profile = mapRowToProfile(rows[0]);
+        try {
+          profile.categories = await loadCategories(profile.organizationId, profile.userId);
+        } catch (_) {
+          profile.categories = [];
+        }
+        return { found: true, profile };
+      }
+    } catch (err) {
+      return { found: false, reason: 'DB_ERROR', error: err.message };
+    }
   }
 
-  const query = `${PROFILE_SELECT} where ${conditions.join(' or ')} limit 1`;
-  let rows = [];
-  try {
-    rows = await pool.rows(query, params, { d1: true });
-  } catch (err) {
-    return { found: false, reason: 'DB_ERROR', error: err.message };
+  // 2. Explicit fallback to organization-level identifiers (organizationId or organizationName)
+  if (organizationId || organizationName) {
+    const orgConditions = [];
+    const orgParams = [];
+    let idx = 1;
+    if (organizationId) {
+      orgConditions.push(`o.uuid = $${idx++}`);
+      orgParams.push(organizationId);
+    }
+    if (organizationName) {
+      orgConditions.push(`lower(o.organization_name) = lower($${idx++})`);
+      orgParams.push(organizationName.trim());
+      idx++;
+    }
+    const query = `${PROFILE_SELECT} where ${orgConditions.join(' or ')} limit 1`;
+    try {
+      const rows = await pool.rows(query, orgParams, { d1: true });
+      if (rows && rows.length > 0) {
+        const profile = mapRowToProfile(rows[0]);
+        try {
+          profile.categories = await loadCategories(profile.organizationId, profile.userId);
+        } catch (_) {
+          profile.categories = [];
+        }
+        return { found: true, profile };
+      }
+    } catch (err) {
+      return { found: false, reason: 'DB_ERROR', error: err.message };
+    }
   }
 
-  if (!rows || rows.length === 0) return { found: false, reason: 'USER_NOT_FOUND' };
-
-  const profile = mapRowToProfile(rows[0]);
-  try {
-    profile.categories = await loadCategories(profile.organizationId, profile.userId);
-  } catch (_) {
-    profile.categories = [];
-  }
-  return { found: true, profile };
+  return { found: false, reason: 'USER_NOT_FOUND' };
 }
 
 // Columns written by a profile save, in the order the UPDATE below binds them.

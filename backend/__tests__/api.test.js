@@ -549,6 +549,20 @@ describe('API Route Endpoints', () => {
         expect(acc.remainingFreeRFQs).toBe(0);
       });
 
+      test('spaced aliases such as mode 0 are canonicalized to mode_0 and do not consume credits', async () => {
+        const email = 'entitlement-spaced-mode@ex.com';
+        await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
+          organizationName: 'Entitlement Spaced Mode Buyer',
+          corporateEmail: email,
+        });
+
+        const rfq = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode 0' }));
+        expect(rfq.statusCode).toBe(201);
+        expect(rfq.body.data.sourcingMode).toBe('mode_0');
+        const acc = await storeService.getBuyerAccountByEmail(email);
+        expect(acc.remainingFreeRFQs).toBe(5);
+      });
+
       test('a free_trial buyer can raise mode_1, mode_2, or mode_3 RFQs sharing the 5 free RFQs', async () => {
         const email = 'entitlement-multi-version@ex.com';
         await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
