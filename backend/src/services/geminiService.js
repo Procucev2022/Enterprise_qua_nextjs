@@ -97,6 +97,13 @@ Return a SINGLE JSON object with EXACTLY this shape and no surrounding prose or 
   ]
 }
 
+COMPACT OUTPUT RULES (CRITICAL FOR SPEED AND AVOIDING TOKEN LIMITS):
+- DO NOT return keys whose value is null, empty or not stated in the document.
+- Only include fields in the output that have actual extracted values. Omit all null or undefined fields from both the document object and item objects.
+- Example: If an item only has description, quantity and unit, output only:
+  {"itemDescription": "Hex bolt M8x250", "quantity": 25, "unit": "PCS"}
+- This keeps the output compact, ultra-fast, and prevents output token exhaustion.
+
 If the document contains no procurement line items at all, return {"items": []}.`;
 
 /** True when a real extraction call can be attempted. */
@@ -183,11 +190,116 @@ function extractResponseText(payload) {
 }
 
 /**
+ * Auto-repairs truncated or cut-off model JSON responses.
+ * When extensive RFQs (e.g. 100-500 line items) reach the model's output token ceiling
+ * (finishReason === 'MAX_TOKENS'), the response is abruptly truncated midway through an item.
+ * This parser isolates the last fully completed item in the "items" array, safely closes the array
+ * and parent document object, and salvages all extracted items without failing the entire request.
+ */
+function repairTruncatedJson(candidate) {
+  if (!candidate || typeof candidate !== 'string') return null;
+
+  let text = candidate.trim();
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) text = fenced[1].trim();
+
+  const firstBrace = text.indexOf('{');
+  if (firstBrace === -1) return null;
+  text = text.slice(firstBrace).trim();
+
+  // Try direct parse first
+  try {
+    return JSON.parse(text);
+  } catch {}
+
+  // 1. Array-level truncation repair: look for "items" array
+  const itemsKeyMatch = text.match(/"items"\s*:\s*\[/);
+  if (itemsKeyMatch && typeof itemsKeyMatch.index === 'number') {
+    const arrayStart = itemsKeyMatch.index + itemsKeyMatch[0].length;
+    let searchPos = text.length;
+    while (searchPos > arrayStart) {
+      const lastCloseBrace = text.lastIndexOf('}', searchPos);
+      if (lastCloseBrace <= arrayStart) break;
+
+      const prefix = text.slice(0, lastCloseBrace + 1);
+      const testCandidate = prefix.replace(/,\s*$/, '') + '\n  ]\n}';
+      try {
+        const parsed = JSON.parse(testCandidate);
+        if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items) && parsed.items.length > 0) {
+          return parsed;
+        }
+      } catch {
+        try {
+          const cleaned = testCandidate.replace(/,(\s*[}\]])/g, '$1');
+          const parsed = JSON.parse(cleaned);
+          if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items) && parsed.items.length > 0) {
+            return parsed;
+          }
+        } catch {}
+      }
+      searchPos = lastCloseBrace - 1;
+    }
+  }
+
+  // 2. Generic structural recovery: count unclosed brackets/braces
+  let openBraces = 0;
+  let openBrackets = 0;
+  let inString = false;
+  let escaped = false;
+  let lastSafePos = -1;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (ch === '{') openBraces++;
+      else if (ch === '}') {
+        openBraces--;
+        lastSafePos = i;
+      } else if (ch === '[') openBrackets++;
+      else if (ch === ']') openBrackets--;
+    }
+  }
+
+  if (openBraces > 0 || openBrackets > 0) {
+    let cleanText = text;
+    if (inString) cleanText += '"';
+    cleanText = cleanText.replace(/,\s*$/, '');
+    const closure = ']'.repeat(Math.max(0, openBrackets)) + '}'.repeat(Math.max(0, openBraces));
+    try {
+      const parsed = JSON.parse(cleanText + closure);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {
+      if (lastSafePos > 0) {
+        const prefix = text.slice(0, lastSafePos + 1).replace(/,\s*$/, '');
+        try {
+          const parsed = JSON.parse(prefix + closure);
+          if (parsed && typeof parsed === 'object') return parsed;
+        } catch {}
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Parse the model's reply into an object.
  *
  * Models occasionally wrap JSON in a ```json fence despite being told not to, so
  * the fence is stripped and the outermost object is isolated before parsing.
- * Anything still unparseable is a failed extraction, never a partial guess.
+ * Anything still unparseable undergoes truncation recovery to salvage line items.
  */
 function parseExtractionJson(text) {
   if (!text) return null;
@@ -197,26 +309,24 @@ function parseExtractionJson(text) {
   if (fenced) candidate = fenced[1].trim();
 
   const firstBrace = candidate.indexOf('{');
-  const lastBrace = candidate.lastIndexOf('}');
-  if (firstBrace === -1 || lastBrace <= firstBrace) return null;
-  candidate = candidate.slice(firstBrace, lastBrace + 1);
+  if (firstBrace === -1) return null;
 
-  // The candidate always starts with '{' and ends with '}', so a successful parse
-  // is necessarily an object; anything else throws and is reported as a failure.
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    // One repair pass for the single most common defect in model JSON: a trailing
-    // comma before a closing } or ]. This only removes a stray separator, so it
-    // cannot turn malformed data into fabricated values; anything still invalid
-    // falls through to null and is reported as a failed extraction (fail-closed).
+  const lastBrace = candidate.lastIndexOf('}');
+  if (lastBrace > firstBrace) {
+    const isolated = candidate.slice(firstBrace, lastBrace + 1);
     try {
-      const repaired = candidate.replace(/,(\s*[}\]])/g, '$1');
-      return JSON.parse(repaired);
+      return JSON.parse(isolated);
     } catch {
-      return null;
+      try {
+        const repaired = isolated.replace(/,(\s*[}\]])/g, '$1');
+        return JSON.parse(repaired);
+      } catch {
+        // Fall through to truncation recovery
+      }
     }
   }
+
+  return repairTruncatedJson(candidate);
 }
 
 /**
@@ -895,6 +1005,16 @@ async function callModel(
             { keyIndex: keyIdx + 1, totalKeys: keys.length, model, status },
             'GEMINI'
           );
+        } else if (status === 503) {
+          logger.warn(
+            `Gemini model ${model} returned 503 Overloaded/Unavailable. Skipping redundant key rotation and failing over to next model immediately.`,
+            { keyIndex: keyIdx + 1, totalKeys: keys.length, model, status },
+            'GEMINI'
+          );
+          const err = new Error(errorMsg);
+          err.status = 503;
+          err.skipKeyRetry = true;
+          throw err;
         } else {
           logger.warn(
             `Gemini API ${keyLabel} failed for ${model} (${status}). Rotating to next key...`,
@@ -939,16 +1059,21 @@ async function callModel(
       const parsed = parseExtractionJson(responseText);
       if (!parsed) {
         logger.warn(
-          `[GEMINI_API] Gemini ${model} returned no parseable JSON response (${durationMs}ms)`,
+          `[GEMINI_API] Gemini ${model} returned no parseable JSON response (${durationMs}ms, finishReason: ${finishReason})`,
           {
             model,
             durationMs,
             rawSnippet: responseText.slice(0, 500),
             rawLength: responseText.length,
+            finishReason,
           },
           'GEMINI'
         );
-        throw new Error(`Gemini ${model} returned no parseable JSON`);
+        const parseErr = new Error(`Gemini ${model} returned no parseable JSON`);
+        // An unparseable response despite HTTP 200 means the model output formatting failed;
+        // retrying other keys with the exact same model and prompt is redundant.
+        parseErr.noKeyRetry = true;
+        throw parseErr;
       }
 
       modelKeyIndices.set(model, keyIdx);
@@ -980,7 +1105,7 @@ async function callModel(
         throw err;
       }
 
-      if (isNonRetryableError(null, err.message)) {
+      if (err.skipKeyRetry || err.noKeyRetry || isNonRetryableError(null, err.message)) {
         throw err;
       }
 
@@ -1775,4 +1900,5 @@ module.exports = {
   getKeyCooldowns,
   isNonRetryableError,
   isLocationUnsupportedError,
+  repairTruncatedJson,
 };

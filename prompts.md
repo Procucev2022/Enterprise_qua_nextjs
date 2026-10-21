@@ -3147,3 +3147,25 @@ git pre-commit checks are failing, can you please check once
 ```text
 Some github files conflicts, can you please check & fix
 ```
+
+### 2026-10-21T17:00:41+05:30
+
+```text
+Can you please check the logs: 
+
+Still gemini took too long
+```
+
+### 2026-10-21T17:17:34+05:30
+
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-10-21T11_42_19.044Z.csv] @[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-10-21T11_46_00.564Z.csv] 
+
+Check the logs, Still gemini extraction taking too much time, Can you tell what is the issue, & how we can reduce extraction time?
+```
+
+### 2026-10-21T17:32:10+05:30
+
+```text
+Please implement these fixes
+```

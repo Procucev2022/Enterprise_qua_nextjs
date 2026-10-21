@@ -2320,5 +2320,138 @@ describe('geminiService.generateJson', () => {
         ).toBe(false);
       });
     });
+
+    describe('Truncated JSON Auto-Recovery & Fast Model Failover', () => {
+      test('repairTruncatedJson parses clean JSON without modification', () => {
+        const input = JSON.stringify({ documentTitle: 'Clean RFQ', items: [{ itemDescription: 'Pipe', quantity: 10 }] });
+        const res = gemini.repairTruncatedJson(input);
+        expect(res).toEqual({ documentTitle: 'Clean RFQ', items: [{ itemDescription: 'Pipe', quantity: 10 }] });
+      });
+
+      test('repairTruncatedJson returns null on invalid or non-string input', () => {
+        expect(gemini.repairTruncatedJson(null)).toBeNull();
+        expect(gemini.repairTruncatedJson(123)).toBeNull();
+        expect(gemini.repairTruncatedJson('not a json string')).toBeNull();
+      });
+
+      test('repairTruncatedJson salvages items when truncated midway through an item', () => {
+        const truncated = `{\n  "documentTitle": "RFQ-2026-0202",\n  "items": [\n    {\n      "itemDescription": "Bolt M8",\n      "quantity": 10,\n      "unit": "PCS"\n    },\n    {\n      "itemDescription": "Nut M8",\n      "deliveryState": nul`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.documentTitle).toBe('RFQ-2026-0202');
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Bolt M8');
+        expect(res.items[0].quantity).toBe(10);
+      });
+
+      test('repairTruncatedJson salvages items when truncated after a comma in items array', () => {
+        const truncated = `{\n  "documentTitle": "RFQ-2026-0202",\n  "items": [\n    {\n      "itemDescription": "Hex Nut M10",\n      "quantity": 50\n    },`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Hex Nut M10');
+      });
+
+      test('repairTruncatedJson handles fenced markdown code blocks with truncated items', () => {
+        const truncated = `\`\`\`json\n{\n  "items": [\n    {\n      "itemDescription": "Steel Flange",\n      "quantity": 5\n    }\n`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Steel Flange');
+      });
+
+      test('repairTruncatedJson generic structural recovery appends missing brackets and braces', () => {
+        const truncated = `{\n  "documentTitle": "Test Title",\n  "metadata": {\n    "author": "Buyer"`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.documentTitle).toBe('Test Title');
+      });
+
+      test('parseExtractionJson automatically salvages truncated model output', () => {
+        const truncated = `{\n  "items": [\n    {\n      "itemDescription": "Gasket 2 inch",\n      "quantity": 100\n    },\n    {\n      "itemDesc`;
+        const res = gemini.parseExtractionJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Gasket 2 inch');
+      });
+
+      test('callModel throws with skipKeyRetry on 503 Overloaded response', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key-1';
+        global.fetch = jest.fn(async () => ({
+          ok: false,
+          status: 503,
+          statusText: 'Service Unavailable',
+          text: async () => 'Model overloaded',
+        }));
+
+        await expect(
+          gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000)
+        ).rejects.toMatchObject({
+          status: 503,
+          skipKeyRetry: true,
+        });
+      });
+
+      test('callModel throws with noKeyRetry when HTTP 200 response contains unparseable content', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key-1';
+        global.fetch = jest.fn(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            candidates: [{ content: { parts: [{ text: 'Plain text without any braces or json structure' }] } }],
+          }),
+        }));
+
+        await expect(
+          gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000)
+        ).rejects.toMatchObject({
+          noKeyRetry: true,
+        });
+      });
+
+      test('repairTruncatedJson handles escaped quotes and backslashes in unclosed strings', () => {
+        const truncated = `{\n  "title": "Item with \\"quoted\\" specs and \\\\ path",\n  "description": "Unfinished string`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.title).toContain('quoted');
+      });
+
+      test('repairTruncatedJson handles array recovery when trailing comma is present before closure', () => {
+        const truncated = `{\n  "items": [\n    {\n      "itemDescription": "Steel Beam",\n      "quantity": 12,\n    },\n    {\n      "broken":`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Steel Beam');
+      });
+
+      test('callModel with multiple keys does not loop on 503 and immediately throws skipKeyRetry', async () => {
+        process.env.GEMINI_API_KEYS = 'key-1,key-2,key-3';
+        const attemptedKeys = [];
+        global.fetch = jest.fn(async (url, opts) => {
+          attemptedKeys.push(opts?.headers?.['x-goog-api-key']);
+          return {
+            ok: false,
+            status: 503,
+            statusText: 'Service Unavailable',
+            text: async () => 'High demand spikes',
+          };
+        });
+
+        await expect(
+          gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000)
+        ).rejects.toMatchObject({
+          status: 503,
+          skipKeyRetry: true,
+        });
+        expect(attemptedKeys).toHaveLength(1); // Only 1 attempt made, did not waste time trying key-2 and key-3
+      });
+
+      test('repairTruncatedJson trims to lastSafePos when unclosed trailing field value is malformed', () => {
+        const truncated = `{\n  "docTitle": "Valid Title",\n  "meta": { "valid": 1 },\n  "brokenField": unfin`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.docTitle).toBe('Valid Title');
+      });
+    });
   });
 });
