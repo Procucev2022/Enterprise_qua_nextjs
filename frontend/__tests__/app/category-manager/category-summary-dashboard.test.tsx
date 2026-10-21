@@ -390,7 +390,7 @@ describe('CategorySummaryDashboard', () => {
 
     render(<CategorySummaryDashboard />);
 
-    expect(screen.getByText(/Category Governance & Demand-Supply Analytics/i)).toBeInTheDocument();
+    expect(screen.getByText(/Active Categories/i)).toBeInTheDocument();
     // No RFQ activity yet has landed for this account, so it isn't "active".
     expect(screen.getByText('1 Buyers')).toBeInTheDocument();
     // The one real RFQ has no prior-period baseline -> "New", not a fabricated %.

@@ -563,30 +563,15 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   return (
     <div className="space-y-6 animate-fade-in pb-10">
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* TITLE HEADER & ACTION BAR */}
+      {/* ACTION BAR */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-              Vendor Summary & Performance Analytics
-            </h1>
-            <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
-              <Sparkles size={11} /> Dual-Stream Directory
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Unified console segmented into Category Manager uploaded Procucev vendors and Self-Onboarded / Buyer-Added private vendors.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => setUploadModalOpen(true)}
-            className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-sm"
-          >
-            <Upload size={14} /> Bulk Upload Vendors
-          </button>
-        </div>
+      <div className="flex items-center justify-end gap-2 pb-1">
+        <button
+          onClick={() => setUploadModalOpen(true)}
+          className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-sm"
+        >
+          <Upload size={14} /> Bulk Upload Vendors
+        </button>
       </div>
 
       <VendorUploadModal isOpen={uploadModalOpen} onClose={() => setUploadModalOpen(false)} />

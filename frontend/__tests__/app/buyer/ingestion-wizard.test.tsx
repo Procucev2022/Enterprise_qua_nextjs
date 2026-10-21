@@ -1054,6 +1054,9 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
 
     await waitFor(() => expect(screen.getAllByText(/Category Mismatch/i).length).toBeGreaterThan(0));
 
+    const mismatchTab = screen.getByRole('button', { name: /Category Mismatch/i });
+    fireEvent.click(mismatchTab);
+
     const sendEmailBtn = screen.getByRole('button', { name: /Send Email to Update Category/i });
     expect(sendEmailBtn).toBeInTheDocument();
 

@@ -697,9 +697,20 @@ async function verifyOtp(email, code, ipAddress, mobile) {
   const otpKey = buildOtpKey(normalizedEmail, submittedMobile);
 
   const user = await loadIdentityUser(normalizedEmail, submittedMobile);
-  const storedOtp = await authSessionQueries.findOtp(otpKey);
+  let storedOtp = await authSessionQueries.findOtp(otpKey);
+  if (!storedOtp) {
+    // Fallback: Check channel-specific email key if registration/dual OTP was dispatched
+    storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`));
+  }
+  if (!storedOtp) {
+    // Fallback: Check clean national digits in case phone formatting varied
+    const cleanDigits = submittedMobile.replace(/\D/g, '');
+    if (cleanDigits && cleanDigits !== submittedMobile) {
+      storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, cleanDigits));
+    }
+  }
 
-  if (storedOtp && Date.now() > storedOtp.expiresAt) {
+  if (storedOtp && storedOtp.expiresAt && Date.now() > storedOtp.expiresAt) {
     await authSessionQueries.deleteOtp(otpKey);
     logger.warn(`Expired OTP submitted for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.INVALID_OTP);

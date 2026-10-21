@@ -134,8 +134,7 @@ describe('BuyersDirectory Component Suite', () => {
   test('renders page header, summary KPI cards, and buyers table', () => {
     render(<BuyersDirectory />);
 
-    expect(screen.getByText('Buyers Directory')).toBeInTheDocument();
-    expect(screen.getByText('4 Enterprises')).toBeInTheDocument();
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
     expect(screen.getByText('Tata Motors Corp')).toBeInTheDocument();
     expect(screen.getByText('L&T Heavy Engineering')).toBeInTheDocument();
     expect(screen.getByText('Pune')).toBeInTheDocument();
@@ -327,7 +326,7 @@ describe('BuyersDirectory Component Suite', () => {
     });
 
     render(<CategoryManagerBuyersDirectoryPage />);
-    expect(screen.getByText('Buyers Directory')).toBeInTheDocument();
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
 
     // Open first buyer dossier
     const dossierBtns = screen.getAllByText('360° Dossier');

@@ -120,7 +120,7 @@ describe('SellersDirectory Component Suite', () => {
   test('renders page header, KPI cards, and unified sellers table', async () => {
     render(<SellersDirectory />);
 
-    expect(screen.getByText('Sellers Directory')).toBeInTheDocument();
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
@@ -425,7 +425,7 @@ describe('SellersDirectory Component Suite', () => {
     });
 
     render(<CategoryManagerSellersDirectoryPage />);
-    expect(screen.getByText('Sellers Directory')).toBeInTheDocument();
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();

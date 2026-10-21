@@ -1736,11 +1736,23 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           an oversight role — always sees the invited suppliers with full
           details, including on V0 RFQs. */}
       {!isVendor && (!isV0 || isCategoryManager) && (() => {
-        const rawAssigned = (activeRfq?.assignedVendors && activeRfq.assignedVendors.length > 0)
-          ? activeRfq.assignedVendors
-          : (activeRfq?.followUpData?.vendors && activeRfq.followUpData.vendors.length > 0)
-          ? activeRfq.followUpData.vendors
-          : [];
+        // Deduplicate assigned and invited vendors across assignedVendors and followUpData.vendors
+        const sourceList: any[] = [
+          ...(Array.isArray(activeRfq?.assignedVendors) ? activeRfq.assignedVendors : []),
+          ...(Array.isArray(activeRfq?.followUpData?.vendors) ? activeRfq.followUpData.vendors : []),
+        ];
+        const seenVendorKeys = new Set<string>();
+        const rawAssigned: any[] = [];
+        for (const item of sourceList) {
+          if (!item) continue;
+          const key = typeof item === 'string'
+            ? (item as string).trim().toLowerCase()
+            : String(item.id || item.vendorId || item.email || item.vendorEmail || item.name || item.vendorName || '').trim().toLowerCase();
+          if (key && !seenVendorKeys.has(key)) {
+            seenVendorKeys.add(key);
+            rawAssigned.push(item);
+          }
+        }
 
         const normalizedAssigned = rawAssigned.map((v: any, idx: number) => {
           if (typeof v === 'string') {
@@ -1891,8 +1903,26 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               ) : isCategoryManager ? (
                 isV0 ? (
                   // ── Category Manager: V0 RFQ flow renders vendor cards directly without tabs ──
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5" data-testid="v0-cm-vendor-cards">
-                    {visibleAssigned.map((v: any) => renderFullCard(v))}
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/70 dark:border-indigo-800/60 text-xs font-semibold text-indigo-950 dark:text-indigo-200">
+                      <span className="font-bold">V0 Starter Sourcing Breakdown:</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-600 text-white shadow-2xs">
+                        {visibleAssigned.length} Distinct Assigned / Invited
+                      </span>
+                      {typeof activeRfq?.followUpData?.totalInvited === 'number' && activeRfq.followUpData.totalInvited > 0 && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white shadow-2xs">
+                          {activeRfq.followUpData.totalInvited} Outreach Dispatches
+                        </span>
+                      )}
+                      {typeof activeRfq?.followUpData?.respondedCount === 'number' && activeRfq.followUpData.respondedCount > 0 && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-600 text-white shadow-2xs">
+                          {activeRfq.followUpData.respondedCount} Responded
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5" data-testid="v0-cm-vendor-cards">
+                      {visibleAssigned.map((v: any) => renderFullCard(v))}
+                    </div>
                   </div>
                 ) : (
                   // ── Category Manager: two tabs, full details for every vendor ──

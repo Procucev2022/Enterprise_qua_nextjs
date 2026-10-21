@@ -9,12 +9,48 @@ const pool = require('./pool');
 const memoryOtpStore = new Map();
 const memoryRevokedTokens = new Set();
 
+function parseExpiryTimestamp(raw) {
+  if (!raw) return 0;
+  if (typeof raw === 'number') return raw;
+  if (raw instanceof Date) return raw.getTime();
+  const str = String(raw).trim();
+  if (/^\d{11,14}$/.test(str)) {
+    return Number(str);
+  }
+  // If the date string has no explicit timezone offset (e.g. SQLite "YYYY-MM-DD HH:MM:SS"),
+  // treat it as UTC to avoid local timezone drift (e.g. IST +05:30 premature expiration).
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(str)) {
+    const utcIso = str.replace(' ', 'T') + 'Z';
+    const parsed = new Date(utcIso).getTime();
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  const parsed = new Date(str).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function extractEmailFromOtpKey(otpKey) {
+  if (!otpKey) return '';
+  const parts = String(otpKey).split('_EMAIL_');
+  return parts.length > 1 ? parts[1].trim() : '';
+}
+
 // ── OTP codes ────────────────────────────────────────────────────────────────
 
 /**
  * Store (or replace) the OTP issued for an email + mobile pair.
  */
-async function saveOtp(otpKey, code, expiresAt) {
+async function saveOtp(otpKey, code, expiresAt, emailHint) {
+  const isoExpiry = new Date(expiresAt).toISOString();
+  const expiresMs = new Date(expiresAt).getTime();
+  const email = emailHint || extractEmailFromOtpKey(otpKey);
+
+  memoryOtpStore.set(otpKey, {
+    otpKey,
+    code,
+    attempts: 0,
+    expiresAt: expiresMs,
+  });
+
   try {
     await pool.query(
       `insert into auth_otp_codes (otp_key, code, attempts, expires_at, created_at)
@@ -24,16 +60,35 @@ async function saveOtp(otpKey, code, expiresAt) {
          attempts = 0,
          expires_at = excluded.expires_at,
          created_at = CURRENT_TIMESTAMP`,
-      [otpKey, code, new Date(expiresAt).toISOString()],
-      { d1: true }
+      [otpKey, code, isoExpiry],
+      {
+        d1: true,
+        d1Text: `insert into auth_otp_codes (id, otp_key, email, code, attempts, expires_at, created_at)
+                 values ($1, $1, $4, $2, 0, $3, CURRENT_TIMESTAMP)
+                 on conflict (otp_key) do update set
+                   email = excluded.email,
+                   code = excluded.code,
+                   attempts = 0,
+                   expires_at = excluded.expires_at,
+                   created_at = CURRENT_TIMESTAMP`,
+        d1Params: [otpKey, code, isoExpiry, email],
+      }
     );
   } catch (err) {
-    memoryOtpStore.set(otpKey, {
-      otpKey,
-      code,
-      attempts: 0,
-      expiresAt: new Date(expiresAt).getTime(),
-    });
+    // If table lacks unique index on otp_key in D1, delete and insert works unconditionally
+    try {
+      await pool.query('delete from auth_otp_codes where otp_key = $1', [otpKey], { d1: true });
+      await pool.query(
+        `insert into auth_otp_codes (id, otp_key, email, code, attempts, expires_at, created_at)
+         values ($1, $1, $4, $2, 0, $3, CURRENT_TIMESTAMP)`,
+        [otpKey, code, isoExpiry, email],
+        { d1: true }
+      );
+    } catch (innerErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[AUTH_SESSION] saveOtp DB write failed:', innerErr.message);
+      }
+    }
   }
 }
 
@@ -43,24 +98,27 @@ async function saveOtp(otpKey, code, expiresAt) {
 async function findOtp(otpKey) {
   try {
     const rows = await pool.rows(
-      'select otp_key, code, attempts, expires_at from auth_otp_codes where otp_key = $1',
+      'select otp_key, code, attempts, expires_at from auth_otp_codes where otp_key = $1 limit 1',
       [otpKey],
       { d1: true }
     );
-    if (rows.length === 0) {
-      if (memoryOtpStore.has(otpKey)) {
-        return { ...memoryOtpStore.get(otpKey) };
-      }
-      return null;
+    if (rows && rows.length > 0) {
+      const row = rows[0];
+      return {
+        otpKey: row.otp_key,
+        code: row.code,
+        attempts: Number(row.attempts || 0),
+        expiresAt: parseExpiryTimestamp(row.expires_at),
+      };
     }
-    const row = rows[0];
-    return {
-      otpKey: row.otp_key,
-      code: row.code,
-      attempts: Number(row.attempts || 0),
-      expiresAt: new Date(row.expires_at).getTime(),
-    };
+    if (memoryOtpStore.has(otpKey)) {
+      return { ...memoryOtpStore.get(otpKey) };
+    }
+    return null;
   } catch (err) {
+    if (typeof console !== 'undefined' && console.error) {
+      console.error('[AUTH_SESSION] findOtp DB read failed:', err.message);
+    }
     const entry = memoryOtpStore.get(otpKey);
     return entry ? { ...entry } : null;
   }
@@ -106,16 +164,33 @@ async function incrementOtpAttempts(otpKey) {
  * Mark a token's signature as revoked until the token would have expired anyway.
  */
 async function revokeToken(signature, expiresAt) {
+  const isoExpiry = new Date(expiresAt).toISOString();
   try {
     await pool.query(
       `insert into auth_revoked_tokens (signature, expires_at, revoked_at)
        values ($1, $2, CURRENT_TIMESTAMP)
        on conflict (signature) do nothing`,
-      [signature, new Date(expiresAt).toISOString()],
-      { d1: true }
+      [signature, isoExpiry],
+      {
+        d1: true,
+        d1Text: `insert into auth_revoked_tokens (jti, signature, expires_at, revoked_at)
+                 values ($1, $1, $2, CURRENT_TIMESTAMP)
+                 on conflict (signature) do nothing`,
+        d1Params: [signature, isoExpiry],
+      }
     );
   } catch (err) {
-    memoryRevokedTokens.add(signature);
+    try {
+      await pool.query('delete from auth_revoked_tokens where signature = $1', [signature], { d1: true });
+      await pool.query(
+        `insert into auth_revoked_tokens (jti, signature, expires_at, revoked_at)
+         values ($1, $1, $2, CURRENT_TIMESTAMP)`,
+        [signature, isoExpiry],
+        { d1: true }
+      );
+    } catch {
+      memoryRevokedTokens.add(signature);
+    }
   }
 }
 
@@ -134,12 +209,36 @@ async function isTokenRevoked(signature) {
  * Drop expired OTPs and revoked-token records.
  */
 async function purgeExpiredAuthState() {
-  const otps = await pool.query('delete from auth_otp_codes where expires_at < now()');
-  const tokens = await pool.query('delete from auth_revoked_tokens where expires_at < now()');
-  return {
-    otpsPurged: otps.rowCount || 0,
-    revokedTokensPurged: tokens.rowCount || 0,
-  };
+  const isoNow = new Date().toISOString();
+  try {
+    const otps = await pool.query(
+      'delete from auth_otp_codes where expires_at < now()',
+      [],
+      {
+        d1: true,
+        d1Text: 'delete from auth_otp_codes where expires_at < $1',
+        d1Params: [isoNow],
+      }
+    );
+    const tokens = await pool.query(
+      'delete from auth_revoked_tokens where expires_at < now()',
+      [],
+      {
+        d1: true,
+        d1Text: 'delete from auth_revoked_tokens where expires_at < $1',
+        d1Params: [isoNow],
+      }
+    );
+    return {
+      otpsPurged: otps.rowCount || 0,
+      revokedTokensPurged: tokens.rowCount || 0,
+    };
+  } catch (err) {
+    return {
+      otpsPurged: 0,
+      revokedTokensPurged: 0,
+    };
+  }
 }
 
 module.exports = {
