@@ -587,6 +587,14 @@ describe('validatePincode async postal API validator', () => {
       const res = await validatePincode('400701');
       expect(res.isValid).toBe(true);
     });
+
+    test('validates extendRFQ schema custom hours validation', () => {
+      const extendRule = FORM_SCHEMAS.extendRFQ;
+      expect(validateFormData(extendRule, { hours: 24 }).isValid).toBe(true);
+      expect(validateFormData(extendRule, { hours: 48 }).isValid).toBe(true);
+      expect(validateFormData(extendRule, { hours: 12 }).isValid).toBe(false);
+      expect(validateFormData(extendRule, { hours: 'abc' }).isValid).toBe(false);
+    });
   });
 });
 

@@ -122,6 +122,20 @@ describe('reportsClient Suite', () => {
       expect(res.success).toBe(false);
       expect(res.error).toBe('Network offline');
     });
+
+    test('handles JSON parsing failure in error response', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => { throw new Error('Unparseable'); },
+      } as unknown as Response);
+
+      const config = REPORT_OPTIONS[0];
+      const res = await fetchReportData(config);
+
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('HTTP 500: Failed to generate report');
+    });
   });
 
   describe('exportReportToExcel', () => {
