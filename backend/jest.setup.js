@@ -27,7 +27,6 @@ process.env.GMAIL_CLIENT_SECRET = '';
 process.env.GMAIL_REFRESH_TOKEN = '';
 process.env.VENDOR_GMAIL_REFRESH_TOKEN = '';
 process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN = '';
-process.env.GEMINI_BACKUP_KEYS = '';
 
 // Same reasoning again for the D1 HTTP client (src/db/d1Bridge.js's
 // getD1HttpClient): CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_D1_DATABASE_ID/

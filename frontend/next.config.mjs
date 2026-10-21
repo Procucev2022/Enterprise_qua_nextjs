@@ -8,11 +8,15 @@ function getWranglerVars(requestedEnv) {
     const clean = raw.replace(/\\"|"(?:\\"|[^"])*"|(\/\/.*|\/\*[\s\S]*?\*\/)/g, (m, g) => (g ? '' : m));
     const config = JSON.parse(clean);
 
+    // Only read wrangler env when explicitly requested via WRANGLER_ENV or CF_ENV
     const targetEnv =
       requestedEnv ||
       process.env.WRANGLER_ENV ||
-      process.env.CF_ENV ||
-      (process.env.NODE_ENV === 'production' ? 'prod' : 'dev');
+      process.env.CF_ENV;
+
+    if (!targetEnv) {
+      return {};
+    }
 
     const envBlock =
       config.env?.[targetEnv] ||
@@ -29,8 +33,10 @@ function getWranglerVars(requestedEnv) {
 
 const isTest = process.env.NODE_ENV === 'test' || Boolean(process.env.JEST_WORKER_ID);
 const wranglerVars = isTest ? {} : getWranglerVars();
-const nodeBackendUrl = process.env.NODE_BACKEND_URL || wranglerVars.NODE_BACKEND_URL;
-const nextPublicBackendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || wranglerVars.NEXT_PUBLIC_BACKEND_URL;
+// For local development, prioritize process.env (loaded from .env.development/.env.local),
+// then wranglerVars (for Cloudflare deployments), with a local fallback to http://localhost:4000.
+const nodeBackendUrl = process.env.NODE_BACKEND_URL || wranglerVars.NODE_BACKEND_URL || 'http://localhost:4000';
+const nextPublicBackendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || wranglerVars.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
 
 if (!isTest) {
   if (nodeBackendUrl && !process.env.NODE_BACKEND_URL) {

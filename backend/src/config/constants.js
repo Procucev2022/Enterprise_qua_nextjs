@@ -617,8 +617,10 @@ const RFQ_CATEGORY_CLASSIFICATION = {
 // GEMINI AI DOCUMENT EXTRACTION
 // ==============================================================================
 // Mirrors app.gemini.* in the Java p2pservices app, which is the service that
-// currently extracts RFQ line items in production. The API key is read from the
-// environment only and never leaves the server.
+// currently extracts RFQ line items in production. The API keys are read from the
+// environment only and never leave the server. Supports a comma-separated list
+// of multiple keys in GEMINI_API_KEY with round-robin sequential rotation per request
+// to expand rate limits on free tier accounts.
 // Gemini extraction policy is intentionally code-owned rather than environment
 // configurable: one operation may run for up to five minutes, with fixed input
 // limits that protect memory and provider payload size.
@@ -627,9 +629,15 @@ const GEMINI_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const GEMINI_MAX_DOCUMENT_TEXT_CHARS = 300000;
 
 const GEMINI_CONFIG = {
-  API_KEYS: process.env.GEMINI_API_KEYS || '',
-  API_KEY: process.env.GEMINI_API_KEY || '',
-  BACKUP_KEYS: process.env.GEMINI_BACKUP_KEYS || '',
+  API_KEYS: (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEYS) ||
+    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_API_KEYS) ||
+    '',
+  API_KEY: (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) ||
+    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_API_KEY) ||
+    '',
+  BACKUP_KEYS: (typeof process !== 'undefined' && process.env && process.env.GEMINI_BACKUP_KEYS) ||
+    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_BACKUP_KEYS) ||
+    '',
   DISABLE_TIMEOUT: process.env.NODE_ENV === 'test' ? (process.env.GEMINI_DISABLE_TIMEOUT === 'true') : true,
   KEY_COOLDOWN_MS: Number(
     process.env.GEMINI_KEY_COOLDOWN_MS !== undefined
@@ -664,6 +672,7 @@ const GEMINI_CONFIG = {
   // Kept as a mutable compatibility field for tests and old callers, but zero
   // means there is no per-model timeout. Production uses only TOTAL_BUDGET_MS.
   REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 0),
+  PER_MODEL_TIMEOUT_MS: Number(process.env.GEMINI_PER_MODEL_TIMEOUT_MS || 30000),
   TOTAL_BUDGET_MS: GEMINI_TOTAL_BUDGET_MS,
   MIN_ATTEMPT_MS: 0,
   MAX_DOCUMENT_BYTES: GEMINI_MAX_DOCUMENT_BYTES,

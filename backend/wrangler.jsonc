@@ -31,8 +31,6 @@
   },
   "vars": {
     "NODE_ENV": "production",
-    "GEMINI_API_KEY": "AQ.Ab8RN6LUTaZniq7GNHjtkJdfSvWHz5OQ7KIj5RFEdc1QPufJGQ",
-    "GEMINI_BACKUP_KEYS": "AQ.Ab8RN6IQchVV-4CSKzXy27ChS9EAaL8ShLqy9sLiNBGcApUsBQ,AQ.Ab8RN6LkUC4mVFQIGSC2U4cBetdDVbXXFv1FJyKQDid--yhl0g,AQ.Ab8RN6LfkMgtAUkX5jNSsD2gYsWOEi_-VMkhwE8SZstDJfHW8g,AQ.Ab8RN6KS_FgoPb4HylylN0en-qdXTY8eM53XrqKilwYKhZKbPQ,AQ.Ab8RN6KpbV56UHNchH6d_ZK51KRQYWS_3pnEPDV2lm_Ip5bNWg,AQ.Ab8RN6KDvVy1gF72Qnja_kqrvumkSeavh77r2iQXi3esqyUyhg,AQ.Ab8RN6JfJNsHToUaOEH-n51iRgpekFPVKexT-_UyztjmSk9Dvg,AQ.Ab8RN6JahBAky8FpYK2tvnSDWN2UcClTScG8w6_VWCZh74leRg,AIzaSyDMlB6o3aKq3LpGqC81mDq-8mD3Zq8mD3Z,AIzaSyB_1mDq-8mD3Zq8mD3Zq8mD3Zq8mD3Zq8mD,AIzaSyC_2mDq-8mD3Zq8mD3Zq8mD3Zq8mD3Zq8mD",
     "GEMINI_MODELS": "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite",
     "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
     "WHATSAPP_USERNAME": "ProcucevnewWapp",
@@ -114,8 +112,6 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "development",
-        "GEMINI_API_KEY": "AQ.Ab8RN6LUTaZniq7GNHjtkJdfSvWHz5OQ7KIj5RFEdc1QPufJGQ",
-        "GEMINI_BACKUP_KEYS": "AQ.Ab8RN6IQchVV-4CSKzXy27ChS9EAaL8ShLqy9sLiNBGcApUsBQ,AQ.Ab8RN6LkUC4mVFQIGSC2U4cBetdDVbXXFv1FJyKQDid--yhl0g,AQ.Ab8RN6LfkMgtAUkX5jNSsD2gYsWOEi_-VMkhwE8SZstDJfHW8g,AQ.Ab8RN6KS_FgoPb4HylylN0en-qdXTY8eM53XrqKilwYKhZKbPQ,AQ.Ab8RN6KpbV56UHNchH6d_ZK51KRQYWS_3pnEPDV2lm_Ip5bNWg,AQ.Ab8RN6KDvVy1gF72Qnja_kqrvumkSeavh77r2iQXi3esqyUyhg,AQ.Ab8RN6JfJNsHToUaOEH-n51iRgpekFPVKexT-_UyztjmSk9Dvg,AQ.Ab8RN6JahBAky8FpYK2tvnSDWN2UcClTScG8w6_VWCZh74leRg,AIzaSyDMlB6o3aKq3LpGqC81mDq-8mD3Zq8mD3Z,AIzaSyB_1mDq-8mD3Zq8mD3Zq8mD3Zq8mD3Zq8mD,AIzaSyC_2mDq-8mD3Zq8mD3Zq8mD3Zq8mD3Zq8mD",
         "GEMINI_MODELS": "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_USERNAME": "ProcucevnewWapp",
@@ -168,8 +164,6 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "production",
-        "GEMINI_API_KEY": "AQ.Ab8RN6LUTaZniq7GNHjtkJdfSvWHz5OQ7KIj5RFEdc1QPufJGQ",
-        "GEMINI_BACKUP_KEYS": "AQ.Ab8RN6IQchVV-4CSKzXy27ChS9EAaL8ShLqy9sLiNBGcApUsBQ,AQ.Ab8RN6LkUC4mVFQIGSC2U4cBetdDVbXXFv1FJyKQDid--yhl0g,AQ.Ab8RN6LfkMgtAUkX5jNSsD2gYsWOEi_-VMkhwE8SZstDJfHW8g,AQ.Ab8RN6KS_FgoPb4HylylN0en-qdXTY8eM53XrqKilwYKhZKbPQ,AQ.Ab8RN6KpbV56UHNchH6d_ZK51KRQYWS_3pnEPDV2lm_Ip5bNWg,AQ.Ab8RN6KDvVy1gF72Qnja_kqrvumkSeavh77r2iQXi3esqyUyhg,AQ.Ab8RN6JfJNsHToUaOEH-n51iRgpekFPVKexT-_UyztjmSk9Dvg,AQ.Ab8RN6JahBAky8FpYK2tvnSDWN2UcClTScG8w6_VWCZh74leRg,AIzaSyDMlB6o3aKq3LpGqC81mDq-8mD3Zq8mD3Z,AIzaSyB_1mDq-8mD3Zq8mD3Zq8mD3Zq8mD3Zq8mD,AIzaSyC_2mDq-8mD3Zq8mD3Zq8mD3Zq8mD3Zq8mD",
         "GEMINI_MODELS": "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_USERNAME": "ProcucevnewWapp",
@@ -231,8 +225,6 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "production",
-        "GEMINI_API_KEY": "AQ.Ab8RN6LUTaZniq7GNHjtkJdfSvWHz5OQ7KIj5RFEdc1QPufJGQ",
-        "GEMINI_BACKUP_KEYS": "AQ.Ab8RN6IQchVV-4CSKzXy27ChS9EAaL8ShLqy9sLiNBGcApUsBQ,AQ.Ab8RN6LkUC4mVFQIGSC2U4cBetdDVbXXFv1FJyKQDid--yhl0g,AQ.Ab8RN6LfkMgtAUkX5jNSsD2gYsWOEi_-VMkhwE8SZstDJfHW8g,AQ.Ab8RN6KS_FgoPb4HylylN0en-qdXTY8eM53XrqKilwYKhZKbPQ,AQ.Ab8RN6KpbV56UHNchH6d_ZK51KRQYWS_3pnEPDV2lm_Ip5bNWg,AQ.Ab8RN6KDvVy1gF72Qnja_kqrvumkSeavh77r2iQXi3esqyUyhg,AQ.Ab8RN6JfJNsHToUaOEH-n51iRgpekFPVKexT-_UyztjmSk9Dvg,AQ.Ab8RN6JahBAky8FpYK2tvnSDWN2UcClTScG8w6_VWCZh74leRg,AIzaSyDMlB6o3aKq3LpGqC81mDq-8mD3Zq8mD3Z,AIzaSyB_1mDq-8mD3Zq8mD3Zq8mD3Zq8mD3Zq8mD,AIzaSyC_2mDq-8mD3Zq8mD3Zq8mD3Zq8mD3Zq8mD",
         "GEMINI_MODELS": "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_USERNAME": "ProcucevnewWapp",

@@ -50,7 +50,6 @@ describe('Gemini category list in the extraction prompt', () => {
 
 describe('Gemini document extraction service', () => {
   const originalKey = GEMINI_CONFIG.API_KEY;
-  const originalBackupKeys = GEMINI_CONFIG.BACKUP_KEYS;
   const originalFetch = global.fetch;
   const originalModels = [...GEMINI_CONFIG.MODELS];
   const originalMaxKeyAttempts = GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL;
@@ -58,7 +57,6 @@ describe('Gemini document extraction service', () => {
 
   afterEach(() => {
     GEMINI_CONFIG.API_KEY = originalKey;
-    GEMINI_CONFIG.BACKUP_KEYS = originalBackupKeys;
     GEMINI_CONFIG.MODELS = [...originalModels];
     GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL = originalMaxKeyAttempts;
     GEMINI_CONFIG.MODEL_RESET_TTL_MS = originalResetTtl;
@@ -1031,9 +1029,8 @@ describe('Gemini document extraction service', () => {
         expect(gemini.resolveApiKeys()).toEqual(['key1', 'key2', 'key3']);
       });
 
-      test('resolveApiKeys combines and deduplicates keys from API_KEY and BACKUP_KEYS', () => {
-        GEMINI_CONFIG.API_KEY = 'key-one, key-two';
-        GEMINI_CONFIG.BACKUP_KEYS = 'key-two, key-three';
+      test('resolveApiKeys deduplicates repeated keys from API_KEY', () => {
+        GEMINI_CONFIG.API_KEY = 'key-one, key-two, key-one, key-three';
         expect(gemini.resolveApiKeys()).toEqual(['key-one', 'key-two', 'key-three']);
       });
 
@@ -1044,18 +1041,127 @@ describe('Gemini document extraction service', () => {
         expect(gemini.isConfigured()).toBe(false);
       });
     });
+
+    describe('round-robin key rotation across incoming requests', () => {
+      test('getNextRoundRobinKeyIndex cycles sequentially through keys and wraps around', () => {
+        GEMINI_CONFIG.API_KEY = 'key-A, key-B, key-C';
+        gemini.resetRoundRobinKeyIndex();
+
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(0);
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(1);
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(2);
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(0);
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(1);
+      });
+
+      test('setRoundRobinKeyIndex and resetRoundRobinKeyIndex set and reset key index properly', () => {
+        GEMINI_CONFIG.API_KEY = 'key-A, key-B, key-C';
+        gemini.setRoundRobinKeyIndex(2);
+        expect(gemini.getRoundRobinKeyIndex()).toBe(2);
+
+        gemini.resetRoundRobinKeyIndex();
+        expect(gemini.getRoundRobinKeyIndex()).toBe(0);
+      });
+
+      test('getNextRoundRobinKeyIndex returns 0 when no keys are configured', () => {
+        GEMINI_CONFIG.API_KEY = '';
+        gemini.resetRoundRobinKeyIndex();
+
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(0);
+        expect(gemini.getRoundRobinKeyIndex()).toBe(0);
+      });
+
+      test('incoming extractLineItems requests sequentially cycle through multiple keys via round-robin', async () => {
+        GEMINI_CONFIG.API_KEY = 'key-alpha, key-beta, key-gamma';
+        GEMINI_CONFIG.MODELS = ['test-model'];
+        gemini.resetRoundRobinKeyIndex();
+
+        const usedKeys = [];
+        global.fetch = jest.fn((url, init) => {
+          usedKeys.push(init.headers['x-goog-api-key']);
+          return Promise.resolve(geminiReply('{"items":[{"itemDescription":"Item","quantity":1}]}'));
+        });
+
+        // Request 1 -> should use key-alpha (index 0)
+        const res1 = await gemini.extractLineItems({ documentText: 'Item | 1' });
+        expect(res1.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(usedKeys[0]).toBe('key-alpha');
+
+        // Request 2 -> should use key-beta (index 1)
+        const res2 = await gemini.extractLineItems({ documentText: 'Item | 1' });
+        expect(res2.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(usedKeys[1]).toBe('key-beta');
+
+        // Request 3 -> should use key-gamma (index 2)
+        const res3 = await gemini.extractLineItems({ documentText: 'Item | 1' });
+        expect(res3.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(usedKeys[2]).toBe('key-gamma');
+
+        // Request 4 -> should wrap around to key-alpha (index 0)
+        const res4 = await gemini.extractLineItems({ documentText: 'Item | 1' });
+        expect(res4.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(usedKeys[3]).toBe('key-alpha');
+      });
+
+      test('incoming generateJson requests sequentially cycle through multiple keys via round-robin', async () => {
+        GEMINI_CONFIG.API_KEY = 'key-x, key-y';
+        GEMINI_CONFIG.MODELS = ['test-model'];
+        gemini.resetRoundRobinKeyIndex();
+
+        const usedKeys = [];
+        global.fetch = jest.fn((url, init) => {
+          usedKeys.push(init.headers['x-goog-api-key']);
+          return Promise.resolve(geminiReply('{"status":"OK"}'));
+        });
+
+        await gemini.generateJson({ prompt: 'test 1' });
+        expect(usedKeys[0]).toBe('key-x');
+
+        await gemini.generateJson({ prompt: 'test 2' });
+        expect(usedKeys[1]).toBe('key-y');
+
+        await gemini.generateJson({ prompt: 'test 3' });
+        expect(usedKeys[2]).toBe('key-x');
+      });
+
+      test('failover within a round-robin request tries subsequent keys and next request continues round-robin sequence', async () => {
+        GEMINI_CONFIG.API_KEY = 'key-1, key-2, key-3';
+        GEMINI_CONFIG.MODELS = ['test-model'];
+        gemini.resetRoundRobinKeyIndex();
+
+        const callKeys = [];
+        global.fetch = jest.fn((url, init) => {
+          const key = init.headers['x-goog-api-key'];
+          callKeys.push(key);
+          if (key === 'key-2') {
+            return Promise.resolve({ ok: false, status: 429, text: async () => 'Rate limit exceeded' });
+          }
+          return Promise.resolve(geminiReply('{"items":[{"itemDescription":"Valve","quantity":1}]}'));
+        });
+
+        // Request 1: starts at index 0 -> key-1 (succeeds)
+        await gemini.extractLineItems({ documentText: 'Valve | 1' });
+        expect(callKeys).toEqual(['key-1']);
+
+        // Request 2: starts at index 1 -> key-2 (fails 429) -> cascades to key-3 (succeeds)
+        await gemini.extractLineItems({ documentText: 'Valve | 1' });
+        expect(callKeys).toEqual(['key-1', 'key-2', 'key-3']);
+
+        // Request 3: starts at index 2 -> key-3 (succeeds)
+        await gemini.extractLineItems({ documentText: 'Valve | 1' });
+        expect(callKeys).toEqual(['key-1', 'key-2', 'key-3', 'key-3']);
+      });
+    });
   });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
 describe('POST /api/rfqs/extract', () => {
   const originalKey = GEMINI_CONFIG.API_KEY;
-  const originalBackupKeys = GEMINI_CONFIG.BACKUP_KEYS;
   const originalFetch = global.fetch;
 
   afterEach(() => {
     GEMINI_CONFIG.API_KEY = originalKey;
-    GEMINI_CONFIG.BACKUP_KEYS = originalBackupKeys;
     global.fetch = originalFetch;
   });
 
@@ -1527,6 +1633,14 @@ describe('geminiService.generateJson', () => {
     } finally {
       GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
     }
+  });
+
+  test('callModel throws when deadline has already expired or is within minimum attempt threshold', async () => {
+    GEMINI_CONFIG.API_KEY = 'test-key';
+    const pastDeadline = Date.now() - 1000;
+    await expect(
+      gemini.callModel('gemini-3.8-flash', { contents: [] }, 0, pastDeadline)
+    ).rejects.toThrow(/time budget exhausted/i);
   });
 
   describe('extractQuotationFallback & extractQuotationFromEmail', () => {
