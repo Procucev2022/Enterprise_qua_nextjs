@@ -649,7 +649,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // Subscription plan and download quota used to live only as local
         // useState (defaulted to 'premium' / 3, reset on every refresh, never
         // actually persisted). Sync them from the real vendor record.
-        const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+        const sessionEmail = typeof authClient?.getSessionUser === 'function' ? authClient.getSessionUser()?.email?.toLowerCase() : null;
         if (sessionEmail && Array.isArray(d.vendors)) {
           const myVendor = d.vendors.find((v: VendorEntry) => v.email?.toLowerCase() === sessionEmail);
           const isUnlimited = hasUnlimitedAccess(sessionEmail);
