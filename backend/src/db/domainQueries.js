@@ -588,6 +588,19 @@ async function getRFQByNumberFromDB(rfqNumber) {
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
+async function getRFQByIdFromDB(idOrNumber) {
+  if (!pool.hasStorage()) return null;
+  const result = await pool.query(
+    'SELECT raw FROM rfqs WHERE id = $1 OR rfq_number = $1 LIMIT 1',
+    [idOrNumber],
+    {
+      d1: true,
+      d1Text: 'SELECT raw FROM rfqs WHERE id = $1 OR rfq_number = $1 LIMIT 1',
+    }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
 async function upsertRFQInDB(rfq) {
   if (!pool.hasStorage()) return null;
   const { id, rfqNumber, category, status, sourcingMode, budget } = rfq;
@@ -1300,6 +1313,7 @@ module.exports = {
   bulkInsertVendorsInDB,
   getRFQsFromDB,
   getRFQByNumberFromDB,
+  getRFQByIdFromDB,
   upsertRFQInDB,
   deleteRFQInDB,
   getEvaluationsFromDB,

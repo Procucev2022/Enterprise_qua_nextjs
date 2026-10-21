@@ -306,12 +306,15 @@ export default function LoginPage() {
       return;
     }
 
+    const rawMobile = loginMobile.trim();
+    const mobile = rawMobile.replace(/[\s\-()]/g, '');
+
     setSubmitting(true);
     try {
       const response = await authClient.verifyOtp(
         loginEmail.trim().toLowerCase(),
         loginOtpInput.trim(),
-        loginMobile.trim()
+        mobile
       );
       if (response.success && response.user) {
         if (response.user.role === 'buyer' && !initialSetupCompleted) {

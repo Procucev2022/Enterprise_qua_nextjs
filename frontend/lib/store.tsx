@@ -58,6 +58,7 @@ import {
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
   formatCurrency,
+  hasUnlimitedAccess,
 } from './constants';
 
 // Backend write endpoints now require a session token (Phase 4 authorization
@@ -121,6 +122,8 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
     majorCategory: rfq.category || '',
     minorCategory: rfq.extractedEntities?.[0]?.minorCategory || '',
+    category: rfq.category || rfq.extractedEntities?.[0]?.majorCategory || '',
+    sourcingMode: rfq.sourcingMode,
     lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
       id: ent.id || `item-${idx}`,
       description: ent.itemName,
@@ -315,13 +318,13 @@ interface AppContextType {
   // Sourcing Free Tier RFQ Limits (Max 5 for Version 1 Free Trial)
   remainingFreeRFQs: number;
   setRemainingFreeRFQs: React.Dispatch<React.SetStateAction<number>>;
-  activeSubscription: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none';
-  setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>>;
+  activeSubscription: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited';
+  setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited'>>;
   vendorSubscription: VendorSubscriptionPlan;
   setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan>>;
   updateVendorSubscription: (plan: 'premium' | 'connect' | 'select') => Promise<boolean>;
   /** Real Zoho payment-link creation for the caller's own vendor profile. Returns the URL to redirect to, or null on failure (a toast is already shown). */
-  createVendorPaymentLink: (plan: string) => Promise<string | null>;
+  createVendorPaymentLink: (plan: string, billingDuration?: '6_months' | '12_months') => Promise<string | null>;
   /** Real status ('CREATED'|'PAID'|'CANCELED'|'EXPIRED') of one of the caller's own vendor payment links, or null if it can't be resolved. */
   checkVendorPaymentLinkStatus: (linkId: string) => Promise<string | null>;
   vendorRfqDownloadsUsed: number;
@@ -388,7 +391,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Subscription State
   const [remainingFreeRFQs, setRemainingFreeRFQs] = useState<number>(5);
-  const [activeSubscription, setActiveSubscription] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>('free_trial');
+  const [activeSubscription, setActiveSubscription] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited'>('free_trial');
   const [vendorSubscription, setVendorSubscription] = useState<VendorSubscriptionPlan>('premium');
   // Was a fabricated "already used 3" starting point — real usage is hydrated
   // from the vendor's actual record in refreshFromDB once it loads.
@@ -435,7 +438,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
-  const createVendorPaymentLink = async (plan: string): Promise<string | null> => {
+  const createVendorPaymentLink = async (
+    plan: string,
+    billingDuration?: '6_months' | '12_months'
+  ): Promise<string | null> => {
     const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
     const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
     if (!myVendor) {
@@ -443,7 +449,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
 
-    const result = await createPaymentLink(myVendor.id, plan);
+    const result = await createPaymentLink(myVendor.id, plan, billingDuration);
     if (!result.success) {
       showToast('Payment Failed', result.error, 'warning');
       return null;
@@ -562,8 +568,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try {
       const res = await fetchVendorRfqCredits();
       if (res.success && res.data) {
-        setVendorFreeCreditsRemaining(res.data.freeCreditsRemaining ?? 5);
-        setVendorFreeCreditsAllocated(res.data.freeCreditsAllocated ?? 5);
+        const isUnlimited = hasUnlimitedAccess(currentUserSession) || res.data.subscriptionPlan === 'unlimited';
+        setVendorFreeCreditsRemaining(isUnlimited ? 999999 : (res.data.freeCreditsRemaining ?? 5));
+        setVendorFreeCreditsAllocated(isUnlimited ? 999999 : (res.data.freeCreditsAllocated ?? 5));
         setVendorFreeCreditsUsed(res.data.freeCreditsUsed ?? 0);
         setVendorUnlockedRfqIds(res.data.unlockedRfqIds || []);
       }
@@ -644,12 +651,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // Subscription plan and download quota used to live only as local
         // useState (defaulted to 'premium' / 3, reset on every refresh, never
         // actually persisted). Sync them from the real vendor record.
-        const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+        const sessionEmail = typeof authClient?.getSessionUser === 'function' ? authClient.getSessionUser()?.email?.toLowerCase() : null;
         if (sessionEmail && Array.isArray(d.vendors)) {
           const myVendor = d.vendors.find((v: VendorEntry) => v.email?.toLowerCase() === sessionEmail);
+          const isUnlimited = hasUnlimitedAccess(sessionEmail);
           if (myVendor) {
-            setVendorSubscription(myVendor.subscriptionPlan || 'premium');
+            setVendorSubscription(isUnlimited ? 'unlimited' : (myVendor.subscriptionPlan || 'premium'));
             setVendorRfqDownloadsUsed(myVendor.rfqDownloadsUsed || 0);
+          } else if (isUnlimited) {
+            setVendorSubscription('unlimited');
           }
         }
 

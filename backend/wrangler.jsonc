@@ -5,6 +5,9 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "placement": {
+    "region": "gcp:us-east4"
+  },
   "observability": {
     "logs": {
       "enabled": true,
@@ -56,7 +59,20 @@
     "ZOHO_RECONCILIATION_ENABLED": "true",
     "ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL": "info@procucev.com",
     "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
-    "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5"
+    "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5",
+    "SUBSCRIPTION_GST_PERCENT": "18",
+    "BUYER_V1_6M_PRICE": "5499",
+    "BUYER_V1_12M_PRICE": "4999",
+    "BUYER_V2_6M_PRICE": "7999",
+    "BUYER_V2_12M_PRICE": "7499",
+    "BUYER_V3_6M_PRICE": "10499",
+    "BUYER_V3_12M_PRICE": "9999",
+    "SELLER_V1_6M_PRICE": "4125",
+    "SELLER_V1_12M_PRICE": "7499",
+    "SELLER_V2_6M_PRICE": "8250",
+    "SELLER_V2_12M_PRICE": "14999",
+    "SELLER_V3_6M_PRICE": "11000",
+    "SELLER_V3_12M_PRICE": "19999"
   },
   "d1_databases": [
     {
@@ -115,7 +131,20 @@
         "SMS_GATEWAY_RFQ_SMSGID": "1777179076323440961",
         "PUBLIC_FRONTEND_URL": "https://procucev-enterprise-frontend.procucev-enterprise.workers.dev",
         "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
-        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5"
+        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5",
+        "SUBSCRIPTION_GST_PERCENT": "18",
+        "BUYER_V1_6M_PRICE": "5499",
+        "BUYER_V1_12M_PRICE": "4999",
+        "BUYER_V2_6M_PRICE": "7999",
+        "BUYER_V2_12M_PRICE": "7499",
+        "BUYER_V3_6M_PRICE": "10499",
+        "BUYER_V3_12M_PRICE": "9999",
+        "SELLER_V1_6M_PRICE": "4125",
+        "SELLER_V1_12M_PRICE": "7499",
+        "SELLER_V2_6M_PRICE": "8250",
+        "SELLER_V2_12M_PRICE": "14999",
+        "SELLER_V3_6M_PRICE": "11000",
+        "SELLER_V3_12M_PRICE": "19999"
       },
       "d1_databases": [
         {
@@ -162,13 +191,26 @@
         "ZOHO_PAYMENTS_RETURN_URL_BASE": "https://equa.procucev.com",
         "ZOHO_RECONCILIATION_ENABLED": "true",
         "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
-        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5"
+        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5",
+        "SUBSCRIPTION_GST_PERCENT": "18",
+        "BUYER_V1_6M_PRICE": "5499",
+        "BUYER_V1_12M_PRICE": "4999",
+        "BUYER_V2_6M_PRICE": "7999",
+        "BUYER_V2_12M_PRICE": "7499",
+        "BUYER_V3_6M_PRICE": "10499",
+        "BUYER_V3_12M_PRICE": "9999",
+        "SELLER_V1_6M_PRICE": "4125",
+        "SELLER_V1_12M_PRICE": "7499",
+        "SELLER_V2_6M_PRICE": "8250",
+        "SELLER_V2_12M_PRICE": "14999",
+        "SELLER_V3_6M_PRICE": "11000",
+        "SELLER_V3_12M_PRICE": "19999"
       },
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "enterprise-qua-d1",
-          "database_id": "9ed3bcce-ee38-4477-ac9f-c5e6f13c026c"
+          "database_id": "63af6c6f-3606-4afa-b0c7-9f9db6296d61"
         }
       ],
       "r2_buckets": [
@@ -209,13 +251,26 @@
         "ZOHO_PAYMENTS_RETURN_URL_BASE": "https://equa.procucev.com",
         "ZOHO_RECONCILIATION_ENABLED": "true",
         "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
-        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5"
+        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5",
+        "SUBSCRIPTION_GST_PERCENT": "18",
+        "BUYER_V1_6M_PRICE": "5499",
+        "BUYER_V1_12M_PRICE": "4999",
+        "BUYER_V2_6M_PRICE": "7999",
+        "BUYER_V2_12M_PRICE": "7499",
+        "BUYER_V3_6M_PRICE": "10499",
+        "BUYER_V3_12M_PRICE": "9999",
+        "SELLER_V1_6M_PRICE": "4125",
+        "SELLER_V1_12M_PRICE": "7499",
+        "SELLER_V2_6M_PRICE": "8250",
+        "SELLER_V2_12M_PRICE": "14999",
+        "SELLER_V3_6M_PRICE": "11000",
+        "SELLER_V3_12M_PRICE": "19999"
       },
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "enterprise-qua-d1",
-          "database_id": "9ed3bcce-ee38-4477-ac9f-c5e6f13c026c"
+          "database_id": "63af6c6f-3606-4afa-b0c7-9f9db6296d61"
         }
       ],
       "r2_buckets": [

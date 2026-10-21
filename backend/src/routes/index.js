@@ -23,8 +23,10 @@ const vendorIngestionRoutes = require('./vendorIngestion');
 const pincodeRoutes = require('./pincode');
 const enterpriseInquiriesRoutes = require('./enterpriseInquiries');
 const reportsRoutes = require('./reports');
+const subscriptionRoutes = require('./subscriptions');
 
 // Mount sub-routers
+router.use('/subscriptions', subscriptionRoutes);
 router.use('/auth', authRoutes);
 router.use('/bootstrap', bootstrapRoutes);
 router.use('/rfqs', rfqRoutes);

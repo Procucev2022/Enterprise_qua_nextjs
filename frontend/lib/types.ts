@@ -2,7 +2,7 @@ export type UserRole = 'buyer' | 'category_manager' | 'vendor' | 'admin';
 
 export type SourcingMode = 'mode_0' | 'mode_1' | 'mode_2' | 'mode_3';
 
-export type VendorSubscriptionPlan = 'premium' | 'connect' | 'select' | 'premium_network';
+export type VendorSubscriptionPlan = 'premium' | 'connect' | 'select' | 'premium_network' | 'unlimited';
 
 export interface SourcingModeDetail {
   id: SourcingMode;
@@ -716,6 +716,8 @@ export interface VendorOpportunity {
   buyerAccountId?: string | null;
   buyerDetailsHidden?: boolean;
   buyerDetailsHiddenUntil?: string;
+  sourcingMode?: string;
+  category?: string;
 }
 
 export interface AuditLogEntry {
@@ -1006,6 +1008,9 @@ export interface VendorEntry {
   rfqDownloadsUsed?: number;
   freeQuotationCredits?: number;
   quotedRfqIds?: string[];
+  unlimitedQuoteSubmissions?: boolean;
+  unlimitedRfqDownloads?: boolean;
+  unlimitedAccess?: boolean;
 
   // Statutory/location fields a category manager's bulk vendor upload
   // collects (mirrors the real p2pservices Vendor Master sheet — see
@@ -1786,8 +1791,10 @@ export interface BuyerAccount {
   cinNumber?: string;
   industrySector: string;
   sourcingMode: SourcingMode;
-  subscriptionPlan: 'free_trial' | 'version_1' | 'version_2' | 'version_3';
+  subscriptionPlan: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'unlimited';
   remainingFreeRFQs: number;
+  unlimitedRfqAccess?: boolean;
+  unlimitedAccess?: boolean;
   accountSource: 'public_system' | 'web_registration' | 'enterprise_sso';
   status: 'ACTIVE_VERIFIED' | 'PENDING_ALIGNMENT' | 'SYNCED_LEGACY';
   primaryPlantLocation: string;

@@ -404,9 +404,9 @@ export default function IngestionWizard({
   const [isSubmittingVendor, setIsSubmittingVendor] = useState(false);
   const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
   const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
-  const [vendorCategoryFilterTab, setVendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('all');
+  const [vendorCategoryFilterTab, setVendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('matched');
   const [mode2VendorSearch, setMode2VendorSearch] = useState('');
-  const [mode2VendorCategoryFilterTab, setMode2VendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('all');
+  const [mode2VendorCategoryFilterTab, setMode2VendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('matched');
 
   const handleSendCategoryUpdateEmail = async (vendor: any, rfqCategorySignals: string[]) => {
     const vendorKey = vendor?.id || vendor?.email;
@@ -2051,8 +2051,32 @@ export default function IngestionWizard({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
-                    {myVendors.map((vendor, idx) => {
+                  {myVendors.length === 0 ? (
+                    <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900 border border-dashed border-slate-300 dark:border-gray-700 space-y-2">
+                      <Users size={24} className="mx-auto text-slate-400 opacity-60" />
+                      <p className="text-xs font-bold text-slate-700 dark:text-gray-300">
+                        {vendorCategoryFilterTab === 'matched'
+                          ? 'No Category-Matched Vendors in Roster'
+                          : 'No Vendors Found'}
+                      </p>
+                      <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
+                        {vendorCategoryFilterTab === 'matched'
+                          ? `No vendors in your approved roster match the RFQ category (${mode1Signals.join(', ') || 'selected'}). Switch to "All" or add a new vendor.`
+                          : 'No vendors match your search or filter criteria.'}
+                      </p>
+                      {vendorCategoryFilterTab === 'matched' && allMyVendors.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setVendorCategoryFilterTab('all')}
+                          className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-block mt-1"
+                        >
+                          View all {allMyVendors.length} private vendors →
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
+                      {myVendors.map((vendor, idx) => {
                       const rawMinor = vendor.minorCategories as string | string[] | undefined;
                       const minorList: string[] = Array.isArray(rawMinor)
                         ? rawMinor
@@ -2218,6 +2242,7 @@ export default function IngestionWizard({
                       );
                     })}
                   </div>
+                  )}
                 </div>
               );
             })()}

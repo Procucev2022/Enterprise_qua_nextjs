@@ -5,6 +5,9 @@ const {
   SYSTEM_ACTOR_EMAIL,
   RFQ_DEFAULTS,
   resolveBuyerSourcingMode,
+  hasUnlimitedRfqAccess,
+  hasUnlimitedQuoteAccess,
+  hasUnlimitedDownloadAccess,
   VENDOR_FREE_CREDITS_LIMIT,
   VENDOR_ASSIGNMENT_LIMITS,
 } = require('../config/constants');
@@ -571,6 +574,9 @@ class StoreService {
     const idx = this.buyerAccounts.findIndex((a) => a.id === id);
     if (idx === -1) return { ok: false, remaining: 0 };
     const buyer = this.buyerAccounts[idx];
+    if (hasUnlimitedRfqAccess(buyer)) {
+      return { ok: true, remaining: buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 999999 };
+    }
     const remaining = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 5;
     if (remaining <= 0) {
       return { ok: false, remaining: 0 };
@@ -595,6 +601,7 @@ class StoreService {
     const idx = this.buyerAccounts.findIndex((a) => a.id === id);
     if (idx === -1) return;
     const buyer = this.buyerAccounts[idx];
+    if (hasUnlimitedRfqAccess(buyer)) return;
     const current = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 0;
     const updated = {
       ...buyer,
@@ -625,6 +632,7 @@ class StoreService {
    *   • V1/V2/V3 RFQs on the `free_trial` plan consume 1 of the 5 free credits.
    *   • V1/V2/V3 RFQs on a paid plan (version_1/2/3) consume 0 (quota is by mode).
    *   • An account with no buyer record (admin/CM-raised) consumes nothing.
+   *   • Unlimited RFQ accounts consume 0 credits across all modes.
    *
    * Email-ingested RFQs previously bypassed this entirely by calling createRFQ
    * directly, so a buyer's sourcing-credit count under-reported every RFQ that
@@ -637,8 +645,15 @@ class StoreService {
   consumeRFQCreditIfApplicable(buyerAccount, sourcingMode) {
     if (!buyerAccount || !buyerAccount.id) return { consumed: false, remaining: null };
 
+    // Database-level unlimited RFQ access bypasses credit deductions
+    if (hasUnlimitedRfqAccess(buyerAccount)) {
+      const current =
+        buyerAccount.remainingFreeRFQs !== undefined ? buyerAccount.remainingFreeRFQs : null;
+      return { consumed: false, remaining: current };
+    }
+
     const plan = buyerAccount.subscriptionPlan || 'free_trial';
-    const isPaidPlan = plan === 'version_1' || plan === 'version_2' || plan === 'version_3';
+    const isPaidPlan = plan === 'version_1' || plan === 'version_2' || plan === 'version_3' || plan === 'unlimited';
 
     // V0 and paid plans never draw down the free-trial credit pool.
     if (this.isV0SourcingMode(sourcingMode) || isPaidPlan) {
@@ -1283,7 +1298,8 @@ class StoreService {
    * Once free credits are exhausted, an active paid subscription ('connect' or 'select')
    * is strictly required.
    */
-  checkVendorQuotationEligibility(vendor, rfq = null) {
+  checkVendorQuotationEligibility(vendorOrId, rfq = null) {
+    const vendor = typeof vendorOrId === 'string' ? this.getVendorById(vendorOrId, 'all') : vendorOrId;
     if (!vendor) {
       return {
         eligible: false,
@@ -1295,6 +1311,7 @@ class StoreService {
       };
     }
 
+    const hasUnlimitedQuotes = hasUnlimitedQuoteAccess(vendor);
     const isBuyerMapped = Boolean(rfq && this.isVendorMappedToRfqBuyer(vendor, rfq));
 
     const freeCredits = vendor.freeQuotationCredits !== undefined
@@ -1305,17 +1322,19 @@ class StoreService {
       vendor.subscriptionPlan === 'connect' ||
       vendor.subscriptionPlan === 'select' ||
       vendor.isSubscribed === true ||
-      vendor.subscriptionStatus === 'active'
+      vendor.subscriptionStatus === 'active' ||
+      hasUnlimitedQuotes
     );
 
-    // If buyer-mapped for this respective buyer's RFQ: unlimited quotations, no subscription needed.
-    const eligible = isBuyerMapped || freeCredits > 0 || isSubscribed;
+    // If buyer-mapped for this respective buyer's RFQ or has unlimited quotes: unlimited quotations, no subscription needed.
+    const eligible = hasUnlimitedQuotes || isBuyerMapped || freeCredits > 0 || isSubscribed;
 
     return {
       eligible,
-      freeCreditsRemaining: Math.max(0, freeCredits),
-      isSubscribed: isSubscribed || isBuyerMapped,
+      freeCreditsRemaining: hasUnlimitedQuotes ? 999999 : Math.max(0, freeCredits),
+      isSubscribed: isSubscribed || isBuyerMapped || hasUnlimitedQuotes,
       isBuyerMapped,
+      hasUnlimitedQuotes,
       subscriptionPlan: vendor.subscriptionPlan || 'premium',
     };
   }
@@ -1337,6 +1356,7 @@ class StoreService {
       };
     }
 
+    const hasUnlimitedDownloads = hasUnlimitedDownloadAccess(vendor);
     const freeCredits = vendor.freeQuotationCredits !== undefined
       ? Number(vendor.freeQuotationCredits)
       : (vendor.freeRfqDownloadCredits !== undefined ? Number(vendor.freeRfqDownloadCredits) : VENDOR_FREE_CREDITS_LIMIT);
@@ -1345,11 +1365,12 @@ class StoreService {
       vendor.subscriptionPlan === 'connect' ||
       vendor.subscriptionPlan === 'select' ||
       vendor.isSubscribed === true ||
-      vendor.subscriptionStatus === 'active'
+      vendor.subscriptionStatus === 'active' ||
+      hasUnlimitedDownloads
     );
 
-    const allocated = vendor.freeCreditsAllocated !== undefined ? Number(vendor.freeCreditsAllocated) : VENDOR_FREE_CREDITS_LIMIT;
-    const remaining = Math.max(0, freeCredits);
+    const allocated = hasUnlimitedDownloads ? 999999 : (vendor.freeCreditsAllocated !== undefined ? Number(vendor.freeCreditsAllocated) : VENDOR_FREE_CREDITS_LIMIT);
+    const remaining = hasUnlimitedDownloads ? 999999 : Math.max(0, freeCredits);
     const used = vendor.freeCreditsUsed !== undefined ? Number(vendor.freeCreditsUsed) : Math.max(0, allocated - remaining);
 
     return {
@@ -1358,6 +1379,7 @@ class StoreService {
       freeCreditsUsed: used,
       freeCreditsRemaining: remaining,
       isSubscribed,
+      hasUnlimitedDownloads,
       subscriptionPlan: vendor.subscriptionPlan || 'premium',
       unlockedRfqIds: Array.isArray(vendor.unlockedRfqIds) ? vendor.unlockedRfqIds : [],
     };
@@ -1375,6 +1397,11 @@ class StoreService {
 
     // Direct buyer-mapped vendors always have access without lock
     if (rfq && this.isVendorMappedToRfqBuyer(vendor, rfq)) {
+      return true;
+    }
+
+    // Unlimited access vendors bypass download lock
+    if (hasUnlimitedDownloadAccess(vendor)) {
       return true;
     }
 
@@ -1411,8 +1438,10 @@ class StoreService {
       };
     }
 
+    const hasUnlimitedDownloads = hasUnlimitedDownloadAccess(vendor);
+
     // Check if vendor has permission to access the RFQ
-    if (!this.vendorCoversRFQ(vendor, rfq)) {
+    if (!hasUnlimitedDownloads && !this.vendorCoversRFQ(vendor, rfq)) {
       return {
         success: false,
         error: 'You do not have permission to access this RFQ.',
@@ -1441,8 +1470,8 @@ class StoreService {
       };
     }
 
-    // Direct buyer-mapped or subscribed vendors do not consume free credits
-    if (isDirect || creditInfo.isSubscribed) {
+    // Direct buyer-mapped, subscribed, or unlimited download vendors do not consume free credits
+    if (isDirect || creditInfo.isSubscribed || hasUnlimitedDownloads) {
       if (!unlockedList.includes(normRfqId)) unlockedList.push(normRfqId);
       if (rfq.rfqNumber && !unlockedList.includes(normRfqNum)) unlockedList.push(normRfqNum);
 
@@ -1453,7 +1482,7 @@ class StoreService {
         vendorId: vendor.id,
         rfqId: rfq.id,
         creditCharged: 0,
-        source: isDirect ? 'buyer_mapped' : 'subscription',
+        source: isDirect ? 'buyer_mapped' : (hasUnlimitedDownloads ? 'unlimited_entitlement' : 'subscription'),
       });
 
       this.addAuditLog({
@@ -1466,7 +1495,7 @@ class StoreService {
         success: true,
         alreadyUnlocked: false,
         unlocked: true,
-        freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+        freeCreditsRemaining: hasUnlimitedDownloads ? 999999 : creditInfo.freeCreditsRemaining,
         creditCharged: 0,
         rfq,
         vendor,
@@ -1960,6 +1989,22 @@ class StoreService {
   }
 
   async getRFQByIdAsync(id) {
+    if (pool.hasStorage()) {
+      try {
+        const dbRfq = await domainQueries.getRFQByIdFromDB(id);
+        if (dbRfq) {
+          const idx = this.rfqs.findIndex((r) => r.id === dbRfq.id || r.rfqNumber === dbRfq.rfqNumber);
+          if (idx !== -1) {
+            this.rfqs[idx] = { ...this.rfqs[idx], ...dbRfq };
+          } else {
+            this.rfqs.unshift(dbRfq);
+          }
+          return this.getRFQById(id);
+        }
+      } catch (err) {
+        logger.warn('Failed to load RFQ from DB in getRFQByIdAsync', { id, error: err.message }, 'STORE_SERVICE');
+      }
+    }
     let rfq = this.getRFQById(id);
     if (!rfq && pool.hasStorage()) {
       await this.syncRFQsFromDB();
@@ -2149,7 +2194,12 @@ class StoreService {
 
       for (const v of newRFQ.assignedVendors) {
         const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
-        const hasCategory = resolved.majorCategory || (Array.isArray(resolved.minorCategories) && resolved.minorCategories.length > 0);
+        const hasCategory = Boolean(
+          resolved.majorCategory ||
+          (Array.isArray(resolved.minorCategories) && resolved.minorCategories.length > 0) ||
+          (Array.isArray(resolved.vendorSelectedCategories) && resolved.vendorSelectedCategories.length > 0) ||
+          (Array.isArray(resolved.clientMappedCategories) && resolved.clientMappedCategories.length > 0)
+        );
         const isMatch = !hasCategory || rfqCategorySignals.some((sig) => this.vendorCoversCategory(resolved, sig));
         if (isMatch) {
           shortlisted.push(v);
@@ -3120,7 +3170,12 @@ class StoreService {
 
     for (const cat of cats) {
       const catCandidates = candidatePool.filter((v) => {
-        const hasCategory = v.majorCategory || (Array.isArray(v.minorCategories) && v.minorCategories.length > 0);
+        const hasCategory = Boolean(
+          v.majorCategory ||
+          (Array.isArray(v.minorCategories) && v.minorCategories.length > 0) ||
+          (Array.isArray(v.vendorSelectedCategories) && v.vendorSelectedCategories.length > 0) ||
+          (Array.isArray(v.clientMappedCategories) && v.clientMappedCategories.length > 0)
+        );
         return !hasCategory || this.vendorCoversCategory(v, cat);
       });
 
@@ -3349,7 +3404,6 @@ class StoreService {
     const mode = rfq.sourcingMode || '';
     const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
     if (!isV0) return rfq;
-    if (!pool.hasStorage()) return rfq;
 
     const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
     const signals = this._rfqCategorySignals(rfq);
@@ -3367,39 +3421,42 @@ class StoreService {
     const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
 
     let dbMatches = [];
-    // 1. Category-matched public vendors from the whole directory.
-    if (Array.isArray(signals) && signals.length > 0) {
-      try {
-        dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, limit);
-      } catch (err) {
-        logger.warn(
-          'V0 DB-backed vendor assignment query failed',
-          { rfqNumber: rfq.rfqNumber, error: err.message },
-          'STORE_SERVICE'
-        );
+    if (pool.hasStorage()) {
+      // 1. Category-matched public vendors from the whole directory.
+      if (Array.isArray(signals) && signals.length > 0) {
+        try {
+          dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, limit);
+        } catch (err) {
+          logger.warn(
+            'V0 DB-backed vendor assignment query failed',
+            { rfqNumber: rfq.rfqNumber, error: err.message },
+            'STORE_SERVICE'
+          );
+        }
+      }
+
+      // 2. Fallback: if category matching in DB returned nothing, fetch public vendors page
+      if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+        try {
+          const page = await domainQueries.getVendorsPageFromDB({
+            limit,
+            offset: 0,
+            publicOnly: true,
+          });
+          dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
+        } catch (err) {
+          logger.warn(
+            'V0 DB-backed network fallback query failed',
+            { rfqNumber: rfq.rfqNumber, error: err.message },
+            'STORE_SERVICE'
+          );
+        }
       }
     }
 
-    // 2. Fallback: if category matching found nothing (no signals, or the RFQ's
-    // category labels don't line up with how vendors are tagged — the common
-    // real-world case that left assignedVendors empty while the count showed a
-    // directory-wide tally like 16,350), assign the top public Procucev vendors
-    // the RFQ CAN reach, so it always has a real, displayable invited set.
+    // Fallback to in-memory candidates if storage is unavailable or returned 0 matches
     if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
-      try {
-        const page = await domainQueries.getVendorsPageFromDB({
-          limit,
-          offset: 0,
-          publicOnly: true,
-        });
-        dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
-      } catch (err) {
-        logger.warn(
-          'V0 DB-backed network fallback query failed',
-          { rfqNumber: rfq.rfqNumber, error: err.message },
-          'STORE_SERVICE'
-        );
-      }
+      dbMatches = this.candidateVendorsForRFQ(rfq).filter((v) => this.isProcucevVendor(v));
     }
 
     if (!Array.isArray(dbMatches) || dbMatches.length === 0) return rfq;
@@ -3616,8 +3673,13 @@ class StoreService {
       }
       if (this._isInvitedVendor(vendor, rfq)) continue;
 
-      const hasCategory = vendor.majorCategory || (Array.isArray(vendor.minorCategories) && vendor.minorCategories.length > 0);
-      const isMatch = signals.length === 0 || !hasCategory || signals.some((c) => this.vendorCoversCategory(vendor, c));
+      const hasCategory = Boolean(
+        vendor.majorCategory ||
+        (Array.isArray(vendor.minorCategories) && vendor.minorCategories.length > 0) ||
+        (Array.isArray(vendor.vendorSelectedCategories) && vendor.vendorSelectedCategories.length > 0) ||
+        (Array.isArray(vendor.clientMappedCategories) && vendor.clientMappedCategories.length > 0)
+      );
+      const isMatch = signals.length === 0 || (hasCategory && signals.some((c) => this.vendorCoversCategory(vendor, c)));
 
       if (!isMatch) {
         overrideVendors.push(vendor);
@@ -3754,8 +3816,13 @@ class StoreService {
 
     for (const v of vendorList) {
       const vendorRecord = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
-      const hasCategory = vendorRecord.majorCategory || (Array.isArray(vendorRecord.minorCategories) && vendorRecord.minorCategories.length > 0);
-      const isMatch = signals.length === 0 || !hasCategory || signals.some((sig) => this.vendorCoversCategory(vendorRecord, sig));
+      const hasCategory = Boolean(
+        vendorRecord.majorCategory ||
+        (Array.isArray(vendorRecord.minorCategories) && vendorRecord.minorCategories.length > 0) ||
+        (Array.isArray(vendorRecord.vendorSelectedCategories) && vendorRecord.vendorSelectedCategories.length > 0) ||
+        (Array.isArray(vendorRecord.clientMappedCategories) && vendorRecord.clientMappedCategories.length > 0)
+      );
+      const isMatch = signals.length === 0 || (hasCategory && signals.some((sig) => this.vendorCoversCategory(vendorRecord, sig)));
 
       if (isMatch) {
         shortlisted.push(v);

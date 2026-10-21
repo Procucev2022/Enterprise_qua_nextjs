@@ -203,19 +203,11 @@ export default function KanbanBoard({
 
   return (
     <div className="space-y-6 animate-fade-in pb-10">
-      {/* Title & Top Toolbar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-            Operational Monitoring Kanban & Chasing Control
-          </h1>
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={onNavigateToSpend} className="btn btn-secondary btn-sm shadow-xs border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300">
-            <TrendingUp size={14} /> Mode & Performance Analytics <ChevronRight size={12} />
-          </button>
-        </div>
+      {/* Top Toolbar */}
+      <div className="flex items-center justify-end gap-2 flex-wrap pb-1">
+        <button onClick={onNavigateToSpend} className="btn btn-secondary btn-sm shadow-xs border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300">
+          <TrendingUp size={14} /> Mode & Performance Analytics <ChevronRight size={12} />
+        </button>
       </div>
 
       {/* Category Manager Top Executive Analytics Summary Strip — every figure derives from the live rfqs collection */}

@@ -21,6 +21,7 @@ jest.mock('@/lib/authClient', () => ({
     updateVendorProfile: jest.fn(),
     getProfile: jest.fn(),
     changePassword: jest.fn().mockResolvedValue({ success: true }),
+    getSessionUser: jest.fn().mockReturnValue(null),
   },
 }));
 jest.mock('@/lib/documentExtraction', () => ({

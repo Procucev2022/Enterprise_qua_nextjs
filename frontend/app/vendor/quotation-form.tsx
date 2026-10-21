@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { formatFileSize } from '@/lib/constants';
+import { formatFileSize, hasUnlimitedAccess } from '@/lib/constants';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
 import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
 import type { RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
@@ -96,6 +96,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [opportunitySearch, setOpportunitySearch] = useState('');
   const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | 'open' | 'submitted' | 'closed'>('all');
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
 
   // This vendor's own backend record id — needed to tell "my submitted quote"
   // apart from any other vendor's quote on the same RFQ, and to submit/download
@@ -218,6 +219,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     return false;
   };
 
+  // Extract distinct categories available across opportunities
+  const availableCategories = useMemo(() => {
+    const set = new Set<string>();
+    vendorOpportunities.forEach((opp) => {
+      const cat = (opp.majorCategory || opp.category || '').trim();
+      if (cat) set.add(cat);
+    });
+    rfqs.forEach((rfq) => {
+      if (rfq.category && rfq.category.trim()) set.add(rfq.category.trim());
+      (rfq.extractedEntities || []).forEach((e) => {
+        if (e.majorCategory && e.majorCategory.trim()) set.add(e.majorCategory.trim());
+      });
+    });
+    return Array.from(set).sort();
+  }, [vendorOpportunities, rfqs]);
+
   // Compile RFQ Bidding summaries
   const totalReceivedCount = vendorOpportunities.length;
   const totalSubmittedCount = submittedQuotes.length;
@@ -229,8 +246,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       if (opportunityStatusFilter === 'submitted' && !quote && opp.status !== 'submitted' && opp.status !== 'under_review') return false;
       if (opportunityStatusFilter === 'closed' && !isClosed) return false;
       if (opportunityStatusFilter === 'open' && (isClosed || quote || opp.status === 'submitted')) return false;
-      if (!query) return true;
+
       const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
+      const oppCat = (opp.majorCategory || opp.category || rfqRecord?.category || rfqRecord?.extractedEntities?.[0]?.majorCategory || '').trim();
+
+      // Category filter check (multi-category support)
+      if (selectedCategories.length > 0) {
+        const matchesCategory = selectedCategories.some((cat) =>
+          cat.toLowerCase() === oppCat.toLowerCase() ||
+          (rfqRecord?.extractedEntities || []).some(
+            (ent) => (ent.majorCategory || ent.category || '').toLowerCase() === cat.toLowerCase()
+          )
+        );
+        if (!matchesCategory) return false;
+      }
+
+      if (!query) return true;
       const itemNames = (rfqRecord?.extractedEntities || []).map((item) => item.itemName);
       return [
         opp.rfqNumber,
@@ -245,7 +276,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       ]
         .some((value) => value.toLocaleLowerCase().includes(query));
     });
-  }, [vendorOpportunities, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter]);
+  }, [vendorOpportunities, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories]);
 
   const handleCopyText = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -686,7 +717,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               <Info size={13} className="shrink-0 text-blue-600 dark:text-blue-400" /> Buyer information becomes available for eligible enquiries
             </span>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_220px]">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,220px)_200px]">
             <label className="relative block min-w-0">
               <span className="sr-only">Search enquiries</span>
               <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -697,6 +728,28 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 placeholder="Search RFQ number, title, or buyer..."
                 className="has-leading-icon h-11 w-full rounded-xl border-slate-200 bg-slate-50 pr-3 text-sm focus:border-blue-400 focus:bg-white dark:border-slate-700 dark:bg-gray-950 dark:focus:bg-gray-900"
               />
+            </label>
+            <label className="block min-w-0">
+              <span className="sr-only">Filter enquiries by category</span>
+              <select
+                value={selectedCategories.length === 0 ? 'all' : selectedCategories.length === 1 ? selectedCategories[0] : 'multiple'}
+                onChange={(event) => {
+                  const val = event.target.value;
+                  if (val === 'all') {
+                    setSelectedCategories([]);
+                  } else {
+                    setSelectedCategories([val]);
+                  }
+                }}
+                className="h-11 w-full rounded-xl border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-gray-950 dark:text-gray-200"
+              >
+                <option value="all">All Categories ({availableCategories.length})</option>
+                {availableCategories.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="block min-w-0">
               <span className="sr-only">Filter enquiries by status</span>
@@ -712,8 +765,62 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               </select>
             </label>
           </div>
+
+          {/* Quick Category Chips for Multi-Category Selection */}
+          {availableCategories.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap pt-1 text-[11px]">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mr-1">
+                Categories:
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedCategories([])}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                  selectedCategories.length === 0
+                    ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                    : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'
+                }`}
+              >
+                All Categories ({totalReceivedCount})
+              </button>
+              {availableCategories.map((cat) => {
+                const isSelected = selectedCategories.includes(cat);
+                const count = vendorOpportunities.filter((opp) => {
+                  const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
+                  return (opp.majorCategory || opp.category || rfqRecord?.category || '').trim() === cat;
+                }).length;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCategories((prev) =>
+                        prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
+                      );
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                        : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    <span>{cat}</span>
+                    <span className={`text-[10px] px-1 py-0.2 rounded-full ${isSelected ? 'bg-blue-700 text-white' : 'bg-slate-200 dark:bg-gray-700 text-slate-500'}`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <p aria-live="polite" className="text-xs font-medium text-slate-500 dark:text-gray-400">
             Showing <span className="font-bold text-slate-700 dark:text-gray-200">{filteredOpportunities.length}</span> of {totalReceivedCount} enquiries
+            {selectedCategories.length > 0 && (
+              <span className="ml-1 text-blue-600 dark:text-blue-400 font-semibold">
+                (Filtered by {selectedCategories.length} categor{selectedCategories.length === 1 ? 'y' : 'ies'})
+              </span>
+            )}
           </p>
         </div>
 
@@ -726,12 +833,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             <p className="max-w-sm text-xs leading-relaxed text-slate-500 dark:text-gray-400">
               {vendorOpportunities.length === 0
                 ? 'New sourcing requests from buyers will appear here.'
+                : selectedCategories.length > 0
+                ? 'No RFQs match the selected category filter. Try clearing or selecting different categories.'
                 : 'Try another search term or choose a different status filter.'}
             </p>
-            {vendorOpportunities.length > 0 && (opportunitySearch || opportunityStatusFilter !== 'all') && (
+            {vendorOpportunities.length > 0 && (opportunitySearch || opportunityStatusFilter !== 'all' || selectedCategories.length > 0) && (
               <button
                 type="button"
-                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); }}
+                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); setSelectedCategories([]); }}
                 className="mt-1 text-xs font-bold text-blue-700 hover:underline dark:text-cyan-300"
               >
                 Clear search and filters
@@ -777,9 +886,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                   null
                 );
                 const parentCompany = getParentCompany(opp.buyer);
+                const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
+                  (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
+                  vendorSubscription === 'unlimited';
                 const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
-                const freeCredits = effectiveFreeCredits;
-                const isLocked = !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
+                const freeCredits = isUnlimited ? 999999 : effectiveFreeCredits;
+                const isLocked = !isUnlimited && !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
                 
                 // Condition: Buyer details remain hidden for 48 hours after bid submission.
                 // After 48 hours, buyer details automatically become visible.
@@ -802,22 +914,48 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                   source: isUploadedByBuyer ? 'buyer_uploaded' : 'quote_submitted',
                 };
 
+                const modeStr = String(opp.sourcingMode || (rfqRecord as any)?.sourcingMode || '').toLowerCase();
+                const versionBadge = (() => {
+                  if (modeStr.includes('0') || modeStr === 'v0' || modeStr === 'version_0' || modeStr === 'mode_0') {
+                    return { label: 'V0 · Starter', color: 'bg-slate-100 text-slate-700 dark:bg-gray-800 dark:text-gray-300 border border-slate-200 dark:border-gray-700' };
+                  }
+                  if (modeStr.includes('1') || modeStr === 'v1' || modeStr === 'version_1' || modeStr === 'mode_1') {
+                    return { label: 'V1 · Private', color: 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800' };
+                  }
+                  if (modeStr.includes('2') || modeStr === 'v2' || modeStr === 'version_2' || modeStr === 'mode_2') {
+                    return { label: 'V2 · Hybrid', color: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800' };
+                  }
+                  if (modeStr.includes('3') || modeStr === 'v3' || modeStr === 'version_3' || modeStr === 'mode_3') {
+                    return { label: 'V3 · Autonomous', color: 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800' };
+                  }
+                  return null;
+                })();
+
                 return (
                   <tr key={opp.rfqNumber} className="transition-colors hover:bg-slate-50/80 dark:hover:bg-gray-850/40">
                     {/* RFQ Number */}
                     <td data-label="RFQ Number" className="py-3 font-mono font-bold text-slate-900 dark:text-white">
-                      {opp.rfqNumber}
+                      <div>{opp.rfqNumber}</div>
+                      {versionBadge && (
+                        <div className="mt-1">
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${versionBadge.color}`}>
+                            {versionBadge.label}
+                          </span>
+                        </div>
+                      )}
                     </td>
                     
                     {/* Title */}
                     <td data-label="RFQ Details" className="py-3">
                       <div className="font-semibold text-slate-800 dark:text-gray-200">{opp.title}</div>
-                      <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-slate-500 dark:text-gray-400">
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 dark:text-gray-400">
                         {(opp.majorCategory || rfqRecord?.category) && (
-                          <span>{opp.majorCategory || rfqRecord?.category}</span>
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
+                            {opp.majorCategory || rfqRecord?.category}
+                          </span>
                         )}
                         {(opp.deliveryLocation || rfqRecord?.deliveryLocation) && (
-                          <span>· {opp.deliveryLocation || rfqRecord?.deliveryLocation}</span>
+                          <span>· 📍 {opp.deliveryLocation || rfqRecord?.deliveryLocation}</span>
                         )}
                       </div>
                       {itemDetails.length > 0 && (

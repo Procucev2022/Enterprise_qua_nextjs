@@ -180,6 +180,7 @@ export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
   version_1: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1],
   version_2: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2],
   version_3: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3],
+  unlimited: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3],
 };
 
 /**
@@ -193,13 +194,21 @@ export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
  * - version_1: mode_0, mode_1
  * - version_2: mode_0, mode_1, mode_2
  * - version_3: mode_0, mode_1, mode_2, mode_3
+ * - unlimited: mode_0, mode_1, mode_2, mode_3
  */
 export function entitledSourcingModes(
   subscriptionPlan?: string | null,
-  remainingFreeRFQs?: number
+  remainingFreeRFQs?: number,
+  unlimitedRfqAccess?: boolean
 ): SourcingMode[] {
+  if (unlimitedRfqAccess) {
+    return [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3];
+  }
   if (!subscriptionPlan) return SUBSCRIPTION_MODE_ENTITLEMENTS.version_1;
   const plan = subscriptionPlan.trim().toLowerCase();
+  if (plan === 'unlimited') {
+    return [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3];
+  }
   if (plan === 'free_trial' && remainingFreeRFQs !== undefined && remainingFreeRFQs <= 0) {
     return ['mode_0'];
   }
@@ -1033,4 +1042,16 @@ export {
   PINCODE_PATTERN,
   PASSWORD_MIN_LENGTH,
 } from './validationSchemas';
+
+export const UNLIMITED_ACCESS_EMAILS = new Set([
+  'sudheer.kangala@procucev.com',
+  'procucevvendor@gmail.com',
+]);
+
+export function hasUnlimitedAccess(emailOrSession?: { email?: string } | string | null): boolean {
+  if (!emailOrSession) return false;
+  const email = (typeof emailOrSession === 'string' ? emailOrSession : emailOrSession.email || '').trim().toLowerCase();
+  return UNLIMITED_ACCESS_EMAILS.has(email);
+}
+
 
