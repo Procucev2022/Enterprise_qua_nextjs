@@ -15,6 +15,7 @@ import type {
   RFQListResult,
   RFQMutationResult,
   RFQUpdatePayload,
+  RFQExtensionResult,
   RFQQuoteAttachment,
   RFQVendorCandidate,
   RFQVendorCandidatesResult,
@@ -662,6 +663,59 @@ export async function updateRFQ(
       reason: res.status === 400 ? 'VALIDATION' : 'SERVER',
       error: body.error || UI_STRINGS.rfqEdit.saveFailed,
       fieldErrors: body.fieldErrors,
+    };
+  }
+
+  return { success: true, rfq: body.data };
+}
+
+/**
+ * Extends the closing deadline of an open RFQ by 24 or 48 hours (strictly one-time).
+ *
+ * Backed by POST /api/rfqs/:id/extend.
+ */
+export async function extendRFQ(
+  identifier: string,
+  hours: 24 | 48
+): Promise<RFQExtensionResult> {
+  const token = authClient.getToken();
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/rfqs/${encodeURIComponent(identifier)}/extend`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ hours }),
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  let body: { success?: boolean; data?: RFQItem; error?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
+  }
+  if (res.status === 404) {
+    return { success: false, reason: 'NOT_FOUND', error: body.error || UI_STRINGS.rfqDetails.notFoundMessage };
+  }
+  if (!res.ok || !body.success || !body.data) {
+    return {
+      success: false,
+      reason: res.status === 400 ? 'VALIDATION' : 'SERVER',
+      error: body.error || UI_STRINGS.rfqDetails.extensionFailedTitle,
     };
   }
 

@@ -189,9 +189,24 @@ const VALIDATION_SCHEMAS = {
       custom: (val) => (isDummyPincode(val) ? 'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed.' : null),
     },
     targetDeliveryDate: { type: 'string', required: false },
+    deadline: { type: 'string', required: false },
+    closingDeadline: { type: 'string', required: false },
+    isExtended: { type: 'boolean', required: false },
+    extensionHours: { type: 'number', required: false },
+    extendedAt: { type: 'string', required: false },
     extractedEntities: { type: 'array', required: false },
     attachments: { type: 'array', required: false },
     assignedVendors: { type: 'array', required: false },
+  },
+
+  // Schema for extending an RFQ closing deadline (strictly one-time, 24h or 48h)
+  extendRFQ: {
+    hours: {
+      type: 'number',
+      required: true,
+      custom: (val) => ([24, 48].includes(Number(val)) ? null : 'Extension duration must be either 24 or 48 hours.'),
+      message: 'Extension hours must be 24 or 48.',
+    },
   },
 
   // Document handed to POST /api/rfqs/extract for Gemini line-item extraction.
