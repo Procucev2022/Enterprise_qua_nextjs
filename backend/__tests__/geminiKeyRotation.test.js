@@ -334,6 +334,102 @@ describe('Gemini API Key Fallback, Cooldown & Automatic Rotation', () => {
       expect(res.status).toBe('AI_FAILED');
       expect(res.data).toBeNull();
     });
+
+    test('isLocationUnsupportedError identifies location precondition failures and isNonRetryableError returns false', () => {
+      const locationMsg = JSON.stringify({
+        error: {
+          code: 400,
+          message: 'User location is not supported for the API use.',
+          status: 'FAILED_PRECONDITION',
+        },
+      });
+
+      expect(gemini.isLocationUnsupportedError(400, locationMsg)).toBe(true);
+      expect(gemini.isNonRetryableError(400, locationMsg)).toBe(false);
+      expect(gemini.isNonRetryableError(400, 'Invalid argument: bad parameter')).toBe(true);
+    });
+
+    test('400 User location unsupported does not abort key rotation and succeeds with Key 2', async () => {
+      const secretKey1 = 'secret-location-blocked-1';
+      const secretKey2 = 'secret-location-ok-2';
+      process.env.GEMINI_API_KEYS = `${secretKey1},${secretKey2}`;
+
+      const locationErrorJson = JSON.stringify({
+        error: {
+          code: 400,
+          message: 'User location is not supported for the API use.',
+          status: 'FAILED_PRECONDITION',
+        },
+      });
+
+      const attemptedKeys = [];
+      global.fetch = jest.fn().mockImplementation(async (url, options) => {
+        const apiKey = options?.headers?.['x-goog-api-key'] || '';
+        attemptedKeys.push(apiKey);
+        if (apiKey === secretKey1) {
+          return {
+            ok: false,
+            status: 400,
+            statusText: 'Bad Request',
+            text: async () => locationErrorJson,
+            json: async () => JSON.parse(locationErrorJson),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: JSON.stringify({ items: [{ itemDescription: 'Supported Item', quantity: 5 }] }) }],
+                },
+              },
+            ],
+          }),
+        };
+      });
+
+      const result = await gemini.extractLineItems({
+        documentText: 'Supported Item 5 Nos',
+        fileName: 'location_test.txt',
+      });
+
+      expect(result.status).toBe(gemini.EXTRACTION_STATUS.SUCCESS);
+      expect(attemptedKeys).toEqual([secretKey1, secretKey2]);
+      expect(result.lineItems).toHaveLength(1);
+      expect(result.lineItems[0].itemName).toBe('Supported Item');
+    });
+
+    test('extractLineItems advances activeModelIndex when all keys fail with location error', async () => {
+      const secretKey1 = 'secret-loc-fail-1';
+      process.env.GEMINI_API_KEYS = secretKey1;
+
+      const locationErrorJson = JSON.stringify({
+        error: {
+          code: 400,
+          message: 'User location is not supported for the API use.',
+          status: 'FAILED_PRECONDITION',
+        },
+      });
+
+      global.fetch = jest.fn().mockImplementation(async () => ({
+        ok: false,
+        status: 400,
+        text: async () => locationErrorJson,
+        json: async () => JSON.parse(locationErrorJson),
+      }));
+
+      const result = await gemini.extractLineItems({
+        documentText: 'Steel Flange 4 inch 15 Nos',
+        fileName: 'materials.txt',
+      });
+
+      expect(result.status).toBe(gemini.EXTRACTION_STATUS.AI_FAILED);
+      expect(result.error).toContain('User location is not supported');
+      // Advances activeModelIndex so subsequent attempts immediately try fallback models
+      expect(gemini.getActiveModelIndex()).toBe(1);
+    });
   });
 });
 

@@ -642,9 +642,20 @@ function isRateLimitError(status, message = '') {
   return /429|quota|resource_exhausted|rate.?limit|too many requests/i.test(message);
 }
 
+function isLocationUnsupportedError(status, message = '') {
+  const msg = String(message || '');
+  return /user location is not supported|location is not supported|failed_precondition/i.test(msg);
+}
+
 function isNonRetryableError(status, message = '') {
+  const msg = String(message || '');
+  // User location and precondition failures are infrastructure/network restrictions, NOT document client payload errors.
+  // They must rotate to subsequent keys or fallback models instead of aborting.
+  if (isLocationUnsupportedError(status, msg)) {
+    return false;
+  }
   if (status === 400) return true;
-  return /invalid argument|bad request|unsupported format|malformed/i.test(message);
+  return /invalid argument|bad request|unsupported format|malformed/i.test(msg);
 }
 
 function safeKeyLabel(keyIdx, totalKeys) {
@@ -763,6 +774,12 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
             { keyIndex: keyIdx + 1, totalKeys: keys.length, model, status },
             'GEMINI'
           );
+        } else if (isLocationUnsupportedError(status, detail)) {
+          logger.warn(
+            `Gemini API ${keyLabel} encountered location/precondition restriction for ${model} (${status}). Rotating to next key / fallback...`,
+            { keyIndex: keyIdx + 1, totalKeys: keys.length, model, status },
+            'GEMINI'
+          );
         } else {
           logger.warn(
             `Gemini API ${keyLabel} failed for ${model} (${status}). Rotating to next key...`,
@@ -772,6 +789,7 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
         }
 
         lastError = new Error(errorMsg);
+        lastError.status = status;
         activeKeyIndex = (keyIdx + 1) % keys.length;
         modelKeyIndices.set(model, activeKeyIndex);
         if (attemptsMade < maxAttempts && (!deadline || Date.now() < deadline - getMinimumAttemptMs())) {
@@ -981,6 +999,7 @@ async function extractLineItems(input = {}) {
       failures.push(`${model}: ${err.message}`);
       const is503 = /503|overloaded|unavailable/i.test(err.message);
       const is429 = /429|quota|resource_exhausted|rate.?limit/i.test(err.message);
+      const isLocation = isLocationUnsupportedError(err.status, err.message);
       if (is503) {
         logger.warn(
           `Gemini model ${model} failed with 503 (overloaded). Failing over to fallback models...`,
@@ -990,6 +1009,12 @@ async function extractLineItems(input = {}) {
       } else if (is429) {
         logger.warn(
           `Gemini model ${model} failed with 429 (quota or rate limit reached). Failing over to fallback models...`,
+          { model, error: err.message },
+          'GEMINI'
+        );
+      } else if (isLocation) {
+        logger.warn(
+          `Gemini model ${model} failed with location restriction. Failing over to fallback models...`,
           { model, error: err.message },
           'GEMINI'
         );
@@ -1003,16 +1028,16 @@ async function extractLineItems(input = {}) {
     }
   }
 
-  // If the failure was due to 503 (overload) or 429 (quota/rate limit), advance activeModelIndex so the next request starts with fallback models
+  // If the failure was due to 503 (overload), 429 (quota/rate limit), or location restriction, advance activeModelIndex so the next request starts with fallback models
   if (
-    failures.some((f) => /503|429|overloaded|unavailable|quota|resource_exhausted|rate.?limit/i.test(f)) &&
+    failures.some((f) => /503|429|overloaded|unavailable|quota|resource_exhausted|rate.?limit|user location is not supported|failed_precondition/i.test(f)) &&
     chain.length > 1 &&
     activeModelIndex === startModelIndex
   ) {
     activeModelIndex = (startModelIndex + 1) % chain.length;
     lastFailoverTimestamp = Date.now();
     logger.info(
-      `Primary model encountered 503 overload or 429 rate limit. Setting next active model to index ${activeModelIndex} (${chain[activeModelIndex]}) for subsequent requests.`,
+      `Primary model encountered 503 overload, 429 rate limit, or location restriction. Setting next active model to index ${activeModelIndex} (${chain[activeModelIndex]}) for subsequent requests.`,
       { nextActiveModel: chain[activeModelIndex], activeModelIndex },
       'GEMINI'
     );
@@ -1093,6 +1118,7 @@ async function generateJson(input = {}) {
       failures.push(`${model}: ${err.message}`);
       const is503 = /503|overloaded|unavailable/i.test(err.message);
       const is429 = /429|quota|resource_exhausted|rate.?limit/i.test(err.message);
+      const isLocation = isLocationUnsupportedError(err.status, err.message);
       if (is503) {
         logger.warn(
           `Gemini ${label} model ${model} failed with 503 (overloaded). Failing over to fallback models...`,
@@ -1102,6 +1128,12 @@ async function generateJson(input = {}) {
       } else if (is429) {
         logger.warn(
           `Gemini ${label} model ${model} failed with 429 (quota or rate limit reached). Failing over to fallback models...`,
+          { model, error: err.message },
+          'GEMINI'
+        );
+      } else if (isLocation) {
+        logger.warn(
+          `Gemini ${label} model ${model} failed with location restriction. Failing over to fallback models...`,
           { model, error: err.message },
           'GEMINI'
         );
@@ -1116,7 +1148,7 @@ async function generateJson(input = {}) {
   }
 
   if (
-    failures.some((f) => /503|429|overloaded|unavailable|quota|resource_exhausted|rate.?limit/i.test(f)) &&
+    failures.some((f) => /503|429|overloaded|unavailable|quota|resource_exhausted|rate.?limit|user location is not supported|failed_precondition/i.test(f)) &&
     chain.length > 1 &&
     activeModelIndex === startModelIndex
   ) {
@@ -1448,4 +1480,6 @@ module.exports = {
   isKeyInCooldown,
   markKeyCooldown,
   getKeyCooldowns,
+  isNonRetryableError,
+  isLocationUnsupportedError,
 };
