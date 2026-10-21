@@ -694,7 +694,7 @@ export async function extendRFQ(
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
   }
 
-  let body: { success?: boolean; data?: RFQItem; error?: string } = {};
+  let body: { success?: boolean; data?: RFQItem; emailsSent?: number; error?: string } = {};
   try {
     body = await res.json();
   } catch {
@@ -719,7 +719,7 @@ export async function extendRFQ(
     };
   }
 
-  return { success: true, rfq: body.data };
+  return { success: true, rfq: body.data, emailsSent: body.emailsSent };
 }
 
 /**

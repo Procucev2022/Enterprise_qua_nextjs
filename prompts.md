@@ -3051,6 +3051,7 @@ Let's have complete operation time limit to 5 minute only. Also can we give re-t
 Remove this gemini timeout related env variable, gemini size related from here, move it to constants or something file, We don't need these in env
 ```
 
+<<<<<<< Updated upstream
 ### 2026-10-21T12:50:49+05:30
 
 ```text
@@ -3147,3 +3148,35 @@ git pre-commit checks are failing, can you please check once
 ```text
 Some github files conflicts, can you please check & fix
 ```
+
+### 2026-10-21T17:14:56+05:30
+
+```text
+Summary of all failing tests
+ FAIL  __tests__/geminiExtraction.test.js (16.57 s)
+  ● Gemini document extraction service › extractLineItems › aborts a model when the shared operation budget expires
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected substring: "shared extraction time budget"
+    Received string:    "skipped gemini-3.8-flash: extraction time budget exhausted"
+
+      828 |         const res = await gemini.extractLineItems({ documentText: 'Pump' });
+      829 |         expect(res.status).toBe(EXTRACTION_STATUS.AI_FAILED);
+    > 830 |         expect(res.error).toContain('shared extraction time budget');
+```
+
+### 2026-10-21T18:01:04+05:30
+
+```text
+git commit -m "mail goes to vendor on extention of RFQ"
+Summary of all failing tests
+ FAIL  __tests__/geminiExtraction.test.js (32.312 s)
+  ● Gemini document extraction service › extractLineItems › aborts a model when the shared operation budget expires
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected substring: "shared extraction time budget"
+    Received string:    "skipped gemini-3.8-flash: extraction time budget exhausted"
+```
+

@@ -679,6 +679,7 @@ export const UI_STRINGS = {
     extendingAction: 'Extending Deadline…',
     extensionSuccessTitle: 'RFQ Deadline Extended',
     extensionSuccessMessage: 'Closing deadline for {rfqNumber} has been extended by {hours} hours to {newDeadline}.',
+    extensionSuccessWithEmailsMessage: 'Closing deadline for {rfqNumber} has been extended by {hours} hours to {newDeadline}. Notification emails sent to {emailsSent} vendor(s).',
     extensionFailedTitle: 'Extension Failed',
     extendedBadge: 'Extended (+{hours}h)',
     alreadyExtendedTooltip: 'A one-time extension of {hours} hours has already been applied to this RFQ.',

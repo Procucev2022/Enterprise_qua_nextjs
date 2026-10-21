@@ -560,7 +560,7 @@ export interface RFQExtensionPayload {
 }
 
 export type RFQExtensionResult =
-  | { success: true; rfq: RFQItem }
+  | { success: true; rfq: RFQItem; emailsSent?: number }
   | { success: false; reason: RFQTransportFailure; error: string };
 
 export interface RFQChatMessage {

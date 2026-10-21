@@ -453,12 +453,18 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         setLocalRfq(result.rfq);
         const deadlineStr = result.rfq.closingDeadline || result.rfq.deadline || '';
         const formattedDeadline = deadlineStr ? formatIndianDateTime(deadlineStr) : '';
+        const messageTemplate =
+          result.emailsSent && result.emailsSent > 0
+            ? DETAILS.extensionSuccessWithEmailsMessage
+            : DETAILS.extensionSuccessMessage;
+
         showToast(
           DETAILS.extensionSuccessTitle,
-          formatString(DETAILS.extensionSuccessMessage, {
+          formatString(messageTemplate, {
             rfqNumber: activeRfq.rfqNumber,
             hours: extensionHours,
             newDeadline: formattedDeadline,
+            emailsSent: result.emailsSent || 0,
           }),
           'success'
         );

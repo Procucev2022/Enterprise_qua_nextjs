@@ -860,6 +860,147 @@ async function sendRfqInviteEmail(to, context) {
   return deliverVendor(buildRfqInviteEmail(to, context), 'RFQ invite email');
 }
 
+// ── RFQ deadline extension notification → matched & assigned vendors ────────
+
+function buildRfqExtensionEmail(to, context = {}) {
+  const {
+    rfq = {},
+    recipientName,
+    buyerEmail,
+    cc,
+    extensionHours = 24,
+    newDeadline,
+    originalDeadline,
+    freeCreditsRemaining,
+    isSubscribed,
+  } = context;
+
+  const items = Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.length > 0
+    ? rfq.extractedEntities
+    : Array.isArray(rfq.items) && rfq.items.length > 0
+      ? rfq.items
+      : Array.isArray(rfq.lineItems)
+        ? rfq.lineItems
+        : [];
+
+  const itemRows = items
+    .slice(0, 20)
+    .map(
+      (it, idx) =>
+        `<tr>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-weight: 600; color: #0f172a;">${idx + 1}. ${it.itemName || it.name || it.item_name || 'Line item'}${it.technicalSpecs || it.specifications || it.specs || it.description ? `<br/><span style="font-weight: normal; font-size: 11px; color: #64748b;">Specs: ${it.technicalSpecs || it.specifications || it.specs || it.description}</span>` : ''}</td>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #1e293b;">${it.quantity != null ? it.quantity : 1} ${it.unit || it.uom || 'Units'}</td>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">${it.deliveryLocation || it.location || rfq.deliveryLocation || '-'}</td>
+        </tr>`
+    )
+    .join('');
+
+  const category = rfq.category || null;
+  const subject = category
+    ? `Deadline Extended (+${extensionHours}h): RFQ ${rfq.rfqNumber} in ${category}`
+    : `Deadline Extended (+${extensionHours}h): RFQ ${rfq.rfqNumber}`;
+
+  const budgetFormatted = rfq.budget != null && rfq.budget !== '' ? `₹${Number(rfq.budget).toLocaleString('en-IN')}` : null;
+
+  const sampleReplyFormat = items.length > 1
+    ? items.map((it, idx) => `${idx + 1}. ${it.itemName || it.name || `Item ${idx + 1}`}: Unit Price ₹[Enter Price] (Qty: ${it.quantity != null ? it.quantity : 1} ${it.unit || it.uom || 'Units'})`).join('\n') + '\n\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]'
+    : items.length === 1
+      ? `Item: ${items[0].itemName || items[0].name || 'Line Item'}\nUnit Price: ₹[Enter Unit Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`
+      : `Unit Price: ₹[Enter Unit Price]\nTotal Price: ₹[Enter Total Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`;
+
+  const gatewayEmail = vendorGatewayAddress();
+  const buyerCc = cc || buyerEmail || undefined;
+  const requiresPortal = items.length > 10;
+  const effectiveNewDeadline = newDeadline || rfq.closingDeadline || rfq.deadline;
+  const prevDeadlineText = originalDeadline ? `<span style="text-decoration: line-through; color: #94a3b8;">${originalDeadline}</span>` : null;
+
+  const inner = `
+    <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
+    <p>Greetings from <strong>Procucev!</strong></p>
+    <div style="margin: 16px 0; padding: 14px 18px; background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px;">
+      <h3 style="margin: 0 0 6px 0; color: #166534; font-size: 15px; font-weight: 700;">⏰ Bidding Deadline Extended by ${extensionHours} Hours</h3>
+      <p style="margin: 0; font-size: 13px; color: #15803d; line-height: 1.5;">The buyer has extended the submission window for RFQ <strong>#${rfq.rfqNumber}</strong>. Please ensure your quotation is submitted before the revised closing deadline.</p>
+    </div>
+    <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
+      ${row('RFQ Number', rfq.rfqNumber)}
+      ${row('Requirement', rfq.title)}
+      ${row('Category', category)}
+      ${prevDeadlineText ? row('Previous Deadline', prevDeadlineText) : ''}
+      ${row('Revised Closing Deadline', `<strong style="color: #166534;">${effectiveNewDeadline}</strong> <span style="display: inline-block; background: #dcfce7; color: #166534; font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">+${extensionHours}h Extension</span>`)}
+      ${row('Delivery location / Pincode', rfq.deliveryPincode ? `${rfq.deliveryLocation || ''} (${rfq.deliveryPincode})` : rfq.deliveryLocation)}
+      ${budgetFormatted ? row('Budget', budgetFormatted) : ''}
+    </table>
+    ${
+      itemRows
+        ? `<table style="width: 100%; border-collapse: collapse; margin-bottom: 16px;">
+             <thead><tr style="background: #f1f5f9; text-align: left;">
+               <th style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">Sl No / Description</th>
+               <th style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; font-size: 12px; color: #475569;">Quantity</th>
+               <th style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">Delivery Location</th>
+             </tr></thead>
+             <tbody>${itemRows}</tbody>
+           </table>`
+        : ''
+    }
+    <div style="margin: 20px 0; padding: 18px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;">
+      ${
+        isSubscribed
+          ? '<div style="background: #f0fdf4; border: 1px solid #86efac; color: #166534; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">✨ <strong>Subscribed Supplier:</strong> You have active subscription access with unlimited quotation submissions.</div>'
+          : freeCreditsRemaining !== undefined && freeCreditsRemaining !== null
+          ? `<div style="background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">📊 <strong>Available Free Quotation Credits:</strong> ${freeCreditsRemaining} / 5 remaining.${freeCreditsRemaining === 0 ? ' <span style="color: #b91c1c; font-weight: bold;">(Plan upgrade required to submit quote)</span>' : ''}</div>`
+          : ''
+      }
+      <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">How to Submit Your Quotation</h4>
+      <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; line-height: 1.5;">
+        ${
+          requiresPortal
+            ? `This RFQ has ${items.length} line items. <strong>Email bids are not accepted for RFQs with more than 10 items.</strong> Submit your bid through the <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="color: #0284c7; font-weight: bold;">Procucev Vendor Portal</a> before the revised deadline.`
+            : `You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>${buyerCc ? ` and keep buyer CC'd: <strong>${buyerCc}</strong>` : ''}), or online via the <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="color: #0284c7; font-weight: bold;">Procucev Quotation Portal</a>.`
+        }
+      </p>
+
+      <p style="margin: 12px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Mandatory Quotation Information Required:</p>
+      <ul style="margin: 0 0 12px 0; padding-left: 20px; font-size: 13px; color: #334155; line-height: 1.6;">
+        <li><strong>Unit Price (₹)*</strong> — <span style="color: #b91c1c; font-weight: bold;">Mandatory</span>: Quoted unit rate (must be greater than ₹0) for each line item.</li>
+        <li><strong>Lead Time (Days)</strong> — Expected delivery timeline from PO issuance.</li>
+        <li><strong>Warranty (Years)</strong> — Product warranty period.</li>
+        <li><strong>Payment Terms</strong> — Commercial terms (e.g., Net 30, Advance).</li>
+        <li><strong>Remarks</strong> — Any inclusions, exclusions, or terms.</li>
+      </ul>
+
+      ${
+        requiresPortal
+          ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>Make sure every RFQ line item is priced in the downloaded workbook. Include supporting documents with your portal submission.</em></p>'
+          : `<p style="margin: 14px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Email Reply Format (Copy, Fill & Send):</p>
+             <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; color: #1e293b; white-space: pre-wrap; line-height: 1.4;">${sampleReplyFormat}</div>`
+      }
+    </div>
+
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="background: #059669; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px; margin-bottom: 10px;">Submit Quotation Before Revised Deadline</a>
+      <br />
+      <a href="${vendorSignInUrl()}" style="color: #0284c7; text-decoration: underline; font-weight: 600; font-size: 13px;">Open in Vendor Web Portal</a>
+    </div>
+    <p style="font-size: 13px; color: #334155; margin-top: 16px;">
+      <strong>Best Regards,</strong><br/>
+      <strong>Team Procucev</strong>
+    </p>
+  `;
+
+  return {
+    from: vendorFromAddress(),
+    to,
+    replyTo: gatewayEmail,
+    cc: buyerCc,
+    subject,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'RFQ Deadline Extended', inner),
+  };
+}
+
+async function sendRfqExtensionEmail(to, context) {
+  return deliverVendor(buildRfqExtensionEmail(to, context), 'RFQ extension notification email');
+}
+
 // ── Vendor quote acknowledgement → vendor (with buyer & support CC) ─────────
 
 function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
@@ -2284,8 +2425,10 @@ module.exports = {
   deliverVendor,
   sendOtpEmail,
   sendRfqInviteEmail,
+  sendRfqExtensionEmail,
   sendQuoteReceivedEmail,
   buildRfqInviteEmail,
+  buildRfqExtensionEmail,
   buildQuoteReceivedEmail,
   sendRequisitionNotificationEmail,
   buildRequisitionEmail,

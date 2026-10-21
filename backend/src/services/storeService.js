@@ -2580,8 +2580,11 @@ class StoreService {
       updatedAt: new Date().toISOString(),
     };
 
+    const previousDeadline = rfq.closingDeadline || rfq.deadline || rfq.targetDeliveryDate || null;
     const updated = this.updateRFQ(rfq.id, updates);
-    return { success: true, rfq: updated };
+    const emailsSent = this.emailRFQExtensionToVendors(updated, extHours, previousDeadline);
+
+    return { success: true, rfq: updated, emailsSent };
   }
 
   addQuoteToRFQ(rfqId, quote) {
@@ -4189,6 +4192,66 @@ class StoreService {
         );
       }
     }
+
+    return allEmails.size;
+  }
+
+  /**
+   * Dispatch deadline extension notification emails to the same vendor cohort
+   * (matched category suppliers and assigned suppliers) that received the initial RFQ invite.
+   */
+  emailRFQExtensionToVendors(rfq, extensionHours = 24, previousDeadline = null) {
+    if (!rfq || rfq.status === 'Draft' || rfq.status === 'Closed' || rfq.status === 'Expired') {
+      return 0;
+    }
+    const recipients = this.selectVendorsForRFQEmail(rfq);
+    const assigned = (Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []).filter((v) => v && v.email);
+    const allEmails = new Set();
+
+    for (const vendor of recipients) {
+      if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
+        allEmails.add(vendor.email.toLowerCase());
+        const creditInfo = this.checkVendorQuotationEligibility(vendor);
+        this._background(
+          mailerService.sendRfqExtensionEmail(vendor.email, {
+            rfq,
+            recipientName: vendor.contactPerson || vendor.name,
+            extensionHours,
+            newDeadline: rfq.closingDeadline || rfq.deadline,
+            originalDeadline: previousDeadline,
+            freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+            isSubscribed: creditInfo.isSubscribed,
+          }),
+          'Failed to email RFQ extension notification to matched vendor'
+        );
+      }
+    }
+
+    for (const vendor of assigned) {
+      if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
+        allEmails.add(vendor.email.toLowerCase());
+        const resolvedVendor = this.getVendorById(vendor.id || vendor.email, 'all');
+        const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor || vendor);
+        this._background(
+          mailerService.sendRfqExtensionEmail(vendor.email, {
+            rfq,
+            recipientName: vendor.contactPerson || vendor.name,
+            extensionHours,
+            newDeadline: rfq.closingDeadline || rfq.deadline,
+            originalDeadline: previousDeadline,
+            freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+            isSubscribed: creditInfo.isSubscribed,
+          }),
+          'Failed to email RFQ extension notification to assigned vendor'
+        );
+      }
+    }
+
+    logger.info(`[STORE] RFQ ${rfq.rfqNumber || rfq.id} extension notice queued for ${allEmails.size} vendor(s)`, {
+      rfqNumber: rfq.rfqNumber,
+      extensionHours,
+      vendorCount: allEmails.size,
+    });
 
     return allEmails.size;
   }

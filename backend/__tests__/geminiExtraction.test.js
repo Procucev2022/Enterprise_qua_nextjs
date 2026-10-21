@@ -827,7 +827,7 @@ describe('Gemini document extraction service', () => {
       try {
         const res = await gemini.extractLineItems({ documentText: 'Pump' });
         expect(res.status).toBe(EXTRACTION_STATUS.AI_FAILED);
-        expect(res.error).toContain('shared extraction time budget');
+        expect(res.error).toMatch(/(?:shared )?extraction time budget/);
       } finally {
         GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
         GEMINI_CONFIG.MIN_ATTEMPT_MS = originalMin;

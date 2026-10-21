@@ -1308,10 +1308,15 @@ async function extendRFQ(req, res, next) {
       rfqNumber: existing.rfqNumber,
       hours,
       newDeadline: result.rfq.closingDeadline,
+      emailsSent: result.emailsSent || 0,
     }, 'RFQ_CONTROLLER');
 
     const role = req.user && req.user.role;
-    res.json({ success: true, data: applyQuotesVisibility(result.rfq, role) });
+    res.json({
+      success: true,
+      data: applyQuotesVisibility(result.rfq, role),
+      emailsSent: result.emailsSent || 0,
+    });
   } catch (err) {
     logger.error(`Error extending RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);

@@ -1,6 +1,7 @@
 const request = require('supertest');
 const app = require('../src/app');
 const storeService = require('../src/services/storeService');
+const mailerService = require('../src/services/mailerService');
 const { ALLOWED_EXTENSION_HOURS, DEFAULT_EXTENSION_HOURS } = require('../src/config/constants');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../src/config/validationSchemas');
 const { authHeader, TEST_USERS } = require('./testHelpers');
@@ -192,6 +193,7 @@ describe('RFQ Extension Feature (24h / 48h strictly one-time)', () => {
       expect(res1.body.success).toBe(true);
       expect(res1.body.data.isExtended).toBe(true);
       expect(res1.body.data.extensionHours).toBe(24);
+      expect(typeof res1.body.emailsSent).toBe('number');
 
       // Attempt second extension on same RFQ
       const res2 = await request(app)
@@ -202,6 +204,130 @@ describe('RFQ Extension Feature (24h / 48h strictly one-time)', () => {
       expect(res2.status).toBe(400);
       expect(res2.body.success).toBe(false);
       expect(res2.body.error).toMatch(/already received its one-time deadline extension/);
+    });
+  });
+
+  describe('Extension Email Dispatch', () => {
+    test('buildRfqExtensionEmail constructs email with 24h extension, subject, and deadlines', () => {
+      const email = mailerService.buildRfqExtensionEmail('vendor@example.com', {
+        rfq: {
+          rfqNumber: 'RFQ-EXT-TEST-1',
+          title: 'Packaging Boxes',
+          category: 'Packaging',
+          deadline: '2026-10-30T10:00:00.000Z',
+          items: [{ itemName: 'Carton Box', quantity: 500, unit: 'Pieces' }],
+        },
+        recipientName: 'Apex Suppliers',
+        extensionHours: 24,
+        newDeadline: '2026-10-31T10:00:00.000Z',
+        originalDeadline: '2026-10-30T10:00:00.000Z',
+      });
+
+      expect(email.to).toBe('vendor@example.com');
+      expect(email.subject).toContain('Deadline Extended (+24h): RFQ RFQ-EXT-TEST-1');
+      expect(email.subject).toContain('Packaging');
+      expect(email.html).toContain('Apex Suppliers');
+      expect(email.html).toContain('Bidding Deadline Extended by 24 Hours');
+      expect(email.html).toContain('2026-10-31T10:00:00.000Z');
+      expect(email.html).toContain('Carton Box');
+      expect(email.html).toContain('Submit Quotation Before Revised Deadline');
+    });
+
+    test('buildRfqExtensionEmail constructs email without category and with >10 items portal instruction', () => {
+      const items = Array.from({ length: 12 }, (_, i) => ({ itemName: `Item ${i + 1}`, quantity: 10 }));
+      const email = mailerService.buildRfqExtensionEmail('supplier@example.com', {
+        rfq: {
+          rfqNumber: 'RFQ-EXT-TEST-2',
+          title: 'Bulk Materials',
+          deadline: '2026-11-01T12:00:00.000Z',
+          items,
+        },
+        recipientName: 'Bulk Corp',
+        extensionHours: 48,
+        newDeadline: '2026-11-03T12:00:00.000Z',
+      });
+
+      expect(email.subject).toBe('Deadline Extended (+48h): RFQ RFQ-EXT-TEST-2');
+      expect(email.html).toContain('48 Hours');
+      expect(email.html).toContain('Email bids are not accepted for RFQs with more than 10 items');
+    });
+
+    test('sendRfqExtensionEmail resolves with delivery object in test env', async () => {
+      const result = await mailerService.sendRfqExtensionEmail('test@vendor.com', {
+        rfq: { rfqNumber: 'RFQ-TEST-99' },
+        recipientName: 'Vendor',
+        extensionHours: 24,
+      });
+      expect(result).toEqual({ sent: false, reason: 'test environment' });
+    });
+
+    test('storeService.emailRFQExtensionToVendors notifies matched and assigned vendors with de-duplication', () => {
+      const sendSpy = jest.spyOn(mailerService, 'sendRfqExtensionEmail').mockResolvedValue({ sent: true });
+
+      const testRfq = storeService.createRFQ({
+        rfqNumber: `RFQ-EMAIL-TEST-${Date.now()}`,
+        title: 'Industrial Pumps',
+        category: 'Machinery & Equipment',
+        status: 'Open',
+        assignedVendors: [
+          { email: 'assigned1@example.com', name: 'Assigned 1' },
+          { email: 'duplicate@example.com', name: 'Duplicate Vendor' },
+        ],
+      });
+
+      const selectSpy = jest.spyOn(storeService, 'selectVendorsForRFQEmail').mockReturnValue([
+        { email: 'matched1@example.com', name: 'Matched 1' },
+        { email: 'duplicate@example.com', name: 'Duplicate Vendor' },
+      ]);
+
+      const count = storeService.emailRFQExtensionToVendors(testRfq, 24, '2026-10-25T00:00:00.000Z');
+
+      expect(count).toBe(3);
+      expect(sendSpy).toHaveBeenCalledTimes(3);
+
+      selectSpy.mockRestore();
+      sendSpy.mockRestore();
+    });
+
+    test('storeService.emailRFQExtensionToVendors does not send if status is not valid for extension', () => {
+      const sendSpy = jest.spyOn(mailerService, 'sendRfqExtensionEmail').mockResolvedValue({ sent: true });
+
+      const draftRfq = { id: 'd-1', status: 'Draft' };
+      const closedRfq = { id: 'c-1', status: 'Closed' };
+      const expiredRfq = { id: 'e-1', status: 'Expired' };
+
+      expect(storeService.emailRFQExtensionToVendors(draftRfq, 24)).toBe(0);
+      expect(storeService.emailRFQExtensionToVendors(closedRfq, 24)).toBe(0);
+      expect(storeService.emailRFQExtensionToVendors(expiredRfq, 24)).toBe(0);
+      expect(storeService.emailRFQExtensionToVendors(null, 24)).toBe(0);
+
+      expect(sendSpy).not.toHaveBeenCalled();
+      sendSpy.mockRestore();
+    });
+
+    test('storeService.extendRFQ returns emailsSent count', () => {
+      const sendSpy = jest.spyOn(mailerService, 'sendRfqExtensionEmail').mockResolvedValue({ sent: true });
+      const selectSpy = jest.spyOn(storeService, 'selectVendorsForRFQEmail').mockReturnValue([
+        { email: 'vendor1@test.com', name: 'Vendor 1' },
+      ]);
+
+      const created = storeService.createRFQ({
+        rfqNumber: `RFQ-EXT-EMAILS-${Date.now()}`,
+        title: 'Open RFQ for emailsSent test',
+        status: 'Open',
+      });
+
+      const result = storeService.extendRFQ(created.id, {
+        hours: 24,
+        userEmail: TEST_USERS.buyer.email,
+      });
+
+      expect(result.success).toBe(true);
+      expect(typeof result.emailsSent).toBe('number');
+      expect(result.emailsSent).toBeGreaterThanOrEqual(1);
+
+      selectSpy.mockRestore();
+      sendSpy.mockRestore();
     });
   });
 });

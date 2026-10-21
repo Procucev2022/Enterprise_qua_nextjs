@@ -130,7 +130,7 @@ function resolveApiKeys() {
   const poolKeys = (GEMINI_CONFIG.API_KEYS !== undefined && GEMINI_CONFIG.API_KEYS !== '' && (!Array.isArray(GEMINI_CONFIG.API_KEYS) || GEMINI_CONFIG.API_KEYS.length > 0))
     ? GEMINI_CONFIG.API_KEYS
     : (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEYS) ||
-      (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_API_KEYS);
+    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_API_KEYS);
   addKey(poolKeys);
 
   for (let i = 1; i <= 20; i++) {
@@ -143,13 +143,13 @@ function resolveApiKeys() {
   const primaryKey = GEMINI_CONFIG.API_KEY !== undefined
     ? GEMINI_CONFIG.API_KEY
     : (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) ||
-      (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_API_KEY);
+    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_API_KEY);
   addKey(primaryKey);
 
   const backupKeys = GEMINI_CONFIG.BACKUP_KEYS !== undefined
     ? GEMINI_CONFIG.BACKUP_KEYS
     : (typeof process !== 'undefined' && process.env && process.env.GEMINI_BACKUP_KEYS) ||
-      (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_BACKUP_KEYS);
+    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_BACKUP_KEYS);
 
   if (keys.length > 0) {
     addKey(backupKeys);
@@ -746,8 +746,8 @@ async function callModel(
   const startKeyIndex = preferredKeyIndex !== null && preferredKeyIndex !== undefined
     ? Number(preferredKeyIndex)
     : modelKeyIndices.has(model)
-    ? modelKeyIndices.get(model)
-    : chain.includes(model) ? 0 : activeKeyIndex;
+      ? modelKeyIndices.get(model)
+      : chain.includes(model) ? 0 : activeKeyIndex;
 
   let lastError = null;
   let attemptsMade = 0;
@@ -795,8 +795,8 @@ async function callModel(
     const requestTimeout = deadlineRemaining === null
       ? perModelTimeout
       : perModelTimeout === null
-      ? deadlineRemaining
-      : Math.min(perModelTimeout, deadlineRemaining);
+        ? deadlineRemaining
+        : Math.min(perModelTimeout, deadlineRemaining);
 
     const controller = new AbortController();
     let operationBudgetExpired = false;
@@ -1155,7 +1155,7 @@ async function extractLineItems(input = {}) {
     const remainingMs = deadline !== null ? deadline - Date.now() : 999999;
     if (deadline !== null) {
       if (remainingMs <= 0 || remainingMs < getMinimumAttemptMs()) {
-        failures.push(`skipped ${model}: extraction time budget exhausted`);
+        failures.push(`skipped ${model}: shared extraction time budget exhausted`);
         logger.warn(
           `Gemini extraction budget exhausted before trying ${model}`,
           { budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS, remainingMs, attempt: attempt + 1, totalModels: chain.length },
@@ -1689,26 +1689,26 @@ Do NOT include markdown fences, prose or explanation outside the JSON object.`;
 
     let lineItemQuotes = Array.isArray(data.lineItemQuotes) && data.lineItemQuotes.length > 0
       ? data.lineItemQuotes.map((lq, idx) => {
-          const lqUnit = normalizeAmount(lq.unitPrice) || unitPrice || 0;
-          const lqQty = Number(lq.quantity) || Number(rfqItems[idx]?.quantity) || 1;
-          const lqTotal = normalizeAmount(lq.totalPrice) || (lqUnit * lqQty);
-          return {
-            itemName: lq.itemName || rfqItems[idx]?.itemName || `Item ${idx + 1}`,
-            quantity: lqQty,
-            unitPrice: lqUnit,
-            totalPrice: lqTotal,
-            tax: normalizeAmount(lq.tax) || 0,
-            deliveryDate: lq.deliveryDate || null,
-          };
-        })
+        const lqUnit = normalizeAmount(lq.unitPrice) || unitPrice || 0;
+        const lqQty = Number(lq.quantity) || Number(rfqItems[idx]?.quantity) || 1;
+        const lqTotal = normalizeAmount(lq.totalPrice) || (lqUnit * lqQty);
+        return {
+          itemName: lq.itemName || rfqItems[idx]?.itemName || `Item ${idx + 1}`,
+          quantity: lqQty,
+          unitPrice: lqUnit,
+          totalPrice: lqTotal,
+          tax: normalizeAmount(lq.tax) || 0,
+          deliveryDate: lq.deliveryDate || null,
+        };
+      })
       : rfqItems.map((rfqItem, idx) => ({
-          itemName: rfqItem.itemName || rfqItem.description || `Item ${idx + 1}`,
-          quantity: Number(rfqItem.quantity) || 1,
-          unitPrice: unitPrice || 0,
-          totalPrice: (unitPrice || 0) * (Number(rfqItem.quantity) || 1),
-          tax: taxes ? Math.round(taxes / (rfqItems.length || 1)) : 0,
-          deliveryDate: rfqItem.targetDate || rfqContext.targetDeliveryDate || null,
-        }));
+        itemName: rfqItem.itemName || rfqItem.description || `Item ${idx + 1}`,
+        quantity: Number(rfqItem.quantity) || 1,
+        unitPrice: unitPrice || 0,
+        totalPrice: (unitPrice || 0) * (Number(rfqItem.quantity) || 1),
+        tax: taxes ? Math.round(taxes / (rfqItems.length || 1)) : 0,
+        deliveryDate: rfqItem.targetDate || rfqContext.targetDeliveryDate || null,
+      }));
 
     if (!unitPrice && lineItemQuotes.length > 0 && lineItemQuotes[0].unitPrice > 0) {
       unitPrice = lineItemQuotes[0].unitPrice;

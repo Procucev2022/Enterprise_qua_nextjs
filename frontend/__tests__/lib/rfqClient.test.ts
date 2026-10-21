@@ -1978,13 +1978,14 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         status: 200,
-        json: async () => ({ success: true, data: mockUpdatedRfq }),
+        json: async () => ({ success: true, data: mockUpdatedRfq, emailsSent: 4 }),
       });
 
       const res = await extendRFQ('rfq-1', 24);
       expect(res.success).toBe(true);
       if (res.success) {
         expect(res.rfq).toEqual(mockUpdatedRfq);
+        expect(res.emailsSent).toBe(4);
       }
       expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/rfq-1/extend', expect.objectContaining({
         method: 'POST',
