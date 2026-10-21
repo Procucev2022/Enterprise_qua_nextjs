@@ -2500,7 +2500,6 @@ describe('geminiService.generateJson', () => {
         expect(res).not.toBeNull();
         expect(res.docTitle).toBe('Valid Title');
       });
-
       test('repairTruncatedJson salvages compact array rows when truncated midway through an item', () => {
         const truncated = `{\n  "documentTitle": "RFQ Bulk 500",\n  "items": [\n    ["Ball Valve 2 inch", 10, "Nos", "SS316", 1200, 12000],\n    ["Gate Valve 4 inch", 5, "Nos", "Cast Iron", 4500, 22500],\n    ["Check Valve 1 inch", 20, "Nos", "SS304`;
         const res = gemini.repairTruncatedJson(truncated);
