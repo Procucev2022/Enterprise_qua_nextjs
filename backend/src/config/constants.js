@@ -638,7 +638,7 @@ const GEMINI_CONFIG = {
   BACKUP_KEYS: (typeof process !== 'undefined' && process.env && process.env.GEMINI_BACKUP_KEYS) ||
     (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_BACKUP_KEYS) ||
     '',
-  DISABLE_TIMEOUT: process.env.NODE_ENV === 'test' ? (process.env.GEMINI_DISABLE_TIMEOUT === 'true') : true,
+  DISABLE_TIMEOUT: process.env.GEMINI_DISABLE_TIMEOUT === 'true',
   KEY_COOLDOWN_MS: Number(
     process.env.GEMINI_KEY_COOLDOWN_MS !== undefined
       ? process.env.GEMINI_KEY_COOLDOWN_MS

@@ -436,6 +436,57 @@ describe('Gemini API Key Fallback, Cooldown & Automatic Rotation', () => {
       // Advances activeModelIndex so subsequent attempts immediately try fallback models
       expect(gemini.getActiveModelIndex()).toBe(1);
     });
+
+    test('callModel skips redundant key rotation and throws skipKeyRetry when project quota is exceeded', async () => {
+      const secretKey1 = 'key-quota-exceeded-1';
+      const secretKey2 = 'key-quota-exceeded-2';
+      process.env.GEMINI_API_KEYS = `${secretKey1},${secretKey2}`;
+
+      const attemptedKeys = [];
+      global.fetch = jest.fn().mockImplementation(async (url, opts) => {
+        attemptedKeys.push(opts?.headers?.['x-goog-api-key']);
+        return {
+          ok: false,
+          status: 429,
+          statusText: 'Too Many Requests',
+          text: async () => JSON.stringify({
+            error: {
+              code: 429,
+              message: 'You exceeded your current quota, please check your plan and billing details.',
+              status: 'RESOURCE_EXHAUSTED',
+            },
+          }),
+        };
+      });
+
+      await expect(
+        gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000)
+      ).rejects.toMatchObject({
+        status: 429,
+        skipKeyRetry: true,
+      });
+
+      expect(attemptedKeys).toHaveLength(1); // Did not redundantly try key-2
+    });
+
+    test('callModel enforces per-model timeout and aborts when timeout duration expires', async () => {
+      process.env.GEMINI_API_KEYS = 'key-timeout-test';
+
+      global.fetch = jest.fn().mockImplementation((url, opts) => {
+        return new Promise((resolve, reject) => {
+          opts.signal.addEventListener('abort', () => {
+            const err = new Error('The operation was aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        });
+      });
+
+      await expect(
+        gemini.callModel('gemini-3.8-flash', { contents: [] }, 50)
+      ).rejects.toThrow();
+    });
   });
 });
+
 

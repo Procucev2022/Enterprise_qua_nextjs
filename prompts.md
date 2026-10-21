@@ -3199,3 +3199,9 @@ Can you try this fix via Zero-Null Compact Prompt approach only
 ```text
 Please proceed with all suggestion except model change.
 ```
+
+### 2026-10-21T19:11:52+05:30
+
+```text
+@[TerminalName: node, ProcessId: 34424] Again it took 6.5 minute, anyway to speed up the gemini extraction?
+```

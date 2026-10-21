@@ -1020,6 +1020,17 @@ async function callModel(
           if (cooldownMs > 0) {
             markKeyCooldown(apiKey, cooldownMs);
           }
+          if (/exceeded your current quota|check your plan and billing/i.test(detail)) {
+            logger.warn(
+              `Gemini model ${model} reached project-level quota limit (${status}). Skipping redundant key attempts and failing over to next model immediately.`,
+              { model, keyIndex: keyIdx + 1, totalKeys: keys.length },
+              'GEMINI'
+            );
+            const err = new Error(errorMsg);
+            err.status = status;
+            err.skipKeyRetry = true;
+            throw err;
+          }
           logger.warn(
             `Gemini API ${keyLabel} reached quota/rate limit (HTTP ${status}). Marked unavailable for ${cooldownMs}ms cooldown. Failing over to next key...`,
             { keyIndex: keyIdx + 1, totalKeys: keys.length, model, status },
