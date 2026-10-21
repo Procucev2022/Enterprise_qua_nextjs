@@ -716,6 +716,8 @@ export interface VendorOpportunity {
   buyerAccountId?: string | null;
   buyerDetailsHidden?: boolean;
   buyerDetailsHiddenUntil?: string;
+  sourcingMode?: string;
+  category?: string;
 }
 
 export interface AuditLogEntry {

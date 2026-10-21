@@ -116,21 +116,14 @@ export default function SpendDashboard({
 
   return (
     <div className="space-y-6 animate-fade-in pb-10">
-      {/* Title & Back button */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <button
-            onClick={onBackToKanban}
-            className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white mb-2 transition-colors font-medium"
-          >
-            <ArrowLeft size={14} /> Back to Operational Monitoring Kanban
-          </button>
-          <div>
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-              Mode Performance & RFQ Analytics Dashboard
-            </h1>
-          </div>
-        </div>
+      {/* Back button */}
+      <div className="flex items-center justify-between pb-1">
+        <button
+          onClick={onBackToKanban}
+          className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white transition-colors font-medium"
+        >
+          <ArrowLeft size={14} /> Back to Operational Monitoring Kanban
+        </button>
       </div>
 
       {/* Top KPI Metric Cards (Non-Spend) */}

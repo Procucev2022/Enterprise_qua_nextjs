@@ -267,38 +267,15 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-5">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-indigo-600/10 dark:bg-indigo-500/20 rounded-lg text-indigo-600 dark:text-indigo-400">
-              <Building2 className="w-6 h-6" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">
-                  Buyers Directory
-                </h1>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300">
-                  {totalBuyers} Enterprises
-                </span>
-              </div>
-              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-                Complete directory of enterprise buyer accounts, sourcing history, credit utilization, and communication logs.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={handleExportDirectory}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-sm transition-all"
-          >
-            <Download className="w-4 h-4" />
-            <span>Export Directory</span>
-          </button>
-        </div>
+      {/* Top Actions */}
+      <div className="flex items-center justify-end gap-2.5 pb-1">
+        <button
+          onClick={handleExportDirectory}
+          className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-sm transition-all"
+        >
+          <Download className="w-4 h-4" />
+          <span>Export Directory</span>
+        </button>
       </div>
 
       {/* KPI Cards */}

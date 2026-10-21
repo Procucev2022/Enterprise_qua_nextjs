@@ -128,6 +128,7 @@ function canVendorViewRfq(vendor, rfq) {
   const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
   const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
   const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
+  const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
 
   if (storeService.isProcucevVendor(vendor)) {
     if (isV0 || isV2) {

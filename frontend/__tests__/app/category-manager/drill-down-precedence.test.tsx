@@ -69,7 +69,7 @@ describe('Category Manager drill-down collapse precedence', () => {
       // AppProvider's async bootstrap fetch, not an instantly-available
       // hardcoded list — wait for it before interacting with the dropdowns.
       await waitFor(() => {
-        expect(screen.getByText(/Buyer Wise Command Console & Analytics/i)).toBeInTheDocument();
+        expect(screen.getByText(/Active Context Selection:/i)).toBeInTheDocument();
         expect(screen.getAllByText(BUYER_COMPANY_LT).length).toBeGreaterThan(0);
       });
     }
@@ -157,7 +157,7 @@ describe('Category Manager drill-down collapse precedence', () => {
       const onNavigateToMatrix = jest.fn();
       renderWithProvider(<VendorConsole onNavigateToMatrix={onNavigateToMatrix} />);
       await waitFor(() => {
-        expect(screen.getByText(/Vendor Summary & Performance Analytics/i)).toBeInTheDocument();
+        expect(screen.getByText(/Active Context Selection:/i)).toBeInTheDocument();
         // Vendor cards now depend on the real vendor directory loading via
         // AppProvider's async bootstrap fetch, not an instantly-available
         // hardcoded list — wait for it before interacting with the dropdowns.
