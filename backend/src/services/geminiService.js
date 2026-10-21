@@ -1247,7 +1247,7 @@ async function extractLineItems(input = {}) {
   const isBudgetDisabled = GEMINI_CONFIG.DISABLE_TIMEOUT || process.env.GEMINI_DISABLE_TIMEOUT === 'true';
   const deadline = isBudgetDisabled
     ? null
-    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 300000);
+    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 900000);
   const tabularItems = (trimmedText && (trimmedText.includes('SHEET:') || trimmedText.includes('|')))
     ? extractSpreadsheetLineItems(trimmedText)
     : [];
@@ -1334,8 +1334,8 @@ async function extractLineItems(input = {}) {
     );
 
     try {
-      const perModelTimeout = GEMINI_CONFIG.PER_MODEL_TIMEOUT_MS || 30000;
-      const parsed = await callModel(model, requestBody, perModelTimeout, deadline, requestKeyIndex);
+      // No per-model timeout: the shared extraction budget (deadline) is the only cancellation boundary.
+      const parsed = await callModel(model, requestBody, 0, deadline, requestKeyIndex);
       let lineItems = toRawLineItems(parsed);
 
       if (tabularItems.length > lineItems.length) {
@@ -1507,7 +1507,7 @@ async function generateJson(input = {}) {
   const isBudgetDisabled = GEMINI_CONFIG.DISABLE_TIMEOUT || process.env.GEMINI_DISABLE_TIMEOUT === 'true';
   const deadline = isBudgetDisabled
     ? null
-    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 300000);
+    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 900000);
 
   const chain = resolveModelChain();
   const startModelIndex = activeModelIndex;

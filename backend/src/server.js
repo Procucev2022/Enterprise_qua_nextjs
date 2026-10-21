@@ -85,6 +85,10 @@ async function bootstrapServer(port = PORT) {
   });
 
   const server = app.listen(port);
+  // Allow long-running operations (such as 15-minute bulk document extractions)
+  // to complete without Node.js closing the connection (default is 5 minutes).
+  server.requestTimeout = Math.max(server.requestTimeout || 300000, 16 * 60 * 1000);
+  server.headersTimeout = Math.max(server.headersTimeout || 330000, 17 * 60 * 1000);
   // Started after the store is hydrated: ingesting a requisition needs the buyer
   // accounts loaded to attribute it to one. No-ops unless a mailbox is configured
   // and EMAIL_GATEWAY_ENABLED is true.

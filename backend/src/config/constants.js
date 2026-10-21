@@ -622,9 +622,9 @@ const RFQ_CATEGORY_CLASSIFICATION = {
 // of multiple keys in GEMINI_API_KEY with round-robin sequential rotation per request
 // to expand rate limits on free tier accounts.
 // Gemini extraction policy is intentionally code-owned rather than environment
-// configurable: one operation may run for up to five minutes, with fixed input
+// configurable: one operation may run for up to fifteen minutes, with fixed input
 // limits that protect memory and provider payload size.
-const GEMINI_TOTAL_BUDGET_MS = Number(process.env.GEMINI_TOTAL_BUDGET_MS || 5 * 60 * 1000);
+const GEMINI_TOTAL_BUDGET_MS = Number(process.env.GEMINI_TOTAL_BUDGET_MS || 15 * 60 * 1000);
 const GEMINI_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const GEMINI_MAX_DOCUMENT_TEXT_CHARS = 300000;
 
@@ -672,7 +672,7 @@ const GEMINI_CONFIG = {
   // Kept as a mutable compatibility field for tests and old callers, but zero
   // means there is no per-model timeout. Production uses only TOTAL_BUDGET_MS.
   REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 0),
-  PER_MODEL_TIMEOUT_MS: Number(process.env.GEMINI_PER_MODEL_TIMEOUT_MS || 30000),
+  PER_MODEL_TIMEOUT_MS: Number(process.env.GEMINI_PER_MODEL_TIMEOUT_MS || 0),
   TOTAL_BUDGET_MS: GEMINI_TOTAL_BUDGET_MS,
   MIN_ATTEMPT_MS: 0,
   MAX_DOCUMENT_BYTES: GEMINI_MAX_DOCUMENT_BYTES,

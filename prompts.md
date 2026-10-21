@@ -3205,3 +3205,27 @@ Please proceed with all suggestion except model change.
 ```text
 @[TerminalName: node, ProcessId: 34424] Again it took 6.5 minute, anyway to speed up the gemini extraction?
 ```
+
+### 2026-10-21T19:28:41+05:30
+
+```text
+Please undo the last change, also don't commit any change your self , first i need to review the change.
+```
+
+### 2026-10-21T19:34:28+05:30
+
+```text
+Remove timeout per model. I think overall timeout is there which is more than enough
+```
+
+### 2026-10-21T19:53:26+05:30
+
+```text
+@[TerminalName: node, ProcessId: 34424] Any specific reason, why it took too long for gemini ai extraction. please check terminal logs
+```
+
+### 2026-10-21T20:01:49+05:30
+
+```text
+increase overall timeout to 15 minute.
+```
