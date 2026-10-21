@@ -3050,3 +3050,88 @@ Let's have complete operation time limit to 5 minute only. Also can we give re-t
 ```text
 Remove this gemini timeout related env variable, gemini size related from here, move it to constants or something file, We don't need these in env
 ```
+
+### 2026-10-21T12:50:49+05:30
+
+```text
+Are gemini code hardcoded in software ? or they are using from cloudflare env variables
+```
+
+### 2026-10-21T12:51:15+05:30
+
+```text
+Are gemini API keys hardcoded in software ? or they are getting using from cloudflare env variables
+```
+
+### 2026-10-21T12:57:14+05:30
+
+```text
+Why there is a concept of 2 gemini api key env variables. 
+"GEMINI_API_KEY" & "GEMINI_BACKUP_KEYS"
+
+Ideal behaviour should be 
+
+"Multiple Gemini API Keys Rotation: Support a comma-separated list of multiple Gemini API keys to expand rate limits on free tier accounts. Implement a round-robin strategy to cycle through each key sequentially for incoming requests. "
+```
+
+### 2026-10-21T13:01:10+05:30
+
+```text
+Please implement this functionality
+```
+
+### 2026-10-21T13:26:11+05:30
+
+```text
+Can we remove this "GEMINI_BACKUP_KEYS" variable from code
+```
+
+### 2026-10-21T13:37:41+05:30
+
+```text
+We have added gemini API key in @[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\backend\wrangler.jsonc] , 
+
+Why we have hardcoded these env in code, these should be taken from env file or something?
+```
+
+### 2026-10-21T13:57:11+05:30
+
+```text
+Can't see proper logs for gemini extraction process happening, can you add logs as detailed as possible, so that we can debug it later.
+```
+
+### 2026-10-21T14:09:43+05:30
+
+```text
+Gemini API extraction process is taking too much time for automatic RFQ details filling, Can you please check the code & confirm why is this issue, also add detailed to debug this issue & how we can optimize it?
+```
+
+### 2026-10-21T14:14:31+05:30
+
+```text
+Can't see the gemini logs in terminal@[TerminalName: node, ProcessId: 26024] ? What could be issue?
+```
+
+### 2026-10-21T14:49:17+05:30
+
+```text
+When i am running application locally, why the application is sending request to cloudflare deployed application. For local application, This should send to local backend only. for dev application, it should application request to dev backend application, for production application, it should send application request to production application, i think, the URL should be set in env file
+```
+
+### 2026-10-21T15:06:24+05:30
+
+```text
+update the gitignore file, env file need not be pushed in github
+```
+
+### 2026-10-21T15:31:00+05:30
+
+```text
+@[TerminalName: node, ProcessId: 26024] Gemini extraction took around 3.8 minute, why so long, can you analyse terminal logs & fix it.
+```
+
+### 2026-10-21T15:54:20+05:30
+
+```text
+Can we change the gemini model order to “Gemini 3.8 flash, gemini 3.7 flash, gemini 3.6flash, gemini 3.5flash, gemini 3.5 flash lite, gemini 3.1 flash lite”.
+```

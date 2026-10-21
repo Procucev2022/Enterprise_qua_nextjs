@@ -13,6 +13,18 @@ describe('apiFetchPatch', () => {
     }
   });
 
+  it('is a no-op when window is undefined (SSR)', () => {
+    const originalWindow = global.window;
+    // @ts-expect-error test-only deletion
+    delete global.window;
+    try {
+      const { installApiFetchPatch } = require('../lib/apiFetchPatch');
+      expect(() => installApiFetchPatch()).not.toThrow();
+    } finally {
+      global.window = originalWindow;
+    }
+  });
+
   it('is a no-op when NEXT_PUBLIC_BACKEND_URL is not set', () => {
     delete process.env.NEXT_PUBLIC_BACKEND_URL;
     const mockFetch = jest.fn();
@@ -49,8 +61,19 @@ describe('apiFetchPatch', () => {
     installApiFetchPatch();
 
     await window.fetch('https://fonts.googleapis.com/css');
-
     expect(mockFetch).toHaveBeenCalledWith('https://fonts.googleapis.com/css', undefined);
+
+    await window.fetch('/static/asset.png');
+    expect(mockFetch).toHaveBeenCalledWith('/static/asset.png', undefined);
+  });
+
+  it('handles window.fetch being undefined when patching', () => {
+    process.env.NEXT_PUBLIC_BACKEND_URL = 'https://backend.example.workers.dev';
+    // @ts-expect-error test-only deletion
+    delete window.fetch;
+
+    const { installApiFetchPatch } = require('../lib/apiFetchPatch');
+    expect(() => installApiFetchPatch()).not.toThrow();
   });
 
   it('only patches window.fetch once even if called again', () => {
@@ -76,5 +99,17 @@ describe('apiFetchPatch', () => {
 
     await window.fetch(new URL('https://example.com/other'));
     expect(mockFetch).toHaveBeenCalled();
+  });
+
+  it('strips trailing slashes from NEXT_PUBLIC_BACKEND_URL to prevent double slashes', async () => {
+    process.env.NEXT_PUBLIC_BACKEND_URL = 'http://localhost:4000/';
+    const mockFetch = jest.fn().mockResolvedValue({ ok: true });
+    window.fetch = mockFetch as unknown as typeof window.fetch;
+
+    const { installApiFetchPatch } = require('../lib/apiFetchPatch');
+    installApiFetchPatch();
+
+    await window.fetch('/api/rfqs/extract', { method: 'POST' });
+    expect(mockFetch).toHaveBeenCalledWith('http://localhost:4000/api/rfqs/extract', { method: 'POST' });
   });
 });

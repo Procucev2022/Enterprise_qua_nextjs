@@ -104,21 +104,30 @@ function isConfigured() {
   return resolveApiKeys().length > 0;
 }
 
-/** Resolve API keys pool from GEMINI_CONFIG.API_KEY and GEMINI_CONFIG.BACKUP_KEYS (supports comma-separated multiple keys). */
+/**
+ * Resolves the pool of API keys from GEMINI_CONFIG.API_KEY (supports a comma-separated list
+ * of multiple keys to expand rate limits on free tier accounts).
+ * Deduplicates and returns an array of trimmed, non-empty keys.
+ */
 function resolveApiKeys() {
   const raw = String(GEMINI_CONFIG.API_KEY || '').trim();
   if (!raw) return [];
-  const primaryKeys = raw
+  const keys = raw
     .split(',')
     .map((k) => k.trim())
     .filter(Boolean);
-  const backupRaw = String(GEMINI_CONFIG.BACKUP_KEYS || '').trim();
-  if (!backupRaw) return primaryKeys;
-  const backupKeys = backupRaw
-    .split(',')
-    .map((k) => k.trim())
-    .filter(Boolean);
-  return Array.from(new Set([...primaryKeys, ...backupKeys]));
+  return Array.from(new Set(keys));
+}
+
+/**
+ * Safely masks an API key for structured debugging logs without leaking credentials.
+ * Example: 'AQ.Ab8RN6LUTaZniq7...' -> 'AQ.Ab8...JGQ'
+ */
+function maskApiKey(key) {
+  if (!key || typeof key !== 'string') return 'none';
+  const trimmed = key.trim();
+  if (trimmed.length <= 8) return '***';
+  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
 }
 
 /**
@@ -459,6 +468,7 @@ function buildRequestBody({ documentText, inlineData, mimeType, fileName }) {
 }
 
 let activeKeyIndex = 0;
+let roundRobinKeyIndex = 0;
 const modelKeyIndices = new Map();
 let activeModelIndex = 0;
 function getQuotaDate() {
@@ -477,8 +487,8 @@ let lastFailoverTimestamp = 0;
 
 /**
  * Checks if a new day has arrived (or the TTL has expired) and automatically
- * restores activeModelIndex and activeKeyIndex to 0 so fresh daily quotas on the
- * primary model can be used.
+ * restores activeModelIndex, activeKeyIndex, and roundRobinKeyIndex to 0 so fresh daily
+ * quotas on the primary model can be used.
  */
 function checkDailyModelReset() {
   const today = getQuotaDate();
@@ -489,7 +499,7 @@ function checkDailyModelReset() {
   const isTtlExpired = lastFailoverTimestamp > 0 && now - lastFailoverTimestamp >= ttlMs;
 
   const hasRotatedModelKey = [...modelKeyIndices.values()].some((index) => index !== 0);
-  if ((isNewDay || isTtlExpired) && (activeModelIndex !== 0 || activeKeyIndex !== 0 || hasRotatedModelKey)) {
+  if ((isNewDay || isTtlExpired) && (activeModelIndex !== 0 || activeKeyIndex !== 0 || roundRobinKeyIndex !== 0 || hasRotatedModelKey)) {
     const chain = resolveModelChain();
     logger.info(
       `Gemini daily quota reset: restoring active model index from ${activeModelIndex} to 0 (${chain[0]}) and active key index to 0.`,
@@ -498,6 +508,7 @@ function checkDailyModelReset() {
     );
     activeModelIndex = 0;
     activeKeyIndex = 0;
+    roundRobinKeyIndex = 0;
     modelKeyIndices.clear();
     lastResetDate = today;
     lastFailoverTimestamp = 0;
@@ -509,6 +520,41 @@ function checkDailyModelReset() {
   return false;
 }
 
+/**
+ * Advances and returns the next sequential round-robin key index across incoming requests.
+ * Distributes requests evenly across multiple API keys to multiply available rate limits
+ * on free-tier accounts.
+ */
+function getNextRoundRobinKeyIndex() {
+  checkDailyModelReset();
+  const keys = resolveApiKeys();
+  if (keys.length === 0) return 0;
+  const currentIndex = ((roundRobinKeyIndex % keys.length) + keys.length) % keys.length;
+  roundRobinKeyIndex = (currentIndex + 1) % keys.length;
+  activeKeyIndex = currentIndex;
+  return currentIndex;
+}
+
+function getRoundRobinKeyIndex() {
+  checkDailyModelReset();
+  const keys = resolveApiKeys();
+  if (keys.length === 0) return 0;
+  return ((roundRobinKeyIndex % keys.length) + keys.length) % keys.length;
+}
+
+function setRoundRobinKeyIndex(idx) {
+  const keys = resolveApiKeys();
+  const total = keys.length || 1;
+  const normalized = Number(idx) || 0;
+  roundRobinKeyIndex = ((normalized % total) + total) % total;
+  activeKeyIndex = roundRobinKeyIndex;
+}
+
+function resetRoundRobinKeyIndex() {
+  roundRobinKeyIndex = 0;
+  activeKeyIndex = 0;
+}
+
 function getActiveKeyIndex() {
   checkDailyModelReset();
   return activeKeyIndex;
@@ -516,6 +562,7 @@ function getActiveKeyIndex() {
 
 function setActiveKeyIndex(idx) {
   activeKeyIndex = Number(idx) || 0;
+  roundRobinKeyIndex = activeKeyIndex;
   modelKeyIndices.clear();
   for (const model of resolveModelChain()) {
     modelKeyIndices.set(model, activeKeyIndex);
@@ -537,6 +584,7 @@ function setActiveModelIndex(idx) {
 function resetActiveModelIndex() {
   activeModelIndex = 0;
   activeKeyIndex = 0;
+  roundRobinKeyIndex = 0;
   modelKeyIndices.clear();
   lastFailoverTimestamp = 0;
   lastResetDate = getQuotaDate();
@@ -580,9 +628,16 @@ function getMinimumAttemptMs() {
 
 /**
  * Call one model, returning its parsed JSON or throwing so the caller can try
- * the next model in the chain. Supports multiple API keys with recursive loop failover.
+ * the next model in the chain. Supports multiple API keys with round-robin sequential rotation
+ * and recursive loop failover.
  */
-async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_TIMEOUT_MS, deadline = null) {
+async function callModel(
+  model,
+  requestBody,
+  timeoutMs = GEMINI_CONFIG.REQUEST_TIMEOUT_MS,
+  deadline = null,
+  preferredKeyIndex = null
+) {
   const url = `${GEMINI_CONFIG.BASE_URL}/${model}:generateContent`;
   const keys = resolveApiKeys();
   if (keys.length === 0) {
@@ -596,23 +651,36 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
       : keys.length
   );
   const chain = resolveModelChain();
-  const startKeyIndex = modelKeyIndices.has(model)
+  const startKeyIndex = preferredKeyIndex !== null && preferredKeyIndex !== undefined
+    ? Number(preferredKeyIndex)
+    : modelKeyIndices.has(model)
     ? modelKeyIndices.get(model)
     : chain.includes(model) ? 0 : activeKeyIndex;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (deadline && Date.now() >= deadline - getMinimumAttemptMs()) {
+      logger.warn(
+        `[GEMINI_API] Extraction time budget exhausted before trying key attempt ${attempt + 1}/${maxAttempts} for ${model}`,
+        { model, attempt: attempt + 1, maxAttempts },
+        'GEMINI'
+      );
       throw new Error(`Extraction time budget exhausted while trying API keys for ${model}`);
     }
 
     const keyIdx = (startKeyIndex + attempt) % keys.length;
     const apiKey = keys[keyIdx];
+    const maskedKey = maskApiKey(apiKey);
     const configuredTimeout = Number(timeoutMs);
     const perModelTimeout = Number.isFinite(configuredTimeout) && configuredTimeout > 0
       ? configuredTimeout
       : null;
     const deadlineRemaining = deadline ? deadline - Date.now() : null;
     if (deadlineRemaining !== null && deadlineRemaining <= 0) {
+      logger.warn(
+        `[GEMINI_API] Extraction time budget exhausted before request dispatch for ${model}`,
+        { model, keyIndex: keyIdx + 1, totalKeys: keys.length, maskedKey },
+        'GEMINI'
+      );
       throw new Error(`Extraction time budget exhausted while trying API keys for ${model}`);
     }
     // A positive timeout is supported for direct/test callers, but extraction
@@ -626,12 +694,38 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
     let operationBudgetExpired = false;
     const timer = requestTimeout && requestTimeout > 0
       ? setTimeout(() => {
-        operationBudgetExpired = perModelTimeout === null && Boolean(deadline);
+        operationBudgetExpired = Boolean(deadline && (perModelTimeout === null || deadlineRemaining <= perModelTimeout));
         controller.abort();
       }, requestTimeout)
       : null;
 
+    logger.info(
+      `[GEMINI_API] Dispatching request to ${model} (key ${keyIdx + 1}/${keys.length} [${maskedKey}], attempt ${attempt + 1}/${maxAttempts})`,
+      {
+        model,
+        keyIndex: keyIdx + 1,
+        totalKeys: keys.length,
+        maskedKey,
+        attempt: attempt + 1,
+        maxAttempts,
+        timeoutMs: requestTimeout,
+        url,
+      },
+      'GEMINI'
+    );
+    const startTime = Date.now();
+
     try {
+      const modelPayload = { ...requestBody };
+      if (modelPayload.generationConfig && !model.endsWith('-lite')) {
+        modelPayload.generationConfig = {
+          ...modelPayload.generationConfig,
+          thinkingConfig: {
+            thinkingBudget: 0,
+          },
+        };
+      }
+
       const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -639,18 +733,66 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
           // Header auth keeps the key out of the URL and therefore out of logs.
           'x-goog-api-key': apiKey,
         },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify(modelPayload),
         signal: controller.signal,
       });
 
+      const durationMs = Date.now() - startTime;
+
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
+        logger.warn(
+          `[GEMINI_API] Gemini ${model} HTTP ${res.status} ${res.statusText || ''} (${durationMs}ms) using key ${keyIdx + 1}/${keys.length} [${maskedKey}]`,
+          {
+            model,
+            status: res.status,
+            statusText: res.statusText,
+            durationMs,
+            keyIndex: keyIdx + 1,
+            totalKeys: keys.length,
+            maskedKey,
+            errorDetail: detail.slice(0, 1000),
+          },
+          'GEMINI'
+        );
         throw new Error(`Gemini ${model} responded ${res.status}: ${detail.slice(0, 200)}`);
       }
 
       const payload = await res.json();
-      const parsed = parseExtractionJson(extractResponseText(payload));
+      const responseText = extractResponseText(payload);
+      const promptTokens = payload?.usageMetadata?.promptTokenCount || null;
+      const candidateTokens = payload?.usageMetadata?.candidatesTokenCount || null;
+      const totalTokens = payload?.usageMetadata?.totalTokenCount || null;
+      const finishReason = payload?.candidates?.[0]?.finishReason || null;
+
+      logger.info(
+        `[GEMINI_API] Gemini ${model} HTTP 200 OK (${durationMs}ms, ${responseText.length} chars) using key ${keyIdx + 1}/${keys.length} [${maskedKey}]`,
+        {
+          model,
+          durationMs,
+          responseLength: responseText.length,
+          finishReason,
+          promptTokens,
+          candidateTokens,
+          totalTokens,
+          keyIndex: keyIdx + 1,
+          maskedKey,
+        },
+        'GEMINI'
+      );
+
+      const parsed = parseExtractionJson(responseText);
       if (!parsed) {
+        logger.warn(
+          `[GEMINI_API] Gemini ${model} returned no parseable JSON response (${durationMs}ms)`,
+          {
+            model,
+            durationMs,
+            rawSnippet: responseText.slice(0, 500),
+            rawLength: responseText.length,
+          },
+          'GEMINI'
+        );
         throw new Error(`Gemini ${model} returned no parseable JSON`);
       }
       modelKeyIndices.set(model, keyIdx);
@@ -658,21 +800,32 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
       if (attempt > 0) {
         logger.info(
           `Gemini failover succeeded with backup key ${keyIdx + 1}/${keys.length} for ${model}`,
-          { keyIndex: keyIdx + 1, totalKeys: keys.length, model },
+          { keyIndex: keyIdx + 1, totalKeys: keys.length, maskedKey, model },
           'GEMINI'
         );
       }
       return parsed;
     } catch (err) {
+      const durationMs = Date.now() - startTime;
       if (err.name === 'AbortError') {
         if (operationBudgetExpired) {
+          logger.warn(
+            `[GEMINI_API] Request to ${model} exceeded shared extraction time budget (${durationMs}ms)`,
+            { model, durationMs, budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS },
+            'GEMINI'
+          );
           throw new Error(`Gemini ${model} request exceeded the shared extraction time budget`);
         }
+        logger.warn(
+          `[GEMINI_API] Request to ${model} timed out or aborted (${durationMs}ms)`,
+          { model, durationMs, timeoutMs: requestTimeout },
+          'GEMINI'
+        );
         throw err;
       }
       logger.warn(
         `Gemini API key ${keyIdx + 1}/${keys.length} failed for ${model}: ${err.message}. Rotating to next key...`,
-        { keyIndex: keyIdx + 1, totalKeys: keys.length, model, error: err.message },
+        { keyIndex: keyIdx + 1, totalKeys: keys.length, maskedKey, model, durationMs, error: err.message },
         'GEMINI'
       );
       activeKeyIndex = (keyIdx + 1) % keys.length;
@@ -718,13 +871,39 @@ async function extractLineItems(input = {}) {
     error: null,
   };
 
+  const keys = resolveApiKeys();
+  const trimmedText = typeof documentText === 'string' ? documentText.trim() : '';
+  const hasInline = Boolean(inlineData);
+  const approxBytes = hasInline ? Math.floor((inlineData.length * 3) / 4) : 0;
+
+  logger.info(
+    `[GEMINI] Initiating line items extraction for "${fileName || 'unnamed document'}"`,
+    {
+      fileName: fileName || null,
+      mimeType: mimeType || null,
+      hasDocumentText: Boolean(trimmedText),
+      documentTextChars: trimmedText.length,
+      hasInlineData: hasInline,
+      approxBytes,
+      configuredKeysCount: keys.length,
+      activeModelIndex,
+      primaryModel: GEMINI_CONFIG.PRIMARY_MODEL,
+      budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS,
+    },
+    'GEMINI'
+  );
+
   if (!isConfigured()) {
-    logger.warn('Gemini extraction skipped: GEMINI_API_KEY is not set', {}, 'GEMINI');
+    logger.warn('Gemini extraction skipped: GEMINI_API_KEY is not set', { configuredKeysCount: keys.length }, 'GEMINI');
     return { ...base, status: EXTRACTION_STATUS.NOT_CONFIGURED };
   }
 
-  const trimmedText = typeof documentText === 'string' ? documentText.trim() : '';
   if (!trimmedText && !inlineData) {
+    logger.warn(
+      `[GEMINI] Extraction aborted: Document contains no readable text or inline data ("${fileName || 'unnamed'}")`,
+      { fileName },
+      'GEMINI'
+    );
     return { ...base, status: EXTRACTION_STATUS.NO_CONTENT };
   }
 
@@ -733,13 +912,30 @@ async function extractLineItems(input = {}) {
     ? extractSpreadsheetLineItems(trimmedText)
     : [];
 
+  if (tabularItems.length > 0) {
+    logger.info(
+      `[GEMINI] Tabular spreadsheet structure detected: pre-extracted ${tabularItems.length} candidate line items`,
+      { tabularItemsCount: tabularItems.length, fileName },
+      'GEMINI'
+    );
+  }
+
   if (inlineData) {
     if (!mimeType || !GEMINI_INLINE_MIME_TYPES.includes(mimeType)) {
+      logger.warn(
+        `[GEMINI] Extraction aborted: Unsupported mimeType "${mimeType}" for inline binary extraction`,
+        { fileName, mimeType, supportedTypes: GEMINI_INLINE_MIME_TYPES },
+        'GEMINI'
+      );
       return { ...base, status: EXTRACTION_STATUS.UNSUPPORTED_TYPE };
     }
     // base64 inflates by 4/3; compare the decoded size against the cap.
-    const approxBytes = Math.floor((inlineData.length * 3) / 4);
     if (approxBytes > GEMINI_CONFIG.MAX_DOCUMENT_BYTES) {
+      logger.warn(
+        `[GEMINI] Extraction aborted: Document size (${approxBytes} bytes) exceeds maximum cap (${GEMINI_CONFIG.MAX_DOCUMENT_BYTES} bytes)`,
+        { fileName, approxBytes, maxBytes: GEMINI_CONFIG.MAX_DOCUMENT_BYTES },
+        'GEMINI'
+      );
       return { ...base, status: EXTRACTION_STATUS.DOCUMENT_TOO_LARGE };
     }
   }
@@ -761,6 +957,21 @@ async function extractLineItems(input = {}) {
 
   const chain = resolveModelChain();
   const startModelIndex = activeModelIndex;
+  const requestKeyIndex = getNextRoundRobinKeyIndex();
+
+  logger.info(
+    `[GEMINI] Starting model fallback chain execution (active model: ${chain[startModelIndex]}, round-robin key index: ${requestKeyIndex + 1}/${keys.length})`,
+    {
+      modelsInChain: chain,
+      startModelIndex,
+      startingModel: chain[startModelIndex],
+      requestKeyIndex: requestKeyIndex + 1,
+      totalKeys: keys.length,
+      totalBudgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS,
+    },
+    'GEMINI'
+  );
+
   for (let attempt = 0; attempt < chain.length; attempt++) {
     const modelIdx = (startModelIndex + attempt) % chain.length;
     const model = chain[modelIdx];
@@ -770,21 +981,27 @@ async function extractLineItems(input = {}) {
       failures.push(`skipped ${model}: extraction time budget exhausted`);
       logger.warn(
         `Gemini extraction budget exhausted before trying ${model}`,
-        { budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS },
+        { budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS, remainingMs, attempt: attempt + 1, totalModels: chain.length },
         'GEMINI'
       );
       break;
     }
 
+    logger.info(
+      `[GEMINI] Attempting model ${attempt + 1}/${chain.length}: ${model} (remaining budget: ${remainingMs}ms)`,
+      { model, attempt: attempt + 1, totalModels: chain.length, remainingMs },
+      'GEMINI'
+    );
+
     try {
-      // No per-model timeout: the single shared deadline is the only cancellation.
-      const parsed = await callModel(model, requestBody, 0, deadline);
+      const perModelTimeout = GEMINI_CONFIG.PER_MODEL_TIMEOUT_MS || 30000;
+      const parsed = await callModel(model, requestBody, perModelTimeout, deadline, requestKeyIndex);
       let lineItems = toRawLineItems(parsed);
 
       if (tabularItems.length > lineItems.length) {
         logger.info(
           `Tabular extraction identified ${tabularItems.length} valid line items across worksheets vs ${lineItems.length} from ${model}. Preserving all valid items.`,
-          { tabularCount: tabularItems.length, modelCount: lineItems.length, model },
+          { tabularCount: tabularItems.length, modelCount: lineItems.length, model, fileName },
           'GEMINI'
         );
         lineItems = tabularItems;
@@ -797,7 +1014,14 @@ async function extractLineItems(input = {}) {
 
       logger.info(
         `Gemini ${model} extracted ${lineItems.length} line items from ${fileName || 'document'}`,
-        { model, itemCount: lineItems.length },
+        {
+          model,
+          fileName: fileName || null,
+          itemCount: lineItems.length,
+          documentTitle: parsed.documentTitle || null,
+          category: parsed.category || null,
+          estimatedBudget: normalizeAmount(parsed.estimatedBudget),
+        },
         'GEMINI'
       );
 
@@ -829,17 +1053,17 @@ async function extractLineItems(input = {}) {
       if (is503) {
         logger.warn(
           `Gemini model ${model} failed with 503 (overloaded). Failing over to fallback models...`,
-          { model, error: err.message },
+          { model, attempt: attempt + 1, totalModels: chain.length, error: err.message },
           'GEMINI'
         );
       } else if (is429) {
         logger.warn(
           `Gemini model ${model} failed with 429 (quota or rate limit reached). Failing over to fallback models...`,
-          { model, error: err.message },
+          { model, attempt: attempt + 1, totalModels: chain.length, error: err.message },
           'GEMINI'
         );
       } else {
-        logger.warn(`Gemini extraction attempt failed on ${model}`, { error: err.message }, 'GEMINI');
+        logger.warn(`Gemini extraction attempt failed on ${model}`, { model, attempt: attempt + 1, totalModels: chain.length, error: err.message }, 'GEMINI');
       }
     }
   }
@@ -859,9 +1083,22 @@ async function extractLineItems(input = {}) {
     );
   }
 
+  const failureStatus = resolveExtractionFailureStatus(failures);
+  logger.error(
+    `[GEMINI] Extraction failed across all ${chain.length} models in chain for "${fileName || 'document'}" (${failureStatus})`,
+    {
+      fileName,
+      totalModelsAttempted: chain.length,
+      failureCount: failures.length,
+      failures,
+      resolvedStatus: failureStatus,
+    },
+    'GEMINI'
+  );
+
   return {
     ...base,
-    status: resolveExtractionFailureStatus(failures),
+    status: failureStatus,
     error: failures.join(' | '),
   };
 }
@@ -884,12 +1121,26 @@ async function generateJson(input = {}) {
   checkDailyModelReset();
 
   const base = { data: null, model: null, error: null };
+  const keys = resolveApiKeys();
+
+  logger.info(
+    `[GEMINI] Initiating generateJson for "${label}"`,
+    {
+      label,
+      promptChars: typeof prompt === 'string' ? prompt.length : 0,
+      configuredKeysCount: keys.length,
+      activeModelIndex,
+      primaryModel: GEMINI_CONFIG.PRIMARY_MODEL,
+    },
+    'GEMINI'
+  );
 
   if (!isConfigured()) {
-    logger.warn(`Gemini ${label} skipped: GEMINI_API_KEY is not set`, {}, 'GEMINI');
+    logger.warn(`Gemini ${label} skipped: GEMINI_API_KEY is not set`, { label, configuredKeysCount: keys.length }, 'GEMINI');
     return { ...base, status: EXTRACTION_STATUS.NOT_CONFIGURED };
   }
   if (typeof prompt !== 'string' || prompt.trim() === '') {
+    logger.warn(`[GEMINI] ${label} aborted: prompt is empty or not a string`, { label }, 'GEMINI');
     return { ...base, status: EXTRACTION_STATUS.NO_CONTENT };
   }
 
@@ -906,6 +1157,21 @@ async function generateJson(input = {}) {
 
   const chain = resolveModelChain();
   const startModelIndex = activeModelIndex;
+  const requestKeyIndex = getNextRoundRobinKeyIndex();
+
+  logger.info(
+    `[GEMINI] Starting generateJson model fallback chain for "${label}" (active model: ${chain[startModelIndex]}, key index: ${requestKeyIndex + 1}/${keys.length})`,
+    {
+      label,
+      modelsInChain: chain,
+      startModelIndex,
+      startingModel: chain[startModelIndex],
+      requestKeyIndex: requestKeyIndex + 1,
+      totalKeys: keys.length,
+    },
+    'GEMINI'
+  );
+
   for (let attempt = 0; attempt < chain.length; attempt++) {
     const modelIdx = (startModelIndex + attempt) % chain.length;
     const model = chain[modelIdx];
@@ -913,13 +1179,24 @@ async function generateJson(input = {}) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0 || remainingMs < getMinimumAttemptMs()) {
       failures.push(`skipped ${model}: time budget exhausted`);
+      logger.warn(
+        `[GEMINI] ${label} budget exhausted before trying ${model}`,
+        { label, model, attempt: attempt + 1, totalModels: chain.length, remainingMs },
+        'GEMINI'
+      );
       break;
     }
 
+    logger.info(
+      `[GEMINI] Attempting ${label} via model ${attempt + 1}/${chain.length}: ${model} (remaining budget: ${remainingMs}ms)`,
+      { label, model, attempt: attempt + 1, totalModels: chain.length, remainingMs },
+      'GEMINI'
+    );
+
     try {
       // No per-model timeout: the single shared deadline is the only cancellation.
-      const parsed = await callModel(model, requestBody, 0, deadline);
-      logger.info(`Gemini ${model} completed ${label}`, { model }, 'GEMINI');
+      const parsed = await callModel(model, requestBody, 0, deadline, requestKeyIndex);
+      logger.info(`Gemini ${model} completed ${label}`, { model, label }, 'GEMINI');
       if (modelIdx !== activeModelIndex) {
         lastFailoverTimestamp = modelIdx > 0 ? Date.now() : 0;
       }
@@ -932,17 +1209,17 @@ async function generateJson(input = {}) {
       if (is503) {
         logger.warn(
           `Gemini ${label} model ${model} failed with 503 (overloaded). Failing over to fallback models...`,
-          { model, error: err.message },
+          { model, label, attempt: attempt + 1, totalModels: chain.length, error: err.message },
           'GEMINI'
         );
       } else if (is429) {
         logger.warn(
           `Gemini ${label} model ${model} failed with 429 (quota or rate limit reached). Failing over to fallback models...`,
-          { model, error: err.message },
+          { model, label, attempt: attempt + 1, totalModels: chain.length, error: err.message },
           'GEMINI'
         );
       } else {
-        logger.warn(`Gemini ${label} attempt failed on ${model}`, { error: err.message }, 'GEMINI');
+        logger.warn(`Gemini ${label} attempt failed on ${model}`, { model, label, attempt: attempt + 1, totalModels: chain.length, error: err.message }, 'GEMINI');
       }
     }
   }
@@ -956,7 +1233,14 @@ async function generateJson(input = {}) {
     lastFailoverTimestamp = Date.now();
   }
 
-  return { ...base, status: resolveExtractionFailureStatus(failures), error: failures.join(' | ') };
+  const failureStatus = resolveExtractionFailureStatus(failures);
+  logger.error(
+    `[GEMINI] ${label} failed across all ${chain.length} models (${failureStatus})`,
+    { label, totalModelsAttempted: chain.length, failureCount: failures.length, failures, resolvedStatus: failureStatus },
+    'GEMINI'
+  );
+
+  return { ...base, status: failureStatus, error: failures.join(' | ') };
 }
 
 function cleanEmailText(text = '') {
@@ -1255,6 +1539,10 @@ module.exports = {
   isConfigured,
   resolveModelChain,
   resolveApiKeys,
+  getNextRoundRobinKeyIndex,
+  getRoundRobinKeyIndex,
+  setRoundRobinKeyIndex,
+  resetRoundRobinKeyIndex,
   getActiveKeyIndex,
   setActiveKeyIndex,
   getActiveModelIndex,
