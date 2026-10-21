@@ -213,6 +213,54 @@ describe('Gemini document extraction service', () => {
       expect(rowsDoc[0].deliveryPincode).toBe('560001');
       expect(rowsDoc[0].deliveryLocation).toBe('Bangalore Plant');
     });
+
+    test('unpacks compact row arrays into full line item objects', () => {
+      const rows = gemini.toRawLineItems({
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+        items: [
+          ['Centrifugal Pump 500 GPM', 12, 'Units', 'SS316 impeller', 145000, 1740000, 'Kirloskar', 'Pumps', '2026-11-01', 'Dock 4'],
+          ['Hex Bolt M8x250', 50, 'PCS', 'Grade 8.8'],
+          ['', 10, 'Nos'], // Empty description should be filtered out
+          [null, 5], // Null description should be filtered out
+          ['Gate Valve', '25', 'Nos', '', '5000', '125000'],
+        ],
+      });
+
+      expect(rows).toHaveLength(3);
+      expect(rows[0]).toEqual({
+        itemName: 'Centrifugal Pump 500 GPM',
+        quantity: 12,
+        unit: 'Units',
+        technicalSpecs: 'SS316 impeller',
+        unitPrice: 145000,
+        totalPrice: 1740000,
+        brand: 'Kirloskar',
+        category: 'Pumps',
+        targetDate: '2026-11-01',
+        deliveryLocation: 'Dock 4',
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+      });
+
+      expect(rows[1]).toEqual({
+        itemName: 'Hex Bolt M8x250',
+        quantity: 50,
+        unit: 'PCS',
+        technicalSpecs: 'Grade 8.8',
+        category: '',
+        targetDate: '',
+        unitPrice: null,
+        totalPrice: null,
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+      });
+
+      expect(rows[2].itemName).toBe('Gate Valve');
+      expect(rows[2].quantity).toBe(25);
+      expect(rows[2].unitPrice).toBe(5000);
+      expect(rows[2].totalPrice).toBe(125000);
+    });
   });
 
   describe('buildRequestBody', () => {
@@ -2451,6 +2499,16 @@ describe('geminiService.generateJson', () => {
         const res = gemini.repairTruncatedJson(truncated);
         expect(res).not.toBeNull();
         expect(res.docTitle).toBe('Valid Title');
+      });
+
+      test('repairTruncatedJson salvages compact array rows when truncated midway through an item', () => {
+        const truncated = `{\n  "documentTitle": "RFQ Bulk 500",\n  "items": [\n    ["Ball Valve 2 inch", 10, "Nos", "SS316", 1200, 12000],\n    ["Gate Valve 4 inch", 5, "Nos", "Cast Iron", 4500, 22500],\n    ["Check Valve 1 inch", 20, "Nos", "SS304`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.documentTitle).toBe('RFQ Bulk 500');
+        expect(res.items).toHaveLength(2);
+        expect(res.items[0][0]).toBe('Ball Valve 2 inch');
+        expect(res.items[1][0]).toBe('Gate Valve 4 inch');
       });
     });
   });

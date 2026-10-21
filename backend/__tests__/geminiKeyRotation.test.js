@@ -62,6 +62,12 @@ describe('Gemini API Key Fallback, Cooldown & Automatic Rotation', () => {
       expect(keys).toEqual(['key-1', 'key-2', 'key-3', 'key-4']);
       expect(keys[0]).toBe('key-1');
     });
+
+    test('filters out invalid placeholder keys (e.g. AIzaSyC_2mDq... or keys with mD3Zq8mD)', () => {
+      process.env.GEMINI_API_KEYS = 'AIzaSyC_2mDqFAKEKEYmD3Zq8mD, key-valid-1, placeholder, key-valid-2';
+      const keys = gemini.resolveApiKeys();
+      expect(keys).toEqual(['key-valid-1', 'key-valid-2']);
+    });
   });
 
   describe('Key Cooldown Management', () => {

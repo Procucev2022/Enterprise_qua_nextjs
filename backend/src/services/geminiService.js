@@ -80,31 +80,23 @@ Return a SINGLE JSON object with this shape and no surrounding prose or markdown
   "deliveryPincode": "Optional postal code if stated",
   "estimatedBudget": 500000,
   "items": [
-    {
-      "itemDescription": "String, product/material name including size, dimension or model token (REQUIRED)",
-      "quantity": 25,
-      "unit": "Nos",
-      "specification": "Technical specification, grade, material or standard if stated",
-      "brand": "Manufacturer or brand if stated",
-      "category": "Item category if stated",
-      "targetDate": "YYYY-MM-DD if line has its own date",
-      "deliveryCity": "Destination city for this item if stated",
-      "deliveryState": "Destination state for this item if stated",
-      "deliveryPincode": "Destination pincode for this item if stated",
-      "deliveryLocation": "Destination location for this item if stated",
-      "unitPrice": 1200,
-      "totalPrice": 30000
-    }
+    ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice]
   ]
 }
 
-CRITICAL ZERO-NULL COMPACT RULES (MANDATORY FOR SPEED & TOKEN CONSERVATION):
-- STRICT ZERO-NULL POLICY: NEVER output keys with null, empty string, or undefined values.
-- Never output "brand": null, "unitPrice": null, "specification": null, "deliveryCity": null, etc.
-- ONLY include keys that have actual, non-empty extracted values from the document. Completely OMIT all absent or unstated fields.
-- Example: If an item in the document only has a description, quantity, and unit, output ONLY:
-  {"itemDescription": "Hex bolt M8x250", "quantity": 25, "unit": "PCS"}
-- This keeps the output ultra-compact, eliminates redundant token generation, and ensures lightning-fast extraction.
+CRITICAL COMPACT ROW ARRAY SPECIFICATION (MANDATORY FOR SPEED & TOKEN CONSERVATION):
+- Each item in "items" MUST be formatted as a compact array of values instead of an object with repeated field names:
+  ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice]
+- Field positions in each item array:
+  1. itemDescription (String, REQUIRED): Product or material name including size, dimension, bore or model token.
+  2. quantity (Number or null): Stated purchase quantity as a plain number. Never guess or default to 1. Return null if unstated.
+  3. unit (String or null): Unit of measure (e.g. "Nos", "Mtr", "Set", "Kg", "Units") if stated.
+  4. specification (String or null): Technical specifications, material grade, standard, rating or details if stated.
+  5. unitPrice (Number or null): Stated unit price as a plain number if stated.
+  6. totalPrice (Number or null): Stated line total price as a plain number if stated.
+- Optional trailing elements if stated in document: [..., brand, category, targetDate, deliveryLocation].
+- Trailing nulls at the end of the item array may be omitted to save tokens (e.g. ["Hex bolt M8x250", 25, "PCS"]).
+- This array format eliminates thousands of repetitive boilerplate tokens and dramatically accelerates extraction.
 
 If the document contains no procurement line items at all, return {"items": []}.`;
 
@@ -127,13 +119,14 @@ function maskApiKey(key) {
 /** Resolve API keys pool from GEMINI_CONFIG.API_KEYS, GEMINI_CONFIG.API_KEY, numbered env vars, and GEMINI_CONFIG.BACKUP_KEYS. */
 function resolveApiKeys() {
   const keys = [];
+  const isInvalidPlaceholder = (k) => typeof k === 'string' && (k.includes('mD3Zq8mD') || k === 'placeholder' || k.startsWith('AIzaSyC_2mDq'));
   const addKey = (val) => {
     if (!val) return;
     if (Array.isArray(val)) {
       val.forEach(addKey);
       return;
     }
-    String(val).split(',').map((k) => k.trim()).filter(Boolean).forEach((k) => keys.push(k));
+    String(val).split(',').map((k) => k.trim()).filter((k) => k && !isInvalidPlaceholder(k)).forEach((k) => keys.push(k));
   };
 
   const poolKeys = (GEMINI_CONFIG.API_KEYS !== undefined && GEMINI_CONFIG.API_KEYS !== '' && (!Array.isArray(GEMINI_CONFIG.API_KEYS) || GEMINI_CONFIG.API_KEYS.length > 0))
@@ -220,10 +213,10 @@ function repairTruncatedJson(candidate) {
     const arrayStart = itemsKeyMatch.index + itemsKeyMatch[0].length;
     let searchPos = text.length;
     while (searchPos > arrayStart) {
-      const lastCloseBrace = text.lastIndexOf('}', searchPos);
-      if (lastCloseBrace <= arrayStart) break;
+      const lastClose = Math.max(text.lastIndexOf('}', searchPos), text.lastIndexOf(']', searchPos));
+      if (lastClose <= arrayStart) break;
 
-      const prefix = text.slice(0, lastCloseBrace + 1);
+      const prefix = text.slice(0, lastClose + 1);
       const testCandidate = prefix.replace(/,\s*$/, '') + '\n  ]\n}';
       try {
         const parsed = JSON.parse(testCandidate);
@@ -243,7 +236,7 @@ function repairTruncatedJson(candidate) {
           }
         } catch {}
       }
-      searchPos = lastCloseBrace - 1;
+      searchPos = lastClose - 1;
     }
   }
 
@@ -274,7 +267,10 @@ function repairTruncatedJson(candidate) {
         openBraces--;
         lastSafePos = i;
       } else if (ch === '[') openBrackets++;
-      else if (ch === ']') openBrackets--;
+      else if (ch === ']') {
+        openBrackets--;
+        lastSafePos = i;
+      }
     }
   }
 
@@ -350,6 +346,28 @@ function toRawLineItems(parsed) {
 
   return items
     .map((item) => {
+      if (Array.isArray(item)) {
+        const [rawDesc, rawQty, rawUnit, rawSpec, rawUnitPrice, rawTotalPrice, rawBrand, rawCat, rawDate, rawLoc] = item;
+        const itemName = typeof rawDesc === 'string' ? rawDesc.trim() : (rawDesc !== null && rawDesc !== undefined ? String(rawDesc).trim() : '');
+        if (!itemName) return null;
+        const row = {
+          itemName,
+          quantity: typeof rawQty === 'number' && Number.isFinite(rawQty) ? rawQty : parseValidQuantity(rawQty),
+          unit: typeof rawUnit === 'string' ? rawUnit.trim() : '',
+          technicalSpecs: typeof rawSpec === 'string' ? rawSpec.trim() : '',
+          category: typeof rawCat === 'string' ? rawCat.trim() : '',
+          targetDate: typeof rawDate === 'string' && rawDate.trim() ? rawDate.trim() : docDate,
+          unitPrice: normalizeAmount(rawUnitPrice),
+          totalPrice: normalizeAmount(rawTotalPrice),
+        };
+        if (rawBrand) row.brand = String(rawBrand).trim();
+        if (rawLoc || parsed?.deliveryLocation) row.deliveryLocation = String(rawLoc || parsed.deliveryLocation).trim();
+        if (parsed?.deliveryCity) row.deliveryCity = String(parsed.deliveryCity).trim();
+        if (parsed?.deliveryState) row.deliveryState = String(parsed.deliveryState).trim();
+        if (parsed?.deliveryPincode) row.deliveryPincode = String(parsed.deliveryPincode).trim();
+        return row;
+      }
+
       const row = {
         itemName: typeof item?.itemDescription === 'string' ? item.itemDescription.trim() : '',
         quantity: item?.quantity,
@@ -377,7 +395,7 @@ function toRawLineItems(parsed) {
 
       return row;
     })
-    .filter((item) => item.itemName !== '');
+    .filter((item) => item !== null && item.itemName !== '');
 }
 
 /**
