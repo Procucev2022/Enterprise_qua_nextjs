@@ -65,44 +65,46 @@ DESCRIPTION vs SPECIFICATION
 
 MONETARY VALUES
 - Report money as a plain number with no currency symbol, thousands separator or words. "Rs. 1,45,000/-" becomes 145000.
-- DO NOT calculate, estimate or infer a price that is not printed in the document. Return null instead.
-- "estimatedBudget" is only for a stated overall value such as a grand total, total amount, estimated value or budget ceiling. If the document only prices individual lines, leave it null; the totals are derived from those lines instead.
+- DO NOT calculate, estimate or infer a price that is not printed in the document. Omit unstated prices entirely; never invent or calculate them.
+- "estimatedBudget" is only for a stated overall value such as a grand total, total amount, estimated value or budget ceiling. If the document only prices individual lines, omit "estimatedBudget".
 
-Return a SINGLE JSON object with EXACTLY this shape and no surrounding prose or markdown:
+OUTPUT JSON SPECIFICATION:
+Return a SINGLE JSON object with this shape and no surrounding prose or markdown:
 {
-  "documentTitle": "String, a short title for the overall requirement, or null",
-  "category": "String, the overall category if stated, copied exactly from the CATEGORY LIST, or null if no listed category is stated",
-  "deliveryDate": "String in YYYY-MM-DD if a delivery or required-by date is stated, else null",
-  "deliveryLocation": "String, overall delivery location or destination if stated, or null",
-  "deliveryCity": "String, overall delivery city if stated, or null",
-  "deliveryState": "String, overall delivery state if stated, or null",
-  "deliveryPincode": "String, overall delivery pincode or postal code if stated, or null",
-  "estimatedBudget": "Number, the overall stated total value or budget of the requirement, or null",
+  "documentTitle": "Optional string, short title for overall requirement if stated",
+  "category": "Optional string, overall category copied exactly from the CATEGORY LIST if stated",
+  "deliveryDate": "Optional string in YYYY-MM-DD if overall delivery date is stated",
+  "deliveryLocation": "Optional destination string if stated",
+  "deliveryCity": "Optional destination city if stated",
+  "deliveryState": "Optional destination state if stated",
+  "deliveryPincode": "Optional postal code if stated",
+  "estimatedBudget": 500000,
   "items": [
     {
-      "itemDescription": "String, the product or material name including any size, dimension or model token that identifies it. Never an empty string.",
-      "quantity": "Number, the purchase quantity exactly as stated, or null if not stated",
-      "unit": "String, unit of measure as stated e.g. Nos, Units, Meters, Kg, Sets, or null",
-      "specification": "String, technical specification, grade, material or standard as stated, or null",
-      "brand": "String, brand or manufacturer if stated, or null",
-      "category": "String, item level category if stated, or null",
-      "targetDate": "String in YYYY-MM-DD if this line has its own date, else null",
-      "deliveryCity": "String, destination city for this item if stated, else null",
-      "deliveryState": "String, destination state for this item if stated, else null",
-      "deliveryPincode": "String, destination pincode for this item if stated, else null",
-      "deliveryLocation": "String, destination location for this item if stated, else null",
-      "unitPrice": "Number, the stated rate or price for ONE unit of this line, or null",
-      "totalPrice": "Number, the stated line total or amount for this line, or null"
+      "itemDescription": "String, product/material name including size, dimension or model token (REQUIRED)",
+      "quantity": 25,
+      "unit": "Nos",
+      "specification": "Technical specification, grade, material or standard if stated",
+      "brand": "Manufacturer or brand if stated",
+      "category": "Item category if stated",
+      "targetDate": "YYYY-MM-DD if line has its own date",
+      "deliveryCity": "Destination city for this item if stated",
+      "deliveryState": "Destination state for this item if stated",
+      "deliveryPincode": "Destination pincode for this item if stated",
+      "deliveryLocation": "Destination location for this item if stated",
+      "unitPrice": 1200,
+      "totalPrice": 30000
     }
   ]
 }
 
-COMPACT OUTPUT RULES (CRITICAL FOR SPEED AND AVOIDING TOKEN LIMITS):
-- DO NOT return keys whose value is null, empty or not stated in the document.
-- Only include fields in the output that have actual extracted values. Omit all null or undefined fields from both the document object and item objects.
-- Example: If an item only has description, quantity and unit, output only:
+CRITICAL ZERO-NULL COMPACT RULES (MANDATORY FOR SPEED & TOKEN CONSERVATION):
+- STRICT ZERO-NULL POLICY: NEVER output keys with null, empty string, or undefined values.
+- Never output "brand": null, "unitPrice": null, "specification": null, "deliveryCity": null, etc.
+- ONLY include keys that have actual, non-empty extracted values from the document. Completely OMIT all absent or unstated fields.
+- Example: If an item in the document only has a description, quantity, and unit, output ONLY:
   {"itemDescription": "Hex bolt M8x250", "quantity": 25, "unit": "PCS"}
-- This keeps the output compact, ultra-fast, and prevents output token exhaustion.
+- This keeps the output ultra-compact, eliminates redundant token generation, and ensures lightning-fast extraction.
 
 If the document contains no procurement line items at all, return {"items": []}.`;
 
@@ -212,8 +214,8 @@ function repairTruncatedJson(candidate) {
     return JSON.parse(text);
   } catch {}
 
-  // 1. Array-level truncation repair: look for "items" array
-  const itemsKeyMatch = text.match(/"items"\s*:\s*\[/);
+  // 1. Array-level truncation repair: look for "items" or "lineItems" array
+  const itemsKeyMatch = text.match(/"(?:items|lineItems)"\s*:\s*\[/);
   if (itemsKeyMatch && typeof itemsKeyMatch.index === 'number') {
     const arrayStart = itemsKeyMatch.index + itemsKeyMatch[0].length;
     let searchPos = text.length;
@@ -225,14 +227,18 @@ function repairTruncatedJson(candidate) {
       const testCandidate = prefix.replace(/,\s*$/, '') + '\n  ]\n}';
       try {
         const parsed = JSON.parse(testCandidate);
-        if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items) && parsed.items.length > 0) {
+        const candidateItems = parsed?.items || parsed?.lineItems;
+        if (parsed && typeof parsed === 'object' && Array.isArray(candidateItems) && candidateItems.length > 0) {
+          if (!parsed.items) parsed.items = candidateItems;
           return parsed;
         }
       } catch {
         try {
           const cleaned = testCandidate.replace(/,(\s*[}\]])/g, '$1');
           const parsed = JSON.parse(cleaned);
-          if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items) && parsed.items.length > 0) {
+          const candidateItems = parsed?.items || parsed?.lineItems;
+          if (parsed && typeof parsed === 'object' && Array.isArray(candidateItems) && candidateItems.length > 0) {
+            if (!parsed.items) parsed.items = candidateItems;
             return parsed;
           }
         } catch {}
@@ -337,7 +343,9 @@ function parseExtractionJson(text) {
  * documented default the Java service used, rather than the model inventing one.
  */
 function toRawLineItems(parsed) {
-  const items = Array.isArray(parsed?.items) ? parsed.items : [];
+  const items = Array.isArray(parsed?.items)
+    ? parsed.items
+    : (Array.isArray(parsed?.lineItems) ? parsed.lineItems : []);
   const docDate = typeof parsed?.deliveryDate === 'string' ? parsed.deliveryDate.trim() : '';
 
   return items
@@ -1280,7 +1288,7 @@ async function extractLineItems(input = {}) {
     const remainingMs = deadline !== null ? deadline - Date.now() : 999999;
     if (deadline !== null) {
       if (remainingMs <= 0 || remainingMs < getMinimumAttemptMs()) {
-        failures.push(`skipped ${model}: extraction time budget exhausted`);
+        failures.push(`skipped ${model}: shared extraction time budget exhausted`);
         logger.warn(
           `Gemini extraction budget exhausted before trying ${model}`,
           { budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS, remainingMs, attempt: attempt + 1, totalModels: chain.length },

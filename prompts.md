@@ -3169,3 +3169,21 @@ Check the logs, Still gemini extraction taking too much time, Can you tell what 
 ```text
 Please implement these fixes
 ```
+
+### 2026-10-21T17:58:13+05:30
+
+```text
+@[TerminalName: node, ProcessId: 34424] Still gemini extraction taking too much time, can you check why?
+```
+
+### 2026-10-21T18:09:34+05:30
+
+```text
+@[TerminalName: node, ProcessId: 34424] Still gemini extraction taking too much time around 3.3 minute in last run,  can you check why? Please check terminal logs
+```
+
+### 2026-10-21T18:13:59+05:30
+
+```text
+Can you try this fix via Zero-Null Compact Prompt approach only
+```
