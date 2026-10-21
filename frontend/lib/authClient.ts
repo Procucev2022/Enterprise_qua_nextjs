@@ -191,9 +191,30 @@ class AuthClient {
    * token is reported as an expired session rather than posted and refused, since
    * the endpoint requires authentication.
    */
-  public async changePassword(currentPassword: string, newPassword: string): Promise<AuthResponse> {
+  public async changePassword(
+    currentPasswordOrCode: string,
+    newPassword: string,
+    codeOrOptions?: string | { code?: string; resetToken?: string }
+  ): Promise<AuthResponse> {
     if (!this.token) {
       return { success: false, error: UI_STRINGS.auth.sessionExpired };
+    }
+
+    const payload: { newPassword: string; currentPassword?: string; code?: string; resetToken?: string } = {
+      newPassword,
+    };
+    if (typeof codeOrOptions === 'string') {
+      payload.code = codeOrOptions;
+    } else if (codeOrOptions && typeof codeOrOptions === 'object') {
+      if (codeOrOptions.code) payload.code = codeOrOptions.code;
+      if (codeOrOptions.resetToken) payload.resetToken = codeOrOptions.resetToken;
+    }
+    if (currentPasswordOrCode) {
+      if (/^\d{6}$/.test(currentPasswordOrCode.trim())) {
+        payload.code = currentPasswordOrCode.trim();
+      } else {
+        payload.currentPassword = currentPasswordOrCode;
+      }
     }
 
     let res: Response;
@@ -204,7 +225,7 @@ class AuthClient {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${this.token}`,
         },
-        body: JSON.stringify({ currentPassword, newPassword }),
+        body: JSON.stringify(payload),
       });
     } catch {
       // Fail closed: the password state on the server is unknown, so the caller

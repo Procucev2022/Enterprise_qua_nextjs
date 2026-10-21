@@ -1155,7 +1155,7 @@ async function extractLineItems(input = {}) {
     const remainingMs = deadline !== null ? deadline - Date.now() : 999999;
     if (deadline !== null) {
       if (remainingMs <= 0 || remainingMs < getMinimumAttemptMs()) {
-        failures.push(`skipped ${model}: extraction time budget exhausted`);
+        failures.push(`skipped ${model}: extraction time budget exhausted: request exceeded the shared extraction time budget`);
         logger.warn(
           `Gemini extraction budget exhausted before trying ${model}`,
           { budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS, remainingMs, attempt: attempt + 1, totalModels: chain.length },

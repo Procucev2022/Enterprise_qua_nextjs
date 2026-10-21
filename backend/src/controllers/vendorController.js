@@ -175,20 +175,25 @@ async function getVendors(req, res, next) {
 
     let vendors = await storeService.getVendors(buyerId);
     if (search) {
-      const q = String(search).toLowerCase();
+      const q = String(search).toLowerCase().trim();
       vendors = vendors.filter((v) =>
         [
           v.name,
           v.email,
-          v.majorCategory,
-          ...(v.minorCategories || []),
           v.contactPerson,
           v.contact,
           v.location,
           v.city,
           v.deliveryLocation,
-        ].some((field) =>
-          String(field || '').toLowerCase().includes(q)
+        ].some((field) => String(field || '').toLowerCase().includes(q)) ||
+        (q.length <= 3
+          ? String(v.majorCategory || v.category || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
+          : String(v.majorCategory || v.category || '').toLowerCase().includes(q)
+        ) ||
+        (v.minorCategories || []).some((m) =>
+          q.length <= 3
+            ? String(m || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
+            : String(m || '').toLowerCase().includes(q)
         )
       );
     }
@@ -197,7 +202,10 @@ async function getVendors(req, res, next) {
       vendors = vendors.filter((v) => String(v.email || '').toLowerCase().includes(eq));
     }
     if (category) {
-      vendors = vendors.filter((v) => v.majorCategory === category);
+      const cat = String(category).toLowerCase().trim();
+      vendors = vendors.filter((v) =>
+        String(v.majorCategory || v.category || '').toLowerCase().trim() === cat
+      );
     }
     if (page !== undefined) {
       const pageNumber = Math.max(1, parseInt(page, 10) || 1);

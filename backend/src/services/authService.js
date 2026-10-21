@@ -417,15 +417,15 @@ async function authenticateWithPassword(email, password, ipAddress, mobile) {
  * sign-in. Introducing hashing needs a migration that makes login hash-aware
  * first; see the note in identityQueries.
  */
-async function changePassword({ userUuid, email, currentPassword, newPassword, ipAddress }) {
-  if (!currentPassword || !newPassword) {
+async function changePassword({ userUuid, email, currentPassword, newPassword, code, resetToken, ipAddress }) {
+  if (!newPassword) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_FIELDS_REQUIRED);
+  }
+  if (!currentPassword && !code && !resetToken) {
     throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_FIELDS_REQUIRED);
   }
   if (String(newPassword).length < PASSWORD_MIN_LENGTH) {
     throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_TOO_SHORT);
-  }
-  if (currentPassword === newPassword) {
-    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_UNCHANGED);
   }
 
   const normalizedEmail = String(email || '').trim().toLowerCase();
@@ -444,13 +444,85 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, i
 
   assertUserCanSignIn(user, normalizedEmail, ipAddress);
 
-  if (!identityQueries.verifyStoredPassword(currentPassword, user.password)) {
-    logger.warn(
-      `Password change rejected, current password incorrect for ${normalizedEmail}`,
-      { ipAddress },
-      'AUTH_SERVICE'
-    );
-    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_CURRENT_INCORRECT);
+  // Authenticate the change request via one of three authorized paths:
+  let verified = false;
+
+  // 1. Verification code (OTP dispatched to registered email/mobile)
+  if (code) {
+    const submittedCode = String(code).trim();
+    const submittedMobile = String(user.mobile || '').trim();
+    const otpKey = buildOtpKey(normalizedEmail, submittedMobile);
+
+    let storedOtp = await authSessionQueries.findOtp(otpKey);
+    if (!storedOtp && submittedMobile) {
+      storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`));
+    }
+    if (!storedOtp && submittedMobile) {
+      const cleanDigits = submittedMobile.replace(/\D/g, '');
+      if (cleanDigits && cleanDigits !== submittedMobile) {
+        storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, cleanDigits));
+      }
+    }
+    if (!storedOtp) {
+      storedOtp = await authSessionQueries.findOtp(`otp:${normalizedEmail}`);
+    }
+
+    if (!storedOtp) {
+      logger.warn(`Password change verification failed, no active OTP found for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
+    }
+
+    if (storedOtp.expiresAt && Date.now() > storedOtp.expiresAt) {
+      await authSessionQueries.deleteOtp(otpKey);
+      logger.warn(`Password change verification failed, expired OTP for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
+    }
+
+    const isValidCode =
+      storedOtp.code.length === submittedCode.length &&
+      crypto.timingSafeEqual(Buffer.from(storedOtp.code), Buffer.from(submittedCode));
+
+    if (!isValidCode) {
+      await authSessionQueries.incrementOtpAttempts(otpKey);
+      logger.warn(`Password change verification failed, invalid OTP for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
+    }
+
+    // Single-use: delete immediately upon successful verification so it cannot be reused!
+    await authSessionQueries.deleteOtp(otpKey);
+    verified = true;
+  } else if (resetToken) {
+    // 2. Verified password reset token
+    const verification = verifySessionToken(resetToken);
+    if (!verification.valid || (verification.user?.sub && verification.user.sub !== user.id)) {
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
+    }
+    const revoked = await authSessionQueries.isTokenRevoked(verification.signature);
+    if (revoked) {
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
+    }
+    // Single-use: revoke token immediately so it cannot be reused!
+    await authSessionQueries.revokeToken(verification.signature, (verification.user?.exp || Math.floor(Date.now() / 1000) + 900) * 1000);
+    verified = true;
+  } else if (currentPassword) {
+    // 3. Current password fallback
+    if (!identityQueries.verifyStoredPassword(currentPassword, user.password)) {
+      logger.warn(
+        `Password change rejected, current password incorrect for ${normalizedEmail}`,
+        { ipAddress },
+        'AUTH_SERVICE'
+      );
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_CURRENT_INCORRECT);
+    }
+    verified = true;
+  }
+
+  if (!verified) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_REQUIRED);
+  }
+
+  if (currentPassword === newPassword || identityQueries.verifyStoredPassword(newPassword, user.password)) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_UNCHANGED);
   }
 
   const written = await identityQueries.updateUserPasswordByUuid(user.id, newPassword, user.email);
