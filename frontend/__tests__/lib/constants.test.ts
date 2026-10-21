@@ -326,6 +326,13 @@ describe('entitledSourcingModes', () => {
     expect(entitledSourcingModes('version_1')).toEqual(['mode_0', 'mode_1']);
     expect(entitledSourcingModes('version_2')).toEqual(['mode_0', 'mode_1', 'mode_2']);
     expect(entitledSourcingModes('version_3')).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes('unlimited')).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+  });
+
+  it('entitles all sourcing modes when unlimitedRfqAccess is true regardless of credits or plan', () => {
+    expect(entitledSourcingModes('free_trial', 0, true)).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes(null, 0, true)).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes('version_1', 0, true)).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
   });
 
   it('falls back to the most restrictive tier for an unrecognised plan string, not to allowing everything', () => {
@@ -334,6 +341,7 @@ describe('entitledSourcingModes', () => {
 
   it('is case-insensitive and trims whitespace', () => {
     expect(entitledSourcingModes(' Version_2 ')).toEqual(['mode_0', 'mode_1', 'mode_2']);
+    expect(entitledSourcingModes(' Unlimited ')).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
   });
 
   it('defaults to the most restrictive tier when the plan is unresolved (null/undefined), not to allowing everything', () => {

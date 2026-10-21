@@ -8,7 +8,7 @@ const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
-const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS } = require('../config/constants');
+const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
 /**
@@ -545,7 +545,8 @@ const ZOHO_PAYABLE_PLANS = ['connect', 'select'];
 async function createSubscriptionPaymentLink(req, res, next) {
   try {
     const { id } = req.params;
-    const { plan } = req.body;
+    const { plan, billingDuration = '12_months', duration } = req.body || {};
+    const normalizedDuration = (billingDuration || duration) === '6_months' ? '6_months' : '12_months';
     const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -558,11 +559,12 @@ async function createSubscriptionPaymentLink(req, res, next) {
       return res.status(400).json({ success: false, error: 'Vendor has no email on file to create a payment link for.' });
     }
 
-    // Not re-checked for null here: ZOHO_PAYABLE_PLANS above is exactly the set
-    // of plans ZOHO_SUBSCRIPTION_PRICING (computeZohoPlanAmount's source) prices,
-    // so this can never actually be null for a plan that passed that gate.
-    const amount = computeZohoPlanAmount(plan);
-    const planLabel = (VENDOR_SUBSCRIPTION_PLANS.find((p) => p.id === plan) || {}).name || plan;
+    const amount = computeZohoPlanAmount(plan, normalizedDuration);
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ success: false, error: `Invalid pricing for plan ${plan}.` });
+    }
+    const durationSuffix = normalizedDuration === '6_months' ? ' (6 Months)' : ' (12 Months)';
+    const planLabel = ((VENDOR_SUBSCRIPTION_PLANS.find((p) => p.id === plan) || {}).name || plan) + durationSuffix;
     // Generated before the Zoho call so it can be embedded in returnUrl — see
     // the matching comment in buyerAccountController.createSubscriptionPaymentLink
     // for why a hardcoded `?payment=success` here would misreport a real
@@ -583,18 +585,30 @@ async function createSubscriptionPaymentLink(req, res, next) {
       id: linkId,
       zohoPaymentLinkId: result.zohoPaymentLinkId,
       vendorId: existing.id,
+      payerType: 'vendor',
       planId: plan,
+      billingDuration: normalizedDuration,
       amount,
       paymentUrl: result.paymentUrl,
       status: result.status || 'CREATED',
       rawResponse: result.rawResponse,
     });
 
-    logger.info(`Created Zoho payment link for vendor ${id} (${plan})`, { id, plan, zohoPaymentLinkId: link.zohoPaymentLinkId }, 'VENDOR_CONTROLLER');
+    logger.info(`Created Zoho payment link for vendor ${id} (${plan}, ${normalizedDuration})`, { id, plan, billingDuration: normalizedDuration, zohoPaymentLinkId: link.zohoPaymentLinkId }, 'VENDOR_CONTROLLER');
     res.json({ success: true, data: { paymentUrl: link.paymentUrl, paymentLinkId: link.id, status: link.status } });
   } catch (err) {
     logger.error(`Error creating Zoho payment link for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
     res.status(502).json({ success: false, error: 'Unable to create a payment link right now. Please try again shortly.' });
+  }
+}
+
+function getSubscriptionPricing(req, res) {
+  try {
+    const config = getSubscriptionPricingConfig();
+    res.json({ success: true, data: config });
+  } catch (err) {
+    logger.error('Failed to get subscription pricing', err, 'VENDOR_CONTROLLER');
+    res.status(500).json({ success: false, error: 'Failed to retrieve subscription pricing' });
   }
 }
 
@@ -930,4 +944,5 @@ module.exports = {
   getBulkImportSessionStatus,
   getVendorsPresence,
   recordVendorHeartbeat,
+  getSubscriptionPricing,
 };

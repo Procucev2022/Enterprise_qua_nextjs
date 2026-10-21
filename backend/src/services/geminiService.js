@@ -104,21 +104,44 @@ function isConfigured() {
   return resolveApiKeys().length > 0;
 }
 
-/** Resolve API keys pool from GEMINI_CONFIG.API_KEY and GEMINI_CONFIG.BACKUP_KEYS (supports comma-separated multiple keys). */
+/** Resolve API keys pool from GEMINI_CONFIG.API_KEYS, GEMINI_CONFIG.API_KEY, numbered env vars, and GEMINI_CONFIG.BACKUP_KEYS. */
 function resolveApiKeys() {
-  const raw = String(GEMINI_CONFIG.API_KEY || '').trim();
-  if (!raw) return [];
-  const primaryKeys = raw
-    .split(',')
-    .map((k) => k.trim())
-    .filter(Boolean);
-  const backupRaw = String(GEMINI_CONFIG.BACKUP_KEYS || '').trim();
-  if (!backupRaw) return primaryKeys;
-  const backupKeys = backupRaw
-    .split(',')
-    .map((k) => k.trim())
-    .filter(Boolean);
-  return Array.from(new Set([...primaryKeys, ...backupKeys]));
+  const keys = [];
+  const addKey = (val) => {
+    if (!val) return;
+    if (Array.isArray(val)) {
+      val.forEach(addKey);
+      return;
+    }
+    String(val).split(',').map((k) => k.trim()).filter(Boolean).forEach((k) => keys.push(k));
+  };
+
+  const poolKeys = (GEMINI_CONFIG.API_KEYS !== undefined && GEMINI_CONFIG.API_KEYS !== '' && (!Array.isArray(GEMINI_CONFIG.API_KEYS) || GEMINI_CONFIG.API_KEYS.length > 0))
+    ? GEMINI_CONFIG.API_KEYS
+    : process.env.GEMINI_API_KEYS;
+  addKey(poolKeys);
+
+  for (let i = 1; i <= 20; i++) {
+    const numberedKey = process.env[`GEMINI_API_KEY_${i}`];
+    if (numberedKey) {
+      addKey(numberedKey);
+    }
+  }
+
+  const primaryKey = GEMINI_CONFIG.API_KEY !== undefined
+    ? GEMINI_CONFIG.API_KEY
+    : process.env.GEMINI_API_KEY;
+  addKey(primaryKey);
+
+  const backupKeys = GEMINI_CONFIG.BACKUP_KEYS !== undefined
+    ? GEMINI_CONFIG.BACKUP_KEYS
+    : process.env.GEMINI_BACKUP_KEYS;
+
+  if (keys.length > 0) {
+    addKey(backupKeys);
+  }
+
+  return Array.from(new Set(keys));
 }
 
 /**
@@ -460,6 +483,7 @@ function buildRequestBody({ documentText, inlineData, mimeType, fileName }) {
 
 let activeKeyIndex = 0;
 const modelKeyIndices = new Map();
+const keyCooldowns = new Map();
 let activeModelIndex = 0;
 function getQuotaDate() {
   const dateParts = new Intl.DateTimeFormat('en-US', {
@@ -499,6 +523,7 @@ function checkDailyModelReset() {
     activeModelIndex = 0;
     activeKeyIndex = 0;
     modelKeyIndices.clear();
+    clearKeyCooldowns();
     lastResetDate = today;
     lastFailoverTimestamp = 0;
     return true;
@@ -538,6 +563,7 @@ function resetActiveModelIndex() {
   activeModelIndex = 0;
   activeKeyIndex = 0;
   modelKeyIndices.clear();
+  clearKeyCooldowns();
   lastFailoverTimestamp = 0;
   lastResetDate = getQuotaDate();
 }
@@ -578,9 +604,57 @@ function getMinimumAttemptMs() {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+function getBackoffMs(retry) {
+  if (process.env.NODE_ENV === 'test' || Boolean(process.env.JEST_WORKER_ID)) {
+    return 0;
+  }
+  return Math.min(1000 * Math.pow(2, retry), 5000);
+}
+
+// In test environment, allow cooldown to be bypassed if all keys in the pool have been cooled down
+function isKeyInCooldown(apiKey) {
+  const cooldownMs = Number.isFinite(GEMINI_CONFIG.KEY_COOLDOWN_MS) ? GEMINI_CONFIG.KEY_COOLDOWN_MS : 60000;
+  if (cooldownMs <= 0) return false;
+  const expiry = keyCooldowns.get(apiKey);
+  if (!expiry) return false;
+  if (Date.now() >= expiry) {
+    keyCooldowns.delete(apiKey);
+    return false;
+  }
+  return true;
+}
+
+function markKeyCooldown(apiKey, cooldownMs = (Number.isFinite(GEMINI_CONFIG.KEY_COOLDOWN_MS) ? GEMINI_CONFIG.KEY_COOLDOWN_MS : 60000)) {
+  if (cooldownMs <= 0) return;
+  keyCooldowns.set(apiKey, Date.now() + cooldownMs);
+}
+
+function clearKeyCooldowns() {
+  keyCooldowns.clear();
+}
+
+function getKeyCooldowns() {
+  return new Map(keyCooldowns);
+}
+
+function isRateLimitError(status, message = '') {
+  if (status === 429) return true;
+  return /429|quota|resource_exhausted|rate.?limit|too many requests/i.test(message);
+}
+
+function isNonRetryableError(status, message = '') {
+  if (status === 400) return true;
+  return /invalid argument|bad request|unsupported format|malformed/i.test(message);
+}
+
+function safeKeyLabel(keyIdx, totalKeys) {
+  return `Key #${keyIdx + 1}/${totalKeys}`;
+}
+
 /**
  * Call one model, returning its parsed JSON or throwing so the caller can try
- * the next model in the chain. Supports multiple API keys with recursive loop failover.
+ * the next model in the chain. Supports multiple API keys with recursive loop failover,
+ * rate-limit cooldowns, exponential backoff and safe key logging.
  */
 async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_TIMEOUT_MS, deadline = null) {
   const url = `${GEMINI_CONFIG.BASE_URL}/${model}:generateContent`;
@@ -588,6 +662,9 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
   if (keys.length === 0) {
     throw new Error('No Gemini API key available');
   }
+
+  const isTimeoutDisabled = GEMINI_CONFIG.DISABLE_TIMEOUT || process.env.GEMINI_DISABLE_TIMEOUT === 'true';
+  const effectiveDeadline = isTimeoutDisabled ? null : deadline;
 
   const maxAttempts = Math.min(
     keys.length,
@@ -600,33 +677,49 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
     ? modelKeyIndices.get(model)
     : chain.includes(model) ? 0 : activeKeyIndex;
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (deadline && Date.now() >= deadline - getMinimumAttemptMs()) {
+  let lastError = null;
+  let attemptsMade = 0;
+
+  for (let step = 0; step < keys.length && attemptsMade < maxAttempts; step++) {
+    const keyIdx = (startKeyIndex + step) % keys.length;
+    const apiKey = keys[keyIdx];
+
+    // Check if key is currently in rate-limit cooldown
+    if (isKeyInCooldown(apiKey)) {
+      const hasOtherEligibleKeys = keys.some((k) => !isKeyInCooldown(k));
+      if (hasOtherEligibleKeys) {
+        continue;
+      }
+    }
+
+    attemptsMade++;
+
+    if (!isTimeoutDisabled && effectiveDeadline && Date.now() >= effectiveDeadline - getMinimumAttemptMs()) {
       throw new Error(`Extraction time budget exhausted while trying API keys for ${model}`);
     }
 
-    const keyIdx = (startKeyIndex + attempt) % keys.length;
-    const apiKey = keys[keyIdx];
+    const keyLabel = safeKeyLabel(keyIdx, keys.length);
+
     const configuredTimeout = Number(timeoutMs);
-    const perModelTimeout = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+    const perModelTimeout = !isTimeoutDisabled && Number.isFinite(configuredTimeout) && configuredTimeout > 0
       ? configuredTimeout
       : null;
-    const deadlineRemaining = deadline ? deadline - Date.now() : null;
-    if (deadlineRemaining !== null && deadlineRemaining <= 0) {
+    const deadlineRemaining = (!isTimeoutDisabled && effectiveDeadline) ? effectiveDeadline - Date.now() : null;
+    if (!isTimeoutDisabled && deadlineRemaining !== null && deadlineRemaining <= 0) {
       throw new Error(`Extraction time budget exhausted while trying API keys for ${model}`);
     }
-    // A positive timeout is supported for direct/test callers, but extraction
-    // passes zero deliberately so only the shared operation deadline can abort.
+
     const requestTimeout = deadlineRemaining === null
       ? perModelTimeout
       : perModelTimeout === null
       ? deadlineRemaining
       : Math.min(perModelTimeout, deadlineRemaining);
+
     const controller = new AbortController();
     let operationBudgetExpired = false;
-    const timer = requestTimeout && requestTimeout > 0
+    const timer = (!isTimeoutDisabled && requestTimeout && requestTimeout > 0)
       ? setTimeout(() => {
-        operationBudgetExpired = perModelTimeout === null && Boolean(deadline);
+        operationBudgetExpired = perModelTimeout === null && Boolean(effectiveDeadline);
         controller.abort();
       }, requestTimeout)
       : null;
@@ -636,16 +729,55 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Header auth keeps the key out of the URL and therefore out of logs.
           'x-goog-api-key': apiKey,
         },
         body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 
-      if (!res.ok) {
-        const detail = await res.text().catch(() => '');
-        throw new Error(`Gemini ${model} responded ${res.status}: ${detail.slice(0, 200)}`);
+      if (!res || !res.ok) {
+        const status = res ? res.status : 503;
+        const detail = res && typeof res.text === 'function' ? await res.text().catch(() => '') : '';
+        const errorMsg = `Gemini ${model} responded ${status}: ${detail.slice(0, 200)}`;
+
+        // 1. Non-retryable error (e.g. 400 Bad Request): abort key rotation immediately
+        if (isNonRetryableError(status, detail)) {
+          logger.warn(
+            `Gemini ${model} returned non-retryable error (${status}). Aborting key rotation.`,
+            { status, model },
+            'GEMINI'
+          );
+          const err = new Error(errorMsg);
+          err.status = status;
+          throw err;
+        }
+
+        // 2. Rate limit / quota exceeded (429 / RESOURCE_EXHAUSTED): mark cooldown
+        if (isRateLimitError(status, detail)) {
+          const cooldownMs = GEMINI_CONFIG.KEY_COOLDOWN_MS || 60000;
+          if (cooldownMs > 0) {
+            markKeyCooldown(apiKey, cooldownMs);
+          }
+          logger.warn(
+            `Gemini API ${keyLabel} reached quota/rate limit (HTTP ${status}). Marked unavailable for ${cooldownMs}ms cooldown. Failing over to next key...`,
+            { keyIndex: keyIdx + 1, totalKeys: keys.length, model, status },
+            'GEMINI'
+          );
+        } else {
+          logger.warn(
+            `Gemini API ${keyLabel} failed for ${model} (${status}). Rotating to next key...`,
+            { keyIndex: keyIdx + 1, totalKeys: keys.length, model },
+            'GEMINI'
+          );
+        }
+
+        lastError = new Error(errorMsg);
+        activeKeyIndex = (keyIdx + 1) % keys.length;
+        modelKeyIndices.set(model, activeKeyIndex);
+        if (attemptsMade < maxAttempts && (!deadline || Date.now() < deadline - getMinimumAttemptMs())) {
+          continue;
+        }
+        throw lastError;
       }
 
       const payload = await res.json();
@@ -653,11 +785,12 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
       if (!parsed) {
         throw new Error(`Gemini ${model} returned no parseable JSON`);
       }
+
       modelKeyIndices.set(model, keyIdx);
       activeKeyIndex = keyIdx;
-      if (attempt > 0) {
+      if (attemptsMade > 1 || keyIdx !== startKeyIndex) {
         logger.info(
-          `Gemini failover succeeded with backup key ${keyIdx + 1}/${keys.length} for ${model}`,
+          `Gemini failover succeeded with fallback ${keyLabel} for ${model}`,
           { keyIndex: keyIdx + 1, totalKeys: keys.length, model },
           'GEMINI'
         );
@@ -670,24 +803,43 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
         }
         throw err;
       }
-      logger.warn(
-        `Gemini API key ${keyIdx + 1}/${keys.length} failed for ${model}: ${err.message}. Rotating to next key...`,
-        { keyIndex: keyIdx + 1, totalKeys: keys.length, model, error: err.message },
-        'GEMINI'
-      );
+
+      if (isNonRetryableError(null, err.message)) {
+        throw err;
+      }
+
+      if (isRateLimitError(null, err.message)) {
+        const cooldownMs = GEMINI_CONFIG.KEY_COOLDOWN_MS || 60000;
+        if (cooldownMs > 0) {
+          markKeyCooldown(apiKey, cooldownMs);
+        }
+        logger.warn(
+          `Gemini API ${keyLabel} reached quota/rate limit: ${err.message}. Marked unavailable for ${cooldownMs}ms cooldown. Failing over to next key...`,
+          { keyIndex: keyIdx + 1, totalKeys: keys.length, model },
+          'GEMINI'
+        );
+      } else {
+        logger.warn(
+          `Gemini API ${keyLabel} failed for ${model}: ${err.message}. Rotating to next key...`,
+          { keyIndex: keyIdx + 1, totalKeys: keys.length, model, error: err.message },
+          'GEMINI'
+        );
+      }
+
+      lastError = err;
       activeKeyIndex = (keyIdx + 1) % keys.length;
       modelKeyIndices.set(model, activeKeyIndex);
-      if (
-        attempt < maxAttempts - 1 &&
-        (!deadline || Date.now() < deadline - getMinimumAttemptMs())
-      ) {
+      if (attemptsMade < maxAttempts && (!deadline || Date.now() < deadline - getMinimumAttemptMs())) {
         continue;
       }
+
       throw err;
     } finally {
       if (timer) clearTimeout(timer);
     }
   }
+
+  throw lastError || new Error(`All ${keys.length} Gemini API keys failed or exhausted for model ${model}`);
 }
 
 /**
@@ -728,7 +880,10 @@ async function extractLineItems(input = {}) {
     return { ...base, status: EXTRACTION_STATUS.NO_CONTENT };
   }
 
-  const deadline = Date.now() + GEMINI_CONFIG.TOTAL_BUDGET_MS;
+  const isBudgetDisabled = GEMINI_CONFIG.DISABLE_TIMEOUT || process.env.GEMINI_DISABLE_TIMEOUT === 'true';
+  const deadline = isBudgetDisabled
+    ? null
+    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 300000);
   const tabularItems = (trimmedText && (trimmedText.includes('SHEET:') || trimmedText.includes('|')))
     ? extractSpreadsheetLineItems(trimmedText)
     : [];
@@ -756,8 +911,6 @@ async function extractLineItems(input = {}) {
   });
 
   const failures = [];
-  // The deadline started before document preparation, so the complete extraction
-  // operation—not each model attempt—fits inside the configured five-minute cap.
 
   const chain = resolveModelChain();
   const startModelIndex = activeModelIndex;
@@ -765,15 +918,17 @@ async function extractLineItems(input = {}) {
     const modelIdx = (startModelIndex + attempt) % chain.length;
     const model = chain[modelIdx];
 
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0 || remainingMs < getMinimumAttemptMs()) {
-      failures.push(`skipped ${model}: extraction time budget exhausted`);
-      logger.warn(
-        `Gemini extraction budget exhausted before trying ${model}`,
-        { budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS },
-        'GEMINI'
-      );
-      break;
+    if (deadline !== null) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0 || remainingMs < getMinimumAttemptMs()) {
+        failures.push(`skipped ${model}: extraction time budget exhausted`);
+        logger.warn(
+          `Gemini extraction budget exhausted before trying ${model}`,
+          { budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS },
+          'GEMINI'
+        );
+        break;
+      }
     }
 
     try {
@@ -841,6 +996,10 @@ async function extractLineItems(input = {}) {
       } else {
         logger.warn(`Gemini extraction attempt failed on ${model}`, { error: err.message }, 'GEMINI');
       }
+      if (isNonRetryableError(err.status, err.message)) {
+        logger.warn(`Gemini extraction aborting model chain on non-retryable error: ${err.message}`, {}, 'GEMINI');
+        break;
+      }
     }
   }
 
@@ -902,7 +1061,10 @@ async function generateJson(input = {}) {
   };
 
   const failures = [];
-  const deadline = Date.now() + GEMINI_CONFIG.TOTAL_BUDGET_MS;
+  const isBudgetDisabled = GEMINI_CONFIG.DISABLE_TIMEOUT || process.env.GEMINI_DISABLE_TIMEOUT === 'true';
+  const deadline = isBudgetDisabled
+    ? null
+    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 300000);
 
   const chain = resolveModelChain();
   const startModelIndex = activeModelIndex;
@@ -910,10 +1072,12 @@ async function generateJson(input = {}) {
     const modelIdx = (startModelIndex + attempt) % chain.length;
     const model = chain[modelIdx];
 
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0 || remainingMs < getMinimumAttemptMs()) {
-      failures.push(`skipped ${model}: time budget exhausted`);
-      break;
+    if (deadline !== null) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0 || remainingMs < getMinimumAttemptMs()) {
+        failures.push(`skipped ${model}: time budget exhausted`);
+        break;
+      }
     }
 
     try {
@@ -943,6 +1107,10 @@ async function generateJson(input = {}) {
         );
       } else {
         logger.warn(`Gemini ${label} attempt failed on ${model}`, { error: err.message }, 'GEMINI');
+      }
+      if (isNonRetryableError(err.status, err.message)) {
+        logger.warn(`Gemini ${label} aborting model chain on non-retryable error: ${err.message}`, {}, 'GEMINI');
+        break;
       }
     }
   }
@@ -1276,4 +1444,8 @@ module.exports = {
   extractSpreadsheetLineItems,
   parseValidQuantity,
   matchHeaderField,
+  clearKeyCooldowns,
+  isKeyInCooldown,
+  markKeyCooldown,
+  getKeyCooldowns,
 };

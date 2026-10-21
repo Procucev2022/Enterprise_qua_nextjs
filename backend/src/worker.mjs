@@ -21,8 +21,8 @@ globalThis.__CF_ENV__ = env;
 if (env && typeof env === 'object') {
   try {
     for (const [k, v] of Object.entries(env)) {
-      if (typeof v === 'string' && !process.env[k]) {
-        process.env[k] = v;
+      if ((typeof v === 'string' || typeof v === 'number') && (!process.env[k] || process.env[k] === '')) {
+        process.env[k] = String(v);
       }
     }
   } catch {}

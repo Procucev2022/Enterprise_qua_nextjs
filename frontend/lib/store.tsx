@@ -315,13 +315,13 @@ interface AppContextType {
   // Sourcing Free Tier RFQ Limits (Max 5 for Version 1 Free Trial)
   remainingFreeRFQs: number;
   setRemainingFreeRFQs: React.Dispatch<React.SetStateAction<number>>;
-  activeSubscription: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none';
-  setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>>;
+  activeSubscription: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited';
+  setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited'>>;
   vendorSubscription: VendorSubscriptionPlan;
   setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan>>;
   updateVendorSubscription: (plan: 'premium' | 'connect' | 'select') => Promise<boolean>;
   /** Real Zoho payment-link creation for the caller's own vendor profile. Returns the URL to redirect to, or null on failure (a toast is already shown). */
-  createVendorPaymentLink: (plan: string) => Promise<string | null>;
+  createVendorPaymentLink: (plan: string, billingDuration?: '6_months' | '12_months') => Promise<string | null>;
   /** Real status ('CREATED'|'PAID'|'CANCELED'|'EXPIRED') of one of the caller's own vendor payment links, or null if it can't be resolved. */
   checkVendorPaymentLinkStatus: (linkId: string) => Promise<string | null>;
   vendorRfqDownloadsUsed: number;
@@ -388,7 +388,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Subscription State
   const [remainingFreeRFQs, setRemainingFreeRFQs] = useState<number>(5);
-  const [activeSubscription, setActiveSubscription] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>('free_trial');
+  const [activeSubscription, setActiveSubscription] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited'>('free_trial');
   const [vendorSubscription, setVendorSubscription] = useState<VendorSubscriptionPlan>('premium');
   // Was a fabricated "already used 3" starting point — real usage is hydrated
   // from the vendor's actual record in refreshFromDB once it loads.
@@ -435,7 +435,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
-  const createVendorPaymentLink = async (plan: string): Promise<string | null> => {
+  const createVendorPaymentLink = async (
+    plan: string,
+    billingDuration?: '6_months' | '12_months'
+  ): Promise<string | null> => {
     const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
     const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
     if (!myVendor) {
@@ -443,7 +446,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
 
-    const result = await createPaymentLink(myVendor.id, plan);
+    const result = await createPaymentLink(myVendor.id, plan, billingDuration);
     if (!result.success) {
       showToast('Payment Failed', result.error, 'warning');
       return null;

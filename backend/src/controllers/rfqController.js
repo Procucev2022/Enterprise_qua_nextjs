@@ -21,6 +21,9 @@ const {
   RFQ_MODES,
   RFQ_MODE_LABELS,
   RFQ_MODE_MAP,
+  hasUnlimitedRfqAccess,
+  hasUnlimitedQuoteAccess,
+  hasUnlimitedDownloadAccess,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
@@ -43,6 +46,7 @@ const SUBSCRIPTION_MODE_ENTITLEMENTS = {
   v2: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, 'v0', 'v1', 'v2', 'version_0', 'version_1', 'version_2', 'mode 0', 'mode 1', 'mode 2'],
   version_3: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3, 'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3', 'mode 0', 'mode 1', 'mode 2', 'mode 3'],
   v3: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3, 'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3', 'mode 0', 'mode 1', 'mode 2', 'mode 3'],
+  unlimited: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3, 'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3', 'mode 0', 'mode 1', 'mode 2', 'mode 3'],
 };
 
 /**
@@ -113,6 +117,13 @@ async function resolveRfqReadScope(req) {
 function canVendorViewRfq(vendor, rfq) {
   if (!vendor || !rfq) return false;
   if (storeService.vendorCoversRFQ(vendor, rfq)) return true;
+
+  // Vendors with database-configured unlimited download/quote access can view any non-private RFQ
+  if (hasUnlimitedDownloadAccess(vendor) || hasUnlimitedQuoteAccess(vendor)) {
+    if (!storeService.isVendorPrivateToDifferentBuyer(vendor, rfq)) {
+      return true;
+    }
+  }
 
   const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
   const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
@@ -585,9 +596,12 @@ async function createRFQ(req, res, next) {
     // buyer-account record at all (e.g. admin/CM-raised RFQs) — there is no
     // subscription to enforce against.
     if (requestingBuyerAccount) {
+      const isUnlimited = hasUnlimitedRfqAccess(requestingBuyerAccount) || hasUnlimitedRfqAccess(req.user);
       const plan = requestingBuyerAccount.subscriptionPlan || 'free_trial';
-      const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(plan);
-      const entitledModes = SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.free_trial;
+      const isPaidPlan = ['version_1', 'version_2', 'version_3', 'unlimited'].includes(plan) || isUnlimited;
+      const entitledModes = isUnlimited
+        ? SUBSCRIPTION_MODE_ENTITLEMENTS.unlimited
+        : (SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.free_trial);
       const requestedMode = body.sourcingMode || 'mode_0';
       const remainingCredits =
         requestingBuyerAccount.remainingFreeRFQs !== undefined
@@ -597,8 +611,8 @@ async function createRFQ(req, res, next) {
       const isV0 = requestedMode === 'mode_0' || requestedMode === 'v0' || requestedMode === 'version_0';
 
       // Enterprise QUA – V0 (Free Starter Trial) is universally available to all accounts (0 credits consumed).
-      // Entitlement check is NEVER applied to V0 (always allowed). Only enforced for V1 / V2 / V3.
-      if (!isV0 && !entitledModes.includes(requestedMode)) {
+      // Entitlement check is NEVER applied to V0 (always allowed). Only enforced for V1 / V2 / V3 unless account has database-level unlimited access.
+      if (!isV0 && !isUnlimited && !entitledModes.includes(requestedMode)) {
         logger.warn(
           `Rejected RFQ creation: ${plan} plan does not include ${requestedMode}`,
           { plan, requestedMode },
@@ -614,8 +628,9 @@ async function createRFQ(req, res, next) {
       // V0 RFQ = No credit deduction (0 credits consumed). Allowed unconditionally even when remaining credits are 0.
       // V1 / V2 / V3 RFQ = 1 credit deducted per RFQ from buyer's 5 free RFQ credits (if on free trial).
       // Once 5 free credits are 0, V1/V2/V3 RFQs require paid subscription.
-      if (isV0) {
-        // V0 RFQ: No credit deduction
+      // Unlimited RFQ accounts are exempt from all credit deductions across all modes.
+      if (isV0 || isUnlimited) {
+        // V0 RFQ or unlimited account: No credit deduction
         consumedFreeTrial = false;
       } else {
         // V1, V2, or V3:
@@ -1292,8 +1307,9 @@ async function addQuote(req, res, next) {
     }
 
     const isMode0 = targetRfq.sourcingMode === 'mode_0' || targetRfq.sourcingMode === 'v0';
+    const isUnlimitedVendor = hasUnlimitedQuoteAccess(vendorRecord) || hasUnlimitedQuoteAccess(req.user);
     const isUnlocked = storeService.isRfqUnlockedForVendor(vendorRecord.id, targetRfq.id);
-    if (isMode0 && !isUnlocked) {
+    if (isMode0 && !isUnlocked && !isUnlimitedVendor) {
       logger.warn(
         `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} without downloading/unlocking it first`,
         { id, vendorId: vendorRecord.id },
@@ -1307,7 +1323,7 @@ async function addQuote(req, res, next) {
     }
 
     const eligibility = storeService.checkVendorQuotationEligibility(vendorRecord, targetRfq);
-    if (!eligibility.eligible) {
+    if (!eligibility.eligible && !isUnlimitedVendor) {
       logger.warn(
         `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but 5 free quotation credits are exhausted`,
         { id, vendorId: vendorRecord.id, freeCreditsRemaining: eligibility.freeCreditsRemaining, subscriptionPlan: eligibility.subscriptionPlan },
@@ -1386,11 +1402,12 @@ async function downloadRFQ(req, res, next) {
         return res.status(400).json({ success: false, error: 'Vendor profile not found.' });
       }
 
+      const isUnlimitedVendor = hasUnlimitedDownloadAccess(requestingVendor) || hasUnlimitedDownloadAccess(req.user);
       const used = requestingVendor.rfqDownloadsUsed || 0;
       storeService.updateVendor(requestingVendor.id, { rfqDownloadsUsed: used + 1 });
 
       const unlockResult = await storeService.unlockRFQForVendor(requestingVendor.id, rfq.id);
-      if (!unlockResult.success && unlockResult.creditsExhausted) {
+      if (!unlockResult.success && unlockResult.creditsExhausted && !isUnlimitedVendor) {
         return res.status(403).json({
           success: false,
           error: unlockResult.error || 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.',
@@ -1433,10 +1450,11 @@ async function generateEmailPreview(req, res, next) {
     if (req.user && req.user.role === 'vendor') {
       const requestingVendor = await resolveVendorForUser(req.user);
       if (requestingVendor) {
+        const isUnlimitedVendor = hasUnlimitedDownloadAccess(requestingVendor) || hasUnlimitedDownloadAccess(req.user);
         const used = requestingVendor.rfqDownloadsUsed || 0;
         storeService.updateVendor(requestingVendor.id, { rfqDownloadsUsed: used + 1 });
         const unlockResult = await storeService.unlockRFQForVendor(requestingVendor.id, rfq.id);
-        if (!unlockResult.success && unlockResult.creditsExhausted) {
+        if (!unlockResult.success && unlockResult.creditsExhausted && !isUnlimitedVendor) {
           return res.status(403).json({
             success: false,
             error: unlockResult.error || 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.',

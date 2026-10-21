@@ -99,7 +99,10 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_1',
     name: 'Version 1 Plan: Client Roster Only',
-    price: '₹199',
+    get price() {
+      const p = process.env.BUYER_V1_12M_PRICE || process.env.BUYER_VERSION_1_12M_PRICE || 4999;
+      return `₹${Number(p).toLocaleString('en-IN')}`;
+    },
     billing: 'per user / month',
     description: 'Streamline procurement across your private pre-approved vendor roster with automated working-hour follow-ups.',
     features: [
@@ -112,7 +115,10 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_2',
     name: 'Version 2 Plan: Hybrid Sourcing',
-    price: '₹499',
+    get price() {
+      const p = process.env.BUYER_V2_12M_PRICE || process.env.BUYER_VERSION_2_12M_PRICE || 7499;
+      return `₹${Number(p).toLocaleString('en-IN')}`;
+    },
     billing: 'per user / month',
     description: 'Cumulative plan giving full access to BOTH Mode 1 and Mode 2 with hybrid platform network discovery.',
     features: [
@@ -125,7 +131,10 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_3',
     name: 'Version 3 Plan: Autonomous AI Enterprise',
-    price: '₹999',
+    get price() {
+      const p = process.env.BUYER_V3_12M_PRICE || process.env.BUYER_VERSION_3_12M_PRICE || 9999;
+      return `₹${Number(p).toLocaleString('en-IN')}`;
+    },
     billing: 'per user / month',
     description: 'Ultimate all-inclusive tier giving full access to Mode 1, Mode 2, AND Mode 3 with autonomous AI governance.',
     features: [
@@ -154,8 +163,11 @@ const VENDOR_SUBSCRIPTION_PLANS = [
   {
     id: 'connect',
     name: 'Connect Model (Marketplace Expansion)',
-    price: '₹149',
-    billing: 'per 3 months (90 days)',
+    get price() {
+      const p = process.env.SELLER_V1_12M_PRICE || process.env.SELLER_CONNECT_12M_PRICE || process.env.SELLER_CONNECT_PRICE || 7499;
+      return `₹${Number(p).toLocaleString('en-IN')}`;
+    },
+    billing: 'per 12 months',
     description: 'Expand your market reach. Access & download open RFQs across the entire Procucev Network Marketplace.',
     features: [
       'All Premium Client-Uploaded features included',
@@ -168,8 +180,11 @@ const VENDOR_SUBSCRIPTION_PLANS = [
   {
     id: 'select',
     name: 'Select Model (Catalogue & High Volume)',
-    price: '₹349',
-    billing: 'per 3 months (90 days)',
+    get price() {
+      const p = process.env.SELLER_V2_12M_PRICE || process.env.SELLER_SELECT_12M_PRICE || process.env.SELLER_SELECT_PRICE || 14999;
+      return `₹${Number(p).toLocaleString('en-IN')}`;
+    },
+    billing: 'per 12 months',
     description: 'Complete tier for high-volume suppliers. Build your Item Catalogue and capture maximum marketplace demand.',
     features: [
       'Download up to 100 RFQs within 3 months',
@@ -603,13 +618,20 @@ const RFQ_CATEGORY_CLASSIFICATION = {
 // Gemini extraction policy is intentionally code-owned rather than environment
 // configurable: one operation may run for up to five minutes, with fixed input
 // limits that protect memory and provider payload size.
-const GEMINI_TOTAL_BUDGET_MS = 5 * 60 * 1000;
+const GEMINI_TOTAL_BUDGET_MS = Number(process.env.GEMINI_TOTAL_BUDGET_MS || 5 * 60 * 1000);
 const GEMINI_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const GEMINI_MAX_DOCUMENT_TEXT_CHARS = 300000;
 
 const GEMINI_CONFIG = {
+  API_KEYS: process.env.GEMINI_API_KEYS || '',
   API_KEY: process.env.GEMINI_API_KEY || '',
   BACKUP_KEYS: process.env.GEMINI_BACKUP_KEYS || '',
+  DISABLE_TIMEOUT: process.env.NODE_ENV === 'test' ? (process.env.GEMINI_DISABLE_TIMEOUT === 'true') : true,
+  KEY_COOLDOWN_MS: Number(
+    process.env.GEMINI_KEY_COOLDOWN_MS !== undefined
+      ? process.env.GEMINI_KEY_COOLDOWN_MS
+      : (process.env.NODE_ENV === 'test' ? 0 : 60000)
+  ),
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
   // Ordered models attempted in sequence: gemini-3.8-flash down to gemini-3.1-flash-lite.
   // Extraction automatically advances through the backup models upon error or 503 overload.
@@ -637,7 +659,7 @@ const GEMINI_CONFIG = {
   },
   // Kept as a mutable compatibility field for tests and old callers, but zero
   // means there is no per-model timeout. Production uses only TOTAL_BUDGET_MS.
-  REQUEST_TIMEOUT_MS: 0,
+  REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 0),
   TOTAL_BUDGET_MS: GEMINI_TOTAL_BUDGET_MS,
   MIN_ATTEMPT_MS: 0,
   MAX_DOCUMENT_BYTES: GEMINI_MAX_DOCUMENT_BYTES,
@@ -841,8 +863,21 @@ function buildZohoConfig() {
     // Refresh the cached access token this many ms before it actually expires, so
     // a request never races a token that's about to go stale mid-flight.
     TOKEN_REFRESH_BUFFER_MS: 60 * 1000,
-    GST_RATE: 0.18,
+    GST_RATE: getSubscriptionGstRate(),
   };
+}
+
+function getSubscriptionGstPercent() {
+  const envVal = process.env.SUBSCRIPTION_GST_PERCENT;
+  if (envVal !== undefined && envVal !== '') {
+    const parsed = Number(envVal);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return 18;
+}
+
+function getSubscriptionGstRate() {
+  return getSubscriptionGstPercent() / 100;
 }
 
 // Same name and shape as before, so every call site is unchanged. Values assigned
@@ -868,49 +903,118 @@ const ZOHO_CONFIG = new Proxy({}, {
   },
 });
 
-// The app's three vendor subscription plans (VENDOR_SUBSCRIPTION_PLANS above)
-// only carry a display price ('$149' etc.) — no numeric, currency-specific
-// amount a payment request can actually charge. 'premium' is free/auto-granted
-// and never reaches this table. INR chosen to match Zoho's `currency=INR`
-// paymentlinks contract the reference app uses.
-//
-// Base (pre-GST) amount, chosen so computeZohoPlanAmount's 18% GST add-on
-// lands on the real annual offer price shown on the card (Connect ₹7,499,
-// Select ₹14,999) — e.g. 6355.08 * 1.18 = 7498.99, a one-paisa rounding
-// artifact of back-calculating a GST-inclusive sticker price.
-const ZOHO_SUBSCRIPTION_PRICING = {
-  connect: 6355.08,
-  select: 12711.02,
-};
+function getSellerSubscriptionPricing() {
+  const gstRate = (zohoConfigOverrides.GST_RATE !== undefined)
+    ? zohoConfigOverrides.GST_RATE
+    : getSubscriptionGstRate();
+
+  const connect12Inclusive = Number(process.env.SELLER_V1_12M_PRICE || 7499);
+  const connect6Inclusive = Number(process.env.SELLER_V1_6M_PRICE || 4125);
+  const connect12Base = Math.round((connect12Inclusive / (1 + gstRate)) * 100) / 100;
+  const connect6Base = Math.round((connect6Inclusive / (1 + gstRate)) * 100) / 100;
+
+  const select12Inclusive = Number(process.env.SELLER_V2_12M_PRICE || 14999);
+  const select6Inclusive = Number(process.env.SELLER_V2_6M_PRICE || 8250);
+  const select12Base = Math.round((select12Inclusive / (1 + gstRate)) * 100) / 100;
+  const select6Base = Math.round((select6Inclusive / (1 + gstRate)) * 100) / 100;
+
+  const v312Inclusive = Number(process.env.SELLER_V3_12M_PRICE || 19999);
+  const v36Inclusive = Number(process.env.SELLER_V3_6M_PRICE || 11000);
+  const v312Base = Math.round((v312Inclusive / (1 + gstRate)) * 100) / 100;
+  const v36Base = Math.round((v36Inclusive / (1 + gstRate)) * 100) / 100;
+
+  return {
+    connect: { '12_months': connect12Base, '6_months': connect6Base },
+    select: { '12_months': select12Base, '6_months': select6Base },
+    version_3: { '12_months': v312Base, '6_months': v36Base },
+  };
+}
+
+const zohoSubscriptionPricingOverrides = {};
+const ZOHO_SUBSCRIPTION_PRICING = new Proxy({}, {
+  get: (_target, key) => {
+    if (key in zohoSubscriptionPricingOverrides) return zohoSubscriptionPricingOverrides[key];
+    const pricing = getSellerSubscriptionPricing();
+    if (key in pricing) {
+      return pricing[key]['12_months'];
+    }
+    return undefined;
+  },
+  set: (_target, key, val) => {
+    zohoSubscriptionPricingOverrides[key] = val;
+    return true;
+  },
+  deleteProperty: (_target, key) => {
+    delete zohoSubscriptionPricingOverrides[key];
+    return true;
+  },
+  has: (_target, key) => key in zohoSubscriptionPricingOverrides || key in getSellerSubscriptionPricing(),
+  ownKeys: () => [...new Set([...Object.keys(getSellerSubscriptionPricing()), ...Object.keys(zohoSubscriptionPricingOverrides)])],
+  getOwnPropertyDescriptor: (_target, key) => {
+    const val = key in zohoSubscriptionPricingOverrides
+      ? zohoSubscriptionPricingOverrides[key]
+      : (getSellerSubscriptionPricing()[key] ? getSellerSubscriptionPricing()[key]['12_months'] : undefined);
+    if (val === undefined) return undefined;
+    return { enumerable: true, configurable: true, value: val, writable: true };
+  },
+});
 
 /** GST-inclusive amount Zoho actually charges for a plan, 2dp, or null if the plan isn't payable. */
-function computeZohoPlanAmount(planId) {
-  const base = ZOHO_SUBSCRIPTION_PRICING[planId];
-  if (!Number.isFinite(base)) return null;
+function computeZohoPlanAmount(planId, billingDuration = '12_months') {
+  const duration = billingDuration === '6_months' ? '6_months' : '12_months';
+  if (planId in zohoSubscriptionPricingOverrides && duration === '12_months') {
+    const base = zohoSubscriptionPricingOverrides[planId];
+    if (!Number.isFinite(base) || base <= 0) return null;
+    return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
+  }
+  const pricing = getSellerSubscriptionPricing();
+  const planPricing = pricing[planId];
+  if (!planPricing) return null;
+  const base = typeof planPricing === 'number' ? planPricing : planPricing[duration];
+  if (!Number.isFinite(base) || base <= 0) return null;
   return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
 }
 
-// Buyer subscription pricing supporting 12-month and 6-month durations.
-// Base monthly rates:
-// Version 1: 12-Month ₹4,999/mo | 6-Month ₹5,499/mo
-// Version 2: 12-Month ₹7,499/mo | 6-Month ₹7,999/mo
-// Version 3: 12-Month ₹9,999/mo | 6-Month ₹10,499/mo
-//
-// Total charged = (monthlyRate * months) + 18% GST.
-const ZOHO_BUYER_SUBSCRIPTION_PRICING = {
-  version_1: {
-    '12_months': 4999,
-    '6_months': 5499,
+function getBuyerSubscriptionPricing() {
+  return {
+    version_1: {
+      '12_months': Number(process.env.BUYER_V1_12M_PRICE || 4999),
+      '6_months': Number(process.env.BUYER_V1_6M_PRICE || 5499),
+    },
+    version_2: {
+      '12_months': Number(process.env.BUYER_V2_12M_PRICE || 7499),
+      '6_months': Number(process.env.BUYER_V2_6M_PRICE || 7999),
+    },
+    version_3: {
+      '12_months': Number(process.env.BUYER_V3_12M_PRICE || 9999),
+      '6_months': Number(process.env.BUYER_V3_6M_PRICE || 10499),
+    },
+  };
+}
+
+const zohoBuyerPricingOverrides = {};
+const ZOHO_BUYER_SUBSCRIPTION_PRICING = new Proxy({}, {
+  get: (_target, key) => {
+    if (key in zohoBuyerPricingOverrides) return zohoBuyerPricingOverrides[key];
+    const pricing = getBuyerSubscriptionPricing();
+    return pricing[key];
   },
-  version_2: {
-    '12_months': 7499,
-    '6_months': 7999,
+  set: (_target, key, val) => {
+    zohoBuyerPricingOverrides[key] = val;
+    return true;
   },
-  version_3: {
-    '12_months': 9999,
-    '6_months': 10499,
+  deleteProperty: (_target, key) => {
+    delete zohoBuyerPricingOverrides[key];
+    return true;
   },
-};
+  has: (_target, key) => key in zohoBuyerPricingOverrides || key in getBuyerSubscriptionPricing(),
+  ownKeys: () => [...new Set([...Object.keys(getBuyerSubscriptionPricing()), ...Object.keys(zohoBuyerPricingOverrides)])],
+  getOwnPropertyDescriptor: (_target, key) => {
+    const val = key in zohoBuyerPricingOverrides ? zohoBuyerPricingOverrides[key] : getBuyerSubscriptionPricing()[key];
+    if (val === undefined) return undefined;
+    return { enumerable: true, configurable: true, value: val, writable: true };
+  },
+});
 
 /** GST-inclusive amount Zoho actually charges for a buyer plan (monthlyRate * durationMonths * 1.18), or null if the plan isn't payable. */
 function computeZohoBuyerPlanAmount(planId, billingDuration = '12_months') {
@@ -919,9 +1023,109 @@ function computeZohoBuyerPlanAmount(planId, billingDuration = '12_months') {
   const duration = billingDuration === '6_months' ? '6_months' : '12_months';
   const months = duration === '6_months' ? 6 : 12;
   const monthlyRate = typeof planPricing === 'number' ? planPricing : planPricing[duration];
-  if (!Number.isFinite(monthlyRate)) return null;
+  if (!Number.isFinite(monthlyRate) || monthlyRate <= 0) return null;
   const base = monthlyRate * months;
   return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
+}
+
+function getSubscriptionPricingConfig() {
+  const gstPercent = getSubscriptionGstPercent();
+  const gstRate = ZOHO_CONFIG.GST_RATE ?? getSubscriptionGstRate();
+  const buyerPricing = getBuyerSubscriptionPricing();
+  const sellerPricing = getSellerSubscriptionPricing();
+
+  const makeBuyerDuration = (planId, dur, months) => {
+    const monthlyRate = buyerPricing[planId][dur];
+    const baseTotal = monthlyRate * months;
+    const gstAmount = Math.round(baseTotal * gstRate * 100) / 100;
+    const totalAmount = computeZohoBuyerPlanAmount(planId, dur);
+    return {
+      monthlyRate,
+      price: monthlyRate,
+      months,
+      baseTotal,
+      baseDurationPrice: baseTotal,
+      gstAmount,
+      totalAmountWithGst: totalAmount,
+      totalWithGst: totalAmount,
+    };
+  };
+
+  const makeSellerDuration = (planId, dur) => {
+    const baseAmount = sellerPricing[planId][dur];
+    const gstAmount = Math.round(baseAmount * gstRate * 100) / 100;
+    const totalAmount = computeZohoPlanAmount(planId, dur);
+    return {
+      baseAmount,
+      price: totalAmount,
+      baseDurationPrice: baseAmount,
+      gstAmount,
+      totalAmountWithGst: totalAmount,
+      totalWithGst: totalAmount,
+    };
+  };
+
+  const v1_12 = makeBuyerDuration('version_1', '12_months', 12);
+  const v1_6 = makeBuyerDuration('version_1', '6_months', 6);
+  const v2_12 = makeBuyerDuration('version_2', '12_months', 12);
+  const v2_6 = makeBuyerDuration('version_2', '6_months', 6);
+  const v3_12 = makeBuyerDuration('version_3', '12_months', 12);
+  const v3_6 = makeBuyerDuration('version_3', '6_months', 6);
+
+  const conn_12 = makeSellerDuration('connect', '12_months');
+  const conn_6 = makeSellerDuration('connect', '6_months');
+  const sel_12 = makeSellerDuration('select', '12_months');
+  const sel_6 = makeSellerDuration('select', '6_months');
+
+  return {
+    gstPercent,
+    gstRate,
+    buyer: {
+      version_1: {
+        id: 'version_1',
+        name: 'Silver Plan (Mode 1)',
+        '12_months': v1_12,
+        '6_months': v1_6,
+        pricing: { '12_months': v1_12, '6_months': v1_6 },
+      },
+      version_2: {
+        id: 'version_2',
+        name: 'Gold Plan (Mode 2)',
+        '12_months': v2_12,
+        '6_months': v2_6,
+        pricing: { '12_months': v2_12, '6_months': v2_6 },
+      },
+      version_3: {
+        id: 'version_3',
+        name: 'Diamond Plan (Mode 3)',
+        '12_months': v3_12,
+        '6_months': v3_6,
+        pricing: { '12_months': v3_12, '6_months': v3_6 },
+      },
+    },
+    seller: {
+      premium: {
+        id: 'premium',
+        name: 'Premium Model',
+        free: true,
+        price: 'Free',
+      },
+      connect: {
+        id: 'connect',
+        name: 'Connect Model',
+        '12_months': conn_12,
+        '6_months': conn_6,
+        pricing: { '12_months': conn_12, '6_months': conn_6 },
+      },
+      select: {
+        id: 'select',
+        name: 'Select Model',
+        '12_months': sel_12,
+        '6_months': sel_6,
+        pricing: { '12_months': sel_12, '6_months': sel_6 },
+      },
+    },
+  };
 }
 
 // ==============================================================================
@@ -1070,13 +1274,90 @@ const BUYER_SUBSCRIPTION_TO_SOURCING_MODE = {
 };
 
 /**
+ * Helper to unwrap raw JSON payload from D1/Postgres database rows if present.
+ */
+function unwrapAccountData(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  if (obj.raw) {
+    if (typeof obj.raw === 'string') {
+      try {
+        const parsed = JSON.parse(obj.raw);
+        return { ...parsed, ...obj };
+      } catch (_) {}
+    } else if (typeof obj.raw === 'object') {
+      return { ...obj.raw, ...obj };
+    }
+  }
+  return obj;
+}
+
+/**
+ * Check if a buyer account has database-configured unlimited RFQ creation access.
+ * Reads database-level flags without hardcoding any identity credentials.
+ */
+function hasUnlimitedRfqAccess(account) {
+  const data = unwrapAccountData(account);
+  if (!data || typeof data !== 'object') return false;
+  return Boolean(
+    data.unlimitedRfqAccess === true ||
+    data.unlimitedAccess === true ||
+    data.isUnlimited === true ||
+    String(data.subscriptionPlan || '').trim().toLowerCase() === 'unlimited'
+  );
+}
+
+/**
+ * Check if a vendor account has database-configured unlimited quote submission access.
+ * Reads database-level flags without hardcoding any identity credentials.
+ */
+function hasUnlimitedQuoteAccess(vendor) {
+  const data = unwrapAccountData(vendor);
+  if (!data || typeof data !== 'object') return false;
+  return Boolean(
+    data.unlimitedQuoteSubmissions === true ||
+    data.unlimitedQuotes === true ||
+    data.unlimitedAccess === true ||
+    data.isUnlimited === true
+  );
+}
+
+/**
+ * Check if a vendor account has database-configured unlimited RFQ download access.
+ * Reads database-level flags without hardcoding any identity credentials.
+ */
+function hasUnlimitedDownloadAccess(vendor) {
+  const data = unwrapAccountData(vendor);
+  if (!data || typeof data !== 'object') return false;
+  return Boolean(
+    data.unlimitedRfqDownloads === true ||
+    data.unlimitedDownloads === true ||
+    data.unlimitedAccess === true ||
+    data.isUnlimited === true
+  );
+}
+
+/**
+ * Entitled sourcing modes per subscription plan tier.
+ */
+const SUBSCRIPTION_MODE_ENTITLEMENTS = {
+  free_trial: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
+  version_0: ['mode_0'],
+  v0: ['mode_0'],
+  version_1: ['mode_0', 'mode_1'],
+  version_2: ['mode_0', 'mode_1', 'mode_2'],
+  version_3: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
+  unlimited: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
+};
+
+/**
  * Resolves the RFQ version / sourcing mode based upon the subscription of the buyer.
  * Defaults to INGESTED_SOURCING_MODE ('mode_2') for free starter trial / unselected plan.
  *
  * @param {Object|string|null|undefined} buyerAccountOrPlan - Buyer account object or subscription plan string
+ * @param {string} [preferredMode] - Optional requested mode
  * @returns {string} Sourcing mode ('mode_0' | 'mode_1' | 'mode_2' | 'mode_3')
  */
-function resolveBuyerSourcingMode(buyerAccountOrPlan) {
+function resolveBuyerSourcingMode(buyerAccountOrPlan, preferredMode = null) {
   let plan = null;
   let subscriptions = [];
   let isExpired = false;
@@ -1084,6 +1365,16 @@ function resolveBuyerSourcingMode(buyerAccountOrPlan) {
   let remainingFreeRFQs = undefined;
 
   if (typeof buyerAccountOrPlan === 'object' && buyerAccountOrPlan !== null) {
+    // Database-level unlimited access bypasses subscription restrictions
+    if (hasUnlimitedRfqAccess(buyerAccountOrPlan)) {
+      const requestedMode = (preferredMode || buyerAccountOrPlan.sourcingMode || buyerAccountOrPlan.sourcing_mode || '').trim().toLowerCase();
+      if (['mode_0', 'v0', 'version_0'].includes(requestedMode)) return 'mode_0';
+      if (['mode_1', 'v1', 'version_1'].includes(requestedMode)) return 'mode_1';
+      if (['mode_2', 'v2', 'version_2'].includes(requestedMode)) return 'mode_2';
+      if (['mode_3', 'v3', 'version_3'].includes(requestedMode)) return 'mode_3';
+      return 'mode_3';
+    }
+
     plan = buyerAccountOrPlan.subscriptionPlan || buyerAccountOrPlan.activeSubscription || null;
     remainingFreeRFQs = buyerAccountOrPlan.remainingFreeRFQs;
     if (Array.isArray(buyerAccountOrPlan.subscriptions)) {
@@ -1116,7 +1407,7 @@ function resolveBuyerSourcingMode(buyerAccountOrPlan) {
 
     if (activeSubs.length > 0) {
       const activePlans = activeSubs.map((s) => String(s.plan || s.subscriptionPlan || s.id || '').trim().toLowerCase());
-      if (activePlans.some((p) => p === 'version_3' || p === 'v3' || p === 'mode_3')) {
+      if (activePlans.some((p) => p === 'unlimited' || p === 'version_3' || p === 'v3' || p === 'mode_3')) {
         return 'mode_3';
       }
       if (activePlans.some((p) => p === 'version_2' || p === 'v2' || p === 'mode_2')) {
@@ -1139,6 +1430,9 @@ function resolveBuyerSourcingMode(buyerAccountOrPlan) {
   // Check single active subscription
   if (typeof plan === 'string') {
     const normalized = plan.trim().toLowerCase();
+    if (normalized === 'unlimited') {
+      return 'mode_3';
+    }
     if (['version_1', 'v1', 'mode_1'].includes(normalized)) {
       return 'mode_1';
     }
@@ -1913,6 +2207,11 @@ module.exports = {
   computeZohoPlanAmount,
   ZOHO_BUYER_SUBSCRIPTION_PRICING,
   computeZohoBuyerPlanAmount,
+  getSubscriptionPricingConfig,
+  getSubscriptionGstPercent,
+  getSubscriptionGstRate,
+  getBuyerSubscriptionPricing,
+  getSellerSubscriptionPricing,
   EMAIL_REGEX,
   GSTIN_REGEX,
   GSTIN_MESSAGE,
@@ -1937,6 +2236,10 @@ module.exports = {
   validatePayload,
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
+  SUBSCRIPTION_MODE_ENTITLEMENTS,
+  hasUnlimitedRfqAccess,
+  hasUnlimitedQuoteAccess,
+  hasUnlimitedDownloadAccess,
   CHASER_DELAYS,
   SMS_DLT_TEMPLATES,
   PRESENCE_ONLINE_THRESHOLD_MS,
