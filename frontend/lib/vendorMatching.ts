@@ -66,6 +66,20 @@ export function extractRfqCategorySignals(form: {
   return { signals, rawSignals };
 }
 
+function matchesCategoryToken(target: string, signal: string): boolean {
+  if (!target || !signal) return false;
+  const t = target.trim().toLowerCase();
+  const s = signal.trim().toLowerCase();
+  if (t === s) return true;
+  // Word boundary regex check to prevent substring collisions (e.g. "it" in "security")
+  const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sReg = new RegExp(`(^|\\b)${escapeRegExp(s)}(\\b|$)`, 'i');
+  if (sReg.test(t)) return true;
+  const tReg = new RegExp(`(^|\\b)${escapeRegExp(t)}(\\b|$)`, 'i');
+  if (tReg.test(s)) return true;
+  return false;
+}
+
 /**
  * Checks if a vendor's categories match the given RFQ category signals.
  */
@@ -76,9 +90,6 @@ export function matchVendorAgainstSignals(
   if (!vendor || !signals || signals.length === 0) {
     return { isMatch: false, matchScore: 0, matchedCategories: [], matchedMajor: vendor?.majorCategory || 'General Industrial' };
   }
-
-  const matched = new Set<string>();
-  let highestScore = 0;
 
   const vendorMajor = vendor.majorCategory ? normalizeCategory(vendor.majorCategory) : '';
   const vendorMinors = (Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [])
@@ -91,6 +102,14 @@ export function matchVendorAgainstSignals(
     .map(normalizeCategory)
     .filter(Boolean);
 
+  const hasAnyCategory = Boolean(vendorMajor || vendorMinors.length > 0 || vendorSelected.length > 0 || vendorMapped.length > 0);
+  if (!hasAnyCategory) {
+    return { isMatch: false, matchScore: 0, matchedCategories: [], matchedMajor: 'General Industrial' };
+  }
+
+  const matched = new Set<string>();
+  let highestScore = 0;
+
   for (const signal of signals) {
     if (!signal) continue;
 
@@ -100,7 +119,7 @@ export function matchVendorAgainstSignals(
       if (vMinor === signal) {
         matched.add(vendor.minorCategories![i]);
         highestScore = Math.max(highestScore, 98);
-      } else if (vMinor.includes(signal) || signal.includes(vMinor)) {
+      } else if (matchesCategoryToken(vMinor, signal)) {
         matched.add(vendor.minorCategories![i]);
         highestScore = Math.max(highestScore, 92);
       }
@@ -112,7 +131,7 @@ export function matchVendorAgainstSignals(
       if (vMapped === signal) {
         matched.add(vendor.clientMappedCategories![i]);
         highestScore = Math.max(highestScore, 96);
-      } else if (vMapped.includes(signal) || signal.includes(vMapped)) {
+      } else if (matchesCategoryToken(vMapped, signal)) {
         matched.add(vendor.clientMappedCategories![i]);
         highestScore = Math.max(highestScore, 90);
       }
@@ -123,7 +142,7 @@ export function matchVendorAgainstSignals(
       if (vendorMajor === signal) {
         matched.add(vendor.majorCategory!);
         highestScore = Math.max(highestScore, 95);
-      } else if (vendorMajor.includes(signal) || signal.includes(vendorMajor)) {
+      } else if (matchesCategoryToken(vendorMajor, signal)) {
         matched.add(vendor.majorCategory!);
         highestScore = Math.max(highestScore, 88);
       }
@@ -135,7 +154,7 @@ export function matchVendorAgainstSignals(
       if (vSel === signal) {
         matched.add(vendor.vendorSelectedCategories![i]);
         highestScore = Math.max(highestScore, 94);
-      } else if (vSel.includes(signal) || signal.includes(vSel)) {
+      } else if (matchesCategoryToken(vSel, signal)) {
         matched.add(vendor.vendorSelectedCategories![i]);
         highestScore = Math.max(highestScore, 86);
       }

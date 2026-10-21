@@ -226,43 +226,24 @@ export default function DailyDownloadableReports({ initialCategory = 'seller' }:
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-5">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-indigo-600/10 dark:bg-indigo-500/20 rounded-lg text-indigo-600 dark:text-indigo-400">
-              <FileSpreadsheet className="w-6 h-6" />
-            </div>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">
-                Daily Downloadable Reports
-              </h1>
-              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-                Operational auditing, daily activity, seller interactions, and RFQ dispatch reports for Category Managers.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Global Export Actions */}
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={handleExportExcel}
-            disabled={loading || reportData.length === 0}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Download className="w-4 h-4" />
-            <span>Excel (.xlsx)</span>
-          </button>
-          <button
-            onClick={handleExportCsv}
-            disabled={loading || reportData.length === 0}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 text-white text-xs sm:text-sm font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Download className="w-4 h-4" />
-            <span>CSV (.csv)</span>
-          </button>
-        </div>
+      {/* Global Export Actions */}
+      <div className="flex items-center justify-end gap-2.5 pb-1">
+        <button
+          onClick={handleExportExcel}
+          disabled={loading || reportData.length === 0}
+          className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Download className="w-4 h-4" />
+          <span>Excel (.xlsx)</span>
+        </button>
+        <button
+          onClick={handleExportCsv}
+          disabled={loading || reportData.length === 0}
+          className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 text-white text-xs sm:text-sm font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Download className="w-4 h-4" />
+          <span>CSV (.csv)</span>
+        </button>
       </div>
 
       {/* Category Tabs */}

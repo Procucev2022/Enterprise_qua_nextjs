@@ -44,7 +44,7 @@ describe('DailyDownloadableReports Component Suite', () => {
   test('renders page title, category tabs, and initial report data', async () => {
     render(<DailyDownloadableReports initialCategory="seller" />);
 
-    expect(screen.getByText('Daily Downloadable Reports')).toBeInTheDocument();
+    expect(screen.getByText('Excel (.xlsx)')).toBeInTheDocument();
     expect(screen.getByText('Seller Reports')).toBeInTheDocument();
     expect(screen.getByText('RFQ Reports')).toBeInTheDocument();
     expect(screen.getByText('Buyer Reports')).toBeInTheDocument();
@@ -253,6 +253,6 @@ describe('DailyDownloadableReports Component Suite', () => {
 
   test('page wrapper component CategoryManagerDailyReportsPage mounts successfully', () => {
     render(<CategoryManagerDailyReportsPage />);
-    expect(screen.getByText('Daily Downloadable Reports')).toBeInTheDocument();
+    expect(screen.getByText('Seller Reports')).toBeInTheDocument();
   });
 });
