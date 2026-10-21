@@ -40,6 +40,7 @@ const {
   EMAIL_GATEWAY_STATE,
   EMAIL_INGESTION_STATUS,
   resolveBuyerSourcingMode,
+  hasUnlimitedRfqAccess,
   SYSTEM_ACTOR_EMAIL,
   VENDOR_QUOTE_SUPPORT_CC,
 } = require('../config/constants');
@@ -875,6 +876,7 @@ function notifyRfqNotCreated(message, reason, { buyerAccount = null, config = {}
  */
 function checkRfqCredits(buyerAccount, sourcingMode, needed) {
   if (!buyerAccount || !buyerAccount.id) return { ok: true, applies: false };
+  if (hasUnlimitedRfqAccess(buyerAccount)) return { ok: true, applies: false };
   const plan = buyerAccount.subscriptionPlan || 'free_trial';
   const isPaidPlan = plan === 'version_1' || plan === 'version_2' || plan === 'version_3';
   const isV0 = sourcingMode === 'mode_0' || sourcingMode === 'v0' || sourcingMode === 'version_0';

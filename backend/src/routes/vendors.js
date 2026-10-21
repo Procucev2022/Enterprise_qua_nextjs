@@ -10,6 +10,7 @@ router.get('/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/presence', optionalAuthenticate, vendorController.getVendorsPresence);
 router.post('/heartbeat', optionalAuthenticate, vendorController.recordVendorHeartbeat);
 router.get('/bulk-import/:sessionId', authenticate, vendorController.getBulkImportSessionStatus);
+router.get('/subscription-pricing', vendorController.getSubscriptionPricing);
 router.get('/:id/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/:id', optionalAuthenticate, vendorController.getVendorById);
 router.put('/:id', authenticate, vendorController.updateVendor);

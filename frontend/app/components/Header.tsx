@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { useRouter } from 'next/navigation';
-import { ROLE_SIDEBAR_NAV, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS } from '@/lib/constants';
+import { ROLE_SIDEBAR_NAV, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS, hasUnlimitedAccess } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import NotificationBell from '@/app/components/NotificationBell';

@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
+import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
 import { Sparkles, ShieldCheck, Check, Zap, Calendar, CheckCircle2, Building2, X, Shield, Crown, Gem } from 'lucide-react';
 
 export type BillingDuration = '6_months' | '12_months';
@@ -113,7 +114,40 @@ export default function SubscriptionCenter() {
   } = useApp();
 
   const [billingDuration, setBillingDuration] = useState<BillingDuration>('12_months');
+  const [buyerPricing, setBuyerPricing] = useState(BUYER_PRICING);
   const [pendingPayment, setPendingPayment] = useState<{ planId: 'version_1' | 'version_2' | 'version_3' } | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    void fetchSubscriptionPricing().then((config) => {
+      if (!isMounted || !config?.buyer) return;
+      const formatINR = (val: number) => `₹${Math.round(val).toLocaleString('en-IN')}`;
+      const formatINRDecimal = (val: number) => `₹${val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+      const newPricing: typeof BUYER_PRICING = JSON.parse(JSON.stringify(BUYER_PRICING));
+      (['6_months', '12_months'] as const).forEach((dur) => {
+        (['version_1', 'version_2', 'version_3'] as const).forEach((planKey) => {
+          const planData = config.buyer[planKey]?.[dur];
+          if (planData) {
+            const months = dur === '6_months' ? 6 : 12;
+            newPricing[dur][planKey] = {
+              ...newPricing[dur][planKey],
+              price: formatINR(planData.price),
+              amount: planData.price,
+              baseDurationLabel: `${formatINR(planData.baseDurationPrice)} (${formatINR(planData.price)} × ${months} months)`,
+              gstAmount: formatINRDecimal(planData.gstAmount),
+              totalPriceWithGst: formatINRDecimal(planData.totalWithGst),
+              totalAmountWithGst: planData.totalWithGst,
+            };
+          }
+        });
+      });
+      setBuyerPricing(newPricing);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const [isEnterpriseModalOpen, setIsEnterpriseModalOpen] = useState(false);
   const [enterpriseSubmitted, setEnterpriseSubmitted] = useState(false);
@@ -444,7 +478,7 @@ export default function SubscriptionCenter() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {plans.map((p) => {
           const isActive = activeSubscription === p.id;
-          const priceInfo = BUYER_PRICING[billingDuration][p.id];
+          const priceInfo = buyerPricing[billingDuration][p.id];
           const isRec = p.isRecommended;
 
           return (
@@ -735,13 +769,13 @@ export default function SubscriptionCenter() {
         onClose={() => setPendingPayment(null)}
         planId={pendingPayment?.planId || 'version_1'}
         planName={pendingPayment ? PLAN_LABEL[pendingPayment.planId] : ''}
-        price={pendingPayment ? BUYER_PRICING[billingDuration][pendingPayment.planId].totalPriceWithGst : ''}
+        price={pendingPayment ? buyerPricing[billingDuration][pendingPayment.planId].totalPriceWithGst : ''}
         billingDurationLabel={billingDuration === '12_months' ? '12 Months (Recommended)' : '6 Months'}
         breakdown={
           pendingPayment
             ? {
-                basePrice: BUYER_PRICING[billingDuration][pendingPayment.planId].baseDurationLabel,
-                gstAmount: BUYER_PRICING[billingDuration][pendingPayment.planId].gstAmount,
+                basePrice: buyerPricing[billingDuration][pendingPayment.planId].baseDurationLabel,
+                gstAmount: buyerPricing[billingDuration][pendingPayment.planId].gstAmount,
               }
             : undefined
         }

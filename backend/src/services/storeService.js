@@ -5,6 +5,9 @@ const {
   SYSTEM_ACTOR_EMAIL,
   RFQ_DEFAULTS,
   resolveBuyerSourcingMode,
+  hasUnlimitedRfqAccess,
+  hasUnlimitedQuoteAccess,
+  hasUnlimitedDownloadAccess,
   VENDOR_FREE_CREDITS_LIMIT,
   VENDOR_ASSIGNMENT_LIMITS,
 } = require('../config/constants');
@@ -571,6 +574,9 @@ class StoreService {
     const idx = this.buyerAccounts.findIndex((a) => a.id === id);
     if (idx === -1) return { ok: false, remaining: 0 };
     const buyer = this.buyerAccounts[idx];
+    if (hasUnlimitedRfqAccess(buyer)) {
+      return { ok: true, remaining: buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 999999 };
+    }
     const remaining = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 5;
     if (remaining <= 0) {
       return { ok: false, remaining: 0 };
@@ -595,6 +601,7 @@ class StoreService {
     const idx = this.buyerAccounts.findIndex((a) => a.id === id);
     if (idx === -1) return;
     const buyer = this.buyerAccounts[idx];
+    if (hasUnlimitedRfqAccess(buyer)) return;
     const current = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 0;
     const updated = {
       ...buyer,
@@ -625,6 +632,7 @@ class StoreService {
    *   • V1/V2/V3 RFQs on the `free_trial` plan consume 1 of the 5 free credits.
    *   • V1/V2/V3 RFQs on a paid plan (version_1/2/3) consume 0 (quota is by mode).
    *   • An account with no buyer record (admin/CM-raised) consumes nothing.
+   *   • Unlimited RFQ accounts consume 0 credits across all modes.
    *
    * Email-ingested RFQs previously bypassed this entirely by calling createRFQ
    * directly, so a buyer's sourcing-credit count under-reported every RFQ that
@@ -637,8 +645,15 @@ class StoreService {
   consumeRFQCreditIfApplicable(buyerAccount, sourcingMode) {
     if (!buyerAccount || !buyerAccount.id) return { consumed: false, remaining: null };
 
+    // Database-level unlimited RFQ access bypasses credit deductions
+    if (hasUnlimitedRfqAccess(buyerAccount)) {
+      const current =
+        buyerAccount.remainingFreeRFQs !== undefined ? buyerAccount.remainingFreeRFQs : null;
+      return { consumed: false, remaining: current };
+    }
+
     const plan = buyerAccount.subscriptionPlan || 'free_trial';
-    const isPaidPlan = plan === 'version_1' || plan === 'version_2' || plan === 'version_3';
+    const isPaidPlan = plan === 'version_1' || plan === 'version_2' || plan === 'version_3' || plan === 'unlimited';
 
     // V0 and paid plans never draw down the free-trial credit pool.
     if (this.isV0SourcingMode(sourcingMode) || isPaidPlan) {
@@ -1283,7 +1298,8 @@ class StoreService {
    * Once free credits are exhausted, an active paid subscription ('connect' or 'select')
    * is strictly required.
    */
-  checkVendorQuotationEligibility(vendor, rfq = null) {
+  checkVendorQuotationEligibility(vendorOrId, rfq = null) {
+    const vendor = typeof vendorOrId === 'string' ? this.getVendorById(vendorOrId, 'all') : vendorOrId;
     if (!vendor) {
       return {
         eligible: false,
@@ -1295,6 +1311,7 @@ class StoreService {
       };
     }
 
+    const hasUnlimitedQuotes = hasUnlimitedQuoteAccess(vendor);
     const isBuyerMapped = Boolean(rfq && this.isVendorMappedToRfqBuyer(vendor, rfq));
 
     const freeCredits = vendor.freeQuotationCredits !== undefined
@@ -1305,17 +1322,19 @@ class StoreService {
       vendor.subscriptionPlan === 'connect' ||
       vendor.subscriptionPlan === 'select' ||
       vendor.isSubscribed === true ||
-      vendor.subscriptionStatus === 'active'
+      vendor.subscriptionStatus === 'active' ||
+      hasUnlimitedQuotes
     );
 
-    // If buyer-mapped for this respective buyer's RFQ: unlimited quotations, no subscription needed.
-    const eligible = isBuyerMapped || freeCredits > 0 || isSubscribed;
+    // If buyer-mapped for this respective buyer's RFQ or has unlimited quotes: unlimited quotations, no subscription needed.
+    const eligible = hasUnlimitedQuotes || isBuyerMapped || freeCredits > 0 || isSubscribed;
 
     return {
       eligible,
-      freeCreditsRemaining: Math.max(0, freeCredits),
-      isSubscribed: isSubscribed || isBuyerMapped,
+      freeCreditsRemaining: hasUnlimitedQuotes ? 999999 : Math.max(0, freeCredits),
+      isSubscribed: isSubscribed || isBuyerMapped || hasUnlimitedQuotes,
       isBuyerMapped,
+      hasUnlimitedQuotes,
       subscriptionPlan: vendor.subscriptionPlan || 'premium',
     };
   }
@@ -1337,6 +1356,7 @@ class StoreService {
       };
     }
 
+    const hasUnlimitedDownloads = hasUnlimitedDownloadAccess(vendor);
     const freeCredits = vendor.freeQuotationCredits !== undefined
       ? Number(vendor.freeQuotationCredits)
       : (vendor.freeRfqDownloadCredits !== undefined ? Number(vendor.freeRfqDownloadCredits) : VENDOR_FREE_CREDITS_LIMIT);
@@ -1345,11 +1365,12 @@ class StoreService {
       vendor.subscriptionPlan === 'connect' ||
       vendor.subscriptionPlan === 'select' ||
       vendor.isSubscribed === true ||
-      vendor.subscriptionStatus === 'active'
+      vendor.subscriptionStatus === 'active' ||
+      hasUnlimitedDownloads
     );
 
-    const allocated = vendor.freeCreditsAllocated !== undefined ? Number(vendor.freeCreditsAllocated) : VENDOR_FREE_CREDITS_LIMIT;
-    const remaining = Math.max(0, freeCredits);
+    const allocated = hasUnlimitedDownloads ? 999999 : (vendor.freeCreditsAllocated !== undefined ? Number(vendor.freeCreditsAllocated) : VENDOR_FREE_CREDITS_LIMIT);
+    const remaining = hasUnlimitedDownloads ? 999999 : Math.max(0, freeCredits);
     const used = vendor.freeCreditsUsed !== undefined ? Number(vendor.freeCreditsUsed) : Math.max(0, allocated - remaining);
 
     return {
@@ -1358,6 +1379,7 @@ class StoreService {
       freeCreditsUsed: used,
       freeCreditsRemaining: remaining,
       isSubscribed,
+      hasUnlimitedDownloads,
       subscriptionPlan: vendor.subscriptionPlan || 'premium',
       unlockedRfqIds: Array.isArray(vendor.unlockedRfqIds) ? vendor.unlockedRfqIds : [],
     };
@@ -1375,6 +1397,11 @@ class StoreService {
 
     // Direct buyer-mapped vendors always have access without lock
     if (rfq && this.isVendorMappedToRfqBuyer(vendor, rfq)) {
+      return true;
+    }
+
+    // Unlimited access vendors bypass download lock
+    if (hasUnlimitedDownloadAccess(vendor)) {
       return true;
     }
 
@@ -1411,8 +1438,10 @@ class StoreService {
       };
     }
 
+    const hasUnlimitedDownloads = hasUnlimitedDownloadAccess(vendor);
+
     // Check if vendor has permission to access the RFQ
-    if (!this.vendorCoversRFQ(vendor, rfq)) {
+    if (!hasUnlimitedDownloads && !this.vendorCoversRFQ(vendor, rfq)) {
       return {
         success: false,
         error: 'You do not have permission to access this RFQ.',
@@ -1441,8 +1470,8 @@ class StoreService {
       };
     }
 
-    // Direct buyer-mapped or subscribed vendors do not consume free credits
-    if (isDirect || creditInfo.isSubscribed) {
+    // Direct buyer-mapped, subscribed, or unlimited download vendors do not consume free credits
+    if (isDirect || creditInfo.isSubscribed || hasUnlimitedDownloads) {
       if (!unlockedList.includes(normRfqId)) unlockedList.push(normRfqId);
       if (rfq.rfqNumber && !unlockedList.includes(normRfqNum)) unlockedList.push(normRfqNum);
 
@@ -1453,7 +1482,7 @@ class StoreService {
         vendorId: vendor.id,
         rfqId: rfq.id,
         creditCharged: 0,
-        source: isDirect ? 'buyer_mapped' : 'subscription',
+        source: isDirect ? 'buyer_mapped' : (hasUnlimitedDownloads ? 'unlimited_entitlement' : 'subscription'),
       });
 
       this.addAuditLog({
@@ -1466,7 +1495,7 @@ class StoreService {
         success: true,
         alreadyUnlocked: false,
         unlocked: true,
-        freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+        freeCreditsRemaining: hasUnlimitedDownloads ? 999999 : creditInfo.freeCreditsRemaining,
         creditCharged: 0,
         rfq,
         vendor,

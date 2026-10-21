@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
+import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
 import { authClient } from '@/lib/authClient';
 import { ShieldCheck, Check, Zap, Layers, AlertCircle, Download, Package, ArrowRight } from 'lucide-react';
 
@@ -72,6 +73,33 @@ export default function VendorSubscriptionCenter() {
 
   const [pendingPayment, setPendingPayment] = useState<{ planId: 'connect' | 'select'; planName: string; price: string } | null>(null);
   const [isUpdatingPlan, setIsUpdatingPlan] = useState(false);
+  const [vendorPricing, setVendorPricing] = useState({
+    connect: { price: '₹7,499', chargeAmount: '₹7,499' },
+    select: { price: '₹14,999', chargeAmount: '₹14,999' },
+  });
+
+  useEffect(() => {
+    let isMounted = true;
+    void fetchSubscriptionPricing().then((config) => {
+      if (!isMounted || !config?.seller) return;
+      const formatINR = (val: number) => `₹${Math.round(val).toLocaleString('en-IN')}`;
+      const connectData = config.seller.connect?.['12_months'] || config.seller.connect?.['6_months'];
+      const selectData = config.seller.select?.['12_months'] || config.seller.select?.['6_months'];
+      setVendorPricing({
+        connect: {
+          price: connectData ? formatINR(connectData.totalWithGst) : '₹7,499',
+          chargeAmount: connectData ? formatINR(connectData.totalWithGst) : '₹7,499',
+        },
+        select: {
+          price: selectData ? formatINR(selectData.totalWithGst) : '₹14,999',
+          chargeAmount: selectData ? formatINR(selectData.totalWithGst) : '₹14,999',
+        },
+      });
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const planLabel = (plan: 'premium' | 'connect' | 'select') =>
     plan === 'premium'
@@ -148,11 +176,11 @@ export default function VendorSubscriptionCenter() {
       name: 'Connect Model',
       subtext: 'Marketplace Expansion',
       originalPrice: '₹25,000',
-      price: '₹7,499',
+      price: vendorPricing.connect.price,
       // Must match the actual GST-inclusive amount Zoho charges
       // (computeZohoPlanAmount in backend/src/config/constants.js), so the
       // payment button never promises an amount the backend won't collect.
-      chargeAmount: '₹7,499',
+      chargeAmount: vendorPricing.connect.chargeAmount,
       billing: 'per year',
       description: 'Expand your market reach. Access & download open RFQs across the entire Procucev Network Marketplace.',
       badge: 'Popular for Growth',
@@ -175,8 +203,8 @@ export default function VendorSubscriptionCenter() {
       name: 'Select Model',
       subtext: 'Item Catalogue & High Volume',
       originalPrice: '₹50,000',
-      price: '₹14,999',
-      chargeAmount: '₹14,999',
+      price: vendorPricing.select.price,
+      chargeAmount: vendorPricing.select.chargeAmount,
       billing: 'per year',
       description: 'Complete tier for high-volume suppliers. Build your Item Catalogue and capture maximum marketplace demand.',
       badge: 'Full Suite',

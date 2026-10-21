@@ -29,6 +29,8 @@ import {
   ALLOWED_EXTENSION_HOURS,
   DEFAULT_EXTENSION_HOURS,
   calculateExtendedDeadline,
+  hasUnlimitedAccess,
+  UNLIMITED_ACCESS_EMAILS,
 } from '@/lib/constants';
 
 
@@ -329,6 +331,13 @@ describe('entitledSourcingModes', () => {
     expect(entitledSourcingModes('version_1')).toEqual(['mode_0', 'mode_1']);
     expect(entitledSourcingModes('version_2')).toEqual(['mode_0', 'mode_1', 'mode_2']);
     expect(entitledSourcingModes('version_3')).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes('unlimited')).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+  });
+
+  it('entitles all sourcing modes when unlimitedRfqAccess is true regardless of credits or plan', () => {
+    expect(entitledSourcingModes('free_trial', 0, true)).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes(null, 0, true)).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes('version_1', 0, true)).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
   });
 
   it('falls back to the most restrictive tier for an unrecognised plan string, not to allowing everything', () => {
@@ -337,6 +346,7 @@ describe('entitledSourcingModes', () => {
 
   it('is case-insensitive and trims whitespace', () => {
     expect(entitledSourcingModes(' Version_2 ')).toEqual(['mode_0', 'mode_1', 'mode_2']);
+    expect(entitledSourcingModes(' Unlimited ')).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
   });
 
   it('defaults to the most restrictive tier when the plan is unresolved (null/undefined), not to allowing everything', () => {
@@ -414,6 +424,27 @@ describe('normalizePoDate', () => {
       const extended = calculateExtendedDeadline(undefined, 24);
       const extendedMs = new Date(extended).getTime();
       expect(extendedMs).toBeGreaterThanOrEqual(before + 7 * 24 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000 - 1000);
+    });
+  });
+
+  describe('hasUnlimitedAccess', () => {
+    it('returns true for known unlimited email accounts', () => {
+      expect(hasUnlimitedAccess('procucevvendor@gmail.com')).toBe(true);
+      expect(hasUnlimitedAccess('sudheer.kangala@procucev.com')).toBe(true);
+      expect(hasUnlimitedAccess('  PROCUCEVVENDOR@GMAIL.COM  ')).toBe(true);
+      expect(hasUnlimitedAccess({ email: 'procucevvendor@gmail.com' })).toBe(true);
+    });
+
+    it('returns false for regular emails or null/undefined', () => {
+      expect(hasUnlimitedAccess('vendor@regular.com')).toBe(false);
+      expect(hasUnlimitedAccess(null)).toBe(false);
+      expect(hasUnlimitedAccess(undefined)).toBe(false);
+      expect(hasUnlimitedAccess({ email: '' })).toBe(false);
+    });
+
+    it('contains expected emails in UNLIMITED_ACCESS_EMAILS', () => {
+      expect(UNLIMITED_ACCESS_EMAILS.has('procucevvendor@gmail.com')).toBe(true);
+      expect(UNLIMITED_ACCESS_EMAILS.has('sudheer.kangala@procucev.com')).toBe(true);
     });
   });
 });

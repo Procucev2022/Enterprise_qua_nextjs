@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { formatFileSize } from '@/lib/constants';
+import { formatFileSize, hasUnlimitedAccess } from '@/lib/constants';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
 import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
 import type { RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
@@ -777,9 +777,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                   null
                 );
                 const parentCompany = getParentCompany(opp.buyer);
+                const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
+                  (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
+                  vendorSubscription === 'unlimited';
                 const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
-                const freeCredits = effectiveFreeCredits;
-                const isLocked = !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
+                const freeCredits = isUnlimited ? 999999 : effectiveFreeCredits;
+                const isLocked = !isUnlimited && !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
                 
                 // Condition: Buyer details remain hidden for 48 hours after bid submission.
                 // After 48 hours, buyer details automatically become visible.

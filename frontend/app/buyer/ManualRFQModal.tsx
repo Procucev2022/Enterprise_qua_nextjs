@@ -114,9 +114,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     // eslint-disable-next-line react-hooks/rules-of-hooks
     store = useApp();
     buyerVendors = store?.buyerVendors || [];
+    const hasUnlimited = Boolean(store?.activeBuyerAccount?.unlimitedRfqAccess || store?.activeBuyerAccount?.unlimitedAccess);
     entitledModes = entitledSourcingModes(
       store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription,
-      store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs
+      store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs,
+      hasUnlimited
     );
     remainingFreeRFQs = store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs ?? 5;
     activeSubscription = store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription ?? 'free_trial';
@@ -125,7 +127,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     buyerVendors = [];
   }
   const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
-  const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(activeSubscription);
+  const hasUnlimited = Boolean(activeBuyerAccount?.unlimitedRfqAccess || activeBuyerAccount?.unlimitedAccess);
+  const isPaidPlan = hasUnlimited || ['version_1', 'version_2', 'version_3', 'unlimited'].includes(activeSubscription);
   const isQuotaExhausted = !isPaidPlan && remainingFreeRFQs <= 0 && form.sourcingMode !== 'mode_0';
 
   useEffect(() => {

@@ -250,7 +250,7 @@ async function checkDatabaseHealth() {
   // leftover DATABASE_URL secret reported reachability/row-counts against
   // an unrelated personal Neon database instead of the D1 store the app
   // actually reads and writes.
-  const d1 = getD1Binding();
+  const d1 = getD1Binding() || getD1HttpClient();
   if (d1) {
     const startedAt = Date.now();
     try {
@@ -261,7 +261,7 @@ async function checkDatabaseHealth() {
         isConnected: true,
         provider: 'cloudflare_d1',
         providerLabel: 'Cloudflare D1',
-        poolStatus: 'ACTIVE (D1 binding)',
+        poolStatus: getD1Binding() ? 'ACTIVE (D1 binding)' : 'ACTIVE (D1 HTTP REST)',
         database: 'enterprise-qua-d1',
         latencyMs: Date.now() - startedAt,
         userCount: Number(row.user_count || 0),

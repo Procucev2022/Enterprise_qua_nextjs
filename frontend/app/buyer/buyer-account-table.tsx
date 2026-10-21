@@ -78,7 +78,7 @@ export default function BuyerAccountTable() {
   const [industry, setIndustry] = useState('Heavy Engineering & Manufacturing');
   const [plantLocation, setPlantLocation] = useState('Navi Mumbai Hub, MH');
   const [sourcingMode, setSourcingMode] = useState<SourcingMode>('mode_2');
-  const [plan, setPlan] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3'>('version_2');
+  const [plan, setPlan] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'unlimited'>('version_2');
   const [freeRfqs, setFreeRfqs] = useState(5);
   const [accountSource, setAccountSource] = useState<'public_system' | 'web_registration' | 'enterprise_sso'>('public_system');
   const [selectedMajors, setSelectedMajors] = useState<string[]>([

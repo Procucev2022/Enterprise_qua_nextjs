@@ -7,7 +7,11 @@ import type { PaymentLinkCreateResult } from './types';
  * upgrade. The caller redirects the browser to the returned `paymentUrl` — Zoho
  * hosts the actual payment page, so no card details ever reach this app.
  */
-export async function createPaymentLink(vendorId: string, plan: string): Promise<PaymentLinkCreateResult> {
+export async function createPaymentLink(
+  vendorId: string,
+  plan: string,
+  billingDuration?: '6_months' | '12_months'
+): Promise<PaymentLinkCreateResult> {
   const token = authClient.getToken();
 
   let res: Response;
@@ -18,7 +22,7 @@ export async function createPaymentLink(vendorId: string, plan: string): Promise
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ plan }),
+      body: JSON.stringify(billingDuration ? { plan, billingDuration } : { plan }),
     });
   } catch {
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
@@ -150,3 +154,31 @@ export async function createBuyerPaymentLink(
     status: body.data.status || '',
   };
 }
+
+export interface SubscriptionPricingPlanData {
+  price: number;
+  baseDurationPrice: number;
+  gstAmount: number;
+  totalWithGst: number;
+}
+
+export interface SubscriptionPricingResponse {
+  gstPercent: number;
+  gstRate: number;
+  buyer: Record<string, Record<string, SubscriptionPricingPlanData>>;
+  seller: Record<string, Record<string, SubscriptionPricingPlanData>>;
+}
+
+export async function fetchSubscriptionPricing(): Promise<SubscriptionPricingResponse | null> {
+  try {
+    const res = await fetch('/api/subscriptions/pricing');
+    const body = await res.json().catch(() => null);
+    if (res.ok && body?.success && body?.data) {
+      return body.data as SubscriptionPricingResponse;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
