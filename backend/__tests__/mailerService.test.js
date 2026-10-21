@@ -1170,6 +1170,17 @@ describe('mailerService', () => {
       expect(mailerService.getLogoUrl()).toBe('https://enterprise.procucev.com/procucev-logo.png');
       delete process.env.PUBLIC_FRONTEND_URL;
 
+      // Production fallback and dev link safeguard
+      process.env.NODE_ENV = 'production';
+      expect(mailerService.getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+      expect(mailerService.vendorSignInUrl()).toBe('https://equa.procucev.com/login');
+
+      process.env.PUBLIC_FRONTEND_URL = 'https://procucev-enterprise-frontend.srinivas-mukku.workers.dev';
+      expect(mailerService.getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+      expect(mailerService.vendorSignInUrl()).toBe('https://equa.procucev.com/login');
+      delete process.env.PUBLIC_FRONTEND_URL;
+      process.env.NODE_ENV = 'test';
+
       // Cloudflare worker global context
       globalThis.__CF_ENV__ = { PUBLIC_FRONTEND_URL: 'https://cf-worker-frontend.dev' };
       expect(mailerService.getPublicFrontendUrl()).toBe('https://cf-worker-frontend.dev');

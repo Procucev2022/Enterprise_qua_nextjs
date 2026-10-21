@@ -109,7 +109,20 @@ function getPublicFrontendUrl() {
     getEnv('APP_PUBLIC_URL') ||
     getEnv('FRONTEND_URL');
   if (envVal && typeof envVal === 'string' && envVal.trim()) {
-    return envVal.trim().replace(/\/+$/, '');
+    const trimmed = envVal.trim().replace(/\/+$/, '');
+    if (trimmed.includes('srinivas-mukku.workers.dev')) {
+      const isProd =
+        getEnv('NODE_ENV') === 'production' ||
+        getEnv('ENVIRONMENT') === 'production' ||
+        getEnv('ENVIRONMENT') === 'prod';
+      if (isProd) {
+        return 'https://equa.procucev.com';
+      }
+    }
+    return trimmed;
+  }
+  if (getEnv('NODE_ENV') === 'production') {
+    return 'https://equa.procucev.com';
   }
   return 'http://localhost:3000';
 }
