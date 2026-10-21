@@ -29,9 +29,10 @@ export function installApiFetchPatch(): void {
   win.__apiFetchPatched = true;
 
   const originalFetch = window.fetch;
+  const normalizedUrl = backendUrl.replace(/\/+$/, '');
   const patchedFetch = (input: RequestInfo | URL, init?: RequestInit) => {
     if (typeof input === 'string' && input.startsWith('/api/')) {
-      return originalFetch(`${backendUrl}${input}`, init);
+      return originalFetch(`${normalizedUrl}${input}`, init);
     }
     return originalFetch(input, init);
   };

@@ -834,9 +834,23 @@ async function extractRFQFromDocument(req, res, next) {
   try {
     const body = req.body || {};
 
+    logger.info(
+      `[RFQ_CONTROLLER] Received document extraction request for "${body.fileName || 'unnamed'}"`,
+      {
+        fileName: body.fileName || null,
+        mimeType: body.mimeType || null,
+        hasInlineData: Boolean(body.inlineData),
+        hasFileKey: Boolean(body.fileKey),
+        hasDocumentText: Boolean(body.documentText),
+        documentTextLength: body.documentText ? body.documentText.length : 0,
+        userEmail: req.user?.email || 'anonymous',
+      },
+      'RFQ_CONTROLLER'
+    );
+
     const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.extractRFQ, body);
     if (!isValid) {
-      logger.warn('Document extraction rejected: payload validation failed', { errors }, 'RFQ_CONTROLLER');
+      logger.warn('Document extraction rejected: payload validation failed', { errors, fileName: body.fileName }, 'RFQ_CONTROLLER');
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
 
@@ -848,13 +862,18 @@ async function extractRFQFromDocument(req, res, next) {
       // (the browser upload, the staging write) moved raw bytes, never base64.
       const buffer = await extractionStagingService.load(body.fileKey);
       if (!buffer) {
-        logger.warn('Document extraction rejected: staged document not found', { fileName: body.fileName }, 'RFQ_CONTROLLER');
+        logger.warn('Document extraction rejected: staged document not found', { fileName: body.fileName, fileKey: body.fileKey }, 'RFQ_CONTROLLER');
         return res.status(422).json({
           success: false,
           reason: 'NO_CONTENT',
           error: EXTRACTION_REASON_MESSAGES.NO_CONTENT || EXTRACTION_REASON_MESSAGES.AI_FAILED,
         });
       }
+      logger.info(
+        `[RFQ_CONTROLLER] Staged document loaded from storage (${buffer.length} bytes)`,
+        { fileName: body.fileName, fileKey: body.fileKey, sizeBytes: buffer.length },
+        'RFQ_CONTROLLER'
+      );
       inlineData = buffer.toString('base64');
     }
 
@@ -893,7 +912,18 @@ async function extractRFQFromDocument(req, res, next) {
       }
       extractionInput = prepared.extractionInput;
       sourceEmail = prepared.message.fromAddress;
+      logger.info(
+        `[RFQ_CONTROLLER] Email document prepared for extraction: from=${sourceEmail}`,
+        { fileName: body.fileName, sourceEmail },
+        'RFQ_CONTROLLER'
+      );
     }
+
+    logger.info(
+      `[RFQ_CONTROLLER] Dispatching document "${body.fileName || 'unnamed'}" to Gemini extraction pipeline`,
+      { fileName: body.fileName, mimeType: extractionInput.mimeType },
+      'RFQ_CONTROLLER'
+    );
 
     const extraction = await geminiService.extractLineItems(extractionInput);
 
@@ -914,6 +944,19 @@ async function extractRFQFromDocument(req, res, next) {
       });
     }
 
+    logger.info(
+      `[RFQ_CONTROLLER] Gemini extraction succeeded (${extraction.lineItems.length} items via ${extraction.model}); building RFQ draft and classifying taxonomy...`,
+      {
+        fileName: body.fileName,
+        model: extraction.model,
+        extractedItemsCount: extraction.lineItems.length,
+        documentTitle: extraction.documentTitle,
+        category: extraction.category,
+        estimatedBudget: extraction.estimatedBudget,
+      },
+      'RFQ_CONTROLLER'
+    );
+
     // Reuse the shared normalisation + taxonomy classification so an AI-extracted
     // RFQ is shaped identically to one keyed by hand.
     const { draft, classification } = await rfqIngestionService.buildRFQDraft({
@@ -929,6 +972,11 @@ async function extractRFQFromDocument(req, res, next) {
     });
 
     if (classification.accepted === 0) {
+      logger.warn(
+        `[RFQ_CONTROLLER] Document extraction rejected: 0 items accepted during taxonomy classification`,
+        { fileName: body.fileName, rejected: classification.rejected },
+        'RFQ_CONTROLLER'
+      );
       return res.status(422).json({
         success: false,
         reason: geminiService.EXTRACTION_STATUS.NO_ITEMS_FOUND,
@@ -938,7 +986,7 @@ async function extractRFQFromDocument(req, res, next) {
 
     logger.info(
       `Document extraction complete: ${classification.accepted} line items via ${extraction.model}`,
-      { ...classification, model: extraction.model },
+      { ...classification, model: extraction.model, fileName: body.fileName },
       'RFQ_CONTROLLER'
     );
 
