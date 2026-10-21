@@ -58,6 +58,7 @@ import {
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
   formatCurrency,
+  hasUnlimitedAccess,
 } from './constants';
 
 // Backend write endpoints now require a session token (Phase 4 authorization
@@ -565,8 +566,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try {
       const res = await fetchVendorRfqCredits();
       if (res.success && res.data) {
-        setVendorFreeCreditsRemaining(res.data.freeCreditsRemaining ?? 5);
-        setVendorFreeCreditsAllocated(res.data.freeCreditsAllocated ?? 5);
+        const isUnlimited = hasUnlimitedAccess(currentUserSession) || res.data.subscriptionPlan === 'unlimited';
+        setVendorFreeCreditsRemaining(isUnlimited ? 999999 : (res.data.freeCreditsRemaining ?? 5));
+        setVendorFreeCreditsAllocated(isUnlimited ? 999999 : (res.data.freeCreditsAllocated ?? 5));
         setVendorFreeCreditsUsed(res.data.freeCreditsUsed ?? 0);
         setVendorUnlockedRfqIds(res.data.unlockedRfqIds || []);
       }
@@ -650,9 +652,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
         if (sessionEmail && Array.isArray(d.vendors)) {
           const myVendor = d.vendors.find((v: VendorEntry) => v.email?.toLowerCase() === sessionEmail);
+          const isUnlimited = hasUnlimitedAccess(sessionEmail);
           if (myVendor) {
-            setVendorSubscription(myVendor.subscriptionPlan || 'premium');
+            setVendorSubscription(isUnlimited ? 'unlimited' : (myVendor.subscriptionPlan || 'premium'));
             setVendorRfqDownloadsUsed(myVendor.rfqDownloadsUsed || 0);
+          } else if (isUnlimited) {
+            setVendorSubscription('unlimited');
           }
         }
 

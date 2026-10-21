@@ -8,6 +8,7 @@ import { authClient } from '@/lib/authClient';
 import { rfqAttachmentUrl } from '@/lib/rfqClient';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
 import { VendorOpportunity } from '@/lib/types';
+import { hasUnlimitedAccess } from '@/lib/constants';
 import {
   Clock,
   AlertTriangle,
@@ -49,6 +50,9 @@ export default function OpportunityFeed({
     refreshVendorCredits,
   } = useApp();
   const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
+  const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
+    hasUnlimitedAccess(authClient.getSessionUser()?.email) ||
+    vendorSubscription === 'unlimited';
 
   const [showUpgradeModal, setShowUpgradeModal] = React.useState(false);
   const openUpgradeModal = () => setShowUpgradeModal(true);
@@ -552,7 +556,7 @@ export default function OpportunityFeed({
                 // (was two contradictory definitions) — 'connect'/'select' are
                 // the real marketplace-unlock tiers, not the unreachable
                 // 'premium_network'.
-                const isLocked = !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
+                const isLocked = !isUnlimited && !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = isRealCategoryMatch(opp);
                 const catalogueMatches = vendorCatalogue || [];
@@ -800,7 +804,7 @@ export default function OpportunityFeed({
               </div>
             ) : (
               networkOpps.map((opp) => {
-                const isLocked = !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
+                const isLocked = !isUnlimited && !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = isRealCategoryMatch(opp);
                 const catalogueMatches = vendorCatalogue || [];
