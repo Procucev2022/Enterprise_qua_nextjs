@@ -14,7 +14,19 @@ function getPublicFrontendUrl() {
     process.env.FRONTEND_URL ||
     (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.PUBLIC_FRONTEND_URL);
   if (envVal && typeof envVal === 'string' && envVal.trim()) {
-    return envVal.trim().replace(/\/+$/, '');
+    const trimmed = envVal.trim().replace(/\/+$/, '');
+    if (trimmed.includes('srinivas-mukku.workers.dev')) {
+      const isProd =
+        process.env.NODE_ENV === 'production' ||
+        (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && (globalThis.__CF_ENV__.NODE_ENV === 'production' || globalThis.__CF_ENV__.ENVIRONMENT === 'prod' || globalThis.__CF_ENV__.ENVIRONMENT === 'production'));
+      if (isProd) {
+        return 'https://equa.procucev.com';
+      }
+    }
+    return trimmed;
+  }
+  if (process.env.NODE_ENV === 'production' || (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.NODE_ENV === 'production')) {
+    return 'https://equa.procucev.com';
   }
   return 'http://localhost:3000';
 }
