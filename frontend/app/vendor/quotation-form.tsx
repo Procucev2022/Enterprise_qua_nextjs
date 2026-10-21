@@ -778,7 +778,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 );
                 const parentCompany = getParentCompany(opp.buyer);
                 const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
-                  hasUnlimitedAccess(authClient.getSessionUser()?.email) ||
+                  (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
                   vendorSubscription === 'unlimited';
                 const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
                 const freeCredits = isUnlimited ? 999999 : effectiveFreeCredits;

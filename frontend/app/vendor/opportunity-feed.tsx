@@ -51,7 +51,7 @@ export default function OpportunityFeed({
   } = useApp();
   const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
   const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
-    hasUnlimitedAccess(authClient.getSessionUser()?.email) ||
+    (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
     vendorSubscription === 'unlimited';
 
   const [showUpgradeModal, setShowUpgradeModal] = React.useState(false);
