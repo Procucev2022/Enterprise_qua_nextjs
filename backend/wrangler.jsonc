@@ -190,6 +190,7 @@
         "ZOHO_OAUTH_TOKEN_URL": "https://accounts.zoho.in/oauth/v2/token",
         "ZOHO_PAYMENTS_RETURN_URL_BASE": "https://equa.procucev.com",
         "ZOHO_RECONCILIATION_ENABLED": "true",
+        "ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL": "info@procucev.com",
         "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
         "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5",
         "SUBSCRIPTION_GST_PERCENT": "18",
@@ -210,7 +211,7 @@
         {
           "binding": "DB",
           "database_name": "enterprise-qua-d1",
-          "database_id": "63af6c6f-3606-4afa-b0c7-9f9db6296d61"
+          "database_id": "9ed3bcce-ee38-4477-ac9f-c5e6f13c026c"
         }
       ],
       "r2_buckets": [
@@ -250,6 +251,7 @@
         "ZOHO_OAUTH_TOKEN_URL": "https://accounts.zoho.in/oauth/v2/token",
         "ZOHO_PAYMENTS_RETURN_URL_BASE": "https://equa.procucev.com",
         "ZOHO_RECONCILIATION_ENABLED": "true",
+        "ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL": "info@procucev.com",
         "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
         "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5",
         "SUBSCRIPTION_GST_PERCENT": "18",
@@ -270,7 +272,7 @@
         {
           "binding": "DB",
           "database_name": "enterprise-qua-d1",
-          "database_id": "63af6c6f-3606-4afa-b0c7-9f9db6296d61"
+          "database_id": "9ed3bcce-ee38-4477-ac9f-c5e6f13c026c"
         }
       ],
       "r2_buckets": [

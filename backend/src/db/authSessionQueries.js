@@ -51,37 +51,42 @@ async function saveOtp(otpKey, code, expiresAt, emailHint) {
     expiresAt: expiresMs,
   });
 
-  try {
-    await pool.query(
-      `insert into auth_otp_codes (otp_key, code, attempts, expires_at, created_at)
+  const primaryQuery = `insert into auth_otp_codes (otp_key, code, attempts, expires_at, created_at)
        values ($1, $2, 0, $3, CURRENT_TIMESTAMP)
        on conflict (otp_key) do update set
          code = excluded.code,
          attempts = 0,
          expires_at = excluded.expires_at,
-         created_at = CURRENT_TIMESTAMP`,
-      [otpKey, code, isoExpiry],
-      {
-        d1: true,
-        d1Text: `insert into auth_otp_codes (id, otp_key, email, code, attempts, expires_at, created_at)
-                 values ($1, $1, $4, $2, 0, $3, CURRENT_TIMESTAMP)
-                 on conflict (otp_key) do update set
-                   email = excluded.email,
-                   code = excluded.code,
-                   attempts = 0,
-                   expires_at = excluded.expires_at,
-                   created_at = CURRENT_TIMESTAMP`,
-        d1Params: [otpKey, code, isoExpiry, email],
-      }
-    );
+         created_at = CURRENT_TIMESTAMP`;
+
+  try {
+    await pool.query(primaryQuery, [otpKey, code, isoExpiry], { d1: true });
   } catch (err) {
-    // If table lacks unique index on otp_key in D1, delete and insert works unconditionally
+    const errMsg = String((err && err.message) || err);
+
+    // If a legacy schema variant has a NOT NULL constraint on email:
+    if (errMsg.includes('auth_otp_codes.email') || errMsg.includes('NOTNULL')) {
+      try {
+        await pool.query('delete from auth_otp_codes where otp_key = $1', [otpKey], { d1: true });
+        await pool.query(
+          `insert into auth_otp_codes (otp_key, email, code, attempts, expires_at, created_at)
+           values ($1, $2, $3, 0, $4, CURRENT_TIMESTAMP)`,
+          [otpKey, email, code, isoExpiry],
+          { d1: true }
+        );
+        return;
+      } catch {
+        // proceed to delete-insert fallback
+      }
+    }
+
+    // Standard fallback: delete followed by insert (handles missing ON CONFLICT index)
     try {
       await pool.query('delete from auth_otp_codes where otp_key = $1', [otpKey], { d1: true });
       await pool.query(
-        `insert into auth_otp_codes (id, otp_key, email, code, attempts, expires_at, created_at)
-         values ($1, $1, $4, $2, 0, $3, CURRENT_TIMESTAMP)`,
-        [otpKey, code, isoExpiry, email],
+        `insert into auth_otp_codes (otp_key, code, attempts, expires_at, created_at)
+         values ($1, $2, 0, $3, CURRENT_TIMESTAMP)`,
+        [otpKey, code, isoExpiry],
         { d1: true }
       );
     } catch (innerErr) {
@@ -171,20 +176,14 @@ async function revokeToken(signature, expiresAt) {
        values ($1, $2, CURRENT_TIMESTAMP)
        on conflict (signature) do nothing`,
       [signature, isoExpiry],
-      {
-        d1: true,
-        d1Text: `insert into auth_revoked_tokens (jti, signature, expires_at, revoked_at)
-                 values ($1, $1, $2, CURRENT_TIMESTAMP)
-                 on conflict (signature) do nothing`,
-        d1Params: [signature, isoExpiry],
-      }
+      { d1: true }
     );
   } catch (err) {
     try {
       await pool.query('delete from auth_revoked_tokens where signature = $1', [signature], { d1: true });
       await pool.query(
-        `insert into auth_revoked_tokens (jti, signature, expires_at, revoked_at)
-         values ($1, $1, $2, CURRENT_TIMESTAMP)`,
+        `insert into auth_revoked_tokens (signature, expires_at, revoked_at)
+         values ($1, $2, CURRENT_TIMESTAMP)`,
         [signature, isoExpiry],
         { d1: true }
       );
