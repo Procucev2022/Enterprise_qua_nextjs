@@ -1334,7 +1334,7 @@ describe("QuotationForm Comprehensive Suite", () => {
     });
 
     const searchInput = screen.getByPlaceholderText(/Search RFQ number, title, or buyer/i);
-    const statusSelect = screen.getByRole("combobox");
+    const statusSelect = screen.getByRole("combobox", { name: /Filter enquiries by status/i });
 
     // Search for pump
     fireEvent.change(searchInput, { target: { value: "Pump" } });

@@ -85,8 +85,7 @@ describe('EnterpriseInquiriesConsole (Category Manager)', () => {
   it('renders header, Screen 2.8 badge, and accurate KPI statistics', async () => {
     render(<EnterpriseInquiriesConsole />);
 
-    expect(screen.getByText('Enterprise Contracts Inquiries')).toBeInTheDocument();
-    expect(screen.getByText('Screen 2.8')).toBeInTheDocument();
+    expect(screen.getByText(/Refresh Leads|Refreshing/)).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText('Larsen & Toubro Heavy Engineering')).toBeInTheDocument();

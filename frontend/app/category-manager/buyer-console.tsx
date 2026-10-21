@@ -131,14 +131,6 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
 
   return (
     <div className="space-y-6 animate-fade-in pb-10">
-      {/* Title Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-            Buyer Wise Command Console & Analytics
-          </h1>
-        </div>
-      </div>
 
       {/* Dynamic Sourcing Selector Bar */}
       <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/60 shadow-sm flex flex-col sm:flex-row gap-4 items-center justify-between">
