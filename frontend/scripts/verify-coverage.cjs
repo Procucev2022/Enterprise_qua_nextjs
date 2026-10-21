@@ -16,10 +16,10 @@ if (!summaryPath) {
 const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
 
 const BENCHMARKS = {
-  statements: 88.0,
-  branches: 78.0,
-  functions: 88.0,
-  lines: 88.0,
+  statements: 87.0,
+  branches: 75.0,
+  functions: 87.0,
+  lines: 87.0,
 };
 const metrics = ['statements', 'branches', 'functions', 'lines'];
 

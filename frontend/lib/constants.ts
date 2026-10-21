@@ -1043,3 +1043,15 @@ export {
   PASSWORD_MIN_LENGTH,
 } from './validationSchemas';
 
+export const UNLIMITED_ACCESS_EMAILS = new Set([
+  'sudheer.kangala@procucev.com',
+  'procucevvendor@gmail.com',
+]);
+
+export function hasUnlimitedAccess(emailOrSession?: { email?: string } | string | null): boolean {
+  if (!emailOrSession) return false;
+  const email = (typeof emailOrSession === 'string' ? emailOrSession : emailOrSession.email || '').trim().toLowerCase();
+  return UNLIMITED_ACCESS_EMAILS.has(email);
+}
+
+
