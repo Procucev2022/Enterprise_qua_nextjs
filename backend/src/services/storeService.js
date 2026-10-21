@@ -3205,37 +3205,6 @@ class StoreService {
   }
 
   /**
-   * Whether a vendor was uploaded privately by a buyer (via Excel, PO ingestion, ERP dump, or buyer roster).
-   */
-  isBuyerUploaded(vendor) {
-    if (!vendor) return false;
-    const src = String(vendor.source || '').toLowerCase();
-    const buyerKeywords = [
-      'buyer',
-      'client',
-      'excel',
-      'po_ingestion',
-      'ingestion',
-      'dump',
-      'historical',
-      'manual',
-      'erp',
-      'upload',
-      'vendor_master',
-      'raw_ingestion',
-    ];
-    if (src && buyerKeywords.some((k) => src.includes(k))) {
-      return true;
-    }
-    if (vendor.buyerId || vendor.buyerAccountId || vendor.addedByBuyerCompany) return true;
-    const vid = String(vendor.id || '');
-    if (vid.startsWith('v-hist-') || vid.startsWith('vm-') || vid.startsWith('v-ingest-') || vid.startsWith('v-buyer-')) {
-      return true;
-    }
-    return false;
-  }
-
-  /**
    * Whether a vendor belongs to the Procucev Network vendor pool (mode_0 / V0).
    * Private buyer-uploaded vendors (having buyerId, buyerAccountId, or addedByBuyerCompany)
    * are excluded from the public Procucev Network pool.
