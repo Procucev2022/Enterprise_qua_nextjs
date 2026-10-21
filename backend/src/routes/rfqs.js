@@ -49,6 +49,7 @@ router.post('/:id/quote-attachments', authenticate, rfqController.uploadQuoteAtt
 router.get('/:id/quote-attachments/:attachmentId', authenticate, rfqController.downloadQuoteAttachment);
 router.get('/:id', authenticate, rfqController.getRFQById);
 router.put('/:id', authenticate, rfqController.updateRFQ);
+router.post('/:id/extend', authenticate, rfqController.extendRFQ);
 router.delete('/:id', authenticate, rfqController.deleteRFQ);
 router.post('/:id/quotes', authenticate, rfqController.addQuote);
 router.post('/:id/inquiries', authenticate, rfqController.addInquiry);

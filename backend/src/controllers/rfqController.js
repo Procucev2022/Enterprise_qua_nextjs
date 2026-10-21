@@ -289,6 +289,11 @@ const RFQ_UPDATABLE_FIELDS = [
   'targetDeliveryDate',
   'deliveryLocation',
   'deliveryPincode',
+  'deadline',
+  'closingDeadline',
+  'isExtended',
+  'extensionHours',
+  'extendedAt',
   'extractedEntities',
   'attachments',
   'inquiries',
@@ -1223,6 +1228,48 @@ async function updateRFQ(req, res, next) {
 }
 
 /**
+ * Extend an open RFQ's closing deadline by 24 or 48 hours (one-time only).
+ */
+async function extendRFQ(req, res, next) {
+  const { id } = req.params;
+  try {
+    const existing = storeService.getRFQById(id);
+    if (!existing || !(await canAccessRfq(req, existing))) {
+      logger.warn(`RFQ not found for extension: ${id}`, { id }, 'RFQ_CONTROLLER');
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.extendRFQ, req.body || {});
+    if (!isValid) {
+      logger.warn('RFQ extension rejected: payload validation failed', { id, errors }, 'RFQ_CONTROLLER');
+      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
+    }
+
+    const hours = Number(req.body.hours);
+    const userEmail = req.user && req.user.email;
+    const result = storeService.extendRFQ(existing.id, { hours, userEmail });
+
+    if (!result.success) {
+      const statusCode = result.reason === 'NOT_FOUND' ? 404 : 400;
+      logger.warn(`RFQ extension rejected: ${result.error}`, { id, reason: result.reason }, 'RFQ_CONTROLLER');
+      return res.status(statusCode).json({ success: false, error: result.error });
+    }
+
+    logger.info(`Extended RFQ ${existing.rfqNumber} by ${hours} hours`, {
+      rfqNumber: existing.rfqNumber,
+      hours,
+      newDeadline: result.rfq.closingDeadline,
+    }, 'RFQ_CONTROLLER');
+
+    const role = req.user && req.user.role;
+    res.json({ success: true, data: applyQuotesVisibility(result.rfq, role) });
+  } catch (err) {
+    logger.error(`Error extending RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
  * Withdraw one of the buyer's own RFQs.
  *
  * A hard delete. Reports the same 404 for another buyer's RFQ as for an id
@@ -1611,6 +1658,7 @@ module.exports = {
   uploadQuoteAttachment,
   downloadQuoteAttachment,
   updateRFQ,
+  extendRFQ,
   deleteRFQ,
   downloadRFQ,
   addQuote,

@@ -26,6 +26,9 @@ import {
   resolveBuyerSourcingMode,
   entitledSourcingModes,
   normalizePoDate,
+  ALLOWED_EXTENSION_HOURS,
+  DEFAULT_EXTENSION_HOURS,
+  calculateExtendedDeadline,
 } from '@/lib/constants';
 
 
@@ -391,5 +394,34 @@ describe('normalizePoDate', () => {
 
   it('falls back to raw string when not parseable', () => {
     expect(normalizePoDate('not-a-valid-date')).toBe('not-a-valid-date');
+  });
+
+  describe('RFQ Extension Constants & Helper', () => {
+    it('exports allowed extension hours and defaults', () => {
+      expect(ALLOWED_EXTENSION_HOURS).toEqual([24, 48]);
+      expect(DEFAULT_EXTENSION_HOURS).toBe(24);
+    });
+
+    it('calculates deadline extension with valid existing deadline', () => {
+      const futureDeadline = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+      const extended24 = calculateExtendedDeadline(futureDeadline, 24);
+      expect(new Date(extended24).getTime()).toBe(new Date(futureDeadline).getTime() + 24 * 60 * 60 * 1000);
+
+      const extended48 = calculateExtendedDeadline(futureDeadline, 48);
+      expect(new Date(extended48).getTime()).toBe(new Date(futureDeadline).getTime() + 48 * 60 * 60 * 1000);
+    });
+
+    it('calculates deadline extension from baseCreatedAt when deadline is not provided', () => {
+      const createdAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+      const extended = calculateExtendedDeadline(undefined, 24, createdAt);
+      expect(new Date(extended).getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('calculates deadline extension from current time when neither deadline nor createdAt is provided', () => {
+      const before = Date.now();
+      const extended = calculateExtendedDeadline(undefined, 24);
+      const extendedMs = new Date(extended).getTime();
+      expect(extendedMs).toBeGreaterThanOrEqual(before + 7 * 24 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000 - 1000);
+    });
   });
 });

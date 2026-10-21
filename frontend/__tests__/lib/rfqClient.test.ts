@@ -17,6 +17,7 @@ import {
   submitRFQInquiry,
   replyToRFQInquiry,
   requestVendorCategoryUpdateEmail,
+  extendRFQ,
 } from '@/lib/rfqClient';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -1969,5 +1970,105 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
 
     const res = await requestVendorCategoryUpdateEmail({ vendorEmail: 'v@abc.com' });
     expect(res).toEqual({ success: false, error: 'Network offline' });
+  });
+
+  describe('extendRFQ', () => {
+    test('successfully extends RFQ deadline with 24 hours', async () => {
+      const mockUpdatedRfq = { id: 'rfq-1', rfqNumber: 'RFQ-001', isExtended: true, extensionHours: 24, closingDeadline: '2026-11-01T00:00:00Z' };
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: mockUpdatedRfq }),
+      });
+
+      const res = await extendRFQ('rfq-1', 24);
+      expect(res.success).toBe(true);
+      if (res.success) {
+        expect(res.rfq).toEqual(mockUpdatedRfq);
+      }
+      expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/rfq-1/extend', expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ hours: 24 }),
+      }));
+    });
+
+    test('returns network error when fetch rejects', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Connection lost'));
+      const res = await extendRFQ('rfq-1', 24);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('NETWORK');
+        expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+      }
+    });
+
+    test('returns network error when json parsing fails', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: async () => { throw new Error('Bad gateway'); },
+      });
+      const res = await extendRFQ('rfq-1', 48);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('NETWORK');
+      }
+    });
+
+    test('returns unauthorized when status is 401', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ success: false, error: 'Session expired' }),
+      });
+      const res = await extendRFQ('rfq-1', 24);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('UNAUTHORIZED');
+        expect(res.error).toBe('Session expired');
+      }
+    });
+
+    test('returns not found when status is 404', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: async () => ({ success: false, error: 'RFQ not found' }),
+      });
+      const res = await extendRFQ('rfq-999', 24);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('NOT_FOUND');
+      }
+    });
+
+    test('returns validation error on 400 rejection', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({ success: false, error: 'Already extended' }),
+      });
+      const res = await extendRFQ('rfq-1', 24);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('VALIDATION');
+        expect(res.error).toBe('Already extended');
+      }
+    });
+
+    test('returns server error on 500 rejection', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({ success: false, error: 'Internal failure' }),
+      });
+      const res = await extendRFQ('rfq-1', 24);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('SERVER');
+        expect(res.error).toBe('Internal failure');
+      }
+    });
   });
 });
