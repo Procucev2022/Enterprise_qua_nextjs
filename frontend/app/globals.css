@@ -606,11 +606,18 @@ input[type="range"] {
   header,
   footer,
   nav,
-  main,
+  main:not(:has(.modal-overlay)),
   aside,
   button,
   .no-print {
     display: none !important;
+  }
+
+  main:has(.modal-overlay) {
+    display: block !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
   }
 
   /* Expand active modal overlay and content */

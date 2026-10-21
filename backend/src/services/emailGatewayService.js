@@ -1543,6 +1543,16 @@ async function processMessage(rawSource, config = resolveConfig()) {
   // email used to create it anyway. Checked for every RFQ this email would raise
   // before any is created, so the buyer never gets half a requirement.
   const sourcingMode = resolveBuyerSourcingMode(authorisation.buyerAccount);
+  logger.info(
+    `[EMAIL_GATEWAY] Determining RFQ version for buyer ${authorisation.buyerAccount?.corporateEmail || message.fromAddress}: resolved sourcingMode=${sourcingMode} (subscription: ${authorisation.buyerAccount?.subscriptionPlan || 'none'}, activeSubscriptions: ${JSON.stringify(authorisation.buyerAccount?.subscriptions || [])})`,
+    {
+      buyerId: authorisation.buyerAccount?.id,
+      buyerEmail: authorisation.buyerAccount?.corporateEmail || message.fromAddress,
+      subscriptionPlan: authorisation.buyerAccount?.subscriptionPlan,
+      resolvedSourcingMode: sourcingMode,
+    },
+    'EMAIL_GATEWAY'
+  );
   const credits = checkRfqCredits(authorisation.buyerAccount, sourcingMode, groups.length);
   if (!credits.ok) {
     logger.warn(
