@@ -213,6 +213,54 @@ describe('Gemini document extraction service', () => {
       expect(rowsDoc[0].deliveryPincode).toBe('560001');
       expect(rowsDoc[0].deliveryLocation).toBe('Bangalore Plant');
     });
+
+    test('unpacks compact row arrays into full line item objects', () => {
+      const rows = gemini.toRawLineItems({
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+        items: [
+          ['Centrifugal Pump 500 GPM', 12, 'Units', 'SS316 impeller', 145000, 1740000, 'Kirloskar', 'Pumps', '2026-11-01', 'Dock 4'],
+          ['Hex Bolt M8x250', 50, 'PCS', 'Grade 8.8'],
+          ['', 10, 'Nos'], // Empty description should be filtered out
+          [null, 5], // Null description should be filtered out
+          ['Gate Valve', '25', 'Nos', '', '5000', '125000'],
+        ],
+      });
+
+      expect(rows).toHaveLength(3);
+      expect(rows[0]).toEqual({
+        itemName: 'Centrifugal Pump 500 GPM',
+        quantity: 12,
+        unit: 'Units',
+        technicalSpecs: 'SS316 impeller',
+        unitPrice: 145000,
+        totalPrice: 1740000,
+        brand: 'Kirloskar',
+        category: 'Pumps',
+        targetDate: '2026-11-01',
+        deliveryLocation: 'Dock 4',
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+      });
+
+      expect(rows[1]).toEqual({
+        itemName: 'Hex Bolt M8x250',
+        quantity: 50,
+        unit: 'PCS',
+        technicalSpecs: 'Grade 8.8',
+        category: '',
+        targetDate: '',
+        unitPrice: null,
+        totalPrice: null,
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+      });
+
+      expect(rows[2].itemName).toBe('Gate Valve');
+      expect(rows[2].quantity).toBe(25);
+      expect(rows[2].unitPrice).toBe(5000);
+      expect(rows[2].totalPrice).toBe(125000);
+    });
   });
 
   describe('buildRequestBody', () => {
@@ -382,29 +430,29 @@ describe('Gemini document extraction service', () => {
 
     test('resolveModelChain reflects ordered GEMINI_MODELS and syncs PRIMARY_MODEL and FALLBACK_MODELS', () => {
       GEMINI_CONFIG.MODELS = [
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ];
       const chain = gemini.resolveModelChain();
       expect(chain).toEqual([
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ]);
-      expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-3.8-flash');
+      expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-3.5-flash-lite');
       expect(GEMINI_CONFIG.FALLBACK_MODELS).toEqual([
+        'gemini-3.1-flash-lite',
+        'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ]);
     });
 
@@ -517,7 +565,7 @@ describe('Gemini document extraction service', () => {
       const fallbackModel = GEMINI_CONFIG.FALLBACK_MODELS[0];
 
       global.fetch = jest.fn((url) => {
-        if (url.includes(primaryModel)) {
+        if (url.includes(`/models/${primaryModel}:`)) {
           // All keys on primary model return 429 rate limit
           return Promise.resolve({
             ok: false,
@@ -525,7 +573,7 @@ describe('Gemini document extraction service', () => {
             text: async () => '{"error":{"status":"RESOURCE_EXHAUSTED","message":"Rate limit reached"}}',
           });
         }
-        if (url.includes(fallbackModel)) {
+        if (url.includes(`/models/${fallbackModel}:`)) {
           // Fallback model succeeds
           return Promise.resolve(geminiReply('{"items":[{"itemDescription":"Centrifugal Pump","quantity":2}]}'));
         }
@@ -538,10 +586,10 @@ describe('Gemini document extraction service', () => {
       expect(res.model).toBe(fallbackModel);
       expect(res.lineItems).toHaveLength(1);
       // Primary model was attempted exactly MAX_KEY_ATTEMPTS_PER_MODEL (3) times, NOT 50 times!
-      const primaryCalls = global.fetch.mock.calls.filter((call) => call[0].includes(primaryModel));
+      const primaryCalls = global.fetch.mock.calls.filter((call) => call[0].includes(`/models/${primaryModel}:`));
       expect(primaryCalls).toHaveLength(3);
       // Fallback model was then called and succeeded
-      const fallbackCalls = global.fetch.mock.calls.filter((call) => call[0].includes(fallbackModel));
+      const fallbackCalls = global.fetch.mock.calls.filter((call) => call[0].includes(`/models/${fallbackModel}:`));
       expect(fallbackCalls).toHaveLength(1);
     });
 
@@ -2451,6 +2499,15 @@ describe('geminiService.generateJson', () => {
         const res = gemini.repairTruncatedJson(truncated);
         expect(res).not.toBeNull();
         expect(res.docTitle).toBe('Valid Title');
+      });
+      test('repairTruncatedJson salvages compact array rows when truncated midway through an item', () => {
+        const truncated = `{\n  "documentTitle": "RFQ Bulk 500",\n  "items": [\n    ["Ball Valve 2 inch", 10, "Nos", "SS316", 1200, 12000],\n    ["Gate Valve 4 inch", 5, "Nos", "Cast Iron", 4500, 22500],\n    ["Check Valve 1 inch", 20, "Nos", "SS304`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.documentTitle).toBe('RFQ Bulk 500');
+        expect(res.items).toHaveLength(2);
+        expect(res.items[0][0]).toBe('Ball Valve 2 inch');
+        expect(res.items[1][0]).toBe('Gate Valve 4 inch');
       });
     });
   });

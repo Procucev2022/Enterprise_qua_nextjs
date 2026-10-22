@@ -622,9 +622,9 @@ const RFQ_CATEGORY_CLASSIFICATION = {
 // of multiple keys in GEMINI_API_KEY with round-robin sequential rotation per request
 // to expand rate limits on free tier accounts.
 // Gemini extraction policy is intentionally code-owned rather than environment
-// configurable: one operation may run for up to five minutes, with fixed input
+// configurable: one operation may run for up to fifteen minutes, with fixed input
 // limits that protect memory and provider payload size.
-const GEMINI_TOTAL_BUDGET_MS = Number(process.env.GEMINI_TOTAL_BUDGET_MS || 5 * 60 * 1000);
+const GEMINI_TOTAL_BUDGET_MS = Number(process.env.GEMINI_TOTAL_BUDGET_MS || 15 * 60 * 1000);
 const GEMINI_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const GEMINI_MAX_DOCUMENT_TEXT_CHARS = 300000;
 
@@ -638,24 +638,24 @@ const GEMINI_CONFIG = {
   BACKUP_KEYS: (typeof process !== 'undefined' && process.env && process.env.GEMINI_BACKUP_KEYS) ||
     (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_BACKUP_KEYS) ||
     '',
-  DISABLE_TIMEOUT: process.env.NODE_ENV === 'test' ? (process.env.GEMINI_DISABLE_TIMEOUT === 'true') : true,
+  DISABLE_TIMEOUT: process.env.GEMINI_DISABLE_TIMEOUT === 'true',
   KEY_COOLDOWN_MS: Number(
     process.env.GEMINI_KEY_COOLDOWN_MS !== undefined
       ? process.env.GEMINI_KEY_COOLDOWN_MS
       : (process.env.NODE_ENV === 'test' ? 0 : 60000)
   ),
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
-  // Ordered models attempted in sequence: gemini-3.8-flash down to gemini-3.1-flash-lite.
+  // Ordered models attempted in sequence: gemini-3.5-flash-lite down to reasoning fallback models.
   // Extraction automatically advances through the backup models upon error or 503 overload.
   MODELS: (
     process.env.GEMINI_MODELS ||
-    'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite'
+    'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash'
   )
     .split(',')
     .map((m) => m.trim().replace(/\s+/g, '-'))
     .filter(Boolean),
   get PRIMARY_MODEL() {
-    return this.MODELS[0] || 'gemini-3.8-flash';
+    return this.MODELS[0] || 'gemini-3.5-flash-lite';
   },
   set PRIMARY_MODEL(val) {
     if (val) {
@@ -672,7 +672,7 @@ const GEMINI_CONFIG = {
   // Kept as a mutable compatibility field for tests and old callers, but zero
   // means there is no per-model timeout. Production uses only TOTAL_BUDGET_MS.
   REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 0),
-  PER_MODEL_TIMEOUT_MS: Number(process.env.GEMINI_PER_MODEL_TIMEOUT_MS || 30000),
+  PER_MODEL_TIMEOUT_MS: Number(process.env.GEMINI_PER_MODEL_TIMEOUT_MS || 0),
   TOTAL_BUDGET_MS: GEMINI_TOTAL_BUDGET_MS,
   MIN_ATTEMPT_MS: 0,
   MAX_DOCUMENT_BYTES: GEMINI_MAX_DOCUMENT_BYTES,
