@@ -3,6 +3,10 @@ const mailerService = require('../src/services/mailerService');
 describe('mailerService', () => {
   beforeEach(() => {
     process.env.NODE_ENV = 'test';
+    // mailerService requires googleapis on first Gmail use, outside the
+    // isolateModules block that registered this test's mock, so drop any mock
+    // instance an earlier test left cached.
+    jest.resetModules();
   });
 
   afterEach(() => {

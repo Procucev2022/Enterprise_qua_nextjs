@@ -1,5 +1,4 @@
 const nodemailer = require('nodemailer');
-const { google } = require('googleapis');
 const dns = require('dns');
 const crypto = require('crypto');
 const mailTransport = require('./mailTransport');
@@ -366,12 +365,19 @@ function findGmailIdentity(id) {
 
 const gmailOAuthClients = new Map();
 
+// googleapis bundles every Google API, and loading it at module scope cost the
+// Worker ~0.8s of startup CPU (over Cloudflare's startup limit). Required on
+// first Gmail use instead; Node caches it after that.
+function googleApi() {
+  return require('googleapis').google;
+}
+
 /** One cached OAuth client per identity, rebuilt when its refresh token changes. */
 function oauthClientFor(identity) {
   if (!identity) return undefined;
   const cached = gmailOAuthClients.get(identity.id);
   if (cached && cached.refreshToken === identity.refreshToken) return cached.client;
-  const client = new google.auth.OAuth2(getEnv('GMAIL_CLIENT_ID'), getEnv('GMAIL_CLIENT_SECRET'));
+  const client = new (googleApi().auth.OAuth2)(getEnv('GMAIL_CLIENT_ID'), getEnv('GMAIL_CLIENT_SECRET'));
   client.setCredentials({ refresh_token: identity.refreshToken });
   gmailOAuthClients.set(identity.id, { refreshToken: identity.refreshToken, client });
   return client;
@@ -421,7 +427,7 @@ function gmailFromAddress(identity) {
 }
 
 async function sendViaGmailIdentity(identity, message) {
-  const gmail = google.gmail({ version: 'v1', auth: oauthClientFor(identity) });
+  const gmail = googleApi().gmail({ version: 'v1', auth: oauthClientFor(identity) });
   const raw = mailTransport.buildRawMimeMessage({
     from: gmailFromAddress(identity),
     to: message.to,
