@@ -1678,6 +1678,18 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       const [payload] = created.mock.calls[0];
       expect(payload.sourcingMode).toBe('mode_0');
     });
+
+    test('processMessage defaults to mode_0 for buyer on free_trial with 5 remaining free credits', async () => {
+      mockExtraction();
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 }));
+      const created = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-trial-5', rfqNumber: 'RFQ-TRIAL-0005' });
+
+      const result = await emailGatewayService.processMessage(raw(), config());
+
+      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+      const [payload] = created.mock.calls[0];
+      expect(payload.sourcingMode).toBe('mode_0');
+    });
   });
 
   // ==============================================================================

@@ -1464,15 +1464,7 @@ function resolveBuyerSourcingMode(buyerAccountOrPlan, preferredMode = null) {
     }
   }
 
-  // Preserve existing V1/V2/V3 credit logic for buyers on free trial with credits remaining
-  if (remainingFreeRFQs !== undefined && Number(remainingFreeRFQs) > 0) {
-    const requestedMode = (buyerAccountOrPlan.sourcingMode || buyerAccountOrPlan.sourcing_mode || '').trim().toLowerCase();
-    if (['mode_1', 'v1', 'version_1'].includes(requestedMode)) return 'mode_1';
-    if (['mode_3', 'v3', 'version_3'].includes(requestedMode)) return 'mode_3';
-    return 'mode_2';
-  }
-
-  // No active V1/V2/V3 subscription -> default to mode_0 (V0)
+  // No active V1/V2/V3 subscription -> default automatically to mode_0 (V0)
   return 'mode_0';
 }
 

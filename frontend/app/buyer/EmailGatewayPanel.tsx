@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { createRFQ, extractLineItemsFromDocument } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import { resolveBuyerSourcingMode } from '@/lib/constants';
+import { resolveBuyerSourcingMode, rfqVersionLabel } from '@/lib/constants';
 import { logger } from '@/lib/logger';
 import type { ExtractedEntity, RFQItem } from '@/lib/types';
 import {
@@ -134,6 +134,21 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
         <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-bold">
           <Mail size={16} /> {GATEWAY.title}
         </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-slate-500 dark:text-gray-400">
+            Target Version:
+          </span>
+          <span
+            data-testid="assigned-version-badge"
+            className="px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800"
+          >
+            {rfqVersionLabel(resolveBuyerSourcingMode(activeBuyerAccount))}
+          </span>
+        </div>
+      </div>
+
+      <div className="text-[11px] text-slate-500 dark:text-gray-400 bg-slate-100/70 dark:bg-gray-900/60 p-2.5 rounded-lg border border-slate-200 dark:border-gray-800">
+        Requisitions sent to the RFQ email ID (<span className="font-mono text-slate-700 dark:text-slate-300">RFQ@procucev.com</span>) are assigned to <strong className="text-slate-700 dark:text-slate-200">V0 (Mode 0)</strong> by default. If your account holds an active subscription to V1, V2, or V3, the RFQ is automatically routed to that respective version.
       </div>
 
       {/* Requisition Composer Form */}

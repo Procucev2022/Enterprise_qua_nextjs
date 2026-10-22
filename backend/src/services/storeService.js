@@ -2115,7 +2115,9 @@ class StoreService {
       buyerAccountName: requestingBuyerAccount
         ? requestingBuyerAccount.organizationName
         : this.activeBuyerAccount ? this.activeBuyerAccount.organizationName : null,
-      sourcingMode: rfqData.sourcingMode || (requestingBuyerAccount ? resolveBuyerSourcingMode(requestingBuyerAccount) : 'mode_1'),
+      sourcingMode: rfqData.source === 'email_gateway'
+        ? (requestingBuyerAccount ? resolveBuyerSourcingMode(requestingBuyerAccount) : (rfqData.sourcingMode || 'mode_0'))
+        : (rfqData.sourcingMode || (requestingBuyerAccount && requestingBuyerAccount.subscriptionPlan && requestingBuyerAccount.subscriptionPlan !== 'free_trial' ? resolveBuyerSourcingMode(requestingBuyerAccount) : 'mode_1')),
       quotesCount: rfqData.quotes ? rfqData.quotes.length : 0,
       chasingActive: rfqData.chasingActive !== undefined ? rfqData.chasingActive : true,
       allocatedTime: rfqData.allocatedTime || RFQ_DEFAULTS.ALLOCATED_TIME,

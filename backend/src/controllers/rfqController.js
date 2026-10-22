@@ -24,6 +24,7 @@ const {
   hasUnlimitedRfqAccess,
   hasUnlimitedQuoteAccess,
   hasUnlimitedDownloadAccess,
+  resolveBuyerSourcingMode,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
@@ -587,8 +588,12 @@ async function createRFQ(req, res, next) {
         (await storeService.getBuyerAccountByEmail(req.user.email))
       : null;
 
-    // Canonicalize sourcingMode through RFQ_MODE_MAP before entitlement checks and persistence
-    if (body.sourcingMode) {
+    // Version Logic: If an RFQ is raised through the email gateway / RFQ email ID,
+    // it should be assigned to V0 by default, or the buyer's active subscribed version (V1, V2, or V3).
+    // Otherwise, it automatically goes to V0.
+    if (body.source === 'email_gateway' || !body.sourcingMode) {
+      body.sourcingMode = resolveBuyerSourcingMode(requestingBuyerAccount, body.sourcingMode);
+    } else if (body.sourcingMode) {
       const normalizedKey = String(body.sourcingMode).trim().toLowerCase();
       body.sourcingMode = RFQ_MODE_MAP[normalizedKey] || body.sourcingMode;
     }

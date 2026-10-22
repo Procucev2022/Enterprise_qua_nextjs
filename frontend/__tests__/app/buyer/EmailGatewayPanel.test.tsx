@@ -347,4 +347,83 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
       );
     });
   });
+
+  test('submits RFQ with mode_0 (V0) by default when buyer is on free_trial plan', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      showToast: mockShowToast,
+      activeBuyerAccount: { corporateEmail: 'trial.buyer@company.com', subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 },
+      adoptCreatedRFQ: mockAdoptCreatedRFQ,
+    });
+
+    render(<EmailGatewayPanel />);
+    await screen.findByTestId('gateway-panel');
+
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'Trial Requisition' } });
+    const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
+    fireEvent.change(bodyTextarea, { target: { value: 'Item Specs' } });
+
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockCreateRFQ).toHaveBeenCalledWith(
+        expect.objectContaining({ sourcingMode: 'mode_0' })
+      );
+    });
+  });
+
+  test('submits RFQ with mode_2 when buyer has active version_2 subscription', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      showToast: mockShowToast,
+      activeBuyerAccount: { corporateEmail: 'v2.buyer@company.com', subscriptionPlan: 'version_2' },
+      adoptCreatedRFQ: mockAdoptCreatedRFQ,
+    });
+
+    render(<EmailGatewayPanel />);
+    await screen.findByTestId('gateway-panel');
+
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'Subject for Version 2' } });
+    const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
+    fireEvent.change(bodyTextarea, { target: { value: 'Item Specs' } });
+
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockCreateRFQ).toHaveBeenCalledWith(
+        expect.objectContaining({ sourcingMode: 'mode_2' })
+      );
+    });
+  });
+
+  test('submits RFQ with mode_0 (V0) when buyer subscription is expired or inactive', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      showToast: mockShowToast,
+      activeBuyerAccount: {
+        corporateEmail: 'expired.buyer@company.com',
+        subscriptionPlan: 'version_2',
+        subscriptionStatus: 'expired',
+      },
+      adoptCreatedRFQ: mockAdoptCreatedRFQ,
+    });
+
+    render(<EmailGatewayPanel />);
+    await screen.findByTestId('gateway-panel');
+
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'Expired Sub Requisition' } });
+    const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
+    fireEvent.change(bodyTextarea, { target: { value: 'Item Specs' } });
+
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockCreateRFQ).toHaveBeenCalledWith(
+        expect.objectContaining({ sourcingMode: 'mode_0' })
+      );
+    });
+  });
 });
