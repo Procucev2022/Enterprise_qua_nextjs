@@ -114,10 +114,10 @@ describe('app/buyer/buyer-profile.tsx', () => {
   it('renders the account security forms outside the organization profile form', async () => {
     await renderLoaded();
 
-    const currentPasswordInput = screen.getByPlaceholderText(
-      UI_STRINGS.accountSecurity.currentPasswordPlaceholder
+    const newPasswordInput = screen.getByPlaceholderText(
+      UI_STRINGS.accountSecurity.newPasswordPlaceholder
     );
-    const accountForm = currentPasswordInput.closest('form');
+    const accountForm = newPasswordInput.closest('form');
     expect(accountForm).not.toBeNull();
 
     const legalEntityInput = screen.getByDisplayValue('Navin Chaudhary Enterprises');

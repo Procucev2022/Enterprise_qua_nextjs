@@ -219,15 +219,26 @@ async function logout(req, res, next) {
  */
 async function changePassword(req, res, next) {
   try {
-    const { currentPassword, newPassword } = req.body || {};
+    const { currentPassword, newPassword, code, verificationCode, resetToken } = req.body || {};
+    const effectiveCode = code || verificationCode;
     const ipAddress = getClientIp(req);
 
     const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.changePassword, {
       currentPassword,
       newPassword,
+      code: effectiveCode,
+      verificationCode: effectiveCode,
+      resetToken,
     });
     if (!isValid) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
+    }
+
+    if (!currentPassword && !effectiveCode && !resetToken) {
+      return res.status(400).json({
+        success: false,
+        error: AUTH_MESSAGES.CHANGE_PASSWORD_FIELDS_REQUIRED,
+      });
     }
 
     const result = await authService.changePassword({
@@ -235,6 +246,8 @@ async function changePassword(req, res, next) {
       email: req.user?.email,
       currentPassword,
       newPassword,
+      code: effectiveCode,
+      resetToken,
       ipAddress,
     });
     return res.json(result);

@@ -243,13 +243,25 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   // applied.
   const fetchSeqRef = useRef(0);
   useEffect(() => {
-    const key = `${debouncedSearch}|${categoryFilter}`;
+    const trimmedSearch = debouncedSearch.trim();
+    const matchedCat = categoryOptions.find(
+      (c) => c.toLowerCase().trim() === trimmedSearch.toLowerCase()
+    );
+    const effectiveCategory = categoryFilter || matchedCat || '';
+    const effectiveSearch = matchedCat ? '' : trimmedSearch;
+
+    const key = `${effectiveSearch}|${effectiveCategory}`;
     if (fetchedVendors.length > 0 && lastFetchedKeyRef.current === key) return;
     lastFetchedKeyRef.current = key;
     const seq = ++fetchSeqRef.current;
     setVendorsLoading(true);
     setVendorsError(null);
-    void fetchAllVendors({ page: 1, pageSize: VENDOR_CARDS_PAGE_SIZE, search: debouncedSearch, category: categoryFilter }).then((result) => {
+    void fetchAllVendors({
+      page: 1,
+      pageSize: VENDOR_CARDS_PAGE_SIZE,
+      search: effectiveSearch,
+      category: effectiveCategory,
+    }).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
         setFetchedVendors(result.candidates);
@@ -260,15 +272,27 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
       setVendorsLoading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, categoryFilter]);
+  }, [debouncedSearch, categoryFilter, categoryOptions]);
 
   const loadMoreVendors = () => {
     if (!vendorsPagination || vendorsLoadingMore) return;
     const nextPage = vendorsPagination.page + 1;
     if (nextPage > vendorsPagination.totalPages) return;
+    const trimmedSearch = debouncedSearch.trim();
+    const matchedCat = categoryOptions.find(
+      (c) => c.toLowerCase().trim() === trimmedSearch.toLowerCase()
+    );
+    const effectiveCategory = categoryFilter || matchedCat || '';
+    const effectiveSearch = matchedCat ? '' : trimmedSearch;
+
     const seq = ++fetchSeqRef.current;
     setVendorsLoadingMore(true);
-    void fetchAllVendors({ page: nextPage, pageSize: VENDOR_CARDS_PAGE_SIZE, search: debouncedSearch, category: categoryFilter }).then((result) => {
+    void fetchAllVendors({
+      page: nextPage,
+      pageSize: VENDOR_CARDS_PAGE_SIZE,
+      search: effectiveSearch,
+      category: effectiveCategory,
+    }).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
         setFetchedVendors((prev) => [...prev, ...result.candidates]);

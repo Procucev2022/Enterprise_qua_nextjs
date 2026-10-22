@@ -330,7 +330,11 @@ const AUTH_MESSAGES = {
   // the stored row on every attempt, because the session token proves who the
   // caller is but not that they still know the credential.
   CHANGE_PASSWORD_FIELDS_REQUIRED:
-    'Both your current password and the new password are required to change it.',
+    'A new password and verification code (or current password) are required to change your password.',
+  CHANGE_PASSWORD_VERIFICATION_REQUIRED:
+    'A valid verification code or reset token is required to change your password.',
+  CHANGE_PASSWORD_VERIFICATION_INVALID:
+    'Invalid or expired verification code. Please request a new code and try again.',
   CHANGE_PASSWORD_CURRENT_INCORRECT:
     'Your current password is not correct, so the password was not changed. Re-enter it and try again.',
   CHANGE_PASSWORD_TOO_SHORT: 'Choose a new password of at least 8 characters.',

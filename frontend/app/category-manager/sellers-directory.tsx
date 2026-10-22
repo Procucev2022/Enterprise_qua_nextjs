@@ -281,14 +281,18 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
         seller.email?.toLowerCase().includes(q) ||
         seller.location?.toLowerCase().includes(q) ||
         seller.deliveryLocation?.toLowerCase().includes(q) ||
-        seller.majorCategory?.toLowerCase().includes(q);
+        (q.length <= 3
+          ? String(seller.majorCategory || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
+          : seller.majorCategory?.toLowerCase().includes(q));
 
       const matchesSource =
         selectedSource === 'all' ||
         (selectedSource === 'network' && seller.source === 'procucev_network') ||
         (selectedSource === 'buyer' && seller.source === 'buyer_uploaded');
 
-      const matchesCategory = selectedCategory === 'all' || seller.majorCategory === selectedCategory;
+      const matchesCategory =
+        selectedCategory === 'all' ||
+        String(seller.majorCategory || '').toLowerCase().trim() === selectedCategory.toLowerCase().trim();
 
       const matchesRating =
         selectedRating === 'all' ||
