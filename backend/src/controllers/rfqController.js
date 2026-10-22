@@ -185,9 +185,14 @@ function applyQuotesVisibility(rfq, role) {
   const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
   const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
   const isWithin48h = createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
-  const isClosed = rfq.status === 'Closed';
+  const isConcluded =
+    rfq.status === 'Closed' ||
+    rfq.status === 'PO Generated' ||
+    rfq.poFinalised ||
+    Boolean(rfq.poNumber) ||
+    rfq.status === 'Expired';
 
-  if (isWithin48h && !isClosed) {
+  if (isWithin48h && !isConcluded) {
     const unhideAt = new Date(createdAtMs + FORTY_EIGHT_HOURS_MS).toISOString();
     return {
       ...rfq,
@@ -1267,6 +1272,15 @@ async function updateRFQ(req, res, next) {
     }
 
     const updates = pickUpdatableRfqFields(body);
+    if (existing.status === 'Parsing' && !updates.status) {
+      const entities = updates.extractedEntities || existing.extractedEntities || [];
+      const hasCategories = entities.length > 0 && entities.every((e) => e.majorCategory && e.minorCategory && e.minorCategory !== e.majorCategory);
+      const hasVendors = (Array.isArray(updates.assignedVendors) && updates.assignedVendors.length > 0) ||
+        (Array.isArray(existing.assignedVendors) && existing.assignedVendors.length > 0);
+      if (hasCategories || hasVendors) {
+        updates.status = 'Quotes Pending';
+      }
+    }
     logger.info(`Updating RFQ ${id}`, { id, fields: Object.keys(updates) }, 'RFQ_CONTROLLER');
     const updated = storeService.updateRFQ(id, updates);
     if (!updated) {

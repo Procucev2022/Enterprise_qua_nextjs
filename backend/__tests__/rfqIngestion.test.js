@@ -225,7 +225,8 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
     // model's word being kept and rendered as an empty dropdown.
     test.each([
       ['Industrial Ball Valve, 2 inch', 'Valves', 'Engineering Spares - Mechanical', 'Hoses, Valves & Fittings'],
-      ['Safety Helmet', 'PPE', 'Occuptional Health and Safety', 'Hemlets'],
+      ['Safety Helmet', 'PPE', 'Occuptional Health and Safety', 'Helmets'],
+      ['Safety Hemlet', 'PPE', 'Occuptional Health and Safety', 'Hemlets'],
       ['Nitrile Industrial Gloves, size L', 'Hand Protection', 'Occuptional Health and Safety', 'Gloves'],
     ])('routes %s past the umbrella label "%s"', (itemName, stated, major, minor) => {
       const result = ingestion.classifyLineItem({ itemName, category: stated });

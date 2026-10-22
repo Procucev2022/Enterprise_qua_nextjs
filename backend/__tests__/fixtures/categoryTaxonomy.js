@@ -248,6 +248,7 @@ const CATEGORY_TAXONOMY_FIXTURE = [
       "Fire Extinguishers",
       "Gloves",
       "Harness",
+      "Helmets",
       "Hemlets",
       "Medicines",
       "Public Announcement System (PAS)",

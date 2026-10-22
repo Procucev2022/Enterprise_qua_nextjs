@@ -217,16 +217,16 @@ describe('emailGatewayService.processMessage', () => {
 
   // The whole point of holding these: nothing has reviewed an inbound message, so
   // it must not reach vendors automatically.
-  test('raises the RFQ in the review status, not as awaiting quotes', async () => {
+  test('raises the RFQ in Quotes Pending status awaiting quotes', async () => {
     mockExtraction();
-    const created = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-1', rfqNumber: 'RFQ-2026-0001' });
+    const created = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-1', rfqNumber: 'RFQ-2026-0001', status: 'Quotes Pending' });
 
     const result = await emailGatewayService.processMessage(raw(), config());
 
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     const [payload, account] = created.mock.calls[0];
     expect(payload.status).toBe(EMAIL_GATEWAY_CONFIG.INGESTED_STATUS);
-    expect(payload.status).not.toBe('Quotes Pending');
+    expect(payload.status).toBe('Quotes Pending');
     // Buyer's own roster only; widening the pool is a commercial decision.
     expect(payload.sourcingMode).toBe(EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE);
     expect(payload.source).toBe('email_gateway');
@@ -726,6 +726,47 @@ describe('emailGatewayService.pollViaGmailApi', () => {
     jest.spyOn(mailerService, 'getVendorGmailOAuthClient').mockReturnValue(null);
     const result = await emailGatewayService.pollVendorViaGmailApi();
     expect(result.skipped).toBe(true);
+  });
+
+  // Per-deployment kill switch for the CRON poll path (dev/prod isolation).
+  test('buyer cron poll is skipped with reason DISABLED when the gateway is disabled, without touching the mailbox', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    const gmailSpy = jest.spyOn(googleapis.google, 'gmail');
+
+    const result = await emailGatewayService.pollViaGmailApi(
+      emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_ENABLED: 'false' })
+    );
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe(EMAIL_GATEWAY_MESSAGES.DISABLED);
+    // A disabled deployment never lists/fetches/modifies the mailbox.
+    expect(gmailSpy).not.toHaveBeenCalled();
+  });
+
+  test('vendor cron poll is skipped with reason DISABLED when the vendor gateway is disabled, without touching the mailbox', async () => {
+    jest.spyOn(mailerService, 'getVendorGmailOAuthClient').mockReturnValue({});
+    const gmailSpy = jest.spyOn(googleapis.google, 'gmail');
+
+    const result = await emailGatewayService.pollVendorViaGmailApi(
+      emailGatewayService.resolveVendorConfig({ ...FULL_ENV, VENDOR_EMAIL_GATEWAY_ENABLED: 'false' })
+    );
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe(EMAIL_GATEWAY_MESSAGES.DISABLED);
+    expect(gmailSpy).not.toHaveBeenCalled();
+  });
+
+  // Guard ordering: NOT_CONFIGURED must win over DISABLED so an unconfigured
+  // deployment still reports NOT_CONFIGURED even when the flag is off.
+  test('an unconfigured deployment reports NOT_CONFIGURED even when the gateway is disabled', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue(null);
+
+    const result = await emailGatewayService.pollViaGmailApi(
+      emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_ENABLED: 'false' })
+    );
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe(EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED);
   });
 
   test('isConfigured/describeConfigurationFault treat the buyer Gmail API and IMAP-based vendor gateway independently', () => {
@@ -2779,7 +2820,7 @@ Delivery needed in Hyderabad.
 
       expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
       expect(result.rfq).toBeDefined();
-      expect(result.rfq.status).toBe('Parsing');
+      expect(result.rfq.status).toBe('Quotes Pending');
       expect(result.rfq.extractedEntities).toHaveLength(3);
       expect(result.rfq.extractedEntities[0].itemName).toBe('Industrial Motor 15HP');
       expect(result.rfq.extractedEntities[0].quantity).toBe(5);

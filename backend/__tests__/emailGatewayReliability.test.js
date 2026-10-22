@@ -187,6 +187,12 @@ describe('pollViaGmailApi reliability', () => {
     return { users: { messages: { list, get, modify } } };
   }
 
+  // The CRON poll path now has a config.enabled kill switch, so these
+  // reliability behaviours must be exercised with the gateway ENABLED. Extra
+  // env overrides (e.g. maxPerPoll) are merged on top of the enabled flag.
+  const enabledConfig = (overrides = {}) =>
+    emailGatewayService.resolveConfig({ EMAIL_GATEWAY_ENABLED: 'true', ...overrides });
+
   beforeEach(() => {
     jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
     jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
@@ -208,7 +214,7 @@ describe('pollViaGmailApi reliability', () => {
       message: { messageId: '<news@x.com>', fromAddress: 'news@x.com', subject: 'Weekly' },
     });
 
-    const result = await emailGatewayService.pollViaGmailApi();
+    const result = await emailGatewayService.pollViaGmailApi(enabledConfig());
     expect(result.outcomes[0].status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
     expect(result.ingested).toBe(0);
     expect(api.users.messages.modify).toHaveBeenCalledWith({ userId: 'me', id: 'n1', requestBody: { removeLabelIds: ['UNREAD'] } });
@@ -220,7 +226,7 @@ describe('pollViaGmailApi reliability', () => {
     jest.spyOn(emailGatewayQueries, 'hasProcessed').mockImplementation(async (key) => !key.startsWith('gmail-'));
     const process = jest.spyOn(emailGatewayService, 'processMessage');
 
-    const result = await emailGatewayService.pollViaGmailApi();
+    const result = await emailGatewayService.pollViaGmailApi(enabledConfig());
     expect(result.outcomes[0]).toEqual(expect.objectContaining({ status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED }));
     expect(result.outcomes[0].messageId).toMatch(/^</);
     expect(process).not.toHaveBeenCalled();
@@ -232,7 +238,7 @@ describe('pollViaGmailApi reliability', () => {
     jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
     jest.spyOn(emailGatewayQueries, 'hasProcessed').mockRejectedValue(new Error('D1 unavailable'));
 
-    const result = await emailGatewayService.pollViaGmailApi();
+    const result = await emailGatewayService.pollViaGmailApi(enabledConfig());
     expect(result.outcomes).toEqual([expect.objectContaining({ uid: 'a', status: emailGatewayService.EMAIL_GATEWAY_LEDGER_UNAVAILABLE })]);
     expect(api.users.messages.modify).not.toHaveBeenCalled();
     expect(emailGatewayService.runtime.lastError).toContain('ledger unavailable');
@@ -246,7 +252,7 @@ describe('pollViaGmailApi reliability', () => {
     emailGatewayQueries.countFailedAttempts.mockResolvedValue(emailGatewayService.EMAIL_GATEWAY_MAX_ATTEMPTS - 1);
     emailGatewayQueries.recordProcessed.mockRejectedValueOnce(new Error('write failed'));
 
-    const result = await emailGatewayService.pollViaGmailApi();
+    const result = await emailGatewayService.pollViaGmailApi(enabledConfig());
     expect(result.outcomes[0]).toEqual(expect.objectContaining({ status: INGESTION_OUTCOME.FAILED, willRetry: false }));
     expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: 'gmail-f1', status: INGESTION_OUTCOME.FAILED })
@@ -260,7 +266,7 @@ describe('pollViaGmailApi reliability', () => {
     jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
     jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
 
-    const result = await emailGatewayService.pollViaGmailApi();
+    const result = await emailGatewayService.pollViaGmailApi(enabledConfig());
     expect(result.outcomes[0].status).toBe(INGESTION_OUTCOME.UNREADABLE);
     expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: 'gmail-empty', status: INGESTION_OUTCOME.UNREADABLE })
@@ -282,7 +288,7 @@ describe('pollViaGmailApi reliability', () => {
       rfq: { id: 'r1', rfqNumber: 'RFQ1' },
     });
 
-    const result = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig({ EMAIL_GATEWAY_MAX_PER_POLL: '1' }));
+    const result = await emailGatewayService.pollViaGmailApi(enabledConfig({ EMAIL_GATEWAY_MAX_PER_POLL: '1' }));
     expect(api.users.messages.list).toHaveBeenCalledTimes(2);
     expect(api.users.messages.list).toHaveBeenLastCalledWith(expect.objectContaining({ pageToken: 'p2' }));
     expect(result.outcomes.map((o) => o.uid)).toEqual(['old1', 'old2', 'new1']);

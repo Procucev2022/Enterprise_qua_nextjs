@@ -3279,3 +3279,15 @@ ypu are doing a lot of extra thing just need to do  vendo twill type the categor
 ```text
 The categoreis adde must be shown to the buyer after adding up ?? 
 ```
+### 2026-10-22T13:24:55+05:30
+
+```text
+after PPO generation, the RFQ is still showing as “Closed” and asking for quotation comparison again. I tested two RFQs: for one, the PPO was generated successfully, but the other is still showing only the “Closed” status. Please check and fix this issue.
+```
+
+### 2026-10-22T13:25:09+05:30
+
+```text
+create a new branch and raise the pr
+```
+
