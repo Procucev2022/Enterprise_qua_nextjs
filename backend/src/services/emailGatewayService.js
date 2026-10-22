@@ -1541,10 +1541,9 @@ async function processMessage(rawSource, config = resolveConfig()) {
     }
   }
 
-  // The portal refuses a V1/V2/V3 RFQ once a free trial's credits are gone;
-  // email used to create it anyway. Checked for every RFQ this email would raise
-  // before any is created, so the buyer never gets half a requirement.
-  const sourcingMode = resolveBuyerSourcingMode(authorisation.buyerAccount);
+  // Version Logic: RFQs raised through the RFQ email ID default to V0 (mode_0),
+  // or the buyer's active subscribed version (V1/V2/V3). Otherwise, V0.
+  const sourcingMode = emailGateway.resolveBuyerSourcingMode(authorisation.buyerAccount);
   logger.info(
     `[EMAIL_GATEWAY] Determining RFQ version for buyer ${authorisation.buyerAccount?.corporateEmail || message.fromAddress}: resolved sourcingMode=${sourcingMode} (subscription: ${authorisation.buyerAccount?.subscriptionPlan || 'none'}, activeSubscriptions: ${JSON.stringify(authorisation.buyerAccount?.subscriptions || [])})`,
     {
@@ -2246,6 +2245,7 @@ const emailGateway = {
   sendAutoReply,
   extractHeaderMessageId,
   checkRfqCredits,
+  resolveBuyerSourcingMode,
   storeEmailAttachments,
   queueAcknowledgement,
   retryPendingAcknowledgements,
