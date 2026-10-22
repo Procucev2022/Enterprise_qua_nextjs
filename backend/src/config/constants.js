@@ -645,17 +645,17 @@ const GEMINI_CONFIG = {
       : (process.env.NODE_ENV === 'test' ? 0 : 60000)
   ),
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
-  // Ordered models attempted in sequence: gemini-3.8-flash down to gemini-3.1-flash-lite.
+  // Ordered models attempted in sequence: gemini-3.5-flash-lite down to reasoning fallback models.
   // Extraction automatically advances through the backup models upon error or 503 overload.
   MODELS: (
     process.env.GEMINI_MODELS ||
-    'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite'
+    'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash'
   )
     .split(',')
     .map((m) => m.trim().replace(/\s+/g, '-'))
     .filter(Boolean),
   get PRIMARY_MODEL() {
-    return this.MODELS[0] || 'gemini-3.8-flash';
+    return this.MODELS[0] || 'gemini-3.5-flash-lite';
   },
   set PRIMARY_MODEL(val) {
     if (val) {

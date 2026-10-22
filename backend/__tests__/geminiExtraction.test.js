@@ -430,29 +430,29 @@ describe('Gemini document extraction service', () => {
 
     test('resolveModelChain reflects ordered GEMINI_MODELS and syncs PRIMARY_MODEL and FALLBACK_MODELS', () => {
       GEMINI_CONFIG.MODELS = [
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ];
       const chain = gemini.resolveModelChain();
       expect(chain).toEqual([
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ]);
-      expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-3.8-flash');
+      expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-3.5-flash-lite');
       expect(GEMINI_CONFIG.FALLBACK_MODELS).toEqual([
+        'gemini-3.1-flash-lite',
+        'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ]);
     });
 
@@ -565,7 +565,7 @@ describe('Gemini document extraction service', () => {
       const fallbackModel = GEMINI_CONFIG.FALLBACK_MODELS[0];
 
       global.fetch = jest.fn((url) => {
-        if (url.includes(primaryModel)) {
+        if (url.includes(`/models/${primaryModel}:`)) {
           // All keys on primary model return 429 rate limit
           return Promise.resolve({
             ok: false,
@@ -573,7 +573,7 @@ describe('Gemini document extraction service', () => {
             text: async () => '{"error":{"status":"RESOURCE_EXHAUSTED","message":"Rate limit reached"}}',
           });
         }
-        if (url.includes(fallbackModel)) {
+        if (url.includes(`/models/${fallbackModel}:`)) {
           // Fallback model succeeds
           return Promise.resolve(geminiReply('{"items":[{"itemDescription":"Centrifugal Pump","quantity":2}]}'));
         }
@@ -586,10 +586,10 @@ describe('Gemini document extraction service', () => {
       expect(res.model).toBe(fallbackModel);
       expect(res.lineItems).toHaveLength(1);
       // Primary model was attempted exactly MAX_KEY_ATTEMPTS_PER_MODEL (3) times, NOT 50 times!
-      const primaryCalls = global.fetch.mock.calls.filter((call) => call[0].includes(primaryModel));
+      const primaryCalls = global.fetch.mock.calls.filter((call) => call[0].includes(`/models/${primaryModel}:`));
       expect(primaryCalls).toHaveLength(3);
       // Fallback model was then called and succeeded
-      const fallbackCalls = global.fetch.mock.calls.filter((call) => call[0].includes(fallbackModel));
+      const fallbackCalls = global.fetch.mock.calls.filter((call) => call[0].includes(`/models/${fallbackModel}:`));
       expect(fallbackCalls).toHaveLength(1);
     });
 

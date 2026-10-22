@@ -3234,3 +3234,23 @@ increase overall timeout to 15 minute.
 ```text
 please resolve file conflict issues
 ```
+
+### 2026-10-22T05:58:23+05:30
+
+```text
+please resolve file conflict issues in PR: https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/300
+```
+
+### 2026-10-22T06:06:36+05:30
+
+```text
+What should be the best order of gemini models for this AI extraction use case, considering speed as important. Please implement that, don't commit this change
+```
+
+### 2026-10-22T06:39:36+05:30
+
+```text
+Please use this model order
+
+    'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash'
+```
