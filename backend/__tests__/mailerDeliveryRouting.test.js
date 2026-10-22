@@ -38,6 +38,10 @@ const ROUTING_ENV = [
 function loadMailer(env, behaviour = {}, { smtpSend } = {}) {
   let mailer;
   const sends = [];
+  // mailerService requires googleapis on first Gmail use, outside the
+  // isolateModules block that registers this mock, so drop any mock instance
+  // an earlier load left cached.
+  jest.resetModules();
   jest.isolateModules(() => {
     ROUTING_ENV.forEach((key) => delete process.env[key]);
     Object.assign(process.env, { NODE_ENV: 'development', GMAIL_CLIENT_ID: 'cid', GMAIL_CLIENT_SECRET: 'secret', ...env });

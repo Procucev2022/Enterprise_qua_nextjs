@@ -19,7 +19,6 @@
 // send it through the BOQ upload tab, which flattens it client-side.
 // ==============================================================================
 
-const { simpleParser } = require('mailparser');
 const { logger } = require('./loggerService');
 const { EMAIL_INGESTION_CONFIG, EMAIL_INGESTION_STATUS } = require('../config/constants');
 
@@ -191,6 +190,9 @@ function referencesText(value) {
  * turns into a NO_CONTENT outcome.
  */
 async function parseEmailMessage(rawBuffer) {
+  // Required here rather than at module scope: mailparser's charset tables
+  // cost ~175ms of Worker startup CPU, and only inbound mail needs them.
+  const { simpleParser } = require('mailparser');
   const parsed = await simpleParser(rawBuffer, { skipImageLinks: true });
 
   const fromAddress = firstAddress(parsed.from);
