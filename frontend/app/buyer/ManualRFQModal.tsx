@@ -43,7 +43,7 @@ import {
   ExternalLink,
   Zap,
 } from 'lucide-react';
-import { getMajorCategories, getMinorCategories, dominantMajorCategory } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories, dominantMajorCategory, hasMajorCategory, hasMinorCategory } from '@/lib/categoryTaxonomy';
 import { CURRENCY, SOURCING_MODES, RFQ_MODES, RFQ_MODE_LABELS, entitledSourcingModes, RFQ_DOCUMENT_LIMITS, VENDOR_ASSIGNMENT_LIMITS } from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, classifyLineItems, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
@@ -271,6 +271,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   }, []);
 
   const [isCategorizing, setIsCategorizing] = useState(false);
+  const [categorizingProgress, setCategorizingProgress] = useState<string | null>(null);
 
   /**
    * Auto-categorize blank line items against the shared taxonomy via the server
@@ -281,6 +282,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
    */
   const handleAutoCategorizeAll = async () => {
     setIsCategorizing(true);
+    setCategorizingProgress(null);
     try {
       const toClassify = form.lineItems.filter(
         (item) => !item.majorCategory && item.itemName.trim() !== ''
@@ -303,7 +305,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           majorCategory: '',
           minorCategory: '',
           confidence: 0,
-        }))
+        })),
+        (prog) => {
+          setCategorizingProgress(`${prog.processed}/${prog.total}`);
+        }
       );
 
       if (!result.success || !result.data || !Array.isArray(result.data.extractedEntities)) {
@@ -320,23 +325,28 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         }
         const matched = classified.get(item.id);
         if (!matched || !matched.majorCategory) return item;
-        if (!detectedMajor) detectedMajor = matched.majorCategory;
+        const validMajor = hasMajorCategory(matched.majorCategory) ? matched.majorCategory : '';
+        const validMinor = validMajor && hasMinorCategory(validMajor, matched.minorCategory) ? matched.minorCategory : '';
+        if (!validMajor) return item;
+        if (!detectedMajor) detectedMajor = validMajor;
         return {
           ...item,
-          majorCategory: matched.majorCategory,
-          minorCategory: matched.minorCategory || '',
+          majorCategory: validMajor,
+          minorCategory: validMinor,
         };
       });
 
+      const dominant = dominantMajorCategory(updatedLineItems);
       setForm((prev) => ({
         ...prev,
-        majorCategory: prev.majorCategory || detectedMajor,
+        majorCategory: prev.majorCategory || dominant || detectedMajor,
         lineItems: updatedLineItems,
       }));
     } catch {
       store?.showToast?.(EXTRACTION.fallbackTitle, EXTRACTION.classifyFailed, 'warning');
     } finally {
       setIsCategorizing(false);
+      setCategorizingProgress(null);
     }
   };
 
@@ -529,8 +539,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     if (extracted.length === 0) return;
 
     // Header major = dominant category across the extracted line items (not
-    // just the first), with guaranteed valid category fallback so it is never null.
-    const headerMajor = dominantMajorCategory(extracted) || (extracted.length > 0 ? getMajorCategories()[0] : '');
+    // just the first), left unselected if no category was extracted.
+    const headerMajor = dominantMajorCategory(extracted) || '';
 
     setHasExtracted(true);
     setForm((prev) => ({
@@ -1087,7 +1097,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   title="Auto-identify and assign major/minor categories for all items"
                 >
                   {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                  {isCategorizing ? 'Classifying...' : 'Auto-Categorize All (AI)'}
+                  {isCategorizing ? (categorizingProgress ? `Classifying (${categorizingProgress})...` : 'Classifying...') : 'Auto-Categorize All (AI)'}
                 </button>
                 <button
                   onClick={() => setForm(addManualRFQLineItem(form))}
@@ -1160,7 +1170,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               aria-label={MODAL.colMajor}
                               aria-invalid={!!errors.majorCategory}
                               value={item.majorCategory}
-                              onChange={(e) => patchItem(item.id, { majorCategory: e.target.value })}
+                              onChange={(e) => {
+                                const newMajor = e.target.value;
+                                const keepMinor = newMajor && hasMinorCategory(newMajor, item.minorCategory) ? item.minorCategory : '';
+                                patchItem(item.id, { majorCategory: newMajor, minorCategory: keepMinor });
+                              }}
                               className="w-44"
                             >
                               <option value="">{MODAL.selectPlaceholder}</option>
@@ -1177,14 +1191,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               aria-label={MODAL.colMinor}
                               aria-invalid={!!errors.minorCategory}
                               value={item.minorCategory}
-                              // Enabled with a chosen major, or when the document
-                              // supplied a minor of its own (kept without a major).
-                              disabled={item.majorCategory === '' && item.minorCategory === ''}
+                              disabled={!item.majorCategory}
                               onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
                               className="w-44 disabled:opacity-50"
                             >
                               <option value="">{MODAL.selectPlaceholder}</option>
-                              {withStoredValue(minorsFor(item.majorCategory), item.minorCategory).map((minor) => (
+                              {minorsFor(item.majorCategory).map((minor) => (
                                 <option key={minor} value={minor}>
                                   {minor}
                                 </option>

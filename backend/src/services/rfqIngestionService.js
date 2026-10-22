@@ -17,7 +17,7 @@
  *   - duplicate rows within one ingest are collapsed on a composite key
  */
 
-const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG } = require('../config/constants');
+const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG, DEFAULT_CATEGORY_TAXONOMY } = require('../config/constants');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { logger } = require('./loggerService');
 
@@ -25,8 +25,10 @@ const {
   CONFIDENCE,
   STATUS,
   STATED_CATEGORY_ALIASES,
+  MAJOR_CATEGORY_ALIASES,
   GENERIC_CATEGORY_TOKENS,
   DOMAIN_KEYWORD_MAP,
+  MATERIAL_ONLY_KEYWORDS,
   TAXONOMY_CACHE_TTL_MS,
 } = RFQ_CATEGORY_CLASSIFICATION;
 
@@ -42,6 +44,7 @@ const {
 // Keywords are matched longest-first so a specific phrase wins over a substring
 // of it, e.g. 'circuit breaker' must beat the bare 'breaker'-style entries.
 const KEYWORDS_BY_LENGTH = Object.keys(DOMAIN_KEYWORD_MAP).sort((a, b) => b.length - a.length);
+const MATERIAL_ONLY_KEYWORD_SET = new Set((MATERIAL_ONLY_KEYWORDS || []).map((k) => k.toLowerCase()));
 
 // ==============================================================================
 // SHARED TAXONOMY INDEX
@@ -70,32 +73,41 @@ const KEYWORDS_BY_LENGTH = Object.keys(DOMAIN_KEYWORD_MAP).sort((a, b) => b.leng
 function taxonomyKey(value) {
   return String(value || '')
     .trim()
+    .replace(/[–—]/g, '-')
     .replace(/\s+/g, ' ')
     .toLowerCase();
 }
 
 // Cached rather than read per ingest: the master is a few hundred short rows that
-// change rarely, and an ingest classifies every line item against it. Starts
-// empty — an unloaded index is not a reason to invent categories, it just means
-// classification falls through to keyword matching.
+// change rarely, and an ingest classifies every line item against it. Pre-primed
+// with DEFAULT_CATEGORY_TAXONOMY as a baseline fallback so offline/test environments
+// have complete valid category mappings available immediately.
 const taxonomyIndex = {
   majorByKey: new Map(),
   byMinorKey: new Map(),
+  minorsByMajorKey: new Map(),
   loadedAt: 0,
   groupCount: 0,
 };
 
-/** Build the two lookup maps from the grouped taxonomy shape. */
+/** Build the lookup maps from the grouped taxonomy shape. */
 function primeTaxonomyIndex(groups) {
   taxonomyIndex.majorByKey = new Map();
   taxonomyIndex.byMinorKey = new Map();
+  taxonomyIndex.minorsByMajorKey = new Map();
   (Array.isArray(groups) ? groups : []).forEach((group) => {
     if (!group || !group.majorCategory) return;
-    taxonomyIndex.majorByKey.set(taxonomyKey(group.majorCategory), group.majorCategory);
+    const majorKey = taxonomyKey(group.majorCategory);
+    taxonomyIndex.majorByKey.set(majorKey, group.majorCategory);
+    if (!taxonomyIndex.minorsByMajorKey.has(majorKey)) {
+      taxonomyIndex.minorsByMajorKey.set(majorKey, new Map());
+    }
+    const minorMap = taxonomyIndex.minorsByMajorKey.get(majorKey);
     (group.minorCategories || []).forEach((minor) => {
       // First major wins for a minor that appears under several ('Refractories',
       // 'Panels', 'Conveyors'), matching the order a buyer sees in the dropdown.
       const key = taxonomyKey(minor);
+      minorMap.set(key, minor);
       if (!taxonomyIndex.byMinorKey.has(key)) {
         taxonomyIndex.byMinorKey.set(key, { major: group.majorCategory, minor });
       }
@@ -104,6 +116,36 @@ function primeTaxonomyIndex(groups) {
   taxonomyIndex.loadedAt = Date.now();
   taxonomyIndex.groupCount = taxonomyIndex.majorByKey.size;
   return taxonomyIndex;
+}
+
+// Pre-initialize index from DEFAULT_CATEGORY_TAXONOMY
+primeTaxonomyIndex(DEFAULT_CATEGORY_TAXONOMY);
+
+/** Check if a minor category belongs to a given major category in the taxonomy */
+function isMinorUnderMajor(major, minor) {
+  if (!major || !minor) return false;
+  const canonical = canonicalMajor(major) || major;
+  const majorKey = taxonomyKey(canonical);
+  const minorKey = taxonomyKey(minor);
+  const minorMap = taxonomyIndex.minorsByMajorKey.get(majorKey);
+  if (!minorMap) return false;
+  if (minorMap.has(minorKey)) return true;
+  const alias = aliasForStatedCategory(minor);
+  if (alias && minorMap.has(taxonomyKey(alias))) return true;
+  for (const masterKey of minorMap.keys()) {
+    if (masterKey.includes(minorKey) || minorKey.includes(masterKey)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Get all minor categories for a given major category */
+function getMinorsForMajor(major) {
+  if (!major) return [];
+  const majorKey = taxonomyKey(major);
+  const minorMap = taxonomyIndex.minorsByMajorKey.get(majorKey);
+  return minorMap ? Array.from(minorMap.values()) : [];
 }
 
 /**
@@ -120,6 +162,7 @@ function taxonomyCategoryNames() {
 function resetTaxonomyIndex() {
   taxonomyIndex.majorByKey = new Map();
   taxonomyIndex.byMinorKey = new Map();
+  taxonomyIndex.minorsByMajorKey = new Map();
   taxonomyIndex.loadedAt = 0;
   taxonomyIndex.groupCount = 0;
 }
@@ -127,27 +170,31 @@ function resetTaxonomyIndex() {
 /**
  * Load the taxonomy index if it is empty or stale.
  *
- * A read failure is logged and swallowed: the previously cached index keeps
- * serving, and if there is none, classification degrades to keyword matching and
- * flags the rest for review. Refusing the whole ingest because the master could
- * not be re-read would be a worse outcome than an item the buyer has to
- * categorise by hand.
+ * Reads from category_division in database, falling back to DEFAULT_CATEGORY_TAXONOMY
+ * if the database has 0 category rows or the read fails.
  */
 async function ensureTaxonomyLoaded() {
   const isFresh =
     taxonomyIndex.loadedAt > 0 && Date.now() - taxonomyIndex.loadedAt < TAXONOMY_CACHE_TTL_MS;
-  if (isFresh) return taxonomyIndex;
+  if (isFresh && taxonomyIndex.groupCount > 0) return taxonomyIndex;
 
   try {
     const groups = await buyerProfileQueries.findCategoryTaxonomy();
-    primeTaxonomyIndex(groups);
-    logger.info(
-      'Category taxonomy index loaded for RFQ classification',
-      { majorCount: taxonomyIndex.majorByKey.size, minorCount: taxonomyIndex.byMinorKey.size },
-      'RFQ_INGESTION'
-    );
+    if (Array.isArray(groups) && groups.length > 0) {
+      primeTaxonomyIndex(groups);
+      logger.info(
+        'Category taxonomy index loaded for RFQ classification',
+        { majorCount: taxonomyIndex.majorByKey.size, minorCount: taxonomyIndex.byMinorKey.size },
+        'RFQ_INGESTION'
+      );
+    } else if (taxonomyIndex.groupCount === 0) {
+      primeTaxonomyIndex(DEFAULT_CATEGORY_TAXONOMY);
+    }
   } catch (err) {
     logger.error('Could not load the category taxonomy for RFQ classification', err, 'RFQ_INGESTION');
+    if (taxonomyIndex.groupCount === 0) {
+      primeTaxonomyIndex(DEFAULT_CATEGORY_TAXONOMY);
+    }
   }
 
   return taxonomyIndex;
@@ -155,7 +202,15 @@ async function ensureTaxonomyLoaded() {
 
 /** The taxonomy's own spelling of a major, or null when it is not one. */
 function canonicalMajor(value) {
-  return taxonomyIndex.majorByKey.get(taxonomyKey(value)) || null;
+  if (!value) return null;
+  const key = taxonomyKey(value);
+  const direct = taxonomyIndex.majorByKey.get(key);
+  if (direct) return direct;
+  const alias = MAJOR_CATEGORY_ALIASES && MAJOR_CATEGORY_ALIASES[key];
+  if (alias) {
+    return taxonomyIndex.majorByKey.get(taxonomyKey(alias)) || alias;
+  }
+  return null;
 }
 
 /** The taxonomy pair owning a minor category, or null when it is not one. */
@@ -166,29 +221,26 @@ function taxonomyPairForMinor(value) {
 /**
  * Settle a stated category into a pair the review grid can render.
  *
- * Succeeds only when the stated minor is a real taxonomy minor. The major is then
- * the stated one if that is itself a real major — which disambiguates a minor
- * living under more than one, such as 'Panels' — and otherwise the major that
- * owns the minor.
- *
- * Returns null when the stated minor is not in the taxonomy, so the caller falls
- * through to keyword matching. That matters for the umbrella labels a model likes
- * to produce: 'Valves', 'PPE' and 'Hand Protection' are not minors, but the item
- * text routes them to 'Hoses, Valves & Fittings', 'Hemlets' and 'Gloves'. Keeping
- * the model's word instead would put a value in the row that the minor dropdown
- * has no option for, and the buyer would see an empty select.
+ * Succeeds only when the stated minor is a real taxonomy minor or alias.
+ * If the stated major owns that minor, it is kept; otherwise the major that
+ * genuinely owns the minor is returned to prevent invalid major-minor combinations.
  */
 function resolveStatedCategory(statedMinor, statedMajor) {
-  // A stated value is accepted if it is a real taxonomy minor directly, or if it
-  // is a known umbrella label (e.g. "IT Equipment", "Electrical Equipment",
-  // "Plumbing Material") that aliases onto one. Aliasing lets a document's own
-  // Category column fill the row instead of being discarded and falling through
-  // to keyword matching. The alias target is itself validated against the
-  // taxonomy, so an alias pointing at a minor the master does not hold still
-  // yields null (blank + review) rather than an unrenderable pair.
-  const pair = taxonomyPairForMinor(statedMinor) || taxonomyPairForMinor(aliasForStatedCategory(statedMinor));
+  if (!statedMinor) return null;
+  const trimmed = String(statedMinor).trim();
+  const directPair = taxonomyPairForMinor(trimmed);
+  const alias = aliasForStatedCategory(trimmed);
+  const aliasPair = alias ? taxonomyPairForMinor(alias) : null;
+  const pair = directPair || aliasPair;
   if (!pair) return null;
-  return { major: canonicalMajor(statedMajor) || pair.major, minor: pair.minor };
+
+  // Never allow an invalid major-minor combination: only use statedMajor if it genuinely owns this minor.
+  const canonicalStatedMajor = canonicalMajor(statedMajor);
+  const majorToUse = (canonicalStatedMajor && isMinorUnderMajor(canonicalStatedMajor, pair.minor))
+    ? canonicalStatedMajor
+    : pair.major;
+
+  return { major: majorToUse, minor: pair.minor };
 }
 
 /**
@@ -217,16 +269,33 @@ function isGenericCategory(value) {
 
 /**
  * Resolve a major/minor pair from free text by domain keyword.
+ * Prioritizes whole word boundaries and optionally excludes raw material keywords.
  * Returns null when nothing matches, so the caller can fall through.
  */
-function matchByKeyword(text) {
+function matchByKeyword(text, options = {}) {
   if (!text) return null;
   const haystack = String(text).toLowerCase();
-  const hit = KEYWORDS_BY_LENGTH.find((keyword) => haystack.includes(keyword));
+  const hit = KEYWORDS_BY_LENGTH.find((keyword) => {
+    if (options.excludeMaterials && MATERIAL_ONLY_KEYWORD_SET.has(keyword.toLowerCase())) {
+      return false;
+    }
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(?:^|[\\s,./\\-_();:\\[\\]{}+*&|!@#$%^~=])${escaped}(?:s|es)?(?:$|[\\s,./\\-_();:\\[\\]{}+*&|!@#$%^~=])`, 'i');
+    return regex.test(haystack);
+  });
   return hit ? { ...DOMAIN_KEYWORD_MAP[hit], keyword: hit } : null;
 }
 
 /**
+ * Classify a single line item independently, prioritizing product description first.
+ *
+ * Precedence:
+ * 1. Explicit item category (if valid in taxonomy)
+ * 2. Item Description — highest priority product classification
+ * 3. Product purpose and technical specifications (excluding raw material keywords)
+ * 4. Combined item text (excluding raw material keywords)
+ * 5. Document payload-wide category fallback
+ * 6. Default unclassified (never invent invalid category pairs)
  * Default minor category for each major category, used as a fallback when an item
  * belongs to a major category but no more specific minor could be resolved.
  */
@@ -260,11 +329,7 @@ function defaultMinorForMajor(major) {
  *   categoryConfidence: number, classificationStatus: string}}
  */
 function classifyLineItem(item, payloadCategory) {
-  // Resolved up front rather than inside step 3, because the stated-category
-  // steps use its major when the model named a minor but no major.
-  const keywordMatch = matchByKeyword(`${item.itemName || ''} ${item.technicalSpecs || ''}`);
-
-  // 1. An explicit, meaningful category on the item itself wins outright.
+  // 1. An explicit, meaningful category on the item itself wins outright if valid.
   const explicitMinor = item.minorCategory || item.category;
   if (!isGenericCategory(explicitMinor)) {
     const resolved = resolveStatedCategory(explicitMinor, item.majorCategory);
@@ -277,11 +342,51 @@ function classifyLineItem(item, payloadCategory) {
         classificationStatus: STATUS.EXPLICIT,
       };
     }
-    // No major could be resolved for it, so the pair would arrive at the review
-    // grid unrenderable. Fall through instead of stamping a placeholder.
   }
 
-  // 2. A category stated once for the whole payload applies to every item.
+  // 2. Item Description — HIGHEST PRIORITY: Classify based on the actual product
+  const itemDesc = String(item.itemName || '').trim();
+  const itemDescMatch = matchByKeyword(itemDesc);
+  if (itemDescMatch) {
+    return {
+      majorCategory: itemDescMatch.major,
+      minorCategory: itemDescMatch.minor,
+      category: itemDescMatch.minor,
+      categoryConfidence: CONFIDENCE.KEYWORD,
+      classificationStatus: STATUS.KEYWORD,
+    };
+  }
+
+  // 3. Technical specifications: exclude raw material keywords so specs like
+  // "stainless steel chest piece" do not misclassify a finished product (e.g. Stethoscope) as Steels.
+  const specs = String(item.technicalSpecs || '').trim();
+  if (specs) {
+    const specsMatch = matchByKeyword(specs, { excludeMaterials: true });
+    if (specsMatch) {
+      return {
+        majorCategory: specsMatch.major,
+        minorCategory: specsMatch.minor,
+        category: specsMatch.minor,
+        categoryConfidence: CONFIDENCE.KEYWORD,
+        classificationStatus: STATUS.KEYWORD,
+      };
+    }
+
+    if (itemDesc) {
+      const combinedMatch = matchByKeyword(`${itemDesc} ${specs}`, { excludeMaterials: true });
+      if (combinedMatch) {
+        return {
+          majorCategory: combinedMatch.major,
+          minorCategory: combinedMatch.minor,
+          category: combinedMatch.minor,
+          categoryConfidence: CONFIDENCE.KEYWORD,
+          classificationStatus: STATUS.KEYWORD,
+        };
+      }
+    }
+  }
+
+  // 4. A category stated once for the whole payload applies as a fallback when the item itself has no match.
   if (!isGenericCategory(payloadCategory)) {
     const resolved = resolveStatedCategory(payloadCategory, item.majorCategory);
     if (resolved) {
@@ -295,49 +400,22 @@ function classifyLineItem(item, payloadCategory) {
     }
   }
 
-  // 3. Keyword match across the description and the technical specification.
-  if (keywordMatch) {
-    return {
-      majorCategory: keywordMatch.major,
-      minorCategory: keywordMatch.minor,
-      category: keywordMatch.minor,
-      categoryConfidence: CONFIDENCE.KEYWORD,
-      classificationStatus: STATUS.KEYWORD,
-    };
-  }
-
-  // 4. Stated category fallback.
+  // 5. Stated category fallback.
   // If the document stated a category (its own, or payloadCategory), inspect it.
   const statedCategory = !isGenericCategory(item.minorCategory || item.category)
     ? String(item.minorCategory || item.category).trim()
-    : !isGenericCategory(payloadCategory)
-      ? String(payloadCategory).trim()
-      : '';
+    : '';
   const statedMajor = !isGenericCategory(item.majorCategory) ? String(item.majorCategory).trim() : '';
 
-  let resolvedMajor = canonicalMajor(statedMajor) || canonicalMajor(statedCategory) || statedMajor;
-  let resolvedMinor = statedCategory;
-  let confidence = CONFIDENCE.DEFAULT;
-  let status = STATUS.DEFAULT;
-
-  if (canonicalMajor(statedCategory)) {
-    // Stated category is actually a Major category (e.g. "IT"). Never store a Major as a Minor!
-    resolvedMajor = canonicalMajor(statedCategory);
-    resolvedMinor = defaultMinorForMajor(resolvedMajor);
-    confidence = CONFIDENCE.KEYWORD;
-    status = STATUS.KEYWORD;
-  } else if (resolvedMajor && (!resolvedMinor || resolvedMinor === resolvedMajor)) {
-    resolvedMinor = defaultMinorForMajor(resolvedMajor);
-    confidence = CONFIDENCE.KEYWORD;
-    status = STATUS.KEYWORD;
-  }
+  const finalMajor = canonicalMajor(statedMajor) || (canonicalMajor(statedCategory) ? canonicalMajor(statedCategory) : '');
+  const finalMinor = (!finalMajor && statedCategory) ? statedCategory : '';
 
   return {
-    majorCategory: resolvedMajor,
-    minorCategory: resolvedMinor,
-    category: resolvedMinor,
-    categoryConfidence: confidence,
-    classificationStatus: status,
+    majorCategory: finalMajor,
+    minorCategory: finalMinor,
+    category: finalMinor,
+    categoryConfidence: CONFIDENCE.DEFAULT,
+    classificationStatus: STATUS.DEFAULT,
   };
 }
 
@@ -665,6 +743,8 @@ module.exports = {
   deriveEstimatedBudget,
   buildDeduplicationKey,
   normalizeLineItems,
+  isMinorUnderMajor,
+  getMinorsForMajor,
   deriveTitle,
   buildRFQDraft,
 };
