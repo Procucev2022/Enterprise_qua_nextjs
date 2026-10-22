@@ -434,6 +434,7 @@ async function sendViaGmailIdentity(identity, message) {
     inReplyTo: message.inReplyTo,
     references: message.references,
     headers: message.headers,
+    attachments: message.attachments,
   });
   const res = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
   return { messageId: res.data.id };
@@ -1888,6 +1889,41 @@ function buildVendorOnboardingEmail({ to, recipientName, buyerOrganizationName, 
   };
 }
 
+/**
+ * Login credentials for a buyer whose account was created outside the web sign-up
+ * (the WhatsApp agent bot). The supplier counterpart is buildVendorOnboardingEmail;
+ * web buyers choose their own password, so nothing else sends a buyer one.
+ */
+function buildBuyerCredentialsEmail({ to, recipientName, tempPassword, contactPhone }) {
+  const signInUrl = escapeHtml(buyerPortalUrl());
+  const inner = `
+    <p>${recipientName ? `Dear <strong>${escapeHtml(recipientName)}</strong>,` : 'Hello,'}</p>
+    <p>Your buyer account on <strong>Procucev Enterprise</strong> is ready. Use the credentials below to sign in and raise RFQs.</p>
+    <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
+      ${row('Email Address', escapeHtml(to))}
+      ${row('Temporary Password', tempPassword ? escapeHtml(tempPassword) : '')}
+      ${row('Login URL', signInUrl)}
+      ${row('Mobile Number', contactPhone ? escapeHtml(contactPhone) : '')}
+    </table>
+    <p style="margin: 24px 0;">
+      <a href="${signInUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Sign in to Procucev Portal</a>
+    </p>
+    <p style="font-size: 13px; color: #92400e; background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px;">
+      <strong>Security Notice:</strong> This temporary password is for first-time access only. Please change it after signing in. You can also sign in at any time with a one-time code sent to this email.
+    </p>
+  `;
+  return {
+    from: fromAddress(),
+    to,
+    subject: 'Welcome to Procucev - Your Account Credentials',
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Buyer Account Login Credentials', inner),
+  };
+}
+
+async function sendBuyerCredentialsEmail(params) {
+  return deliver(buildBuyerCredentialsEmail(params), 'Buyer credentials email');
+}
+
 /** Template D — Rating revision notification to vendor */
 function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany, buyerName, previousRating, newRating, previousScore, newScore, remarks, qualityScore, costScore, deliveryScore }) {
   const inner = `
@@ -2299,6 +2335,8 @@ module.exports = {
   buildVendorCategoryMappingEmail,
   buildVendorSelfMappingEmail,
   buildVendorOnboardingEmail,
+  buildBuyerCredentialsEmail,
+  sendBuyerCredentialsEmail,
   buildRatingRevisionEmail,
   sendVendorIngestionEmail,
   buildRfqAcknowledgementEmail,
