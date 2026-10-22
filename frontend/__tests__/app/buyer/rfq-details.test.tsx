@@ -1424,5 +1424,25 @@ function makeInquiry(overrides: any = {}): any {
       expect(screen.queryByText('Secret Procucev Vendor')).not.toBeInTheDocument();
       expect(screen.queryByText('secret@procucev.com')).not.toBeInTheDocument();
     });
+
+    it('renders Pre-Purchase Order Finalised banner and omits Close/Extend actions when PO is generated', () => {
+      renderDetails(
+        buildRFQ({
+          id: 'rfq-po-screen',
+          rfqNumber: 'RFQ-2026-00421',
+          status: 'PO Generated',
+          poFinalised: true,
+          poNumber: 'PO-2026-00421',
+          awardedVendor: 'Apex Supplies Ltd.',
+          awardedAmount: 185000,
+        })
+      );
+
+      expect(screen.getByText(/Pre-Purchase Order Finalised/i)).toBeInTheDocument();
+      expect(screen.getAllByText('PO-2026-00421').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText(/View Finalised Matrix & PO ↗/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Close RFQ/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Extend RFQ/i })).not.toBeInTheDocument();
+    });
   });
 });

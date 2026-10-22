@@ -177,6 +177,10 @@ class StoreService {
       this.vendors = vendorPage.rows;
       this.vendorsTotal = vendorPage.total;
       this.rfqs = rfqs.map((rfq) => {
+        if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
+          rfq = { ...rfq, status: 'PO Generated', poFinalised: true };
+          this._persistRFQ(rfq);
+        }
         if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
           const corrected = { ...rfq, source: 'manual_entry' };
           this._persistRFQ(corrected);
@@ -1931,7 +1935,14 @@ class StoreService {
 
     for (let i = 0; i < this.rfqs.length; i++) {
       const rfq = this.rfqs[i];
-      if (rfq && rfq.status !== 'Closed') {
+      if (
+        rfq &&
+        rfq.status !== 'Closed' &&
+        rfq.status !== 'PO Generated' &&
+        !rfq.poFinalised &&
+        !rfq.poNumber &&
+        rfq.status !== 'Expired'
+      ) {
         const createdMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
         if (createdMs > 0 && now - createdMs >= fortyEightHoursMs) {
           const updated = {
@@ -1954,8 +1965,11 @@ class StoreService {
     this.checkAndClose48HourRFQs();
     return this.rfqs.map((r) => {
       let item = r;
-      if (r && r.source === 'ai_extraction' && !r.sourceFileName) {
-        item = { ...r, source: 'manual_entry' };
+      if (item && (item.poFinalised || item.poNumber) && item.status === 'Closed') {
+        item = { ...item, status: 'PO Generated', poFinalised: true };
+      }
+      if (item && item.source === 'ai_extraction' && !item.sourceFileName) {
+        item = { ...item, source: 'manual_entry' };
       }
       return item.quotes ? { ...item, quotes: evaluateQuotes(item.quotes) } : item;
     });
@@ -1972,6 +1986,11 @@ class StoreService {
       if (Array.isArray(allFromDB)) {
         const byId = new Map(this.rfqs.map((r) => [r.id, r]));
         for (const rfq of allFromDB) {
+          if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
+            rfq.status = 'PO Generated';
+            rfq.poFinalised = true;
+            this._persistRFQ(rfq);
+          }
           if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
             rfq.source = 'manual_entry';
             this._persistRFQ(rfq);
@@ -2018,8 +2037,11 @@ class StoreService {
     const found = this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
     if (!found) return undefined;
     let rfq = found;
-    if (found && found.source === 'ai_extraction' && !found.sourceFileName) {
-      rfq = { ...found, source: 'manual_entry' };
+    if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
+      rfq = { ...rfq, status: 'PO Generated', poFinalised: true };
+    }
+    if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
+      rfq = { ...rfq, source: 'manual_entry' };
     }
     return rfq.quotes
       ? {
@@ -2649,7 +2671,7 @@ class StoreService {
     let autoClosed = false;
     let finalStatus = nextStatus;
 
-    if (!isV0 && allInvitedSubmitted && rfq.status !== 'Closed' && rfq.status !== 'PO Generated') {
+    if (!isV0 && allInvitedSubmitted && rfq.status !== 'Closed' && rfq.status !== 'PO Generated' && !rfq.poFinalised && !rfq.poNumber && rfq.status !== 'Expired') {
       finalStatus = 'Closed';
       autoClosed = true;
       logger.info(
@@ -4177,7 +4199,7 @@ class StoreService {
    * Whether an RFQ is currently within its 48-hour bidding integrity window.
    */
   isWithin48HourWindow(rfq) {
-    if (!rfq || rfq.status === 'Closed') return false;
+    if (!rfq || rfq.status === 'Closed' || rfq.status === 'PO Generated' || rfq.poFinalised || Boolean(rfq.poNumber) || rfq.status === 'Expired') return false;
     const isV0 =
       rfq.sourcingMode === 'mode_0' ||
       rfq.sourcingMode === 'v0' ||

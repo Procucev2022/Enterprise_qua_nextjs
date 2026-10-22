@@ -216,6 +216,37 @@ describe('QuoteMatrix Component Tests', () => {
     fireEvent.click(selectKiranBtn);
   });
 
+  test('renders view finalised PO on awarded vendor and bid concluded on other vendors when PO is finalised', () => {
+    const poFinalisedRfq = {
+      ...mockRFQs[0],
+      status: 'PO Generated' as const,
+      poFinalised: true,
+      poNumber: 'PO-2026-00421',
+      awardedVendor: 'Apex Supplies Ltd.',
+      awardedAmount: 75000,
+      quotes: [
+        { ...mockRFQs[0].quotes[0], status: 'Awarded', awarded: true },
+        { ...mockRFQs[0].quotes[1], status: 'Submitted', awarded: false },
+      ],
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [poFinalisedRfq],
+      selectedRFQForMatrix: poFinalisedRfq,
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      selectedRFQForDeepDive: null,
+    });
+
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+
+    expect(screen.getByText(/\[ VIEW FINALISED PRE-PURCHASE ORDER \]/i)).toBeInTheDocument();
+    expect(screen.getByText(/Bid Concluded/i)).toBeInTheDocument();
+  });
+
   test('triggers openRFQDeepDive and closes deep dive modal', () => {
     (useApp as jest.Mock).mockReturnValue({
       rfqs: mockRFQs,
