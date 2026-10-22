@@ -147,6 +147,44 @@ describe('categoryTaxonomy module', () => {
     expect(res5.majorCategory).toBe('');
     expect(res5.minorCategory).toBe('');
 
+    // Grocery items auto-categorization
+    const groceryItems = [
+      'SUGAR PACKING',
+      'SUGAR REFINED',
+      'SUGAR LOOSE',
+      'MADHUR SUGAR-1KG',
+      'TOOR DAL LOOSE',
+      'GRAM DAL',
+      'GRAM DAL LOOSE',
+    ];
+    groceryItems.forEach((item) => {
+      const res = require('@/lib/categoryTaxonomy').autoCategorizeItem(item, 'Food grocery item');
+      expect(res.majorCategory).toBe('Others – New Product');
+      expect(res.minorCategory).toBe('Food & Beverages');
+    });
+
+    // Medical equipment auto-categorization and material keyword exclusion
+    const stethoscope = require('@/lib/categoryTaxonomy').autoCategorizeItem(
+      'Stethoscope',
+      'Medical diagnostic instrument with stainless-steel chest piece and dual lumen tubing'
+    );
+    expect(stethoscope.majorCategory).toBe('Others – New Product');
+    expect(stethoscope.minorCategory).toBe('Health Equipments');
+
+    const oximeter = require('@/lib/categoryTaxonomy').autoCategorizeItem(
+      'Pulse Oximeter',
+      'Fingertip OLED display digital monitor with plastic casing'
+    );
+    expect(oximeter.majorCategory).toBe('Others – New Product');
+    expect(oximeter.minorCategory).toBe('Health Equipments');
+
+    const gloves = require('@/lib/categoryTaxonomy').autoCategorizeItem(
+      'Disposable Gloves',
+      'Nitrile examination gloves powder free'
+    );
+    expect(gloves.majorCategory).toBe('Occuptional Health and Safety');
+    expect(gloves.minorCategory).toBe('Gloves');
+
     // getDefaultMinorForMajor
     expect(require('@/lib/categoryTaxonomy').getDefaultMinorForMajor('Civil Works')).toBe('Back filing');
     expect(require('@/lib/categoryTaxonomy').getDefaultMinorForMajor('Unknown Major')).toBe('');
@@ -186,5 +224,50 @@ describe('categoryTaxonomy module', () => {
         ['All Categories']
       )
     ).toBe('Civil Works');
+  });
+
+  it('covers specs matching, dynamic taxonomy matching, and empty taxonomy fallback', () => {
+    const {
+      autoCategorizeItem,
+      getMajorCategories,
+      resetCategoryTaxonomy,
+      setCategoryTaxonomy,
+    } = require('@/lib/categoryTaxonomy');
+
+    // Specs matching rule when name does not match
+    const specsRes = autoCategorizeItem('Custom Unit', 'Pulse Oximeter device with sensor');
+    expect(specsRes.majorCategory).toBe('Others – New Product');
+    expect(specsRes.minorCategory).toBe('Health Equipments');
+
+    // Dynamic taxonomy matching minor and major
+    const minorRes = autoCategorizeItem('Back filing', '');
+    expect(minorRes.majorCategory).toBe('Civil Works');
+    expect(minorRes.minorCategory).toBe('Back filing');
+
+    const majorRes = autoCategorizeItem('Civil Works', '');
+    expect(majorRes.majorCategory).toBe('Civil Works');
+    expect(majorRes.minorCategory).toBe('Back filing');
+
+    // Fallback when taxonomy is reset
+    clearCategoryTaxonomy();
+    expect(getMajorCategories()).toContain('Civil Works');
+
+    // AutoCategorizeItem with empty name but specs, or default specs
+    expect(autoCategorizeItem('', 'Unknown custom specs')).toEqual({ majorCategory: '', minorCategory: '' });
+    expect(autoCategorizeItem('Sugar')).toEqual({ majorCategory: 'Others – New Product', minorCategory: 'Food & Beverages' });
+
+    // Empty major queries
+    const { getMinorCategories, getDefaultMinorForMajor } = require('@/lib/categoryTaxonomy');
+    expect(getMinorCategories('')).toEqual([]);
+    expect(getDefaultMinorForMajor('')).toBe('');
+
+    // Transform 'Others – New Product' and 'Others – New Service' with explicit minors and empty major
+    setCategoryTaxonomy([
+      { majorCategory: '', minorCategories: [] },
+      { majorCategory: 'Others – New Product', minorCategories: ['Custom Food'] },
+      { majorCategory: 'Others – New Service', minorCategories: ['Custom Consulting'] },
+    ]);
+    expect(getMajorCategories()).toContain('Others – New Product');
+    expect(getMajorCategories()).toContain('Others – New Service');
   });
 });

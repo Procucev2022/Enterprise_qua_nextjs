@@ -10,6 +10,7 @@ const {
   hasUnlimitedDownloadAccess,
   VENDOR_FREE_CREDITS_LIMIT,
   VENDOR_ASSIGNMENT_LIMITS,
+  MAJOR_CATEGORY_ALIASES,
 } = require('../config/constants');
 const crypto = require('crypto');
 const pool = require('../db/pool');
@@ -3114,13 +3115,22 @@ class StoreService {
     if (!category) return false;
     const target = String(category).trim().toLowerCase();
     if (!target) return false;
+    const targetAlias = MAJOR_CATEGORY_ALIASES && MAJOR_CATEGORY_ALIASES[target];
+    const targetNormalized = (targetAlias || target).toLowerCase();
     const pools = [
       vendor.majorCategory,
       ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : []),
       ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
       ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
     ];
-    return pools.some((c) => String(c || '').trim().toLowerCase() === target);
+    return pools.some((c) => {
+      if (!c) return false;
+      const normalized = String(c).trim().toLowerCase();
+      if (normalized === target) return true;
+      const alias = MAJOR_CATEGORY_ALIASES && MAJOR_CATEGORY_ALIASES[normalized];
+      const poolNormalized = (alias || normalized).toLowerCase();
+      return poolNormalized === targetNormalized;
+    });
   }
 
   /**

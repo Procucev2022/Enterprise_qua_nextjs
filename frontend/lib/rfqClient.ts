@@ -169,48 +169,153 @@ export async function stageDocumentForExtraction(
  * explicit category takes precedence server-side, so leaving them in would make
  * re-classification a no-op.
  */
-export async function classifyLineItems(items: ExtractedEntity[]): Promise<RFQIngestionResponse> {
-  const token = authClient.getToken();
-
-  const lineItems = items.map((item) => ({
-    id: item.id,
-    itemName: item.itemName,
-    quantity: item.quantity,
-    unit: item.unit,
-    targetDate: item.targetDate,
-    technicalSpecs: item.technicalSpecs,
-  }));
-
-  let res: Response;
-  try {
-    res = await fetch('/api/rfqs/ingest', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+export async function classifyLineItems(
+  items: ExtractedEntity[],
+  onProgress?: (progress: { processed: number; total: number; percent: number }) => void
+): Promise<RFQIngestionResponse> {
+  if (!items || items.length === 0) {
+    return {
+      success: true,
+      data: {
+        title: '',
+        category: '',
+        targetDeliveryDate: '',
+        estimatedBudget: null,
+        extractedEntities: [],
+        source: 'manual_entry',
       },
-      body: JSON.stringify({ lineItems }),
+    };
+  }
+
+  const token = authClient.getToken();
+  const BATCH_SIZE = 50;
+
+  // Single-batch fast path for small sets (<= 50 items)
+  if (items.length <= BATCH_SIZE) {
+    const lineItems = items.map((item) => ({
+      id: item.id,
+      itemName: item.itemName,
+      quantity: item.quantity,
+      unit: item.unit,
+      targetDate: item.targetDate,
+      technicalSpecs: item.technicalSpecs,
+    }));
+
+    let res: Response;
+    try {
+      res = await fetch('/api/rfqs/ingest', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ lineItems }),
+      });
+    } catch {
+      return { success: false, error: UI_STRINGS.auth.networkUnreachable };
+    }
+
+    if (res.status >= 500) {
+      return { success: false, error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }) };
+    }
+
+    let body: Partial<RFQIngestionResponse> = {};
+    try {
+      body = await res.json();
+    } catch {
+      return { success: false, error: UI_STRINGS.rfqExtraction.classifyFailed };
+    }
+
+    if (!res.ok || !body.success || !body.data) {
+      return { success: false, error: body.error || UI_STRINGS.rfqExtraction.classifyFailed };
+    }
+
+    onProgress?.({ processed: items.length, total: items.length, percent: 100 });
+    return { success: true, data: body.data, classification: body.classification };
+  }
+
+  // Multi-batch path for large sets (e.g. 100, 279+ items)
+  const allClassified: ExtractedEntity[] = [];
+  let firstError: string | null = null;
+  const itemMap = new Map<string, ExtractedEntity>(items.map((it) => [it.id, it]));
+
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const chunk = items.slice(i, i + BATCH_SIZE);
+    const lineItems = chunk.map((item) => ({
+      id: item.id,
+      itemName: item.itemName,
+      quantity: item.quantity,
+      unit: item.unit,
+      targetDate: item.targetDate,
+      technicalSpecs: item.technicalSpecs,
+    }));
+
+    try {
+      const res = await fetch('/api/rfqs/ingest', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ lineItems }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        if (!firstError) {
+          firstError =
+            res.status >= 500
+              ? formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status })
+              : body.error || UI_STRINGS.rfqExtraction.classifyFailed;
+        }
+      } else {
+        const body: Partial<RFQIngestionResponse> = await res.json();
+        if (body.success && body.data?.extractedEntities) {
+          for (const entity of body.data.extractedEntities) {
+            const original = itemMap.get(entity.id);
+            allClassified.push({
+              ...(original || {}),
+              id: entity.id,
+              itemName: original?.itemName || entity.itemName,
+              quantity: original?.quantity ?? entity.quantity,
+              unit: original?.unit || entity.unit,
+              targetDate: original?.targetDate || entity.targetDate,
+              technicalSpecs: original?.technicalSpecs ?? entity.technicalSpecs,
+              category: entity.minorCategory || entity.category || '',
+              majorCategory: entity.majorCategory || '',
+              minorCategory: entity.minorCategory || '',
+              confidence: entity.confidence ?? 0,
+            });
+          }
+        }
+      }
+    } catch {
+      if (!firstError) firstError = UI_STRINGS.auth.networkUnreachable;
+    }
+
+    const processed = Math.min(i + BATCH_SIZE, items.length);
+    onProgress?.({
+      processed,
+      total: items.length,
+      percent: Math.round((processed / items.length) * 100),
     });
-  } catch {
-    return { success: false, error: UI_STRINGS.auth.networkUnreachable };
   }
 
-  if (res.status >= 500) {
-    return { success: false, error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }) };
+  if (allClassified.length === 0 && firstError) {
+    return { success: false, error: firstError };
   }
 
-  let body: Partial<RFQIngestionResponse> = {};
-  try {
-    body = await res.json();
-  } catch {
-    return { success: false, error: UI_STRINGS.rfqExtraction.classifyFailed };
-  }
-
-  if (!res.ok || !body.success || !body.data) {
-    return { success: false, error: body.error || UI_STRINGS.rfqExtraction.classifyFailed };
-  }
-
-  return { success: true, data: body.data, classification: body.classification };
+  return {
+    success: true,
+    data: {
+      title: '',
+      category: allClassified[0]?.majorCategory || '',
+      targetDeliveryDate: '',
+      estimatedBudget: null,
+      extractedEntities: allClassified,
+      source: 'manual_entry',
+    },
+  };
 }
 
 /** Where a stored attachment is served from, used directly as a link target. */
