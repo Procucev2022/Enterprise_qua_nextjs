@@ -19,9 +19,15 @@
 
 const { GEMINI_CONFIG, GEMINI_INLINE_MIME_TYPES } = require('../config/constants');
 const { logger } = require('./loggerService');
-// Monetary parsing lives with the ingestion layer that consumes these rows, so
-// prices from a model reply and prices from a browser-parsed BOQ normalise identically.
-const { normalizeAmount, ensureTaxonomyLoaded, taxonomyCategoryNames } = require('./rfqIngestionService');
+const {
+  normalizeAmount,
+  ensureTaxonomyLoaded,
+  taxonomyCategoryNames,
+  canonicalMajor,
+  taxonomyPairForMinor,
+  matchByKeyword,
+  isGenericCategory,
+} = require('./rfqIngestionService');
 
 /** Machine-readable outcomes the route maps onto responses. */
 const EXTRACTION_STATUS = {
@@ -72,7 +78,7 @@ OUTPUT JSON SPECIFICATION:
 Return a SINGLE JSON object with this shape and no surrounding prose or markdown:
 {
   "documentTitle": "Optional string, short title for overall requirement if stated",
-  "category": "Optional string, overall category copied exactly from the CATEGORY LIST if stated",
+  "category": "String, MANDATORY: Choose the single best-fitting category copied exactly from the CATEGORY LIST. If not explicitly stated in the document, you MUST infer the single best-fitting category from the line items and descriptions. MUST NEVER be null.",
   "deliveryDate": "Optional string in YYYY-MM-DD if overall delivery date is stated",
   "deliveryLocation": "Optional destination string if stated",
   "deliveryCity": "Optional destination city if stated",
@@ -599,9 +605,42 @@ function categoryPromptBlock() {
   return `
 
 CATEGORY LIST
-If the document states a procurement category (for example "Category: Civil Works"), set "category" to the matching name copied exactly from this list. Use a major category name or a minor category name. Never invent a category, never reword one, and never use a name that is not in this list. If nothing stated matches the list, return null.
+Category generation is MANDATORY. You MUST choose and set "category" to the single best-fitting category copied exactly from the CATEGORY LIST.
+- If the document explicitly states a procurement category (for example "Category: Civil Works"), use it.
+- If the document does not explicitly state a category header, you MUST infer the best-fitting category from the line items, materials, equipment, or service descriptions in the document.
+- The "category" field MUST NEVER be null. Always choose the closest matching major category or minor category from this list. Never invent a category or use a name outside this list.
 Major categories: ${majors.join(' | ')}
 Minor categories: ${minors.join(' | ')}`;
+}
+
+/**
+ * Infer the best-fitting major category from line items when the model returned null or unclassified.
+ * In all category creation flows, category generation is mandatory from our list and should never be null.
+ */
+function inferCategoryFromLineItems(lineItems = []) {
+  if (!Array.isArray(lineItems) || lineItems.length === 0) return null;
+  const majorCounts = {};
+
+  for (const item of lineItems) {
+    const rawCat = (item.category || '').trim();
+    if (rawCat && !isGenericCategory(rawCat)) {
+      const pair = taxonomyPairForMinor(rawCat);
+      const major = canonicalMajor(rawCat) || (pair ? pair.major : null);
+      if (major) {
+        majorCounts[major] = (majorCounts[major] || 0) + 2;
+      }
+    }
+    const match = matchByKeyword(`${item.itemName || ''} ${item.technicalSpecs || ''}`);
+    if (match && match.major) {
+      majorCounts[match.major] = (majorCounts[match.major] || 0) + 1;
+    }
+  }
+
+  const sorted = Object.entries(majorCounts).sort((a, b) => b[1] - a[1]);
+  if (sorted.length > 0 && sorted[0][0]) {
+    return sorted[0][0];
+  }
+  return 'Others – New Product';
 }
 
 /**
@@ -1372,12 +1411,24 @@ async function extractLineItems(input = {}) {
       }
       activeModelIndex = modelIdx;
 
+      let category = typeof parsed.category === 'string' && parsed.category.trim() ? parsed.category.trim() : null;
+      if (category) {
+        const resolvedMajor = canonicalMajor(category) || taxonomyPairForMinor(category)?.major;
+        if (resolvedMajor) {
+          category = resolvedMajor;
+        }
+      }
+
+      if (!category && lineItems.length > 0) {
+        category = inferCategoryFromLineItems(lineItems);
+      }
+
       return {
         status: EXTRACTION_STATUS.SUCCESS,
         lineItems,
         model,
         documentTitle: typeof parsed.documentTitle === 'string' ? parsed.documentTitle : null,
-        category: typeof parsed.category === 'string' ? parsed.category : null,
+        category,
         deliveryDate: typeof parsed.deliveryDate === 'string' ? parsed.deliveryDate : null,
         deliveryLocation: typeof parsed.deliveryLocation === 'string' ? parsed.deliveryLocation : null,
         deliveryCity: typeof parsed.deliveryCity === 'string' ? parsed.deliveryCity : null,
@@ -1938,4 +1989,5 @@ module.exports = {
   isNonRetryableError,
   isLocationUnsupportedError,
   repairTruncatedJson,
+  inferCategoryFromLineItems,
 };

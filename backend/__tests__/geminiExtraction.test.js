@@ -2510,5 +2510,65 @@ describe('geminiService.generateJson', () => {
         expect(res.items[1][0]).toBe('Gate Valve 4 inch');
       });
     });
+
+    describe('Mandatory Category Generation & inferCategoryFromLineItems', () => {
+      test('returns null for empty or invalid line items', () => {
+        expect(gemini.inferCategoryFromLineItems([])).toBeNull();
+        expect(gemini.inferCategoryFromLineItems(null)).toBeNull();
+        expect(gemini.inferCategoryFromLineItems(undefined)).toBeNull();
+      });
+
+      test('infers major category from items with stated minor category', () => {
+        const items = [
+          { itemName: 'Custom Item 1', category: 'Pumps & Accessories' },
+          { itemName: 'Custom Item 2', category: 'Pumps & Accessories' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Engineering Spares - Mechanical');
+      });
+
+      test('infers major category from items with stated canonical major category', () => {
+        const items = [
+          { itemName: 'Item 1', category: 'Civil Works' },
+          { itemName: 'Item 2', category: 'Civil Works' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Civil Works');
+      });
+
+      test('infers category from keywords in item description and specs', () => {
+        const items = [
+          { itemName: 'Heavy Centrifugal Pump', technicalSpecs: 'High pressure SS316' },
+          { itemName: 'Electric motor 50HP', technicalSpecs: '415V 3-phase' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Engineering Spares - Mechanical');
+      });
+
+      test('falls back to Others – New Product when items have no keyword or category match', () => {
+        const items = [
+          { itemName: 'Unknown widget 9999', technicalSpecs: 'xyz unknown' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Others – New Product');
+      });
+
+      test('extractLineItems automatically populates category when model returns null', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(
+          geminiReply(
+            JSON.stringify({
+              documentTitle: 'Pump and Valve Procurement',
+              category: null,
+              items: [
+                ['Centrifugal Pump 500 GPM', 10, 'Nos', 'SS316'],
+                ['Gate Valve 2 inch', 20, 'Nos', 'Class 150'],
+              ],
+            })
+          )
+        );
+
+        const res = await gemini.extractLineItems({ documentText: 'Pump and Valve Procurement' });
+        expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(res.category).toBe('Engineering Spares - Mechanical');
+        expect(res.lineItems).toHaveLength(2);
+      });
+    });
   });
 });

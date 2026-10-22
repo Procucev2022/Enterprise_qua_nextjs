@@ -897,12 +897,13 @@ export default function IngestionWizard({
         const derivedLocation = result.data.deliveryLocation || '';
         const derivedPincode = result.data.deliveryPincode || '';
         const derivedDate = result.data.targetDeliveryDate || '';
+        const extractedCategory = result.data.category || '';
 
         setForm((prev) => ({
           ...prev,
           title: prev.title || derivedTitle,
           estimatedBudget: prev.estimatedBudget ?? derivedBudget,
-          majorCategory: prev.majorCategory || derivedMajor,
+          majorCategory: prev.majorCategory || extractedCategory || derivedMajor || (extracted.length > 0 ? getMajorCategories()[0] : ''),
           deliveryLocation: prev.deliveryLocation || derivedLocation,
           deliveryPincode: prev.deliveryPincode || derivedPincode,
           targetDeliveryDate: prev.targetDeliveryDate || derivedDate,

@@ -251,7 +251,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
     const effectiveSearch = matchedCat ? '' : trimmedSearch;
 
     const key = `${effectiveSearch}|${effectiveCategory}`;
-    if (fetchedVendors.length > 0 && lastFetchedKeyRef.current === key) return;
+    if (lastFetchedKeyRef.current === key) return;
     lastFetchedKeyRef.current = key;
     const seq = ++fetchSeqRef.current;
     setVendorsLoading(true);
