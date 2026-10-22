@@ -3147,3 +3147,110 @@ git pre-commit checks are failing, can you please check once
 ```text
 Some github files conflicts, can you please check & fix
 ```
+
+### 2026-10-21T17:00:41+05:30
+
+```text
+Can you please check the logs: 
+
+Still gemini took too long
+```
+
+### 2026-10-21T17:17:34+05:30
+
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-10-21T11_42_19.044Z.csv] @[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-10-21T11_46_00.564Z.csv] 
+
+Check the logs, Still gemini extraction taking too much time, Can you tell what is the issue, & how we can reduce extraction time?
+```
+
+### 2026-10-21T17:32:10+05:30
+
+```text
+Please implement these fixes
+```
+
+### 2026-10-21T17:58:13+05:30
+
+```text
+@[TerminalName: node, ProcessId: 34424] Still gemini extraction taking too much time, can you check why?
+```
+
+### 2026-10-21T18:09:34+05:30
+
+```text
+@[TerminalName: node, ProcessId: 34424] Still gemini extraction taking too much time around 3.3 minute in last run,  can you check why? Please check terminal logs
+```
+
+### 2026-10-21T18:13:59+05:30
+
+```text
+Can you try this fix via Zero-Null Compact Prompt approach only
+```
+### 2026-10-21T18:33:24+05:30
+
+```text
+@[TerminalName: node, ProcessId: 34424] Again it took 3.8 minute, anyway to speed up the gemini extraction?
+```
+
+### 2026-10-21T18:39:14+05:30
+
+```text
+Please proceed with all suggestion except model change.
+```
+
+### 2026-10-21T19:11:52+05:30
+
+```text
+@[TerminalName: node, ProcessId: 34424] Again it took 6.5 minute, anyway to speed up the gemini extraction?
+```
+
+### 2026-10-21T19:28:41+05:30
+
+```text
+Please undo the last change, also don't commit any change your self , first i need to review the change.
+```
+
+### 2026-10-21T19:34:28+05:30
+
+```text
+Remove timeout per model. I think overall timeout is there which is more than enough
+```
+
+### 2026-10-21T19:53:26+05:30
+
+```text
+@[TerminalName: node, ProcessId: 34424] Any specific reason, why it took too long for gemini ai extraction. please check terminal logs
+```
+
+### 2026-10-21T20:01:49+05:30
+
+```text
+increase overall timeout to 15 minute.
+```
+
+### 2026-10-21T20:25:27+05:30
+
+```text
+please resolve file conflict issues
+```
+
+### 2026-10-22T05:58:23+05:30
+
+```text
+please resolve file conflict issues in PR: https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/300
+```
+
+### 2026-10-22T06:06:36+05:30
+
+```text
+What should be the best order of gemini models for this AI extraction use case, considering speed as important. Please implement that, don't commit this change
+```
+
+### 2026-10-22T06:39:36+05:30
+
+```text
+Please use this model order
+
+    'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash'
+```

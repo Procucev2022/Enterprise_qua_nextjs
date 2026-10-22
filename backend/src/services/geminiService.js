@@ -65,37 +65,38 @@ DESCRIPTION vs SPECIFICATION
 
 MONETARY VALUES
 - Report money as a plain number with no currency symbol, thousands separator or words. "Rs. 1,45,000/-" becomes 145000.
-- DO NOT calculate, estimate or infer a price that is not printed in the document. Return null instead.
-- "estimatedBudget" is only for a stated overall value such as a grand total, total amount, estimated value or budget ceiling. If the document only prices individual lines, leave it null; the totals are derived from those lines instead.
+- DO NOT calculate, estimate or infer a price that is not printed in the document. Omit unstated prices entirely; never invent or calculate them.
+- "estimatedBudget" is only for a stated overall value such as a grand total, total amount, estimated value or budget ceiling. If the document only prices individual lines, omit "estimatedBudget".
 
-Return a SINGLE JSON object with EXACTLY this shape and no surrounding prose or markdown:
+OUTPUT JSON SPECIFICATION:
+Return a SINGLE JSON object with this shape and no surrounding prose or markdown:
 {
-  "documentTitle": "String, a short title for the overall requirement, or null",
-  "category": "String, the overall category if stated, copied exactly from the CATEGORY LIST, or null if no listed category is stated",
-  "deliveryDate": "String in YYYY-MM-DD if a delivery or required-by date is stated, else null",
-  "deliveryLocation": "String, overall delivery location or destination if stated, or null",
-  "deliveryCity": "String, overall delivery city if stated, or null",
-  "deliveryState": "String, overall delivery state if stated, or null",
-  "deliveryPincode": "String, overall delivery pincode or postal code if stated, or null",
-  "estimatedBudget": "Number, the overall stated total value or budget of the requirement, or null",
+  "documentTitle": "Optional string, short title for overall requirement if stated",
+  "category": "Optional string, overall category copied exactly from the CATEGORY LIST if stated",
+  "deliveryDate": "Optional string in YYYY-MM-DD if overall delivery date is stated",
+  "deliveryLocation": "Optional destination string if stated",
+  "deliveryCity": "Optional destination city if stated",
+  "deliveryState": "Optional destination state if stated",
+  "deliveryPincode": "Optional postal code if stated",
+  "estimatedBudget": 500000,
   "items": [
-    {
-      "itemDescription": "String, the product or material name including any size, dimension or model token that identifies it. Never an empty string.",
-      "quantity": "Number, the purchase quantity exactly as stated, or null if not stated",
-      "unit": "String, unit of measure as stated e.g. Nos, Units, Meters, Kg, Sets, or null",
-      "specification": "String, technical specification, grade, material or standard as stated, or null",
-      "brand": "String, brand or manufacturer if stated, or null",
-      "category": "String, item level category if stated, or null",
-      "targetDate": "String in YYYY-MM-DD if this line has its own date, else null",
-      "deliveryCity": "String, destination city for this item if stated, else null",
-      "deliveryState": "String, destination state for this item if stated, else null",
-      "deliveryPincode": "String, destination pincode for this item if stated, else null",
-      "deliveryLocation": "String, destination location for this item if stated, else null",
-      "unitPrice": "Number, the stated rate or price for ONE unit of this line, or null",
-      "totalPrice": "Number, the stated line total or amount for this line, or null"
-    }
+    ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice]
   ]
 }
+
+CRITICAL COMPACT ROW ARRAY SPECIFICATION (MANDATORY FOR SPEED & TOKEN CONSERVATION):
+- Each item in "items" MUST be formatted as a compact array of values instead of an object with repeated field names:
+  ["itemDescription", quantity, "unit", "specification", unitPrice, totalPrice]
+- Field positions in each item array:
+  1. itemDescription (String, REQUIRED): Product or material name including size, dimension, bore or model token.
+  2. quantity (Number or null): Stated purchase quantity as a plain number. Never guess or default to 1. Return null if unstated.
+  3. unit (String or null): Unit of measure (e.g. "Nos", "Mtr", "Set", "Kg", "Units") if stated.
+  4. specification (String or null): Technical specifications, material grade, standard, rating or details if stated.
+  5. unitPrice (Number or null): Stated unit price as a plain number if stated.
+  6. totalPrice (Number or null): Stated line total price as a plain number if stated.
+- Optional trailing elements if stated in document: [..., brand, category, targetDate, deliveryLocation].
+- Trailing nulls at the end of the item array may be omitted to save tokens (e.g. ["Hex bolt M8x250", 25, "PCS"]).
+- This array format eliminates thousands of repetitive boilerplate tokens and dramatically accelerates extraction.
 
 If the document contains no procurement line items at all, return {"items": []}.`;
 
@@ -118,13 +119,14 @@ function maskApiKey(key) {
 /** Resolve API keys pool from GEMINI_CONFIG.API_KEYS, GEMINI_CONFIG.API_KEY, numbered env vars, and GEMINI_CONFIG.BACKUP_KEYS. */
 function resolveApiKeys() {
   const keys = [];
+  const isInvalidPlaceholder = (k) => typeof k === 'string' && (k.includes('mD3Zq8mD') || k === 'placeholder' || k.startsWith('AIzaSyC_2mDq'));
   const addKey = (val) => {
     if (!val) return;
     if (Array.isArray(val)) {
       val.forEach(addKey);
       return;
     }
-    String(val).split(',').map((k) => k.trim()).filter(Boolean).forEach((k) => keys.push(k));
+    String(val).split(',').map((k) => k.trim()).filter((k) => k && !isInvalidPlaceholder(k)).forEach((k) => keys.push(k));
   };
 
   const poolKeys = (GEMINI_CONFIG.API_KEYS !== undefined && GEMINI_CONFIG.API_KEYS !== '' && (!Array.isArray(GEMINI_CONFIG.API_KEYS) || GEMINI_CONFIG.API_KEYS.length > 0))
@@ -183,11 +185,123 @@ function extractResponseText(payload) {
 }
 
 /**
+ * Auto-repairs truncated or cut-off model JSON responses.
+ * When extensive RFQs (e.g. 100-500 line items) reach the model's output token ceiling
+ * (finishReason === 'MAX_TOKENS'), the response is abruptly truncated midway through an item.
+ * This parser isolates the last fully completed item in the "items" array, safely closes the array
+ * and parent document object, and salvages all extracted items without failing the entire request.
+ */
+function repairTruncatedJson(candidate) {
+  if (!candidate || typeof candidate !== 'string') return null;
+
+  let text = candidate.trim();
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) text = fenced[1].trim();
+
+  const firstBrace = text.indexOf('{');
+  if (firstBrace === -1) return null;
+  text = text.slice(firstBrace).trim();
+
+  // Try direct parse first
+  try {
+    return JSON.parse(text);
+  } catch {}
+
+  // 1. Array-level truncation repair: look for "items" or "lineItems" array
+  const itemsKeyMatch = text.match(/"(?:items|lineItems)"\s*:\s*\[/);
+  if (itemsKeyMatch && typeof itemsKeyMatch.index === 'number') {
+    const arrayStart = itemsKeyMatch.index + itemsKeyMatch[0].length;
+    let searchPos = text.length;
+    while (searchPos > arrayStart) {
+      const lastClose = Math.max(text.lastIndexOf('}', searchPos), text.lastIndexOf(']', searchPos));
+      if (lastClose <= arrayStart) break;
+
+      const prefix = text.slice(0, lastClose + 1);
+      const testCandidate = prefix.replace(/,\s*$/, '') + '\n  ]\n}';
+      try {
+        const parsed = JSON.parse(testCandidate);
+        const candidateItems = parsed?.items || parsed?.lineItems;
+        if (parsed && typeof parsed === 'object' && Array.isArray(candidateItems) && candidateItems.length > 0) {
+          if (!parsed.items) parsed.items = candidateItems;
+          return parsed;
+        }
+      } catch {
+        try {
+          const cleaned = testCandidate.replace(/,(\s*[}\]])/g, '$1');
+          const parsed = JSON.parse(cleaned);
+          const candidateItems = parsed?.items || parsed?.lineItems;
+          if (parsed && typeof parsed === 'object' && Array.isArray(candidateItems) && candidateItems.length > 0) {
+            if (!parsed.items) parsed.items = candidateItems;
+            return parsed;
+          }
+        } catch {}
+      }
+      searchPos = lastClose - 1;
+    }
+  }
+
+  // 2. Generic structural recovery: count unclosed brackets/braces
+  let openBraces = 0;
+  let openBrackets = 0;
+  let inString = false;
+  let escaped = false;
+  let lastSafePos = -1;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (ch === '{') openBraces++;
+      else if (ch === '}') {
+        openBraces--;
+        lastSafePos = i;
+      } else if (ch === '[') openBrackets++;
+      else if (ch === ']') {
+        openBrackets--;
+        lastSafePos = i;
+      }
+    }
+  }
+
+  if (openBraces > 0 || openBrackets > 0) {
+    let cleanText = text;
+    if (inString) cleanText += '"';
+    cleanText = cleanText.replace(/,\s*$/, '');
+    const closure = ']'.repeat(Math.max(0, openBrackets)) + '}'.repeat(Math.max(0, openBraces));
+    try {
+      const parsed = JSON.parse(cleanText + closure);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {
+      if (lastSafePos > 0) {
+        const prefix = text.slice(0, lastSafePos + 1).replace(/,\s*$/, '');
+        try {
+          const parsed = JSON.parse(prefix + closure);
+          if (parsed && typeof parsed === 'object') return parsed;
+        } catch {}
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Parse the model's reply into an object.
  *
  * Models occasionally wrap JSON in a ```json fence despite being told not to, so
  * the fence is stripped and the outermost object is isolated before parsing.
- * Anything still unparseable is a failed extraction, never a partial guess.
+ * Anything still unparseable undergoes truncation recovery to salvage line items.
  */
 function parseExtractionJson(text) {
   if (!text) return null;
@@ -197,26 +311,24 @@ function parseExtractionJson(text) {
   if (fenced) candidate = fenced[1].trim();
 
   const firstBrace = candidate.indexOf('{');
-  const lastBrace = candidate.lastIndexOf('}');
-  if (firstBrace === -1 || lastBrace <= firstBrace) return null;
-  candidate = candidate.slice(firstBrace, lastBrace + 1);
+  if (firstBrace === -1) return null;
 
-  // The candidate always starts with '{' and ends with '}', so a successful parse
-  // is necessarily an object; anything else throws and is reported as a failure.
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    // One repair pass for the single most common defect in model JSON: a trailing
-    // comma before a closing } or ]. This only removes a stray separator, so it
-    // cannot turn malformed data into fabricated values; anything still invalid
-    // falls through to null and is reported as a failed extraction (fail-closed).
+  const lastBrace = candidate.lastIndexOf('}');
+  if (lastBrace > firstBrace) {
+    const isolated = candidate.slice(firstBrace, lastBrace + 1);
     try {
-      const repaired = candidate.replace(/,(\s*[}\]])/g, '$1');
-      return JSON.parse(repaired);
+      return JSON.parse(isolated);
     } catch {
-      return null;
+      try {
+        const repaired = isolated.replace(/,(\s*[}\]])/g, '$1');
+        return JSON.parse(repaired);
+      } catch {
+        // Fall through to truncation recovery
+      }
     }
   }
+
+  return repairTruncatedJson(candidate);
 }
 
 /**
@@ -227,11 +339,35 @@ function parseExtractionJson(text) {
  * documented default the Java service used, rather than the model inventing one.
  */
 function toRawLineItems(parsed) {
-  const items = Array.isArray(parsed?.items) ? parsed.items : [];
+  const items = Array.isArray(parsed?.items)
+    ? parsed.items
+    : (Array.isArray(parsed?.lineItems) ? parsed.lineItems : []);
   const docDate = typeof parsed?.deliveryDate === 'string' ? parsed.deliveryDate.trim() : '';
 
   return items
     .map((item) => {
+      if (Array.isArray(item)) {
+        const [rawDesc, rawQty, rawUnit, rawSpec, rawUnitPrice, rawTotalPrice, rawBrand, rawCat, rawDate, rawLoc] = item;
+        const itemName = typeof rawDesc === 'string' ? rawDesc.trim() : (rawDesc !== null && rawDesc !== undefined ? String(rawDesc).trim() : '');
+        if (!itemName) return null;
+        const row = {
+          itemName,
+          quantity: typeof rawQty === 'number' && Number.isFinite(rawQty) ? rawQty : parseValidQuantity(rawQty),
+          unit: typeof rawUnit === 'string' ? rawUnit.trim() : '',
+          technicalSpecs: typeof rawSpec === 'string' ? rawSpec.trim() : '',
+          category: typeof rawCat === 'string' ? rawCat.trim() : '',
+          targetDate: typeof rawDate === 'string' && rawDate.trim() ? rawDate.trim() : docDate,
+          unitPrice: normalizeAmount(rawUnitPrice),
+          totalPrice: normalizeAmount(rawTotalPrice),
+        };
+        if (rawBrand) row.brand = String(rawBrand).trim();
+        if (rawLoc || parsed?.deliveryLocation) row.deliveryLocation = String(rawLoc || parsed.deliveryLocation).trim();
+        if (parsed?.deliveryCity) row.deliveryCity = String(parsed.deliveryCity).trim();
+        if (parsed?.deliveryState) row.deliveryState = String(parsed.deliveryState).trim();
+        if (parsed?.deliveryPincode) row.deliveryPincode = String(parsed.deliveryPincode).trim();
+        return row;
+      }
+
       const row = {
         itemName: typeof item?.itemDescription === 'string' ? item.itemDescription.trim() : '',
         quantity: item?.quantity,
@@ -259,7 +395,7 @@ function toRawLineItems(parsed) {
 
       return row;
     })
-    .filter((item) => item.itemName !== '');
+    .filter((item) => item !== null && item.itemName !== '');
 }
 
 /**
@@ -884,6 +1020,17 @@ async function callModel(
           if (cooldownMs > 0) {
             markKeyCooldown(apiKey, cooldownMs);
           }
+          if (/exceeded your current quota|check your plan and billing/i.test(detail)) {
+            logger.warn(
+              `Gemini model ${model} reached project-level quota limit (${status}). Skipping redundant key attempts and failing over to next model immediately.`,
+              { model, keyIndex: keyIdx + 1, totalKeys: keys.length },
+              'GEMINI'
+            );
+            const err = new Error(errorMsg);
+            err.status = status;
+            err.skipKeyRetry = true;
+            throw err;
+          }
           logger.warn(
             `Gemini API ${keyLabel} reached quota/rate limit (HTTP ${status}). Marked unavailable for ${cooldownMs}ms cooldown. Failing over to next key...`,
             { keyIndex: keyIdx + 1, totalKeys: keys.length, model, status },
@@ -895,6 +1042,16 @@ async function callModel(
             { keyIndex: keyIdx + 1, totalKeys: keys.length, model, status },
             'GEMINI'
           );
+        } else if (status === 503) {
+          logger.warn(
+            `Gemini model ${model} returned 503 Overloaded/Unavailable. Skipping redundant key rotation and failing over to next model immediately.`,
+            { keyIndex: keyIdx + 1, totalKeys: keys.length, model, status },
+            'GEMINI'
+          );
+          const err = new Error(errorMsg);
+          err.status = 503;
+          err.skipKeyRetry = true;
+          throw err;
         } else {
           logger.warn(
             `Gemini API ${keyLabel} failed for ${model} (${status}). Rotating to next key...`,
@@ -939,16 +1096,21 @@ async function callModel(
       const parsed = parseExtractionJson(responseText);
       if (!parsed) {
         logger.warn(
-          `[GEMINI_API] Gemini ${model} returned no parseable JSON response (${durationMs}ms)`,
+          `[GEMINI_API] Gemini ${model} returned no parseable JSON response (${durationMs}ms, finishReason: ${finishReason})`,
           {
             model,
             durationMs,
             rawSnippet: responseText.slice(0, 500),
             rawLength: responseText.length,
+            finishReason,
           },
           'GEMINI'
         );
-        throw new Error(`Gemini ${model} returned no parseable JSON`);
+        const parseErr = new Error(`Gemini ${model} returned no parseable JSON`);
+        // An unparseable response despite HTTP 200 means the model output formatting failed;
+        // retrying other keys with the exact same model and prompt is redundant.
+        parseErr.noKeyRetry = true;
+        throw parseErr;
       }
 
       modelKeyIndices.set(model, keyIdx);
@@ -980,7 +1142,7 @@ async function callModel(
         throw err;
       }
 
-      if (isNonRetryableError(null, err.message)) {
+      if (err.skipKeyRetry || err.noKeyRetry || isNonRetryableError(null, err.message)) {
         throw err;
       }
 
@@ -1085,7 +1247,7 @@ async function extractLineItems(input = {}) {
   const isBudgetDisabled = GEMINI_CONFIG.DISABLE_TIMEOUT || process.env.GEMINI_DISABLE_TIMEOUT === 'true';
   const deadline = isBudgetDisabled
     ? null
-    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 300000);
+    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 900000);
   const tabularItems = (trimmedText && (trimmedText.includes('SHEET:') || trimmedText.includes('|')))
     ? extractSpreadsheetLineItems(trimmedText)
     : [];
@@ -1155,7 +1317,7 @@ async function extractLineItems(input = {}) {
     const remainingMs = deadline !== null ? deadline - Date.now() : 999999;
     if (deadline !== null) {
       if (remainingMs <= 0 || remainingMs < getMinimumAttemptMs()) {
-        failures.push(`skipped ${model}: extraction time budget exhausted: request exceeded the shared extraction time budget`);
+        failures.push(`skipped ${model}: shared extraction time budget exhausted`);
         logger.warn(
           `Gemini extraction budget exhausted before trying ${model}`,
           { budgetMs: GEMINI_CONFIG.TOTAL_BUDGET_MS, remainingMs, attempt: attempt + 1, totalModels: chain.length },
@@ -1172,8 +1334,8 @@ async function extractLineItems(input = {}) {
     );
 
     try {
-      const perModelTimeout = GEMINI_CONFIG.PER_MODEL_TIMEOUT_MS || 30000;
-      const parsed = await callModel(model, requestBody, perModelTimeout, deadline, requestKeyIndex);
+      // No per-model timeout: the shared extraction budget (deadline) is the only cancellation boundary.
+      const parsed = await callModel(model, requestBody, 0, deadline, requestKeyIndex);
       let lineItems = toRawLineItems(parsed);
 
       if (tabularItems.length > lineItems.length) {
@@ -1345,7 +1507,7 @@ async function generateJson(input = {}) {
   const isBudgetDisabled = GEMINI_CONFIG.DISABLE_TIMEOUT || process.env.GEMINI_DISABLE_TIMEOUT === 'true';
   const deadline = isBudgetDisabled
     ? null
-    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 300000);
+    : Date.now() + (GEMINI_CONFIG.TOTAL_BUDGET_MS !== undefined ? GEMINI_CONFIG.TOTAL_BUDGET_MS : 900000);
 
   const chain = resolveModelChain();
   const startModelIndex = activeModelIndex;
@@ -1775,4 +1937,5 @@ module.exports = {
   getKeyCooldowns,
   isNonRetryableError,
   isLocationUnsupportedError,
+  repairTruncatedJson,
 };
