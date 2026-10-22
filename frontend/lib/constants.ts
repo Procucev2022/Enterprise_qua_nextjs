@@ -116,44 +116,110 @@ export const BUYER_SUBSCRIPTION_TO_SOURCING_MODE: Record<string, SourcingMode> =
   mode_1: RFQ_MODES.MODE_1,
   mode_2: RFQ_MODES.MODE_2,
   mode_3: RFQ_MODES.MODE_3,
+  unlimited: RFQ_MODES.MODE_3,
 };
 
 /**
  * Resolves the RFQ version / sourcing mode based upon the subscription of the buyer.
- * Defaults to 'mode_2' for free starter trial / general ingestion.
+ * If any buyer raises an RFQ through the RFQ email ID, it should be assigned to V0 by default.
+ * However, if the buyer has an active subscription to V1, V2, or V3, the RFQ should be assigned
+ * to the respective subscribed version. Otherwise, it should automatically go to V0.
  *
  * @param buyerAccountOrPlan - Buyer account object or subscription plan string
+ * @param preferredMode - Optional requested mode
  * @returns Sourcing mode ('mode_0' | 'mode_1' | 'mode_2' | 'mode_3')
  */
 export function resolveBuyerSourcingMode(
-  buyerAccountOrPlan?: { subscriptionPlan?: string; remainingFreeRFQs?: number } | string | null
+  buyerAccountOrPlan?: any,
+  preferredMode?: string | null
 ): SourcingMode {
-  let plan: string | undefined;
-  let remainingFreeRFQs: number | undefined;
+  let plan: string | null = null;
+  let subscriptions: any[] = [];
+  let isExpired = false;
 
   if (typeof buyerAccountOrPlan === 'object' && buyerAccountOrPlan !== null) {
-    plan = buyerAccountOrPlan.subscriptionPlan;
-    remainingFreeRFQs = buyerAccountOrPlan.remainingFreeRFQs;
+    if (buyerAccountOrPlan.unlimitedRfqAccess || buyerAccountOrPlan.unlimitedAccess) {
+      const requested = (preferredMode || buyerAccountOrPlan.sourcingMode || buyerAccountOrPlan.sourcing_mode || '').trim().toLowerCase();
+      if (['mode_0', 'v0', 'version_0'].includes(requested)) return RFQ_MODES.MODE_0;
+      if (['mode_1', 'v1', 'version_1'].includes(requested)) return RFQ_MODES.MODE_1;
+      if (['mode_2', 'v2', 'version_2'].includes(requested)) return RFQ_MODES.MODE_2;
+      if (['mode_3', 'v3', 'version_3'].includes(requested)) return RFQ_MODES.MODE_3;
+      return RFQ_MODES.MODE_3;
+    }
+
+    plan = buyerAccountOrPlan.subscriptionPlan || buyerAccountOrPlan.activeSubscription || null;
+    if (Array.isArray(buyerAccountOrPlan.subscriptions)) {
+      subscriptions = buyerAccountOrPlan.subscriptions;
+    }
+    const status = String(buyerAccountOrPlan.subscriptionStatus || buyerAccountOrPlan.status || '').toLowerCase();
+    if (status === 'expired' || status === 'inactive') {
+      isExpired = true;
+    }
+    const expiry = buyerAccountOrPlan.subscriptionExpiry || buyerAccountOrPlan.expiresAt;
+    if (expiry && !isNaN(new Date(expiry).getTime()) && new Date(expiry).getTime() < Date.now()) {
+      isExpired = true;
+    }
   } else if (typeof buyerAccountOrPlan === 'string') {
     plan = buyerAccountOrPlan;
   }
 
-  // 1. Subscription-based version assignment takes priority:
-  // Mode 1 for Mode 1 subscribers, Mode 2 for Mode 2 subscribers, Mode 3 for Mode 3 subscribers, Mode 0 for Mode 0 subscribers.
-  if (typeof plan === 'string') {
-    const normalized = plan.trim().toLowerCase();
-    if (BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized]) {
-      return BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized];
+  // Handle multiple active subscriptions (V3 > V2 > V1 > V0)
+  if (Array.isArray(subscriptions) && subscriptions.length > 0) {
+    const activeSubs = subscriptions.filter((sub) => {
+      if (!sub) return false;
+      const subStatus = String(sub.status || '').toLowerCase();
+      if (subStatus === 'expired' || subStatus === 'inactive' || sub.active === false) return false;
+      const subExpiry = sub.expiresAt || sub.expiryDate || sub.validUntil;
+      if (subExpiry && !isNaN(new Date(subExpiry).getTime()) && new Date(subExpiry).getTime() < Date.now()) {
+        return false;
+      }
+      return true;
+    });
+
+    if (activeSubs.length > 0) {
+      const activePlans = activeSubs.map((s) => String(s.plan || s.subscriptionPlan || s.id || '').trim().toLowerCase());
+      if (activePlans.some((p) => p === 'unlimited' || p === 'version_3' || p === 'v3' || p === 'mode_3')) {
+        return RFQ_MODES.MODE_3;
+      }
+      if (activePlans.some((p) => p === 'version_2' || p === 'v2' || p === 'mode_2')) {
+        return RFQ_MODES.MODE_2;
+      }
+      if (activePlans.some((p) => p === 'version_1' || p === 'v1' || p === 'mode_1')) {
+        return RFQ_MODES.MODE_1;
+      }
+      if (activePlans.some((p) => p === 'version_0' || p === 'v0' || p === 'mode_0')) {
+        return RFQ_MODES.MODE_0;
+      }
     }
   }
 
-  // 2. For buyers without a subscription (free trial / no active plan):
-  // Assign Mode 2 for the first 5 free RFQs and switch to Mode 0 after free credits are exhausted.
-  if (remainingFreeRFQs !== undefined && Number(remainingFreeRFQs) <= 0) {
+  // Expired or inactive subscriptions are not considered; default to mode_0
+  if (isExpired) {
     return RFQ_MODES.MODE_0;
   }
 
-  return RFQ_MODES.MODE_2;
+  // Check single active subscription
+  if (typeof plan === 'string') {
+    const normalized = plan.trim().toLowerCase();
+    if (normalized === 'unlimited') {
+      return RFQ_MODES.MODE_3;
+    }
+    if (['version_1', 'v1', 'mode_1'].includes(normalized)) {
+      return RFQ_MODES.MODE_1;
+    }
+    if (['version_2', 'v2', 'mode_2'].includes(normalized)) {
+      return RFQ_MODES.MODE_2;
+    }
+    if (['version_3', 'v3', 'mode_3'].includes(normalized)) {
+      return RFQ_MODES.MODE_3;
+    }
+    if (['version_0', 'v0', 'mode_0'].includes(normalized)) {
+      return RFQ_MODES.MODE_0;
+    }
+  }
+
+  // If no active subscription to V1, V2, or V3, default automatically to Mode 0 (V0)
+  return RFQ_MODES.MODE_0;
 }
 
 /**

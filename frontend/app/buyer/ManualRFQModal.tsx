@@ -529,8 +529,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     if (extracted.length === 0) return;
 
     // Header major = dominant category across the extracted line items (not
-    // just the first), and only when the document actually supplied one.
-    const headerMajor = dominantMajorCategory(extracted);
+    // just the first), with guaranteed valid category fallback so it is never null.
+    const headerMajor = dominantMajorCategory(extracted) || (extracted.length > 0 ? getMajorCategories()[0] : '');
 
     setHasExtracted(true);
     setForm((prev) => ({

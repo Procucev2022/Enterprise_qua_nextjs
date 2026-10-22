@@ -2166,16 +2166,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // its real response so the modal can render the real document instead.
   const approvePO = async (
     rfqNumber: string,
-    vendorId: string | null,
-    vendorName: string,
-    amount: number,
+    vendorId: string | any,
+    vendorName: string | any,
+    amount?: number,
     approverNotes?: string
   ): Promise<{ success: boolean; poNumber?: string; issueDate?: string; shaSignature?: string; lineItems?: { description: string; quantity: number; unit: string }[]; error?: string }> => {
+    const effectiveVendorId = typeof vendorId === 'string'
+      ? vendorId
+      : (vendorId && typeof vendorId === 'object' ? (vendorId.id || vendorId.vendorId || null) : null);
+    const effectiveVendorName = typeof vendorName === 'string'
+      ? vendorName
+      : (vendorId && typeof vendorId === 'object' ? (vendorId.name || vendorId.vendorName || '') : String(vendorName || ''));
+    const effectiveAmount = typeof amount === 'number'
+      ? amount
+      : (typeof vendorName === 'number' ? vendorName : 0);
+
     try {
       const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqNumber)}/approve-po`, {
         method: 'POST',
         headers: authFetchHeaders(),
-        body: JSON.stringify({ vendorId, vendorName, totalAmount: amount, approverNotes }),
+        body: JSON.stringify({ vendorId: effectiveVendorId, vendorName: effectiveVendorName, totalAmount: effectiveAmount, approverNotes }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -2186,20 +2196,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setRfqs((prev) =>
         prev.map((r) =>
           r.rfqNumber === rfqNumber
-            ? { ...r, status: 'PO Generated' as const, awardedVendor: vendorName, awardedAmount: amount }
+            ? {
+                ...r,
+                status: 'PO Generated' as const,
+                awardedVendor: effectiveVendorName,
+                awardedAmount: effectiveAmount,
+                awardedVendorId: effectiveVendorId || (r as any).awardedVendorId || null,
+                poNumber: data.poNumber,
+                poIssueDate: data.issueDate,
+                poFinalised: true,
+                poShaSignature: data.shaSignature,
+                quotes: Array.isArray(r.quotes)
+                  ? r.quotes.map((q) => {
+                      const isAwarded = Boolean(
+                        (effectiveVendorId && q.vendorId === effectiveVendorId) ||
+                        (effectiveVendorName && q.vendorName && String(q.vendorName).toLowerCase().trim() === String(effectiveVendorName).toLowerCase().trim())
+                      );
+                      return { ...q, status: isAwarded ? 'Awarded' : q.status, awarded: isAwarded };
+                    })
+                  : r.quotes,
+              }
             : r
         )
       );
 
       addFeedItem(
         `Pre-Purchase Order Generated: ${rfqNumber}`,
-        `Approved Pre-PO ${data.poNumber} generated for ${vendorName} totaling ${formatCurrency(amount)}. Dispatched to ERP & Vendor Portal.`,
+        `Approved Pre-PO ${data.poNumber} generated for ${effectiveVendorName} totaling ${formatCurrency(effectiveAmount)}. Dispatched to ERP & Vendor Portal.`,
         'approval',
         rfqNumber
       );
 
       addAuditLog(
-        `Approved Pre-Purchase Order (PO) Generation & Dispatched Contract for ${rfqNumber} to ${vendorName} (${formatCurrency(amount)})`,
+        `Approved Pre-Purchase Order (PO) Generation & Dispatched Contract for ${rfqNumber} to ${effectiveVendorName} (${formatCurrency(effectiveAmount)})`,
         rfqNumber
       );
 

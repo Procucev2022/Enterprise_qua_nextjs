@@ -319,6 +319,13 @@ describe('resolveBuyerSourcingMode', () => {
     expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_3', remainingFreeRFQs: 0 })).toBe('mode_3');
   });
 
+  test('defaults to mode_0 (V0) for buyers on free_trial regardless of remainingFreeRFQs', () => {
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 1 })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 0 })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({ remainingFreeRFQs: 5 })).toBe('mode_0');
+  });
+
   test('handles multiple active subscriptions by selecting the highest active tier (V3 > V2 > V1)', () => {
     expect(resolveBuyerSourcingMode({
       subscriptions: [

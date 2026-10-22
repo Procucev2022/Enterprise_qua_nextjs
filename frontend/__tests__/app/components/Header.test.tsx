@@ -277,7 +277,7 @@ describe('Header', () => {
     // which is covered by its own suite.
     expect(screen.getByText(UI_STRINGS.accountSecurity.panelTitle)).toBeInTheDocument();
     expect(
-      screen.getByPlaceholderText(UI_STRINGS.accountSecurity.currentPasswordPlaceholder)
+      screen.getByPlaceholderText(UI_STRINGS.accountSecurity.newPasswordPlaceholder)
     ).toBeInTheDocument();
 
     // Close from the header ✕.

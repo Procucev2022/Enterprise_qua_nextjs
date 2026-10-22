@@ -111,14 +111,18 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
    * backend's `changePassword` schema, so all three agree on the boundary.
    */
   changePasswordForm: {
-    currentPassword: {
-      required: true,
-      message: UI_STRINGS.accountSecurity.currentPasswordRequired,
-    },
     newPassword: {
       required: true,
       minLength: PASSWORD_MIN_LENGTH,
       message: UI_STRINGS.accountSecurity.weakPasswordMessage,
+    },
+    verificationCode: {
+      required: false,
+      message: UI_STRINGS.accountSecurity.verificationCodeRequired,
+    },
+    currentPassword: {
+      required: false,
+      message: UI_STRINGS.accountSecurity.currentPasswordRequired,
     },
   },
 

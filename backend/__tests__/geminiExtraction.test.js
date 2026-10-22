@@ -213,6 +213,54 @@ describe('Gemini document extraction service', () => {
       expect(rowsDoc[0].deliveryPincode).toBe('560001');
       expect(rowsDoc[0].deliveryLocation).toBe('Bangalore Plant');
     });
+
+    test('unpacks compact row arrays into full line item objects', () => {
+      const rows = gemini.toRawLineItems({
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+        items: [
+          ['Centrifugal Pump 500 GPM', 12, 'Units', 'SS316 impeller', 145000, 1740000, 'Kirloskar', 'Pumps', '2026-11-01', 'Dock 4'],
+          ['Hex Bolt M8x250', 50, 'PCS', 'Grade 8.8'],
+          ['', 10, 'Nos'], // Empty description should be filtered out
+          [null, 5], // Null description should be filtered out
+          ['Gate Valve', '25', 'Nos', '', '5000', '125000'],
+        ],
+      });
+
+      expect(rows).toHaveLength(3);
+      expect(rows[0]).toEqual({
+        itemName: 'Centrifugal Pump 500 GPM',
+        quantity: 12,
+        unit: 'Units',
+        technicalSpecs: 'SS316 impeller',
+        unitPrice: 145000,
+        totalPrice: 1740000,
+        brand: 'Kirloskar',
+        category: 'Pumps',
+        targetDate: '2026-11-01',
+        deliveryLocation: 'Dock 4',
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+      });
+
+      expect(rows[1]).toEqual({
+        itemName: 'Hex Bolt M8x250',
+        quantity: 50,
+        unit: 'PCS',
+        technicalSpecs: 'Grade 8.8',
+        category: '',
+        targetDate: '',
+        unitPrice: null,
+        totalPrice: null,
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+      });
+
+      expect(rows[2].itemName).toBe('Gate Valve');
+      expect(rows[2].quantity).toBe(25);
+      expect(rows[2].unitPrice).toBe(5000);
+      expect(rows[2].totalPrice).toBe(125000);
+    });
   });
 
   describe('buildRequestBody', () => {
@@ -382,29 +430,29 @@ describe('Gemini document extraction service', () => {
 
     test('resolveModelChain reflects ordered GEMINI_MODELS and syncs PRIMARY_MODEL and FALLBACK_MODELS', () => {
       GEMINI_CONFIG.MODELS = [
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ];
       const chain = gemini.resolveModelChain();
       expect(chain).toEqual([
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ]);
-      expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-3.8-flash');
+      expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-3.5-flash-lite');
       expect(GEMINI_CONFIG.FALLBACK_MODELS).toEqual([
+        'gemini-3.1-flash-lite',
+        'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ]);
     });
 
@@ -517,7 +565,7 @@ describe('Gemini document extraction service', () => {
       const fallbackModel = GEMINI_CONFIG.FALLBACK_MODELS[0];
 
       global.fetch = jest.fn((url) => {
-        if (url.includes(primaryModel)) {
+        if (url.includes(`/models/${primaryModel}:`)) {
           // All keys on primary model return 429 rate limit
           return Promise.resolve({
             ok: false,
@@ -525,7 +573,7 @@ describe('Gemini document extraction service', () => {
             text: async () => '{"error":{"status":"RESOURCE_EXHAUSTED","message":"Rate limit reached"}}',
           });
         }
-        if (url.includes(fallbackModel)) {
+        if (url.includes(`/models/${fallbackModel}:`)) {
           // Fallback model succeeds
           return Promise.resolve(geminiReply('{"items":[{"itemDescription":"Centrifugal Pump","quantity":2}]}'));
         }
@@ -538,10 +586,10 @@ describe('Gemini document extraction service', () => {
       expect(res.model).toBe(fallbackModel);
       expect(res.lineItems).toHaveLength(1);
       // Primary model was attempted exactly MAX_KEY_ATTEMPTS_PER_MODEL (3) times, NOT 50 times!
-      const primaryCalls = global.fetch.mock.calls.filter((call) => call[0].includes(primaryModel));
+      const primaryCalls = global.fetch.mock.calls.filter((call) => call[0].includes(`/models/${primaryModel}:`));
       expect(primaryCalls).toHaveLength(3);
       // Fallback model was then called and succeeded
-      const fallbackCalls = global.fetch.mock.calls.filter((call) => call[0].includes(fallbackModel));
+      const fallbackCalls = global.fetch.mock.calls.filter((call) => call[0].includes(`/models/${fallbackModel}:`));
       expect(fallbackCalls).toHaveLength(1);
     });
 
@@ -2318,6 +2366,208 @@ describe('geminiService.generateJson', () => {
         expect(
           res.body.data.extractedEntities.some((entity) => entity.itemName.startsWith('Unusable Scrap'))
         ).toBe(false);
+      });
+    });
+
+    describe('Truncated JSON Auto-Recovery & Fast Model Failover', () => {
+      test('repairTruncatedJson parses clean JSON without modification', () => {
+        const input = JSON.stringify({ documentTitle: 'Clean RFQ', items: [{ itemDescription: 'Pipe', quantity: 10 }] });
+        const res = gemini.repairTruncatedJson(input);
+        expect(res).toEqual({ documentTitle: 'Clean RFQ', items: [{ itemDescription: 'Pipe', quantity: 10 }] });
+      });
+
+      test('repairTruncatedJson returns null on invalid or non-string input', () => {
+        expect(gemini.repairTruncatedJson(null)).toBeNull();
+        expect(gemini.repairTruncatedJson(123)).toBeNull();
+        expect(gemini.repairTruncatedJson('not a json string')).toBeNull();
+      });
+
+      test('repairTruncatedJson salvages items when truncated midway through an item', () => {
+        const truncated = `{\n  "documentTitle": "RFQ-2026-0202",\n  "items": [\n    {\n      "itemDescription": "Bolt M8",\n      "quantity": 10,\n      "unit": "PCS"\n    },\n    {\n      "itemDescription": "Nut M8",\n      "deliveryState": nul`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.documentTitle).toBe('RFQ-2026-0202');
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Bolt M8');
+        expect(res.items[0].quantity).toBe(10);
+      });
+
+      test('repairTruncatedJson salvages items when truncated after a comma in items array', () => {
+        const truncated = `{\n  "documentTitle": "RFQ-2026-0202",\n  "items": [\n    {\n      "itemDescription": "Hex Nut M10",\n      "quantity": 50\n    },`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Hex Nut M10');
+      });
+
+      test('repairTruncatedJson handles fenced markdown code blocks with truncated items', () => {
+        const truncated = `\`\`\`json\n{\n  "items": [\n    {\n      "itemDescription": "Steel Flange",\n      "quantity": 5\n    }\n`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Steel Flange');
+      });
+
+      test('repairTruncatedJson generic structural recovery appends missing brackets and braces', () => {
+        const truncated = `{\n  "documentTitle": "Test Title",\n  "metadata": {\n    "author": "Buyer"`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.documentTitle).toBe('Test Title');
+      });
+
+      test('parseExtractionJson automatically salvages truncated model output', () => {
+        const truncated = `{\n  "items": [\n    {\n      "itemDescription": "Gasket 2 inch",\n      "quantity": 100\n    },\n    {\n      "itemDesc`;
+        const res = gemini.parseExtractionJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Gasket 2 inch');
+      });
+
+      test('callModel throws with skipKeyRetry on 503 Overloaded response', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key-1';
+        global.fetch = jest.fn(async () => ({
+          ok: false,
+          status: 503,
+          statusText: 'Service Unavailable',
+          text: async () => 'Model overloaded',
+        }));
+
+        await expect(
+          gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000)
+        ).rejects.toMatchObject({
+          status: 503,
+          skipKeyRetry: true,
+        });
+      });
+
+      test('callModel throws with noKeyRetry when HTTP 200 response contains unparseable content', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key-1';
+        global.fetch = jest.fn(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            candidates: [{ content: { parts: [{ text: 'Plain text without any braces or json structure' }] } }],
+          }),
+        }));
+
+        await expect(
+          gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000)
+        ).rejects.toMatchObject({
+          noKeyRetry: true,
+        });
+      });
+
+      test('repairTruncatedJson handles escaped quotes and backslashes in unclosed strings', () => {
+        const truncated = `{\n  "title": "Item with \\"quoted\\" specs and \\\\ path",\n  "description": "Unfinished string`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.title).toContain('quoted');
+      });
+
+      test('repairTruncatedJson handles array recovery when trailing comma is present before closure', () => {
+        const truncated = `{\n  "items": [\n    {\n      "itemDescription": "Steel Beam",\n      "quantity": 12,\n    },\n    {\n      "broken":`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Steel Beam');
+      });
+
+      test('callModel with multiple keys does not loop on 503 and immediately throws skipKeyRetry', async () => {
+        process.env.GEMINI_API_KEYS = 'key-1,key-2,key-3';
+        const attemptedKeys = [];
+        global.fetch = jest.fn(async (url, opts) => {
+          attemptedKeys.push(opts?.headers?.['x-goog-api-key']);
+          return {
+            ok: false,
+            status: 503,
+            statusText: 'Service Unavailable',
+            text: async () => 'High demand spikes',
+          };
+        });
+
+        await expect(
+          gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000)
+        ).rejects.toMatchObject({
+          status: 503,
+          skipKeyRetry: true,
+        });
+        expect(attemptedKeys).toHaveLength(1); // Only 1 attempt made, did not waste time trying key-2 and key-3
+      });
+
+      test('repairTruncatedJson trims to lastSafePos when unclosed trailing field value is malformed', () => {
+        const truncated = `{\n  "docTitle": "Valid Title",\n  "meta": { "valid": 1 },\n  "brokenField": unfin`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.docTitle).toBe('Valid Title');
+      });
+      test('repairTruncatedJson salvages compact array rows when truncated midway through an item', () => {
+        const truncated = `{\n  "documentTitle": "RFQ Bulk 500",\n  "items": [\n    ["Ball Valve 2 inch", 10, "Nos", "SS316", 1200, 12000],\n    ["Gate Valve 4 inch", 5, "Nos", "Cast Iron", 4500, 22500],\n    ["Check Valve 1 inch", 20, "Nos", "SS304`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.documentTitle).toBe('RFQ Bulk 500');
+        expect(res.items).toHaveLength(2);
+        expect(res.items[0][0]).toBe('Ball Valve 2 inch');
+        expect(res.items[1][0]).toBe('Gate Valve 4 inch');
+      });
+    });
+
+    describe('Mandatory Category Generation & inferCategoryFromLineItems', () => {
+      test('returns null for empty or invalid line items', () => {
+        expect(gemini.inferCategoryFromLineItems([])).toBeNull();
+        expect(gemini.inferCategoryFromLineItems(null)).toBeNull();
+        expect(gemini.inferCategoryFromLineItems(undefined)).toBeNull();
+      });
+
+      test('infers major category from items with stated minor category', () => {
+        const items = [
+          { itemName: 'Custom Item 1', category: 'Pumps & Accessories' },
+          { itemName: 'Custom Item 2', category: 'Pumps & Accessories' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Engineering Spares - Mechanical');
+      });
+
+      test('infers major category from items with stated canonical major category', () => {
+        const items = [
+          { itemName: 'Item 1', category: 'Civil Works' },
+          { itemName: 'Item 2', category: 'Civil Works' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Civil Works');
+      });
+
+      test('infers category from keywords in item description and specs', () => {
+        const items = [
+          { itemName: 'Heavy Centrifugal Pump', technicalSpecs: 'High pressure SS316' },
+          { itemName: 'Electric motor 50HP', technicalSpecs: '415V 3-phase' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Engineering Spares - Mechanical');
+      });
+
+      test('falls back to Others – New Product when items have no keyword or category match', () => {
+        const items = [
+          { itemName: 'Unknown widget 9999', technicalSpecs: 'xyz unknown' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Others – New Product');
+      });
+
+      test('extractLineItems automatically populates category when model returns null', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(
+          geminiReply(
+            JSON.stringify({
+              documentTitle: 'Pump and Valve Procurement',
+              category: null,
+              items: [
+                ['Centrifugal Pump 500 GPM', 10, 'Nos', 'SS316'],
+                ['Gate Valve 2 inch', 20, 'Nos', 'Class 150'],
+              ],
+            })
+          )
+        );
+
+        const res = await gemini.extractLineItems({ documentText: 'Pump and Valve Procurement' });
+        expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(res.category).toBe('Engineering Spares - Mechanical');
+        expect(res.lineItems).toHaveLength(2);
       });
     });
   });

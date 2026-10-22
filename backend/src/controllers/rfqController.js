@@ -24,6 +24,7 @@ const {
   hasUnlimitedRfqAccess,
   hasUnlimitedQuoteAccess,
   hasUnlimitedDownloadAccess,
+  resolveBuyerSourcingMode,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
@@ -184,9 +185,14 @@ function applyQuotesVisibility(rfq, role) {
   const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
   const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
   const isWithin48h = createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
-  const isClosed = rfq.status === 'Closed';
+  const isConcluded =
+    rfq.status === 'Closed' ||
+    rfq.status === 'PO Generated' ||
+    rfq.poFinalised ||
+    Boolean(rfq.poNumber) ||
+    rfq.status === 'Expired';
 
-  if (isWithin48h && !isClosed) {
+  if (isWithin48h && !isConcluded) {
     const unhideAt = new Date(createdAtMs + FORTY_EIGHT_HOURS_MS).toISOString();
     return {
       ...rfq,
@@ -587,8 +593,12 @@ async function createRFQ(req, res, next) {
         (await storeService.getBuyerAccountByEmail(req.user.email))
       : null;
 
-    // Canonicalize sourcingMode through RFQ_MODE_MAP before entitlement checks and persistence
-    if (body.sourcingMode) {
+    // Version Logic: If an RFQ is raised through the email gateway / RFQ email ID,
+    // it should be assigned to V0 by default, or the buyer's active subscribed version (V1, V2, or V3).
+    // Otherwise, it automatically goes to V0.
+    if (body.source === 'email_gateway' || !body.sourcingMode) {
+      body.sourcingMode = resolveBuyerSourcingMode(requestingBuyerAccount, body.sourcingMode);
+    } else if (body.sourcingMode) {
       const normalizedKey = String(body.sourcingMode).trim().toLowerCase();
       body.sourcingMode = RFQ_MODE_MAP[normalizedKey] || body.sourcingMode;
     }
@@ -1262,6 +1272,15 @@ async function updateRFQ(req, res, next) {
     }
 
     const updates = pickUpdatableRfqFields(body);
+    if (existing.status === 'Parsing' && !updates.status) {
+      const entities = updates.extractedEntities || existing.extractedEntities || [];
+      const hasCategories = entities.length > 0 && entities.every((e) => e.majorCategory && e.minorCategory && e.minorCategory !== e.majorCategory);
+      const hasVendors = (Array.isArray(updates.assignedVendors) && updates.assignedVendors.length > 0) ||
+        (Array.isArray(existing.assignedVendors) && existing.assignedVendors.length > 0);
+      if (hasCategories || hasVendors) {
+        updates.status = 'Quotes Pending';
+      }
+    }
     logger.info(`Updating RFQ ${id}`, { id, fields: Object.keys(updates) }, 'RFQ_CONTROLLER');
     const updated = storeService.updateRFQ(id, updates);
     if (!updated) {

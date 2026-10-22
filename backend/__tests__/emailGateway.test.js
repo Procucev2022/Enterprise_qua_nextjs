@@ -217,16 +217,16 @@ describe('emailGatewayService.processMessage', () => {
 
   // The whole point of holding these: nothing has reviewed an inbound message, so
   // it must not reach vendors automatically.
-  test('raises the RFQ in the review status, not as awaiting quotes', async () => {
+  test('raises the RFQ in Quotes Pending status awaiting quotes', async () => {
     mockExtraction();
-    const created = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-1', rfqNumber: 'RFQ-2026-0001' });
+    const created = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-1', rfqNumber: 'RFQ-2026-0001', status: 'Quotes Pending' });
 
     const result = await emailGatewayService.processMessage(raw(), config());
 
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     const [payload, account] = created.mock.calls[0];
     expect(payload.status).toBe(EMAIL_GATEWAY_CONFIG.INGESTED_STATUS);
-    expect(payload.status).not.toBe('Quotes Pending');
+    expect(payload.status).toBe('Quotes Pending');
     // Buyer's own roster only; widening the pool is a commercial decision.
     expect(payload.sourcingMode).toBe(EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE);
     expect(payload.source).toBe('email_gateway');
@@ -1719,6 +1719,18 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       const [payload] = created.mock.calls[0];
       expect(payload.sourcingMode).toBe('mode_0');
     });
+
+    test('processMessage defaults to mode_0 for buyer on free_trial with 5 remaining free credits', async () => {
+      mockExtraction();
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 }));
+      const created = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-trial-5', rfqNumber: 'RFQ-TRIAL-0005' });
+
+      const result = await emailGatewayService.processMessage(raw(), config());
+
+      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+      const [payload] = created.mock.calls[0];
+      expect(payload.sourcingMode).toBe('mode_0');
+    });
   });
 
   // ==============================================================================
@@ -2808,7 +2820,7 @@ Delivery needed in Hyderabad.
 
       expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
       expect(result.rfq).toBeDefined();
-      expect(result.rfq.status).toBe('Parsing');
+      expect(result.rfq.status).toBe('Quotes Pending');
       expect(result.rfq.extractedEntities).toHaveLength(3);
       expect(result.rfq.extractedEntities[0].itemName).toBe('Industrial Motor 15HP');
       expect(result.rfq.extractedEntities[0].quantity).toBe(5);

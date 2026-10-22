@@ -57,27 +57,93 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   const conditions = [];
   const d1Conditions = [];
   if (search) {
-    params.push(`%${search.trim()}%`);
-    // major_category/email/name/minorCategories/contactPerson/location/deliveryLocation
-    // are queried so unified directory search matches all seller details.
-    conditions.push(`(major_category ILIKE $${params.length}
-      OR email ILIKE $${params.length}
-      OR raw->>'name' ILIKE $${params.length}
-      OR (raw->'minorCategories')::text ILIKE $${params.length}
-      OR raw->>'contactPerson' ILIKE $${params.length}
-      OR raw->>'contact' ILIKE $${params.length}
-      OR raw->>'location' ILIKE $${params.length}
-      OR raw->>'city' ILIKE $${params.length}
-      OR raw->>'deliveryLocation' ILIKE $${params.length})`);
-    d1Conditions.push(`(lower(major_category) LIKE lower($${params.length})
-      OR lower(email) LIKE lower($${params.length})
-      OR lower(json_extract(raw,'$.name')) LIKE lower($${params.length})
-      OR lower(json_extract(raw,'$.minorCategories')) LIKE lower($${params.length})
-      OR lower(json_extract(raw,'$.contactPerson')) LIKE lower($${params.length})
-      OR lower(json_extract(raw,'$.contact')) LIKE lower($${params.length})
-      OR lower(json_extract(raw,'$.location')) LIKE lower($${params.length})
-      OR lower(json_extract(raw,'$.city')) LIKE lower($${params.length})
-      OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${params.length}))`);
+    const trimmed = search.trim();
+    params.push(`%${trimmed}%`);
+    const p = params.length;
+
+    // For short search tokens (<= 3 characters, e.g. "IT", "HR"), fields
+    // must match on discrete word boundaries or exact match, not substring '%it%', which erroneously
+    // matches "switches" (sw-IT-ches), "commoditiess" (commod-IT-iess), "limited", "solitaire", etc.
+    let catCondition = `major_category ILIKE $${p}`;
+    let d1CatCondition = `lower(major_category) LIKE lower($${p})`;
+    let nameCondition = `raw->>'name' ILIKE $${p}`;
+    let d1NameCondition = `lower(json_extract(raw,'$.name')) LIKE lower($${p})`;
+    let minorCatCondition = `(raw->'minorCategories')::text ILIKE $${p}`;
+    let d1MinorCatCondition = `lower(json_extract(raw,'$.minorCategories')) LIKE lower($${p})`;
+    let contactCondition = `raw->>'contactPerson' ILIKE $${p}`;
+    let d1ContactCondition = `lower(json_extract(raw,'$.contactPerson')) LIKE lower($${p})`;
+
+    if (trimmed.length <= 3) {
+      params.push(trimmed.toLowerCase());
+      const pExact = params.length;
+      catCondition = `(
+        lower(major_category) = $${pExact}
+        OR lower(major_category) LIKE ($${pExact} || ' %')
+        OR lower(major_category) LIKE ('% ' || $${pExact})
+        OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
+        OR lower(raw->>'majorCategory') = $${pExact}
+      )`;
+      d1CatCondition = `(
+        lower(major_category) = $${pExact}
+        OR lower(major_category) LIKE ($${pExact} || ' %')
+        OR lower(major_category) LIKE ('% ' || $${pExact})
+        OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
+        OR lower(json_extract(raw,'$.majorCategory')) = $${pExact}
+      )`;
+      nameCondition = `(
+        lower(raw->>'name') = $${pExact}
+        OR lower(raw->>'name') LIKE ($${pExact} || ' %')
+        OR lower(raw->>'name') LIKE ('% ' || $${pExact})
+        OR lower(raw->>'name') LIKE ('% ' || $${pExact} || ' %')
+      )`;
+      d1NameCondition = `(
+        lower(json_extract(raw,'$.name')) = $${pExact}
+        OR lower(json_extract(raw,'$.name')) LIKE ($${pExact} || ' %')
+        OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact})
+        OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact} || ' %')
+      )`;
+      minorCatCondition = `(
+        (raw->'minorCategories')::text ILIKE '%"' || $${pExact} || '"%'
+        OR (raw->'minorCategories')::text ILIKE '% ' || $${pExact} || ' %'
+        OR (raw->'minorCategories')::text ILIKE '%[' || $${pExact} || ']%'
+      )`;
+      d1MinorCatCondition = `(
+        lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || $${pExact} || '"%')
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE ('% ' || $${pExact} || ' %')
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%[' || $${pExact} || ']%')
+      )`;
+      contactCondition = `(
+        lower(raw->>'contactPerson') = $${pExact}
+        OR lower(raw->>'contactPerson') LIKE ($${pExact} || ' %')
+        OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact})
+        OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact} || ' %')
+      )`;
+      d1ContactCondition = `(
+        lower(json_extract(raw,'$.contactPerson')) = $${pExact}
+        OR lower(json_extract(raw,'$.contactPerson')) LIKE ($${pExact} || ' %')
+        OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact})
+        OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact} || ' %')
+      )`;
+    }
+
+    conditions.push(`(${catCondition}
+      OR email ILIKE $${p}
+      OR ${nameCondition}
+      OR ${minorCatCondition}
+      OR ${contactCondition}
+      OR raw->>'contact' ILIKE $${p}
+      OR raw->>'location' ILIKE $${p}
+      OR raw->>'city' ILIKE $${p}
+      OR raw->>'deliveryLocation' ILIKE $${p})`);
+    d1Conditions.push(`(${d1CatCondition}
+      OR lower(email) LIKE lower($${p})
+      OR ${d1NameCondition}
+      OR ${d1MinorCatCondition}
+      OR ${d1ContactCondition}
+      OR lower(json_extract(raw,'$.contact')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.location')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.city')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`);
   }
   if (email) {
     params.push(`%${email.trim()}%`);
@@ -85,13 +151,11 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     d1Conditions.push(`(lower(email) LIKE lower($${params.length}) OR lower(json_extract(raw,'$.email')) LIKE lower($${params.length}))`);
   }
   if (category) {
-    // An exact-match category filter (the CM's category dropdown), separate
-    // from the free-text `search` above — combinable with it via AND. Uses
-    // the existing plain btree idx_vendors_major_category index (an equality
-    // match, unlike search's leading-wildcard ILIKE, so no trigram needed).
-    params.push(category);
-    conditions.push(`major_category = $${params.length}`);
-    d1Conditions.push(`major_category = $${params.length}`);
+    // Case-insensitive exact category filter matching both table column and raw JSON:
+    params.push(category.trim());
+    const p = params.length;
+    conditions.push(`(major_category = $${p} OR lower(major_category) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}))`);
+    d1Conditions.push(`(lower(major_category) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}))`);
   }
   if (publicOnly) {
     // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a

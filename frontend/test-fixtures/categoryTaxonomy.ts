@@ -260,6 +260,7 @@ export const CATEGORY_TAXONOMY_FIXTURE: MajorMinorCategory[] = [
       'Fire Extinguishers',
       'Gloves',
       'Harness',
+      'Helmets',
       'Hemlets',
       'Medicines',
       'Public Announcement System (PAS)',

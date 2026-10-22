@@ -1086,6 +1086,11 @@ export const UI_STRINGS = {
     newPasswordPlaceholder: 'Min 8 characters',
     confirmPasswordLabel: 'Confirm New Password',
     confirmPasswordPlaceholder: 'Re-enter new password',
+    verificationCodeLabel: 'Verification Code',
+    verificationCodePlaceholder: 'Enter 6-digit code',
+    sendVerificationCodeAction: 'Send Verification Code',
+    sendingCodeAction: 'Sending code…',
+    resendCodeAction: 'Resend Code',
     updatePasswordAction: 'Update Password',
     updatingPasswordAction: 'Updating…',
 
@@ -1105,10 +1110,14 @@ export const UI_STRINGS = {
     passwordMismatchTitle: 'Password Mismatch',
     passwordChangedTitle: 'Password Changed',
     changeFailedTitle: 'Password Not Changed',
+    codeSentTitle: 'Verification Code Sent',
 
     // Toast messages. Failure text is supplied by the API so the reason is
     // specific; these cover the client-side checks and the fallbacks.
     currentPasswordRequired: 'Enter your current password to authorise the change.',
+    verificationCodeRequired: 'Enter the 6-digit verification code sent to your registered contact.',
+    codeSentMessage: 'A 6-digit verification code has been dispatched to your registered contact.',
+    requestOtpFirst: 'Please request and enter a verification code first.',
     weakPasswordMessage: 'Choose a new password of at least 8 characters.',
     passwordMismatchMessage: 'The new password and its confirmation do not match.',
     passwordSameAsCurrent:

@@ -386,16 +386,28 @@ const VALIDATION_SCHEMAS = {
   // it matches PASSWORD_MIN_LENGTH on the frontend so the browser hint and the
   // server boundary agree.
   changePassword: {
-    currentPassword: {
-      type: 'string',
-      required: true,
-      message: 'Enter your current password to authorise the change.',
-    },
     newPassword: {
       type: 'string',
       required: true,
       minLength: PASSWORD_MIN_LENGTH,
       message: 'Choose a new password of at least 8 characters.',
+    },
+    currentPassword: {
+      type: 'string',
+      required: false,
+      message: 'Enter your current password to authorise the change.',
+    },
+    code: {
+      type: 'string',
+      required: false,
+    },
+    verificationCode: {
+      type: 'string',
+      required: false,
+    },
+    resetToken: {
+      type: 'string',
+      required: false,
     },
   },
 

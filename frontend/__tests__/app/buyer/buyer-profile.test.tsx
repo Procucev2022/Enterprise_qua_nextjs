@@ -86,6 +86,51 @@ async function renderLoaded() {
 /** Re-render the mounted component, picking up the latest useApp() mock value. */
 let rerenderCurrent: () => void = () => undefined;
 
+/**
+ * Read the selection summary badge.
+ */
+function selectionSummary(): string {
+  const badge =
+    document.querySelector('.badge.badge-purple.font-mono.text-xs') ??
+    document.querySelector('.badge.badge-purple.font-mono');
+  return (badge?.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+/** All "Select All" / "Clear" buttons currently rendered, in document order. */
+function categoryActionButtons(label: 'Select All' | 'Clear'): HTMLButtonElement[] {
+  return Array.from(document.querySelectorAll('button')).filter(
+    (b) => b.textContent?.trim() === label
+  ) as HTMLButtonElement[];
+}
+
+/** The accordion panel for one major category. */
+function majorPanel(name: string): HTMLElement {
+  return (
+    screen.getByText(name).closest('div.rounded-2xl') ??
+    screen.getByText(name).closest('div.rounded-xl')
+  ) as HTMLElement;
+}
+
+/** Expand a collapsed major by clicking its chevron. */
+function expandMajor(name: string): void {
+  fireEvent.click(majorPanel(name).querySelector('button.p-1') as HTMLButtonElement);
+}
+
+/** Click "Select All" inside a specific major, expanding it first if needed. */
+function selectAllIn(name: string): void {
+  const panel = majorPanel(name);
+  let button = Array.from(panel.querySelectorAll('button')).find(
+    (b) => b.textContent?.trim() === 'Select All'
+  );
+  if (!button) {
+    expandMajor(name);
+    button = Array.from(majorPanel(name).querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Select All'
+    );
+  }
+  fireEvent.click(button as HTMLButtonElement);
+}
+
 describe('app/buyer/buyer-profile.tsx', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -102,22 +147,22 @@ describe('app/buyer/buyer-profile.tsx', () => {
   });
 
   // ── Structure ─────────────────────────────────────────────────────────────
-  it('renders organization, address, contact, and security sections, and hides procurement categories', async () => {
+  it('renders organization, address, contact, category, and security sections', async () => {
     await renderLoaded();
     expect(screen.getByText(/Section 1: Organization & Tax Registration/i)).toBeInTheDocument();
     expect(screen.getByText(/Registered Corporate Address/i)).toBeInTheDocument();
     expect(screen.getByText(/Key Procurement Contact Person/i)).toBeInTheDocument();
+    expect(screen.getByText(/Section 3: Relevant Procurement Categories/i)).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.accountSecurity.sectionTitle)).toBeInTheDocument();
-    expect(screen.queryByText(/Relevant Procurement Categories/i)).not.toBeInTheDocument();
   });
 
   it('renders the account security forms outside the organization profile form', async () => {
     await renderLoaded();
 
-    const currentPasswordInput = screen.getByPlaceholderText(
-      UI_STRINGS.accountSecurity.currentPasswordPlaceholder
+    const newPasswordInput = screen.getByPlaceholderText(
+      UI_STRINGS.accountSecurity.newPasswordPlaceholder
     );
-    const accountForm = currentPasswordInput.closest('form');
+    const accountForm = newPasswordInput.closest('form');
     expect(accountForm).not.toBeNull();
 
     const legalEntityInput = screen.getByDisplayValue('Navin Chaudhary Enterprises');
@@ -334,6 +379,54 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     expect(screen.getByText('Invalid Format')).toBeInTheDocument();
     expect(screen.getByText('Invalid GSTIN')).toBeInTheDocument();
+  });
+
+  // ── Category Selection ────────────────────────────────────────────────────
+  it('renders the category tree from the taxonomy the database returned', async () => {
+    await renderLoaded();
+    TAXONOMY.forEach((cat) => {
+      expect(screen.getByText(cat.majorCategory)).toBeInTheDocument();
+    });
+  });
+
+  it('restores the stored category selection and shows count badge', async () => {
+    await renderLoaded();
+    expect(selectionSummary()).toBe('2 Major • 2 Minor Selected');
+  });
+
+  it('filters categories using the search bar', async () => {
+    await renderLoaded();
+    const searchInput = screen.getByPlaceholderText(/Search across all 13 Major and 120\+ Minor categories/i);
+    fireEvent.change(searchInput, { target: { value: 'Pumps' } });
+    expect(screen.queryByText('Civil Works')).not.toBeInTheDocument();
+    fireEvent.change(searchInput, { target: { value: '' } });
+    expect(screen.getByText('Civil Works')).toBeInTheDocument();
+  });
+
+  it('toggles a major category on and off', async () => {
+    await renderLoaded();
+
+    fireEvent.click(screen.getByText('Logistics'));
+    expect(selectionSummary()).toBe('3 Major • 3 Minor Selected');
+
+    fireEvent.click(screen.getByText('Logistics'));
+    expect(selectionSummary()).toBe('2 Major • 2 Minor Selected');
+  });
+
+  it('blocks a save with no procurement category selected', async () => {
+    mockLoad({ ...PROFILE, categories: [] });
+    await renderLoaded();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(saveBuyerProfile).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.validationErrorTitle,
+      UI_STRINGS.buyerProfile.categoriesRequired,
+      'warning'
+    );
   });
 
   // ── Save ──────────────────────────────────────────────────────────────────
@@ -582,5 +675,177 @@ describe('app/buyer/buyer-profile.tsx', () => {
     });
 
     jest.useRealTimers();
+  });
+
+  // ── Category Taxonomy Accordion, Minor Toggles & Caps ───────────────────
+  it('expands and collapses category accordion panels via chevron', async () => {
+    await renderLoaded();
+
+    // Civil Works is selected in PROFILE so it starts expanded
+    expect(screen.getByText('Piling')).toBeInTheDocument();
+
+    // Raw Material starts collapsed
+    expect(screen.queryByText('Steels')).not.toBeInTheDocument();
+
+    // Expand Raw Material
+    expandMajor('Raw Material');
+    expect(screen.getByText('Steels')).toBeInTheDocument();
+
+    // Collapse Civil Works
+    expandMajor('Civil Works');
+    expect(screen.queryByText('Piling')).not.toBeInTheDocument();
+  });
+
+  it('selects and deselects minor categories individually', async () => {
+    await renderLoaded();
+
+    // Civil Works is expanded; select 'Excavation'
+    const excavationLabel = screen.getByText('Excavation').closest('label')!;
+    const excavationInput = excavationLabel.querySelector('input')!;
+    fireEvent.click(excavationInput);
+
+    expect(selectionSummary()).toBe('2 Major • 3 Minor Selected');
+
+    // Deselect 'Excavation'
+    fireEvent.click(excavationInput);
+    expect(selectionSummary()).toBe('2 Major • 2 Minor Selected');
+
+    // Deselect 'Piling' (the only selected minor in Civil Works)
+    const pilingLabel = screen.getByText('Piling').closest('label')!;
+    const pilingInput = pilingLabel.querySelector('input')!;
+    fireEvent.click(pilingInput);
+
+    // Deselecting all minors should deselect the major
+    expect(selectionSummary()).toBe('1 Major • 1 Minor Selected');
+  });
+
+  it('supports Select All and Clear buttons within a major category', async () => {
+    await renderLoaded();
+
+    // Select All in Civil Works (5 minors)
+    selectAllIn('Civil Works');
+    expect(selectionSummary()).toBe('2 Major • 6 Minor Selected');
+
+    // Clear Civil Works
+    const panel = majorPanel('Civil Works');
+    const clearBtn = Array.from(panel.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Clear'
+    )!;
+    fireEvent.click(clearBtn);
+
+    expect(selectionSummary()).toBe('1 Major • 1 Minor Selected');
+  });
+
+  it('filters by minor category keyword in search bar', async () => {
+    await renderLoaded();
+
+    const searchInput = screen.getByPlaceholderText(/Search across all 13 Major and 120\+ Minor categories/i);
+    fireEvent.change(searchInput, { target: { value: 'Laptop' } });
+
+    expect(screen.getByText('IT')).toBeInTheDocument();
+    expect(screen.queryByText('Civil Works')).not.toBeInTheDocument();
+  });
+
+  it('enforces major category limit cap and shows toast', async () => {
+    // 7 taxonomy items to exceed MAX_MAJOR_CATEGORIES (5)
+    const bigTaxonomy = Array.from({ length: 7 }, (_, i) => ({
+      majorCategory: `Category ${i + 1}`,
+      minorCategories: [`Subcat ${i + 1}A`, `Subcat ${i + 1}B`],
+    }));
+    const initialMajors = bigTaxonomy.slice(0, 5).map((c) => ({
+      major: c.majorCategory,
+      minor: c.minorCategories[0],
+    }));
+
+    mockLoad({ ...PROFILE, categories: initialMajors }, bigTaxonomy);
+    await renderLoaded();
+
+    expect(selectionSummary()).toBe('5 Major • 5 Minor Selected');
+
+    // Try to toggle 6th category
+    fireEvent.click(screen.getByText('Category 6'));
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.limitReachedTitle,
+      expect.stringContaining('5'),
+      'warning'
+    );
+  });
+
+  it('enforces minor category limit cap and shows toast', async () => {
+    // 1 major category with 45 minors, exceeding MAX_MINOR_CATEGORIES (40)
+    const minors = Array.from({ length: 45 }, (_, i) => `Subcat ${i + 1}`);
+    const bigTaxonomy = [{ majorCategory: 'Huge Category', minorCategories: minors }];
+    const initialCategories = minors.slice(0, 40).map((m) => ({
+      major: 'Huge Category',
+      minor: m,
+    }));
+
+    mockLoad({ ...PROFILE, categories: initialCategories }, bigTaxonomy);
+    await renderLoaded();
+
+    // Try to select 41st minor
+    const subcat41 = screen.getByText('Subcat 41').closest('label')!.querySelector('input')!;
+    fireEvent.click(subcat41);
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.limitReachedTitle,
+      expect.stringContaining('40'),
+      'warning'
+    );
+  });
+
+  it('backfills profile fields from activeBuyerAccount if profile returned blank fields', async () => {
+    const blankProfile: BuyerProfile = {
+      organizationId: 'org-blank',
+      userId: 'user-blank',
+      companyName: '',
+      brandName: '',
+      organizationType: 'Public Limited',
+      panNumber: '',
+      gstNumber: '',
+      cinNumber: '',
+      website: '',
+      annualTurnover: '',
+      street: '',
+      city: '',
+      state: '',
+      pincode: '',
+      country: '',
+      contactName: '',
+      contactDesignation: '',
+      contactEmail: '',
+      contactPhone: '',
+      categories: [{ major: 'Civil Works', minor: 'Piling' }],
+    };
+
+    const mockAccount = {
+      organizationName: 'Backfilled Org Name',
+      brandName: 'Backfilled Brand',
+      gstin: '27AAACL1234F1Z5',
+      city: 'Pune',
+      state: 'Maharashtra',
+      pincode: '411001',
+      country: 'India',
+      contactPerson: 'Aditi Sharma',
+      mobileNumber: '+919876543210',
+      corporateEmail: 'aditi@backfilled.com',
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      activeBuyerAccount: mockAccount,
+    });
+
+    mockLoad(blankProfile);
+    await renderLoaded();
+
+    expect(screen.getByDisplayValue('Backfilled Org Name')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Backfilled Brand')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('27AAACL1234F1Z5')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('AAACL1234F')).toBeInTheDocument(); // Derived PAN from GSTIN
+    expect(screen.getByDisplayValue('Pune')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Aditi Sharma')).toBeInTheDocument();
   });
 });
