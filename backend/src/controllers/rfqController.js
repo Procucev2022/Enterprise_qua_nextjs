@@ -1267,6 +1267,15 @@ async function updateRFQ(req, res, next) {
     }
 
     const updates = pickUpdatableRfqFields(body);
+    if (existing.status === 'Parsing' && !updates.status) {
+      const entities = updates.extractedEntities || existing.extractedEntities || [];
+      const hasCategories = entities.length > 0 && entities.every((e) => e.majorCategory && e.minorCategory && e.minorCategory !== e.majorCategory);
+      const hasVendors = (Array.isArray(updates.assignedVendors) && updates.assignedVendors.length > 0) ||
+        (Array.isArray(existing.assignedVendors) && existing.assignedVendors.length > 0);
+      if (hasCategories || hasVendors) {
+        updates.status = 'Quotes Pending';
+      }
+    }
     logger.info(`Updating RFQ ${id}`, { id, fields: Object.keys(updates) }, 'RFQ_CONTROLLER');
     const updated = storeService.updateRFQ(id, updates);
     if (!updated) {

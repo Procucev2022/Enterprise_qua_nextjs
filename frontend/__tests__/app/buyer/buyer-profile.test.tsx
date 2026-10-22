@@ -86,6 +86,51 @@ async function renderLoaded() {
 /** Re-render the mounted component, picking up the latest useApp() mock value. */
 let rerenderCurrent: () => void = () => undefined;
 
+/**
+ * Read the selection summary badge.
+ */
+function selectionSummary(): string {
+  const badge =
+    document.querySelector('.badge.badge-purple.font-mono.text-xs') ??
+    document.querySelector('.badge.badge-purple.font-mono');
+  return (badge?.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+/** All "Select All" / "Clear" buttons currently rendered, in document order. */
+function categoryActionButtons(label: 'Select All' | 'Clear'): HTMLButtonElement[] {
+  return Array.from(document.querySelectorAll('button')).filter(
+    (b) => b.textContent?.trim() === label
+  ) as HTMLButtonElement[];
+}
+
+/** The accordion panel for one major category. */
+function majorPanel(name: string): HTMLElement {
+  return (
+    screen.getByText(name).closest('div.rounded-2xl') ??
+    screen.getByText(name).closest('div.rounded-xl')
+  ) as HTMLElement;
+}
+
+/** Expand a collapsed major by clicking its chevron. */
+function expandMajor(name: string): void {
+  fireEvent.click(majorPanel(name).querySelector('button.p-1') as HTMLButtonElement);
+}
+
+/** Click "Select All" inside a specific major, expanding it first if needed. */
+function selectAllIn(name: string): void {
+  const panel = majorPanel(name);
+  let button = Array.from(panel.querySelectorAll('button')).find(
+    (b) => b.textContent?.trim() === 'Select All'
+  );
+  if (!button) {
+    expandMajor(name);
+    button = Array.from(majorPanel(name).querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Select All'
+    );
+  }
+  fireEvent.click(button as HTMLButtonElement);
+}
+
 describe('app/buyer/buyer-profile.tsx', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -102,13 +147,13 @@ describe('app/buyer/buyer-profile.tsx', () => {
   });
 
   // ── Structure ─────────────────────────────────────────────────────────────
-  it('renders organization, address, contact, and security sections, and hides procurement categories', async () => {
+  it('renders organization, address, contact, category, and security sections', async () => {
     await renderLoaded();
     expect(screen.getByText(/Section 1: Organization & Tax Registration/i)).toBeInTheDocument();
     expect(screen.getByText(/Registered Corporate Address/i)).toBeInTheDocument();
     expect(screen.getByText(/Key Procurement Contact Person/i)).toBeInTheDocument();
+    expect(screen.getByText(/Section 3: Relevant Procurement Categories/i)).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.accountSecurity.sectionTitle)).toBeInTheDocument();
-    expect(screen.queryByText(/Relevant Procurement Categories/i)).not.toBeInTheDocument();
   });
 
   it('renders the account security forms outside the organization profile form', async () => {
@@ -334,6 +379,54 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     expect(screen.getByText('Invalid Format')).toBeInTheDocument();
     expect(screen.getByText('Invalid GSTIN')).toBeInTheDocument();
+  });
+
+  // ── Category Selection ────────────────────────────────────────────────────
+  it('renders the category tree from the taxonomy the database returned', async () => {
+    await renderLoaded();
+    TAXONOMY.forEach((cat) => {
+      expect(screen.getByText(cat.majorCategory)).toBeInTheDocument();
+    });
+  });
+
+  it('restores the stored category selection and shows count badge', async () => {
+    await renderLoaded();
+    expect(selectionSummary()).toBe('2 Major • 2 Minor Selected');
+  });
+
+  it('filters categories using the search bar', async () => {
+    await renderLoaded();
+    const searchInput = screen.getByPlaceholderText(/Search across all 13 Major and 120\+ Minor categories/i);
+    fireEvent.change(searchInput, { target: { value: 'Pumps' } });
+    expect(screen.queryByText('Civil Works')).not.toBeInTheDocument();
+    fireEvent.change(searchInput, { target: { value: '' } });
+    expect(screen.getByText('Civil Works')).toBeInTheDocument();
+  });
+
+  it('toggles a major category on and off', async () => {
+    await renderLoaded();
+
+    fireEvent.click(screen.getByText('Logistics'));
+    expect(selectionSummary()).toBe('3 Major • 3 Minor Selected');
+
+    fireEvent.click(screen.getByText('Logistics'));
+    expect(selectionSummary()).toBe('2 Major • 2 Minor Selected');
+  });
+
+  it('blocks a save with no procurement category selected', async () => {
+    mockLoad({ ...PROFILE, categories: [] });
+    await renderLoaded();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(saveBuyerProfile).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.validationErrorTitle,
+      UI_STRINGS.buyerProfile.categoriesRequired,
+      'warning'
+    );
   });
 
   // ── Save ──────────────────────────────────────────────────────────────────

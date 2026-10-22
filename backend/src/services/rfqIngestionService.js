@@ -227,6 +227,31 @@ function matchByKeyword(text) {
 }
 
 /**
+ * Default minor category for each major category, used as a fallback when an item
+ * belongs to a major category but no more specific minor could be resolved.
+ */
+function defaultMinorForMajor(major) {
+  if (!major) return '';
+  const key = taxonomyKey(major);
+  const defaults = {
+    'it': 'Hardware',
+    'engineeringspareselectrical': 'Other Electrical Items',
+    'engineeringsparesmechanical': 'Hardwares',
+    'civilworks': 'Plumbing',
+    'occuptionalhealthandsafety': 'Seafty Equipments',
+    'packingmaterial': 'Plastic Packaging',
+    'logistics': 'Road transport',
+    'rawmaterial': 'Chemicals',
+    'professionalservices': 'Consultant',
+    'capexequipmentmachinery': 'Material Handling Equipments',
+    'retailrepairmaintenance': 'Equipment Repair & Maintenance',
+    'othersnewproduct': 'Office & security Cabins',
+    'othersnewservice': 'Warehousing',
+  };
+  return defaults[key] || '';
+}
+
+/**
  * Classify a single line item, mirroring the Java precedence chain.
  *
  * @param {Object} item raw or partially normalised line item
@@ -281,19 +306,8 @@ function classifyLineItem(item, payloadCategory) {
     };
   }
 
-  // 4. No taxonomy match. The item is unclassified against the master, but if the
-  // DOCUMENT itself stated a category (its own, or the payload-wide one), pass that
-  // original string through as the minor rather than discarding it. The wizard's
-  // category selects prepend an off-taxonomy stored value as a selectable option
-  // (withStoredValue), so the buyer sees exactly what the document said and can
-  // keep it or pick a taxonomy value — instead of two blank dropdowns. The major
-  // is left blank because no master major can be derived from an unknown label.
-  //
-  // Earlier this stamped 'General Procurement' / 'General Industrial Goods', which
-  // were NOT in the master — a value no dropdown could render yet validation
-  // accepted, so an unclassified item could be dispatched under a category no
-  // vendor matched. Passing the document's own wording through is honest: it is
-  // what the buyer wrote, flagged for review (STATUS.DEFAULT feeds needsReview).
+  // 4. Stated category fallback.
+  // If the document stated a category (its own, or payloadCategory), inspect it.
   const statedCategory = !isGenericCategory(item.minorCategory || item.category)
     ? String(item.minorCategory || item.category).trim()
     : !isGenericCategory(payloadCategory)
@@ -301,12 +315,29 @@ function classifyLineItem(item, payloadCategory) {
       : '';
   const statedMajor = !isGenericCategory(item.majorCategory) ? String(item.majorCategory).trim() : '';
 
+  let resolvedMajor = canonicalMajor(statedMajor) || canonicalMajor(statedCategory) || statedMajor;
+  let resolvedMinor = statedCategory;
+  let confidence = CONFIDENCE.DEFAULT;
+  let status = STATUS.DEFAULT;
+
+  if (canonicalMajor(statedCategory)) {
+    // Stated category is actually a Major category (e.g. "IT"). Never store a Major as a Minor!
+    resolvedMajor = canonicalMajor(statedCategory);
+    resolvedMinor = defaultMinorForMajor(resolvedMajor);
+    confidence = CONFIDENCE.KEYWORD;
+    status = STATUS.KEYWORD;
+  } else if (resolvedMajor && (!resolvedMinor || resolvedMinor === resolvedMajor)) {
+    resolvedMinor = defaultMinorForMajor(resolvedMajor);
+    confidence = CONFIDENCE.KEYWORD;
+    status = STATUS.KEYWORD;
+  }
+
   return {
-    majorCategory: statedMajor,
-    minorCategory: statedCategory,
-    category: statedCategory,
-    categoryConfidence: CONFIDENCE.DEFAULT,
-    classificationStatus: STATUS.DEFAULT,
+    majorCategory: resolvedMajor,
+    minorCategory: resolvedMinor,
+    category: resolvedMinor,
+    categoryConfidence: confidence,
+    classificationStatus: status,
   };
 }
 
@@ -519,12 +550,18 @@ async function buildRFQDraft(payload = {}) {
       } else if (entity.majorCategory !== declaredMajor) {
         entity.categoryMismatch = true;
       }
+      if (!entity.minorCategory || entity.minorCategory === entity.majorCategory) {
+        entity.minorCategory = defaultMinorForMajor(entity.majorCategory);
+        entity.category = entity.minorCategory;
+        if (entity.classificationStatus === STATUS.DEFAULT) {
+          entity.classificationStatus = STATUS.KEYWORD;
+          entity.categoryConfidence = CONFIDENCE.KEYWORD;
+          entity.confidence = 85;
+        }
+      }
     });
   }
 
-  const needsReview = entities.filter(
-    (e) => e.classificationStatus === STATUS.DEFAULT || e.categoryMismatch
-  ).length;
   const title = String(payload.title || '').trim() || deriveTitle(entities);
 
   // The RFQ header category follows the majority of its line items rather than
@@ -551,8 +588,21 @@ async function buildRFQDraft(payload = {}) {
       if (!entity.majorCategory) {
         entity.majorCategory = headerCategory;
       }
+      if (!entity.minorCategory || entity.minorCategory === entity.majorCategory) {
+        entity.minorCategory = defaultMinorForMajor(entity.majorCategory);
+        entity.category = entity.minorCategory;
+        if (entity.classificationStatus === STATUS.DEFAULT) {
+          entity.classificationStatus = STATUS.KEYWORD;
+          entity.categoryConfidence = CONFIDENCE.KEYWORD;
+          entity.confidence = 85;
+        }
+      }
     });
   }
+
+  const needsReview = entities.filter(
+    (e) => !e.majorCategory || !e.minorCategory || e.categoryMismatch || e.minorCategory === e.majorCategory
+  ).length;
 
   const estimatedBudget = deriveEstimatedBudget(payload.estimatedBudget, lineValues);
 
@@ -608,6 +658,7 @@ module.exports = {
   isGenericCategory,
   matchByKeyword,
   classifyLineItem,
+  defaultMinorForMajor,
   defaultTargetDate,
   normalizeQuantity,
   normalizeAmount,

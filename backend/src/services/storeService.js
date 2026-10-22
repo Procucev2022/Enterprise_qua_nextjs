@@ -2448,6 +2448,10 @@ class StoreService {
 
     newRFQ.procucevVendorCount = procucevVendorCount;
 
+    if (newRFQ.status === 'Parsing' && Array.isArray(newRFQ.assignedVendors) && newRFQ.assignedVendors.length > 0) {
+      newRFQ.status = 'Quotes Pending';
+    }
+
     this.rfqs.unshift(newRFQ);
     this._persistRFQ(newRFQ);
 
@@ -3681,6 +3685,9 @@ class StoreService {
       needsCategoryManagerAssignment: false,
       procucevVendorCount: allAssigned.length,
     };
+    if (rfq.status === 'Parsing' || rfq.status === 'Draft' || !rfq.status) {
+      updatePayload.status = 'Quotes Pending';
+    }
     if (rfq.followUpData) {
       updatePayload.followUpData = {
         ...rfq.followUpData,
