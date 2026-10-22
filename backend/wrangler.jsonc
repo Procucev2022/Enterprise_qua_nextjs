@@ -28,7 +28,9 @@
   },
   "vars": {
     "NODE_ENV": "production",
-    "GEMINI_MODELS": "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash",
+    "EMAIL_GATEWAY_ENABLED": "true",
+    "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
+    "GEMINI_MODELS": "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite",
     "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
     "WHATSAPP_USERNAME": "ProcucevnewWapp",
     "WHATSAPP_PASSWORD": "ProcucevnewWapp@987",
@@ -109,7 +111,9 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "development",
-        "GEMINI_MODELS": "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash",
+        "EMAIL_GATEWAY_ENABLED": "true",
+        "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
+        "GEMINI_MODELS": "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_USERNAME": "ProcucevnewWapp",
         "WHATSAPP_PASSWORD": "ProcucevnewWapp@987",
@@ -161,7 +165,9 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "production",
-        "GEMINI_MODELS": "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash",
+        "EMAIL_GATEWAY_ENABLED": "true",
+        "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
+        "GEMINI_MODELS": "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_USERNAME": "ProcucevnewWapp",
         "WHATSAPP_PASSWORD": "ProcucevnewWapp@987",
@@ -222,7 +228,9 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "production",
-        "GEMINI_MODELS": "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash",
+        "EMAIL_GATEWAY_ENABLED": "true",
+        "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
+        "GEMINI_MODELS": "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_USERNAME": "ProcucevnewWapp",
         "WHATSAPP_PASSWORD": "ProcucevnewWapp@987",

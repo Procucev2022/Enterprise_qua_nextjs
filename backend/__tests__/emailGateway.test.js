@@ -728,6 +728,47 @@ describe('emailGatewayService.pollViaGmailApi', () => {
     expect(result.skipped).toBe(true);
   });
 
+  // Per-deployment kill switch for the CRON poll path (dev/prod isolation).
+  test('buyer cron poll is skipped with reason DISABLED when the gateway is disabled, without touching the mailbox', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    const gmailSpy = jest.spyOn(googleapis.google, 'gmail');
+
+    const result = await emailGatewayService.pollViaGmailApi(
+      emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_ENABLED: 'false' })
+    );
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe(EMAIL_GATEWAY_MESSAGES.DISABLED);
+    // A disabled deployment never lists/fetches/modifies the mailbox.
+    expect(gmailSpy).not.toHaveBeenCalled();
+  });
+
+  test('vendor cron poll is skipped with reason DISABLED when the vendor gateway is disabled, without touching the mailbox', async () => {
+    jest.spyOn(mailerService, 'getVendorGmailOAuthClient').mockReturnValue({});
+    const gmailSpy = jest.spyOn(googleapis.google, 'gmail');
+
+    const result = await emailGatewayService.pollVendorViaGmailApi(
+      emailGatewayService.resolveVendorConfig({ ...FULL_ENV, VENDOR_EMAIL_GATEWAY_ENABLED: 'false' })
+    );
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe(EMAIL_GATEWAY_MESSAGES.DISABLED);
+    expect(gmailSpy).not.toHaveBeenCalled();
+  });
+
+  // Guard ordering: NOT_CONFIGURED must win over DISABLED so an unconfigured
+  // deployment still reports NOT_CONFIGURED even when the flag is off.
+  test('an unconfigured deployment reports NOT_CONFIGURED even when the gateway is disabled', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue(null);
+
+    const result = await emailGatewayService.pollViaGmailApi(
+      emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_ENABLED: 'false' })
+    );
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe(EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED);
+  });
+
   test('isConfigured/describeConfigurationFault treat the buyer Gmail API and IMAP-based vendor gateway independently', () => {
     jest.spyOn(mailerService, 'isGmailApiConfigured').mockReturnValue(true);
     jest.spyOn(mailerService, 'isVendorGmailApiConfigured').mockReturnValue(false);
