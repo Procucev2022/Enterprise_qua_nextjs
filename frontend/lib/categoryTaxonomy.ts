@@ -281,12 +281,21 @@ export function hasMinorCategory(major: string, minor: string): boolean {
   return defaults.some((d) => taxonomyKey(d) === taxonomyKey(minor));
 }
 
+/** Standard procurement category taxonomy fallback when database is unseeded. */
+export function getDefaultCategoryTaxonomy(): MajorMinorCategory[] {
+  const majors = getMajorCategories();
+  return majors.map((majorName) => ({
+    majorCategory: majorName,
+    minorCategories: getMinorCategories(majorName),
+  }));
+}
+
 /**
  * The major category the master owns a minor under, or an empty string.
  *
  * The first match wins for a minor that appears under several majors
  * ('Refractories', 'Panels', 'Conveyors'), matching the order a buyer sees in the
- * dropdown.
+ * dropdown. Falls back to static defaults if dynamic taxonomy has not loaded.
  */
 export function findMajorForMinor(minor: string): string {
   if (!minor) return '';
@@ -297,6 +306,14 @@ export function findMajorForMinor(minor: string): string {
       found = majorsByKey.get(majorKey) || '';
     }
   });
+  if (!found) {
+    for (const [majorKey, defaultMinors] of Object.entries(DEFAULT_MAJOR_MINORS)) {
+      if (defaultMinors.some((d) => taxonomyKey(d) === key)) {
+        found = majorsByKey.get(majorKey) || getMajorCategories().find((m) => taxonomyKey(m) === majorKey) || majorKey;
+        break;
+      }
+    }
+  }
   return found;
 }
 

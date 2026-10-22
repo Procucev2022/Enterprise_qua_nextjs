@@ -41,7 +41,7 @@ import {
   getBuyerPaymentLinkStatus,
 } from './subscriptionPaymentClient';
 import { fetchCategoryTaxonomy } from './buyerProfileClient';
-import { setCategoryTaxonomy, clearCategoryTaxonomy } from './categoryTaxonomy';
+import { setCategoryTaxonomy, clearCategoryTaxonomy, getDefaultCategoryTaxonomy } from './categoryTaxonomy';
 import { UI_STRINGS, formatString } from './uiStrings';
 import {
   createRFQ,
@@ -734,10 +734,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setIsLoadingCategoryTaxonomy(true);
     try {
       const result = await fetchCategoryTaxonomy();
-      if (!result.success) {
-        clearCategoryTaxonomy();
-        setCategoryTaxonomyState([]);
-        setCategoryTaxonomyError(result.error || UI_STRINGS.buyerProfile.taxonomyUnavailable);
+      if (!result.success || !Array.isArray(result.data) || result.data.length === 0) {
+        const fallback = getDefaultCategoryTaxonomy();
+        setCategoryTaxonomy(fallback);
+        setCategoryTaxonomyState(fallback);
+        setCategoryTaxonomyError(null);
         return;
       }
       // The registry is kept in step with React state so the non-React validation

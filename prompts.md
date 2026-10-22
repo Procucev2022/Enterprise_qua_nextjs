@@ -3252,5 +3252,30 @@ What should be the best order of gemini models for this AI extraction use case, 
 ```text
 Please use this model order
 
+```text
     'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash'
+```
+
+### 2026-10-22T12:35:26+05:30
+
+```text
+For V1 RFQs whose category is not selected by the vendor, the email asking the vendor to log in and update categories is not working. Vendor profile also says no procurement categories are configured. for vendor profile just nned to dot h just can add his own category here  vedor can update his own categories 
+```
+
+### 2026-10-22T13:19:39+05:30
+
+```text
+what are you doing you have not done a single change just moving
+```
+
+### 2026-10-22T19:28:59+05:30
+
+```text
+ypu are doing a lot of extra thing just need to do  vendo twill type the categories here and shown in picture will search and automatically mark tick other wise it will add in other for that vendor only and make that tick or selected  their is limilt of 10 categories selection it can give alter that only 10 will be selecte as if giving now and a lot of change you have odne in login  page and other mailer just remove and please do this fast
+```
+
+### 2026-10-22T19:43:53+05:30
+
+```text
+The categoreis adde must be shown to the buyer after adding up ?? 
 ```
