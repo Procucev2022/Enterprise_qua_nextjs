@@ -603,7 +603,6 @@ async function buildRFQDraft(payload = {}) {
   const needsReview = entities.filter(
     (e) => !e.majorCategory || !e.minorCategory || e.categoryMismatch || e.minorCategory === e.majorCategory
   ).length;
-
   const estimatedBudget = deriveEstimatedBudget(payload.estimatedBudget, lineValues);
 
   const draft = {

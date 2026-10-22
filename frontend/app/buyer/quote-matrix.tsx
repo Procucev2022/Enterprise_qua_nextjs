@@ -500,21 +500,53 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                           : ''
                       }`}
                     >
-                      {quote.isPreferred ? (
-                        <button
-                          onClick={() => handleSelectVendor(quote)}
-                          className="btn btn-emerald btn-lg w-full font-bold shadow-md"
-                        >
-                          <ShieldCheck size={16} /> [ APPROVE & GENERATE PRE-PURCHASE ORDER ]
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleSelectVendor(quote)}
-                          className="btn btn-secondary btn-md w-full"
-                        >
-                          Select {quote.vendorName.split(' ')[0]}
-                        </button>
-                      )}
+                      {(() => {
+                        const isPOFinalised = currentRFQ.status === 'PO Generated' || Boolean((currentRFQ as any).poFinalised);
+                        const isAwarded =
+                          Boolean((quote as any).awarded) ||
+                          quote.status === 'Awarded' ||
+                          (currentRFQ.awardedVendor && quote.vendorName.trim().toLowerCase() === currentRFQ.awardedVendor.trim().toLowerCase()) ||
+                          Boolean((currentRFQ as any).awardedVendorId && quote.vendorId === (currentRFQ as any).awardedVendorId);
+
+                        if (isPOFinalised) {
+                          return isAwarded ? (
+                            <button
+                              type="button"
+                              onClick={() => handleSelectVendor(quote)}
+                              className="btn btn-emerald btn-lg w-full font-bold shadow-md flex items-center justify-center gap-1.5"
+                              title="View and download the finalised Pre-Purchase Order document"
+                            >
+                              <ShieldCheck size={16} /> [ VIEW FINALISED PRE-PURCHASE ORDER ]
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled
+                              className="btn btn-secondary btn-md w-full opacity-60 cursor-not-allowed text-xs font-semibold"
+                            >
+                              Bid Concluded
+                            </button>
+                          );
+                        }
+
+                        return quote.isPreferred ? (
+                          <button
+                            type="button"
+                            onClick={() => handleSelectVendor(quote)}
+                            className="btn btn-emerald btn-lg w-full font-bold shadow-md"
+                          >
+                            <ShieldCheck size={16} /> [ APPROVE & GENERATE PRE-PURCHASE ORDER ]
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleSelectVendor(quote)}
+                            className="btn btn-secondary btn-md w-full"
+                          >
+                            Select {quote.vendorName.split(' ')[0]}
+                          </button>
+                        );
+                      })()}
                     </td>
                   ))}
                 </tr>

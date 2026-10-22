@@ -185,9 +185,14 @@ function applyQuotesVisibility(rfq, role) {
   const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
   const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
   const isWithin48h = createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
-  const isClosed = rfq.status === 'Closed';
+  const isConcluded =
+    rfq.status === 'Closed' ||
+    rfq.status === 'PO Generated' ||
+    rfq.poFinalised ||
+    Boolean(rfq.poNumber) ||
+    rfq.status === 'Expired';
 
-  if (isWithin48h && !isClosed) {
+  if (isWithin48h && !isConcluded) {
     const unhideAt = new Date(createdAtMs + FORTY_EIGHT_HOURS_MS).toISOString();
     return {
       ...rfq,

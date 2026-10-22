@@ -88,6 +88,8 @@ export interface QuoteComparison {
   deliveryDate?: string;
   lineItemQuotes?: LineItemQuote[];
   attachments?: RFQQuoteAttachment[];
+  status?: string;
+  awarded?: boolean;
   scoreBreakdown?: {
     price: { score: number; weighted: number; maxWeight: number };
     leadTime: { score: number; weighted: number; maxWeight: number };
