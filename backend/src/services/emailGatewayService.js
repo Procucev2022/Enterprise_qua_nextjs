@@ -1741,6 +1741,24 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
   }
 
+  // Per-deployment kill switch for the CRON poll path. Mirrors the
+  // startBuyerPolling()/startVendorPolling() config.enabled guard so a
+  // disabled deployment never lists/fetches/modifies the mailbox — this is
+  // what lets dev and prod run as separate Cloudflare workers against their
+  // OWN Gmail mailboxes without racing for the shared UNREAD flag. Ordered
+  // AFTER the NOT_CONFIGURED check so an unconfigured deployment still reports
+  // NOT_CONFIGURED first (see pollViaGmailApi tests). A skipped-because-disabled
+  // run is observable as { skipped: true, reason: DISABLED } in the poll
+  // summary and via the INFO log below.
+  if (!config.enabled) {
+    logger.info(
+      'Email gateway poll skipped: gateway disabled for this deployment',
+      { isVendorMailbox: !!config.isVendorMailbox },
+      'EMAIL_GATEWAY'
+    );
+    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
+  }
+
   const { google } = require('googleapis');
   const gmail = google.gmail({ version: 'v1', auth });
 
