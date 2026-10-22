@@ -1267,7 +1267,11 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <span className="text-xs text-slate-600 dark:text-gray-300 font-medium">{activeRfq.title}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
-            {activeRfq.status !== 'Closed' && activeRfq.status !== 'Expired' && !isVendor && (
+            {activeRfq.status !== 'Closed' &&
+              activeRfq.status !== 'Expired' &&
+              activeRfq.status !== 'PO Generated' &&
+              !Boolean((activeRfq as any).poFinalised) &&
+              !isVendor && (
               <>
                 {activeRfq.isExtended ? (
                   <span
@@ -1289,7 +1293,10 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 )}
               </>
             )}
-            {activeRfq.status !== 'Closed' && (
+            {activeRfq.status !== 'Closed' &&
+              activeRfq.status !== 'Expired' &&
+              activeRfq.status !== 'PO Generated' &&
+              !Boolean((activeRfq as any).poFinalised) && (
               <button
                 type="button"
                 onClick={handleCloseRFQ}
@@ -1321,6 +1328,39 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </div>
         </div>
       </header>
+
+      {/* Finalised PO Banner */}
+      {(activeRfq.status === 'PO Generated' || Boolean((activeRfq as any).poFinalised)) && (
+        <div className="p-3.5 sm:p-4 rounded-xl bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/40 dark:to-teal-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+              <CheckCircle2 size={18} />
+            </span>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-extrabold text-sm text-emerald-900 dark:text-emerald-100">
+                  Pre-Purchase Order Finalised
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-200/80 dark:bg-emerald-800/60 text-emerald-800 dark:text-emerald-200 mono">
+                  {(activeRfq as any).poNumber || 'PO Generated'}
+                </span>
+              </div>
+              <p className="text-emerald-800/90 dark:text-emerald-300/90 text-xs mt-0.5">
+                Awarded to <span className="font-bold">{activeRfq.awardedVendor || 'Awarded Vendor'}</span>
+                {activeRfq.awardedAmount ? ` for ₹${Number(activeRfq.awardedAmount).toLocaleString()}` : ''}
+                {(activeRfq as any).poIssueDate ? ` on ${(activeRfq as any).poIssueDate}` : ''}.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`)}
+            className="btn btn-emerald btn-xs px-3.5 py-1.5 font-bold shrink-0 inline-flex items-center gap-1.5"
+          >
+            <Sparkles size={12} /> View Finalised Matrix &amp; PO ↗
+          </button>
+        </div>
+      )}
 
       {/* Overview cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -2005,7 +2045,10 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 onClick={() => router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`)}
                 className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1.5"
               >
-                <Sparkles size={12} /> Compare Quotations in Matrix ↗
+                <Sparkles size={12} />{' '}
+                {activeRfq.status === 'PO Generated' || Boolean((activeRfq as any).poFinalised)
+                  ? 'View Finalised Matrix & PO ↗'
+                  : 'Compare Quotations in Matrix ↗'}
               </button>
             </div>
           ) : undefined
