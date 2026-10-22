@@ -14,13 +14,23 @@ describe('Backend LoggerService Unit Tests', () => {
    * a bare rmSync intermittently fails once suites run in parallel.
    */
   const removeTestLogsDir = () => {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
       if (!fs.existsSync(testLogsDir)) return;
       try {
         fs.rmSync(testLogsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         return;
       } catch (err) {
-        if (attempt === 4) throw err;
+        if (attempt === 7) {
+          try {
+            const files = fs.readdirSync(testLogsDir);
+            for (const file of files) {
+              try { fs.unlinkSync(path.join(testLogsDir, file)); } catch (_) {}
+            }
+          } catch (_) {}
+          return;
+        }
+        const start = Date.now();
+        while (Date.now() - start < 100) {}
       }
     }
   };
