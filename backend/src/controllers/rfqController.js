@@ -571,14 +571,87 @@ async function createRFQ(req, res, next) {
     }
 
     const lineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
-    for (const item of lineItems) {
-      if (item && isPastDate(item.targetDate)) {
+    await rfqIngestionService.ensureTaxonomyLoaded();
+
+    const declaredMajor = (body.category || body.majorCategory || '').trim();
+    const declaredMinor = (body.minorCategory || '').trim();
+    if (declaredMajor && declaredMajor !== 'All Categories') {
+      const canonical = rfqIngestionService.canonicalMajor(declaredMajor);
+      if (!canonical) {
+        logger.warn(`Failed to create RFQ: invalid major category "${declaredMajor}"`, {}, 'RFQ_CONTROLLER');
+        return res.status(400).json({
+          success: false,
+          error: `Invalid major category: "${declaredMajor}". Must exist in category master.`,
+          fieldErrors: { category: `Invalid major category: "${declaredMajor}"` },
+        });
+      }
+      body.category = canonical;
+      if (body.majorCategory) body.majorCategory = canonical;
+    }
+    if (declaredMinor) {
+      if (!declaredMajor) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot set minor category "${declaredMinor}" without a valid major category.`,
+          fieldErrors: { minorCategory: `Major category required for "${declaredMinor}"` },
+        });
+      }
+      if (declaredMajor !== 'All Categories' && !rfqIngestionService.isMinorUnderMajor(body.category || declaredMajor, declaredMinor)) {
+        logger.warn(`Failed to create RFQ: invalid category combination ("${declaredMajor}" / "${declaredMinor}")`, {}, 'RFQ_CONTROLLER');
+        return res.status(400).json({
+          success: false,
+          error: `Invalid category combination: minor category "${declaredMinor}" does not belong to major category "${declaredMajor}".`,
+          fieldErrors: { minorCategory: `Minor category "${declaredMinor}" does not belong to "${declaredMajor}"` },
+        });
+      }
+    }
+
+    for (let idx = 0; idx < lineItems.length; idx++) {
+      const item = lineItems[idx];
+      if (!item) continue;
+      if (isPastDate(item.targetDate)) {
         logger.warn('Failed to create RFQ: line item targetDate is in the past', { targetDate: item.targetDate }, 'RFQ_CONTROLLER');
         return res.status(400).json({
           success: false,
           error: 'Target date cannot be earlier than today.',
           fieldErrors: { targetDate: 'Target date cannot be earlier than today.' },
         });
+      }
+      const major = (item.majorCategory || '').trim();
+      const minor = (item.minorCategory || item.category || '').trim();
+      if (major && major !== 'All Categories') {
+        const canonical = rfqIngestionService.canonicalMajor(major);
+        if (!canonical) {
+          logger.warn(`Failed to create RFQ: invalid major category "${major}" on line item ${idx + 1}`, {}, 'RFQ_CONTROLLER');
+          return res.status(400).json({
+            success: false,
+            error: `Line item ${idx + 1} has an invalid major category: "${major}". Please select a valid category from the master.`,
+            fieldErrors: { [`lineItems[${idx}].majorCategory`]: `Invalid major category: "${major}"` },
+          });
+        }
+        item.majorCategory = canonical;
+      }
+      if (minor) {
+        const effectiveLineMajor = item.majorCategory || declaredMajor;
+        if (!effectiveLineMajor) {
+          logger.warn(`Failed to create RFQ: minor category "${minor}" without major category on line item ${idx + 1}`, {}, 'RFQ_CONTROLLER');
+          return res.status(400).json({
+            success: false,
+            error: `Line item ${idx + 1} specifies minor category "${minor}" without a major category. Please select a major category first.`,
+            fieldErrors: { [`lineItems[${idx}].minorCategory`]: `Major category required for "${minor}"` },
+          });
+        }
+        if (effectiveLineMajor !== 'All Categories' && !rfqIngestionService.isMinorUnderMajor(effectiveLineMajor, minor)) {
+          logger.warn(`Failed to create RFQ: invalid category combination ("${effectiveLineMajor}" / "${minor}") on line item ${idx + 1}`, {}, 'RFQ_CONTROLLER');
+          return res.status(400).json({
+            success: false,
+            error: `Line item ${idx + 1} has an invalid category combination: "${minor}" does not belong to "${effectiveLineMajor}".`,
+            fieldErrors: { [`lineItems[${idx}].minorCategory`]: `Minor category "${minor}" does not belong to "${effectiveLineMajor}"` },
+          });
+        }
+        if (!item.majorCategory && effectiveLineMajor) {
+          item.majorCategory = rfqIngestionService.canonicalMajor(effectiveLineMajor) || effectiveLineMajor;
+        }
       }
     }
 
@@ -1258,15 +1331,88 @@ async function updateRFQ(req, res, next) {
       });
     }
 
+    await rfqIngestionService.ensureTaxonomyLoaded();
+    const declaredMajor = (body.majorCategory || body.category || '').trim();
+    const declaredMinor = (body.minorCategory || '').trim();
+    const effectiveMajor = (declaredMajor || existing.category || existing.majorCategory || '').trim();
+
+    if (declaredMajor && declaredMajor !== 'All Categories') {
+      const canonical = rfqIngestionService.canonicalMajor(declaredMajor);
+      if (!canonical) {
+        logger.warn(`RFQ edit rejected: invalid major category "${declaredMajor}"`, { id }, 'RFQ_CONTROLLER');
+        return res.status(400).json({
+          success: false,
+          error: `Invalid major category: "${declaredMajor}". Must exist in category master.`,
+          fieldErrors: { majorCategory: `Invalid major category: "${declaredMajor}"` },
+        });
+      }
+    }
+
+    if (declaredMinor) {
+      if (!effectiveMajor) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot set minor category "${declaredMinor}" without a valid major category.`,
+          fieldErrors: { minorCategory: `Major category required for "${declaredMinor}"` },
+        });
+      }
+      if (effectiveMajor !== 'All Categories' && !rfqIngestionService.isMinorUnderMajor(effectiveMajor, declaredMinor)) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid category combination: minor category "${declaredMinor}" does not belong to major category "${effectiveMajor}".`,
+          fieldErrors: { minorCategory: `Minor category "${declaredMinor}" does not belong to "${effectiveMajor}"` },
+        });
+      }
+    }
+
     if (Array.isArray(body.extractedEntities)) {
-      for (const item of body.extractedEntities) {
-        if (item && isPastDate(item.targetDate)) {
+      await rfqIngestionService.ensureTaxonomyLoaded();
+      for (let idx = 0; idx < body.extractedEntities.length; idx++) {
+        const item = body.extractedEntities[idx];
+        if (!item) continue;
+        if (isPastDate(item.targetDate)) {
           logger.warn('RFQ edit rejected: line item targetDate is in the past', { id, targetDate: item.targetDate }, 'RFQ_CONTROLLER');
           return res.status(400).json({
             success: false,
             error: 'Target date cannot be earlier than today.',
             fieldErrors: { targetDate: 'Target date cannot be earlier than today.' },
           });
+        }
+        const major = (item.majorCategory || '').trim();
+        const minor = (item.minorCategory || item.category || '').trim();
+        if (major && major !== 'All Categories') {
+          const canonical = rfqIngestionService.canonicalMajor(major);
+          if (!canonical) {
+            logger.warn(`RFQ edit rejected: invalid major category "${major}" on line item ${idx + 1}`, { id }, 'RFQ_CONTROLLER');
+            return res.status(400).json({
+              success: false,
+              error: `Line item ${idx + 1} has an invalid major category: "${major}". Please select a valid category from the master.`,
+              fieldErrors: { [`extractedEntities[${idx}].majorCategory`]: `Invalid major category: "${major}"` },
+            });
+          }
+          item.majorCategory = canonical;
+        }
+        if (minor) {
+          const effectiveLineMajor = item.majorCategory || effectiveMajor;
+          if (!effectiveLineMajor) {
+            logger.warn(`RFQ edit rejected: minor category "${minor}" without major category on line item ${idx + 1}`, { id }, 'RFQ_CONTROLLER');
+            return res.status(400).json({
+              success: false,
+              error: `Line item ${idx + 1} specifies minor category "${minor}" without a major category. Please select a major category first.`,
+              fieldErrors: { [`extractedEntities[${idx}].minorCategory`]: `Major category required for "${minor}"` },
+            });
+          }
+          if (effectiveLineMajor !== 'All Categories' && !rfqIngestionService.isMinorUnderMajor(effectiveLineMajor, minor)) {
+            logger.warn(`RFQ edit rejected: invalid category combination ("${effectiveLineMajor}" / "${minor}") on line item ${idx + 1}`, { id }, 'RFQ_CONTROLLER');
+            return res.status(400).json({
+              success: false,
+              error: `Line item ${idx + 1} has an invalid category combination: "${minor}" does not belong to "${effectiveLineMajor}".`,
+              fieldErrors: { [`extractedEntities[${idx}].minorCategory`]: `Minor category "${minor}" does not belong to "${effectiveLineMajor}"` },
+            });
+          }
+          if (!item.majorCategory && effectiveLineMajor) {
+            item.majorCategory = rfqIngestionService.canonicalMajor(effectiveLineMajor) || effectiveLineMajor;
+          }
         }
       }
     }

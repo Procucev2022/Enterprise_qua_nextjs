@@ -26,6 +26,7 @@ import {
   hasMinorCategory,
   autoCategorizeItem,
   getDefaultMinorForMajor,
+  findMajorForMinor,
 } from './categoryTaxonomy';
 import { PINCODE_PATTERN, isDummyPincode } from './validationSchemas';
 import { UI_STRINGS, formatString } from './uiStrings';
@@ -57,16 +58,6 @@ export const MANUAL_ENTRY_CONFIDENCE = 0;
 // Read from the taxonomy registry at call time rather than captured into module
 // constants at import time: the master is fetched from the database now, so it is
 // not available when this module is first evaluated.
-
-/** The major category if the taxonomy has it, else empty. */
-function taxonomyMajorOrBlank(major: string): string {
-  return hasMajorCategory(major) ? major : '';
-}
-
-/** The minor category if it belongs to the given major, else empty. */
-function taxonomyMinorOrBlank(major: string, minor: string): string {
-  return hasMinorCategory(major, minor) ? minor : '';
-}
 
 const DEFAULT_SOURCING_MODE: SourcingMode = 'mode_1';
 const TITLE_MIN_LENGTH = 3;
@@ -144,10 +135,18 @@ export function validateManualRFQLineItem(item: ManualRFQLineItem): ManualRFQLin
   if (clean(item.unit) === '') {
     errors.unit = MANUAL.unitRequired;
   }
-  // Delivery date is managed at the RFQ header level rather than per line item.
-  // Major/minor category are no longer mandatory to dispatch a manual RFQ —
-  // a buyer may not know the exact taxonomy slot for an item up front, and
-  // an uncategorised line can still be reviewed/reclassified later.
+
+  // Validate category relationships when specified
+  if (item.majorCategory && item.majorCategory !== 'All Categories') {
+    if (!hasMajorCategory(item.majorCategory)) {
+      errors.majorCategory = 'Selected major category does not exist in category master.';
+    }
+    if (item.minorCategory && !hasMinorCategory(item.majorCategory, item.minorCategory)) {
+      errors.minorCategory = 'Selected minor category does not belong to the selected major category.';
+    }
+  } else if (item.minorCategory) {
+    errors.minorCategory = 'Cannot select minor category without a valid major category.';
+  }
 
   return errors;
 }
@@ -168,6 +167,11 @@ export function validateManualRFQForm(form: ManualRFQForm): ManualRFQValidation 
   const lineItemErrors: Record<string, ManualRFQLineItemErrors> = {};
 
   const items = Array.isArray(form.lineItems) ? form.lineItems : [];
+
+  // Validate header category if provided
+  if (form.majorCategory && form.majorCategory !== 'All Categories' && !hasMajorCategory(form.majorCategory)) {
+    formErrors.majorCategory = 'Selected major category does not exist in category master.';
+  }
 
   // The title may be left blank: it falls back to the leading line item's
   // description on submission, matching how the server derives one. It is only
@@ -323,12 +327,26 @@ export function fromExtractedEntity(entity: ExtractedEntity): ManualRFQLineItem 
   rowCounter += 1;
   const rawMajor = clean(entity.majorCategory);
   const rawMinor = clean(entity.minorCategory) || clean(entity.category);
-  // Keep whatever the document stated. taxonomyMajorOrBlank/taxonomyMinorOrBlank
-  // return '' for an off-taxonomy value, so the `|| raw` fallback preserves the
-  // document's exact category instead of dropping it; the selects then prepend
-  // it as an option (withStoredValue) so it renders and stays selectable.
-  const majorCategory = taxonomyMajorOrBlank(rawMajor) || rawMajor;
-  const minorCategory = taxonomyMinorOrBlank(majorCategory, rawMinor) || rawMinor;
+
+  let majorCategory = '';
+  let minorCategory = '';
+
+  if (hasMajorCategory(rawMajor)) {
+    majorCategory = rawMajor;
+    if (hasMinorCategory(rawMajor, rawMinor)) {
+      minorCategory = rawMinor;
+    }
+  } else if (rawMinor && findMajorForMinor(rawMinor)) {
+    const inferredMajor = findMajorForMinor(rawMinor);
+    majorCategory = inferredMajor;
+    minorCategory = rawMinor;
+  } else if (rawMajor) {
+    majorCategory = rawMajor;
+    minorCategory = rawMinor;
+  } else {
+    majorCategory = '';
+    minorCategory = rawMinor;
+  }
 
   const rawTargetDate = clean(entity.targetDate);
   const targetDate = isPastDateString(rawTargetDate) ? '' : rawTargetDate;
@@ -357,9 +375,8 @@ export function removeManualRFQLineItem(form: ManualRFQForm, id: string): Manual
 /**
  * Patch one row.
  *
- * Changing the major category clears the minor, because a minor category from the
- * previous major is not valid under the new one and leaving it would dispatch a
- * mismatched pair to vendors.
+ * Changing the major category clears the minor if it does not belong to the new major,
+ * preventing invalid Major-Minor combinations from being dispatched to vendors.
  */
 export function updateManualRFQLineItem(
   form: ManualRFQForm,
@@ -372,7 +389,18 @@ export function updateManualRFQLineItem(
       if (item.id !== id) return item;
       const next = { ...item, ...patch };
       if (patch.majorCategory !== undefined && patch.majorCategory !== item.majorCategory) {
-        next.minorCategory = patch.minorCategory !== undefined ? patch.minorCategory : '';
+        if (patch.minorCategory !== undefined) {
+          next.minorCategory =
+            patch.majorCategory && hasMinorCategory(patch.majorCategory, patch.minorCategory)
+              ? patch.minorCategory
+              : '';
+        } else {
+          // Clear previous minor category if it does not belong to the new major category
+          next.minorCategory =
+            patch.majorCategory && hasMinorCategory(patch.majorCategory, item.minorCategory)
+              ? item.minorCategory
+              : '';
+        }
       }
       return next;
     }),

@@ -849,6 +849,32 @@ const KNOWN_KEYWORD_RULES: Array<{
 
   // 8. Others – New Product
   {
+    keywords: [
+      'stethoscope', 'pulse oximeter', 'oximeter', 'thermometer', 'sphygmomanometer',
+      'bp monitor', 'blood pressure monitor', 'glucometer', 'nebulizer', 'ventilator',
+      'ecg machine', 'ecg monitor', 'health equipment', 'health equipments',
+      'medical equipment', 'medical supplies', 'medical device', 'medical devices'
+    ],
+    major: 'Others – New Product',
+    minor: 'Health Equipments',
+  },
+  {
+    keywords: [
+      'sugar packing', 'sugar refined', 'sugar loose', 'madhur sugar', 'sugar',
+      'toor dal loose', 'toor dal', 'gram dal loose', 'gram dal', 'chana dal', 'moong dal',
+      'urad dal', 'masoor dal', 'dal loose', 'dal', 'pulses',
+      'groceries', 'grocery', 'food & beverages', 'food and beverages', 'beverage', 'beverages',
+      'rice', 'wheat', 'flour', 'atta', 'maida', 'sooji', 'tea', 'coffee', 'spices', 'salt'
+    ],
+    major: 'Others – New Product',
+    minor: 'Food & Beverages',
+  },
+  {
+    keywords: ['surgical instrument', 'surgical instruments', 'scalpel', 'forceps', 'biopsy forceps'],
+    major: 'CAPEX - Equipment & Machinery',
+    minor: 'Surgical Instruments',
+  },
+  {
     keywords: ['storage rack', 'storage racks', 'racking', 'pallet rack', 'pallet racking', 'slotted angle', 'cantilever rack', 'mezzanine', 'shelving', 'industrial rack'],
     major: 'Others – New Product',
     minor: 'Storage Racks',
@@ -947,6 +973,12 @@ const KNOWN_KEYWORD_RULES: Array<{
   },
 ];
 
+const MATERIAL_ONLY_KEYWORDS = new Set([
+  'steel', 'steels', 'structural steel', 'rebar', 'tmt', 'lubricant', 'lubricants',
+  'rubber', 'plastic', 'copper', 'brass', 'aluminium', 'aluminum', 'metal', 'metals',
+  'iron', 'cast iron', 'sheet metal', 'electrical'
+]);
+
 function matchesRuleKeyword(combined: string, tokens: string[], kw: string): boolean {
   const kwLower = kw.toLowerCase().trim();
   if (!kwLower) return false;
@@ -960,44 +992,58 @@ function matchesRuleKeyword(combined: string, tokens: string[], kw: string): boo
 /**
  * Automatically identify and assign the appropriate major and minor category
  * based on item name and technical specifications keywords.
+ * Prioritizes Item Description (highest priority) and excludes isolated raw material
+ * keywords from specs.
  */
 export function autoCategorizeItem(
   itemName: string,
   specs = ''
 ): { majorCategory: string; minorCategory: string } {
-  const combined = `${itemName || ''} ${specs || ''}`.trim().toLowerCase();
-  if (!combined) {
+  const cleanName = String(itemName || '').trim().toLowerCase();
+  const cleanSpecs = String(specs || '').trim().toLowerCase();
+  if (!cleanName && !cleanSpecs) {
     return { majorCategory: '', minorCategory: '' };
   }
 
-  // Tokenize the combined text into words
-  const tokens = combined.split(/[\s,./\\;:\-_+()\[\]{}|*&^%$#@!~`]+/).filter((t) => t.length >= 2);
+  const nameTokens = cleanName ? cleanName.split(/[\s,./\\;:\-_+()\[\]{}|*&^%$#@!~`]+/).filter((t) => t.length >= 2) : [];
 
-  // 1. Direct match against known procurement keyword patterns
-  for (const rule of KNOWN_KEYWORD_RULES) {
-    if (rule.keywords.some((kw) => matchesRuleKeyword(combined, tokens, kw))) {
-      return { majorCategory: rule.major, minorCategory: rule.minor };
-    }
-  }
-
-  // 2. Match against dynamic registered taxonomy
-  for (const group of groups) {
-    const major = group.majorCategory;
-    for (const minor of group.minorCategories || []) {
-      if (minor && matchesRuleKeyword(combined, tokens, minor)) {
-        return { majorCategory: major, minorCategory: minor };
+  // 1. Priority 1: Match itemName directly against known procurement keyword patterns
+  if (cleanName) {
+    for (const rule of KNOWN_KEYWORD_RULES) {
+      if (rule.keywords.some((kw) => matchesRuleKeyword(cleanName, nameTokens, kw))) {
+        return { majorCategory: rule.major, minorCategory: rule.minor };
       }
     }
-    if (major && matchesRuleKeyword(combined, tokens, major)) {
-      const defaultMinor = group.minorCategories?.[0] || '';
-      return { majorCategory: major, minorCategory: defaultMinor };
+  }
+
+  // 2. Priority 2: Match specs against rules, EXCLUDING isolated material keywords (e.g. steel, plastic)
+  if (cleanSpecs) {
+    const specsTokens = cleanSpecs.split(/[\s,./\\;:\-_+()\[\]{}|*&^%$#@!~`]+/).filter((t) => t.length >= 2);
+    for (const rule of KNOWN_KEYWORD_RULES) {
+      const nonMaterialKeywords = rule.keywords.filter((kw) => !MATERIAL_ONLY_KEYWORDS.has(kw.toLowerCase()));
+      if (nonMaterialKeywords.some((kw) => matchesRuleKeyword(cleanSpecs, specsTokens, kw))) {
+        return { majorCategory: rule.major, minorCategory: rule.minor };
+      }
     }
   }
 
-  // 3. No reliable keyword or taxonomy match was found. Leave the category
-  //    empty rather than guessing from weak, generic cues (e.g. "item",
-  //    "product", "supply"), which previously forced an unrelated
-  //    "Others – New Product/Service" bucket onto nearly any text.
+  // 3. Priority 3: Match against dynamic registered taxonomy
+  if (cleanName) {
+    for (const group of groups) {
+      const major = group.majorCategory;
+      for (const minor of group.minorCategories || []) {
+        if (minor && matchesRuleKeyword(cleanName, nameTokens, minor)) {
+          return { majorCategory: major, minorCategory: minor };
+        }
+      }
+      if (major && matchesRuleKeyword(cleanName, nameTokens, major)) {
+        const defaultMinor = group.minorCategories?.[0] || '';
+        return { majorCategory: major, minorCategory: defaultMinor };
+      }
+    }
+  }
+
+  // 4. No reliable keyword or taxonomy match found. Never guess.
   return { majorCategory: '', minorCategory: '' };
 }
 

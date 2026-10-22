@@ -881,6 +881,72 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(400);
     });
 
+    test('POST /api/rfqs rejects invalid major category', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Invalid Category RFQ',
+          deliveryLocation: 'Mumbai Site',
+          deliveryPincode: '400701',
+          targetDeliveryDate: '2026-12-01',
+          category: 'Nonexistent Major Category 12345',
+        });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toMatch(/Invalid major category/i);
+    });
+
+    test('POST /api/rfqs rejects minor category not belonging to major category', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Mismatched Category RFQ',
+          deliveryLocation: 'Mumbai Site',
+          deliveryPincode: '400701',
+          targetDeliveryDate: '2026-12-01',
+          category: 'Engineering Spares - Electrical',
+          minorCategory: 'Food & Beverages',
+        });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toMatch(/Invalid category combination/i);
+    });
+
+    test('POST /api/rfqs rejects line item with invalid category combination', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Mismatched Line Item Category RFQ',
+          deliveryLocation: 'Mumbai Site',
+          deliveryPincode: '400701',
+          targetDeliveryDate: '2026-12-01',
+          category: 'Others – New Product',
+          extractedEntities: [
+            {
+              id: 'li-1',
+              itemName: 'Stethoscope',
+              majorCategory: 'Raw Material',
+              minorCategory: 'Health Equipments', // Health Equipments does NOT belong to Raw Material!
+            },
+          ],
+        });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toMatch(/invalid category combination/i);
+    });
+
+    test('PUT /api/rfqs/:id rejects invalid major-minor combination', async () => {
+      const res = await request(app)
+        .put(`/api/rfqs/${testRfqId}`)
+        .set(authHeader('buyer'))
+        .send({
+          majorCategory: 'Engineering Spares - Mechanical',
+          minorCategory: 'Food & Beverages',
+        });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toMatch(/Invalid category combination/i);
+    });
+
     test('GET /api/rfqs/:id returns RFQ', async () => {
       const res = await request(app).get(`/api/rfqs/${testRfqId}`).set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);

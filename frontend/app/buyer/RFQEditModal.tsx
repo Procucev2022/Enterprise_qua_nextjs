@@ -20,7 +20,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, Paperclip, Plus, Save, Sparkles, Trash2, X } from 'lucide-react';
-import { getMajorCategories, getMinorCategories, getDefaultMinorForMajor } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories, hasMajorCategory, hasMinorCategory } from '@/lib/categoryTaxonomy';
 import { CURRENCY, RFQ_STATUSES, formatFileSize, formatIndianDateTime } from '@/lib/constants';
 import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, resolveLocationFromPostalResult } from '@/lib/validationSchemas';
 import { uploadRFQAttachment, classifyLineItems } from '@/lib/rfqClient';
@@ -440,11 +440,15 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
           // master); use the server-backed Auto-Categorize action for that.
           if (changes.majorCategory !== undefined && changes.majorCategory !== row.majorCategory) {
             if (changes.minorCategory !== undefined) {
-              nextRow.minorCategory = changes.minorCategory;
-            } else if (changes.majorCategory) {
-              nextRow.minorCategory = getDefaultMinorForMajor(changes.majorCategory);
+              nextRow.minorCategory =
+                changes.majorCategory && hasMinorCategory(changes.majorCategory, changes.minorCategory)
+                  ? changes.minorCategory
+                  : '';
             } else {
-              nextRow.minorCategory = '';
+              nextRow.minorCategory =
+                changes.majorCategory && hasMinorCategory(changes.majorCategory, row.minorCategory)
+                  ? row.minorCategory
+                  : '';
             }
           }
           return nextRow;
@@ -492,12 +496,15 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
           return item;
         }
         const matched = classified.get(item.id);
-        if (!matched || !matched.majorCategory) return item;
-        if (!detectedMajor) detectedMajor = matched.majorCategory;
+        if (!matched) return item;
+        const validMajor = hasMajorCategory(matched.majorCategory) ? matched.majorCategory : '';
+        const validMinor = validMajor && hasMinorCategory(validMajor, matched.minorCategory) ? matched.minorCategory : '';
+        if (!validMajor) return item;
+        if (!detectedMajor) detectedMajor = validMajor;
         return {
           ...item,
-          majorCategory: matched.majorCategory,
-          minorCategory: matched.minorCategory || '',
+          majorCategory: validMajor,
+          minorCategory: validMinor,
         };
       });
 
@@ -884,13 +891,11 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                             <option value="">
                               {row.majorCategory === '' ? EDIT.selectMajorFirst : ''}
                             </option>
-                            {withStoredValue(minorsFor(row.majorCategory), row.minorCategory).map(
-                              (minor) => (
-                                <option key={minor} value={minor}>
-                                  {minor}
-                                </option>
-                              )
-                            )}
+                            {withStoredValue(minorsFor(row.majorCategory), row.minorCategory).map((minor) => (
+                              <option key={minor} value={minor}>
+                                {minor}
+                              </option>
+                            ))}
                           </select>
                         </td>
                         <td className="px-2 py-2 align-top">

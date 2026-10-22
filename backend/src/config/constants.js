@@ -570,10 +570,136 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     'first aid box': 'First Aid Kits',
     'first aid kit': 'First Aid Kits',
     'fire safety': 'Fire Extinguishers',
+    'groceries': 'Food & Beverages',
+    'grocery': 'Food & Beverages',
+    'food': 'Food & Beverages',
+    'food & beverage': 'Food & Beverages',
+    'food and beverage': 'Food & Beverages',
+    'food & beverages': 'Food & Beverages',
+    'food and beverages': 'Food & Beverages',
+    'disposable gloves': 'Gloves',
+    'surgical gloves': 'Gloves',
+    'examination gloves': 'Gloves',
+    'surgical instruments': 'Surgical Instruments',
+    'surgical instrument': 'Surgical Instruments',
+    'health equipment': 'Health Equipments',
+    'health equipments': 'Health Equipments',
   },
+
+  // Aliases for major category abbreviations/legacy names to canonical taxonomy names
+  MAJOR_CATEGORY_ALIASES: {
+    mechanical: 'Engineering Spares - Mechanical',
+    electrical: 'Engineering Spares - Electrical',
+    civil: 'Civil Works',
+    safety: 'Occuptional Health and Safety',
+    'occupational health and safety': 'Occuptional Health and Safety',
+    packaging: 'Packing Material',
+    packing: 'Packing Material',
+    stationery: 'Printing & Stationery',
+    retail: 'Retail Repair & Maintenance',
+    it: 'IT',
+    logistics: 'Logistics',
+    'pumps & motors': 'Engineering Spares - Mechanical',
+    'pumps and motors': 'Engineering Spares - Mechanical',
+    electronics: 'Engineering Spares - Electrical',
+    electronic: 'Engineering Spares - Electrical',
+    piping: 'Engineering Spares - Mechanical',
+    pipes: 'Engineering Spares - Mechanical',
+    valves: 'Engineering Spares - Mechanical',
+    pumps: 'Engineering Spares - Mechanical',
+    motors: 'Engineering Spares - Electrical',
+    'general procurement': 'Others – New Product',
+  },
+
+  // Keywords that describe raw/component materials rather than product purpose.
+  // When classifying by technical specifications alone, these must be ignored so
+  // finished goods (e.g. Stethoscopes with stainless steel parts) are not misclassified.
+  MATERIAL_ONLY_KEYWORDS: [
+    'steel',
+    'steels',
+    'structural steel',
+    'rebar',
+    'tmt',
+    'lubricant',
+    'lubricants',
+    'rubber',
+    'plastic',
+    'copper',
+    'brass',
+    'aluminium',
+    'aluminum',
+    'metal',
+    'metals',
+    'iron',
+    'cast iron',
+    'sheet metal',
+    'electrical',
+  ],
 
   // Longest keyword is evaluated first so "circuit breaker" beats "breaker".
   DOMAIN_KEYWORD_MAP: {
+    // Grocery & Food items -> Others – New Product » Food & Beverages
+    'sugar packing': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'sugar refined': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'sugar loose': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'madhur sugar': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'toor dal loose': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'toor dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'gram dal loose': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'gram dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'chana dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'moong dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'urad dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'masoor dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'dal loose': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'pulses': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'sugar': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'groceries': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'grocery': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'food & beverages': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'food and beverages': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'beverages': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'beverage': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'rice': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'wheat': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'atta': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'maida': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'sooji': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'tea': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'coffee': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'spices': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'salt': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'edible oil': { major: 'Raw Material', minor: 'Edible Oil' },
+
+    // Medical & Healthcare items -> Others – New Product » Health Equipments
+    'stethoscope': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'pulse oximeter': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'oximeter': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'thermometer': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'sphygmomanometer': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'bp monitor': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'blood pressure monitor': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'glucometer': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'nebulizer': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'ventilator': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'ecg machine': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'ecg monitor': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'health equipment': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'health equipments': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'surgical instrument': { major: 'CAPEX - Equipment & Machinery', minor: 'Surgical Instruments' },
+    'surgical instruments': { major: 'CAPEX - Equipment & Machinery', minor: 'Surgical Instruments' },
+    'ambulance': { major: 'CAPEX - Equipment & Machinery', minor: 'Ambulances' },
+    'ambulances': { major: 'CAPEX - Equipment & Machinery', minor: 'Ambulances' },
+    'disposable gloves': { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    'surgical gloves': { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    'examination gloves': { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    'latex gloves': { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    'nitrile gloves': { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    'medicine': { major: 'Occuptional Health and Safety', minor: 'Medicines' },
+    'medicines': { major: 'Occuptional Health and Safety', minor: 'Medicines' },
+
+    // Existing Engineering & Industrial mappings
     'centrifugal pump': { major: 'Engineering Spares - Mechanical', minor: 'Pumps & Accessories' },
     'circuit breaker': { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
     'structural steel': { major: 'Civil Works', minor: 'PEB Structure' },
@@ -600,18 +726,10 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     cable: { major: 'Engineering Spares - Electrical', minor: 'Cables' },
     sensor: { major: 'Engineering Spares - Electrical', minor: 'Sensors' },
     motor: { major: 'Engineering Spares - Electrical', minor: 'Motors' },
-    // Lighting fixtures -> Engineering Spares - Electrical » Lights. "flood
-    // light" / "street light" / "led light" are listed as whole phrases so they
-    // win over the shorter electrical entries (KEYWORDS_BY_LENGTH sorts
-    // longest-first).
     'flood light': { major: 'Engineering Spares - Electrical', minor: 'Lights' },
     'street light': { major: 'Engineering Spares - Electrical', minor: 'Lights' },
     'led light': { major: 'Engineering Spares - Electrical', minor: 'Lights' },
     luminaire: { major: 'Engineering Spares - Electrical', minor: 'Lights' },
-    // Plumbing -> Civil Works » Plumbing. "water pipe" and "hdpe" are
-    // plumbing-specific, so they must beat the generic 'pipe' -> Pipes & Pipe
-    // Fittings entry below; longest-first ordering handles the water-pipe case,
-    // and 'hdpe' is only ever a plumbing pipe here.
     'water pipe': { major: 'Civil Works', minor: 'Plumbing' },
     hdpe: { major: 'Civil Works', minor: 'Plumbing' },
     cpvc: { major: 'Civil Works', minor: 'Plumbing' },
@@ -620,9 +738,6 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     tmt: { major: 'Civil Works', minor: 'TMT BARS' },
     steel: { major: 'Raw Material', minor: 'Steels' },
     tool: { major: 'Engineering Spares - Mechanical', minor: 'Tools & Tackles' },
-    // Personal protective equipment. The model tends to label these with an
-    // umbrella term ('PPE', 'Hand Protection') that is not a taxonomy minor, so
-    // the item text is what routes them.
     'fire extinguisher': { major: 'Occuptional Health and Safety', minor: 'Fire Extinguishers' },
     'safety jacket': { major: 'Occuptional Health and Safety', minor: 'Safety jackets' },
     'safety shoe': { major: 'Occuptional Health and Safety', minor: 'Safety Shoes' },
@@ -637,9 +752,12 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     hemlet: { major: 'Occuptional Health and Safety', minor: 'Hemlets' },
     harness: { major: 'Occuptional Health and Safety', minor: 'Harness' },
     glove: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    gloves: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
     filter: { major: 'Engineering Spares - Mechanical', minor: 'Filters' },
   },
 };
+
+const DEFAULT_CATEGORY_TAXONOMY = require('./categoryTaxonomyMaster.json');
 
 // ==============================================================================
 // GEMINI AI DOCUMENT EXTRACTION
@@ -2282,4 +2400,6 @@ module.exports = {
   RFQ_MODE_MAP,
   ALLOWED_EXTENSION_HOURS,
   DEFAULT_EXTENSION_HOURS,
+  DEFAULT_CATEGORY_TAXONOMY,
+  MAJOR_CATEGORY_ALIASES: RFQ_CATEGORY_CLASSIFICATION.MAJOR_CATEGORY_ALIASES,
 };

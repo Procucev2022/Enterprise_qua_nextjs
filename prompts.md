@@ -3267,3 +3267,195 @@ after PPO generation, the RFQ is still showing as “Closed” and asking for qu
 create a new branch and raise the pr
 ```
 
+---
+
+### 2026-10-22T18:08:02+05:30
+
+```text
+# Fix RFQ Major & Minor Category Auto-Mapping Issues
+
+## Context
+
+In the Procucev Buyer Dashboard → RFQ Creation → Line Items Specification, the auto-category mapping is assigning incorrect Major and Minor Categories after document extraction.
+
+The application uses the category master from the database through:
+
+`GET /api/buyer-profile/categories`
+
+Review the existing category mapping implementation, frontend state management, backend classification logic, and category master relationships.
+
+## 1. Current Issues
+
+**Issue 1: Incorrect Major Category for Grocery Items**
+
+When uploading a grocery requirements document containing 279 line items, products such as:
+
+- SUGAR PACKING
+- SUGAR REFINED
+- SUGAR LOOSE
+- MADHUR SUGAR-1KG
+- TOOR DAL LOOSE
+- GRAM DAL
+- GRAM DAL LOOSE
+
+are incorrectly mapped as:
+
+- Major Category: `Engineering Spares - ...`
+- Minor Category: `Groceries`
+
+This is an invalid or inconsistent mapping.
+
+According to the provided taxonomy fixture, the appropriate existing category for grocery products is generally:
+
+- Major Category: `Others – New Product`
+- Minor Category: `Food & Beverages`
+
+Use the exact category names and IDs returned by the live database. Do not create new category values unless explicitly required.
+
+**Issue 2: Incorrect Medical Equipment Classification**
+
+For a medical supplies RFQ, a Stethoscope is incorrectly classified as:
+
+- Major Category: `Raw Material`
+- Minor Category: `Steels`
+
+This happens because the specification mentions a stainless-steel chest piece.
+
+The correct classification should prioritize the actual product rather than its manufacturing material.
+
+For example, based on the existing taxonomy:
+
+- Major Category: `Others – New Product`
+- Minor Category: `Health Equipments`
+
+Other medical items should be mapped to the closest valid category available in the master.
+
+**Issue 3: Same Category Assigned to All Items**
+
+The system sometimes assigns the same Major and Minor Category to every extracted line item without considering individual product descriptions.
+
+Each line item must be classified independently.
+
+## 2. Required Fixes
+
+### A. Fix Major and Minor Category Relationships
+
+- Fetch the latest taxonomy from the database.
+- Validate that the selected Minor Category belongs to the selected Major Category.
+- Never allow an invalid Major–Minor combination.
+- Use stable database identifiers where available.
+- Ensure category IDs, labels, and dropdown values remain synchronized.
+- Avoid index-based category mapping.
+- Do not silently select the first category when mapping fails.
+- If no suitable category exists, leave the fields unselected and allow manual selection.
+
+### B. Improve AI Auto-Categorization
+
+Classify each item using:
+
+1. Item Description — highest priority
+2. Product purpose and functionality
+3. Product specifications
+4. Available Major and Minor Categories
+
+Examples:
+
+| Item | Expected Major | Expected Minor |
+|---|---|---|
+| Sugar | Others – New Product | Food & Beverages |
+| Toor Dal | Others – New Product | Food & Beverages |
+| Gram Dal | Others – New Product | Food & Beverages |
+| Stethoscope | Others – New Product | Health Equipments |
+| Pulse Oximeter | Others – New Product | Health Equipments |
+| Disposable Gloves | Occuptional Health and Safety | Gloves |
+
+Use the exact spelling in the existing database, including legacy taxonomy labels.
+
+Do not classify products using isolated keywords such as steel, metal, plastic, or electrical when those keywords only describe a component or material.
+
+### C. Fix Bulk Auto-Categorization
+
+The Auto-Categorize All (AI) button must:
+
+- Process all extracted line items, including large documents with 279+ items.
+- Classify each item independently.
+- Support batching to avoid AI timeouts and token limits.
+- Preserve the original item description, specifications, quantity, and unit.
+- Update the correct row using a stable line-item ID.
+- Prevent category values from one row leaking into another.
+- Handle partial failures without corrupting successfully classified rows.
+- Display clear progress and failure messages.
+- Avoid overwriting manually selected categories unless the user explicitly requests re-categorization.
+
+### D. Fix Frontend Dropdown State
+
+Inspect the React/Next.js category selection logic.
+
+- Each line item must maintain its own Major and Minor Category state.
+- When the Major Category changes, load only its valid Minor Categories.
+- Clear the previous Minor Category if it does not belong to the new Major Category.
+- Ensure extracted AI values correctly populate both dropdowns.
+- Prevent stale React state, shared object references, and incorrect array-index updates.
+- Verify that the category remains correct after editing, adding, or deleting line items.
+
+### E. Validate Before RFQ Submission
+
+Before saving or submitting an RFQ:
+
+- Confirm the Major Category exists in the category master.
+- Confirm the Minor Category belongs to the selected Major Category.
+- Reject invalid category combinations with a clear validation message.
+- Preserve valid manually selected categories.
+- Ensure the backend saves the same category values displayed in the frontend.
+
+## 3. Testing Requirements
+
+Test these scenarios:
+
+1. Upload the grocery Excel document containing 279 line items.
+2. Verify Sugar, Toor Dal, Gram Dal, and other grocery products map to valid food-related categories.
+3. Upload the medical supplies RFQ PDF containing 15 items.
+4. Verify Stethoscope is not mapped to Raw Material → Steels.
+5. Verify every item receives an independently evaluated category.
+6. Change a Major Category manually and verify the Minor Category dropdown updates correctly.
+7. Test Auto-Categorize All with 10, 100, and 279+ items.
+8. Test AI extraction and auto-categorization with missing specifications.
+9. Verify category persistence after saving and reopening an RFQ.
+10. Add regression tests for invalid parent-child category combinations, stale dropdown state, and cross-row category leakage.
+
+## 4. Important Technical Requirements
+
+- Use the existing database category master as the single source of truth.
+- Do not rely on outdated hardcoded category JSON.
+- Reuse existing APIs and services wherever possible.
+- Do not change unrelated RFQ functionality.
+- Preserve V0, V1, V2, and V3 RFQ flows.
+- Keep existing manual category selection functionality working.
+- Do not modify category master records without approval.
+
+## 5. Expected Result
+
+After the fix:
+
+- Grocery products are assigned to valid food-related categories.
+- Medical equipment is classified by product purpose.
+- Every Major and Minor Category combination is valid.
+- Bulk categorization works correctly for large documents.
+- No incorrect default categories are silently assigned.
+- Category selections remain consistent between frontend, backend, and database.
+
+**First identify the root cause in the existing implementation, then implement the fix. Finally, provide a summary of changed files, root cause, test results, and any remaining limitations.**
+
+
+i already implement this can continue and check the 17 files changes and resume them
+```
+
+---
+
+### 2026-10-22T18:35:48+05:30
+
+```text
+raise the pr
+```
+
+
