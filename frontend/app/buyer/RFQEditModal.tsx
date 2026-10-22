@@ -255,7 +255,16 @@ export function changedFields(rfq: RFQItem, form: RFQEditFormState): RFQUpdatePa
 
   if (form.title.trim() !== original.title) changes.title = form.title.trim();
   if (form.category !== original.category) changes.category = form.category;
-  if (form.status !== original.status) changes.status = form.status;
+  if (form.status !== original.status) {
+    changes.status = form.status;
+  } else if (original.status === 'Parsing') {
+    const hasValidCategories = form.lineItems.length > 0 && form.lineItems.every(
+      (item) => item.majorCategory && item.minorCategory && item.minorCategory !== item.majorCategory
+    );
+    if (hasValidCategories) {
+      changes.status = 'Quotes Pending';
+    }
+  }
   if ((form.budget ?? 0) !== (original.budget ?? 0)) changes.budget = form.budget ?? 0;
   if (form.targetDeliveryDate !== original.targetDeliveryDate) {
     changes.targetDeliveryDate = form.targetDeliveryDate;

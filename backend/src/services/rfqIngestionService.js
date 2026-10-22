@@ -296,6 +296,32 @@ function matchByKeyword(text, options = {}) {
  * 4. Combined item text (excluding raw material keywords)
  * 5. Document payload-wide category fallback
  * 6. Default unclassified (never invent invalid category pairs)
+ * Default minor category for each major category, used as a fallback when an item
+ * belongs to a major category but no more specific minor could be resolved.
+ */
+function defaultMinorForMajor(major) {
+  if (!major) return '';
+  const key = taxonomyKey(major);
+  const defaults = {
+    'it': 'Hardware',
+    'engineeringspareselectrical': 'Other Electrical Items',
+    'engineeringsparesmechanical': 'Hardwares',
+    'civilworks': 'Plumbing',
+    'occuptionalhealthandsafety': 'Seafty Equipments',
+    'packingmaterial': 'Plastic Packaging',
+    'logistics': 'Road transport',
+    'rawmaterial': 'Chemicals',
+    'professionalservices': 'Consultant',
+    'capexequipmentmachinery': 'Material Handling Equipments',
+    'retailrepairmaintenance': 'Equipment Repair & Maintenance',
+    'othersnewproduct': 'Office & security Cabins',
+    'othersnewservice': 'Warehousing',
+  };
+  return defaults[key] || '';
+}
+
+/**
+ * Classify a single line item, mirroring the Java precedence chain.
  *
  * @param {Object} item raw or partially normalised line item
  * @param {string} [payloadCategory] category stated once for the whole payload
@@ -375,6 +401,19 @@ function classifyLineItem(item, payloadCategory) {
   }
 
   // 5. No taxonomy match. Never create an invalid major-minor combination.
+  // 3. Keyword match across the description and the technical specification.
+  if (keywordMatch) {
+    return {
+      majorCategory: keywordMatch.major,
+      minorCategory: keywordMatch.minor,
+      category: keywordMatch.minor,
+      categoryConfidence: CONFIDENCE.KEYWORD,
+      classificationStatus: STATUS.KEYWORD,
+    };
+  }
+
+  // 4. Stated category fallback.
+  // If the document stated a category (its own, or payloadCategory), inspect it.
   const statedCategory = !isGenericCategory(item.minorCategory || item.category)
     ? String(item.minorCategory || item.category).trim()
     : '';
@@ -389,6 +428,29 @@ function classifyLineItem(item, payloadCategory) {
     category: finalMinor,
     categoryConfidence: CONFIDENCE.DEFAULT,
     classificationStatus: STATUS.DEFAULT,
+  let resolvedMajor = canonicalMajor(statedMajor) || canonicalMajor(statedCategory) || statedMajor;
+  let resolvedMinor = statedCategory;
+  let confidence = CONFIDENCE.DEFAULT;
+  let status = STATUS.DEFAULT;
+
+  if (canonicalMajor(statedCategory)) {
+    // Stated category is actually a Major category (e.g. "IT"). Never store a Major as a Minor!
+    resolvedMajor = canonicalMajor(statedCategory);
+    resolvedMinor = defaultMinorForMajor(resolvedMajor);
+    confidence = CONFIDENCE.KEYWORD;
+    status = STATUS.KEYWORD;
+  } else if (resolvedMajor && (!resolvedMinor || resolvedMinor === resolvedMajor)) {
+    resolvedMinor = defaultMinorForMajor(resolvedMajor);
+    confidence = CONFIDENCE.KEYWORD;
+    status = STATUS.KEYWORD;
+  }
+
+  return {
+    majorCategory: resolvedMajor,
+    minorCategory: resolvedMinor,
+    category: resolvedMinor,
+    categoryConfidence: confidence,
+    classificationStatus: status,
   };
 }
 
@@ -601,12 +663,18 @@ async function buildRFQDraft(payload = {}) {
       } else if (entity.majorCategory !== declaredMajor) {
         entity.categoryMismatch = true;
       }
+      if (!entity.minorCategory || entity.minorCategory === entity.majorCategory) {
+        entity.minorCategory = defaultMinorForMajor(entity.majorCategory);
+        entity.category = entity.minorCategory;
+        if (entity.classificationStatus === STATUS.DEFAULT) {
+          entity.classificationStatus = STATUS.KEYWORD;
+          entity.categoryConfidence = CONFIDENCE.KEYWORD;
+          entity.confidence = 85;
+        }
+      }
     });
   }
 
-  const needsReview = entities.filter(
-    (e) => e.classificationStatus === STATUS.DEFAULT || e.categoryMismatch
-  ).length;
   const title = String(payload.title || '').trim() || deriveTitle(entities);
 
   // The RFQ header category follows the majority of its line items rather than
@@ -633,9 +701,21 @@ async function buildRFQDraft(payload = {}) {
       if (!entity.majorCategory) {
         entity.majorCategory = headerCategory;
       }
+      if (!entity.minorCategory || entity.minorCategory === entity.majorCategory) {
+        entity.minorCategory = defaultMinorForMajor(entity.majorCategory);
+        entity.category = entity.minorCategory;
+        if (entity.classificationStatus === STATUS.DEFAULT) {
+          entity.classificationStatus = STATUS.KEYWORD;
+          entity.categoryConfidence = CONFIDENCE.KEYWORD;
+          entity.confidence = 85;
+        }
+      }
     });
   }
 
+  const needsReview = entities.filter(
+    (e) => !e.majorCategory || !e.minorCategory || e.categoryMismatch || e.minorCategory === e.majorCategory
+  ).length;
   const estimatedBudget = deriveEstimatedBudget(payload.estimatedBudget, lineValues);
 
   const draft = {
@@ -690,6 +770,7 @@ module.exports = {
   isGenericCategory,
   matchByKeyword,
   classifyLineItem,
+  defaultMinorForMajor,
   defaultTargetDate,
   normalizeQuantity,
   normalizeAmount,
