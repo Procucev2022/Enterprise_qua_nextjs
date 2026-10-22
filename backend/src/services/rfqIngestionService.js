@@ -540,11 +540,25 @@ async function buildRFQDraft(payload = {}) {
   }, {});
   const dominantMajor = Object.keys(majorCounts).sort((a, b) => majorCounts[b] - majorCounts[a])[0] || '';
 
+  const fallbackCategory = (entities.length > 0 && !declaredMajor && !dominantMajor)
+    ? 'Others – New Product'
+    : '';
+  const headerCategory = declaredMajor || dominantMajor || fallbackCategory;
+
+  // When a header category is resolved, assign it to line items that have no major category
+  if (headerCategory) {
+    entities.forEach((entity) => {
+      if (!entity.majorCategory) {
+        entity.majorCategory = headerCategory;
+      }
+    });
+  }
+
   const estimatedBudget = deriveEstimatedBudget(payload.estimatedBudget, lineValues);
 
   const draft = {
     title,
-    category: declaredMajor || dominantMajor,
+    category: headerCategory,
     targetDeliveryDate:
       payload.targetDeliveryDate ||
       (entities.length > 0 && entities[0].targetDate ? entities[0].targetDate : defaultTargetDate()),
