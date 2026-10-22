@@ -1006,6 +1006,24 @@ export const UI_STRINGS = {
     buyerFilterAll: '🌐 All Inviting Buyers',
   },
 
+  vendorProfile: {
+    customCategoriesTitle: 'Add & Update Your Supply Categories',
+    customCategoriesSubtitle: 'Self-service category addition',
+    customCategoriesDesc:
+      "Can't find your exact product or service in the pre-configured categories below? Add your own specialized procurement categories here. They will be saved to your profile and matched to relevant RFQs.",
+    customCategoryPlaceholder:
+      'Type custom category name (e.g., CNC Precision Machining, Industrial Valves, Fire Protection)...',
+    addCategoryButton: '+ Add Category',
+    categoryAddedTitle: 'Category Added',
+    categoryAddedMessage: 'Added "{category}" to your procurement categories.',
+    categoryExistsMessage: 'Category already exists in your selections.',
+    categoryEmptyMessage: 'Please enter a valid category name.',
+    maxCategoriesReached: 'Maximum {max} categories allowed. Please remove a category before adding a new one.',
+    customCategoryGroup: 'Other',
+    removeCategoryTitle: 'Remove Category',
+    noCategoriesSelected: 'No categories selected. Pick up to 10 below or add your own above.',
+  },
+
   buyerProfile: {
     // Toast titles
     loadFailedTitle: 'Profile Could Not Be Loaded',
