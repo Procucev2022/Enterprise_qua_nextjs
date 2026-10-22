@@ -111,7 +111,7 @@
   },
   "env": {
     "dev": {
-      "name": "procucev-enterprise-backend-dev",
+      "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "development",
         "EMAIL_GATEWAY_ENABLED": "true",
