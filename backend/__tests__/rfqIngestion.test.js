@@ -5,6 +5,7 @@ const ingestion = require('../src/services/rfqIngestionService');
 const storeService = require('../src/services/storeService');
 const rfqSummaryService = require('../src/services/rfqSummaryService');
 const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG } = require('../src/config/constants');
+const buyerProfileQueries = require('../src/db/buyerProfileQueries');
 const { CATEGORY_TAXONOMY_FIXTURE: taxonomy } = require('./fixtures/categoryTaxonomy');
 const { authHeader } = require('./testHelpers');
 
@@ -19,9 +20,39 @@ beforeEach(() => {
 
 afterEach(() => {
   ingestion.resetTaxonomyIndex();
+  jest.restoreAllMocks();
 });
 
 describe('RFQ ingestion service (AI line-item classification)', () => {
+  describe('ensureTaxonomyLoaded', () => {
+    test('returns existing index if loaded and fresh', async () => {
+      ingestion.primeTaxonomyIndex(taxonomy);
+      const result = await ingestion.ensureTaxonomyLoaded();
+      expect(result.groupCount).toBeGreaterThan(0);
+    });
+
+    test('loads from buyerProfileQueries when reset', async () => {
+      ingestion.resetTaxonomyIndex();
+      jest.spyOn(buyerProfileQueries, 'findCategoryTaxonomy').mockResolvedValueOnce(taxonomy);
+      const result = await ingestion.ensureTaxonomyLoaded();
+      expect(result.groupCount).toBeGreaterThan(0);
+      expect(result.majorByKey.size).toBeGreaterThan(0);
+    });
+
+    test('falls back to default taxonomy if query returns empty array', async () => {
+      ingestion.resetTaxonomyIndex();
+      jest.spyOn(buyerProfileQueries, 'findCategoryTaxonomy').mockResolvedValueOnce([]);
+      const result = await ingestion.ensureTaxonomyLoaded();
+      expect(result.groupCount).toBeGreaterThan(0);
+    });
+
+    test('falls back to default taxonomy if query throws error', async () => {
+      ingestion.resetTaxonomyIndex();
+      jest.spyOn(buyerProfileQueries, 'findCategoryTaxonomy').mockRejectedValueOnce(new Error('DB failure'));
+      const result = await ingestion.ensureTaxonomyLoaded();
+      expect(result.groupCount).toBeGreaterThan(0);
+    });
+  });
   // ── Generic category detection ─────────────────────────────────────────────
   describe('isGenericCategory', () => {
     test.each(['', '   ', 'various', 'Multiple', 'NOT SPECIFIED', 'n/a', 'misc', 'general goods'])(

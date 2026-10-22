@@ -3458,4 +3458,125 @@ i already implement this can continue and check the 17 files changes and resume 
 raise the pr
 ```
 
+---
+
+### 2026-10-22T18:59:40+05:30
+
+```text
+FAIL __tests__/supportChat.test.js
+● Test suite failed to run
+Jest encountered an unexpected token
+Jest failed to parse a file. This happens e.g. when your code or its dependencies use non-standard JavaScript syntax, or when Jest is not configured to support such syntax.
+Out of the box Jest supports Babel, which will be used to transform your files into valid JS based on your Babel configuration.
+By default "node_modules" folder is ignored by transformers.
+Here's what you can do:
+• If you are trying to use ECMAScript Modules, see https://jestjs.io/docs/ecmascript-modules for how to enable it.
+• If you are trying to use TypeScript, see https://jestjs.io/docs/getting-started#using-typescript
+• To have some of your "node_modules" files transformed, you can specify a custom "transformIgnorePatterns" in your config.
+• If you need a custom transformation specify a "transform" option in your config.
+• If you simply want to mock your non-JS modules (e.g. binary assets) you can stub them out with the "moduleNameMapper" config option.
+You'll find more details and examples of these config options in the docs:
+https://jestjs.io/docs/configuration
+For information about custom transformations, see:
+https://jestjs.io/docs/code-transformation
+Details:
+SyntaxError: /home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/src/services/rfqIngestionService.js: Unexpected reserved word 'let'. (431:2)
+429 | categoryConfidence: CONFIDENCE.DEFAULT,
+430 | classificationStatus: STATUS.DEFAULT,
+> 431 | let resolvedMajor = canonicalMajor(statedMajor) || canonicalMajor(statedCategory) || statedMajor;
+| ^
+432 | let resolvedMinor = statedCategory;
+433 | let confidence = CONFIDENCE.DEFAULT;
+434 | let status = STATUS.DEFAULT;
+3 | // Called through the module namespace (like storeService below) so the ingestion
+4 | // pipeline stays substitutable in tests rather than being bound at import time.
+> 5 | const rfqIngestionService = require('../services/rfqIngestionService');
+| ^
+6 | const geminiService = require('../services/geminiService');
+7 | const rfqAttachmentService = require('../services/rfqAttachmentService');
+8 | const quoteAttachmentService = require('../services/quoteAttachmentService');
+at constructor (node_modules/@babel/parser/src/parse-error.ts:96:45)
+at Parser.toParseError [as raise] (node_modules/@babel/parser/src/tokenizer/index.ts:1504:19)
+at Parser.raise [as checkReservedWord] (node_modules/@babel/parser/src/parser/expression.ts:2921:12)
+at Parser.checkReservedWord [as parseObjectProperty] (node_modules/@babel/parser/src/parser/expression.ts:2371:12)
+at Parser.parseObjectProperty [as parseObjPropValue] (node_modules/@babel/parser/src/parser/expression.ts:2421:12)
+at Parser.parseObjPropValue [as parsePropertyDefinition] (node_modules/@babel/parser/src/parser/expression.ts:2261:17)
+at Parser.parsePropertyDefinition [as parseObjectLike] (node_modules/@babel/parser/src/parser/expression.ts:2128:21)
+at Parser.parseObjectLike [as parseExprAtom] (node_modules/@babel/parser/src/parser/expression.ts:1208:21)
+at Parser.parseExprAtom [as parseExprSubscripts] (node_modules/@babel/parser/src/parser/expression.ts:742:23)
+at Parser.parseExprSubscripts [as parseUpdate] (node_modules/@babel/parser/src/parser/expression.ts:721:21)
+at Parser.parseUpdate [as parseMaybeUnary] (node_modules/@babel/parser/src/parser/expression.ts:683:23)
+at Parser.parseMaybeUnary [as parseMaybeUnaryOrPrivate] (node_modules/@babel/parser/src/parser/expression.ts:417:14)
+at Parser.parseMaybeUnaryOrPrivate [as parseExprOps] (node_modules/@babel/parser/src/parser/expression.ts:429:23)
+at Parser.parseExprOps [as parseMaybeConditional] (node_modules/@babel/parser/src/parser/expression.ts:384:23)
+at Parser.parseMaybeConditional [as parseMaybeAssign] (node_modules/@babel/parser/src/parser/expression.ts:301:21)
+at Parser.parseMaybeAssign [as parseExpressionBase] (node_modules/@babel/parser/src/parser/expression.ts:226:23)
+at parseExpressionBase (node_modules/@babel/parser/src/parser/expression.ts:217:39)
+at Parser.callback [as allowInAnd] (node_modules/@babel/parser/src/parser/expression.ts:3222:16)
+at Parser.allowInAnd [as parseExpression] (node_modules/@babel/parser/src/parser/expression.ts:217:17)
+at Parser.parseExpression [as parseReturnStatement] (node_modules/@babel/parser/src/parser/statement.ts:1115:28)
+at Parser.parseReturnStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:543:21)
+at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:482:17)
+at Parser.parseStatementLike [as parseStatementListItem] (node_modules/@babel/parser/src/parser/statement.ts:431:17)
+at Parser.parseStatementListItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1444:16)
+at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1417:10)
+at Parser.parseBlockBody [as parseBlock] (node_modules/@babel/parser/src/parser/statement.ts:1385:10)
+at Parser.parseBlock [as parseFunctionBody] (node_modules/@babel/parser/src/parser/expression.ts:2651:24)
+at Parser.parseFunctionBody [as parseFunctionBodyAndFinish] (node_modules/@babel/parser/src/parser/expression.ts:2620:10)
+at parseFunctionBodyAndFinish (node_modules/@babel/parser/src/parser/statement.ts:1695:12)
+at Parser.callback [as withSmartMixTopicForbiddingContext] (node_modules/@babel/parser/src/parser/expression.ts:3201:14)
+at Parser.withSmartMixTopicForbiddingContext [as parseFunction] (node_modules/@babel/parser/src/parser/statement.ts:1693:10)
+at Parser.parseFunction [as parseFunctionStatement] (node_modules/@babel/parser/src/parser/statement.ts:1080:17)
+at Parser.parseFunctionStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:525:21)
+at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:482:17)
+at Parser.parseStatementLike [as parseModuleItem] (node_modules/@babel/parser/src/parser/statement.ts:419:17)
+at Parser.parseModuleItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1443:16)
+at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1417:10)
+at Parser.parseBlockBody [as parseProgram] (node_modules/@babel/parser/src/parser/statement.ts:229:10)
+at Parser.parseProgram [as parseTopLevel] (node_modules/@babel/parser/src/parser/statement.ts:203:25)
+at Parser.parseTopLevel [as parse] (node_modules/@babel/parser/src/parser/index.ts:83:25)
+at parse (node_modules/@babel/parser/src/index.ts:86:38)
+at parser (node_modules/@babel/core/src/parser/index.ts:29:19)
+at parser.next (<anonymous>)
+at normalizeFile (node_modules/@babel/core/src/transformation/normalize-file.ts:49:24)
+at normalizeFile.next (<anonymous>)
+at run (node_modules/@babel/core/src/transformation/index.ts:41:36)
+at run.next (<anonymous>)
+at transform (node_modules/@babel/core/src/transform.ts:29:20)
+at transform.next (<anonymous>)
+at evaluateSync (node_modules/gensync/index.js:251:28)
+at sync (node_modules/gensync/index.js:89:14)
+at fn (node_modules/@babel/core/src/errors/rewrite-stack-trace.ts:99:14)
+at transformSync (node_modules/@babel/core/src/transform.ts:66:52)
+at ScriptTransformer.transformSource (node_modules/@jest/transform/build/ScriptTransformer.js:545:31)
+at ScriptTransformer._transformAndBuildScript (node_modules/@jest/transform/build/ScriptTransformer.js:674:40)
+at ScriptTransformer.transform (node_modules/@jest/transform/build/ScriptTransformer.js:726:19)
+at Object.require (src/controllers/rfqController.js:5:29)
+at Object.require (src/routes/rfqs.js:3:23)
+at Object.require (src/routes/index.js:4:19)
+at Object.require (src/app.js:17:19)
+at Object.require (__tests__/supportChat.test.js:2:13)
+Test Suites: 46 failed, 50 passed, 96 total
+Tests: 1227 passed, 1227 total
+Snapshots: 0 total
+Time: 83.052 s
+Ran all test suites.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+Error: Process completed with exit code 1.
+0s
+0s
+0s
+0s
+fix this isses
+```
+
+---
+
+### 2026-10-22T19:54:09+05:30
+
+```text
+continue
+```
+
+
 

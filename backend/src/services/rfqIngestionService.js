@@ -400,26 +400,14 @@ function classifyLineItem(item, payloadCategory) {
     }
   }
 
-  // 5. No taxonomy match. Never create an invalid major-minor combination.
-  // 3. Keyword match across the description and the technical specification.
-  if (keywordMatch) {
-    return {
-      majorCategory: keywordMatch.major,
-      minorCategory: keywordMatch.minor,
-      category: keywordMatch.minor,
-      categoryConfidence: CONFIDENCE.KEYWORD,
-      classificationStatus: STATUS.KEYWORD,
-    };
-  }
-
-  // 4. Stated category fallback.
+  // 5. Stated category fallback.
   // If the document stated a category (its own, or payloadCategory), inspect it.
   const statedCategory = !isGenericCategory(item.minorCategory || item.category)
     ? String(item.minorCategory || item.category).trim()
     : '';
   const statedMajor = !isGenericCategory(item.majorCategory) ? String(item.majorCategory).trim() : '';
 
-  const finalMajor = canonicalMajor(statedMajor) || '';
+  const finalMajor = canonicalMajor(statedMajor) || (canonicalMajor(statedCategory) ? canonicalMajor(statedCategory) : '');
   const finalMinor = (!finalMajor && statedCategory) ? statedCategory : '';
 
   return {
@@ -428,29 +416,6 @@ function classifyLineItem(item, payloadCategory) {
     category: finalMinor,
     categoryConfidence: CONFIDENCE.DEFAULT,
     classificationStatus: STATUS.DEFAULT,
-  let resolvedMajor = canonicalMajor(statedMajor) || canonicalMajor(statedCategory) || statedMajor;
-  let resolvedMinor = statedCategory;
-  let confidence = CONFIDENCE.DEFAULT;
-  let status = STATUS.DEFAULT;
-
-  if (canonicalMajor(statedCategory)) {
-    // Stated category is actually a Major category (e.g. "IT"). Never store a Major as a Minor!
-    resolvedMajor = canonicalMajor(statedCategory);
-    resolvedMinor = defaultMinorForMajor(resolvedMajor);
-    confidence = CONFIDENCE.KEYWORD;
-    status = STATUS.KEYWORD;
-  } else if (resolvedMajor && (!resolvedMinor || resolvedMinor === resolvedMajor)) {
-    resolvedMinor = defaultMinorForMajor(resolvedMajor);
-    confidence = CONFIDENCE.KEYWORD;
-    status = STATUS.KEYWORD;
-  }
-
-  return {
-    majorCategory: resolvedMajor,
-    minorCategory: resolvedMinor,
-    category: resolvedMinor,
-    categoryConfidence: confidence,
-    classificationStatus: status,
   };
 }
 
