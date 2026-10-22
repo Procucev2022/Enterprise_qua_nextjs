@@ -101,7 +101,47 @@ function htmlToText(html) {
  * self-made `<random@gmail.com>` id is one Gmail's servers never issued, which
  * spam filters read as a forged header.
  */
-function buildRawMimeMessage({ from, to, cc, bcc, subject, html, text, replyTo, inReplyTo, references, headers }) {
+/**
+ * File attachments in the one shape every transport here accepts.
+ *
+ * Nodemailer takes `{ filename, content, encoding: 'base64', contentType }` as-is,
+ * and the HTTP providers and the raw MIME builder read the same fields, so a
+ * caller attaches a file once regardless of which transport delivers it. Entries
+ * without a name or content are dropped rather than sent as empty parts.
+ */
+function toAttachmentList(attachments) {
+  if (!Array.isArray(attachments)) return [];
+  return attachments
+    .filter((a) => a && a.filename && a.content)
+    .map((a) => ({
+      filename: String(a.filename),
+      content: String(a.content).replace(/\s+/g, ''),
+      contentType: a.contentType || 'application/octet-stream',
+      encoding: 'base64',
+    }));
+}
+
+/** A raw MIME body with each attachment appended as its own base64 part. */
+function withMimeAttachments(lines, contentHeaders, body, attachments) {
+  const mixedBoundary = `=_procucev_mixed_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  lines.push(`Content-Type: multipart/mixed; boundary="${mixedBoundary}"`);
+  const parts = [`--${mixedBoundary}`, ...contentHeaders, '', body];
+  for (const attachment of attachments) {
+    const name = attachment.filename.replace(/"/g, '');
+    parts.push(
+      `--${mixedBoundary}`,
+      `Content-Type: ${attachment.contentType}; name="${name}"`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="${name}"`,
+      '',
+      attachment.content.replace(/(.{76})/g, '$1\r\n')
+    );
+  }
+  parts.push(`--${mixedBoundary}--`, '');
+  return parts.join('\r\n');
+}
+
+function buildRawMimeMessage({ from, to, cc, bcc, subject, html, text, replyTo, inReplyTo, references, headers, attachments }) {
   const ccList = toAddressList(cc);
   const bccList = toAddressList(bcc);
   const toList = toAddressList(to);
@@ -120,10 +160,12 @@ function buildRawMimeMessage({ from, to, cc, bcc, subject, html, text, replyTo, 
   ].filter(Boolean);
 
   const plain = text || htmlToText(html);
+  const files = toAttachmentList(attachments);
   let body;
+  let contentHeaders;
   if (html) {
     const boundary = `=_procucev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
-    lines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+    contentHeaders = [`Content-Type: multipart/alternative; boundary="${boundary}"`];
     body = [
       `--${boundary}`,
       'Content-Type: text/plain; charset=UTF-8',
@@ -139,8 +181,13 @@ function buildRawMimeMessage({ from, to, cc, bcc, subject, html, text, replyTo, 
       '',
     ].join('\r\n');
   } else {
-    lines.push('Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: 8bit');
+    contentHeaders = ['Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: 8bit'];
     body = plain;
+  }
+  if (files.length > 0) {
+    body = withMimeAttachments(lines, contentHeaders, body, files);
+  } else {
+    lines.push(...contentHeaders);
   }
   return Buffer.from(`${lines.join('\r\n')}\r\n\r\n${body}`, 'utf8').toString('base64url');
 }
@@ -313,6 +360,9 @@ const HTTP_PROVIDERS = [
           ...(message.headers ? { headers: message.headers } : {}),
           html: message.html,
           ...(message.text ? { text: message.text } : {}),
+          ...(toAttachmentList(message.attachments).length
+            ? { attachments: toAttachmentList(message.attachments).map((a) => ({ filename: a.filename, content: a.content })) }
+            : {}),
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -346,6 +396,16 @@ const HTTP_PROVIDERS = [
             { type: 'text/plain', value: message.text || htmlToText(message.html) || ' ' },
             ...(message.html ? [{ type: 'text/html', value: message.html }] : []),
           ],
+          ...(toAttachmentList(message.attachments).length
+            ? {
+                attachments: toAttachmentList(message.attachments).map((a) => ({
+                  content: a.content,
+                  filename: a.filename,
+                  type: a.contentType,
+                  disposition: 'attachment',
+                })),
+              }
+            : {}),
         }),
       });
       if (!res.ok) throw httpError('SendGrid', res, await res.text().catch(() => ''));
@@ -371,6 +431,9 @@ const HTTP_PROVIDERS = [
           ...(message.headers ? { headers: message.headers } : {}),
           htmlContent: message.html || undefined,
           textContent: message.text || htmlToText(message.html) || ' ',
+          ...(toAttachmentList(message.attachments).length
+            ? { attachment: toAttachmentList(message.attachments).map((a) => ({ content: a.content, name: a.filename })) }
+            : {}),
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -402,6 +465,15 @@ const HTTP_PROVIDERS = [
             { type: 'text/plain', value: message.text || htmlToText(message.html) || ' ' },
             ...(message.html ? [{ type: 'text/html', value: message.html }] : []),
           ],
+          ...(toAttachmentList(message.attachments).length
+            ? {
+                attachments: toAttachmentList(message.attachments).map((a) => ({
+                  content: a.content,
+                  filename: a.filename,
+                  type: a.contentType,
+                })),
+              }
+            : {}),
         }),
       });
       if (!res.ok && res.status !== 202) throw httpError('MailChannels', res, await res.text().catch(() => ''));
@@ -424,6 +496,7 @@ module.exports = {
   toAddressList,
   bareAddress,
   htmlToText,
+  toAttachmentList,
   buildRawMimeMessage,
   errorText,
   parseRetryAfterMs,
