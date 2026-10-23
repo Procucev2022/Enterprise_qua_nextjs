@@ -33,7 +33,10 @@ function respond(status, body) {
 /** The vendor record behind a vendor account, or null. */
 async function vendorForUser(user) {
   if (!user || user.role !== 'vendor' || !user.email) return null;
-  return storeService.getVendorByIdWithDBFallback(user.email, 'all');
+  const known = storeService.getVendorById(user.email, 'all');
+  if (known) return known;
+  const vendorId = await botBridgeQueries.findVendorIdByEmail(user.email);
+  return vendorId ? (await storeService.getVendorByIdWithDBFallback(vendorId, 'all')) || null : null;
 }
 
 /**

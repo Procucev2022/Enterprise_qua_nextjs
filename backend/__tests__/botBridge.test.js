@@ -81,6 +81,17 @@ describe('WhatsApp agent-bot bridge', () => {
       expect(await botBridgeQueries.findUserByUuid('missing')).toBeNull();
     });
 
+    test('findVendorIdByEmail probes the indexed, lowercase email column only', async () => {
+      const rows = jest.spyOn(pool, 'rows').mockResolvedValue([{ id: 'v-1' }]);
+      expect(await botBridgeQueries.findVendorIdByEmail(null)).toBeNull();
+      expect(await botBridgeQueries.findVendorIdByEmail('  ')).toBeNull();
+      expect(rows).not.toHaveBeenCalled();
+      expect(await botBridgeQueries.findVendorIdByEmail(' Seller@Steel.com ')).toBe('v-1');
+      expect(rows).toHaveBeenCalledWith('select id from vendors where email = $1 limit 1', ['seller@steel.com'], { d1: true });
+      rows.mockResolvedValue([]);
+      expect(await botBridgeQueries.findVendorIdByEmail('nobody@x.com')).toBeNull();
+    });
+
     test('setWhatsAppStatus writes only the fields given, in both SQL dialects', async () => {
       const query = jest.spyOn(pool, 'query').mockResolvedValue({ rowCount: 1 });
 
@@ -126,6 +137,22 @@ describe('WhatsApp agent-bot bridge', () => {
       const res = await request(app).get('/api/bot/vendor-plans').set(BOT);
       expect(res.status).toBe(503);
       expect(res.body.error).toBe(BOT_BRIDGE_MESSAGES.BRIDGE_DISABLED);
+    });
+
+    test('bridge requests do not wait for the in-memory store to load; other routes still do', async () => {
+      const wasHydrated = storeService.isHydratedFromDB;
+      storeService.isHydratedFromDB = false;
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const hydrate = jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValue({ hydrated: true });
+      try {
+        expect((await request(app).get('/api/bot/vendor-plans').set(BOT)).status).toBe(200);
+        expect((await request(app).get('/api/bot').set(BOT)).status).toBe(404);
+        expect(hydrate).not.toHaveBeenCalled();
+        await request(app).get('/health');
+        expect(hydrate).toHaveBeenCalledTimes(1);
+      } finally {
+        storeService.isHydratedFromDB = wasHydrated;
+      }
     });
 
     test('a missing or wrong key is refused', async () => {
@@ -203,6 +230,7 @@ describe('WhatsApp agent-bot bridge', () => {
       expect(byEmail).toHaveBeenCalledWith('buyer@acme.com', '9876543210');
 
       jest.spyOn(botBridgeQueries, 'findUserByUuid').mockResolvedValue(vendorUser());
+      jest.spyOn(botBridgeQueries, 'findVendorIdByEmail').mockResolvedValue('v-1');
       jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(VENDOR);
       const seller = await botBridgeService.createSession({ id: 'u-vendor' });
       expect(seller.body.user).toMatchObject({ role: 'vendor', vendorId: 'v-1' });
@@ -224,8 +252,13 @@ describe('WhatsApp agent-bot bridge', () => {
         vendorUser({ id: 'u-v2', email: 'new@steel.com' }),
         buyerUser({ role: 'admin' }),
       ]);
-      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockImplementation(async (key) => (key === 'seller@steel.com' ? VENDOR : null));
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(undefined);
+      const byEmail = jest.spyOn(botBridgeQueries, 'findVendorIdByEmail').mockImplementation(async (email) => (email === 'seller@steel.com' ? 'v-1' : null));
+      const byId = jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockImplementation(async (key) => (key === 'v-1' ? VENDOR : null));
       const res = await botBridgeService.findUsersByPhone('9876543210');
+      // The vendor record is reached by its id, never by the unindexed email match.
+      expect(byEmail).toHaveBeenCalledWith('new@steel.com');
+      expect(byId.mock.calls.map(([key]) => key)).toEqual(['v-1']);
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual([
         {
@@ -235,6 +268,15 @@ describe('WhatsApp agent-bot bridge', () => {
         expect.objectContaining({ id: 'u-vendor', orgName: null, uniqueId: null, verificationStatus: null, vendorId: 'v-1' }),
         expect.objectContaining({ id: 'u-v2', vendorId: null }),
       ]);
+    });
+
+    test('a vendor already in memory is used without a database lookup', async () => {
+      jest.spyOn(botBridgeQueries, 'findUsersByPhone').mockResolvedValue([vendorUser()]);
+      jest.spyOn(storeService, 'getVendorById').mockImplementation((key) => (key === 'seller@steel.com' ? VENDOR : undefined));
+      const byEmail = jest.spyOn(botBridgeQueries, 'findVendorIdByEmail');
+      const res = await botBridgeService.findUsersByPhone('9876543210');
+      expect(res.body.data[0].vendorId).toBe('v-1');
+      expect(byEmail).not.toHaveBeenCalled();
     });
 
     test('setWhatsAppStatus validates the state and honours the approval setting', async () => {
@@ -281,6 +323,7 @@ describe('WhatsApp agent-bot bridge', () => {
 
     test('issueCredentials sends sellers the supplier onboarding email and records it on the vendor', async () => {
       jest.spyOn(botBridgeQueries, 'setTemporaryPassword').mockResolvedValue(true);
+      jest.spyOn(botBridgeQueries, 'findVendorIdByEmail').mockResolvedValue('v-1');
       const vendorLookup = jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(VENDOR);
       const update = jest.spyOn(storeService, 'updateVendor').mockReturnValue({});
       const build = jest.spyOn(mailerService, 'buildVendorOnboardingEmail');
