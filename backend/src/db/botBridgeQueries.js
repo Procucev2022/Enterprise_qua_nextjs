@@ -58,6 +58,22 @@ async function findUsersByPhone(phone) {
   return rows.map((row) => ({ ...mapRowToUser(row), uniqueId: row.unique_id || null }));
 }
 
+/**
+ * Id of the vendor record whose email is a vendor account's login email.
+ *
+ * vendors.email is stored lowercase and indexed, so this is a single index
+ * probe. The general email lookup also matches raw.corporateEmail, which no
+ * index covers: on a vendor account with no vendor record of its own (most
+ * accounts migrated from QUA) it scanned the whole vendors table on every
+ * bot message.
+ */
+async function findVendorIdByEmail(email) {
+  const key = String(email || '').trim().toLowerCase();
+  if (!key) return null;
+  const rows = await pool.rows('select id from vendors where email = $1 limit 1', [key], { d1: true });
+  return rows[0] ? rows[0].id : null;
+}
+
 /** Accounts belonging to one organisation, active first. */
 async function findUsersByOrgUuid(orgUuid) {
   if (!orgUuid) return [];
@@ -133,5 +149,6 @@ module.exports = {
   findUsersByPhone,
   findUsersByOrgUuid,
   findUserByUuid,
+  findVendorIdByEmail,
   setWhatsAppStatus,
 };
