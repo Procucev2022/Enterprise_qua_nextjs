@@ -107,11 +107,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // Buyer's own registered pincode, fetched once — used to rank vendors with
   // a matching pincode first, same relevance-then-pincode rule the backend
   // already applies to mode_2 RFQ dispatch (createRFQ) and RFQ invite emails
-  // (selectVendorsForRFQEmail): pincode re-sorts an already-relevant list, it
-  // never filters anyone out.
-  const [buyerPincode, setBuyerPincode] = useState<string | null>(null);
+  const [buyerPincode, setBuyerPincode] = useState<string | null>(() => {
+    return activeBuyerAccount?.pincode ? String(activeBuyerAccount.pincode).trim() : null;
+  });
   useEffect(() => {
     let cancelled = false;
+    if (activeBuyerAccount?.pincode) {
+      setBuyerPincode(String(activeBuyerAccount.pincode).trim() || null);
+      return;
+    }
     void fetchBuyerProfile().then((result) => {
       if (cancelled) return;
       if (result.success && result.data?.pincode) {
@@ -121,7 +125,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeBuyerAccount?.pincode]);
 
   // Pincode-first sort: vendors whose pincode matches the buyer's own are
   // moved to the front, preserving whatever relative order (rating, etc.)
