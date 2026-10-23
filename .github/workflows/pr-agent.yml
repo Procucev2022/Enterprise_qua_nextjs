@@ -1,26 +1,52 @@
-name: Gemini PR Code Review
+name: Direct Gemini PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    types: [opened, synchronize]
 
 jobs:
-  gemini-review:
+  review:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
-      issues: write
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Gemini Code Review
-        uses: google-github-actions/run-gemini-cli@main # <--- Changed v1 to main
         with:
-          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          gemini_model: "gemini-2.0-flash"
-          prompt: |
-            You are a senior software engineering reviewer. 
-            Analyze the Pull Request code diff provided and post a concise review.
+          fetch-depth: 0
+
+      - name: Get PR Diff & Run Gemini Review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # 1. Generate Git Diff
+          git diff origin/${{ github.event.pull_request.base.ref }}...HEAD > pr_diff.txt
+          head -n 2000 pr_diff.txt > trimmed_diff.txt
+
+          # 2. Call Gemini API
+          PAYLOAD=$(jq -n --rawfile diff trimmed_diff.txt '{
+            contents: [{
+              parts: [{
+                text: "You are a senior developer. Review this Git PR diff concisely for bugs, security risks, or code quality issues:\n\n" + $diff
+              }]
+            }]
+          }')
+
+          RESPONSE=$(curl -s -X POST \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          REVIEW_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // "Failed to generate review."')
+
+          # 3. Post Comment to PR
+          jq -n --arg body "$REVIEW_TEXT" '{body: $body}' | curl -s -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            -d @-
