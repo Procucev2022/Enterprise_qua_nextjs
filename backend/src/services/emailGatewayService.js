@@ -257,13 +257,15 @@ function resolveConnectionState(config, { lastError, watching } = {}) {
  * Returns `{ allowed, reason, buyerAccount }`. `buyerAccount` is needed by the
  * caller regardless, to scope the RFQ.
  */
-async function resolveSenderAuthorisation(fromAddress, config = resolveConfig()) {
+async function resolveSenderAuthorisation(fromAddress, config = resolveConfig(), preloadedBuyerAccount = undefined) {
   const address = String(fromAddress || '').trim().toLowerCase();
   if (!address) {
     return { allowed: false, reason: EMAIL_GATEWAY_MESSAGES.SENDER_MISSING, buyerAccount: null };
   }
 
-  const buyerAccount = (await storeService.getBuyerAccountByEmail(address)) || null;
+  const buyerAccount = preloadedBuyerAccount !== undefined
+    ? preloadedBuyerAccount
+    : ((await storeService.getBuyerAccountByEmail(address)) || null);
   const allowedSenders = Array.isArray(config && config.allowedSenders) ? config.allowedSenders : [];
   const allowedDomains = Array.isArray(config && config.allowedDomains) ? config.allowedDomains : [];
 
@@ -597,6 +599,10 @@ async function extractRfqReferenceFromEmail(message) {
   const candidates = [];
   for (const raw of rawMatches) {
     const trimmed = raw.trim();
+    // Ignore generic English words like "RFQ", "RFQs", "RFQ's" that do not contain numbers or sub-identifiers
+    if (/^RFQs?['’]?s?$/i.test(trimmed)) {
+      continue;
+    }
     const standardMatch = trimmed.match(/RFQ-?\d{4}-\d{4,6}/i) || trimmed.match(/RFQ\d{10,14}/i);
     if (standardMatch) {
       candidates.push(standardMatch[0].toUpperCase());
@@ -605,6 +611,8 @@ async function extractRfqReferenceFromEmail(message) {
     candidates.push(stripped.toUpperCase());
     candidates.push(trimmed.toUpperCase());
   }
+
+  if (candidates.length === 0) return { targetRfq: null, referencedNumber: null };
 
   // getRFQByIdAsync, not the plain in-memory getRFQById — the same Workers
   // isolate-cache-staleness bug fixed in rfqController.addQuote applies here
@@ -1549,12 +1557,24 @@ async function processMessage(rawSource, config = resolveConfig()) {
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
   const { targetRfq, referencedNumber } = await extractRfqReferenceFromEmail(message);
   const vendorRecord = await resolveVendorFromEmail(message.fromAddress, targetRfq);
+  const buyerAccount = await storeService.getBuyerAccountByEmail(message.fromAddress);
+  const isRegisteredBuyer = Boolean(buyerAccount);
 
-  if (targetRfq && vendorRecord) {
+  // If sender is both buyer and vendor, but is the owner/creator of the target RFQ,
+  // they are managing their RFQ as a buyer, not quoting on their own requirement.
+  const isOwnerOfTargetRfq = Boolean(
+    targetRfq && buyerAccount && (
+      (targetRfq.buyerAccountId && targetRfq.buyerAccountId === buyerAccount.id) ||
+      (targetRfq.buyerEmail && String(targetRfq.buyerEmail).toLowerCase() === String(message.fromAddress).toLowerCase())
+    )
+  );
+
+  if (targetRfq && vendorRecord && !isOwnerOfTargetRfq) {
     return await processVendorQuoteMessage(message, targetRfq, vendorRecord);
   }
 
-  if (!targetRfq && referencedNumber && vendorRecord) {
+  // If RFQ is not found, but a vendor (who is not a registered buyer) referenced an RFQ number:
+  if (!targetRfq && referencedNumber && vendorRecord && !isRegisteredBuyer) {
     return {
       status: INGESTION_OUTCOME.INVALID_RFQ,
       detail: EMAIL_GATEWAY_MESSAGES.INVALID_RFQ_REFERENCED.replace('{rfqNumber}', referencedNumber),
@@ -1574,7 +1594,6 @@ async function processMessage(rawSource, config = resolveConfig()) {
   // When an email represents a new RFQ/request (from a registered buyer or an RFQ enquiry),
   // it is processed through the RFQ creation pipeline as per dual-inbox requirements.
   if (config && config.isVendorMailbox) {
-    const isRegisteredBuyer = Boolean(await storeService.getBuyerAccountByEmail(message.fromAddress));
     const isRfqSubjectOrContent = /rfq|requisition|purchase|material|indent|tender|quot|boq|requirement/i.test(
       `${message.subject || ''} ${message.bodyText || ''}`
     );
@@ -1609,6 +1628,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
   let authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
+  const authorisation = await resolveSenderAuthorisation(message.fromAddress, config, buyerAccount);
   if (!authorisation.allowed) {
     const isDomainOrSenderRestricted =
       (Array.isArray(config?.allowedSenders) && config.allowedSenders.length > 0 && !config.allowedSenders.includes(String(message.fromAddress || '').toLowerCase())) ||

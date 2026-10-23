@@ -1180,6 +1180,45 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
       expect(screen.queryByTestId('ingestion-wizard-quota-exhausted-banner')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).toBeInTheDocument();
     });
+
+    it('opens RfqUpgradePlanModal when clicking unentitled Mode 1 or Mode 2 with exhausted credits', () => {
+      render(
+        <AppProvider>
+          <IngestionWizard
+            forceSubscription="free_trial"
+            forceRemainingFreeRFQs={0}
+            onComplete={jest.fn()}
+            onCancel={jest.fn()}
+          />
+        </AppProvider>
+      );
+
+      // Sourcing mode buttons
+      const btn1 = screen.getByTestId('sourcing-mode-btn-mode_1');
+      fireEvent.click(btn1);
+
+      // RfqUpgradePlanModal should open
+      expect(screen.getByTestId('rfq-upgrade-plan-modal')).toBeInTheDocument();
+      expect(screen.getByText(/You don't have credits to publish the RFQ in Mode 1/i)).toBeInTheDocument();
+    });
+
+    it('opens RfqUpgradePlanModal when clicking Upgrade Plan CTA on the quota banner', () => {
+      render(
+        <AppProvider>
+          <IngestionWizard
+            forceSubscription="free_trial"
+            forceRemainingFreeRFQs={0}
+            onComplete={jest.fn()}
+            onCancel={jest.fn()}
+          />
+        </AppProvider>
+      );
+
+      const upgradeLinks = screen.getAllByRole('link', { name: /Upgrade Plan/i });
+      fireEvent.click(upgradeLinks[0]);
+
+      expect(screen.getByTestId('rfq-upgrade-plan-modal')).toBeInTheDocument();
+    });
   });
 
   describe('RFQ Success Popup Dynamic Procucev Vendor Count Retrieval', () => {

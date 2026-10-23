@@ -2,7 +2,7 @@
 
 import React, { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { useApp } from '@/lib/store';
+import { useApp, clearSessionCache } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { LOGIN_ROUTE, ROLE_LANDING_ROUTE } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -73,6 +73,7 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
   }, [isLoggedIn, sessionRole, role, router, mustChangeVendorPassword, mustCompleteBuyerOnboarding]);
 
   const handleLogout = () => {
+    clearSessionCache();
     const email = undefined;
     setIsLoggedIn(false);
     setCurrentUserSession(null);

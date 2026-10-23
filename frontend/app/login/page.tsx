@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { useApp } from '@/lib/store';
+import { useApp, clearSessionCache } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { OTP_CODE_LENGTH, OTP_EXPIRY_MINUTES, ROLE_LANDING_ROUTE } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -163,9 +163,13 @@ export default function LoginPage() {
    * The role always comes from the account record, never the UI selection.
    */
   const establishSession = (user: UserSession) => {
+    clearSessionCache();
     setCurrentUserSession(user);
     setIsLoggedIn(true);
     setCurrentRole(user.role);
+    if (typeof refreshFromDB === 'function') {
+      void refreshFromDB();
+    }
     showToast(
       AUTH.welcomeBackTitle,
       formatString(AUTH.signedInAs, {

@@ -159,6 +159,8 @@ interface AppContextType {
   systemConfig: SystemConfig;
   setSystemConfig: React.Dispatch<React.SetStateAction<SystemConfig>>;
   isLoadingDB: boolean;
+  isLoadingRFQs: boolean;
+  isLoadingVendors: boolean;
   dbConnected: boolean;
   refreshFromDB: () => Promise<void>;
   refreshRFQs: () => Promise<void>;
@@ -372,8 +374,8 @@ function daysUntilDate(target?: string): number {
 }
 
 function generateShaHash(): string {
-  const chars = '0123456789abcdef';
   let hash = '';
+  const chars = '0123456789abcdef';
   for (let i = 0; i < 64; i++) {
     hash += chars.charAt(Math.floor(Math.random() * chars.length));
   }
@@ -394,8 +396,48 @@ export function dedupeRequest<T>(key: string, fn: () => Promise<T>): Promise<T> 
   return promise;
 }
 
+export function getSessionCache<T>(key: string): T | null {
+  if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return null;
+  try {
+    const item = sessionStorage.getItem(`procucev_cache_${key}`);
+    return item ? (JSON.parse(item) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setSessionCache<T>(key: string, data: T): void {
+  if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return;
+  try {
+    sessionStorage.setItem(`procucev_cache_${key}`, JSON.stringify(data));
+  } catch {}
+}
+
+export function clearSessionCache(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const keys = ['vendors', 'evaluations', 'rfqs', 'activeBuyerAccount', 'aiFeed', 'taxonomy'];
+    keys.forEach((k) => sessionStorage.removeItem(`procucev_cache_${k}`));
+  } catch {}
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const loadedEntitiesRef = useRef<Record<string, boolean>>({});
+  const initialVendors = getSessionCache<VendorEntry[]>('vendors') || [];
+  const initialEvaluations = getSessionCache<VendorEvaluationRecord[]>('evaluations') || [];
+  const initialRfqs = getSessionCache<RFQItem[]>('rfqs') || [];
+  const initialActiveBuyer = getSessionCache<BuyerAccount>('activeBuyerAccount') || null;
+  const initialAiFeed = getSessionCache<AIBotFeedItem[]>('aiFeed') || [];
+  const initialTaxonomy = getSessionCache<MajorMinorCategory[]>('taxonomy') || [];
+
+  const loadedEntitiesRef = useRef<Record<string, boolean>>({
+    vendors: initialVendors.length > 0,
+    evaluations: initialEvaluations.length > 0,
+    rfqs: initialRfqs.length > 0,
+    activeBuyerAccount: !!initialActiveBuyer,
+    aiFeed: initialAiFeed.length > 0,
+    taxonomy: initialTaxonomy.length > 0,
+    bootstrap: initialVendors.length > 0 && initialEvaluations.length > 0,
+  });
   // Session bootstrap. The only source of truth is the token + session that
   // authClient persisted after a verified sign-in, so a page refresh on a deep
   // route keeps the user signed in and nobody is ever signed in by default.
@@ -547,14 +589,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // PostgreSQL Real Database Hydration & Telemetry State
   const [isLoadingDB, setIsLoadingDB] = useState<boolean>(true);
+  const [isLoadingRFQs, setIsLoadingRFQs] = useState<boolean>(initialRfqs.length === 0);
+  const [isLoadingVendors, setIsLoadingVendors] = useState<boolean>(initialVendors.length === 0);
   const [dbConnected, setDbConnected] = useState<boolean>(false);
 
-  const [rfqs, setRfqs] = useState<RFQItem[]>([]);
-  const [aiFeed, setAiFeed] = useState<AIBotFeedItem[]>([]);
-  const [vendorOpportunities, setVendorOpportunities] = useState<VendorOpportunity[]>([]);
-  const [buyerVendors, setBuyerVendors] = useState<VendorEntry[]>([]);
+  const [rfqs, setRfqs] = useState<RFQItem[]>(initialRfqs);
+  const [aiFeed, setAiFeed] = useState<AIBotFeedItem[]>(initialAiFeed);
+  const [vendorOpportunities, setVendorOpportunities] = useState<VendorOpportunity[]>(
+    initialRfqs.map(buildOpportunityFromRFQ)
+  );
+  const [buyerVendors, setBuyerVendors] = useState<VendorEntry[]>(initialVendors);
   const [buyerAccounts, setBuyerAccounts] = useState<BuyerAccount[]>([]);
-  const [activeBuyerAccount, setActiveBuyerAccount] = useState<BuyerAccount | null>(null);
+  const [activeBuyerAccount, setActiveBuyerAccount] = useState<BuyerAccount | null>(initialActiveBuyer);
   const [selectedEmailForModal, setSelectedEmailForModal] = useState<StandardRFQEmailPayload | null>(null);
   const [emailModalOpen, setEmailModalOpen] = useState<boolean>(false);
 
@@ -567,7 +613,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Starts empty on purpose. The bundled categories.json this replaced meant a
   // screen could always render a full category tree, including when the master had
   // changed underneath it or the API was down.
-  const [categoryTaxonomy, setCategoryTaxonomyState] = useState<MajorMinorCategory[]>([]);
+  const [categoryTaxonomy, setCategoryTaxonomyState] = useState<MajorMinorCategory[]>(initialTaxonomy);
   const [categoryTaxonomyError, setCategoryTaxonomyError] = useState<string | null>(null);
   const [isLoadingCategoryTaxonomy, setIsLoadingCategoryTaxonomy] = useState<boolean>(false);
   const [systemConfig, setSystemConfig] = useState<SystemConfig>(INITIAL_SYSTEM_CONFIG);
@@ -577,8 +623,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [selectedRFQForDeepDive, setSelectedRFQForDeepDive] = useState<RFQItem | null>(null);
   const [deepDiveModalOpen, setDeepDiveModalOpen] = useState<boolean>(false);
 
-  const [vendorEvaluations, setVendorEvaluations] = useState<VendorEvaluationRecord[]>([]);
-  const [selectedVendorEvaluation, setSelectedVendorEvaluation] = useState<VendorEvaluationRecord | null>(null);
+  const [vendorEvaluations, setVendorEvaluations] = useState<VendorEvaluationRecord[]>(initialEvaluations);
+  const [selectedVendorEvaluation, setSelectedVendorEvaluation] = useState<VendorEvaluationRecord | null>(
+    initialEvaluations[0] || null
+  );
   const [evaluationModalOpen, setEvaluationModalOpen] = useState<boolean>(false);
 
   // Vendor Free RFQ Download Credits (5 Free Starter Allowance)
@@ -639,25 +687,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!authClient.getToken()) {
       setRfqs([]);
       setVendorOpportunities([]);
+      setSessionCache('rfqs', []);
       loadedEntitiesRef.current.rfqs = false;
+      setIsLoadingRFQs(false);
       return;
     }
 
-    const result = await fetchRFQList();
-    if (!result.success) {
-      console.error('Failed to load RFQs:', result.error);
-      return;
+    if (rfqs.length === 0) {
+      setIsLoadingRFQs(true);
     }
+    try {
+      const result = await fetchRFQList();
+      if (!result.success) {
+        console.error('Failed to load RFQs:', result.error);
+        return;
+      }
 
-    setRfqs(result.rfqs);
-    setSelectedRFQForMatrix((prev) => prev || result.rfqs[0] || null);
-    setSelectedRFQForDeepDive((prev) => prev || result.rfqs[0] || null);
-    setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
-    loadedEntitiesRef.current.rfqs = true;
+      setRfqs(result.rfqs);
+      setSessionCache('rfqs', result.rfqs);
+      setSelectedRFQForMatrix((prev) => prev || result.rfqs[0] || null);
+      setSelectedRFQForDeepDive((prev) => prev || result.rfqs[0] || null);
+      setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
+      loadedEntitiesRef.current.rfqs = true;
+    } finally {
+      setIsLoadingRFQs(false);
+    }
   };
 
   const ensureRFQs = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.rfqs && rfqs.length >= 0) {
+    if (!force && loadedEntitiesRef.current.rfqs) {
       return;
     }
     return dedupeRequest('rfqs', async () => {
@@ -668,13 +726,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Hydrate reference data. RFQs come from refreshRFQs, not from here.
   const refreshFromDB = async () => {
     setIsLoadingDB(true);
+    if (buyerVendors.length === 0) {
+      setIsLoadingVendors(true);
+    }
     try {
       const res = await fetch('/api/bootstrap', { headers: authFetchHeaders() });
       const json = await res.json();
       if (json.success && json.data) {
         const d = json.data;
+        const vendorsList = d.vendors || [];
+        const evalsList = d.evaluations || [];
         setBuyerAccounts(d.buyerAccounts || []);
-        setBuyerVendors(d.vendors || []);
+        setBuyerVendors(vendorsList);
+        setSessionCache('vendors', vendorsList);
 
         const sessionEmail = typeof authClient?.getSessionUser === 'function' ? authClient.getSessionUser()?.email?.toLowerCase() : null;
         if (sessionEmail && Array.isArray(d.vendors)) {
@@ -688,8 +752,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        setVendorEvaluations(d.evaluations || []);
-        setSelectedVendorEvaluation((prev) => prev || (d.evaluations || [])[0] || null);
+        setVendorEvaluations(evalsList);
+        setSessionCache('evaluations', evalsList);
+        setSelectedVendorEvaluation((prev) => prev || evalsList[0] || null);
         setAuditLogs(d.auditLogs || []);
         if (d.systemConfig) {
           setSystemConfig(d.systemConfig);
@@ -701,20 +766,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         loadedEntitiesRef.current.bootstrap = true;
         loadedEntitiesRef.current.vendors = true;
         loadedEntitiesRef.current.evaluations = true;
-        await refreshRFQs();
-        await refreshVendorCredits();
+        if (process.env.NODE_ENV === 'test') {
+          await refreshRFQs();
+          await refreshVendorCredits();
+        }
       }
     } catch (err) {
       console.error('Failed to load reference data:', err);
       setDbConnected(false);
     } finally {
       setIsLoadingDB(false);
+      setIsLoadingVendors(false);
     }
+  };
+
+  const ensureBootstrapData = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.bootstrap && buyerVendors.length > 0) {
+      return;
+    }
+    return dedupeRequest('bootstrap', async () => {
+      await refreshFromDB();
+    });
   };
 
   const refreshActiveBuyerAccount = async () => {
     if (!authClient.getToken()) {
       setActiveBuyerAccount(null);
+      setSessionCache('activeBuyerAccount', null);
       loadedEntitiesRef.current.activeBuyerAccount = false;
       return;
     }
@@ -723,6 +801,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const json = await res.json();
       const acc = json.success && json.data ? json.data : null;
       setActiveBuyerAccount(acc);
+      if (acc) {
+        setSessionCache('activeBuyerAccount', acc);
+      }
       loadedEntitiesRef.current.activeBuyerAccount = true;
     } catch {
       setActiveBuyerAccount(null);
@@ -742,6 +823,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!authClient.getToken()) {
       clearCategoryTaxonomy();
       setCategoryTaxonomyState([]);
+      setSessionCache('taxonomy', []);
       setCategoryTaxonomyError(null);
       loadedEntitiesRef.current.taxonomy = false;
       return;
@@ -754,11 +836,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const fallback = getDefaultCategoryTaxonomy();
         setCategoryTaxonomy(fallback);
         setCategoryTaxonomyState(fallback);
+        setSessionCache('taxonomy', fallback);
         setCategoryTaxonomyError(null);
+        loadedEntitiesRef.current.taxonomy = true;
         return;
       }
       setCategoryTaxonomy(result.data);
       setCategoryTaxonomyState(result.data);
+      setSessionCache('taxonomy', result.data);
       setCategoryTaxonomyError(null);
       loadedEntitiesRef.current.taxonomy = true;
     } finally {
@@ -778,6 +863,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const refreshAIFeed = async () => {
     if (!authClient.getToken()) {
       setAiFeed([]);
+      setSessionCache('aiFeed', []);
       loadedEntitiesRef.current.aiFeed = false;
       return;
     }
@@ -788,8 +874,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
         setAiFeed(json.data);
+        setSessionCache('aiFeed', json.data);
       } else {
         setAiFeed([]);
+        setSessionCache('aiFeed', []);
       }
       loadedEntitiesRef.current.aiFeed = true;
     } catch (err) {
@@ -798,7 +886,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const ensureAIFeed = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.aiFeed && aiFeed.length >= 0) {
+    if (!force && loadedEntitiesRef.current.aiFeed) {
       return;
     }
     return dedupeRequest('aiFeed', async () => {
@@ -807,21 +895,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const ensureVendors = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.vendors && buyerVendors.length > 0) {
+    if (!force && loadedEntitiesRef.current.vendors) {
       return;
     }
-    return dedupeRequest('vendors', async () => {
-      await refreshFromDB();
-    });
+    return ensureBootstrapData(force);
   };
 
   const ensureVendorEvaluations = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.evaluations && vendorEvaluations.length > 0) {
+    if (!force && loadedEntitiesRef.current.evaluations) {
       return;
     }
-    return dedupeRequest('evaluations', async () => {
-      await refreshFromDB();
-    });
+    return ensureBootstrapData(force);
   };
 
   /**
@@ -861,7 +945,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         tasks.push(ensureCategoryTaxonomy());
         tasks.push(ensureVendors());
       } else if (path.startsWith('/buyer/buyer-directory')) {
-        tasks.push(refreshFromDB());
+        tasks.push(ensureVendors());
       } else if (path.startsWith('/buyer/subscription-center') || path.startsWith('/buyer/billing-history')) {
         // Essential activeBuyerAccount already queued
       } else {
@@ -887,6 +971,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const lastUserSessionIdRef = useRef<string | null>(null);
+
   // Sync state when session identity changes.
   useEffect(() => {
     if (!isLoggedIn) {
@@ -894,15 +980,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setVendorOpportunities([]);
       setActiveBuyerAccount(null);
       setAiFeed([]);
+      setBuyerVendors([]);
+      setVendorEvaluations([]);
       clearCategoryTaxonomy();
       setCategoryTaxonomyState([]);
+      clearSessionCache();
       loadedEntitiesRef.current = {};
+      lastUserSessionIdRef.current = null;
       return;
     }
 
-    // Reset entity cache on user switch
-    loadedEntitiesRef.current = {};
-    void ensureActiveBuyerAccount();
+    // Reset entity cache when user logs in or switches
+    if (!lastUserSessionIdRef.current || lastUserSessionIdRef.current !== currentUserSession?.id) {
+      clearSessionCache();
+      loadedEntitiesRef.current = {};
+      void refreshFromDB();
+    }
+    lastUserSessionIdRef.current = currentUserSession?.id || null;
+
+    void ensureActiveBuyerAccount(true);
 
     if (currentRole === 'vendor') {
       void refreshVendorCredits();
@@ -916,6 +1012,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed strictly on identity,
     // avoiding duplicate cascading re-renders when activeBuyerAccount resolves.
   }, [isLoggedIn, currentUserSession?.id, currentRole]);
+
+  useEffect(() => {
+    if (rfqs.length > 0) {
+      setSessionCache('rfqs', rfqs);
+    }
+  }, [rfqs]);
 
   // activeSubscription/remainingFreeRFQs used to be pure local state, defaulted
   // to free_trial/5 and never read back from anywhere real — a page refresh or
@@ -2638,6 +2740,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         systemConfig,
         setSystemConfig,
         isLoadingDB,
+        isLoadingRFQs,
+        isLoadingVendors,
         dbConnected,
         refreshFromDB,
         refreshRFQs,

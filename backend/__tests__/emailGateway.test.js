@@ -3221,6 +3221,16 @@ describe('emailGatewayService.extractRfqReferenceFromEmail', () => {
     expect(res.targetRfq).toBeNull();
     expect(res.referencedNumber).toContain('RFQ-2026-0008');
   });
+
+  test('ignores generic English words like RFQs in signatures or body', async () => {
+    jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue(null);
+    const res = await emailGatewayService.extractRfqReferenceFromEmail({
+      subject: 'Quotation Request for Consumables',
+      bodyText: 'Please find attached list. Buyers - Raise unlimited RFQs for free. Sellers - Get access to genuine RFQs',
+    });
+    expect(res.targetRfq).toBeNull();
+    expect(res.referencedNumber).toBeNull();
+  });
 });
 
 describe('emailGatewayService.resolveVendorFromEmail', () => {
@@ -3260,5 +3270,54 @@ describe('emailGatewayService.resolveVendorFromEmail', () => {
     expect(await emailGatewayService.resolveVendorFromEmail('unknown@nowhere.com')).toBeNull();
   });
 });
+
+describe('emailGatewayService dual-registered buyer and vendor handling', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  test('allows dual-registered buyer who is also in vendors table to raise RFQs via email', async () => {
+    const dualEmail = 'dual.user@procucev.com';
+    const mockBuyer = { id: 'buyer-dual-1', corporateEmail: dualEmail, plan: 'growth', remainingFreeRFQs: 10 };
+    const mockVendor = { id: 'vendor-dual-1', email: dualEmail, name: 'Dual Vendor' };
+
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(mockBuyer);
+    jest.spyOn(emailGatewayService, 'resolveVendorFromEmail').mockResolvedValue(mockVendor);
+    jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue(null);
+
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      model: 'gemini-test',
+      documentTitle: 'Safety Equipment Requisition',
+      lineItems: [{ itemName: 'Safety Gloves', quantity: 100, unit: 'pairs' }],
+    });
+
+    jest.spyOn(storeService, 'createRFQ').mockReturnValue({
+      id: 'rfq-dual-created',
+      rfqNumber: 'RFQ-2026-9999',
+    });
+
+    const emlContent = `From: ${dualEmail}
+To: client@procucev.com
+Subject: Quotation Request for Consumables
+Message-ID: <dual-msg-1@procucev.com>
+Date: Fri, 23 Oct 2026 15:17:43 +0530
+Content-Type: text/plain
+
+Please find attached the list of consumables required.
+Buyers - Raise unlimited RFQs for free
+`;
+
+    const raw = Buffer.from(emlContent, 'utf8');
+    const outcome = await emailGatewayService.processMessage(
+      raw,
+      emailGatewayService.resolveConfig(FULL_ENV)
+    );
+
+    // Must NOT be INVALID_RFQ; must succeed in ingesting RFQ for the buyer
+    expect(outcome.status).not.toBe(INGESTION_OUTCOME.INVALID_RFQ);
+    expect(outcome.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(outcome.rfq.rfqNumber).toBe('RFQ-2026-9999');
+  });
+});
+
 
 

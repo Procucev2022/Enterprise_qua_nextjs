@@ -707,11 +707,14 @@ class StoreService {
       if (!scopedBuyerId) {
         return false;
       }
-      const sId = String(scopedBuyerId).toLowerCase();
-      return (
-        (v.buyerId && String(v.buyerId).toLowerCase() === sId) ||
-        (v.buyerAccountId && String(v.buyerAccountId).toLowerCase() === sId) ||
-        (v.buyerEmail && String(v.buyerEmail).toLowerCase() === sId)
+      const candidateIds = Array.isArray(scopedBuyerId)
+        ? scopedBuyerId.map((id) => String(id).toLowerCase())
+        : [String(scopedBuyerId).toLowerCase()];
+      return candidateIds.some(
+        (sId) =>
+          (v.buyerId && String(v.buyerId).toLowerCase() === sId) ||
+          (v.buyerAccountId && String(v.buyerAccountId).toLowerCase() === sId) ||
+          (v.buyerEmail && String(v.buyerEmail).toLowerCase() === sId)
       );
     });
   }
@@ -722,11 +725,15 @@ class StoreService {
     if (scopedBuyerId === 'all') return vendor;
     if (!vendor.buyerId && !vendor.buyerAccountId) return vendor;
     if (!scopedBuyerId) return undefined;
-    const sId = String(scopedBuyerId).toLowerCase();
-    const matches =
-      (vendor.buyerId && String(vendor.buyerId).toLowerCase() === sId) ||
-      (vendor.buyerAccountId && String(vendor.buyerAccountId).toLowerCase() === sId) ||
-      (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId);
+    const candidateIds = Array.isArray(scopedBuyerId)
+      ? scopedBuyerId.map((id) => String(id).toLowerCase())
+      : [String(scopedBuyerId).toLowerCase()];
+    const matches = candidateIds.some(
+      (sId) =>
+        (vendor.buyerId && String(vendor.buyerId).toLowerCase() === sId) ||
+        (vendor.buyerAccountId && String(vendor.buyerAccountId).toLowerCase() === sId) ||
+        (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId)
+    );
     return matches ? vendor : undefined;
   }
 
@@ -2000,7 +2007,7 @@ class StoreService {
   async syncRFQsFromDB(force = false) {
     if (!pool.hasStorage()) return this.getRFQs();
     const now = Date.now();
-    if (!force && this._lastRfqSyncTime && (now - this._lastRfqSyncTime < 5000)) {
+    if (!force && this._lastRfqSyncTime && (now - this._lastRfqSyncTime < 25000)) {
       return this.getRFQs();
     }
     if (this._syncRFQsPromise) {
@@ -5432,24 +5439,13 @@ class StoreService {
         }
       }
     } else if (scopedBuyerId && pool.hasStorage()) {
-      // Own vendors first, unconditionally (a buyer's own vendor count is
-      // realistically small, but still bounded via getVendorsByBuyerFromDB
-      // rather than trusting that assumption) — the same "own vendors never
-      // get pushed out of the window" rule the comment below used to
-      // implement via a full in-memory sync. That in-memory sync
-      // (this.getVendors(scopedBuyerId)) was a full unbounded re-fetch of
-      // the ENTIRE vendors table on every single bootstrap call for every
-      // buyer page load — confirmed live as the actual cause of D1's
-      // free-tier daily row-read cap being exhausted (6.7M rows read in 24h
-      // against a 20k-row table, via `wrangler d1 info`). Public vendors
-      // only fill whatever room is left, fetched with the same bounded,
-      // public-only page query the unscoped branch above already uses.
-      const ownVendors = await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
+      const ownVendors = sessionEmail
+        ? await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS, sessionEmail)
+        : await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
       const remaining = Math.max(0, MAX_BOOTSTRAP_VENDORS - ownVendors.length);
-      const publicPage =
-        remaining > 0
-          ? await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true })
-          : { rows: [], total: 0 };
+      const publicPage = remaining > 0
+        ? await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true })
+        : { rows: [], total: 0 };
       vendors = [...ownVendors, ...publicPage.rows];
       vendorsTotal = ownVendors.length + publicPage.total;
       if (sessionEmail) {
@@ -5466,8 +5462,25 @@ class StoreService {
       // LIMIT to lean on here.
       const allVendors = await this.getVendors(scopedBuyerId);
       vendorsTotal = allVendors.length;
-      const ownVendors = scopedBuyerId ? allVendors.filter((v) => v.buyerId === scopedBuyerId || v.buyerAccountId === scopedBuyerId) : [];
-      const publicVendors = scopedBuyerId ? allVendors.filter((v) => !(v.buyerId === scopedBuyerId || v.buyerAccountId === scopedBuyerId)) : allVendors;
+      const candidateIds = new Set();
+      if (Array.isArray(scopedBuyerId)) scopedBuyerId.forEach((id) => id && candidateIds.add(String(id).toLowerCase()));
+      else if (scopedBuyerId) candidateIds.add(String(scopedBuyerId).toLowerCase());
+      if (sessionEmail) candidateIds.add(String(sessionEmail).toLowerCase());
+
+      const ownVendors = candidateIds.size > 0
+        ? allVendors.filter((v) =>
+            candidateIds.has(String(v.buyerId || '').toLowerCase()) ||
+            candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) ||
+            candidateIds.has(String(v.buyerEmail || '').toLowerCase())
+          )
+        : [];
+      const publicVendors = candidateIds.size > 0
+        ? allVendors.filter((v) =>
+            !candidateIds.has(String(v.buyerId || '').toLowerCase()) &&
+            !candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) &&
+            !candidateIds.has(String(v.buyerEmail || '').toLowerCase())
+          )
+        : allVendors;
       vendors = [...ownVendors, ...publicVendors].slice(0, MAX_BOOTSTRAP_VENDORS);
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();
