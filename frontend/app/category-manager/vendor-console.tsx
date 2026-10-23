@@ -5,6 +5,7 @@ import { useApp } from '@/lib/store';
 import { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
+import { getMajorCategories } from '@/lib/categoryTaxonomy';
 import { formatCurrency } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import {
@@ -199,7 +200,7 @@ const VENDOR_CARDS_PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 350;
 
 export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluation }: VendorConsoleProps) {
-  const { rfqs } = useApp();
+  const { rfqs, categoryTaxonomy } = useApp();
   const [fetchedVendors, setFetchedVendors] = useState<RFQVendorCandidate[]>([]);
   const [vendorsPagination, setVendorsPagination] = useState<VendorPageMeta | null>(null);
   const [vendorsLoading, setVendorsLoading] = useState(true);
@@ -208,7 +209,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
-  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
+  const [categoryOptions, setCategoryOptions] = useState<string[]>(() => getMajorCategories());
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
   const [expandedQuoteNumber, setExpandedQuoteNumber] = useState<string | null>(null);
   // Tracks an explicit user collapse ("Hide Details") so dropdown-driven
@@ -229,12 +230,36 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   }, [searchTerm]);
 
   useEffect(() => {
-    void fetchCategoryTaxonomy().then((result) => {
-      if (result.success) {
-        setCategoryOptions(result.data.map((c) => c.majorCategory));
-      }
-    });
+    void fetchCategoryTaxonomy()
+      .then((result) => {
+        if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+          const fetched = result.data.map((c) => c.majorCategory).filter(Boolean);
+          if (fetched.length > 0) {
+            setCategoryOptions(fetched);
+          }
+        }
+      })
+      .catch(() => {
+        // Fall back gracefully to standard major categories
+      });
   }, []);
+
+  const effectiveCategoryOptions = useMemo(() => {
+    const set = new Set<string>();
+    const baseOptions = categoryOptions.length > 0 ? categoryOptions : getMajorCategories();
+    baseOptions.forEach((cat) => {
+      if (cat && cat.trim()) set.add(cat.trim());
+    });
+    if (Array.isArray(categoryTaxonomy)) {
+      categoryTaxonomy.forEach((c) => {
+        if (c?.majorCategory?.trim()) set.add(c.majorCategory.trim());
+      });
+    }
+    fetchedVendors.forEach((v) => {
+      if (v?.majorCategory?.trim()) set.add(v.majorCategory.trim());
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [categoryOptions, categoryTaxonomy, fetchedVendors]);
 
   const lastFetchedKeyRef = useRef<string | null>(null);
   // Guards against a slower, earlier request (e.g. the initial unfiltered
@@ -244,7 +269,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   const fetchSeqRef = useRef(0);
   useEffect(() => {
     const trimmedSearch = debouncedSearch.trim();
-    const matchedCat = categoryOptions.find(
+    const matchedCat = effectiveCategoryOptions.find(
       (c) => c.toLowerCase().trim() === trimmedSearch.toLowerCase()
     );
     const effectiveCategory = categoryFilter || matchedCat || '';
@@ -272,7 +297,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
       setVendorsLoading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, categoryFilter, categoryOptions]);
+  }, [debouncedSearch, categoryFilter, effectiveCategoryOptions]);
 
   const loadMoreVendors = () => {
     if (!vendorsPagination || vendorsLoadingMore) return;
@@ -932,7 +957,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
               className="select py-1.5 px-3 text-xs w-full sm:w-44 bg-white dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-medium"
             >
               <option value="">All categories</option>
-              {categoryOptions.map((c) => (
+              {effectiveCategoryOptions.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>

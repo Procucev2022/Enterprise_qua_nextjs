@@ -26,7 +26,10 @@ import {
   Loader2,
   Plus,
   X,
+  KeyRound,
+  Lock,
 } from 'lucide-react';
+import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 
 export default function VendorProfilePage() {
@@ -617,13 +620,22 @@ export default function VendorProfilePage() {
             Manage company registration, PAN/GSTIN compliance, and define your manufacturing / supply categories for direct buyer RFQs.
           </p>
         </div>
-        <button
-          onClick={handleSaveProfile}
-          disabled={isLoadingProfile || isSaving}
-          className="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-        >
-          <Save size={16} /> {isSaving ? 'Saving...' : 'Save Supplier Profile'}
-        </button>
+        <div className="flex items-center gap-2.5">
+          <a
+            href="#account-security"
+            className="btn btn-secondary btn-md font-bold flex items-center gap-1.5 shadow-xs"
+          >
+            <KeyRound size={16} className="text-emerald-600 dark:text-emerald-400" />
+            <span>Update Password</span>
+          </a>
+          <button
+            onClick={handleSaveProfile}
+            disabled={isLoadingProfile || isSaving}
+            className="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <Save size={16} /> {isSaving ? 'Saving...' : 'Save Supplier Profile'}
+          </button>
+        </div>
       </div>
 
       {isLoadingProfile && (
@@ -1232,6 +1244,30 @@ export default function VendorProfilePage() {
           </button>
         </div>
       </form>
+
+      {/* Section 4: Account & Security (Update Password) */}
+      {/* Sits outside the profile form above on purpose. The panel has its */}
+      {/* own submit handlers, and nesting a <form> inside another is invalid */}
+      {/* HTML — the inner one is dropped during parsing, which would wire the */}
+      {/* password button up to the profile save instead. */}
+      <div id="account-security" className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-gray-800 pb-3">
+          <div>
+            <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+              <KeyRound className="text-emerald-600 dark:text-emerald-400" size={18} />{' '}
+              {UI_STRINGS.accountSecurity.sectionTitle}
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+              {UI_STRINGS.accountSecurity.sectionDescription}
+            </p>
+          </div>
+          <span className="badge badge-emerald text-[11px] font-bold px-2.5 py-1 rounded-full self-start sm:self-auto flex items-center gap-1">
+            <ShieldCheck size={12} /> Password Security
+          </span>
+        </div>
+
+        <AccountSecurityPanel />
+      </div>
     </div>
   );
 }

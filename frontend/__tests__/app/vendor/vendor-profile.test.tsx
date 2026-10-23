@@ -556,5 +556,22 @@ describe('VendorProfilePage Comprehensive Suite', () => {
     fireEvent.click(removeLaserBtn);
     expect(screen.queryByTitle(/Remove Category: Advanced Laser Cutting/i)).not.toBeInTheDocument();
   });
+
+  it('renders clearly visible Update Password option and Account & Security section', async () => {
+    await renderWithProvider();
+
+    // Check top bar button
+    const updatePasswordTopBtn = screen.getByRole('link', { name: /Update Password/i });
+    expect(updatePasswordTopBtn).toBeInTheDocument();
+    expect(updatePasswordTopBtn).toHaveAttribute('href', '#account-security');
+
+    // Check Account & Security section with password input
+    const securitySection = document.getElementById('account-security');
+    expect(securitySection).toBeInTheDocument();
+    expect(screen.getByText(/Section 4: Security/i)).toBeInTheDocument();
+    expect(screen.getByText(/Change Sign-In Password/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Min 8 characters/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Re-enter new password/i)).toBeInTheDocument();
+  });
 });
 
