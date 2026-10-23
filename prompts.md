@@ -3602,5 +3602,40 @@ fix this isses
 continue
 ```
 
+---
 
+### 2026-10-23T12:02:20+05:30
 
+```text
+RFQ details should be visible to all vendors, even if they have not received an invitation. Vendors should be able to view RFQs across V0, V2, and V3, and submit quotations according to the applicable free-credit and subscription rules. 
+ This is buyer-invited vendors, quotation submission should be unlimited for RFQs created by that specific buyer. However, when submitting quotations for RFQs from other buyers, the vendor should be prompted to subscribe after using the 5 free quotation credits. This functionality was working previously. Please check and fix the issue.
+
+only need to do two thing one comparing changes in prod last commit and 2nd last commit from prod-v2 and just check where the function have been remove and add it and create branch and raise pr and update the prod it will be working
+```
+
+---
+
+### 2026-10-23T12:08:50+05:30
+
+```text
+[12:05, 23/10/2026] +91 99667 66905: When I log in as a vendor, I am unable to view all RFQs to submit quotations. Only one RFQ is visible, and it is from a V1 buyer who invited the vendor.
+Please fix this issue so that vendors can view all relevant RFQs from V0, V2, and V3 buyers and submit their quotations accordingly.
+If a vendor is invited by a V1 buyer, the vendor should also be able to view and access all relevant RFQs from V0, V1, V2, and V3 buyers. The vendor should be able to submit quotations using the 5 free credits provided. Once all 5 free credits are used, a subscription popup should automatically appear, prompting the vendor to subscribe to continue using the platform.
+[12:05, 23/10/2026] +91 99667 66905: yesterday was working fine today it is not working
+```
+
+---
+
+### 2026-10-23T12:11:01+05:30
+
+```text
+https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/316 check this pr aftet this issue was coming
+```
+
+---
+
+### 2026-10-23T12:28:34+05:30
+
+```text
+okay start working you need to do some thing
+```

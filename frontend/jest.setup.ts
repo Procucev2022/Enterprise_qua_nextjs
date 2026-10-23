@@ -271,21 +271,23 @@ global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: stri
         const pinMatch = url.match(/\/pincode\/(\d{6})/);
         const pin = pinMatch ? pinMatch[1] : '';
         const isNaviMumbai = pin.startsWith('4007');
+        const isPune = pin.startsWith('411');
+        const cityName = isNaviMumbai ? 'Navi Mumbai' : isPune ? 'Pune' : 'Mumbai';
         return [
           {
             Status: 'Success',
             Message: 'Number of pincode found:1',
             PostOffice: [
               {
-                Name: isNaviMumbai ? 'Navi Mumbai' : 'Mumbai',
+                Name: cityName,
                 Description: null,
                 BranchType: 'Sub Post Office',
                 DeliveryStatus: 'Delivery',
                 Circle: 'Maharashtra',
-                District: isNaviMumbai ? 'Navi Mumbai' : 'Mumbai',
-                Division: 'Navi Mumbai',
-                Region: 'Mumbai',
-                Block: 'Thane',
+                District: cityName,
+                Division: cityName,
+                Region: cityName,
+                Block: cityName,
                 State: 'Maharashtra',
                 Country: 'India',
                 Pincode: pin,
