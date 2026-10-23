@@ -3639,3 +3639,11 @@ https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/316 check this pr aft
 ```text
 okay start working you need to do some thing
 ```
+
+---
+
+### 2026-10-23T16:17:05+05:30
+
+```text
+Please remove the “Close RFQ” button from the vendor side. Currently, when a vendor clicks it, the RFQ gets closed. Only the buyer and Category Manager should have permission to close an RFQ.
+```
