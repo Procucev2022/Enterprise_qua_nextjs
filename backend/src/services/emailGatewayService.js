@@ -1627,8 +1627,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
-  let authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
-  const authorisation = await resolveSenderAuthorisation(message.fromAddress, config, buyerAccount);
+  let authorisation = await resolveSenderAuthorisation(message.fromAddress, config, buyerAccount);
   if (!authorisation.allowed) {
     const isDomainOrSenderRestricted =
       (Array.isArray(config?.allowedSenders) && config.allowedSenders.length > 0 && !config.allowedSenders.includes(String(message.fromAddress || '').toLowerCase())) ||

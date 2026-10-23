@@ -3680,3 +3680,113 @@ i send the email to dev email create we check the flow
 send the credentials from here then i check it is working or not
 ```
 
+---
+
+### 2026-10-23T17:13:06+05:30
+
+```text
+veerababu.v@procucev.com this email as already existing use 
+srinu20262025@gmail.com
+```
+
+---
+
+### 2026-10-23T21:51:32+05:30
+
+```text
+FAIL __tests__/supportChat.test.js
+● Test suite failed to run
+Jest encountered an unexpected token
+Jest failed to parse a file. This happens e.g. when your code or its dependencies use non-standard JavaScript syntax, or when Jest is not configured to support such syntax.
+Out of the box Jest supports Babel, which will be used to transform your files into valid JS based on your Babel configuration.
+By default "node_modules" folder is ignored by transformers.
+Here's what you can do:
+• If you are trying to use ECMAScript Modules, see https://jestjs.io/docs/ecmascript-modules for how to enable it.
+• If you are trying to use TypeScript, see https://jestjs.io/docs/getting-started#using-typescript
+• To have some of your "node_modules" files transformed, you can specify a custom "transformIgnorePatterns" in your config.
+• If you need a custom transformation specify a "transform" option in your config.
+• If you simply want to mock your non-JS modules (e.g. binary assets) you can stub them out with the "moduleNameMapper" config option.
+You'll find more details and examples of these config options in the docs:
+https://jestjs.io/docs/configuration
+For information about custom transformations, see:
+https://jestjs.io/docs/code-transformation
+Details:
+SyntaxError: /home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/src/services/emailGatewayService.js: Identifier 'authorisation' has already been declared. (1631:8)
+1629 | // 2. Otherwise process as Inbound Buyer RFQ Requisition
+1630 | let authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
+> 1631 | const authorisation = await resolveSenderAuthorisation(message.fromAddress, config, buyerAccount);
+| ^
+1632 | if (!authorisation.allowed) {
+1633 | const isDomainOrSenderRestricted =
+1634 | (Array.isArray(config?.allowedSenders) && config.allowedSenders.length > 0 && !config.allowedSenders.includes(String(message.fromAddress || '').toLowerCase())) ||
+9 | const rfqSummaryService = require('../services/rfqSummaryService');
+10 | const { logger } = require('../services/loggerService');
+> 11 | const emailGatewayService = require('../services/emailGatewayService');
+| ^
+12 | const emailIngestionService = require('../services/emailIngestionService');
+13 | const mailerService = require('../services/mailerService');
+14 | const extractionStagingService = require('../services/extractionStagingService');
+at constructor (node_modules/@babel/parser/src/parse-error.ts:96:45)
+at Parser.toParseError [as raise] (node_modules/@babel/parser/src/tokenizer/index.ts:1504:19)
+at ScopeHandler.raise [as checkRedeclarationInScope] (node_modules/@babel/parser/src/util/scope.ts:164:19)
+at ScopeHandler.checkRedeclarationInScope [as declareName] (node_modules/@babel/parser/src/util/scope.ts:118:12)
+at Parser.declareName [as declareNameFromIdentifier] (node_modules/@babel/parser/src/parser/lval.ts:876:16)
+at Parser.declareNameFromIdentifier [as checkIdentifier] (node_modules/@babel/parser/src/parser/lval.ts:871:12)
+at Parser.checkIdentifier [as checkLVal] (node_modules/@babel/parser/src/parser/lval.ts:763:12)
+at Parser.checkLVal [as parseVarId] (node_modules/@babel/parser/src/parser/statement.ts:1633:10)
+at Parser.parseVarId [as parseVar] (node_modules/@babel/parser/src/parser/statement.ts:1582:12)
+at Parser.parseVar [as parseVarStatement] (node_modules/@babel/parser/src/parser/statement.ts:1251:10)
+at Parser.parseVarStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:612:21)
+at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:482:17)
+at Parser.parseStatementLike [as parseStatementListItem] (node_modules/@babel/parser/src/parser/statement.ts:431:17)
+at Parser.parseStatementListItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1444:16)
+at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1417:10)
+at Parser.parseBlockBody [as parseBlock] (node_modules/@babel/parser/src/parser/statement.ts:1385:10)
+at Parser.parseBlock [as parseFunctionBody] (node_modules/@babel/parser/src/parser/expression.ts:2651:24)
+at Parser.parseFunctionBody [as parseFunctionBodyAndFinish] (node_modules/@babel/parser/src/parser/expression.ts:2620:10)
+at parseFunctionBodyAndFinish (node_modules/@babel/parser/src/parser/statement.ts:1695:12)
+at Parser.callback [as withSmartMixTopicForbiddingContext] (node_modules/@babel/parser/src/parser/expression.ts:3201:14)
+at Parser.withSmartMixTopicForbiddingContext [as parseFunction] (node_modules/@babel/parser/src/parser/statement.ts:1693:10)
+at Parser.parseFunction [as parseFunctionStatement] (node_modules/@babel/parser/src/parser/statement.ts:1080:17)
+at Parser.parseFunctionStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:673:23)
+at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:482:17)
+at Parser.parseStatementLike [as parseModuleItem] (node_modules/@babel/parser/src/parser/statement.ts:419:17)
+at Parser.parseModuleItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1443:16)
+at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1417:10)
+at Parser.parseBlockBody [as parseProgram] (node_modules/@babel/parser/src/parser/statement.ts:229:10)
+at Parser.parseProgram [as parseTopLevel] (node_modules/@babel/parser/src/parser/statement.ts:203:25)
+at Parser.parseTopLevel [as parse] (node_modules/@babel/parser/src/parser/index.ts:83:25)
+at parse (node_modules/@babel/parser/src/index.ts:86:38)
+at parser (node_modules/@babel/core/src/parser/index.ts:29:19)
+at parser.next (<anonymous>)
+at normalizeFile (node_modules/@babel/core/src/transformation/normalize-file.ts:49:24)
+at normalizeFile.next (<anonymous>)
+at run (node_modules/@babel/core/src/transformation/index.ts:41:36)
+at run.next (<anonymous>)
+at transform (node_modules/@babel/core/src/transform.ts:29:20)
+at transform.next (<anonymous>)
+at evaluateSync (node_modules/gensync/index.js:251:28)
+at sync (node_modules/gensync/index.js:89:14)
+at fn (node_modules/@babel/core/src/errors/rewrite-stack-trace.ts:99:14)
+at transformSync (node_modules/@babel/core/src/transform.ts:66:52)
+at ScriptTransformer.transformSource (node_modules/@jest/transform/build/ScriptTransformer.js:545:31)
+at ScriptTransformer._transformAndBuildScript (node_modules/@jest/transform/build/ScriptTransformer.js:674:40)
+at ScriptTransformer.transform (node_modules/@jest/transform/build/ScriptTransformer.js:726:19)
+at Object.require (src/controllers/rfqController.js:11:29)
+at Object.require (src/routes/rfqs.js:3:23)
+at Object.require (src/routes/index.js:4:19)
+at Object.require (src/app.js:17:19)
+at Object.require (__tests__/supportChat.test.js:2:13)
+Test Suites: 42 failed, 57 passed, 99 total
+Tests: 1369 passed, 1369 total
+Snapshots: 0 total
+Time: 50.848 s
+Ran all test suites.
+Force exiting Jest: Have you considered using --detectOpenHandles to detect async operations that kept running after all tests finished?
+Error: Process completed with exit code 1.
+0s
+0s
+0s
+1s
+```
+
