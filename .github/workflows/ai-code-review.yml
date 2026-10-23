@@ -1,0 +1,27 @@
+name: Request Copilot Review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+jobs:
+  request-copilot:
+    # Avoid requesting review on draft PRs
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Request Copilot as Reviewer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Request @copilot as reviewer using GitHub CLI
+          gh pr edit "$PR_NUMBER" --repo "$GH_REPO" --add-reviewer "@copilot"
