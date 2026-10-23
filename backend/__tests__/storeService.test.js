@@ -2645,6 +2645,18 @@ describe('demo RFQ seeding', () => {
         expect(result.vendors.some((v) => v.id === 'v-own')).toBe(true);
         expect(result.vendors.some((v) => v.id === 'v-public')).toBe(true);
       });
+
+      test('scoped bootstrap passes sessionEmail and supports candidate array', async () => {
+        const ownVendor = { id: 'v-dump-1', email: 'v1@example.com', buyerId: 'buyer-acc-2580', source: 'historical_purchase_dump' };
+        const ownSpy = jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValue([ownVendor]);
+        jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({ rows: [], total: 0 });
+        jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
+
+        const result = await storeService.getBootstrapData(['org-uuid-1', 'buyer-acc-2580'], 'buyer@example.com');
+
+        expect(ownSpy).toHaveBeenCalledWith(['org-uuid-1', 'buyer-acc-2580'], expect.any(Number), 'buyer@example.com');
+        expect(result.vendors.some((v) => v.id === 'v-dump-1')).toBe(true);
+      });
     });
   });
 

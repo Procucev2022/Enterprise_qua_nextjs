@@ -781,7 +781,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const ensureBootstrapData = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.bootstrap) {
+    if (!force && loadedEntitiesRef.current.bootstrap && buyerVendors.length > 0) {
       return;
     }
     return dedupeRequest('bootstrap', async () => {
@@ -971,7 +971,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const lastUserSessionIdRef = useRef<string | null>(currentUserSession?.id || null);
+  const lastUserSessionIdRef = useRef<string | null>(null);
 
   // Sync state when session identity changes.
   useEffect(() => {
@@ -980,6 +980,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setVendorOpportunities([]);
       setActiveBuyerAccount(null);
       setAiFeed([]);
+      setBuyerVendors([]);
+      setVendorEvaluations([]);
       clearCategoryTaxonomy();
       setCategoryTaxonomyState([]);
       clearSessionCache();
@@ -988,14 +990,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    // Reset entity cache on user switch only
-    if (lastUserSessionIdRef.current && lastUserSessionIdRef.current !== currentUserSession?.id) {
+    // Reset entity cache when user logs in or switches
+    if (!lastUserSessionIdRef.current || lastUserSessionIdRef.current !== currentUserSession?.id) {
       clearSessionCache();
       loadedEntitiesRef.current = {};
+      void refreshFromDB();
     }
     lastUserSessionIdRef.current = currentUserSession?.id || null;
 
-    void ensureActiveBuyerAccount();
+    void ensureActiveBuyerAccount(true);
 
     if (currentRole === 'vendor') {
       void refreshVendorCredits();
