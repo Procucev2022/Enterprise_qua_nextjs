@@ -675,18 +675,22 @@ let roundRobinKeyIndex = 0;
 const modelKeyIndices = new Map();
 const keyCooldowns = new Map();
 let activeModelIndex = 0;
-function getQuotaDate() {
+function getQuotaDate(at = new Date()) {
   const dateParts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Los_Angeles',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).formatToParts(new Date());
+  }).formatToParts(at);
   const parts = Object.fromEntries(dateParts.map(({ type, value }) => [type, value]));
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-let lastResetDate = getQuotaDate();
+// The first timezone-aware Intl call loads ICU zone data (~120ms of Worker
+// startup CPU), so the load-time quota date is resolved on first check instead,
+// still from the moment the module loaded.
+const moduleLoadedAt = new Date();
+let lastResetDate;
 let lastFailoverTimestamp = 0;
 
 /**
@@ -699,6 +703,7 @@ function checkDailyModelReset() {
   const now = Date.now();
   const ttlMs = GEMINI_CONFIG.MODEL_RESET_TTL_MS || 24 * 60 * 60 * 1000;
 
+  if (lastResetDate === undefined) lastResetDate = getQuotaDate(moduleLoadedAt);
   const isNewDay = lastResetDate !== today;
   const isTtlExpired = lastFailoverTimestamp > 0 && now - lastFailoverTimestamp >= ttlMs;
 

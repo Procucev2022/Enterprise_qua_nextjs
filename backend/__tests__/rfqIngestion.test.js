@@ -5,6 +5,7 @@ const ingestion = require('../src/services/rfqIngestionService');
 const storeService = require('../src/services/storeService');
 const rfqSummaryService = require('../src/services/rfqSummaryService');
 const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG } = require('../src/config/constants');
+const buyerProfileQueries = require('../src/db/buyerProfileQueries');
 const { CATEGORY_TAXONOMY_FIXTURE: taxonomy } = require('./fixtures/categoryTaxonomy');
 const { authHeader } = require('./testHelpers');
 
@@ -19,9 +20,39 @@ beforeEach(() => {
 
 afterEach(() => {
   ingestion.resetTaxonomyIndex();
+  jest.restoreAllMocks();
 });
 
 describe('RFQ ingestion service (AI line-item classification)', () => {
+  describe('ensureTaxonomyLoaded', () => {
+    test('returns existing index if loaded and fresh', async () => {
+      ingestion.primeTaxonomyIndex(taxonomy);
+      const result = await ingestion.ensureTaxonomyLoaded();
+      expect(result.groupCount).toBeGreaterThan(0);
+    });
+
+    test('loads from buyerProfileQueries when reset', async () => {
+      ingestion.resetTaxonomyIndex();
+      jest.spyOn(buyerProfileQueries, 'findCategoryTaxonomy').mockResolvedValueOnce(taxonomy);
+      const result = await ingestion.ensureTaxonomyLoaded();
+      expect(result.groupCount).toBeGreaterThan(0);
+      expect(result.majorByKey.size).toBeGreaterThan(0);
+    });
+
+    test('falls back to default taxonomy if query returns empty array', async () => {
+      ingestion.resetTaxonomyIndex();
+      jest.spyOn(buyerProfileQueries, 'findCategoryTaxonomy').mockResolvedValueOnce([]);
+      const result = await ingestion.ensureTaxonomyLoaded();
+      expect(result.groupCount).toBeGreaterThan(0);
+    });
+
+    test('falls back to default taxonomy if query throws error', async () => {
+      ingestion.resetTaxonomyIndex();
+      jest.spyOn(buyerProfileQueries, 'findCategoryTaxonomy').mockRejectedValueOnce(new Error('DB failure'));
+      const result = await ingestion.ensureTaxonomyLoaded();
+      expect(result.groupCount).toBeGreaterThan(0);
+    });
+  });
   // ── Generic category detection ─────────────────────────────────────────────
   describe('isGenericCategory', () => {
     test.each(['', '   ', 'various', 'Multiple', 'NOT SPECIFIED', 'n/a', 'misc', 'general goods'])(
@@ -852,7 +883,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       const vendorRes = await request(app)
         .post('/api/vendors')
         .set(authHeader('vendor'))
-        .send({ name: 'Scoping Test Vendor', majorCategory: 'Vendor-Scope-Cat' });
+        .send({ name: 'Scoping Test Vendor', majorCategory: 'Civil Works' });
       vendorId = vendorRes.body.data.id;
 
       const buyerRes = await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({
@@ -869,7 +900,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       // requiring an explicit CM invite, which is what's under test here.
       const inCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
         title: 'Vendor-visible scoped enquiry',
-        category: 'Vendor-Scope-Cat',
+        category: 'Civil Works',
         budget: 1000,
         targetDeliveryDate: '2026-12-01',
         deadline: '2026-12-01',
@@ -882,7 +913,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
 
       const outCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
         title: 'Vendor-hidden scoped enquiry',
-        category: 'Some-Other-Scope-Cat',
+        category: 'Logistics',
         budget: 1000,
         targetDeliveryDate: '2026-12-01',
         deadline: '2026-12-01',
@@ -1106,6 +1137,175 @@ describe('RFQ ingestion & summary HTTP routes', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
+    });
+  });
+
+  describe('RFQ Category Auto-Mapping Fixes (Grocery, Medical Equipment, Independent Classification)', () => {
+    test('classifies grocery products (sugar, dals) to Others – New Product / Food & Beverages even when document has engineering spares header', () => {
+      const groceryList = [
+        'SUGAR PACKING',
+        'SUGAR REFINED',
+        'SUGAR LOOSE',
+        'MADHUR SUGAR-1KG',
+        'TOOR DAL LOOSE',
+        'GRAM DAL',
+        'GRAM DAL LOOSE',
+        'CHANA DAL',
+        'MOONG DAL',
+        'URAD DAL',
+      ];
+
+      groceryList.forEach((itemName) => {
+        const result = ingestion.classifyLineItem(
+          { itemName, technicalSpecs: 'Food supply packaging' },
+          'Engineering Spares - Mechanical' // Payload-level category that must NOT override grocery item!
+        );
+        expect(result.majorCategory).toBe('Others – New Product');
+        expect(result.minorCategory).toBe('Food & Beverages');
+        expect(ingestion.isMinorUnderMajor(result.majorCategory, result.minorCategory)).toBe(true);
+      });
+    });
+
+    test('classifies a simulated 279-item grocery document independently and consistently', () => {
+      const groceryVariants = [
+        'SUGAR PACKING',
+        'SUGAR REFINED',
+        'SUGAR LOOSE',
+        'MADHUR SUGAR-1KG',
+        'TOOR DAL LOOSE',
+        'GRAM DAL',
+        'GRAM DAL LOOSE',
+      ];
+      const items = Array.from({ length: 279 }, (_, i) => ({
+        id: `item-${i + 1}`,
+        itemName: `${groceryVariants[i % groceryVariants.length]} Batch ${Math.floor(i / 7) + 1}`,
+        quantity: (i % 50) + 1,
+        unit: 'Kg',
+        technicalSpecs: 'Standard food grade grocery packaging',
+      }));
+
+      const { entities } = ingestion.normalizeLineItems(items, { category: 'Engineering Spares - Electrical' });
+      expect(entities).toHaveLength(279);
+      entities.forEach((entity) => {
+        expect(entity.majorCategory).toBe('Others – New Product');
+        expect(entity.minorCategory).toBe('Food & Beverages');
+        expect(ingestion.isMinorUnderMajor(entity.majorCategory, entity.minorCategory)).toBe(true);
+      });
+    });
+
+    test('classifies medical equipment by product description rather than component material keyword in specs', () => {
+      // Stethoscope with "stainless-steel chest piece" must NOT map to Raw Material / Steels!
+      const stethoscope = ingestion.classifyLineItem({
+        itemName: 'Stethoscope',
+        technicalSpecs: 'Dual lumen tube with stainless-steel chest piece and brass binaurals',
+      });
+      expect(stethoscope.majorCategory).toBe('Others – New Product');
+      expect(stethoscope.minorCategory).toBe('Health Equipments');
+      expect(stethoscope.majorCategory).not.toBe('Raw Material');
+      expect(stethoscope.minorCategory).not.toBe('Steels');
+
+      const oximeter = ingestion.classifyLineItem({
+        itemName: 'Pulse Oximeter',
+        technicalSpecs: 'Fingertip digital OLED display with ABS plastic housing',
+      });
+      expect(oximeter.majorCategory).toBe('Others – New Product');
+      expect(oximeter.minorCategory).toBe('Health Equipments');
+
+      const gloves = ingestion.classifyLineItem({
+        itemName: 'Disposable Gloves',
+        technicalSpecs: 'Powder free nitrile examination gloves',
+      });
+      expect(gloves.majorCategory).toBe('Occuptional Health and Safety');
+      expect(gloves.minorCategory).toBe('Gloves');
+
+      const surgical = ingestion.classifyLineItem({
+        itemName: 'Surgical Instruments',
+        technicalSpecs: 'Surgical forceps and scalpels made of medical grade stainless steel',
+      });
+      expect(surgical.majorCategory).toBe('CAPEX - Equipment & Machinery');
+      expect(surgical.minorCategory).toBe('Surgical Instruments');
+    });
+
+    test('evaluates every line item independently without copying same category to all items', () => {
+      const mixedItems = [
+        { id: '1', itemName: 'SUGAR PACKING', technicalSpecs: '1kg pack' },
+        { id: '2', itemName: 'Centrifugal Water Pump', technicalSpecs: '5HP motor' },
+        { id: '3', itemName: 'Stethoscope', technicalSpecs: 'Stainless steel chest piece' },
+        { id: '4', itemName: 'Nitrile Gloves', technicalSpecs: 'Box of 100' },
+        { id: '5', itemName: 'TMT Steel Rebar', technicalSpecs: 'Fe500D 12mm' },
+      ];
+
+      const { entities } = ingestion.normalizeLineItems(mixedItems, { category: 'Civil Works' });
+
+      expect(entities[0].minorCategory).toBe('Food & Beverages');
+      expect(entities[0].majorCategory).toBe('Others – New Product');
+
+      expect(entities[1].minorCategory).toBe('Pumps & Accessories');
+      expect(entities[1].majorCategory).toBe('Engineering Spares - Mechanical');
+
+      expect(entities[2].minorCategory).toBe('Health Equipments');
+      expect(entities[2].majorCategory).toBe('Others – New Product');
+
+      expect(entities[3].minorCategory).toBe('Gloves');
+      expect(entities[3].majorCategory).toBe('Occuptional Health and Safety');
+
+      expect(entities[4].minorCategory).toBe('TMT BARS');
+      expect(entities[4].majorCategory).toBe('Civil Works');
+    });
+
+    test('isMinorUnderMajor accurately validates parent-child relationships', () => {
+      expect(ingestion.isMinorUnderMajor('Others – New Product', 'Food & Beverages')).toBe(true);
+      expect(ingestion.isMinorUnderMajor('Others – New Product', 'Health Equipments')).toBe(true);
+      expect(ingestion.isMinorUnderMajor('Occuptional Health and Safety', 'Gloves')).toBe(true);
+      expect(ingestion.isMinorUnderMajor('Raw Material', 'Steels')).toBe(true);
+
+      // Invalid combinations must return false
+      expect(ingestion.isMinorUnderMajor('Engineering Spares - Mechanical', 'Groceries')).toBe(false);
+      expect(ingestion.isMinorUnderMajor('Raw Material', 'Health Equipments')).toBe(false);
+      expect(ingestion.isMinorUnderMajor('Civil Works', 'Gloves')).toBe(false);
+      expect(ingestion.isMinorUnderMajor('', 'Food & Beverages')).toBe(false);
+      expect(ingestion.isMinorUnderMajor('Others – New Product', '')).toBe(false);
+    });
+
+    test('getMinorsForMajor retrieves minors for major or empty array when missing', () => {
+      expect(ingestion.getMinorsForMajor('')).toEqual([]);
+      expect(ingestion.getMinorsForMajor(null)).toEqual([]);
+      expect(ingestion.getMinorsForMajor('NonExistentMajor123')).toEqual([]);
+      const civilMinors = ingestion.getMinorsForMajor('Civil Works');
+      expect(civilMinors).toBeInstanceOf(Array);
+      expect(civilMinors).toContain('Plumbing');
+    });
+
+    test('classifies line item with combined text or unclassified fallback branches', () => {
+      // Combined match where individual fields don't match alone, but together they match
+      const combined = ingestion.classifyLineItem({
+        itemName: 'Vacuum Circuit',
+        technicalSpecs: 'Breaker 11kV 630A',
+      });
+      expect(combined.minorCategory).toBe('Circuit Breakers');
+      expect(combined.majorCategory).toBe('Engineering Spares - Electrical');
+
+      // Canonical major with alias fallback
+      expect(ingestion.canonicalMajor('stationery')).toBe('Printing & Stationery');
+      expect(ingestion.isMinorUnderMajor('NonExistentMajor', 'Plumbing')).toBe(false);
+
+      // Unclassified item with stated major and unlisted custom category
+      const unclassifiedMismatched = ingestion.classifyLineItem({
+        itemName: 'Random Unrecognized Thing 2',
+        majorCategory: 'Civil Works',
+        category: 'UnlistedCustomWidget123',
+      });
+      expect(unclassifiedMismatched.majorCategory).toBe('Civil Works');
+      expect(unclassifiedMismatched.minorCategory).toBe('');
+
+      // Unclassified item with unknown stated major
+      const unclassifiedUnknownMajor = ingestion.classifyLineItem({
+        itemName: 'Random Unrecognized Thing 3',
+        majorCategory: 'MadeUpMajorX',
+        category: 'SomeCustomMinorY',
+      });
+      expect(unclassifiedUnknownMajor.majorCategory).toBe('');
+      expect(unclassifiedUnknownMajor.minorCategory).toBe('SomeCustomMinorY');
     });
   });
 });
