@@ -1319,6 +1319,12 @@ async function updateRFQ(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
 
+    const role = req.user && req.user.role;
+    if (role === 'vendor') {
+      logger.warn(`Vendor forbidden from updating or closing RFQ: ${id}`, { id, user: req.user?.email, role }, 'RFQ_CONTROLLER');
+      return res.status(403).json({ success: false, error: 'Only the buyer and Category Manager have permission to close an RFQ.' });
+    }
+
     const body = req.body || {};
     const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.updateRFQ, body);
     if (!isValid) {
@@ -1437,7 +1443,6 @@ async function updateRFQ(req, res, next) {
       logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    const role = req.user && req.user.role;
     res.json({ success: true, data: applyQuotesVisibility(updated, role) });
   } catch (err) {
     logger.error(`Error updating RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');

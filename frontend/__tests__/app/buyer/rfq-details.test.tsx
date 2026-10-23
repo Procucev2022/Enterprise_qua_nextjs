@@ -106,7 +106,8 @@ function buildRFQ(overrides: Partial<RFQItem> = {}): RFQItem {
 }
 
 const onBack = jest.fn();
-const renderDetails = (rfq: RFQItem | null) => render(<RFQDetails rfq={rfq} onBack={onBack} />);
+const renderDetails = (rfq: RFQItem | null, props: Partial<React.ComponentProps<typeof RFQDetails>> = {}) =>
+  render(<RFQDetails rfq={rfq} onBack={onBack} {...props} />);
 
 /**
  * The line-item table.
@@ -1390,6 +1391,11 @@ function makeInquiry(overrides: any = {}): any {
           expect(mockUpdateRFQ).toHaveBeenCalledWith('rfq-1', { status: 'Closed' });
         });
       }
+    });
+
+    it('does not render Close RFQ button on the vendor side', () => {
+      renderDetails(buildRFQ({ status: 'Quotes Pending' }), { isVendorView: true });
+      expect(screen.queryByRole('button', { name: /Close RFQ/i })).not.toBeInTheDocument();
     });
 
     it('on V2 RFQ, hides Procucev network vendor details from the buyer while displaying own vendors', () => {
