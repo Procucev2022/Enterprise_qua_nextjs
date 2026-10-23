@@ -269,6 +269,7 @@ CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category
 -- DESC LIMIT/OFFSET) — without this, every "Load more" page at 600k+ rows
 -- requires a full sort of the whole table.
 CREATE INDEX IF NOT EXISTS idx_vendors_created_at ON vendors (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vendors_source ON vendors (source);
 
 -- getVendorsPageFromDB's vendor search matches `ILIKE '%term%'` — a leading
 -- wildcard, which a plain btree index (idx_vendors_email/major_category

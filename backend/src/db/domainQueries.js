@@ -13,6 +13,7 @@
 
 const pool = require('./pool');
 const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
+const { queryCache } = require('./queryCache');
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
@@ -45,8 +46,15 @@ async function getVendorsFromDB() {
  * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
  * a page request only ever touches the rows it actually returns.
  */
-async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', publicOnly = false, scopedBuyerId = '' } = {}) {
+async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', publicOnly = false, scopedBuyerId = '', skipCount = false } = {}) {
   if (!pool.hasStorage()) return { rows: [], total: 0 };
+  const cacheKey = (!search && !email && !category)
+    ? `vendors_page_${limit}_${offset}_${publicOnly}_${scopedBuyerId}_${skipCount}`
+    : null;
+  if (cacheKey) {
+    const cached = queryCache.get(cacheKey, []);
+    if (cached) return cached;
+  }
   const params = [];
   // Two parallel condition lists, not one translated after the fact: ILIKE
   // has no SQLite equivalent (LIKE + lower() instead), raw->>'x' is Postgres
@@ -162,7 +170,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     // specific buyer (buyerId/buyerAccountId set inside `raw`) is only meant
     // to be visible to that buyer, never in an anonymous/public listing.
     conditions.push(`(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`);
-    d1Conditions.push(`json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL`);
+    d1Conditions.push(`source NOT IN ('buyer_manual', 'buyer_uploaded', 'historical_purchase_dump')`);
   }
   if (scopedBuyerId) {
     // A buyer's paginated listing must include every public vendor (no
@@ -197,11 +205,13 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   // mutating one array across both calls works with a driver that sends the
   // query immediately, but is a needless footgun (and confusing to inspect
   // in tests) for no benefit.
-  const countResult = await pool.query(
-    `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
-    [...params],
-    { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}` }
-  );
+  const countResult = skipCount
+    ? { rows: [{ total: 0 }] }
+    : await pool.query(
+        `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
+        [...params],
+        { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}` }
+      );
   const total = countResult.rows[0]?.total || 0;
 
   const dataParams = [...params, limit, offset];
@@ -213,7 +223,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
     }
   );
-  return {
+  const response = {
     rows: dataResult.rows.map((row) => {
       const v = parseRaw(row.raw);
       if (row.created_at && !v.created_at) v.created_at = row.created_at;
@@ -223,6 +233,10 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     }),
     total,
   };
+  if (cacheKey) {
+    queryCache.set(cacheKey, [], response, { tag: 'vendors', ttlMs: 120000 });
+  }
+  return response;
 }
 
 /**
@@ -417,25 +431,34 @@ async function getVendorByEmailFromDB(email) {
  */
 async function getVendorsByBuyerFromDB(buyerId, limit) {
   if (!pool.hasStorage() || !buyerId) return [];
+  const normalizedBuyerId = String(buyerId).trim().toLowerCase();
+  const cacheKey = `buyer_vendors:${normalizedBuyerId}:${limit}`;
+  const cached = queryCache.get(cacheKey);
+  if (cached) return cached;
+
   const result = await pool.query(
     `SELECT raw FROM vendors
-     WHERE lower(raw->>'buyerId') = lower($1)
+     WHERE source NOT IN ('category_manager_upload', 'excel')
+       AND (lower(raw->>'buyerId') = lower($1)
         OR lower(raw->>'buyerAccountId') = lower($1)
-        OR lower(raw->>'buyerEmail') = lower($1)
+        OR lower(raw->>'buyerEmail') = lower($1))
      ORDER BY created_at DESC
      LIMIT $2`,
     [buyerId, limit],
     {
       d1: true,
       d1Text: `SELECT raw FROM vendors
-     WHERE lower(json_extract(raw,'$.buyerId')) = lower($1)
+     WHERE source NOT IN ('category_manager_upload', 'excel')
+       AND (lower(json_extract(raw,'$.buyerId')) = lower($1)
         OR lower(json_extract(raw,'$.buyerAccountId')) = lower($1)
-        OR lower(json_extract(raw,'$.buyerEmail')) = lower($1)
+        OR lower(json_extract(raw,'$.buyerEmail')) = lower($1))
      ORDER BY created_at DESC
      LIMIT $2`,
     }
   );
-  return result.rows.map((row) => parseRaw(row.raw));
+  const rows = result.rows.map((row) => parseRaw(row.raw));
+  queryCache.set(cacheKey, [], rows, { tag: 'vendors', ttlMs: 120000 });
+  return rows;
 }
 
 /** Single-row lookup by id — same reasoning as getVendorByEmailFromDB, keyed
@@ -487,6 +510,7 @@ async function upsertVendorInDB(vendor) {
      RETURNING raw`,
     }
   );
+  queryCache.invalidate('vendors');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
@@ -497,6 +521,7 @@ async function deleteVendorInDB(id) {
     [id],
     { d1: true }
   );
+  queryCache.invalidate('vendors');
   return result.rowCount > 0;
 }
 

@@ -1985,7 +1985,7 @@ class StoreService {
   async syncRFQsFromDB(force = false) {
     if (!pool.hasStorage()) return this.getRFQs();
     const now = Date.now();
-    if (!force && this._lastRfqSyncTime && (now - this._lastRfqSyncTime < 5000)) {
+    if (!force && this._lastRfqSyncTime && (now - this._lastRfqSyncTime < 25000)) {
       return this.getRFQs();
     }
     if (this._syncRFQsPromise) {
@@ -5323,24 +5323,11 @@ class StoreService {
         }
       }
     } else if (scopedBuyerId && pool.hasStorage()) {
-      // Own vendors first, unconditionally (a buyer's own vendor count is
-      // realistically small, but still bounded via getVendorsByBuyerFromDB
-      // rather than trusting that assumption) — the same "own vendors never
-      // get pushed out of the window" rule the comment below used to
-      // implement via a full in-memory sync. That in-memory sync
-      // (this.getVendors(scopedBuyerId)) was a full unbounded re-fetch of
-      // the ENTIRE vendors table on every single bootstrap call for every
-      // buyer page load — confirmed live as the actual cause of D1's
-      // free-tier daily row-read cap being exhausted (6.7M rows read in 24h
-      // against a 20k-row table, via `wrangler d1 info`). Public vendors
-      // only fill whatever room is left, fetched with the same bounded,
-      // public-only page query the unscoped branch above already uses.
       const ownVendors = await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
       const remaining = Math.max(0, MAX_BOOTSTRAP_VENDORS - ownVendors.length);
-      const publicPage =
-        remaining > 0
-          ? await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true })
-          : { rows: [], total: 0 };
+      const publicPage = remaining > 0
+        ? await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true })
+        : { rows: [], total: 0 };
       vendors = [...ownVendors, ...publicPage.rows];
       vendorsTotal = ownVendors.length + publicPage.total;
       if (sessionEmail) {

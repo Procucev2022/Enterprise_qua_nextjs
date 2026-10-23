@@ -97,6 +97,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     reviseVendorRating,
     openRatingRevisionEmailModal,
     activeBuyerAccount,
+    isLoadingVendors,
   } = useApp();
 
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
@@ -1274,7 +1275,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* Vendors Display List */}
       <div className="space-y-2.5">
         {buyerFilteredVendors.map(renderVendorCard)}
-        {buyerFilteredVendors.length === 0 && (
+        {isLoadingVendors && buyerFilteredVendors.length === 0 && (
+          <div className="p-12 text-center text-slate-500 border border-slate-200 dark:border-gray-800 rounded-2xl bg-white dark:bg-gray-900/60 shadow-xs space-y-3">
+            <Loader2 size={24} className="animate-spin text-indigo-600 dark:text-indigo-400 mx-auto" />
+            <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Loading vendor directory...
+            </p>
+          </div>
+        )}
+        {!isLoadingVendors && buyerFilteredVendors.length === 0 && (
           <div className="p-8 text-center text-slate-500 border border-dashed border-slate-200 dark:border-gray-800 rounded-2xl bg-slate-50/50 dark:bg-gray-950/40 space-y-3">
             <div className="p-3 bg-indigo-50 dark:bg-indigo-950/60 rounded-full w-fit mx-auto text-indigo-600 dark:text-indigo-400">
               <Building2 size={24} />

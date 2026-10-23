@@ -159,6 +159,8 @@ interface AppContextType {
   systemConfig: SystemConfig;
   setSystemConfig: React.Dispatch<React.SetStateAction<SystemConfig>>;
   isLoadingDB: boolean;
+  isLoadingRFQs: boolean;
+  isLoadingVendors: boolean;
   dbConnected: boolean;
   refreshFromDB: () => Promise<void>;
   refreshRFQs: () => Promise<void>;
@@ -395,7 +397,7 @@ export function dedupeRequest<T>(key: string, fn: () => Promise<T>): Promise<T> 
 }
 
 export function getSessionCache<T>(key: string): T | null {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return null;
   try {
     const item = sessionStorage.getItem(`procucev_cache_${key}`);
     return item ? (JSON.parse(item) as T) : null;
@@ -405,7 +407,7 @@ export function getSessionCache<T>(key: string): T | null {
 }
 
 export function setSessionCache<T>(key: string, data: T): void {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return;
   try {
     sessionStorage.setItem(`procucev_cache_${key}`, JSON.stringify(data));
   } catch {}
@@ -587,6 +589,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // PostgreSQL Real Database Hydration & Telemetry State
   const [isLoadingDB, setIsLoadingDB] = useState<boolean>(true);
+  const [isLoadingRFQs, setIsLoadingRFQs] = useState<boolean>(initialRfqs.length === 0);
+  const [isLoadingVendors, setIsLoadingVendors] = useState<boolean>(initialVendors.length === 0);
   const [dbConnected, setDbConnected] = useState<boolean>(false);
 
   const [rfqs, setRfqs] = useState<RFQItem[]>(initialRfqs);
@@ -683,25 +687,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!authClient.getToken()) {
       setRfqs([]);
       setVendorOpportunities([]);
+      setSessionCache('rfqs', []);
       loadedEntitiesRef.current.rfqs = false;
+      setIsLoadingRFQs(false);
       return;
     }
 
-    const result = await fetchRFQList();
-    if (!result.success) {
-      console.error('Failed to load RFQs:', result.error);
-      return;
+    if (rfqs.length === 0) {
+      setIsLoadingRFQs(true);
     }
+    try {
+      const result = await fetchRFQList();
+      if (!result.success) {
+        console.error('Failed to load RFQs:', result.error);
+        return;
+      }
 
-    setRfqs(result.rfqs);
-    setSelectedRFQForMatrix((prev) => prev || result.rfqs[0] || null);
-    setSelectedRFQForDeepDive((prev) => prev || result.rfqs[0] || null);
-    setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
-    loadedEntitiesRef.current.rfqs = true;
+      setRfqs(result.rfqs);
+      setSessionCache('rfqs', result.rfqs);
+      setSelectedRFQForMatrix((prev) => prev || result.rfqs[0] || null);
+      setSelectedRFQForDeepDive((prev) => prev || result.rfqs[0] || null);
+      setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
+      loadedEntitiesRef.current.rfqs = true;
+    } finally {
+      setIsLoadingRFQs(false);
+    }
   };
 
   const ensureRFQs = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.rfqs && rfqs.length >= 0) {
+    if (!force && loadedEntitiesRef.current.rfqs) {
       return;
     }
     return dedupeRequest('rfqs', async () => {
@@ -712,6 +726,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Hydrate reference data. RFQs come from refreshRFQs, not from here.
   const refreshFromDB = async () => {
     setIsLoadingDB(true);
+    if (buyerVendors.length === 0) {
+      setIsLoadingVendors(true);
+    }
     try {
       const res = await fetch('/api/bootstrap', { headers: authFetchHeaders() });
       const json = await res.json();
@@ -759,6 +776,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setDbConnected(false);
     } finally {
       setIsLoadingDB(false);
+      setIsLoadingVendors(false);
     }
   };
 
@@ -991,6 +1009,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed strictly on identity,
     // avoiding duplicate cascading re-renders when activeBuyerAccount resolves.
   }, [isLoggedIn, currentUserSession?.id, currentRole]);
+
+  useEffect(() => {
+    if (rfqs.length > 0) {
+      setSessionCache('rfqs', rfqs);
+    }
+  }, [rfqs]);
 
   // activeSubscription/remainingFreeRFQs used to be pure local state, defaulted
   // to free_trial/5 and never read back from anywhere real — a page refresh or
@@ -2713,6 +2737,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         systemConfig,
         setSystemConfig,
         isLoadingDB,
+        isLoadingRFQs,
+        isLoadingVendors,
         dbConnected,
         refreshFromDB,
         refreshRFQs,
