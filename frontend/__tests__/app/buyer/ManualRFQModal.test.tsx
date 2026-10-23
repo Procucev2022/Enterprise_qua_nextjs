@@ -1096,6 +1096,35 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       expect(screen.queryByTestId('manual-rfq-quota-exhausted-banner')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: MODAL.saveAction })).toBeInTheDocument();
     });
+
+    it('opens RfqUpgradePlanModal when buyer clicks unentitled mode when credits are exhausted', () => {
+      useApp.mockReturnValue({
+        activeSubscription: 'free_trial',
+        remainingFreeRFQs: 0,
+        activeBuyerAccount: { subscriptionPlan: 'free_trial', remainingFreeRFQs: 0 },
+      });
+      renderModal();
+
+      const mode2Card = screen.getByTestId('manual-mode-mode_2');
+      fireEvent.click(mode2Card);
+
+      expect(screen.getByTestId('rfq-upgrade-plan-modal')).toBeInTheDocument();
+      expect(screen.getByText(/You don't have credits to publish the RFQ in Mode 2/i)).toBeInTheDocument();
+    });
+
+    it('opens RfqUpgradePlanModal when clicking upgrade CTA on quota banner', () => {
+      useApp.mockReturnValue({
+        activeSubscription: 'free_trial',
+        remainingFreeRFQs: 0,
+        activeBuyerAccount: { subscriptionPlan: 'free_trial', remainingFreeRFQs: 0 },
+      });
+      renderModal();
+
+      const upgradeLinks = screen.getAllByRole('link', { name: /Please Upgrade Your Plan/i });
+      fireEvent.click(upgradeLinks[0]);
+
+      expect(screen.getByTestId('rfq-upgrade-plan-modal')).toBeInTheDocument();
+    });
   });
 
   describe('ManualRFQModal: Quota exhaustion and upgrade plan', () => {

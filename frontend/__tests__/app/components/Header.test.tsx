@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import Header from '@/app/components/Header';
 import * as storeModule from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -434,5 +434,100 @@ describe('Header theme control while signed out', () => {
 
     fireEvent.click(screen.getByTitle('Switch to Dark Mode'));
     expect(mockToggleThemeSignedOut).toHaveBeenCalled();
+  });
+});
+
+describe('Header Session Timer and Auto Logout', () => {
+  const mockSetIsLoggedIn = jest.fn();
+  const mockSetCurrentUserSession = jest.fn();
+  const mockSetCurrentRole = jest.fn();
+  const mockShowToast = jest.fn();
+  const mockAddAuditLog = jest.fn();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    localStorage.clear();
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      isLoggedIn: true,
+      currentRole: 'buyer',
+      setIsLoggedIn: mockSetIsLoggedIn,
+      setCurrentRole: mockSetCurrentRole,
+      setCurrentUserSession: mockSetCurrentUserSession,
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      currentUserSession: { email: 'buyer@procucev.com', name: 'Buyer User' },
+    });
+  });
+
+  afterEach(() => {
+    jest.clearAllTimers();
+  });
+
+  it('renders session timer badge for buyer dashboard', () => {
+    render(<Header />);
+    const timer = screen.getByTestId('header-session-timer');
+    expect(timer).toBeInTheDocument();
+    expect(timer).toHaveTextContent(/Session:/i);
+  });
+
+  it('renders session timer badge for vendor dashboard', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      isLoggedIn: true,
+      currentRole: 'vendor',
+      setIsLoggedIn: mockSetIsLoggedIn,
+      setCurrentRole: mockSetCurrentRole,
+      setCurrentUserSession: mockSetCurrentUserSession,
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      vendorFreeCreditsRemaining: 3,
+    });
+    render(<Header />);
+    expect(screen.getByTestId('header-session-timer')).toBeInTheDocument();
+  });
+
+  it('renders session timer badge for category manager dashboard', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      isLoggedIn: true,
+      currentRole: 'category_manager',
+      setIsLoggedIn: mockSetIsLoggedIn,
+      setCurrentRole: mockSetCurrentRole,
+      setCurrentUserSession: mockSetCurrentUserSession,
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+    });
+    render(<Header />);
+    expect(screen.getByTestId('header-session-timer')).toBeInTheDocument();
+  });
+
+  it('allows user to click session timer to extend session by 30 minutes', () => {
+    render(<Header />);
+    const timer = screen.getByTestId('header-session-timer');
+    fireEvent.click(timer);
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Session Extended',
+      expect.stringContaining('30 minutes'),
+      'info'
+    );
+  });
+
+  it('triggers auto logout when session timer expires', () => {
+    jest.useFakeTimers();
+    // Set localStorage expiration to 1 second in the future
+    localStorage.setItem('procucev_session_expires_at', String(Date.now() + 1000));
+    render(<Header />);
+
+    // Fast-forward time past expiration
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    expect(mockSetIsLoggedIn).toHaveBeenCalledWith(false);
+    expect(mockSetCurrentUserSession).toHaveBeenCalledWith(null);
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Session Expired',
+      expect.stringContaining('logged out automatically'),
+      'warning'
+    );
+    jest.useRealTimers();
   });
 });

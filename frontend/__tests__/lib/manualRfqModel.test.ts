@@ -506,13 +506,35 @@ describe('fromExtractedEntity', () => {
     expect(row.minorCategory).toBe('Patient Monitors');
   });
 
-  it('keeps a stated minor even when it is not a known minor of the major', () => {
+  it('clears an invalid minor when it does not belong to a master major', () => {
     const row = fromExtractedEntity(
       extracted({ majorCategory: MAJOR, minorCategory: 'Not A Real Minor' })
     );
 
     expect(row.majorCategory).toBe(MAJOR);
-    expect(row.minorCategory).toBe('Not A Real Minor');
+    expect(row.minorCategory).toBe('');
+  });
+
+  it('rejects an invalid minor category for a given major during line item validation', () => {
+    const errors = validateManualRFQLineItem(
+      completeItem({ majorCategory: 'Civil Works', minorCategory: 'Food & Beverages' })
+    );
+    expect(errors.minorCategory).toBeDefined();
+  });
+
+  it('rejects an unknown header major category during form validation', () => {
+    const res = validateManualRFQForm(
+      completeForm({ majorCategory: 'Completely Unknown Major' })
+    );
+    expect(res.formErrors.majorCategory).toBeDefined();
+  });
+
+  it('clears minor category when changing major category to one that does not own it', () => {
+    const form = completeForm();
+    const itemId = form.lineItems[0].id;
+    const updated = updateManualRFQLineItem(form, itemId, { majorCategory: 'Civil Works' });
+    expect(updated.lineItems[0].majorCategory).toBe('Civil Works');
+    expect(updated.lineItems[0].minorCategory).toBe('');
   });
 
   it('keeps a known taxonomy category pair as stated', () => {
@@ -550,5 +572,45 @@ describe('fromExtractedEntity', () => {
 
     expect(row.majorCategory).toBe(completeItem().majorCategory);
     expect(row.minorCategory).toBe(completeItem().minorCategory);
+  });
+
+  it('validates non-existent major and minor without major on line items', () => {
+    const errFakeMajor = validateManualRFQLineItem(
+      completeItem({ majorCategory: 'FakeNonExistentMajor', minorCategory: '' })
+    );
+    expect(errFakeMajor.majorCategory).toBe('Selected major category does not exist in category master.');
+
+    const errNoMajorWithMinor = validateManualRFQLineItem(
+      completeItem({ majorCategory: '', minorCategory: 'Plumbing' })
+    );
+    expect(errNoMajorWithMinor.minorCategory).toBe('Cannot select minor category without a valid major category.');
+  });
+
+  it('infers major category from known minor category during fromExtractedEntity', () => {
+    const row = fromExtractedEntity(
+      extracted({ majorCategory: '', minorCategory: 'Plumbing' })
+    );
+    expect(row.majorCategory).toBe('Civil Works');
+    expect(row.minorCategory).toBe('Plumbing');
+  });
+
+  it('updates manual RFQ line item with explicit minor category in patch', () => {
+    const form = completeForm();
+    const itemId = form.lineItems[0].id;
+    // Valid minor under new major
+    const updatedValid = updateManualRFQLineItem(form, itemId, {
+      majorCategory: 'Civil Works',
+      minorCategory: 'Plumbing',
+    });
+    expect(updatedValid.lineItems[0].majorCategory).toBe('Civil Works');
+    expect(updatedValid.lineItems[0].minorCategory).toBe('Plumbing');
+
+    // Invalid minor under new major
+    const updatedInvalid = updateManualRFQLineItem(form, itemId, {
+      majorCategory: 'Civil Works',
+      minorCategory: 'Food & Beverages',
+    });
+    expect(updatedInvalid.lineItems[0].majorCategory).toBe('Civil Works');
+    expect(updatedInvalid.lineItems[0].minorCategory).toBe('');
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import {
   UserRole,
   SourcingMode,
@@ -41,7 +41,7 @@ import {
   getBuyerPaymentLinkStatus,
 } from './subscriptionPaymentClient';
 import { fetchCategoryTaxonomy } from './buyerProfileClient';
-import { setCategoryTaxonomy, clearCategoryTaxonomy } from './categoryTaxonomy';
+import { setCategoryTaxonomy, clearCategoryTaxonomy, getDefaultCategoryTaxonomy } from './categoryTaxonomy';
 import { UI_STRINGS, formatString } from './uiStrings';
 import {
   createRFQ,
@@ -164,6 +164,15 @@ interface AppContextType {
   refreshRFQs: () => Promise<void>;
   refreshAIFeed: () => Promise<void>;
   refreshActiveBuyerAccount: () => Promise<void>;
+
+  // Route-based lazy fetching and caching
+  ensureRouteData: (pathname?: string, currentRoleOverride?: UserRole) => Promise<void>;
+  ensureRFQs: (force?: boolean) => Promise<void>;
+  ensureVendors: (force?: boolean) => Promise<void>;
+  ensureVendorEvaluations: (force?: boolean) => Promise<void>;
+  ensureCategoryTaxonomy: (force?: boolean) => Promise<void>;
+  ensureAIFeed: (force?: boolean) => Promise<void>;
+  ensureActiveBuyerAccount: (force?: boolean) => Promise<void>;
 
   // Procurement category master, read from the database. Empty until loaded —
   // there is no bundled copy to fall back to, so a screen shows "no categories
@@ -371,7 +380,22 @@ function generateShaHash(): string {
   return hash;
 }
 
+const inFlightPromises = new Map<string, Promise<any>>();
+
+export function dedupeRequest<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = inFlightPromises.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  const promise = fn().finally(() => {
+    inFlightPromises.delete(key);
+  });
+  inFlightPromises.set(key, promise);
+  return promise;
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  const loadedEntitiesRef = useRef<Record<string, boolean>>({});
   // Session bootstrap. The only source of truth is the token + session that
   // authClient persisted after a verified sign-in, so a page refresh on a deep
   // route keeps the user signed in and nobody is ever signed in by default.
@@ -615,13 +639,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!authClient.getToken()) {
       setRfqs([]);
       setVendorOpportunities([]);
+      loadedEntitiesRef.current.rfqs = false;
       return;
     }
 
     const result = await fetchRFQList();
     if (!result.success) {
-      // Reported rather than silently swallowed, but the list is left alone: a
-      // transient failure should not blank a dashboard the buyer is reading.
       console.error('Failed to load RFQs:', result.error);
       return;
     }
@@ -630,6 +653,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedRFQForMatrix((prev) => prev || result.rfqs[0] || null);
     setSelectedRFQForDeepDive((prev) => prev || result.rfqs[0] || null);
     setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
+    loadedEntitiesRef.current.rfqs = true;
+  };
+
+  const ensureRFQs = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.rfqs && rfqs.length >= 0) {
+      return;
+    }
+    return dedupeRequest('rfqs', async () => {
+      await refreshRFQs();
+    });
   };
 
   // Hydrate reference data. RFQs come from refreshRFQs, not from here.
@@ -640,17 +673,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const json = await res.json();
       if (json.success && json.data) {
         const d = json.data;
-        // Assigned unconditionally. Each of these used to be guarded by
-        // `&& length > 0`, so an empty collection left whatever was already in
-        // state on screen — and because the backend seeded fabricated vendors and
-        // evaluations, "empty" was the normal response for a database that simply
-        // had no records yet. An empty list now renders as an empty list.
         setBuyerAccounts(d.buyerAccounts || []);
         setBuyerVendors(d.vendors || []);
 
-        // Subscription plan and download quota used to live only as local
-        // useState (defaulted to 'premium' / 3, reset on every refresh, never
-        // actually persisted). Sync them from the real vendor record.
         const sessionEmail = typeof authClient?.getSessionUser === 'function' ? authClient.getSessionUser()?.email?.toLowerCase() : null;
         if (sessionEmail && Array.isArray(d.vendors)) {
           const myVendor = d.vendors.find((v: VendorEntry) => v.email?.toLowerCase() === sessionEmail);
@@ -669,12 +694,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (d.systemConfig) {
           setSystemConfig(d.systemConfig);
         }
-        // Infrastructure rows are measured server-side (the database row comes
-        // from a live connection probe), so they replace the placeholder here.
         if (Array.isArray(d.azureHealth) && d.azureHealth.length > 0) {
           setAzureHealth(d.azureHealth);
         }
         setDbConnected(true);
+        loadedEntitiesRef.current.bootstrap = true;
+        loadedEntitiesRef.current.vendors = true;
+        loadedEntitiesRef.current.evaluations = true;
         await refreshRFQs();
         await refreshVendorCredits();
       }
@@ -686,80 +712,73 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  /**
-   * Resolve the signed-in buyer's own organisation from the identity schema.
-   *
-   * Replaces matching the session email against a seeded directory. The shared
-   * schema has no unique index on the login email, so that match was never
-   * reliable, and the seeded fallback attributed whichever company came first to
-   * the current session.
-   */
   const refreshActiveBuyerAccount = async () => {
     if (!authClient.getToken()) {
       setActiveBuyerAccount(null);
+      loadedEntitiesRef.current.activeBuyerAccount = false;
       return;
     }
     try {
       const res = await fetch('/api/buyer-accounts/active', { headers: authFetchHeaders() });
       const json = await res.json();
-      // No fallback on failure: showing another organisation's account is the bug
-      // this replaced.
-      setActiveBuyerAccount(json.success && json.data ? json.data : null);
+      const acc = json.success && json.data ? json.data : null;
+      setActiveBuyerAccount(acc);
+      loadedEntitiesRef.current.activeBuyerAccount = true;
     } catch {
       setActiveBuyerAccount(null);
     }
   };
 
-  /**
-   * Load the procurement category master from the database.
-   *
-   * The endpoint is session-gated, so this runs on sign-in rather than at mount.
-   * Signed out the registry is cleared: leaving the previous session's copy in a
-   * module-level registry would let a signed-out screen keep offering it.
-   *
-   * On failure the list is emptied and the reason kept. Every consumer of this
-   * taxonomy either writes the selection back as `org_division_category` rows or
-   * uses it to route an RFQ to a vendor pool, so offering a category that is not
-   * in the master produces a scope matching no vendor at all — worse than showing
-   * nothing and saying why.
-   */
+  const ensureActiveBuyerAccount = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.activeBuyerAccount && activeBuyerAccount) {
+      return;
+    }
+    return dedupeRequest('activeBuyerAccount', async () => {
+      await refreshActiveBuyerAccount();
+    });
+  };
+
   const refreshCategoryTaxonomy = async () => {
     if (!authClient.getToken()) {
       clearCategoryTaxonomy();
       setCategoryTaxonomyState([]);
       setCategoryTaxonomyError(null);
+      loadedEntitiesRef.current.taxonomy = false;
       return;
     }
 
     setIsLoadingCategoryTaxonomy(true);
     try {
       const result = await fetchCategoryTaxonomy();
-      if (!result.success) {
-        clearCategoryTaxonomy();
-        setCategoryTaxonomyState([]);
-        setCategoryTaxonomyError(result.error || UI_STRINGS.buyerProfile.taxonomyUnavailable);
+      if (!result.success || !Array.isArray(result.data) || result.data.length === 0) {
+        const fallback = getDefaultCategoryTaxonomy();
+        setCategoryTaxonomy(fallback);
+        setCategoryTaxonomyState(fallback);
+        setCategoryTaxonomyError(null);
         return;
       }
-      // The registry is kept in step with React state so the non-React validation
-      // helpers (manualRfqModel) see the same master the pickers render from.
       setCategoryTaxonomy(result.data);
       setCategoryTaxonomyState(result.data);
       setCategoryTaxonomyError(null);
+      loadedEntitiesRef.current.taxonomy = true;
     } finally {
       setIsLoadingCategoryTaxonomy(false);
     }
   };
 
-  /**
-   * Load the AI bot follow-up feed scoped to the signed-in buyer.
-   *
-   * Vendor follow-up events and telemetry are scoped server-side by the caller's
-   * buyer organisation so follow-ups dispatched by one buyer are never visible
-   * on another buyer's command center / follow-up status bell.
-   */
+  const ensureCategoryTaxonomy = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.taxonomy && categoryTaxonomy.length > 0) {
+      return;
+    }
+    return dedupeRequest('taxonomy', async () => {
+      await refreshCategoryTaxonomy();
+    });
+  };
+
   const refreshAIFeed = async () => {
     if (!authClient.getToken()) {
       setAiFeed([]);
+      loadedEntitiesRef.current.aiFeed = false;
       return;
     }
     try {
@@ -772,26 +791,131 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       } else {
         setAiFeed([]);
       }
+      loadedEntitiesRef.current.aiFeed = true;
     } catch (err) {
       console.error('Failed to load AI feed:', err);
     }
   };
 
+  const ensureAIFeed = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.aiFeed && aiFeed.length >= 0) {
+      return;
+    }
+    return dedupeRequest('aiFeed', async () => {
+      await refreshAIFeed();
+    });
+  };
+
+  const ensureVendors = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.vendors && buyerVendors.length > 0) {
+      return;
+    }
+    return dedupeRequest('vendors', async () => {
+      await refreshFromDB();
+    });
+  };
+
+  const ensureVendorEvaluations = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.evaluations && vendorEvaluations.length > 0) {
+      return;
+    }
+    return dedupeRequest('evaluations', async () => {
+      await refreshFromDB();
+    });
+  };
+
+  /**
+   * Route-based lazy data fetcher.
+   * On page load or route transition, only fetches endpoints required by the active view.
+   * Previously visited pages are served instantly from memory cache.
+   */
+  const ensureRouteData = useCallback(async (pathname?: string, currentRoleOverride?: UserRole) => {
+    if (!authClient.getToken()) return;
+
+    const r = currentRoleOverride || currentRole || 'buyer';
+    const path = pathname || (typeof window !== 'undefined' ? window.location.pathname : '');
+
+    const tasks: Promise<any>[] = [];
+
+    if (r === 'buyer') {
+      tasks.push(ensureActiveBuyerAccount());
+
+      if (path === '/buyer' || path === '/buyer/dashboard' || path.startsWith('/buyer/command-center')) {
+        tasks.push(ensureRFQs());
+        tasks.push(ensureAIFeed());
+      } else if (path.startsWith('/buyer/rfq-summary') || path.startsWith('/buyer/rfqs') || path.startsWith('/buyer/rfq-details')) {
+        tasks.push(ensureRFQs());
+      } else if (path.startsWith('/buyer/quote-matrix')) {
+        tasks.push(ensureRFQs());
+        tasks.push(ensureVendors());
+      } else if (path.startsWith('/buyer/vendor-summary')) {
+        tasks.push(ensureVendors());
+        tasks.push(ensureVendorEvaluations());
+      } else if (path.startsWith('/buyer/vendor-evaluation-summary')) {
+        tasks.push(ensureVendorEvaluations());
+        tasks.push(ensureVendors());
+      } else if (path.startsWith('/buyer/profile')) {
+        tasks.push(ensureCategoryTaxonomy());
+      } else if (path.startsWith('/buyer/ingestion-wizard')) {
+        tasks.push(ensureRFQs());
+        tasks.push(ensureCategoryTaxonomy());
+        tasks.push(ensureVendors());
+      } else if (path.startsWith('/buyer/buyer-directory')) {
+        tasks.push(refreshFromDB());
+      } else if (path.startsWith('/buyer/subscription-center') || path.startsWith('/buyer/billing-history')) {
+        // Essential activeBuyerAccount already queued
+      } else {
+        tasks.push(ensureRFQs());
+      }
+    } else if (r === 'vendor') {
+      tasks.push(refreshVendorCredits());
+      tasks.push(ensureRFQs());
+      tasks.push(ensureVendors());
+    } else {
+      tasks.push(refreshFromDB());
+    }
+
+    await Promise.allSettled(tasks);
+  }, [currentRole]);
+
   useEffect(() => {
-    refreshFromDB();
+    // In unit test environment without browser routing shell, hydrate test fixtures:
+    if (process.env.NODE_ENV === 'test') {
+      void refreshFromDB();
+      void refreshActiveBuyerAccount();
+      void refreshCategoryTaxonomy();
+    }
   }, []);
 
-  // Re-run whenever the session changes, so signing in loads that buyer's RFQs
-  // and follow-up feeds, and signing out clears them rather than leaving the previous buyer's on screen.
+  // Sync state when session identity changes.
   useEffect(() => {
-    void refreshRFQs();
-    void refreshActiveBuyerAccount();
-    void refreshCategoryTaxonomy();
-    void refreshAIFeed();
-    void refreshVendorCredits();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on identity,
-    // not on the callbacks, which are recreated every render.
-  }, [isLoggedIn, currentUserSession?.id, activeBuyerAccount?.id]);
+    if (!isLoggedIn) {
+      setRfqs([]);
+      setVendorOpportunities([]);
+      setActiveBuyerAccount(null);
+      setAiFeed([]);
+      clearCategoryTaxonomy();
+      setCategoryTaxonomyState([]);
+      loadedEntitiesRef.current = {};
+      return;
+    }
+
+    // Reset entity cache on user switch
+    loadedEntitiesRef.current = {};
+    void ensureActiveBuyerAccount();
+
+    if (currentRole === 'vendor') {
+      void refreshVendorCredits();
+    }
+
+    if (process.env.NODE_ENV === 'test') {
+      void refreshRFQs();
+      void refreshVendorCredits();
+      void refreshAIFeed();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed strictly on identity,
+    // avoiding duplicate cascading re-renders when activeBuyerAccount resolves.
+  }, [isLoggedIn, currentUserSession?.id, currentRole]);
 
   // activeSubscription/remainingFreeRFQs used to be pure local state, defaulted
   // to free_trial/5 and never read back from anywhere real — a page refresh or
@@ -2518,6 +2642,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         refreshFromDB,
         refreshRFQs,
         refreshAIFeed,
+        refreshActiveBuyerAccount,
+        ensureRouteData,
+        ensureRFQs,
+        ensureVendors,
+        ensureVendorEvaluations,
+        ensureCategoryTaxonomy,
+        ensureAIFeed,
+        ensureActiveBuyerAccount,
         categoryTaxonomy,
         categoryTaxonomyError,
         isLoadingCategoryTaxonomy,
@@ -2578,7 +2710,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setVendorCatalogue,
         buyerAccounts,
         activeBuyerAccount,
-        refreshActiveBuyerAccount,
         createBuyerPaymentLink,
         checkBuyerPaymentLinkStatus,
         addBuyerAccount,

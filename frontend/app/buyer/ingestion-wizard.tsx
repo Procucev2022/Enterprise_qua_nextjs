@@ -32,7 +32,7 @@ import {
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
 import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, resolveLocationFromPostalResult } from '@/lib/validationSchemas';
-import { getMajorCategories, getMinorCategories, dominantMajorCategory } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories, dominantMajorCategory, hasMajorCategory, hasMinorCategory } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import {
   extractRfqCategorySignals,
@@ -716,6 +716,7 @@ export default function IngestionWizard({
   const [isDraggingDoc, setIsDraggingDoc] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
+  const [categorizingProgress, setCategorizingProgress] = useState<string | null>(null);
   const [extractionError, setExtractionError] = useState<string | null>(null);
   // The raw underlying failure cause from the server, shown beneath the friendly
   // message in the failure banner so a failed extraction is easy to debug.
@@ -903,7 +904,12 @@ export default function IngestionWizard({
           ...prev,
           title: prev.title || derivedTitle,
           estimatedBudget: prev.estimatedBudget ?? derivedBudget,
-          majorCategory: prev.majorCategory || extractedCategory || derivedMajor || (extracted.length > 0 ? getMajorCategories()[0] : ''),
+          majorCategory:
+            prev.majorCategory ||
+            (hasMajorCategory(extractedCategory) ? extractedCategory : '') ||
+            (hasMajorCategory(derivedMajor) ? derivedMajor : '') ||
+            dominantMajorCategory(extracted) ||
+            '',
           deliveryLocation: prev.deliveryLocation || derivedLocation,
           deliveryPincode: prev.deliveryPincode || derivedPincode,
           targetDeliveryDate: prev.targetDeliveryDate || derivedDate,
@@ -968,6 +974,7 @@ export default function IngestionWizard({
    */
   const handleAutoCategorizeAll = async () => {
     setIsCategorizing(true);
+    setCategorizingProgress(null);
     try {
       // Only the rows still missing a category are classified. Keep the rest.
       const toClassify = form.lineItems.filter(
@@ -995,7 +1002,10 @@ export default function IngestionWizard({
           majorCategory: '',
           minorCategory: '',
           confidence: 0,
-        }))
+        })),
+        (prog) => {
+          setCategorizingProgress(`${prog.processed}/${prog.total}`);
+        }
       );
 
       if (!result.success || !result.data || !Array.isArray(result.data.extractedEntities)) {
@@ -1014,17 +1024,21 @@ export default function IngestionWizard({
         const matched = classified.get(item.id);
         // Not asked about, or the server could not place it -> leave blank.
         if (!matched || !matched.majorCategory) return item;
-        if (!detectedMajor) detectedMajor = matched.majorCategory;
+        const validMajor = hasMajorCategory(matched.majorCategory) ? matched.majorCategory : '';
+        const validMinor = validMajor && hasMinorCategory(validMajor, matched.minorCategory) ? matched.minorCategory : '';
+        if (!validMajor) return item;
+        if (!detectedMajor) detectedMajor = validMajor;
         return {
           ...item,
-          majorCategory: matched.majorCategory,
-          minorCategory: matched.minorCategory || '',
+          majorCategory: validMajor,
+          minorCategory: validMinor,
         };
       });
 
+      const dominant = dominantMajorCategory(updatedLineItems);
       setForm((prev) => ({
         ...prev,
-        majorCategory: prev.majorCategory || detectedMajor,
+        majorCategory: prev.majorCategory || dominant || detectedMajor,
         lineItems: updatedLineItems,
       }));
 
@@ -1041,6 +1055,7 @@ export default function IngestionWizard({
       showToast(EXTRACTION.fallbackTitle, EXTRACTION.classifyFailed, 'warning');
     } finally {
       setIsCategorizing(false);
+      setCategorizingProgress(null);
     }
   };
 
@@ -1643,7 +1658,7 @@ export default function IngestionWizard({
               className="btn btn-secondary btn-sm text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50"
             >
               {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-              {isCategorizing ? 'Classifying...' : 'Auto-Categorize All (AI)'}
+              {isCategorizing ? (categorizingProgress ? `Classifying (${categorizingProgress})...` : 'Classifying...') : 'Auto-Categorize All (AI)'}
             </button>
             {form.lineItems.length < 5 && (
               <button
@@ -1748,7 +1763,11 @@ export default function IngestionWizard({
                         <select
                           aria-label={MODAL.colMajor}
                           value={item.majorCategory}
-                          onChange={(e) => patchItem(item.id, { majorCategory: e.target.value })}
+                          onChange={(e) => {
+                            const newMajor = e.target.value;
+                            const keepMinor = newMajor && hasMinorCategory(newMajor, item.minorCategory) ? item.minorCategory : '';
+                            patchItem(item.id, { majorCategory: newMajor, minorCategory: keepMinor });
+                          }}
                           className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
                         >
                           <option value="">{MODAL.selectPlaceholder}</option>
@@ -1767,11 +1786,8 @@ export default function IngestionWizard({
                         <select
                           aria-label={MODAL.colMinor}
                           value={item.minorCategory}
-                          // Enabled when a major is chosen, or when the document
-                          // supplied a minor of its own (kept even without a
-                          // master major) so the buyer can see and keep it.
                           disabled={
-                            (!item.majorCategory && !item.minorCategory) ||
+                            !item.majorCategory ||
                             item.majorCategory === ALL_CATEGORIES_OPTION
                           }
                           onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
@@ -1780,7 +1796,7 @@ export default function IngestionWizard({
                           <option value="">
                             {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
                           </option>
-                          {withStoredValue(minorsFor(item.majorCategory), item.minorCategory).map((minor) => (
+                          {minorsFor(item.majorCategory).map((minor) => (
                             <option key={minor} value={minor}>
                               {minor}
                             </option>

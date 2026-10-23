@@ -10,6 +10,7 @@ const {
   hasUnlimitedDownloadAccess,
   VENDOR_FREE_CREDITS_LIMIT,
   VENDOR_ASSIGNMENT_LIMITS,
+  MAJOR_CATEGORY_ALIASES,
 } = require('../config/constants');
 const crypto = require('crypto');
 const pool = require('../db/pool');
@@ -319,10 +320,12 @@ class StoreService {
   }
 
   _persistRFQ(rfq) {
+    this._lastRfqSyncTime = 0;
     this._background(domainQueries.upsertRFQInDB(rfq), 'Failed to persist RFQ');
   }
 
   _removeRFQ(id) {
+    this._lastRfqSyncTime = 0;
     this._background(domainQueries.deleteRFQInDB(id), 'Failed to delete persisted RFQ');
   }
 
@@ -1445,7 +1448,19 @@ class StoreService {
     const hasUnlimitedDownloads = hasUnlimitedDownloadAccess(vendor);
 
     // Check if vendor has permission to access the RFQ
-    if (!hasUnlimitedDownloads && !this.vendorCoversRFQ(vendor, rfq)) {
+    const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
+    const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
+    const isNetworkMode = isV0 || isV2 || isV3;
+
+    const signals = this._rfqCategorySignals(rfq);
+    const categoryMatches =
+      signals.length === 0 ||
+      !vendor.majorCategory ||
+      signals.some((c) => this.vendorCoversCategory(vendor, c));
+
+    if (!hasUnlimitedDownloads && !this.vendorCoversRFQ(vendor, rfq) && !(isNetworkMode && categoryMatches)) {
       return {
         success: false,
         error: 'You do not have permission to access this RFQ.',
@@ -1607,7 +1622,6 @@ class StoreService {
     }
 
     let newCredits = eligibility.freeCreditsRemaining;
-    // If the credit was not previously consumed during unlock, deduct it now
     if (!alreadyQuoted && !eligibility.isSubscribed && !isBuyerMapped) {
       newCredits = Math.max(0, eligibility.freeCreditsRemaining - 1);
     }
@@ -1979,32 +1993,45 @@ class StoreService {
    * Re-sync RFQs from Neon PostgreSQL so records inserted by external processes
    * (e.g. check-email CLI, background workers) are merged into memory.
    */
-  async syncRFQsFromDB() {
+  async syncRFQsFromDB(force = false) {
     if (!pool.hasStorage()) return this.getRFQs();
-    try {
-      const allFromDB = await domainQueries.getRFQsFromDB();
-      if (Array.isArray(allFromDB)) {
-        const byId = new Map(this.rfqs.map((r) => [r.id, r]));
-        for (const rfq of allFromDB) {
-          if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
-            rfq.status = 'PO Generated';
-            rfq.poFinalised = true;
-            this._persistRFQ(rfq);
-          }
-          if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
-            rfq.source = 'manual_entry';
-            this._persistRFQ(rfq);
-          }
-          byId.set(rfq.id, rfq);
-        }
-        this.rfqs = Array.from(byId.values()).sort(
-          (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-        );
-      }
-    } catch (err) {
-      logger.error('Failed to sync RFQs from database', err, 'STORE_SERVICE');
+    const now = Date.now();
+    if (!force && this._lastRfqSyncTime && (now - this._lastRfqSyncTime < 5000)) {
+      return this.getRFQs();
     }
-    return this.getRFQs();
+    if (this._syncRFQsPromise) {
+      return this._syncRFQsPromise;
+    }
+    this._syncRFQsPromise = (async () => {
+      try {
+        const allFromDB = await domainQueries.getRFQsFromDB();
+        if (Array.isArray(allFromDB)) {
+          const byId = new Map(this.rfqs.map((r) => [r.id, r]));
+          for (const rfq of allFromDB) {
+            if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
+              rfq.status = 'PO Generated';
+              rfq.poFinalised = true;
+              this._persistRFQ(rfq);
+            }
+            if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
+              rfq.source = 'manual_entry';
+              this._persistRFQ(rfq);
+            }
+            byId.set(rfq.id, rfq);
+          }
+          this.rfqs = Array.from(byId.values()).sort(
+            (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+          );
+        }
+        this._lastRfqSyncTime = Date.now();
+      } catch (err) {
+        logger.error('Failed to sync RFQs from database', err, 'STORE_SERVICE');
+      } finally {
+        this._syncRFQsPromise = null;
+      }
+      return this.getRFQs();
+    })();
+    return this._syncRFQsPromise;
   }
 
   async getRFQByIdAsync(id) {
@@ -3114,13 +3141,22 @@ class StoreService {
     if (!category) return false;
     const target = String(category).trim().toLowerCase();
     if (!target) return false;
+    const targetAlias = MAJOR_CATEGORY_ALIASES && MAJOR_CATEGORY_ALIASES[target];
+    const targetNormalized = (targetAlias || target).toLowerCase();
     const pools = [
       vendor.majorCategory,
       ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : []),
       ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
       ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
     ];
-    return pools.some((c) => String(c || '').trim().toLowerCase() === target);
+    return pools.some((c) => {
+      if (!c) return false;
+      const normalized = String(c).trim().toLowerCase();
+      if (normalized === target) return true;
+      const alias = MAJOR_CATEGORY_ALIASES && MAJOR_CATEGORY_ALIASES[normalized];
+      const poolNormalized = (alias || normalized).toLowerCase();
+      return poolNormalized === targetNormalized;
+    });
   }
 
   /**

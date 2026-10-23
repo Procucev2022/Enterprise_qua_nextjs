@@ -848,6 +848,21 @@ async function getVendorRfqCredits(req, res, next) {
       return res.status(401).json({ success: false, error: 'Authentication required.' });
     }
 
+    if (user.role === 'buyer') {
+      return res.json({
+        success: true,
+        data: {
+          vendorId: user.email,
+          freeCreditsAllocated: 0,
+          freeCreditsUsed: 0,
+          freeCreditsRemaining: 0,
+          isSubscribed: false,
+          subscriptionPlan: 'free',
+          unlockedRfqIds: [],
+        },
+      });
+    }
+
     let vendor = null;
     if (id && id !== 'me' && id !== 'current') {
       vendor = storeService.getVendorById(id, 'all');

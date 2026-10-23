@@ -15,6 +15,7 @@ import { X, Send, CheckCircle2, Loader2, AlertTriangle, Users, Search, UserPlus 
 import { useApp } from '@/lib/store';
 import { fetchAllVendors, fetchVendorCandidates, inviteVendorsToRFQ } from '@/lib/rfqClient';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
+import { getMajorCategories } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
@@ -57,7 +58,7 @@ function vendorCoversAnySignal(vendor: RFQVendorCandidate, signals: string[]): b
 }
 
 export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: InviteVendorsModalProps) {
-  const { showToast } = useApp();
+  const { showToast, categoryTaxonomy } = useApp();
 
   const [tab, setTab] = useState<Tab>('category');
   const [loading, setLoading] = useState(true);
@@ -71,7 +72,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
-  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
+  const [categoryOptions, setCategoryOptions] = useState<string[]>(() => getMajorCategories());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
 
@@ -110,11 +111,18 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       }
       setLoading(false);
     });
-    void fetchCategoryTaxonomy().then((result) => {
-      if (result.success) {
-        setCategoryOptions(result.data.map((c) => c.majorCategory));
-      }
-    });
+    void fetchCategoryTaxonomy()
+      .then((result) => {
+        if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+          const fetched = result.data.map((c) => c.majorCategory).filter(Boolean);
+          if (fetched.length > 0) {
+            setCategoryOptions(fetched);
+          }
+        }
+      })
+      .catch(() => {
+        // Fall back gracefully to standard major categories
+      });
   }, [isOpen, rfq]);
 
   // Debounce free-text search before it re-triggers a server-side page fetch.
@@ -180,6 +188,38 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   };
 
   const categorySignals = useMemo(() => (rfq ? rfqCategorySignals(rfq) : []), [rfq]);
+
+  const effectiveCategoryOptions = useMemo(() => {
+    const set = new Set<string>();
+
+    const baseOptions = categoryOptions.length > 0 ? categoryOptions : getMajorCategories();
+    baseOptions.forEach((cat) => {
+      if (cat && cat.trim()) set.add(cat.trim());
+    });
+
+    if (Array.isArray(categoryTaxonomy)) {
+      categoryTaxonomy.forEach((c) => {
+        if (c?.majorCategory?.trim()) set.add(c.majorCategory.trim());
+      });
+    }
+
+    if (rfq?.category?.trim()) set.add(rfq.category.trim());
+    if (Array.isArray(rfq?.extractedEntities)) {
+      rfq.extractedEntities.forEach((ent) => {
+        if (ent.majorCategory?.trim()) set.add(ent.majorCategory.trim());
+        if (ent.category?.trim()) set.add(ent.category.trim());
+      });
+    }
+
+    (allVendors || []).forEach((v) => {
+      if (v?.majorCategory?.trim()) set.add(v.majorCategory.trim());
+    });
+    candidates.forEach((v) => {
+      if (v?.majorCategory?.trim()) set.add(v.majorCategory.trim());
+    });
+
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [categoryOptions, categoryTaxonomy, rfq, allVendors, candidates]);
 
   // "All Vendors" is already server-paginated and server-searched — no
   // further client-side filtering needed (or possible, since only the
@@ -401,7 +441,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                 setNewVendorContactPerson('');
                 setNewVendorEmail('');
                 setNewVendorPhone('');
-                setNewVendorMajorCategory(rfq?.category || categoryOptions[0] || 'Mechanical & Fluid Equipment');
+                setNewVendorMajorCategory(rfq?.category || effectiveCategoryOptions[0] || 'Mechanical & Fluid Equipment');
                 setNewVendorMinorCategory(rfq?.extractedEntities?.[0]?.minorCategory || '');
                 setNewVendorCity('');
                 setNewVendorState('');
@@ -433,7 +473,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
               className="w-48 px-2 py-2 rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
             >
               <option value="">All categories</option>
-              {categoryOptions.map((c) => (
+              {effectiveCategoryOptions.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
@@ -721,7 +761,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     onChange={(e) => setNewVendorMajorCategory(e.target.value)}
                     className="w-full px-2 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   >
-                    {categoryOptions.map((c) => (
+                    {effectiveCategoryOptions.map((c) => (
                       <option key={c} value={c}>
                         {c}
                       </option>

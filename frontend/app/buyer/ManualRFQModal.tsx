@@ -43,10 +43,11 @@ import {
   ExternalLink,
   Zap,
 } from 'lucide-react';
-import { getMajorCategories, getMinorCategories, dominantMajorCategory } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories, dominantMajorCategory, hasMajorCategory, hasMinorCategory } from '@/lib/categoryTaxonomy';
 import { CURRENCY, SOURCING_MODES, RFQ_MODES, RFQ_MODE_LABELS, entitledSourcingModes, RFQ_DOCUMENT_LIMITS, VENDOR_ASSIGNMENT_LIMITS } from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, classifyLineItems, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
+import RfqUpgradePlanModal from './RfqUpgradePlanModal';
 import {
   addManualRFQLineItem,
   createEmptyManualRFQForm,
@@ -165,6 +166,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   const [confirmationRfq, setConfirmationRfq] = useState<RFQItem | null>(null);
   const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
   const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [upgradeModalTargetMode, setUpgradeModalTargetMode] = useState<SourcingMode>('mode_1');
 
   const handleSendCategoryUpdateEmail = async (vendor: any, signals: string[]) => {
     const vendorKey = vendor?.id || vendor?.email;
@@ -271,6 +274,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   }, []);
 
   const [isCategorizing, setIsCategorizing] = useState(false);
+  const [categorizingProgress, setCategorizingProgress] = useState<string | null>(null);
 
   /**
    * Auto-categorize blank line items against the shared taxonomy via the server
@@ -281,6 +285,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
    */
   const handleAutoCategorizeAll = async () => {
     setIsCategorizing(true);
+    setCategorizingProgress(null);
     try {
       const toClassify = form.lineItems.filter(
         (item) => !item.majorCategory && item.itemName.trim() !== ''
@@ -303,7 +308,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           majorCategory: '',
           minorCategory: '',
           confidence: 0,
-        }))
+        })),
+        (prog) => {
+          setCategorizingProgress(`${prog.processed}/${prog.total}`);
+        }
       );
 
       if (!result.success || !result.data || !Array.isArray(result.data.extractedEntities)) {
@@ -320,23 +328,28 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         }
         const matched = classified.get(item.id);
         if (!matched || !matched.majorCategory) return item;
-        if (!detectedMajor) detectedMajor = matched.majorCategory;
+        const validMajor = hasMajorCategory(matched.majorCategory) ? matched.majorCategory : '';
+        const validMinor = validMajor && hasMinorCategory(validMajor, matched.minorCategory) ? matched.minorCategory : '';
+        if (!validMajor) return item;
+        if (!detectedMajor) detectedMajor = validMajor;
         return {
           ...item,
-          majorCategory: matched.majorCategory,
-          minorCategory: matched.minorCategory || '',
+          majorCategory: validMajor,
+          minorCategory: validMinor,
         };
       });
 
+      const dominant = dominantMajorCategory(updatedLineItems);
       setForm((prev) => ({
         ...prev,
-        majorCategory: prev.majorCategory || detectedMajor,
+        majorCategory: prev.majorCategory || dominant || detectedMajor,
         lineItems: updatedLineItems,
       }));
     } catch {
       store?.showToast?.(EXTRACTION.fallbackTitle, EXTRACTION.classifyFailed, 'warning');
     } finally {
       setIsCategorizing(false);
+      setCategorizingProgress(null);
     }
   };
 
@@ -529,8 +542,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     if (extracted.length === 0) return;
 
     // Header major = dominant category across the extracted line items (not
-    // just the first), with guaranteed valid category fallback so it is never null.
-    const headerMajor = dominantMajorCategory(extracted) || (extracted.length > 0 ? getMajorCategories()[0] : '');
+    // just the first), left unselected if no category was extracted.
+    const headerMajor = dominantMajorCategory(extracted) || '';
 
     setHasExtracted(true);
     setForm((prev) => ({
@@ -558,6 +571,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
     if (isQuotaExhausted) {
       setSubmitError(MODAL.quotaExhaustedMessage);
+      setUpgradeModalTargetMode(form.sourcingMode);
+      setIsUpgradeModalOpen(true);
       return;
     }
 
@@ -831,6 +846,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 </button>
                 <a
                   href="/buyer/subscription-center"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                    setIsUpgradeModalOpen(true);
+                  }}
                   className="btn btn-primary btn-sm font-bold shrink-0 inline-flex items-center gap-1.5 shadow-xs"
                 >
                   <Sparkles size={13} />
@@ -1087,7 +1107,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   title="Auto-identify and assign major/minor categories for all items"
                 >
                   {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                  {isCategorizing ? 'Classifying...' : 'Auto-Categorize All (AI)'}
+                  {isCategorizing ? (categorizingProgress ? `Classifying (${categorizingProgress})...` : 'Classifying...') : 'Auto-Categorize All (AI)'}
                 </button>
                 <button
                   onClick={() => setForm(addManualRFQLineItem(form))}
@@ -1160,7 +1180,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               aria-label={MODAL.colMajor}
                               aria-invalid={!!errors.majorCategory}
                               value={item.majorCategory}
-                              onChange={(e) => patchItem(item.id, { majorCategory: e.target.value })}
+                              onChange={(e) => {
+                                const newMajor = e.target.value;
+                                const keepMinor = newMajor && hasMinorCategory(newMajor, item.minorCategory) ? item.minorCategory : '';
+                                patchItem(item.id, { majorCategory: newMajor, minorCategory: keepMinor });
+                              }}
                               className="w-44"
                             >
                               <option value="">{MODAL.selectPlaceholder}</option>
@@ -1177,14 +1201,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               aria-label={MODAL.colMinor}
                               aria-invalid={!!errors.minorCategory}
                               value={item.minorCategory}
-                              // Enabled with a chosen major, or when the document
-                              // supplied a minor of its own (kept without a major).
-                              disabled={item.majorCategory === '' && item.minorCategory === ''}
+                              disabled={!item.majorCategory}
                               onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
                               className="w-44 disabled:opacity-50"
                             >
                               <option value="">{MODAL.selectPlaceholder}</option>
-                              {withStoredValue(minorsFor(item.majorCategory), item.minorCategory).map((minor) => (
+                              {minorsFor(item.majorCategory).map((minor) => (
                                 <option key={minor} value={minor}>
                                   {minor}
                                 </option>
@@ -1303,14 +1325,18 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                     key={mode.id}
                     data-testid={`manual-mode-${mode.id}`}
                     onClick={() => {
-                      if (!isEntitled) return;
+                      if (!isEntitled) {
+                        setUpgradeModalTargetMode(mode.id as SourcingMode);
+                        setIsUpgradeModalOpen(true);
+                        return;
+                      }
                       patchForm("sourcingMode", mode.id as SourcingMode);
                     }}
                     className={`
             group relative text-left rounded-2xl border p-4 cursor-pointer
             transition-all duration-200
             ${!isEntitled
-                        ? "border-slate-200 bg-slate-50/70 opacity-60 cursor-not-allowed dark:border-gray-800 dark:bg-gray-900/40"
+                        ? "border-slate-200 bg-slate-50/70 hover:border-amber-400 dark:border-gray-800 dark:bg-gray-900/40"
                         : isSelected
                         ? "border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/30 shadow-sm ring-2 ring-indigo-500/15"
                         : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50/70 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700"
@@ -1335,7 +1361,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
                       <div className="flex items-center gap-2">
                         {!isEntitled && (
-                          <span className="rounded-full px-2 py-0.5 text-[8px] font-extrabold tracking-wider bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
+                          <span
+                            title="Click to upgrade your plan and unlock this mode"
+                            className="rounded-full px-2 py-0.5 text-[8px] font-extrabold tracking-wider bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
+                          >
                             LOCKED
                           </span>
                         )}
@@ -1360,7 +1389,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                           disabled={!isEntitled}
                           aria-label={mode.shortLabel}
                           onChange={() => {
-                            if (!isEntitled) return;
+                            if (!isEntitled) {
+                              setUpgradeModalTargetMode(mode.id as SourcingMode);
+                              setIsUpgradeModalOpen(true);
+                              return;
+                            }
                             patchForm("sourcingMode", mode.id as SourcingMode);
                           }}
                           className="h-4 w-4 rounded text-indigo-600 border-slate-300 dark:border-gray-600 focus:ring-indigo-500 cursor-pointer"
@@ -2281,6 +2314,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 </button>
                 <a
                   href="/buyer/subscription-center"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                    setIsUpgradeModalOpen(true);
+                  }}
                   className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
                 >
                   <Sparkles size={14} />
@@ -2302,6 +2340,17 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           </>
         )}
       </div>
+
+      <RfqUpgradePlanModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        targetMode={upgradeModalTargetMode}
+        remainingCredits={remainingFreeRFQs}
+        onSwitchToMode0={() => {
+          patchForm('sourcingMode', 'mode_0');
+          setIsUpgradeModalOpen(false);
+        }}
+      />
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   saveBuyerProfile,
 } from '@/lib/buyerProfileClient';
 import { BUYER_PROFILE_LIMITS, ORGANIZATION_TYPE_OPTIONS } from '@/lib/constants';
+import { getDefaultCategoryTaxonomy } from '@/lib/categoryTaxonomy';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { FORM_SCHEMAS, validateFormData, validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 import { logger } from '@/lib/logger';
@@ -47,7 +48,7 @@ import {
  * never names an organisation and a buyer can only ever reach their own record.
  */
 export default function BuyerProfilePage() {
-  const { addAuditLog, showToast, activeBuyerAccount } = useApp();
+  const { addAuditLog, showToast, activeBuyerAccount, categoryTaxonomy } = useApp();
   const activeBuyerAccountRef = useRef(activeBuyerAccount);
   useEffect(() => {
     activeBuyerAccountRef.current = activeBuyerAccount;
@@ -145,11 +146,20 @@ export default function BuyerProfilePage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedMajor, setExpandedMajor] = useState<Record<string, boolean>>({});
 
-  // The major/minor taxonomy, read from the `category_division` master table.
-  // Starts empty because there is no offline copy to show: an unreachable API
-  // means the buyer is told the tree could not be loaded, not offered categories
-  // that might not exist.
-  const [taxonomy, setTaxonomy] = useState<MajorMinorCategory[]>([]);
+  // Base taxonomy from backend, or standard default fixture if backend table has 0 rows or is loading
+  const fallbackTaxonomy =
+    categoryTaxonomy && categoryTaxonomy.length > 0
+      ? categoryTaxonomy
+      : getDefaultCategoryTaxonomy();
+
+  const [taxonomy, setTaxonomy] = useState<MajorMinorCategory[]>(() => fallbackTaxonomy);
+
+  // Sync if store loads category taxonomy dynamically
+  useEffect(() => {
+    if (categoryTaxonomy && categoryTaxonomy.length > 0) {
+      setTaxonomy((prev) => (prev.length === 0 ? categoryTaxonomy : prev));
+    }
+  }, [categoryTaxonomy]);
 
   // Request state. `isLoaded` gates saving: without a resolved organisation there
   // is nothing to patch, and submitting would post a form the buyer never saw
@@ -207,9 +217,13 @@ export default function BuyerProfilePage() {
 
     if (!isMountedRef.current) return;
 
-    setTaxonomy(taxonomyResult.data);
-    if (!taxonomyResult.success) {
-      showToastRef.current(UI_STRINGS.buyerProfile.loadFailedTitle, taxonomyResult.error || '', 'warning');
+    if (taxonomyResult.success && Array.isArray(taxonomyResult.data) && taxonomyResult.data.length > 0) {
+      setTaxonomy(taxonomyResult.data);
+    } else {
+      if (!taxonomyResult.success) {
+        showToastRef.current(UI_STRINGS.buyerProfile.loadFailedTitle, taxonomyResult.error || '', 'warning');
+      }
+      setTaxonomy((prev) => (prev.length > 0 ? prev : fallbackTaxonomy));
     }
 
     if (!profileResult.success || !profileResult.data) {
@@ -313,9 +327,11 @@ export default function BuyerProfilePage() {
   // Calculate totals
   const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
 
+  const effectiveTaxonomy = taxonomy.length > 0 ? taxonomy : fallbackTaxonomy;
+
   /** Minors of a major, from the taxonomy the database returned. */
   const minorsOf = (majorName: string) =>
-    taxonomy.find((c) => c.majorCategory === majorName)?.minorCategories || [];
+    effectiveTaxonomy.find((c) => c.majorCategory === majorName)?.minorCategories || [];
 
   /**
    * Report that a cardinality cap blocked a selection.
@@ -445,7 +461,7 @@ export default function BuyerProfilePage() {
   };
 
   // Filtered Categories based on search
-  const filteredCategories = taxonomy.filter((cat) => {
+  const filteredCategories = effectiveTaxonomy.filter((cat) => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
     const matchesMajor = cat.majorCategory.toLowerCase().includes(term);
@@ -879,6 +895,11 @@ export default function BuyerProfilePage() {
 
           {/* Categories Accordion / Selector Grid */}
           <div className="space-y-2 pt-0.5">
+            {filteredCategories.length === 0 && (
+              <div className="p-6 text-center text-xs text-slate-500 dark:text-gray-400 bg-slate-50/50 dark:bg-gray-950/40 rounded-xl border border-dashed border-slate-200 dark:border-gray-800">
+                {searchTerm.trim() ? `No categories found matching "${searchTerm}".` : 'No procurement categories available.'}
+              </div>
+            )}
             {filteredCategories.map((cat) => {
               const isMajorSelected = selectedMajor.includes(cat.majorCategory);
               const selectedMinorsInCat = selectedMinor[cat.majorCategory] || [];

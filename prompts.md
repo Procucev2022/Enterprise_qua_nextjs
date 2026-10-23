@@ -3252,9 +3252,33 @@ What should be the best order of gemini models for this AI extraction use case, 
 ```text
 Please use this model order
 
+```text
     'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash'
 ```
 
+### 2026-10-22T12:35:26+05:30
+
+```text
+For V1 RFQs whose category is not selected by the vendor, the email asking the vendor to log in and update categories is not working. Vendor profile also says no procurement categories are configured. for vendor profile just nned to dot h just can add his own category here  vedor can update his own categories 
+```
+
+### 2026-10-22T13:19:39+05:30
+
+```text
+what are you doing you have not done a single change just moving
+```
+
+### 2026-10-22T19:28:59+05:30
+
+```text
+ypu are doing a lot of extra thing just need to do  vendo twill type the categories here and shown in picture will search and automatically mark tick other wise it will add in other for that vendor only and make that tick or selected  their is limilt of 10 categories selection it can give alter that only 10 will be selecte as if giving now and a lot of change you have odne in login  page and other mailer just remove and please do this fast
+```
+
+### 2026-10-22T19:43:53+05:30
+
+```text
+The categoreis adde must be shown to the buyer after adding up ?? 
+```
 ### 2026-10-22T13:24:55+05:30
 
 ```text
@@ -3267,3 +3291,351 @@ after PPO generation, the RFQ is still showing as “Closed” and asking for qu
 create a new branch and raise the pr
 ```
 
+---
+
+### 2026-10-22T18:08:02+05:30
+
+```text
+# Fix RFQ Major & Minor Category Auto-Mapping Issues
+
+## Context
+
+In the Procucev Buyer Dashboard → RFQ Creation → Line Items Specification, the auto-category mapping is assigning incorrect Major and Minor Categories after document extraction.
+
+The application uses the category master from the database through:
+
+`GET /api/buyer-profile/categories`
+
+Review the existing category mapping implementation, frontend state management, backend classification logic, and category master relationships.
+
+## 1. Current Issues
+
+**Issue 1: Incorrect Major Category for Grocery Items**
+
+When uploading a grocery requirements document containing 279 line items, products such as:
+
+- SUGAR PACKING
+- SUGAR REFINED
+- SUGAR LOOSE
+- MADHUR SUGAR-1KG
+- TOOR DAL LOOSE
+- GRAM DAL
+- GRAM DAL LOOSE
+
+are incorrectly mapped as:
+
+- Major Category: `Engineering Spares - ...`
+- Minor Category: `Groceries`
+
+This is an invalid or inconsistent mapping.
+
+According to the provided taxonomy fixture, the appropriate existing category for grocery products is generally:
+
+- Major Category: `Others – New Product`
+- Minor Category: `Food & Beverages`
+
+Use the exact category names and IDs returned by the live database. Do not create new category values unless explicitly required.
+
+**Issue 2: Incorrect Medical Equipment Classification**
+
+For a medical supplies RFQ, a Stethoscope is incorrectly classified as:
+
+- Major Category: `Raw Material`
+- Minor Category: `Steels`
+
+This happens because the specification mentions a stainless-steel chest piece.
+
+The correct classification should prioritize the actual product rather than its manufacturing material.
+
+For example, based on the existing taxonomy:
+
+- Major Category: `Others – New Product`
+- Minor Category: `Health Equipments`
+
+Other medical items should be mapped to the closest valid category available in the master.
+
+**Issue 3: Same Category Assigned to All Items**
+
+The system sometimes assigns the same Major and Minor Category to every extracted line item without considering individual product descriptions.
+
+Each line item must be classified independently.
+
+## 2. Required Fixes
+
+### A. Fix Major and Minor Category Relationships
+
+- Fetch the latest taxonomy from the database.
+- Validate that the selected Minor Category belongs to the selected Major Category.
+- Never allow an invalid Major–Minor combination.
+- Use stable database identifiers where available.
+- Ensure category IDs, labels, and dropdown values remain synchronized.
+- Avoid index-based category mapping.
+- Do not silently select the first category when mapping fails.
+- If no suitable category exists, leave the fields unselected and allow manual selection.
+
+### B. Improve AI Auto-Categorization
+
+Classify each item using:
+
+1. Item Description — highest priority
+2. Product purpose and functionality
+3. Product specifications
+4. Available Major and Minor Categories
+
+Examples:
+
+| Item | Expected Major | Expected Minor |
+|---|---|---|
+| Sugar | Others – New Product | Food & Beverages |
+| Toor Dal | Others – New Product | Food & Beverages |
+| Gram Dal | Others – New Product | Food & Beverages |
+| Stethoscope | Others – New Product | Health Equipments |
+| Pulse Oximeter | Others – New Product | Health Equipments |
+| Disposable Gloves | Occuptional Health and Safety | Gloves |
+
+Use the exact spelling in the existing database, including legacy taxonomy labels.
+
+Do not classify products using isolated keywords such as steel, metal, plastic, or electrical when those keywords only describe a component or material.
+
+### C. Fix Bulk Auto-Categorization
+
+The Auto-Categorize All (AI) button must:
+
+- Process all extracted line items, including large documents with 279+ items.
+- Classify each item independently.
+- Support batching to avoid AI timeouts and token limits.
+- Preserve the original item description, specifications, quantity, and unit.
+- Update the correct row using a stable line-item ID.
+- Prevent category values from one row leaking into another.
+- Handle partial failures without corrupting successfully classified rows.
+- Display clear progress and failure messages.
+- Avoid overwriting manually selected categories unless the user explicitly requests re-categorization.
+
+### D. Fix Frontend Dropdown State
+
+Inspect the React/Next.js category selection logic.
+
+- Each line item must maintain its own Major and Minor Category state.
+- When the Major Category changes, load only its valid Minor Categories.
+- Clear the previous Minor Category if it does not belong to the new Major Category.
+- Ensure extracted AI values correctly populate both dropdowns.
+- Prevent stale React state, shared object references, and incorrect array-index updates.
+- Verify that the category remains correct after editing, adding, or deleting line items.
+
+### E. Validate Before RFQ Submission
+
+Before saving or submitting an RFQ:
+
+- Confirm the Major Category exists in the category master.
+- Confirm the Minor Category belongs to the selected Major Category.
+- Reject invalid category combinations with a clear validation message.
+- Preserve valid manually selected categories.
+- Ensure the backend saves the same category values displayed in the frontend.
+
+## 3. Testing Requirements
+
+Test these scenarios:
+
+1. Upload the grocery Excel document containing 279 line items.
+2. Verify Sugar, Toor Dal, Gram Dal, and other grocery products map to valid food-related categories.
+3. Upload the medical supplies RFQ PDF containing 15 items.
+4. Verify Stethoscope is not mapped to Raw Material → Steels.
+5. Verify every item receives an independently evaluated category.
+6. Change a Major Category manually and verify the Minor Category dropdown updates correctly.
+7. Test Auto-Categorize All with 10, 100, and 279+ items.
+8. Test AI extraction and auto-categorization with missing specifications.
+9. Verify category persistence after saving and reopening an RFQ.
+10. Add regression tests for invalid parent-child category combinations, stale dropdown state, and cross-row category leakage.
+
+## 4. Important Technical Requirements
+
+- Use the existing database category master as the single source of truth.
+- Do not rely on outdated hardcoded category JSON.
+- Reuse existing APIs and services wherever possible.
+- Do not change unrelated RFQ functionality.
+- Preserve V0, V1, V2, and V3 RFQ flows.
+- Keep existing manual category selection functionality working.
+- Do not modify category master records without approval.
+
+## 5. Expected Result
+
+After the fix:
+
+- Grocery products are assigned to valid food-related categories.
+- Medical equipment is classified by product purpose.
+- Every Major and Minor Category combination is valid.
+- Bulk categorization works correctly for large documents.
+- No incorrect default categories are silently assigned.
+- Category selections remain consistent between frontend, backend, and database.
+
+**First identify the root cause in the existing implementation, then implement the fix. Finally, provide a summary of changed files, root cause, test results, and any remaining limitations.**
+
+
+i already implement this can continue and check the 17 files changes and resume them
+```
+
+---
+
+### 2026-10-22T18:35:48+05:30
+
+```text
+raise the pr
+```
+
+---
+
+### 2026-10-22T18:59:40+05:30
+
+```text
+FAIL __tests__/supportChat.test.js
+● Test suite failed to run
+Jest encountered an unexpected token
+Jest failed to parse a file. This happens e.g. when your code or its dependencies use non-standard JavaScript syntax, or when Jest is not configured to support such syntax.
+Out of the box Jest supports Babel, which will be used to transform your files into valid JS based on your Babel configuration.
+By default "node_modules" folder is ignored by transformers.
+Here's what you can do:
+• If you are trying to use ECMAScript Modules, see https://jestjs.io/docs/ecmascript-modules for how to enable it.
+• If you are trying to use TypeScript, see https://jestjs.io/docs/getting-started#using-typescript
+• To have some of your "node_modules" files transformed, you can specify a custom "transformIgnorePatterns" in your config.
+• If you need a custom transformation specify a "transform" option in your config.
+• If you simply want to mock your non-JS modules (e.g. binary assets) you can stub them out with the "moduleNameMapper" config option.
+You'll find more details and examples of these config options in the docs:
+https://jestjs.io/docs/configuration
+For information about custom transformations, see:
+https://jestjs.io/docs/code-transformation
+Details:
+SyntaxError: /home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/src/services/rfqIngestionService.js: Unexpected reserved word 'let'. (431:2)
+429 | categoryConfidence: CONFIDENCE.DEFAULT,
+430 | classificationStatus: STATUS.DEFAULT,
+> 431 | let resolvedMajor = canonicalMajor(statedMajor) || canonicalMajor(statedCategory) || statedMajor;
+| ^
+432 | let resolvedMinor = statedCategory;
+433 | let confidence = CONFIDENCE.DEFAULT;
+434 | let status = STATUS.DEFAULT;
+3 | // Called through the module namespace (like storeService below) so the ingestion
+4 | // pipeline stays substitutable in tests rather than being bound at import time.
+> 5 | const rfqIngestionService = require('../services/rfqIngestionService');
+| ^
+6 | const geminiService = require('../services/geminiService');
+7 | const rfqAttachmentService = require('../services/rfqAttachmentService');
+8 | const quoteAttachmentService = require('../services/quoteAttachmentService');
+at constructor (node_modules/@babel/parser/src/parse-error.ts:96:45)
+at Parser.toParseError [as raise] (node_modules/@babel/parser/src/tokenizer/index.ts:1504:19)
+at Parser.raise [as checkReservedWord] (node_modules/@babel/parser/src/parser/expression.ts:2921:12)
+at Parser.checkReservedWord [as parseObjectProperty] (node_modules/@babel/parser/src/parser/expression.ts:2371:12)
+at Parser.parseObjectProperty [as parseObjPropValue] (node_modules/@babel/parser/src/parser/expression.ts:2421:12)
+at Parser.parseObjPropValue [as parsePropertyDefinition] (node_modules/@babel/parser/src/parser/expression.ts:2261:17)
+at Parser.parsePropertyDefinition [as parseObjectLike] (node_modules/@babel/parser/src/parser/expression.ts:2128:21)
+at Parser.parseObjectLike [as parseExprAtom] (node_modules/@babel/parser/src/parser/expression.ts:1208:21)
+at Parser.parseExprAtom [as parseExprSubscripts] (node_modules/@babel/parser/src/parser/expression.ts:742:23)
+at Parser.parseExprSubscripts [as parseUpdate] (node_modules/@babel/parser/src/parser/expression.ts:721:21)
+at Parser.parseUpdate [as parseMaybeUnary] (node_modules/@babel/parser/src/parser/expression.ts:683:23)
+at Parser.parseMaybeUnary [as parseMaybeUnaryOrPrivate] (node_modules/@babel/parser/src/parser/expression.ts:417:14)
+at Parser.parseMaybeUnaryOrPrivate [as parseExprOps] (node_modules/@babel/parser/src/parser/expression.ts:429:23)
+at Parser.parseExprOps [as parseMaybeConditional] (node_modules/@babel/parser/src/parser/expression.ts:384:23)
+at Parser.parseMaybeConditional [as parseMaybeAssign] (node_modules/@babel/parser/src/parser/expression.ts:301:21)
+at Parser.parseMaybeAssign [as parseExpressionBase] (node_modules/@babel/parser/src/parser/expression.ts:226:23)
+at parseExpressionBase (node_modules/@babel/parser/src/parser/expression.ts:217:39)
+at Parser.callback [as allowInAnd] (node_modules/@babel/parser/src/parser/expression.ts:3222:16)
+at Parser.allowInAnd [as parseExpression] (node_modules/@babel/parser/src/parser/expression.ts:217:17)
+at Parser.parseExpression [as parseReturnStatement] (node_modules/@babel/parser/src/parser/statement.ts:1115:28)
+at Parser.parseReturnStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:543:21)
+at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:482:17)
+at Parser.parseStatementLike [as parseStatementListItem] (node_modules/@babel/parser/src/parser/statement.ts:431:17)
+at Parser.parseStatementListItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1444:16)
+at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1417:10)
+at Parser.parseBlockBody [as parseBlock] (node_modules/@babel/parser/src/parser/statement.ts:1385:10)
+at Parser.parseBlock [as parseFunctionBody] (node_modules/@babel/parser/src/parser/expression.ts:2651:24)
+at Parser.parseFunctionBody [as parseFunctionBodyAndFinish] (node_modules/@babel/parser/src/parser/expression.ts:2620:10)
+at parseFunctionBodyAndFinish (node_modules/@babel/parser/src/parser/statement.ts:1695:12)
+at Parser.callback [as withSmartMixTopicForbiddingContext] (node_modules/@babel/parser/src/parser/expression.ts:3201:14)
+at Parser.withSmartMixTopicForbiddingContext [as parseFunction] (node_modules/@babel/parser/src/parser/statement.ts:1693:10)
+at Parser.parseFunction [as parseFunctionStatement] (node_modules/@babel/parser/src/parser/statement.ts:1080:17)
+at Parser.parseFunctionStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:525:21)
+at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:482:17)
+at Parser.parseStatementLike [as parseModuleItem] (node_modules/@babel/parser/src/parser/statement.ts:419:17)
+at Parser.parseModuleItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1443:16)
+at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1417:10)
+at Parser.parseBlockBody [as parseProgram] (node_modules/@babel/parser/src/parser/statement.ts:229:10)
+at Parser.parseProgram [as parseTopLevel] (node_modules/@babel/parser/src/parser/statement.ts:203:25)
+at Parser.parseTopLevel [as parse] (node_modules/@babel/parser/src/parser/index.ts:83:25)
+at parse (node_modules/@babel/parser/src/index.ts:86:38)
+at parser (node_modules/@babel/core/src/parser/index.ts:29:19)
+at parser.next (<anonymous>)
+at normalizeFile (node_modules/@babel/core/src/transformation/normalize-file.ts:49:24)
+at normalizeFile.next (<anonymous>)
+at run (node_modules/@babel/core/src/transformation/index.ts:41:36)
+at run.next (<anonymous>)
+at transform (node_modules/@babel/core/src/transform.ts:29:20)
+at transform.next (<anonymous>)
+at evaluateSync (node_modules/gensync/index.js:251:28)
+at sync (node_modules/gensync/index.js:89:14)
+at fn (node_modules/@babel/core/src/errors/rewrite-stack-trace.ts:99:14)
+at transformSync (node_modules/@babel/core/src/transform.ts:66:52)
+at ScriptTransformer.transformSource (node_modules/@jest/transform/build/ScriptTransformer.js:545:31)
+at ScriptTransformer._transformAndBuildScript (node_modules/@jest/transform/build/ScriptTransformer.js:674:40)
+at ScriptTransformer.transform (node_modules/@jest/transform/build/ScriptTransformer.js:726:19)
+at Object.require (src/controllers/rfqController.js:5:29)
+at Object.require (src/routes/rfqs.js:3:23)
+at Object.require (src/routes/index.js:4:19)
+at Object.require (src/app.js:17:19)
+at Object.require (__tests__/supportChat.test.js:2:13)
+Test Suites: 46 failed, 50 passed, 96 total
+Tests: 1227 passed, 1227 total
+Snapshots: 0 total
+Time: 83.052 s
+Ran all test suites.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+Error: Process completed with exit code 1.
+0s
+0s
+0s
+0s
+fix this isses
+```
+
+---
+
+### 2026-10-22T19:54:09+05:30
+
+```text
+continue
+```
+
+---
+
+### 2026-10-23T12:02:20+05:30
+
+```text
+RFQ details should be visible to all vendors, even if they have not received an invitation. Vendors should be able to view RFQs across V0, V2, and V3, and submit quotations according to the applicable free-credit and subscription rules. 
+ This is buyer-invited vendors, quotation submission should be unlimited for RFQs created by that specific buyer. However, when submitting quotations for RFQs from other buyers, the vendor should be prompted to subscribe after using the 5 free quotation credits. This functionality was working previously. Please check and fix the issue.
+
+only need to do two thing one comparing changes in prod last commit and 2nd last commit from prod-v2 and just check where the function have been remove and add it and create branch and raise pr and update the prod it will be working
+```
+
+---
+
+### 2026-10-23T12:08:50+05:30
+
+```text
+[12:05, 23/10/2026] +91 99667 66905: When I log in as a vendor, I am unable to view all RFQs to submit quotations. Only one RFQ is visible, and it is from a V1 buyer who invited the vendor.
+Please fix this issue so that vendors can view all relevant RFQs from V0, V2, and V3 buyers and submit their quotations accordingly.
+If a vendor is invited by a V1 buyer, the vendor should also be able to view and access all relevant RFQs from V0, V1, V2, and V3 buyers. The vendor should be able to submit quotations using the 5 free credits provided. Once all 5 free credits are used, a subscription popup should automatically appear, prompting the vendor to subscribe to continue using the platform.
+[12:05, 23/10/2026] +91 99667 66905: yesterday was working fine today it is not working
+```
+
+---
+
+### 2026-10-23T12:11:01+05:30
+
+```text
+https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/316 check this pr aftet this issue was coming
+```
+
+---
+
+### 2026-10-23T12:28:34+05:30
+
+```text
+okay start working you need to do some thing
+```

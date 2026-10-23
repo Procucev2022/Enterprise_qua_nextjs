@@ -1006,6 +1006,24 @@ export const UI_STRINGS = {
     buyerFilterAll: '🌐 All Inviting Buyers',
   },
 
+  vendorProfile: {
+    customCategoriesTitle: 'Add & Update Your Supply Categories',
+    customCategoriesSubtitle: 'Self-service category addition',
+    customCategoriesDesc:
+      "Can't find your exact product or service in the pre-configured categories below? Add your own specialized procurement categories here. They will be saved to your profile and matched to relevant RFQs.",
+    customCategoryPlaceholder:
+      'Type custom category name (e.g., CNC Precision Machining, Industrial Valves, Fire Protection)...',
+    addCategoryButton: '+ Add Category',
+    categoryAddedTitle: 'Category Added',
+    categoryAddedMessage: 'Added "{category}" to your procurement categories.',
+    categoryExistsMessage: 'Category already exists in your selections.',
+    categoryEmptyMessage: 'Please enter a valid category name.',
+    maxCategoriesReached: 'Maximum {max} categories allowed. Please remove a category before adding a new one.',
+    customCategoryGroup: 'Other',
+    removeCategoryTitle: 'Remove Category',
+    noCategoriesSelected: 'No categories selected. Pick up to 10 below or add your own above.',
+  },
+
   buyerProfile: {
     // Toast titles
     loadFailedTitle: 'Profile Could Not Be Loaded',
@@ -1598,6 +1616,23 @@ export const UI_STRINGS = {
     mode_1: 'Mode 1 – Internal Vendors',
     mode_2: 'Mode 2 – Internal + Procucev Vetted Vendors',
     mode_3: 'Mode 3 – Autonomous AI + 360 Qualification',
+  },
+
+  vendorSubscriptionModal: {
+    upgradeTitle: '🔒 Upgrade Plan to Submit Quotations',
+    creditsExhaustedWarning: '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.',
+    connectTitle: 'Connect Model (₹2 / 3 mo)',
+    connectDesc: 'Quote and download up to 50 RFQs in 3 months from Marketplace.',
+    selectTitle: 'Select Model (₹5 / 3 mo)',
+    selectDesc: 'Item Catalogue (100 products) + 100 RFQs / 3 months.',
+    activeBadge: 'Active',
+    upgradeAction: 'Upgrade',
+    closeAction: 'Close',
+    upgradeToBidAction: '🔒 Upgrade to Bid',
+    subscriptionRequiredToastTitle: 'Subscription Required',
+    subscriptionRequiredToastDesc: 'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
+    creditsExhaustedToastTitle: 'Quotation Credits Exhausted',
+    creditsExhaustedToastDesc: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
   },
 };
 
