@@ -3648,3 +3648,35 @@ okay start working you need to do some thing
 continue and after this feature implemented  create a new branch and raise the pr
 ```
 
+---
+
+### 2026-10-23T16:16:03+05:30
+
+```text
+run locally to check how it is working
+```
+
+---
+
+### 2026-10-23T16:26:20+05:30
+
+```text
+i send the email to dev email create we check the flow
+```
+
+---
+
+### 2026-10-23T16:28:53+05:30
+
+```text
+@[TerminalName: cmd, ProcessId: 6600] 
+```
+
+---
+
+### 2026-10-23T16:43:06+05:30
+
+```text
+send the credentials from here then i check it is working or not
+```
+
