@@ -369,7 +369,7 @@ describe('emailGatewayService.processMessage', () => {
     storeService.getBuyerAccountByEmail.mockReturnValue(null);
     const extract = mockExtraction();
 
-    const result = await emailGatewayService.processMessage(raw(), config());
+    const result = await emailGatewayService.processMessage(raw(), emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_AUTO_REGISTER: 'false' }));
 
     expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
     // Quota is not spent on a message that was never going to be accepted.
@@ -436,7 +436,7 @@ describe('emailGatewayService.processMessage', () => {
   test('catches errors gracefully if unauthorized buyer notification email fails to send', async () => {
     storeService.getBuyerAccountByEmail.mockReturnValue(null);
     jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockRejectedValueOnce(new Error('SMTP down'));
-    const result = await emailGatewayService.processMessage(raw(), config());
+    const result = await emailGatewayService.processMessage(raw(), emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_AUTO_REGISTER: 'false' }));
     expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
   });
 
@@ -1244,14 +1244,14 @@ describe('emailGatewayService.processLineItemsAndGroups', () => {
 
   test('splits items with different delivery dates into separate groups', () => {
     const rawItems = [
-      { itemName: 'Item 1', targetDate: '2026-10-01', deliveryCity: 'Bangalore' },
-      { itemName: 'Item 2', targetDate: '2026-10-05', deliveryCity: 'Bangalore' },
+      { itemName: 'Item 1', targetDate: '2028-10-01', deliveryCity: 'Bangalore' },
+      { itemName: 'Item 2', targetDate: '2028-10-05', deliveryCity: 'Bangalore' },
     ];
     const groups = emailGatewayService.processLineItemsAndGroups(rawItems, {}, buyerLoc);
 
     expect(groups).toHaveLength(2);
-    expect(groups[0].targetDate).toBe('2026-10-01');
-    expect(groups[1].targetDate).toBe('2026-10-05');
+    expect(groups[0].targetDate).toBe('2028-10-01');
+    expect(groups[1].targetDate).toBe('2028-10-05');
   });
 
   test('splits items with different delivery locations into separate groups', () => {
@@ -1299,7 +1299,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
           itemName: 'Industrial Pump',
           quantity: 2,
           unit: 'Nos',
-          targetDate: '2026-10-15',
+          targetDate: '2028-10-15',
           deliveryCity: 'Mumbai',
           deliveryState: 'Maharashtra',
           deliveryPincode: '400001',
@@ -1312,7 +1312,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(createSpy).toHaveBeenCalledTimes(1);
     const [payload] = createSpy.mock.calls[0];
-    expect(payload.targetDeliveryDate).toBe('2026-10-15');
+    expect(payload.targetDeliveryDate).toBe('2028-10-15');
     expect(payload.deliveryCity).toBe('Mumbai');
     expect(payload.deliveryState).toBe('Maharashtra');
     expect(payload.deliveryPincode).toBe('400001');
@@ -1356,7 +1356,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
           itemName: 'Industrial Pump',
           quantity: 2,
           unit: 'Nos',
-          targetDate: '2026-10-20',
+          targetDate: '2028-10-20',
           deliveryCity: '',
           deliveryState: '',
           deliveryPincode: '',
@@ -1369,7 +1369,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(createSpy).toHaveBeenCalledTimes(1);
     const [payload] = createSpy.mock.calls[0];
-    expect(payload.targetDeliveryDate).toBe('2026-10-20');
+    expect(payload.targetDeliveryDate).toBe('2028-10-20');
     expect(payload.deliveryCity).toBe('Bangalore');
     expect(payload.deliveryState).toBe('Karnataka');
     expect(payload.deliveryPincode).toBe('560001');
@@ -1464,8 +1464,8 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
       status: geminiService.EXTRACTION_STATUS.SUCCESS,
       lineItems: [
-        { itemName: 'Laptop Batch A', quantity: 10, unit: 'Nos', targetDate: '2026-09-21', deliveryCity: 'Bangalore' },
-        { itemName: 'Printer Batch B', quantity: 5, unit: 'Nos', targetDate: '2026-09-25', deliveryCity: 'Bangalore' },
+        { itemName: 'Laptop Batch A', quantity: 10, unit: 'Nos', targetDate: '2028-09-21', deliveryCity: 'Bangalore' },
+        { itemName: 'Printer Batch B', quantity: 5, unit: 'Nos', targetDate: '2028-09-25', deliveryCity: 'Bangalore' },
       ],
     });
 
@@ -1474,8 +1474,8 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(createSpy).toHaveBeenCalledTimes(2);
     expect(result.rfqs).toHaveLength(2);
-    expect(result.rfqs[0].targetDeliveryDate || createSpy.mock.calls[0][0].targetDeliveryDate).toBe('2026-09-21');
-    expect(result.rfqs[1].targetDeliveryDate || createSpy.mock.calls[1][0].targetDeliveryDate).toBe('2026-09-25');
+    expect(result.rfqs[0].targetDeliveryDate || createSpy.mock.calls[0][0].targetDeliveryDate).toBe('2028-09-21');
+    expect(result.rfqs[1].targetDeliveryDate || createSpy.mock.calls[1][0].targetDeliveryDate).toBe('2028-09-25');
   });
 
   test('TEST 8: Multiple items + different locations -> grouped into separate RFQs', async () => {
@@ -1555,7 +1555,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     const geminiSpy = jest.spyOn(geminiService, 'extractLineItems');
 
     const unregEml = fixtures.PLAIN_REQUISITION_EML.split(SENDER).join('stranger.buyer@outside.org');
-    const result = await emailGatewayService.processMessage(Buffer.from(unregEml, 'utf8'), config());
+    const result = await emailGatewayService.processMessage(Buffer.from(unregEml, 'utf8'), emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_AUTO_REGISTER: 'false' }));
 
     expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
     expect(mailerSpy).toHaveBeenCalledWith('stranger.buyer@outside.org', expect.anything());

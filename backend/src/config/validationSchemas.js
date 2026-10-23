@@ -433,6 +433,34 @@ const VALIDATION_SCHEMAS = {
     code: { type: 'string', required: false },
   },
 
+  // Mandatory first-login profile completion for automatically created buyers
+  completeBuyerOnboarding: {
+    emailOtp: { type: 'string', required: true, pattern: OTP_CODE_REGEX, message: 'Valid 6-digit email OTP is required.' },
+    mobile: {
+      type: 'string',
+      required: true,
+      pattern: INDIAN_MOBILE_REGEX,
+      message: INDIAN_MOBILE_MESSAGE,
+      custom: (val) => {
+        const cleaned = String(val || '').replace(/\D/g, '');
+        if (cleaned.endsWith('9999999999') || cleaned === '9999999999') {
+          return 'Placeholder phone number 9999999999 must be replaced with your actual phone number.';
+        }
+        return null;
+      },
+    },
+    mobileOtp: { type: 'string', required: true, pattern: OTP_CODE_REGEX, message: 'Valid 6-digit SMS OTP is required.' },
+    currentPassword: { type: 'string', required: true, minLength: 1, message: 'Current temporary password is required.' },
+    newPassword: { type: 'string', required: true, minLength: PASSWORD_MIN_LENGTH, message: 'New password of at least 8 characters is required.' },
+    companyName: { type: 'string', required: true, minLength: 2, maxLength: 255, message: 'Company or organisation name is required.' },
+    contactName: { type: 'string', required: false, maxLength: 255 },
+    city: { type: 'string', required: false, maxLength: 255 },
+    state: { type: 'string', required: false, maxLength: 255 },
+    pincode: { type: 'string', required: false, pattern: INDIAN_PINCODE_REGEX, message: INDIAN_PINCODE_MESSAGE },
+    gstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
+    pan: { type: 'string', required: false, pattern: PAN_REGEX, message: PAN_MESSAGE },
+  },
+
   // Buyer organisation profile submitted by PUT /api/buyer-profile/me.
   //
   // Ported from the fields ProcUserServiceImpl.updateBuyer patches onto the
@@ -576,6 +604,52 @@ const VALIDATION_SCHEMAS = {
 
   vendorPresenceQuery: {
     identifiers: { type: 'string', required: false, maxLength: 2000 },
+  },
+
+  completeBuyerOnboarding: {
+    emailOtp: {
+      type: 'string',
+      required: true,
+      pattern: OTP_CODE_REGEX,
+      message: 'Enter the 6-digit email OTP verification code.',
+    },
+    mobile: {
+      type: 'string',
+      required: true,
+      pattern: INDIAN_MOBILE_REGEX,
+      message: INDIAN_MOBILE_MESSAGE,
+    },
+    mobileOtp: {
+      type: 'string',
+      required: true,
+      pattern: OTP_CODE_REGEX,
+      message: 'Enter the 6-digit SMS OTP verification code.',
+    },
+    currentPassword: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      message: 'Current/temporary password is required.',
+    },
+    newPassword: {
+      type: 'string',
+      required: true,
+      minLength: PASSWORD_MIN_LENGTH,
+      message: `New password must be at least ${PASSWORD_MIN_LENGTH} characters.`,
+    },
+    companyName: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 255,
+      message: 'Company name is required.',
+    },
+    contactName: { type: 'string', required: false, maxLength: 255 },
+    city: { type: 'string', required: false, maxLength: 100 },
+    state: { type: 'string', required: false, maxLength: 100 },
+    pincode: { type: 'string', required: false, pattern: INDIAN_PINCODE_REGEX, message: INDIAN_PINCODE_MESSAGE },
+    gstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
+    pan: { type: 'string', required: false, pattern: PAN_REGEX, message: PAN_MESSAGE },
   },
 };
 

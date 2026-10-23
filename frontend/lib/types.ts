@@ -1885,7 +1885,23 @@ export interface UserSession {
   orgName: string;
   mobile?: string;
   passwordChangeRequired?: boolean;
+  onboardingRequired?: boolean;
   authMethod?: 'PASSWORD' | 'EMAIL_OTP' | 'TEMP_PASSWORD' | 'INSTANT_DEMO';
+}
+
+export interface BuyerOnboardingPayload {
+  emailOtp: string;
+  mobile: string;
+  mobileOtp: string;
+  currentPassword: string;
+  newPassword: string;
+  companyName: string;
+  contactName?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  gstin?: string;
+  pan?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════

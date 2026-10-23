@@ -1930,6 +1930,146 @@ async function sendBuyerCredentialsEmail(params) {
   return deliver(buildBuyerCredentialsEmail(params), 'Buyer credentials email');
 }
 
+/**
+ * Onboarding credentials and RFQ creation confirmation for an automatically registered buyer.
+ */
+function buildBuyerOnboardingWithRfqEmail({
+  to,
+  buyerName,
+  tempPassword,
+  rfqNumber,
+  rfqTitle,
+  deliveryDate,
+  rfqs = [],
+}) {
+  const signInUrl = escapeHtml(buyerPortalUrl());
+  const name = escapeHtml(buyerName || 'Valued Buyer');
+  const formattedRfq = escapeHtml(rfqNumber || (rfqs.length > 0 ? rfqs.map((r) => r.rfqNumber).join(', ') : ''));
+
+  const inner = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
+      <p style="font-size: 16px; margin: 0 0 16px 0;">Hi <strong>${name}</strong>,</p>
+
+      <p style="font-size: 15px; margin: 0 0 16px 0;">
+        Great news! We received your requirement and created your buyer account on <strong>Procucev Enterprise</strong> along with your <strong>RFQ <span style="color: #0284c7; font-family: monospace; font-size: 16px;">${formattedRfq}</span></strong>.
+      </p>
+
+      ${rfqTitle ? `<p style="font-size: 13px; color: #64748b; margin: 0 0 12px 0;"><strong>Requirement:</strong> ${escapeHtml(rfqTitle)}</p>` : ''}
+      ${deliveryDate ? `<p style="font-size: 13px; color: #64748b; margin: 0 0 16px 0;"><strong>Target Delivery Date:</strong> ${escapeHtml(deliveryDate)}</p>` : ''}
+
+      <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #86efac; border-radius: 8px; padding: 14px 18px; margin: 16px 0;">
+        <p style="margin: 0; font-size: 14px; color: #166534; font-weight: 600;">
+          Your RFQ has been dispatched to Procucev verified vendors under Private Approved Roster (V0) rules.
+        </p>
+      </div>
+
+      <h3 style="font-size: 15px; color: #0f172a; margin: 20px 0 10px 0;">Your Account Login Credentials</h3>
+      <table style="width: 100%; border-collapse: collapse; margin: 12px 0; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+        ${row('Login Identifier (Email)', escapeHtml(to))}
+        ${row('Temporary Password', tempPassword ? escapeHtml(tempPassword) : '')}
+        ${row('Portal Link', signInUrl)}
+      </table>
+
+      <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px 16px; margin: 18px 0; border-radius: 4px;">
+        <p style="font-size: 13px; color: #92400e; margin: 0; line-height: 1.5;">
+          <strong>Action Required on First Login:</strong> For security and compliance, please sign in to the portal and complete mandatory profile verification (Email OTP verification, updating your phone number from the placeholder with SMS OTP verification, and setting a new permanent password).
+        </p>
+      </div>
+
+      <p style="margin: 24px 0;">
+        <a href="${signInUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Sign In to Buyer Portal</a>
+      </p>
+
+      <p style="font-size: 14px; margin: 20px 0 24px 0; color: #334155;">
+        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.CLOSING}
+      </p>
+
+      <p style="font-size: 15px; font-weight: bold; color: #0f172a; margin: 0;">
+        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}
+      </p>
+    </div>
+  `;
+
+  return {
+    from: fromAddress(),
+    to,
+    replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
+    subject: `Your Procucev Account & RFQ Confirmation - ${formattedRfq || 'RFQ Created'}`,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Account Onboarding & RFQ Confirmation', inner),
+  };
+}
+
+async function sendBuyerOnboardingWithRfqEmail(params) {
+  const message = buildBuyerOnboardingWithRfqEmail(params);
+  return deliver(message, 'Buyer onboarding credentials and RFQ confirmation');
+}
+
+/**
+ * Reminder email sent to an unverified automatically registered buyer when the first quotation lands.
+ * Does not expose full quotation prices or vendor sensitive data until verification is complete.
+ */
+function buildBuyerProfileCompletionReminderEmail({
+  to,
+  recipientName,
+  rfqNumber,
+  rfqTitle,
+}) {
+  const signInUrl = escapeHtml(buyerPortalUrl());
+  const name = escapeHtml(recipientName || 'Valued Buyer');
+  const formattedRfq = escapeHtml(rfqNumber || '');
+
+  const inner = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
+      <p style="font-size: 16px; margin: 0 0 16px 0;">Hi <strong>${name}</strong>,</p>
+
+      <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #86efac; border-radius: 8px; padding: 14px 18px; margin: 16px 0;">
+        <p style="margin: 0; font-size: 15px; color: #166534; font-weight: 600;">
+          A quotation has been submitted for your RFQ <span style="font-family: monospace;">${formattedRfq}</span>!
+        </p>
+      </div>
+
+      ${rfqTitle ? `<p style="font-size: 14px; color: #475569; margin: 0 0 16px 0;"><strong>Requisition:</strong> ${escapeHtml(rfqTitle)}</p>` : ''}
+
+      <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 14px 18px; margin: 18px 0; border-radius: 4px;">
+        <h4 style="margin: 0 0 8px 0; color: #92400e; font-size: 14px;">Complete Verification to Unlock Full Quotation Details</h4>
+        <p style="font-size: 13px; color: #78350f; margin: 0; line-height: 1.5;">
+          Vendors have submitted bids for your RFQ. To unlock full item-level quotes, unit prices, tax breakdown, and delivery commitments by email and on the portal, please sign in and complete mandatory verification:
+        </p>
+        <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px; color: #78350f;">
+          <li>Verify your corporate email via OTP</li>
+          <li>Replace your placeholder mobile with your valid phone number via SMS OTP</li>
+          <li>Update your temporary password to a permanent secure password</li>
+        </ul>
+      </div>
+
+      <p style="margin: 24px 0;">
+        <a href="${signInUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Complete Profile & View Quotations</a>
+      </p>
+
+      <p style="font-size: 14px; margin: 20px 0 24px 0; color: #334155;">
+        As soon as your verification is complete, available quotation details will also be delivered directly to this email address.
+      </p>
+
+      <p style="font-size: 15px; font-weight: bold; color: #0f172a; margin: 0;">
+        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}
+      </p>
+    </div>
+  `;
+
+  return {
+    from: fromAddress(),
+    to,
+    replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
+    subject: `[Action Required] Quotation Received for RFQ ${formattedRfq} - Complete Profile Verification`,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Alert - Profile Verification Required', inner),
+  };
+}
+
+async function sendBuyerProfileCompletionReminderEmail(params) {
+  const message = buildBuyerProfileCompletionReminderEmail(params);
+  return deliver(message, 'Buyer profile completion reminder email');
+}
+
 /** Template D — Rating revision notification to vendor */
 function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany, buyerName, previousRating, newRating, previousScore, newScore, remarks, qualityScore, costScore, deliveryScore }) {
   const inner = `
@@ -2343,6 +2483,10 @@ module.exports = {
   buildVendorOnboardingEmail,
   buildBuyerCredentialsEmail,
   sendBuyerCredentialsEmail,
+  buildBuyerOnboardingWithRfqEmail,
+  sendBuyerOnboardingWithRfqEmail,
+  buildBuyerProfileCompletionReminderEmail,
+  sendBuyerProfileCompletionReminderEmail,
   buildRatingRevisionEmail,
   sendVendorIngestionEmail,
   buildRfqAcknowledgementEmail,

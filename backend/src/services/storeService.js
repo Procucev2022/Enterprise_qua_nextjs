@@ -31,6 +31,7 @@ const mailerService = require('./mailerService');
 const whatsAppService = require('./whatsAppService');
 const smsService = require('./smsService');
 const rfqChaserScheduler = require('./rfqChaserScheduler');
+const rfqIngestionService = require('./rfqIngestionService');
 const { logger } = require('./loggerService');
 
 // Bound on the vendors table read at boot hydration (see hydrateFromDB) —
@@ -532,8 +533,11 @@ class StoreService {
     return newAcc;
   }
 
-  updateBuyerAccount(id, updates) {
-    const idx = this.buyerAccounts.findIndex((a) => a.id === id);
+  updateBuyerAccount(idOrEmail, updates) {
+    const key = String(idOrEmail || '').trim().toLowerCase();
+    const idx = this.buyerAccounts.findIndex(
+      (a) => a.id === idOrEmail || (a.corporateEmail && a.corporateEmail.toLowerCase() === key)
+    );
     if (idx === -1) return null;
 
     const updated = {
@@ -544,7 +548,7 @@ class StoreService {
     this.buyerAccounts[idx] = updated;
     this._persistBuyerAccount(updated);
 
-    if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
+    if (this.activeBuyerAccount && this.activeBuyerAccount.id === updated.id) {
       this.activeBuyerAccount = updated;
     }
 
@@ -2118,6 +2122,20 @@ class StoreService {
     const rfqNumber = rfqData.rfqNumber || this.generateRFQNumber();
     const id = rfqData.id || `rfq-${Date.now()}`;
 
+    const resolvedBuyer =
+      requestingBuyerAccount ||
+      (rfqData.buyerEmail
+        ? this.buyerAccounts.find(
+            (a) =>
+              a.corporateEmail &&
+              a.corporateEmail.toLowerCase() === String(rfqData.buyerEmail).trim().toLowerCase()
+          )
+        : null);
+
+    const buyerEmail =
+      rfqData.buyerEmail ||
+      (resolvedBuyer ? resolvedBuyer.corporateEmail : (rfqData.raisedByEmail || rfqData.sourceEmail || null));
+
     const newRFQ = {
       id,
       rfqNumber,
@@ -2127,10 +2145,16 @@ class StoreService {
       // and routed it to the wrong vendor pool.
       category: rfqData.category || null,
       createdAt: rfqData.createdAt || new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
-      // No hardcoded fallback date. A fixed '2026-09-20' was previously stamped on
-      // any RFQ that arrived without one, so an RFQ could show a deadline the
-      deadline: rfqData.deadline || rfqData.targetDeliveryDate || rfqData.target_delivery_date || null,
-      targetDeliveryDate: rfqData.targetDeliveryDate || rfqData.target_delivery_date || rfqData.deadline || null,
+      deadline: rfqData.deadline
+        ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
+        : (rfqData.targetDeliveryDate
+            ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
+            : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
+      targetDeliveryDate: rfqData.targetDeliveryDate
+        ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
+        : (rfqData.deadline
+            ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
+            : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
       // Budget was previously dropped here, so an RFQ saved through the API came
       // back from hydration with no budget at all: the portfolio value totalled
       // zero and the quote matrix crashed reading it. It is validated as a
@@ -2157,7 +2181,8 @@ class StoreService {
         : (rfqData.source !== undefined ? rfqData.source : null),
       sourceFileName: rfqData.sourceFileName || null,
       sourceEmail: rfqData.sourceEmail || null,
-      raisedByEmail: requestingBuyerAccount ? requestingBuyerAccount.corporateEmail : rfqData.raisedByEmail || null,
+      buyerEmail,
+      raisedByEmail: resolvedBuyer ? resolvedBuyer.corporateEmail : (rfqData.raisedByEmail || buyerEmail || null),
       status: rfqData.status || 'Quotes Pending',
       // Stamped from the authenticated caller's own buyer account (resolved
       // by the controller/resolver from the session, never trusted from the
@@ -2165,15 +2190,15 @@ class StoreService {
       // Falls back to the legacy system-wide "active" buyer account only for
       // callers that don't have a per-request buyer identity to resolve
       // (e.g. historical-data ingestion, admin-driven creation).
-      buyerAccountId: requestingBuyerAccount
-        ? requestingBuyerAccount.id
+      buyerAccountId: resolvedBuyer
+        ? resolvedBuyer.id
         : this.activeBuyerAccount ? this.activeBuyerAccount.id : null,
-      buyerAccountName: requestingBuyerAccount
-        ? requestingBuyerAccount.organizationName
+      buyerAccountName: resolvedBuyer
+        ? resolvedBuyer.organizationName
         : this.activeBuyerAccount ? this.activeBuyerAccount.organizationName : null,
       sourcingMode: rfqData.source === 'email_gateway'
-        ? (requestingBuyerAccount ? resolveBuyerSourcingMode(requestingBuyerAccount) : (rfqData.sourcingMode || 'mode_0'))
-        : (rfqData.sourcingMode || (requestingBuyerAccount && requestingBuyerAccount.subscriptionPlan && requestingBuyerAccount.subscriptionPlan !== 'free_trial' ? resolveBuyerSourcingMode(requestingBuyerAccount) : 'mode_1')),
+        ? (resolvedBuyer ? resolveBuyerSourcingMode(resolvedBuyer) : (rfqData.sourcingMode || 'mode_0'))
+        : (rfqData.sourcingMode || (resolvedBuyer && resolvedBuyer.subscriptionPlan && resolvedBuyer.subscriptionPlan !== 'free_trial' ? resolveBuyerSourcingMode(resolvedBuyer) : 'mode_1')),
       quotesCount: rfqData.quotes ? rfqData.quotes.length : 0,
       chasingActive: rfqData.chasingActive !== undefined ? rfqData.chasingActive : true,
       allocatedTime: rfqData.allocatedTime || RFQ_DEFAULTS.ALLOCATED_TIME,
@@ -2242,7 +2267,6 @@ class StoreService {
     // 2. Dispatch an email to the vendor requesting them to update their category/business details.
     // 3. Record an audit log.
     const rfqCategorySignals = this._rfqCategorySignals(newRFQ);
-    const buyerEmail = requestingBuyerAccount ? requestingBuyerAccount.corporateEmail : rfqData.raisedByEmail || null;
     const maxClientPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY;
     const distinctCategories = this._rfqDistinctCategories(newRFQ);
 
@@ -4343,11 +4367,85 @@ class StoreService {
       organizationName: rfq.buyerAccountName || rfq.buyerName || 'Buyer',
     };
 
+    const isPendingVerification = Boolean(
+      buyer.onboardingRequired ||
+      buyer.status === 'PENDING_ONBOARDING' ||
+      buyer.profileVerified === false
+    );
+
+    if (isPendingVerification) {
+      logger.info(
+        `Buyer ${buyer.corporateEmail} profile verification is pending. Sending completion reminder without full quote details for RFQ ${rfq.rfqNumber}`,
+        { rfqNumber: rfq.rfqNumber, quoteVendor: quote.vendorName },
+        'STORE_SERVICE'
+      );
+      this.queuePendingQuoteNotification(buyer.corporateEmail, { rfq, quote });
+      this._background(
+        mailerService.sendBuyerProfileCompletionReminderEmail({
+          to: buyer.corporateEmail,
+          recipientName: buyer.organizationName,
+          rfqNumber: rfq.rfqNumber,
+          rfqTitle: rfq.title,
+        }),
+        'Failed to email profile completion reminder to buyer'
+      );
+      this.addAuditLog({
+        userEmail: buyer.corporateEmail,
+        action: `Notification outcome: Sent profile completion reminder email to ${buyer.corporateEmail} for RFQ ${rfq.rfqNumber}`,
+      });
+      return true;
+    }
+
     this._background(
       mailerService.sendQuoteReceivedEmail(buyer.corporateEmail, { rfq, quote, recipientName: buyer.organizationName }),
       'Failed to email quote to buyer'
     );
     return true;
+  }
+
+  queuePendingQuoteNotification(buyerEmail, { rfq, quote }) {
+    if (!buyerEmail || !rfq || !quote) return;
+    const normEmail = String(buyerEmail).trim().toLowerCase();
+    if (!this._pendingQuoteNotifications) {
+      this._pendingQuoteNotifications = new Map();
+    }
+    const list = this._pendingQuoteNotifications.get(normEmail) || [];
+    const quoteKey = `${rfq.id || rfq.rfqNumber}:${quote.id || quote.vendorId || quote.vendorName}`;
+    const alreadyQueued = list.some((item) => {
+      const existingKey = `${item.rfq.id || item.rfq.rfqNumber}:${item.quote.id || item.quote.vendorId || item.quote.vendorName}`;
+      return existingKey === quoteKey;
+    });
+    if (!alreadyQueued) {
+      list.push({ rfq, quote });
+      this._pendingQuoteNotifications.set(normEmail, list);
+    }
+  }
+
+  async dispatchPendingQuoteNotifications(buyerEmail) {
+    if (!buyerEmail || !this._pendingQuoteNotifications) return [];
+    const normEmail = String(buyerEmail).trim().toLowerCase();
+    const list = this._pendingQuoteNotifications.get(normEmail) || [];
+    this._pendingQuoteNotifications.delete(normEmail);
+
+    const buyer = (await this.getBuyerAccountByEmail(normEmail)) || {
+      corporateEmail: normEmail,
+      organizationName: 'Valued Buyer',
+    };
+
+    const dispatched = [];
+    for (const item of list) {
+      try {
+        await mailerService.sendQuoteReceivedEmail(normEmail, {
+          rfq: item.rfq,
+          quote: item.quote,
+          recipientName: buyer.organizationName,
+        });
+        dispatched.push(item);
+      } catch (err) {
+        logger.error(`Failed to dispatch pending quote notification to ${normEmail}`, err, 'STORE_SERVICE');
+      }
+    }
+    return dispatched;
   }
 
   /**
