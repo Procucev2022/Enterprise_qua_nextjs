@@ -11,6 +11,7 @@ import {
   formatFileSize,
   RFQ_DOCUMENT_LIMITS,
   VENDOR_ASSIGNMENT_LIMITS,
+  entitledSourcingModes,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString, extractionReasonMessage } from '@/lib/uiStrings';
 import {
@@ -41,6 +42,7 @@ import {
   selectVendorsForCategories,
   type RankedProcucevVendor,
 } from '@/lib/vendorMatching';
+import RfqUpgradePlanModal from './RfqUpgradePlanModal';
 import type {
   ManualRFQForm,
   ManualRFQLineItem,
@@ -313,6 +315,17 @@ export default function IngestionWizard({
       ? forceRemainingFreeRFQs
       : (activeBuyerAccount?.remainingFreeRFQs ?? storeRemaining ?? 5);
   const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(effectivePlan);
+
+  let entitledModes: ReturnType<typeof entitledSourcingModes> = entitledSourcingModes(null);
+  try {
+    entitledModes = entitledSourcingModes(effectivePlan, effectiveRemaining);
+  } catch {
+    entitledModes = ['mode_0', 'mode_1'];
+  }
+
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [upgradeModalTargetMode, setUpgradeModalTargetMode] = useState<SourcingMode | string>('mode_1');
+
   const [form, setForm] = useState<ManualRFQForm>(() => ({
     ...createEmptyManualRFQForm(),
     sourcingMode: currentMode || 'mode_2',
@@ -1337,6 +1350,11 @@ export default function IngestionWizard({
             </button>
             <a
               href="/buyer/subscription-center"
+              onClick={(e) => {
+                e.preventDefault();
+                setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                setIsUpgradeModalOpen(true);
+              }}
               className="btn btn-primary font-bold shrink-0 inline-flex items-center gap-2 px-3 py-1.5 text-xs shadow-md hover:shadow-lg"
             >
               <Sparkles size={13} />
@@ -1856,7 +1874,15 @@ export default function IngestionWizard({
               data-testid="sourcing-mode-select"
               aria-label="Sourcing Mode"
               value={form.sourcingMode}
-              onChange={(e) => patchForm('sourcingMode', e.target.value as SourcingMode)}
+              onChange={(e) => {
+                const target = e.target.value as SourcingMode;
+                if (!entitledModes.includes(target)) {
+                  setUpgradeModalTargetMode(target);
+                  setIsUpgradeModalOpen(true);
+                  return;
+                }
+                patchForm('sourcingMode', target);
+              }}
               className="sr-only"
               tabIndex={-1}
             >
@@ -1879,6 +1905,7 @@ export default function IngestionWizard({
             >
               {SOURCING_MODES.map((mode) => {
                 const isSelected = form.sourcingMode === mode.id;
+                const isEntitled = entitledModes.includes(mode.id as SourcingMode);
                 const label = SOURCING_VERSION_LABELS[mode.id] || mode.shortLabel;
 
                 return (
@@ -1888,16 +1915,31 @@ export default function IngestionWizard({
                     role="radio"
                     aria-checked={isSelected}
                     data-testid={`sourcing-mode-btn-${mode.id}`}
-                    onClick={() => patchForm('sourcingMode', mode.id as SourcingMode)}
+                    onClick={() => {
+                      if (!isEntitled) {
+                        setUpgradeModalTargetMode(mode.id as SourcingMode);
+                        setIsUpgradeModalOpen(true);
+                        return;
+                      }
+                      patchForm('sourcingMode', mode.id as SourcingMode);
+                    }}
                     className={`h-9 px-3.5 py-1.5 rounded-xl text-xs font-semibold tracking-tight transition-all duration-150 shrink-0 flex items-center justify-center gap-1.5 border cursor-pointer select-none ${
                       isSelected
                         ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs shadow-indigo-600/20'
+                        : !isEntitled
+                        ? 'bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 border-dashed border-slate-300 dark:border-gray-700 hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400'
                         : 'bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 border-slate-200 dark:border-gray-700 hover:bg-slate-50 dark:hover:bg-gray-700/60 hover:border-slate-300 dark:hover:border-gray-600'
                     }`}
                   >
                     <span data-testid={`mode-${mode.id}`} aria-hidden="true" className="contents">
                       {isSelected && <Check size={13} className="shrink-0 stroke-[2.5]" />}
                       <span>{label}</span>
+                      {!isEntitled && (
+                        <span className="badge badge-amber text-[9px] font-bold px-1.5 py-0.5 rounded-full inline-flex items-center gap-0.5">
+                          <Sparkles size={9} />
+                          Upgrade
+                        </span>
+                      )}
                     </span>
                   </button>
                 );
@@ -2947,6 +2989,11 @@ export default function IngestionWizard({
             </button>
             <a
               href="/buyer/subscription-center"
+              onClick={(e) => {
+                e.preventDefault();
+                setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                setIsUpgradeModalOpen(true);
+              }}
               className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg cursor-pointer"
             >
               <Sparkles size={16} />
@@ -3345,6 +3392,17 @@ export default function IngestionWizard({
           </div>
         </div>
       )}
+      {/* ── Upgrade Plan Modal for Exhausted Credits / Unentitled Sourcing Modes ── */}
+      <RfqUpgradePlanModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        targetMode={upgradeModalTargetMode}
+        remainingCredits={effectiveRemaining}
+        onSwitchToMode0={() => {
+          patchForm('sourcingMode', 'mode_0');
+          setIsUpgradeModalOpen(false);
+        }}
+      />
     </div>
   );
 }
