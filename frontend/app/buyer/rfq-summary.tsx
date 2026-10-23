@@ -24,6 +24,7 @@ import {
   FileText,
   Trash2,
   Sparkles,
+  Loader2,
 } from 'lucide-react';
 
 const SCREEN = UI_STRINGS.screens.rfqSummary;
@@ -66,6 +67,7 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
     deepDiveModalOpen,
     setDeepDiveModalOpen,
     selectedRFQForDeepDive,
+    isLoadingRFQs,
   } = useApp();
 
   // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
@@ -539,7 +541,18 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
                   </tr>
                 ))}
 
-                {filteredRFQs.length === 0 && (
+                {isLoadingRFQs && filteredRFQs.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="p-10 text-center text-slate-400 dark:text-gray-500">
+                      <div className="flex items-center justify-center gap-2">
+                        <Loader2 size={16} className="animate-spin text-indigo-600 dark:text-indigo-400" />
+                        <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Loading procurement RFQs...</span>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+
+                {!isLoadingRFQs && filteredRFQs.length === 0 && (
                   <tr>
                     <td colSpan={6} className="p-8 text-center text-slate-400 dark:text-gray-500">
                       {RFQ.noMatchesMessage}

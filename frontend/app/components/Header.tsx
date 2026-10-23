@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useApp } from '@/lib/store';
+import { useApp, clearSessionCache } from '@/lib/store';
 import { useRouter } from 'next/navigation';
 import { ROLE_SIDEBAR_NAV, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS, hasUnlimitedAccess } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
@@ -133,6 +133,7 @@ export default function Header() {
 
   const handleLogout = useCallback(() => {
     setUserProfileDropdownOpen(false);
+    clearSessionCache();
     if (typeof window !== 'undefined') {
       localStorage.removeItem('procucev_session_expires_at');
     }
@@ -147,6 +148,7 @@ export default function Header() {
 
   const handleAutoLogout = useCallback(() => {
     setUserProfileDropdownOpen(false);
+    clearSessionCache();
     if (typeof window !== 'undefined') {
       localStorage.removeItem('procucev_session_expires_at');
     }

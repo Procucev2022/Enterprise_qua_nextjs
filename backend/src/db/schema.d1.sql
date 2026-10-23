@@ -230,6 +230,7 @@ CREATE TABLE IF NOT EXISTS vendors (
 CREATE INDEX IF NOT EXISTS idx_vendors_email ON vendors (email);
 CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category);
 CREATE INDEX IF NOT EXISTS idx_vendors_created_at ON vendors (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vendors_source ON vendors (source);
 
 CREATE TABLE IF NOT EXISTS rfqs (
   id TEXT PRIMARY KEY,
