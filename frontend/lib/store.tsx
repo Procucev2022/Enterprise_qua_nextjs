@@ -1760,7 +1760,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const newV = body.data;
-    setBuyerVendors((prev) => [newV, ...prev]);
+    setBuyerVendors((prev) => {
+      const updated = [newV, ...prev];
+      setSessionCache('vendors', updated);
+      return updated;
+    });
 
     addFeedItem(
       `Vendor Added: ${newV.name}`,

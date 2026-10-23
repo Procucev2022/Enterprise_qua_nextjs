@@ -149,14 +149,10 @@ function hasStorage() {
  * param instead of one array.
  */
 async function query(text, params = [], options = {}) {
-  if (options.d1) {
-    // Priority 1: Workers D1 binding (production on Cloudflare Workers)
-    const db = getD1Binding();
-    if (db) return queryD1(db, options.d1Text || text, options.d1Params || params);
-
-    // Priority 2: D1 HTTP REST API (Node dev / Render / any non-Workers host)
-    const httpClient = getD1HttpClient();
-    if (httpClient) return queryD1(httpClient, options.d1Text || text, options.d1Params || params);
+  // Cloudflare D1 is the primary datastore (Workers binding or HTTP REST client)
+  const d1 = getD1Binding() || getD1HttpClient();
+  if (d1) {
+    return queryD1(d1, options.d1Text || text, options.d1Params || params);
   }
   if (!poolModule.pool) {
     throw new Error(NOT_CONFIGURED_MESSAGE);
@@ -177,14 +173,18 @@ async function rows(text, params = [], options = {}) {
 }
 
 /**
- * Run `fn` inside a single transaction on one dedicated client.
- *
- * The client is always released and the transaction is always resolved, so a
- * failure part-way cannot leave a connection checked out of the pool holding an
- * open transaction — which on a serverless provider means paying for an idle
- * compute instance until the statement timeout fires.
+ * Run `fn` inside a transaction.
+ * On Cloudflare D1, provides an active D1 query client wrapper.
+ * On PostgreSQL (or test mocks), runs within a checked-out transaction client.
  */
 async function withTransaction(fn) {
+  const d1 = getD1Binding() || getD1HttpClient();
+  if (d1) {
+    const client = {
+      query: (sql, params = []) => query(sql, params, { d1: true }),
+    };
+    return await fn(client);
+  }
   if (!poolModule.pool) {
     throw new Error(NOT_CONFIGURED_MESSAGE);
   }

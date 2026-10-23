@@ -3647,3 +3647,30 @@ okay start working you need to do some thing
 ```text
 Please remove the “Close RFQ” button from the vendor side. Currently, when a vendor clicks it, the RFQ gets closed. Only the buyer and Category Manager should have permission to close an RFQ.
 ```
+
+---
+
+### 2026-10-23T17:40:37+05:30
+
+```text
+In buyer side, when we are uploading vendors, it is showing in website for sometime, but after some time, Vendor uploaded data is getting missed, Can you please tell what could be the issue?
+```
+
+---
+
+### 2026-10-23T18:15:59+05:30
+
+```text
+1. We don't use postgres, everything should go D1 database, remove everything related to postgres, & make sure it is going to D1. 
+2. Please implement all remaining fixes.
+```
+
+---
+
+### 2026-10-23T19:00:01+05:30
+
+```text
+Please remove any non needed file, so that i can commit
+```
+
+

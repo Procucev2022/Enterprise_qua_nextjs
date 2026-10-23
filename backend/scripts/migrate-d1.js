@@ -67,25 +67,18 @@ async function d1Query(sql, params = []) {
 }
 
 function splitStatements(sql) {
-  // Split on semicolons, then for each chunk:
-  //   1. Strip leading/trailing whitespace
-  //   2. Remove leading comment lines (-- ...)
-  //   3. Keep only non-empty chunks that contain a SQL keyword
-  return sql
-    .split(';')
-    .map((chunk) => {
-      // Remove comment lines from the start of the chunk
-      const lines = chunk.split('\n');
-      const codeLines = [];
-      let seenCode = false;
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!seenCode && (trimmed.startsWith('--') || trimmed === '')) continue;
-        seenCode = true;
-        codeLines.push(line);
-      }
-      return codeLines.join('\n').trim();
+  // Strip single-line comments (-- ...) first so semicolons inside comments don't split statements
+  const stripped = sql
+    .split('\n')
+    .map((line) => {
+      const idx = line.indexOf('--');
+      return idx >= 0 ? line.slice(0, idx) : line;
     })
+    .join('\n');
+
+  return stripped
+    .split(';')
+    .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
 

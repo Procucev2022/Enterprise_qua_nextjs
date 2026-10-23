@@ -170,7 +170,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     // specific buyer (buyerId/buyerAccountId set inside `raw`) is only meant
     // to be visible to that buyer, never in an anonymous/public listing.
     conditions.push(`(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`);
-    d1Conditions.push(`source NOT IN ('buyer_manual', 'buyer_uploaded', 'historical_purchase_dump')`);
+    d1Conditions.push(`source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump')`);
   }
   if (scopedBuyerId) {
     // A buyer's paginated listing must include every public vendor (no
@@ -469,16 +469,14 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
   const limitPlaceholder = `$${ids.length + 1}`;
 
   const pgQuery = `SELECT raw FROM vendors
-     WHERE source NOT IN ('category_manager_upload', 'excel')
-       AND (lower(raw->>'buyerId') IN (${placeholders})
+     WHERE (lower(raw->>'buyerId') IN (${placeholders})
         OR lower(raw->>'buyerAccountId') IN (${placeholders})
         OR lower(raw->>'buyerEmail') IN (${placeholders}))
      ORDER BY created_at DESC
      LIMIT ${limitPlaceholder}`;
 
   const d1Query = `SELECT raw FROM vendors
-     WHERE source NOT IN ('category_manager_upload', 'excel')
-       AND (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
+     WHERE (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
         OR lower(json_extract(raw,'$.buyerAccountId')) IN (${placeholders})
         OR lower(json_extract(raw,'$.buyerEmail')) IN (${placeholders}))
      ORDER BY created_at DESC
@@ -604,6 +602,7 @@ async function bulkInsertVendorsInDB(vendors) {
       ],
     }));
     const results = await batchD1(d1, statements);
+    queryCache.invalidate('vendors');
     return results.flatMap((result) => result.rows.map((row) => row.email));
   }
 
@@ -628,6 +627,7 @@ async function bulkInsertVendorsInDB(vendors) {
      RETURNING email`,
     values
   );
+  queryCache.invalidate('vendors');
   return result.rows.map((row) => row.email);
 }
 

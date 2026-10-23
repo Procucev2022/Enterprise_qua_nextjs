@@ -187,7 +187,7 @@ CREATE INDEX IF NOT EXISTS idx_vendor_dispatch_templates_org ON vendor_dispatch_
 -- otp_key is what authSessionQueries.js actually keys every query on
 -- (INSERT ... ON CONFLICT (otp_key), WHERE otp_key = ?) — it must be UNIQUE.
 -- attempts backs incrementOtpAttempts(). id/email kept only because older
--- rows may have been written under the previous shape; no code reads them.
+-- rows may have been written under the previous shape, no code reads them.
 CREATE TABLE IF NOT EXISTS auth_otp_codes (
   id TEXT PRIMARY KEY,
   otp_key TEXT,
