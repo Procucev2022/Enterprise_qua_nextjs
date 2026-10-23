@@ -31,6 +31,7 @@ const domainQueries = require('../db/domainQueries');
 const mailerService = require('./mailerService');
 const emailGatewayQueries = require('../db/emailGatewayQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
+const identityQueries = require('../db/identityQueries');
 const pool = require('../db/pool');
 const { logger } = require('./loggerService');
 const {
@@ -155,6 +156,7 @@ function resolveConfig(env = process.env) {
     // Optional extra restriction on top of the buyer-account requirement.
     allowedDomains: splitList(env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
     allowedSenders: splitList(env.EMAIL_GATEWAY_ALLOWED_SENDERS),
+    autoRegisterUnregisteredBuyers: String(env.EMAIL_GATEWAY_AUTO_REGISTER || 'true').toLowerCase() !== 'false',
   };
 }
 
@@ -306,6 +308,104 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig())
   return { allowed: true, reason: null, buyerAccount };
 }
 
+const inFlightBuyerRegistrations = new Map();
+
+/**
+ * Concurrency-safe retrieval or autonomous creation of a buyer account for an unregistered sender.
+ */
+async function getOrCreateBuyerAccount(email) {
+  const normEmail = String(email || '').trim().toLowerCase();
+  if (!normEmail) {
+    throw new Error('Email address is required for buyer onboarding.');
+  }
+
+  // 1. Check if already exists in storeService
+  let existing = await storeService.getBuyerAccountByEmail(normEmail);
+  if (existing) {
+    return { buyerAccount: existing, isNew: false, tempPassword: null };
+  }
+
+  // 2. Concurrency lock per email
+  if (inFlightBuyerRegistrations.has(normEmail)) {
+    return await inFlightBuyerRegistrations.get(normEmail);
+  }
+
+  const creationPromise = (async () => {
+    // Re-check after acquiring promise
+    existing = await storeService.getBuyerAccountByEmail(normEmail);
+    if (existing) {
+      return { buyerAccount: existing, isNew: false, tempPassword: null };
+    }
+
+    const tempPassword = storeService._generateTempPassword();
+    const displayName = normEmail.split('@')[0];
+    const orgName = `${displayName} Enterprises`;
+
+    // Create in identity database
+    let userResult = null;
+    try {
+      userResult = await identityQueries.insertBuyerAccount({
+        email: normEmail,
+        password: tempPassword,
+        phone: '9999999999',
+        fullName: displayName,
+        organizationName: orgName,
+        resetPasswordRequired: true,
+        verificationStatus: 'PENDING_ONBOARDING',
+        createdBy: 'email-gateway-autonomous',
+      });
+    } catch (dbErr) {
+      logger.error('Failed to create identity user for unregistered buyer', dbErr, 'EMAIL_GATEWAY');
+    }
+
+    const userId = userResult?.user?.id || `buyer-user-${Date.now()}`;
+    const orgId = userResult?.user?.orgId || `org-${Date.now()}`;
+
+    // Create in storeService (buyer_accounts)
+    const newBuyerAccount = storeService.addBuyerAccount({
+      id: userId,
+      organizationName: orgName,
+      brandName: displayName,
+      organizationType: 'Private Limited',
+      corporateEmail: normEmail,
+      contactPerson: displayName,
+      contactDesignation: 'Procurement Specialist',
+      mobileNumber: '+919999999999',
+      organizationId: orgId,
+      sourcingMode: 'mode_0',
+      subscriptionPlan: 'free_trial',
+      remainingFreeRFQs: 5,
+      status: 'PENDING_ONBOARDING',
+      onboardingRequired: true,
+      profileVerified: false,
+      emailVerified: false,
+      phoneVerified: false,
+      tempPasswordRequired: true,
+      isAutoRegistered: true,
+    });
+
+    logger.info(
+      `Autonomous buyer account created for unregistered sender ${normEmail}`,
+      { buyerAccountId: newBuyerAccount.id, sourcingMode: newBuyerAccount.sourcingMode },
+      'EMAIL_GATEWAY'
+    );
+
+    return {
+      buyerAccount: newBuyerAccount,
+      isNew: true,
+      tempPassword,
+      user: userResult?.user || null,
+    };
+  })();
+
+  inFlightBuyerRegistrations.set(normEmail, creationPromise);
+  try {
+    return await creationPromise;
+  } finally {
+    inFlightBuyerRegistrations.delete(normEmail);
+  }
+}
+
 /**
  * Resolves the registered buyer's default delivery location (city, state, pincode)
  * dynamically from the validated buyer account or linked organization profile.
@@ -378,7 +478,7 @@ function processLineItemsAndGroups(lineItems, extraction = {}, buyerLocation = {
       extraction.deliveryDate ||
       extraction.targetDeliveryDate;
 
-    const targetDate = String(rawTargetDate || defaultDate).trim();
+    const targetDate = rfqIngestionService.ensureFutureDeliveryDate(rawTargetDate, 5);
 
     // 2. Location Handling:
     const explicitCity = String(item.deliveryCity || item.delivery_city || extraction.deliveryCity || '').trim();
@@ -1317,11 +1417,35 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
 
   if (buyerEmail) {
     try {
-      await mailerService.sendQuoteReceivedEmail(buyerEmail, {
-        rfq: updatedRFQ || targetRfq,
-        quote,
-        recipientName: targetRfq.buyerAccountName || 'Buyer',
-      });
+      const buyerAcc = await storeService.getBuyerAccountByEmail(buyerEmail);
+      const isPendingVerification = Boolean(
+        buyerAcc && (buyerAcc.onboardingRequired || buyerAcc.status === 'PENDING_ONBOARDING' || buyerAcc.profileVerified === false)
+      );
+
+      if (isPendingVerification) {
+        logger.info(
+          `Quotation received for RFQ ${targetRfq.rfqNumber} but buyer ${buyerEmail} has pending verification. Dispatching completion reminder.`,
+          { rfqNumber: targetRfq.rfqNumber, buyerEmail },
+          'EMAIL_GATEWAY'
+        );
+        storeService.queuePendingQuoteNotification(buyerEmail, { rfq: updatedRFQ || targetRfq, quote });
+        await mailerService.sendBuyerProfileCompletionReminderEmail({
+          to: buyerEmail,
+          recipientName: targetRfq.buyerAccountName || 'Buyer',
+          rfqNumber: targetRfq.rfqNumber,
+          rfqTitle: targetRfq.title,
+        });
+        storeService.addAuditLog({
+          userEmail: buyerEmail,
+          action: `Notification outcome: Sent profile completion reminder email to ${buyerEmail} for RFQ ${targetRfq.rfqNumber}`,
+        });
+      } else {
+        await mailerService.sendQuoteReceivedEmail(buyerEmail, {
+          rfq: updatedRFQ || targetRfq,
+          quote,
+          recipientName: targetRfq.buyerAccountName || 'Buyer',
+        });
+      }
     } catch (mailErr) {
       logger.error('Failed to send buyer quote received email', mailErr, 'EMAIL_GATEWAY');
     }
@@ -1438,6 +1562,14 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
+  if (referencedNumber && !vendorRecord && (config?.isVendorMailbox || !isOwnNoticeSubject(message.subject))) {
+    return {
+      status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED,
+      detail: EMAIL_GATEWAY_MESSAGES.SENDER_NOT_LISTED.replace('{address}', message.fromAddress || 'unknown'),
+      message,
+    };
+  }
+
   // If message arrived on the vendor quotation mailbox, vendor submissions require an RFQ.
   // When an email represents a new RFQ/request (from a registered buyer or an RFQ enquiry),
   // it is processed through the RFQ creation pipeline as per dual-inbox requirements.
@@ -1446,6 +1578,24 @@ async function processMessage(rawSource, config = resolveConfig()) {
     const isRfqSubjectOrContent = /rfq|requisition|purchase|material|indent|tender|quot|boq|requirement/i.test(
       `${message.subject || ''} ${message.bodyText || ''}`
     );
+
+    if (!isRegisteredBuyer && isRfqSubjectOrContent) {
+      await sendAutoReply(
+        message,
+        AUTO_REPLY_KIND.UNAUTHORIZED_SENDER,
+        () =>
+          mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
+            subject: message.subject,
+            gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+          }),
+        { config, failureLog: 'Failed to dispatch registration notification to unregistered buyer emailing vendor inbox' }
+      );
+      return {
+        status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED,
+        detail: EMAIL_GATEWAY_MESSAGES.UNREGISTERED_BUYER_ON_VENDOR_MAILBOX,
+        message,
+      };
+    }
 
     // Non-RFQ vendor correspondence or general enquiries sent to vendor mailbox without an RFQ are rejected
     if (!isRegisteredBuyer && !isRfqSubjectOrContent) {
@@ -1458,19 +1608,43 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
-  const authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
+  let authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
   if (!authorisation.allowed) {
-    await sendAutoReply(
-      message,
-      AUTO_REPLY_KIND.UNAUTHORIZED_SENDER,
-      () =>
-        mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
-          subject: message.subject,
-          gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
-        }),
-      { config, failureLog: 'Failed to dispatch registration notification to unauthorized sender' }
-    );
-    return { status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED, detail: authorisation.reason, message };
+    const isDomainOrSenderRestricted =
+      (Array.isArray(config?.allowedSenders) && config.allowedSenders.length > 0 && !config.allowedSenders.includes(String(message.fromAddress || '').toLowerCase())) ||
+      (Array.isArray(config?.allowedDomains) && config.allowedDomains.length > 0 && !config.allowedDomains.includes((String(message.fromAddress || '').split('@')[1] || '').toLowerCase())) ||
+      !message.fromAddress;
+
+    const isUnregisteredSender =
+      !isDomainOrSenderRestricted &&
+      !message.automatedReason &&
+      !isSystemOrAutomatedSender(message.fromAddress) &&
+      !authorisation.buyerAccount &&
+      !config?.isVendorMailbox &&
+      config?.autoRegisterUnregisteredBuyers !== false;
+
+    if (isUnregisteredSender) {
+      const onboardResult = await emailGateway.getOrCreateBuyerAccount(message.fromAddress);
+      authorisation = {
+        allowed: true,
+        reason: null,
+        buyerAccount: onboardResult.buyerAccount,
+        isAutoRegistered: onboardResult.isNew,
+        tempPassword: onboardResult.tempPassword,
+      };
+    } else {
+      await sendAutoReply(
+        message,
+        AUTO_REPLY_KIND.UNAUTHORIZED_SENDER,
+        () =>
+          mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
+            subject: message.subject,
+            gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+          }),
+        { config, failureLog: 'Failed to dispatch registration notification to unauthorized sender' }
+      );
+      return { status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED, detail: authorisation.reason, message };
+    }
   }
 
   // A transient Gemini failure (timeout, rate limit, outage, missing key) says
@@ -1605,6 +1779,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
       deliveryState: group.deliveryState,
       deliveryPincode: group.deliveryPincode,
       targetDeliveryDate: group.targetDate,
+      ensureFutureDate: true,
     });
 
     if (classification.accepted === 0) {
@@ -1623,6 +1798,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
         status: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
         source: 'email_gateway',
         sourceEmail: message.fromAddress,
+        buyerEmail: message.fromAddress,
         sourceFileName: message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
         raisedByEmail: message.fromAddress,
         budget: draft.estimatedBudget || 0,
@@ -1666,17 +1842,32 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
     // Dispatch RFQ creation acknowledgement email to the buyer
     if (message.fromAddress) {
-      const ack = {
-        to: message.fromAddress,
-        buyerName: buyerDisplayName(authorisation.buyerAccount, message),
-        rfqNumber: created.rfqNumber,
-        rfqTitle: created.title,
-      };
-      try {
-        await mailerService.sendRfqAcknowledgementEmail(ack);
-      } catch (ackErr) {
-        logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
-        await queueAcknowledgement(groupKey || created.id, ack);
+      if (authorisation.isAutoRegistered && authorisation.tempPassword) {
+        try {
+          await mailerService.sendBuyerOnboardingWithRfqEmail({
+            to: message.fromAddress,
+            buyerName: buyerDisplayName(authorisation.buyerAccount, message),
+            tempPassword: authorisation.tempPassword,
+            rfqNumber: created.rfqNumber,
+            rfqTitle: created.title,
+            deliveryDate: created.targetDeliveryDate,
+          });
+        } catch (onboardErr) {
+          logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');
+        }
+      } else {
+        const ack = {
+          to: message.fromAddress,
+          buyerName: buyerDisplayName(authorisation.buyerAccount, message),
+          rfqNumber: created.rfqNumber,
+          rfqTitle: created.title,
+        };
+        try {
+          await mailerService.sendRfqAcknowledgementEmail(ack);
+        } catch (ackErr) {
+          logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
+          await queueAcknowledgement(groupKey || created.id, ack);
+        }
       }
     }
 
@@ -2283,6 +2474,7 @@ const emailGateway = {
   startVendorPolling,
   stopPolling,
   getStatus,
+  getOrCreateBuyerAccount,
 };
 
 module.exports = emailGateway;

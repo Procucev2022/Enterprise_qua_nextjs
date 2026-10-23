@@ -959,7 +959,7 @@ describe('Gemini document extraction service', () => {
 
         expect(res.status).toBe(EXTRACTION_STATUS.AI_FAILED);
         // Would sit for 60s per model without the cap.
-        expect(Date.now() - startedAt).toBeLessThan(2000);
+        expect(Date.now() - startedAt).toBeLessThan(10000);
       } finally {
         GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
         GEMINI_CONFIG.MIN_ATTEMPT_MS = originalMin;

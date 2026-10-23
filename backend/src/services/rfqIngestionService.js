@@ -430,6 +430,36 @@ function defaultTargetDate(offsetDays = DELIVERY_DATE_OFFSET_DAYS) {
 }
 
 /**
+ * Ensures an extracted or stated delivery date is in the future.
+ * If missing, invalid, or in the past, returns current date + offsetDays (default 5).
+ * Preserves explicitly provided future dates (>= today).
+ */
+function ensureFutureDeliveryDate(dateInput, offsetDays = DELIVERY_DATE_OFFSET_DAYS) {
+  const fallback = defaultTargetDate(offsetDays);
+  if (!dateInput) return fallback;
+  const str = String(dateInput).trim();
+  if (!str) return fallback;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (str < todayStr) return fallback;
+    const [y, m, d] = str.split('-').map(Number);
+    const dateObj = new Date(Date.UTC(y, m - 1, d));
+    if (dateObj.getUTCFullYear() !== y || dateObj.getUTCMonth() !== m - 1 || dateObj.getUTCDate() !== d) {
+      return fallback;
+    }
+    return str;
+  }
+
+  const parsed = new Date(str);
+  if (isNaN(parsed.getTime())) return fallback;
+  const targetIso = parsed.toISOString().slice(0, 10);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (targetIso < todayStr) return fallback;
+  return targetIso;
+}
+
+/**
  * Coerce a spreadsheet quantity into a usable positive number.
  * Anything absent, non-numeric or <= 0 becomes the documented default of 1.
  */
@@ -545,7 +575,9 @@ function normalizeLineItems(rawItems, options = {}) {
       itemName,
       quantity: normalizeQuantity(raw.quantity),
       unit: String(raw.unit || raw.uom || '').trim() || DEFAULT_UNIT,
-      targetDate: String(raw.targetDate || '').trim() || defaultTargetDate(),
+      targetDate: options.ensureFutureDate
+        ? ensureFutureDeliveryDate(raw.targetDate, DELIVERY_DATE_OFFSET_DAYS)
+        : (String(raw.targetDate || '').trim() || defaultTargetDate()),
       technicalSpecs: String(raw.technicalSpecs || raw.specifications || raw.specification || '').trim(),
       brand: String(raw.brand || '').trim(),
       deliveryCity: String(raw.deliveryCity || '').trim(),
@@ -604,7 +636,7 @@ function deriveTitle(entities) {
  * @param {string} [payload.sourceEmail]
  * @param {boolean} [payload.requireValidQuantity] enforce valid positive quantities
  */
-async function buildRFQDraft(payload = {}) {
+async function buildRFQDraft(payload = {}, options = {}) {
   // Loaded once here rather than per line item, so classification below stays
   // synchronous and one ingest costs at most one taxonomy read.
   await ensureTaxonomyLoaded();
@@ -612,6 +644,7 @@ async function buildRFQDraft(payload = {}) {
   const { entities, duplicatesRemoved, lineValues } = normalizeLineItems(payload.lineItems, {
     category: payload.category,
     requireValidQuantity: Boolean(payload.requireValidQuantity),
+    ensureFutureDate: Boolean(payload.ensureFutureDate),
   });
 
   // A declared major category (e.g. the email's "Category: Civil Works") is the
@@ -686,9 +719,14 @@ async function buildRFQDraft(payload = {}) {
   const draft = {
     title,
     category: headerCategory,
-    targetDeliveryDate:
-      payload.targetDeliveryDate ||
-      (entities.length > 0 && entities[0].targetDate ? entities[0].targetDate : defaultTargetDate()),
+    targetDeliveryDate: (options.ensureFutureDate || payload.ensureFutureDate)
+      ? ensureFutureDeliveryDate(
+          payload.targetDeliveryDate ||
+          (entities.length > 0 && entities[0].targetDate ? entities[0].targetDate : null),
+          DELIVERY_DATE_OFFSET_DAYS
+        )
+      : (payload.targetDeliveryDate ||
+         (entities.length > 0 && entities[0].targetDate ? entities[0].targetDate : defaultTargetDate())),
     // Null rather than a placeholder figure: the wizard shows an empty budget
     // field so the buyer supplies the number the document did not state.
     estimatedBudget,
@@ -737,6 +775,7 @@ module.exports = {
   classifyLineItem,
   defaultMinorForMajor,
   defaultTargetDate,
+  ensureFutureDeliveryDate,
   normalizeQuantity,
   normalizeAmount,
   lineItemValue,

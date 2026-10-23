@@ -3639,3 +3639,12 @@ https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/316 check this pr aft
 ```text
 okay start working you need to do some thing
 ```
+
+---
+
+### 2026-10-23T14:39:31+05:30
+
+```text
+continue and after this feature implemented  create a new branch and raise the pr
+```
+

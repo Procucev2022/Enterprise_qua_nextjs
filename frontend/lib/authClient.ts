@@ -1,5 +1,6 @@
 import type {
   AuthResponse,
+  BuyerOnboardingPayload,
   LoginCredentials,
   OtpRequestPayload,
   OtpVerifyPayload,
@@ -245,6 +246,42 @@ class AuthClient {
     }
     if (res.status === 401) {
       // The token was rejected outright, so the local session is stale.
+      this.setSession(null, null);
+      return { ...data, success: false, error: data.error || UI_STRINGS.auth.sessionExpired };
+    }
+    if (!res.ok && !data.error) {
+      return { ...data, success: false, error: UI_STRINGS.auth.serverErrorFallback };
+    }
+    if (data.success && data.token && data.user) {
+      this.setSession(data.user, data.token);
+    }
+    return data;
+  }
+
+  /**
+   * Complete mandatory first-login profile verification and password change for automatically created buyers.
+   */
+  public async completeBuyerOnboarding(payload: BuyerOnboardingPayload): Promise<AuthResponse> {
+    const res = await fetch('/api/auth/complete-buyer-onboarding', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    let data: AuthResponse | null = null;
+    try {
+      data = (await res.json()) as AuthResponse;
+    } catch {
+      data = null;
+    }
+
+    if (!data) {
+      return { success: false, error: UI_STRINGS.auth.serverErrorFallback };
+    }
+    if (res.status === 401) {
       this.setSession(null, null);
       return { ...data, success: false, error: data.error || UI_STRINGS.auth.sessionExpired };
     }
