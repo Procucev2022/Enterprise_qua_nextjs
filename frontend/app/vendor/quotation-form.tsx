@@ -7,6 +7,8 @@ import { authClient } from '@/lib/authClient';
 import { formatFileSize, hasUnlimitedAccess } from '@/lib/constants';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
 import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
+import { SubscriptionPaymentModal } from '@/app/components/Modals';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
 import * as XLSX from 'xlsx';
 import {
@@ -91,12 +93,35 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     vendorUnlockedRfqIds,
     refreshVendorCredits,
     unlockRFQForVendor,
+    createVendorPaymentLink,
+    updateVendorSubscription,
   } = useApp();
   const [selectedBuyerModal, setSelectedBuyerModal] = useState<(BuyerContactInfo & { rfqNumber: string }) | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [opportunitySearch, setOpportunitySearch] = useState('');
   const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | 'open' | 'submitted' | 'closed'>('all');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [pendingPayment, setPendingPayment] = useState<{
+    planId: 'connect' | 'select';
+    planName: string;
+    price: string;
+  } | null>(null);
+
+  const handleUpgradeClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const plan = e.currentTarget.getAttribute('data-plan') as 'premium' | 'connect' | 'select';
+    if (!plan) return;
+    if (plan === 'premium') {
+      if (updateVendorSubscription) updateVendorSubscription('premium');
+      showToast('Switched Plan', 'Switched to Premium tier.', 'success');
+      setShowUpgradeModal(false);
+      return;
+    }
+    const planName = plan === 'connect' ? 'Connect Model (Marketplace Access)' : 'Select Model (Catalogue + Scale)';
+    const price = plan === 'connect' ? '₹2 / 3 months' : '₹5 / 3 months';
+    setPendingPayment({ planId: plan, planName, price });
+    setShowUpgradeModal(false);
+  };
 
   // This vendor's own backend record id — needed to tell "my submitted quote"
   // apart from any other vendor's quote on the same RFQ, and to submit/download
@@ -358,6 +383,21 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   };
 
   const openBidForm = (opp: VendorOpportunity) => {
+    const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
+    const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
+      (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
+      vendorSubscription === 'unlimited';
+    const freeCredits = isUnlimited ? 999999 : effectiveFreeCredits;
+    const locked = !isUnlimited && !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
+    if (locked) {
+      setShowUpgradeModal(true);
+      showToast(
+        UI_STRINGS.vendorSubscriptionModal?.subscriptionRequiredToastTitle || 'Subscription Required',
+        UI_STRINGS.vendorSubscriptionModal?.subscriptionRequiredToastDesc || 'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
+        'warning'
+      );
+      return;
+    }
     setBiddingOn(opp);
     setBidUnitPrice('');
     setBidLineItemPrices({});
@@ -555,10 +595,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        const errorMsg = data.error || (data.upgradeRequired ? 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.' : 'Failed to submit quotation.');
+        const errorMsg = data.error || (data.upgradeRequired ? (UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedToastDesc || 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.') : 'Failed to submit quotation.');
         setSubmitModalError(errorMsg);
         if (data.upgradeRequired || res.status === 403) {
-          showToast('Quotation Credits Exhausted', errorMsg, 'warning');
+          showToast(UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedToastTitle || 'Quotation Credits Exhausted', errorMsg, 'warning');
+          setShowUpgradeModal(true);
         } else {
           showToast('Submission Failed', errorMsg, 'warning');
         }
@@ -1031,6 +1072,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                           onClick={() => {
                             if (isLocked) {
                               showToast('Premium Locked', 'Please upgrade your subscription to download specifications for this external buyer.', 'warning');
+                              setShowUpgradeModal(true);
                             } else {
                               handleDownloadRfq(opp);
                             }
@@ -1103,7 +1145,16 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                           🔒 RFQ Closed
                         </span>
                       ) : isLocked ? (
-                        <span className="text-amber-500 font-bold text-[10px]">🔒 Premium Locked</span>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span className="text-amber-500 font-bold text-[10px]">🔒 Premium Locked</span>
+                          <button
+                            onClick={() => setShowUpgradeModal(true)}
+                            className="btn btn-amber btn-xs min-h-8 py-1 px-2 inline-flex items-center gap-1 text-[10px] font-bold"
+                            title="Upgrade subscription to quote"
+                          >
+                            {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
+                          </button>
+                        </div>
                       ) : (
                         <div className="flex items-center justify-end gap-1.5">
                           <button
@@ -1684,6 +1735,103 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               </div>
             </div>
         )}
+
+        {/* Upgrade Subscription Modal */}
+        {showUpgradeModal && (
+          <div className="modal-backdrop">
+            <div className="glass-panel p-6 rounded-3xl max-w-lg w-full space-y-4 border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-2xl">
+              <div className="flex justify-between items-center border-b border-slate-100 dark:border-gray-800 pb-3">
+                <h3 className="font-black text-sm uppercase tracking-wider text-slate-800 dark:text-gray-100 flex items-center gap-2">
+                  {UI_STRINGS.vendorSubscriptionModal?.upgradeTitle || '🔒 Upgrade Plan to Submit Quotations'}
+                </h3>
+                <button
+                  onClick={() => setShowUpgradeModal(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white font-extrabold text-sm border-none bg-transparent cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/40 text-xs leading-relaxed">
+                {UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedWarning || '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.'}
+              </div>
+
+              <div className="space-y-3">
+                {/* Option: Connect */}
+                <div className={`p-3 rounded-2xl border-2 flex justify-between items-center relative ${
+                  vendorSubscription === 'connect' ? 'border-indigo-500 bg-indigo-50/10' : 'border-indigo-200 dark:border-indigo-900/60'
+                }`}>
+                  <div>
+                    <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
+                      {UI_STRINGS.vendorSubscriptionModal?.connectTitle || 'Connect Model (₹2 / 3 mo)'}
+                    </h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {UI_STRINGS.vendorSubscriptionModal?.connectDesc || 'Quote and download up to 50 RFQs in 3 months from Marketplace.'}
+                    </p>
+                  </div>
+                  {vendorSubscription === 'connect' ? (
+                    <span className="text-[10px] font-bold text-indigo-600 bg-indigo-100 dark:bg-indigo-950 px-2 py-0.5 rounded">
+                      {UI_STRINGS.vendorSubscriptionModal?.activeBadge || 'Active'}
+                    </span>
+                  ) : (
+                    <button
+                      data-plan="connect"
+                      onClick={handleUpgradeClick}
+                      className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700"
+                    >
+                      {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
+                    </button>
+                  )}
+                </div>
+
+                {/* Option: Select */}
+                <div className={`p-3 rounded-2xl border-2 flex justify-between items-center relative ${
+                  vendorSubscription === 'select' ? 'border-purple-500 bg-purple-50/10' : 'border-purple-200 dark:border-purple-900/60'
+                }`}>
+                  <div>
+                    <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
+                      {UI_STRINGS.vendorSubscriptionModal?.selectTitle || 'Select Model (₹5 / 3 mo)'}
+                    </h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {UI_STRINGS.vendorSubscriptionModal?.selectDesc || 'Item Catalogue (100 products) + 100 RFQs / 3 months.'}
+                    </p>
+                  </div>
+                  {vendorSubscription === 'select' ? (
+                    <span className="text-[10px] font-bold text-purple-600 bg-purple-100 dark:bg-purple-950 px-2 py-0.5 rounded">
+                      {UI_STRINGS.vendorSubscriptionModal?.activeBadge || 'Active'}
+                    </span>
+                  ) : (
+                    <button
+                      data-plan="select"
+                      onClick={handleUpgradeClick}
+                      className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-purple-600 hover:bg-purple-700"
+                    >
+                      {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
+                <button
+                  onClick={() => setShowUpgradeModal(false)}
+                  className="btn btn-secondary btn-sm"
+                >
+                  {UI_STRINGS.vendorSubscriptionModal?.closeAction || 'Close'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <SubscriptionPaymentModal
+          isOpen={!!pendingPayment}
+          onClose={() => setPendingPayment(null)}
+          planId={pendingPayment?.planId || 'connect'}
+          planName={pendingPayment?.planName || ''}
+          price={pendingPayment?.price || ''}
+          createPaymentLink={createVendorPaymentLink}
+        />
       </div>
     );
   }

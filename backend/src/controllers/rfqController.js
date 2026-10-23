@@ -131,12 +131,16 @@ function canVendorViewRfq(vendor, rfq) {
   const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
   const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
 
-  if (storeService.isProcucevVendor(vendor)) {
-    if (isV0 || isV2) {
-      const signals = storeService._rfqCategorySignals(rfq);
-      if (signals.length > 0 && signals.some((c) => storeService.vendorCoversCategory(vendor, c))) {
-        return true;
-      }
+  // RFQ details should be visible to all vendors (including buyer-invited vendors)
+  // across V0, V2, and V3, even if they have not received an invitation.
+  if (isV0 || isV2 || isV3) {
+    const signals = storeService._rfqCategorySignals(rfq);
+    if (
+      signals.length === 0 ||
+      !vendor.majorCategory ||
+      signals.some((c) => storeService.vendorCoversCategory(vendor, c))
+    ) {
+      return true;
     }
   }
 
@@ -220,7 +224,7 @@ function applyVendorBuyerPrivacy(rfq, vendorRecord) {
 
   const vendorQuotes = (Array.isArray(rfq.quotes) ? rfq.quotes : []).filter(
     (q) => (vendorRecord.id && q.vendorId === vendorRecord.id) ||
-           (vendorRecord.email && q.vendorEmail && q.vendorEmail.toLowerCase() === vendorRecord.email.toLowerCase())
+      (vendorRecord.email && q.vendorEmail && q.vendorEmail.toLowerCase() === vendorRecord.email.toLowerCase())
   );
 
   if (vendorQuotes.length === 0) {
@@ -663,7 +667,7 @@ async function createRFQ(req, res, next) {
     // left invisible in their own list. Non-buyers keep the plain lookup.
     requestingBuyerAccount = req.user
       ? (await storeService.ensureBuyerAccountForUser(req.user)) ||
-        (await storeService.getBuyerAccountByEmail(req.user.email))
+      (await storeService.getBuyerAccountByEmail(req.user.email))
       : null;
 
     // Version Logic: If an RFQ is raised through the email gateway / RFQ email ID,
@@ -1090,7 +1094,7 @@ async function extractRFQFromDocument(req, res, next) {
     // Staging is for the lifetime of exactly one extraction call — delete it
     // whether this request succeeded, failed, or threw, so a staged upload
     // never lingers in R2.
-    if (stagedKey) extractionStagingService.remove(stagedKey).catch(() => {});
+    if (stagedKey) extractionStagingService.remove(stagedKey).catch(() => { });
   }
 }
 
