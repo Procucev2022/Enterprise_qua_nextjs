@@ -1478,6 +1478,19 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
       expect(storeService.getRFQById(rfq.id).title).toBe('Mechanical Spares Procurement');
     });
 
+    test('rejects vendor requests to close or update an RFQ with 403', async () => {
+      const rfq = await createOwnRFQ();
+
+      const res = await request(app)
+        .put(`/api/rfqs/${rfq.id}`)
+        .set(authHeader('vendor'))
+        .send({ status: 'Closed' });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toMatch(/permission/i);
+    });
+
     test('rejects a malformed pincode with a field error', async () => {
       const rfq = await createOwnRFQ();
 

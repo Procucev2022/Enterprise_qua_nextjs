@@ -313,6 +313,9 @@ const rootResolvers = {
 
   updateRFQ: async ({ id, input }, context) => {
     const scope = await requireRfqReadScope(context);
+    if (scope.role === 'vendor') {
+      return null;
+    }
     const existing = storeService.getRFQById(id);
     if (!existing || !rfqInScope(scope, existing)) {
       return null;

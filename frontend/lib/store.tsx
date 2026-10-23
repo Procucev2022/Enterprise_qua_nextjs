@@ -895,14 +895,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const ensureVendors = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.vendors && buyerVendors.length > 0) {
+    if (!force && loadedEntitiesRef.current.vendors) {
       return;
     }
     return ensureBootstrapData(force);
   };
 
   const ensureVendorEvaluations = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.evaluations && vendorEvaluations.length > 0) {
+    if (!force && loadedEntitiesRef.current.evaluations) {
       return;
     }
     return ensureBootstrapData(force);

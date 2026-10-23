@@ -376,7 +376,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     router = null;
   }
   const { currentRole, showToast, refreshFromDB, buyerVendors, currentUserSession } = useApp();
-  const isVendor = Boolean(isVendorView || currentUserSession?.role === 'vendor');
+  const isVendor = Boolean(isVendorView || currentUserSession?.role === 'vendor' || currentRole === 'vendor');
   // The category manager is an internal oversight role: it sees full vendor
   // contact details (no double-blind) and a tabbed Procucev / Buyer's-own split
   // in the assigned-suppliers panel. The buyer keeps the confidential view.
@@ -426,7 +426,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     (activeRfq?.sourcingMode as any) === 'version_2';
 
   const handleCloseRFQ = async () => {
-    if (!activeRfq || isClosing) return;
+    if (!activeRfq || isClosing || isVendor) return;
     setIsClosing(true);
     try {
       const result = await updateRFQ(activeRfq.id, { status: 'Closed' });
@@ -1296,7 +1296,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             {activeRfq.status !== 'Closed' &&
               activeRfq.status !== 'Expired' &&
               activeRfq.status !== 'PO Generated' &&
-              !Boolean((activeRfq as any).poFinalised) && (
+              !Boolean((activeRfq as any).poFinalised) &&
+              !isVendor && (
               <button
                 type="button"
                 onClick={handleCloseRFQ}

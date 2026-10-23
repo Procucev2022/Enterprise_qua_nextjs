@@ -423,8 +423,6 @@ async function getVendorByEmailFromDB(email) {
  * bounded, so it never reads more than `limit` rows regardless of table
  * size. Used by storeService.getBootstrapData's buyer-scoped branch, which
  * used to call storeService.getVendors() (a full unbounded re-sync of the
- * entire vendors table) on every single bootstrap request for every buyer
- * page load — the actual cause of D1's free-tier daily row-read cap being
  * exhausted (6.7M rows read in 24h against a 20k-row table: confirmed live
  * via `wrangler d1 info`). A buyer's own vendor count is realistically
  * small, but this stays bounded rather than trusting that assumption.
