@@ -39,9 +39,14 @@ const app = express();
 // suite, where jest.setup.js blanks DATABASE_URL and there's no D1 binding)
 // there's nothing to hydrate from, so this stays a no-op rather than calling
 // into hydrateFromDB()'s own logging on every single request/test.
+// The WhatsApp bot bridge (/api/bot) reads accounts straight from the database
+// and loads any vendor it touches on demand, so it skips this: a cold isolate
+// would otherwise hold the bot's reply until every table above had loaded.
+const BOT_BRIDGE_PATH = '/api/bot';
 let hydrationPromise = null;
 app.use((req, res, next) => {
   if (storeService.isHydratedFromDB || !pool.hasStorage()) return next();
+  if (req.path === BOT_BRIDGE_PATH || req.path.startsWith(`${BOT_BRIDGE_PATH}/`)) return next();
   if (!hydrationPromise) {
     hydrationPromise = storeService
       .hydrateFromDB()
