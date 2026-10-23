@@ -54,6 +54,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     activeBuyerAccount,
     setInitialSetupModalOpen,
     initialSetupCompleted,
+    isLoadingRFQs,
   } = useApp();
 
   const [feedChannelFilter, setFeedChannelFilter] = useState<'all' | 'call' | 'whatsapp' | 'sms' | 'email' | 'system'>('all');
@@ -255,7 +256,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             <div className="flex items-baseline gap-2">
               <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalActiveRFQs}</span>
               <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                {totalActiveRFQs > 0 ? '100% On Schedule' : 'No Active RFQs'}
+                {isLoadingRFQs && totalActiveRFQs === 0 ? 'Syncing...' : (totalActiveRFQs > 0 ? '100% On Schedule' : 'No Active RFQs')}
               </span>
             </div>
           </div>
