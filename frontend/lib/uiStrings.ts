@@ -1617,6 +1617,23 @@ export const UI_STRINGS = {
     mode_2: 'Mode 2 – Internal + Procucev Vetted Vendors',
     mode_3: 'Mode 3 – Autonomous AI + 360 Qualification',
   },
+
+  vendorSubscriptionModal: {
+    upgradeTitle: '🔒 Upgrade Plan to Submit Quotations',
+    creditsExhaustedWarning: '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.',
+    connectTitle: 'Connect Model (₹2 / 3 mo)',
+    connectDesc: 'Quote and download up to 50 RFQs in 3 months from Marketplace.',
+    selectTitle: 'Select Model (₹5 / 3 mo)',
+    selectDesc: 'Item Catalogue (100 products) + 100 RFQs / 3 months.',
+    activeBadge: 'Active',
+    upgradeAction: 'Upgrade',
+    closeAction: 'Close',
+    upgradeToBidAction: '🔒 Upgrade to Bid',
+    subscriptionRequiredToastTitle: 'Subscription Required',
+    subscriptionRequiredToastDesc: 'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
+    creditsExhaustedToastTitle: 'Quotation Credits Exhausted',
+    creditsExhaustedToastDesc: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
+  },
 };
 
 /**
