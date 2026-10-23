@@ -429,31 +429,69 @@ async function getVendorByEmailFromDB(email) {
  * via `wrangler d1 info`). A buyer's own vendor count is realistically
  * small, but this stays bounded rather than trusting that assumption.
  */
-async function getVendorsByBuyerFromDB(buyerId, limit) {
-  if (!pool.hasStorage() || !buyerId) return [];
-  const normalizedBuyerId = String(buyerId).trim().toLowerCase();
-  const cacheKey = `buyer_vendors:${normalizedBuyerId}:${limit}`;
+async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
+  if (!pool.hasStorage()) return [];
+
+  const candidateSet = new Set();
+  const addCandidate = (val) => {
+    if (!val) return;
+    const s = String(val).trim().toLowerCase();
+    if (s && s !== 'null' && s !== 'undefined') {
+      candidateSet.add(s);
+    }
+  };
+
+  if (Array.isArray(buyerId)) {
+    buyerId.forEach(addCandidate);
+  } else {
+    addCandidate(buyerId);
+  }
+  addCandidate(sessionEmail);
+
+  for (const candidate of Array.from(candidateSet)) {
+    if (candidate.includes('@')) {
+      try {
+        const acc = await getBuyerAccountByEmailFromDB(candidate);
+        if (acc && acc.id) {
+          addCandidate(acc.id);
+        }
+      } catch (_) {}
+    }
+  }
+
+  const ids = Array.from(candidateSet);
+  if (ids.length === 0) return [];
+
+  const maxLimit = typeof limit === 'number' && limit > 0 ? limit : 500;
+  const cacheKey = `buyer_vendors:${ids.sort().join(',')}:${maxLimit}`;
   const cached = queryCache.get(cacheKey);
   if (cached) return cached;
 
-  const result = await pool.query(
-    `SELECT raw FROM vendors
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+  const limitPlaceholder = `$${ids.length + 1}`;
+
+  const pgQuery = `SELECT raw FROM vendors
      WHERE source NOT IN ('category_manager_upload', 'excel')
-       AND (lower(raw->>'buyerId') = lower($1)
-        OR lower(raw->>'buyerAccountId') = lower($1)
-        OR lower(raw->>'buyerEmail') = lower($1))
+       AND (lower(raw->>'buyerId') IN (${placeholders})
+        OR lower(raw->>'buyerAccountId') IN (${placeholders})
+        OR lower(raw->>'buyerEmail') IN (${placeholders}))
      ORDER BY created_at DESC
-     LIMIT $2`,
-    [buyerId, limit],
+     LIMIT ${limitPlaceholder}`;
+
+  const d1Query = `SELECT raw FROM vendors
+     WHERE source NOT IN ('category_manager_upload', 'excel')
+       AND (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
+        OR lower(json_extract(raw,'$.buyerAccountId')) IN (${placeholders})
+        OR lower(json_extract(raw,'$.buyerEmail')) IN (${placeholders}))
+     ORDER BY created_at DESC
+     LIMIT ${limitPlaceholder}`;
+
+  const result = await pool.query(
+    pgQuery,
+    [...ids, maxLimit],
     {
       d1: true,
-      d1Text: `SELECT raw FROM vendors
-     WHERE source NOT IN ('category_manager_upload', 'excel')
-       AND (lower(json_extract(raw,'$.buyerId')) = lower($1)
-        OR lower(json_extract(raw,'$.buyerAccountId')) = lower($1)
-        OR lower(json_extract(raw,'$.buyerEmail')) = lower($1))
-     ORDER BY created_at DESC
-     LIMIT $2`,
+      d1Text: d1Query,
     }
   );
   const rows = result.rows.map((row) => parseRaw(row.raw));
