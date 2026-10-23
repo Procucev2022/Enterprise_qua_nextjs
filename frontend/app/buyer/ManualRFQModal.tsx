@@ -47,6 +47,7 @@ import { getMajorCategories, getMinorCategories, dominantMajorCategory, hasMajor
 import { CURRENCY, SOURCING_MODES, RFQ_MODES, RFQ_MODE_LABELS, entitledSourcingModes, RFQ_DOCUMENT_LIMITS, VENDOR_ASSIGNMENT_LIMITS } from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, classifyLineItems, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
+import RfqUpgradePlanModal from './RfqUpgradePlanModal';
 import {
   addManualRFQLineItem,
   createEmptyManualRFQForm,
@@ -165,6 +166,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   const [confirmationRfq, setConfirmationRfq] = useState<RFQItem | null>(null);
   const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
   const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [upgradeModalTargetMode, setUpgradeModalTargetMode] = useState<SourcingMode>('mode_1');
 
   const handleSendCategoryUpdateEmail = async (vendor: any, signals: string[]) => {
     const vendorKey = vendor?.id || vendor?.email;
@@ -568,6 +571,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
     if (isQuotaExhausted) {
       setSubmitError(MODAL.quotaExhaustedMessage);
+      setUpgradeModalTargetMode(form.sourcingMode);
+      setIsUpgradeModalOpen(true);
       return;
     }
 
@@ -841,6 +846,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 </button>
                 <a
                   href="/buyer/subscription-center"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                    setIsUpgradeModalOpen(true);
+                  }}
                   className="btn btn-primary btn-sm font-bold shrink-0 inline-flex items-center gap-1.5 shadow-xs"
                 >
                   <Sparkles size={13} />
@@ -1315,14 +1325,18 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                     key={mode.id}
                     data-testid={`manual-mode-${mode.id}`}
                     onClick={() => {
-                      if (!isEntitled) return;
+                      if (!isEntitled) {
+                        setUpgradeModalTargetMode(mode.id as SourcingMode);
+                        setIsUpgradeModalOpen(true);
+                        return;
+                      }
                       patchForm("sourcingMode", mode.id as SourcingMode);
                     }}
                     className={`
             group relative text-left rounded-2xl border p-4 cursor-pointer
             transition-all duration-200
             ${!isEntitled
-                        ? "border-slate-200 bg-slate-50/70 opacity-60 cursor-not-allowed dark:border-gray-800 dark:bg-gray-900/40"
+                        ? "border-slate-200 bg-slate-50/70 hover:border-amber-400 dark:border-gray-800 dark:bg-gray-900/40"
                         : isSelected
                         ? "border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/30 shadow-sm ring-2 ring-indigo-500/15"
                         : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50/70 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700"
@@ -1347,7 +1361,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
                       <div className="flex items-center gap-2">
                         {!isEntitled && (
-                          <span className="rounded-full px-2 py-0.5 text-[8px] font-extrabold tracking-wider bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
+                          <span
+                            title="Click to upgrade your plan and unlock this mode"
+                            className="rounded-full px-2 py-0.5 text-[8px] font-extrabold tracking-wider bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
+                          >
                             LOCKED
                           </span>
                         )}
@@ -1372,7 +1389,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                           disabled={!isEntitled}
                           aria-label={mode.shortLabel}
                           onChange={() => {
-                            if (!isEntitled) return;
+                            if (!isEntitled) {
+                              setUpgradeModalTargetMode(mode.id as SourcingMode);
+                              setIsUpgradeModalOpen(true);
+                              return;
+                            }
                             patchForm("sourcingMode", mode.id as SourcingMode);
                           }}
                           className="h-4 w-4 rounded text-indigo-600 border-slate-300 dark:border-gray-600 focus:ring-indigo-500 cursor-pointer"
@@ -2293,6 +2314,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 </button>
                 <a
                   href="/buyer/subscription-center"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                    setIsUpgradeModalOpen(true);
+                  }}
                   className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
                 >
                   <Sparkles size={14} />
@@ -2314,6 +2340,17 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           </>
         )}
       </div>
+
+      <RfqUpgradePlanModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        targetMode={upgradeModalTargetMode}
+        remainingCredits={remainingFreeRFQs}
+        onSwitchToMode0={() => {
+          patchForm('sourcingMode', 'mode_0');
+          setIsUpgradeModalOpen(false);
+        }}
+      />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { LOGIN_ROUTE, ROLE_LANDING_ROUTE } from '@/lib/constants';
@@ -27,6 +27,7 @@ interface WorkspaceShellProps {
  */
 export default function WorkspaceShell({ role, children }: WorkspaceShellProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const {
     isLoggedIn,
     currentRole,
@@ -35,11 +36,19 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
     setIsLoggedIn,
     setCurrentUserSession,
     showToast,
+    ensureRouteData,
   } = useApp();
 
   const mustChangeVendorPassword =
     role === 'vendor' && currentUserSession?.passwordChangeRequired === true;
   const sessionRole = currentRole;
+
+  // Lazy-load data needed specifically by the active route.
+  useEffect(() => {
+    if (isLoggedIn && sessionRole === role && !mustChangeVendorPassword && typeof ensureRouteData === 'function') {
+      void ensureRouteData(pathname, role);
+    }
+  }, [isLoggedIn, sessionRole, role, pathname, mustChangeVendorPassword, ensureRouteData]);
 
   useEffect(() => {
     if (!isLoggedIn) {

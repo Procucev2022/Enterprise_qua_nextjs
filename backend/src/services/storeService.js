@@ -320,10 +320,12 @@ class StoreService {
   }
 
   _persistRFQ(rfq) {
+    this._lastRfqSyncTime = 0;
     this._background(domainQueries.upsertRFQInDB(rfq), 'Failed to persist RFQ');
   }
 
   _removeRFQ(id) {
+    this._lastRfqSyncTime = 0;
     this._background(domainQueries.deleteRFQInDB(id), 'Failed to delete persisted RFQ');
   }
 
@@ -1980,32 +1982,45 @@ class StoreService {
    * Re-sync RFQs from Neon PostgreSQL so records inserted by external processes
    * (e.g. check-email CLI, background workers) are merged into memory.
    */
-  async syncRFQsFromDB() {
+  async syncRFQsFromDB(force = false) {
     if (!pool.hasStorage()) return this.getRFQs();
-    try {
-      const allFromDB = await domainQueries.getRFQsFromDB();
-      if (Array.isArray(allFromDB)) {
-        const byId = new Map(this.rfqs.map((r) => [r.id, r]));
-        for (const rfq of allFromDB) {
-          if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
-            rfq.status = 'PO Generated';
-            rfq.poFinalised = true;
-            this._persistRFQ(rfq);
-          }
-          if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
-            rfq.source = 'manual_entry';
-            this._persistRFQ(rfq);
-          }
-          byId.set(rfq.id, rfq);
-        }
-        this.rfqs = Array.from(byId.values()).sort(
-          (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-        );
-      }
-    } catch (err) {
-      logger.error('Failed to sync RFQs from database', err, 'STORE_SERVICE');
+    const now = Date.now();
+    if (!force && this._lastRfqSyncTime && (now - this._lastRfqSyncTime < 5000)) {
+      return this.getRFQs();
     }
-    return this.getRFQs();
+    if (this._syncRFQsPromise) {
+      return this._syncRFQsPromise;
+    }
+    this._syncRFQsPromise = (async () => {
+      try {
+        const allFromDB = await domainQueries.getRFQsFromDB();
+        if (Array.isArray(allFromDB)) {
+          const byId = new Map(this.rfqs.map((r) => [r.id, r]));
+          for (const rfq of allFromDB) {
+            if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
+              rfq.status = 'PO Generated';
+              rfq.poFinalised = true;
+              this._persistRFQ(rfq);
+            }
+            if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
+              rfq.source = 'manual_entry';
+              this._persistRFQ(rfq);
+            }
+            byId.set(rfq.id, rfq);
+          }
+          this.rfqs = Array.from(byId.values()).sort(
+            (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+          );
+        }
+        this._lastRfqSyncTime = Date.now();
+      } catch (err) {
+        logger.error('Failed to sync RFQs from database', err, 'STORE_SERVICE');
+      } finally {
+        this._syncRFQsPromise = null;
+      }
+      return this.getRFQs();
+    })();
+    return this._syncRFQsPromise;
   }
 
   async getRFQByIdAsync(id) {
