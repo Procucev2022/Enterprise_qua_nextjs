@@ -51,7 +51,17 @@ export const UI_STRINGS = {
       screenTag: 'Screen 4.2',
       subtitle: 'Immutable record of system changes, procurement actions, and user activities.',
     },
+    transactionalEmails: {
+      title: 'Qua AI Transactional Email Templates',
+      screenTag: 'Screen 5.1',
+      subtitle: 'Standardized transactional communication templates across buyer and vendor lifecycles.',
+      supportPhone: '+91 8247722944',
+      supportEmail: 'info@procucev.com',
+      teamSignature: 'Team Qua AI',
+      companyName: 'Procucev Enterprise Solutions',
+    },
   },
+
 
   actions: {
     backToDashboard: 'Back to Command Center',

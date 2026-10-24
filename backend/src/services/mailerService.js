@@ -2457,6 +2457,11 @@ async function sendEnterpriseInquiryBuyerConfirmationEmail(inquiry, options = {}
   return deliver(asAutoReply(message), 'enterprise inquiry buyer confirmation', options);
 }
 
+async function sendTransactionalEmail(templateKey, recipientEmail, params = {}, options = {}) {
+  const transactionalEmailTemplates = require('./transactionalEmailTemplates');
+  return transactionalEmailTemplates.sendTransactionalEmail(templateKey, recipientEmail, params, options);
+}
+
 function isConfigured() {
   return (
     gmailIdentities().length > 0 ||
@@ -2538,4 +2543,6 @@ module.exports = {
   sendEnterpriseInquiryNotificationEmail,
   buildEnterpriseInquiryBuyerConfirmationEmail,
   sendEnterpriseInquiryBuyerConfirmationEmail,
+  sendTransactionalEmail,
 };
+
