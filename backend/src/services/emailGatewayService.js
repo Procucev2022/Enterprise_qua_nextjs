@@ -1745,7 +1745,6 @@ async function processMessage(rawSource, config = resolveConfig()) {
         buyerAccount: onboardResult.buyerAccount,
         isAutoRegistered: Boolean(onboardResult.isNew || onboardResult.isAutoRegistered),
         isOnboardingPending: Boolean(onboardResult.isNew || onboardResult.isOnboardingPending),
-        isAutoRegistered: onboardResult.isNew,
         tempPassword: onboardResult.tempPassword,
       };
     } else {
