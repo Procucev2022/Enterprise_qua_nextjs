@@ -282,6 +282,16 @@ describe('mailerService', () => {
       expect(msg.html).not.toContain('partner@enterprise.com');
       expect(msg.html).not.toContain('2026-09-15');
     });
+
+    test('does not add the buyer in CC when sending RFQ invitations to vendors', () => {
+      const msg = mailerService.buildRfqInviteEmail('vendor@example.com', {
+        rfq: RFQ,
+        buyerEmail: 'buyer@corp.com',
+        cc: 'buyer@corp.com',
+      });
+      expect(msg.cc).toBeUndefined();
+      expect(msg.html).not.toContain('keep buyer CC');
+    });
   });
 
   describe('buildQuoteReceivedEmail', () => {
@@ -501,6 +511,16 @@ describe('mailerService', () => {
         rfqNumber: 'RFQ-2026-00100',
       });
       expect(res).toEqual({ sent: false, reason: 'test environment' });
+    });
+
+    test('does not add buyer in CC for quotation submissions when buyerEmail is specified', () => {
+      const msg = mailerService.buildQuoteAcknowledgementEmail('vendor@example.com', {
+        rfqNumber: 'RFQ-2026-00100',
+        quote: { unitPrice: 5000 },
+        buyerEmail: 'buyer@example.com',
+        cc: 'buyer@example.com',
+      });
+      expect(msg.cc).toBeUndefined();
     });
   });
 

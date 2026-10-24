@@ -770,7 +770,12 @@ function buildRfqInviteEmail(to, context = {}) {
       : `Unit Price: ₹[Enter Unit Price]\nTotal Price: ₹[Enter Total Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`;
 
   const gatewayEmail = vendorGatewayAddress();
-  const buyerCc = cc || buyerEmail || undefined;
+  const buyerNormalized = (buyerEmail || (rfq && (rfq.buyerEmail || rfq.raisedByEmail)) || '').toLowerCase().trim();
+  let inviteCc = undefined;
+  if (cc) {
+    const list = String(cc).split(',').map((s) => s.trim()).filter((s) => s.toLowerCase() !== buyerNormalized);
+    inviteCc = list.length > 0 ? list.join(', ') : undefined;
+  }
   const requiresPortal = items.length > 10;
 
   const inner = `
@@ -811,7 +816,7 @@ function buildRfqInviteEmail(to, context = {}) {
         ${
           requiresPortal
             ? `This RFQ has ${items.length} line items. <strong>Email bids are not accepted for RFQs with more than 10 items.</strong> Submit your bid through the <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="color: #0284c7; font-weight: bold;">Procucev Vendor Portal</a>: download the RFQ Excel file, enter a unit price for each item, then upload the completed workbook and supporting documents.`
-            : `You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>${buyerCc ? ` and keep buyer CC'd: <strong>${buyerCc}</strong>` : ''}), or online via the <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="color: #0284c7; font-weight: bold;">Procucev Quotation Portal</a>. Attach your quotation and any supporting documents when submitting by email.`
+            : `You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>), or online via the <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="color: #0284c7; font-weight: bold;">Procucev Quotation Portal</a>. Attach your quotation and any supporting documents when submitting by email.`
         }
       </p>
 
@@ -861,7 +866,7 @@ function buildRfqInviteEmail(to, context = {}) {
     from: vendorFromAddress(),
     to,
     replyTo: gatewayEmail,
-    cc: buyerCc,
+    cc: inviteCc,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', isReminder ? 'RFQ Reminder' : 'New Sourcing Enquiry', inner),
   };
@@ -871,11 +876,17 @@ async function sendRfqInviteEmail(to, context) {
   return deliverVendor(buildRfqInviteEmail(to, context), 'RFQ invite email');
 }
 
-// ── Vendor quote acknowledgement → vendor (with buyer & support CC) ─────────
+// ── Vendor quote acknowledgement → vendor ────────────────────────────────────
 
 function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
   const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
-  const { rfqNumber, rfqTitle, vendorName, quote = {}, cc } = context;
+  const { rfqNumber, rfqTitle, vendorName, quote = {}, cc, buyerEmail } = context;
+  const buyerNormalized = buyerEmail ? String(buyerEmail).toLowerCase().trim() : null;
+  let resolvedCc = cc;
+  if (resolvedCc && buyerNormalized) {
+    const list = String(resolvedCc).split(',').map((s) => s.trim()).filter((s) => s.toLowerCase() !== buyerNormalized);
+    resolvedCc = list.length > 0 ? list.join(', ') : undefined;
+  }
   const subject = `Quotation Received – RFQ ${rfqNumber}`;
   const inner = `
     <p>${vendorName ? `Dear <strong>${vendorName}</strong>,` : 'Hello,'}</p>
@@ -896,7 +907,7 @@ function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
     from: vendorFromAddress(),
     to,
     replyTo: vendorGatewayAddress(),
-    cc: cc || undefined,
+    cc: resolvedCc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Confirmation', inner),
   };
@@ -1466,7 +1477,7 @@ async function sendRfqAutoClosureAcknowledgementEmail(toOrParams, maybeContext) 
 
 function buildComplexRfqPortalRedirectEmail(toOrParams, maybeContext) {
   const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
-  const { rfq = {}, vendorName, itemCount = 0 } = context;
+  const { rfq = {}, vendorName, itemCount = 0, cc } = context;
   const rfqNumber = rfq.rfqNumber || 'RFQ';
   const rfqTitle = rfq.title || 'Procurement Requisition';
   const base = getPublicFrontendUrl();
@@ -1501,6 +1512,7 @@ function buildComplexRfqPortalRedirectEmail(toOrParams, maybeContext) {
   return {
     from: fromAddress(),
     to,
+    cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Portal Bidding Required', inner),
   };
