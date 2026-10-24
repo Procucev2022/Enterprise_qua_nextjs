@@ -808,6 +808,48 @@ async function createRFQ(req, res, next) {
       );
     }
 
+    // Qua AI Email 2: Send RFQ created acknowledgement to registered buyer
+    const buyerEmail = req.user && req.user.email ? req.user.email : body.sourceEmail;
+    if (buyerEmail && body.source !== 'email_gateway') {
+      try {
+        const rawEntities = Array.isArray(finalRFQ.extractedEntities) && finalRFQ.extractedEntities.length > 0
+          ? finalRFQ.extractedEntities
+          : Array.isArray(finalRFQ.items)
+            ? finalRFQ.items
+            : [];
+
+        const normalizedLineItems = rawEntities.map((it) => ({
+          item_name: it.itemName || it.name || it.item_name || 'Line Item',
+          item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || 'Standard Specification',
+          qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : 1),
+          uom: it.unit || it.uom || 'Nos',
+        }));
+
+        const buyerName = req.user?.name || (requestingBuyerAccount && requestingBuyerAccount.companyName) || 'Valued Buyer';
+        const suppliersCount = finalRFQ.assignedVendors && finalRFQ.assignedVendors.length > 0
+          ? finalRFQ.assignedVendors.length
+          : (finalRFQ.procucevVendorCount || 5);
+
+        void mailerService.sendRfqAcknowledgementEmail({
+          to: buyerEmail,
+          buyerName,
+          rfqNumber: finalRFQ.rfqNumber,
+          rfqTitle: finalRFQ.title,
+          category: finalRFQ.category,
+          itemCount: normalizedLineItems.length || 1,
+          deliveryLocation: finalRFQ.deliveryLocation,
+          deliveryDate: finalRFQ.targetDeliveryDate,
+          requiredBy: finalRFQ.targetDeliveryDate,
+          quoteDeadline: finalRFQ.deadline,
+          deadline: finalRFQ.deadline,
+          suppliersInvited: suppliersCount,
+          items: normalizedLineItems,
+        });
+      } catch (buyerMailErr) {
+        logger.warn('Could not dispatch buyer RFQ created email', { error: buyerMailErr.message }, 'RFQ_CONTROLLER');
+      }
+    }
+
     res.status(201).json({ success: true, data: finalRFQ });
   } catch (err) {
     if (consumedFreeTrial && requestingBuyerAccount) {

@@ -1878,18 +1878,19 @@ const UNAUTHORIZED_BUYER_NOTIFICATION = {
   DEFAULT_GATEWAY_EMAIL: 'RFQ@procucev.com',
 };
 
-/** RFQ creation acknowledgement notification sent to the buyer. */
+/** RFQ creation acknowledgement notification sent to the buyer (Qua AI Email 2 Standard). */
 const RFQ_ACKNOWLEDGEMENT_NOTIFICATION = {
-  SUBJECT: 'Great news! Your requirement has been converted into RFQ #{rfqNumber}',
-  HEADLINE: 'PROCUCEV ENTERPRISE',
+  SUBJECT: 'Congratulations, RFQ {rfq_id} is live. Qua AI is on it',
+  LEGACY_SUBJECT: 'Great news! Your requirement has been converted into RFQ #{rfqNumber}',
+  HEADLINE: 'QUA AI AUTONOMOUS PROCUREMENT',
   SUBLINE: 'RFQ Creation Acknowledgement',
-  SUPPORT_PHONE: '+91-7996170801',
-  SUPPORT_EMAIL: 'RFQ@procucev.com / support@procucev.com',
+  SUPPORT_PHONE: '+91 8247722944',
+  SUPPORT_EMAIL: 'info@procucev.com',
   DEFAULT_GATEWAY_EMAIL: 'RFQ@procucev.com',
-  TEAM_SIGNATURE: 'Team Procucev',
-  QUOTES_TIMELINE: 'Quotes typically start coming in within 24–48 hours.',
-  NEED_IT_FASTER: 'Need it faster or have a follow-up requirement?',
-  CLOSING: "Just drop us your requirement anytime — we'll take it from there!",
+  TEAM_SIGNATURE: 'Team Qua AI\nProcucev Enterprise Solutions',
+  QUOTES_TIMELINE: 'Suppliers start quoting within about 24 hours. Qua AI follows up with them and sends you the quotations side by side.',
+  NEED_IT_FASTER: 'For any further questions or clarifications, please reach out to +91 8247722944/email to info@procucev.com',
+  CLOSING: 'Next time, just email your requirement to RFQ@procucev.com again.',
 };
 
 /**

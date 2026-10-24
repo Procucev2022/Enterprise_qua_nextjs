@@ -591,6 +591,33 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       process.env.PUBLIC_FRONTEND_URL = 'http://127.0.0.1:3000';
       expect(getLogoUrl()).toContain('procucev-enterprise-frontend.procucev-enterprise.workers.dev');
     });
+
+    test('covers all 13 email builders and wrapQuaAiEmail when called with zero arguments / defaults', () => {
+      expect(wrapQuaAiEmail({})).toBeDefined();
+      expect(wrapQuaAiEmail({ title: undefined, subtitle: undefined, innerHtml: 'content', supportPhone: undefined, supportEmail: undefined })).toBeDefined();
+
+      expect(buildEmail1_RfqCreatedAccountAutoCreated()).toBeDefined();
+      expect(buildEmail2_RfqCreated()).toBeDefined();
+      expect(buildEmail2_RfqCreated({ items: [{ item_name: 'Tool', item_spec: 'Steel', qty: 2, uom: 'Nos' }] })).toBeDefined();
+      expect(buildEmail2_RfqCreated({ item_count: undefined, items: [] })).toBeDefined();
+      expect(buildEmail3_NewRfqIntimation()).toBeDefined();
+      expect(buildEmail4_NewRfqToQuote()).toBeDefined();
+      expect(buildEmail5_QuotationsReadyToCompare()).toBeDefined();
+      expect(buildEmail6_ActivateYourAccount()).toBeDefined();
+      expect(buildEmail7_RfqNeedsMoreInformation()).toBeDefined();
+      expect(buildEmail7_RfqNeedsMoreInformation({ missing_fields: [] })).toBeDefined();
+      expect(buildEmail8_NoQuotesYet()).toBeDefined();
+      expect(buildEmail9_QuoteDeadlineReminder()).toBeDefined();
+      expect(buildEmail10_LowOrZeroCredits()).toBeDefined();
+      expect(buildEmail11_QuoteSubmitted()).toBeDefined();
+      expect(buildEmail12_RfqRevisedBuyerQuestion()).toBeDefined();
+      expect(buildEmail13_CompleteYourProfile()).toBeDefined();
+
+      // Test alias resolution directly with exact case matching TEMPLATE_ALIASES keys
+      expect(resolveTemplateKey('email_1')).toBe('EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED');
+      expect(resolveTemplateKey('EMAIL_1')).toBe('EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED');
+    });
   });
 });
+
 

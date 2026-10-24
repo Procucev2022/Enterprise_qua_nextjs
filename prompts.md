@@ -4058,3 +4058,261 @@ check don't change any existing functonaliity of register buyer
 create a new branch and raise the pr
 ```
 
+---
+
+### 2026-10-24T17:35:04+05:30
+
+```text
+Verify that RFQ details are successfully sent to the selected vendors.
+Do not add the buyer in CC when sending RFQ invitations to vendors.
+For V1 and V3, if a vendor submits a quotation via email and the submission fails, send the failure notification with the buyer in CC.
+Do not add the buyer in CC for successful quotation submissions.
+Test both successful and failed email quotation scenarios and verify the CC behavior.
+```
+
+---
+
+### 2026-10-24T18:31:03+05:30
+
+```text
+Qua AI: Transactional Email Templates
+Email 1 : RFQ created from email, account auto-created
+Who: Unregistered buyer
+Trigger: An unknown email address writes to RFQ@procucev.com. Qua AI creates a profile with the email ID and dummy details, creates the RFQ, then sends this email.
+Subject: Congratulations, your RFQ rfq_id is live on Qua AI
+Body:
+Hi first_name | there,
+Congratulations! We received your requirement and Qua AI has already turned it into a structured RFQ: rfq_id : rfq_title. Matching suppliers are being lined up now.
+To save you time, we created a free Qua AI account for you with this email address.
+Your login details
+Login ID: email
+Temporary password: temp_password (valid for 48 hours)
+Login page: login_url
+Three quick steps to finish
+Log in and set your own password.
+Complete your profile: company name, GSTIN, delivery address and phone number. We've used placeholder details for now; suppliers quote more accurately once these are real.
+Go to RFQ Summary to review rfq_id.
+[ Log in & review my RFQ ] (CTA Button)
+Suppliers start quoting within about 24 hours. Qua AI follows up with them and sends you the quotations side by side.
+Next time, just email your requirement to RFQ@procucev.com again.
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 2 : RFQ created
+Who: Registered buyer
+Trigger: A logged-in buyer creates an RFQ on the platform, or a registered buyer's email to RFQ@procucev.com is converted into an RFQ.
+Subject: Congratulations, RFQ rfq_id is live. Qua AI is on it
+Body:
+Hi first_name,
+Congratulations! Your RFQ is live and has gone out to suppliers_invited matched suppliers.
+Now sit back and relax. Qua AI follows up with every supplier by email, SMS and WhatsApp, so you don't have to. As soon as quotations come in, we'll share them with you in a side-by-side comparison.
+RFQ Summary
+Field
+Details
+RFQ ID
+rfq_id
+Title
+rfq_title
+Category
+category
+Line items
+item_count
+Delivery location
+delivery_location
+Required by
+required_by
+Quotes due
+quote_deadline
+Suppliers invited
+suppliers_invited
+Items requested
+#
+Item
+Specification
+Qty
+Unit
+n
+item_name
+item_spec
+qty
+uom
+Spotted something to change? You can edit the RFQ until the first quote arrives.
+[ View RFQ Summary ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 3 : New RFQ intimation
+Who: Unregistered vendor
+Trigger: Qua AI matches an RFQ to a supplier in the Procucev network who has no account yet.
+Subject: New buyer enquiry for category: quote by quote_deadline
+Body:
+Hi first_name | there,
+A verified buyer is looking for suppliers in category, and Qua AI has matched your business to the requirement.
+RFQ at a glance
+Field
+Details
+Requirement
+rfq_title
+Buyer
+buyer_industry company, buyer_city
+Line items
+item_count
+Delivery to
+delivery_location
+Required by
+required_by
+Quotes close
+quote_deadline
+To see the full specifications and submit your quotation:
+Click the button below. Your account is already set up with this email.
+Complete your company profile: name, GSTIN, product categories and contact details. It takes about 3 minutes.
+Go to RFQs → Recent RFQs, open rfq_id and submit your quote.
+[ Complete profile & quote now ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to info@procucev.com
+Team Qua AI
+Procucev Enterprise Solutions
+Email 4 : New RFQ to quote
+Who: Registered vendor
+Trigger: A new RFQ matches the categories on a registered vendor's profile.
+Subject: New RFQ rfq_id: rfq_title, quotes close quote_deadline
+Body:
+Hi first_name,
+A new RFQ matching your categories just came in. Buyers usually shortlist from the first few quotes, so submitting early improves your chances.
+RFQ at a glance
+Field
+Details
+RFQ ID
+rfq_id
+Requirement
+rfq_title
+Buyer
+buyer_industry company, buyer_city
+Line items
+item_count
+Delivery to
+delivery_location
+Required by
+required_by
+Quotes close
+quote_deadline
+[ Submit my quote ] (CTA Button)
+Your credit balance: credit_balance credits.
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 5 : Quotations ready to compare
+Who: Buyer (registered or auto-created)
+Trigger: First quotation received on an RFQ, then a final digest when the quote deadline passes.
+Subject: quote_count quotes in for RFQ rfq_id: compare now
+Body:
+Hi first_name,
+Good news. quote_count suppliers have quoted on rfq_title. The lowest landed price is lowest_price, and the fastest delivery is fastest_delivery.
+Qua AI has laid them out side by side: price, delivery, payment terms and supplier rating.
+[ View & compare quotes ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to info@procucev.com
+Team Qua AI
+Procucev Enterprise Solutions
+Email 6 : Activate your account
+Who: Unregistered buyer (account auto-created in Email 1)
+Trigger: No login 24 hours after Email 1; repeat once at 72 hours.
+Subject: Suppliers are waiting on RFQ rfq_id
+Body:
+Hi first_name | there,
+Your RFQ rfq_title is live, but your profile still has placeholder details. Suppliers quote faster and more accurately when they see the right company details.
+It takes 2 minutes: log in, complete your profile, then check RFQ Summary.
+[ Log in & review my RFQ ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 7 : RFQ needs more information
+Who: Buyer (registered or unregistered)
+Trigger: Qua AI can't confirm a quantity, specification, delivery location or attachment from the buyer's email or upload.
+Subject: One detail needed to send RFQ rfq_id to suppliers
+Body:
+Hi first_name,
+We've structured most of your requirement, but couldn't confirm the following:
+missing_field_1
+missing_field_2
+Add these and we'll send the RFQ to suppliers straight away. You can also simply reply to this email with the details.
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+[ Add missing details ] (CTA Button)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 8 : No quotes yet
+Who: Buyer
+Trigger: Zero quotes received 48 hours before the quote deadline.
+Subject: RFQ rfq_id: let's get you more quotes
+Body:
+Hi first_name,
+Suppliers are still reviewing rfq_title, but no quotes have come in yet. Qua AI is following up with them now.
+To widen the response, you can extend the deadline or let us invite more suppliers from the Procucev network.
+[ Extend deadline / invite more suppliers ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 9 : Quote deadline reminder
+Who: Vendor (registered or unregistered)
+Trigger: 24 hours before the quote deadline, to vendors who were notified or viewed the RFQ but haven't quoted.
+Subject: 24 hours left to quote on rfq_title
+Body:
+Hi first_name,
+RFQ rfq_id closes on quote_deadline. quote_count suppliers have already quoted. Submit yours to stay in the running.
+[ Submit my quote ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 10 : Low or zero credits
+Who: Registered vendor
+Trigger: Credit balance falls below 2, or the vendor tries to open an RFQ with zero credits.
+Subject: You have credit_balance credits left: don't miss the next RFQ
+Body:
+Hi first_name,
+Your Qua AI credit balance is down to credit_balance. In the last 30 days, matched_rfq_count RFQs matched your categories. Without credits, you can't open new RFQs or quote on them.
+A package of 50 credits costs ₹7,500 (₹150 per RFQ).
+[ Buy 50 credits ] → buy_credits_url
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 11 : Quote submitted
+Who: Vendor
+Trigger: Vendor submits a quotation on an RFQ.
+Subject: Your quote for RFQ rfq_id has been received
+Body:
+Hi first_name,
+Thank you. Your quote of quote_value for rfq_title has reached the buyer.
+The buyer will review all quotes after quote_deadline. You can revise your quote any time before then.
+[ View my quote ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 12 : RFQ revised / buyer question
+Who: Vendor (notified on or quoted on the RFQ)
+Trigger: Buyer edits the RFQ (quantity, spec, date) or posts a clarification question.
+Subject: Update on RFQ rfq_id: please review
+Body:
+Hi first_name,
+The buyer has updated rfq_title:
+change_summary
+If you've already quoted, please check whether your quote still applies and revise it if needed. The deadline is now quote_deadline.
+[ Review changes ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 13 : Complete your profile
+Who: Unregistered vendor (received Email 3)
+Trigger: Profile not completed 48 hours after Email 3.
+Subject: Your RFQ for category closes quote_deadline
+Body:
+Hi first_name | there,
+A buyer in buyer_city is still waiting for quotes on rfq_title. Finish your profile in 3 minutes to see the full specifications and submit your quote.
+[ Complete profile & quote ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+
+
+
+u already implements this templates but in dev not working as previously only please check and fix
+```
+
+
