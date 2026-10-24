@@ -4025,4 +4025,36 @@ Force exiting Jest: Have you considered using `--detectOpenHandles` to detect as
 Error: Process completed with exit code 1.
 ```
 
+---
+
+### 2026-10-24T09:45:10+05:30
+
+```text
+this is working as expected now we need to add the mobile number for login credentials 9999999999
+and for login now verification of phone number is working email and change the password and it should ask the that full GMST number company name now address also asking add gst number like registeration 
+```
+
+---
+
+### 2026-10-24T11:02:33+05:30
+
+```text
+Once the buyer receive the quotation, ask them to update the profile to get the quotes insted of directly share the quote in v0 via email we should ask to update the profile mail acknowledgment should go after receive one quotation for that rfq
+```
+
+---
+
+### 2026-10-24T11:36:24+05:30
+
+```text
+check don't change any existing functonaliity of register buyer
+```
+
+---
+
+### 2026-10-24T11:37:03+05:30
+
+```text
+create a new branch and raise the pr
+```
 

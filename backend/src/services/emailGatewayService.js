@@ -986,6 +986,7 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
           rfqNumber: row.rfq_number,
           rfqTitle: saved.rfqTitle || row.subject,
           deliveryDate: saved.deliveryDate,
+          mobileNumber: saved.mobileNumber || '9999999999',
         });
       } else {
         await mailerService.sendRfqAcknowledgementEmail({
@@ -1521,9 +1522,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   if (buyerEmail) {
     try {
       const buyerAcc = await storeService.getBuyerAccountByEmail(buyerEmail);
-      const isPendingVerification = Boolean(
-        buyerAcc && (buyerAcc.onboardingRequired || buyerAcc.status === 'PENDING_ONBOARDING' || buyerAcc.profileVerified === false)
-      );
+      const isPendingVerification = storeService.isBuyerProfileUpdateRequired(buyerAcc, targetRfq);
 
       if (isPendingVerification) {
         logger.info(
@@ -1532,21 +1531,25 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           'EMAIL_GATEWAY'
         );
         storeService.queuePendingQuoteNotification(buyerEmail, { rfq: updatedRFQ || targetRfq, quote });
-        await mailerService.sendBuyerProfileCompletionReminderEmail({
-          to: buyerEmail,
-          recipientName: targetRfq.buyerAccountName || 'Buyer',
-          rfqNumber: targetRfq.rfqNumber,
-          rfqTitle: targetRfq.title,
-        });
-        storeService.addAuditLog({
-          userEmail: buyerEmail,
-          action: `Notification outcome: Sent profile completion reminder email to ${buyerEmail} for RFQ ${targetRfq.rfqNumber}`,
-        });
+        if (!storeService.hasQuoteAckBeenSent(targetRfq)) {
+          storeService.markQuoteAckSent(targetRfq);
+          await mailerService.sendBuyerProfileCompletionReminderEmail({
+            to: buyerEmail,
+            recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            quotesCount: 1,
+          });
+          storeService.addAuditLog({
+            userEmail: buyerEmail,
+            action: `Notification outcome: Sent quotation acknowledgment and profile update reminder to ${buyerEmail} for RFQ ${targetRfq.rfqNumber}`,
+          });
+        }
       } else {
         await mailerService.sendQuoteReceivedEmail(buyerEmail, {
           rfq: updatedRFQ || targetRfq,
           quote,
-          recipientName: targetRfq.buyerAccountName || 'Buyer',
+          recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
         });
       }
     } catch (mailErr) {
@@ -1963,6 +1966,11 @@ async function processMessage(rawSource, config = resolveConfig()) {
         authorisation.tempPassword
       );
 
+      const resolvedMobile =
+        authorisation?.buyerAccount?.mobileNumber ||
+        authorisation?.buyerAccount?.phone ||
+        '9999999999';
+
       const ack = {
         to: message.fromAddress,
         buyerName: buyerDisplayName(authorisation.buyerAccount, message),
@@ -1970,6 +1978,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
         rfqTitle: created.title,
         deliveryDate: created.targetDeliveryDate,
         tempPassword: shouldSendOnboardingCredentials ? authorisation.tempPassword : null,
+        mobileNumber: resolvedMobile,
       };
 
       if (shouldSendOnboardingCredentials) {
@@ -1981,6 +1990,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
             rfqNumber: ack.rfqNumber,
             rfqTitle: ack.rfqTitle,
             deliveryDate: ack.deliveryDate,
+            mobileNumber: ack.mobileNumber,
           });
         } catch (onboardErr) {
           logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');

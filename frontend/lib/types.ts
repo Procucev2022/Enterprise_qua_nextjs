@@ -1900,8 +1900,12 @@ export interface BuyerOnboardingPayload {
   city?: string;
   state?: string;
   pincode?: string;
+  address?: string;
+  street?: string;
   gstin?: string;
+  gstNumber?: string;
   pan?: string;
+  panNumber?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════

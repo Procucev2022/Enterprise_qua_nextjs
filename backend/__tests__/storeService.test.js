@@ -2145,6 +2145,37 @@ describe('Store Service & Business Operations', () => {
       await new Promise((r) => setImmediate(r));
     });
 
+    test('emailQuoteToBuyer resolves buyer by corporateEmail when buyerAccountId is null', () => {
+      const emailBuyer = storeService.addBuyerAccount({ organizationName: 'Email Match Buyer', corporateEmail: 'emb@ex.com' });
+      const rfqWithoutId = {
+        rfqNumber: 'RFQ-EM-1',
+        title: 'Title EM',
+        buyerEmail: 'emb@ex.com',
+        buyerAccountId: null,
+      };
+      quoteSpy.mockClear();
+      const res = storeService.emailQuoteToBuyer(rfqWithoutId, { unitPrice: 10, totalPrice: 100 });
+      expect(res).toBe(true);
+      expect(quoteSpy).toHaveBeenCalledWith(
+        'emb@ex.com',
+        expect.objectContaining({ recipientName: 'Email Match Buyer' })
+      );
+    });
+
+    test('queuePendingQuoteNotification and dispatchPendingQuoteNotifications handle edge cases', async () => {
+      // Guard clauses on queue
+      storeService.queuePendingQuoteNotification(null, {});
+      storeService.queuePendingQuoteNotification('b@ex.com', { rfq: null, quote: {} });
+      storeService.queuePendingQuoteNotification('b@ex.com', { rfq: {}, quote: null });
+
+      // Guard clause on dispatch with null buyerEmail
+      expect(await storeService.dispatchPendingQuoteNotifications(null)).toEqual([]);
+
+      // Dispatch with uninitialized map
+      storeService._pendingQuoteNotifications = null;
+      expect(await storeService.dispatchPendingQuoteNotifications('unknown@ex.com')).toEqual([]);
+    });
+
     test('notifyBuyerOfFinalComparison suppresses final comparison email for portal RFQ within 48h', () => {
       const finalEmailSpy = jest.spyOn(mailerService, 'sendRfqFinalComparisonEmail').mockResolvedValue({ sent: true });
       const buyer = storeService.addBuyerAccount({ organizationName: 'Portal Buyer 2', corporateEmail: 'pb2@ex.com' });
@@ -2860,6 +2891,224 @@ describe('demo RFQ seeding', () => {
       // 5. No emails anywhere
       expect(storeService.resolveBuyerEmailForRFQ({}))
         .toBeNull();
+    });
+
+    test('isBuyerProfileUpdateRequired handles all buyer and sourcing mode combinations', () => {
+      // 1. Null buyer returns false (does not disrupt existing flows)
+      expect(storeService.isBuyerProfileUpdateRequired(null)).toBe(false);
+
+      // 2. Standard active verified buyer without V0 returns false
+      const standardBuyer = {
+        id: 'b-std',
+        status: 'ACTIVE_VERIFIED',
+        profileVerified: true,
+        phoneVerified: true,
+        onboardingRequired: false,
+        phone: '9876543210',
+      };
+      expect(storeService.isBuyerProfileUpdateRequired(standardBuyer, { sourcingMode: 'mode_1' })).toBe(false);
+
+      // 3. Registered buyer in V0 returns false (no regression for registered buyers)
+      expect(storeService.isBuyerProfileUpdateRequired(standardBuyer, { sourcingMode: 'mode_0' })).toBe(false);
+      expect(storeService.isBuyerProfileUpdateRequired(standardBuyer, { sourcingMode: 'v0' })).toBe(false);
+
+      // 4. Registered buyer with accountSource web_registration or verified profile returns false
+      const webRegisteredBuyer = {
+        id: 'b-web',
+        status: 'ACTIVE_VERIFIED',
+        accountSource: 'web_registration',
+        phone: '9876543210',
+      };
+      expect(storeService.isBuyerProfileUpdateRequired(webRegisteredBuyer, { sourcingMode: 'mode_0' })).toBe(false);
+      expect(storeService.isBuyerProfileUpdateRequired({ status: 'ACTIVE_VERIFIED', onboardingRequired: false, phone: '9876543210' }, { sourcingMode: 'mode_0' })).toBe(false);
+      expect(storeService.isBuyerProfileUpdateRequired({ status: 'ACTIVE_VERIFIED', profileVerified: true, phone: '9876543210' }, { sourcingMode: 'mode_0' })).toBe(false);
+
+      // 5. Unregistered / pending onboarding buyer returns true
+      const unverifiedBuyer = {
+        id: 'b-unv',
+        status: 'PENDING_ONBOARDING',
+        profileVerified: false,
+        phone: '9876543210',
+      };
+      expect(storeService.isBuyerProfileUpdateRequired(unverifiedBuyer, { sourcingMode: 'mode_0' })).toBe(true);
+
+      // 6. Buyer with mode_0 sourcingMode returns true ONLY if pending onboarding / unverified
+      const v0Account = {
+        id: 'b-v0-acc',
+        sourcingMode: 'mode_0',
+        profileVerified: false,
+      };
+      expect(storeService.isBuyerProfileUpdateRequired(v0Account, {})).toBe(true);
+
+      // 7. Non-V0 buyer with onboardingRequired = true returns true
+      expect(storeService.isBuyerProfileUpdateRequired({ onboardingRequired: true })).toBe(true);
+
+      // 8. Non-V0 buyer with PENDING_ONBOARDING status returns true
+      expect(storeService.isBuyerProfileUpdateRequired({ status: 'PENDING_ONBOARDING' })).toBe(true);
+
+      // 9. Non-V0 buyer with profileVerified = false returns true
+      expect(storeService.isBuyerProfileUpdateRequired({ profileVerified: false })).toBe(true);
+
+      // 10. Non-V0 buyer with phoneVerified = false returns true
+      expect(storeService.isBuyerProfileUpdateRequired({ phoneVerified: false })).toBe(true);
+
+      // 11. Non-V0 buyer with placeholder 9999999999 phone returns true
+      expect(storeService.isBuyerProfileUpdateRequired({ phone: '+919999999999' })).toBe(true);
+      expect(storeService.isBuyerProfileUpdateRequired({ mobileNumber: '9999999999' })).toBe(true);
+    });
+
+    test('hasQuoteAckBeenSent and markQuoteAckSent track acknowledgments accurately', () => {
+      storeService._rfqQuoteAckSent = null;
+
+      // Null handling
+      expect(storeService.hasQuoteAckBeenSent(null)).toBe(false);
+      storeService.markQuoteAckSent(null);
+
+      // Unmarked RFQ
+      const testRfq = { id: 'rfq-ack-test-1', rfqNumber: 'RFQ-ACK-001' };
+      expect(storeService.hasQuoteAckBeenSent(testRfq)).toBe(false);
+
+      // Mark and check by id and by rfqNumber
+      storeService.markQuoteAckSent(testRfq);
+      expect(storeService.hasQuoteAckBeenSent(testRfq)).toBe(true);
+      expect(storeService.hasQuoteAckBeenSent({ id: 'rfq-ack-test-1' })).toBe(true);
+      expect(storeService.hasQuoteAckBeenSent({ rfqNumber: 'RFQ-ACK-001' })).toBe(true);
+      expect(storeService.hasQuoteAckBeenSent({ id: 'other-rfq' })).toBe(false);
+
+      // Mark by rfqNumber only
+      const numOnlyRfq = { rfqNumber: 'RFQ-NUM-ONLY' };
+      storeService.markQuoteAckSent(numOnlyRfq);
+      expect(storeService.hasQuoteAckBeenSent(numOnlyRfq)).toBe(true);
+    });
+
+    test('notifyBuyerOfAutoClosureAndScheduleComparison queues quotes and sends reminder when buyer verification is pending', () => {
+      jest.useFakeTimers();
+      const remindSpy = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
+      const compareSpy = jest.spyOn(mailerService, 'sendRfqFinalComparisonEmail').mockResolvedValue({ sent: true });
+
+      const pendingBuyer = storeService.addBuyerAccount({
+        organizationName: 'Auto Closure Pending Buyer',
+        corporateEmail: 'acpb@ex.com',
+        status: 'PENDING_ONBOARDING',
+        onboardingRequired: true,
+      });
+
+      const autoRfq = storeService.createRFQ(
+        { id: 'rfq-auto-clos-1', rfqNumber: 'RFQ-AC-1', title: 'Auto Requisition', sourcingMode: 'mode_0' },
+        pendingBuyer
+      );
+
+      const quotes = [{ vendorId: 'v-10', vendorName: 'Vendor 10', totalPrice: 80000 }];
+
+      storeService.notifyBuyerOfAutoClosureAndScheduleComparison(autoRfq, quotes);
+
+      // Advance 5 minutes timer
+      jest.advanceTimersByTime(5 * 60 * 1000);
+
+      // Expect reminder sent instead of unsealed comparison email
+      expect(remindSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'acpb@ex.com',
+          rfqNumber: 'RFQ-AC-1',
+          quotesCount: 1,
+        })
+      );
+      expect(compareSpy).not.toHaveBeenCalled();
+
+      // Second timer execution for same RFQ does not duplicate reminder
+      remindSpy.mockClear();
+      storeService.notifyBuyerOfAutoClosureAndScheduleComparison(autoRfq, quotes);
+      jest.advanceTimersByTime(5 * 60 * 1000);
+      expect(remindSpy).not.toHaveBeenCalled();
+
+      remindSpy.mockRestore();
+      compareSpy.mockRestore();
+      jest.useRealTimers();
+    });
+
+    test('notifyBuyerOfAutoClosureAndScheduleComparison sends final comparison email to registered buyer without queueing or demanding profile completion', () => {
+      jest.useFakeTimers();
+      const remindSpy = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
+      const compareSpy = jest.spyOn(mailerService, 'sendRfqFinalComparisonEmail').mockResolvedValue({ sent: true });
+
+      const registeredBuyer = storeService.addBuyerAccount({
+        organizationName: 'Active Enterprise Buyer Ltd',
+        corporateEmail: 'activebuyer@enterprise.com',
+        status: 'ACTIVE_VERIFIED',
+        onboardingRequired: false,
+        profileVerified: true,
+        phoneVerified: true,
+        mobileNumber: '+919876543210',
+      });
+
+      const registeredRfq = storeService.createRFQ(
+        { id: 'rfq-reg-auto-1', rfqNumber: 'RFQ-REG-AUTO-1', title: 'Industrial Pumps', sourcingMode: 'mode_0' },
+        registeredBuyer
+      );
+
+      const quotes = [{ vendorId: 'v-reg-1', vendorName: 'Apex Industrial', totalPrice: 45000 }];
+
+      storeService.notifyBuyerOfAutoClosureAndScheduleComparison(registeredRfq, quotes);
+
+      // Advance 5 minutes timer
+      jest.advanceTimersByTime(5 * 60 * 1000);
+
+      // Expect final comparison sent directly to registered buyer, and NO profile completion reminder sent
+      expect(compareSpy).toHaveBeenCalledWith(
+        'activebuyer@enterprise.com',
+        expect.objectContaining({
+          rfq: expect.objectContaining({ rfqNumber: 'RFQ-REG-AUTO-1' }),
+          quotes,
+          recipientName: 'Active Enterprise Buyer Ltd',
+        })
+      );
+      expect(remindSpy).not.toHaveBeenCalled();
+
+      remindSpy.mockRestore();
+      compareSpy.mockRestore();
+      jest.useRealTimers();
+    });
+
+    test('emailQuoteToBuyer dispatches quotation email directly to registered buyer without queueing', () => {
+      const quoteSpy = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
+      const remindSpy = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
+      const queueSpy = jest.spyOn(storeService, 'queuePendingQuoteNotification');
+
+      const registeredBuyer = storeService.addBuyerAccount({
+        id: 'buyer-reg-quote-test',
+        organizationName: 'Tata Steel Procurement',
+        corporateEmail: 'tatasteel.buyer@tata.com',
+        status: 'ACTIVE_VERIFIED',
+        onboardingRequired: false,
+        profileVerified: true,
+        phoneVerified: true,
+        mobileNumber: '+919876543210',
+      });
+
+      const rfq = storeService.createRFQ(
+        { id: 'rfq-reg-quote-1', rfqNumber: 'RFQ-REG-Q-1', title: 'Seamless Steel Pipes', sourcingMode: 'mode_0' },
+        registeredBuyer
+      );
+
+      const quote = { id: 'q-reg-1', vendorId: 'v-apex', vendorName: 'Apex Metal', totalPrice: 120000 };
+
+      const outcome = storeService.emailQuoteToBuyer(rfq, quote);
+
+      expect(outcome).toBe(true);
+      expect(queueSpy).not.toHaveBeenCalled();
+      expect(remindSpy).not.toHaveBeenCalled();
+      expect(quoteSpy).toHaveBeenCalledWith(
+        'tatasteel.buyer@tata.com',
+        expect.objectContaining({
+          rfq: expect.objectContaining({ rfqNumber: 'RFQ-REG-Q-1' }),
+          quote,
+          recipientName: 'Tata Steel Procurement',
+        })
+      );
+
+      quoteSpy.mockRestore();
+      remindSpy.mockRestore();
+      queueSpy.mockRestore();
     });
   });
 });

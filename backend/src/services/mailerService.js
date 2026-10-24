@@ -1904,16 +1904,17 @@ function buildVendorOnboardingEmail({ to, recipientName, buyerOrganizationName, 
  * (the WhatsApp agent bot). The supplier counterpart is buildVendorOnboardingEmail;
  * web buyers choose their own password, so nothing else sends a buyer one.
  */
-function buildBuyerCredentialsEmail({ to, recipientName, tempPassword, contactPhone }) {
+function buildBuyerCredentialsEmail({ to, recipientName, tempPassword, contactPhone, mobileNumber }) {
   const signInUrl = escapeHtml(buyerPortalUrl());
+  const phone = escapeHtml(mobileNumber || contactPhone || '9999999999');
   const inner = `
     <p>${recipientName ? `Dear <strong>${escapeHtml(recipientName)}</strong>,` : 'Hello,'}</p>
     <p>Your buyer account on <strong>Procucev Enterprise</strong> is ready. Use the credentials below to sign in and raise RFQs.</p>
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('Email Address', escapeHtml(to))}
+      ${row('Mobile Number', phone)}
       ${row('Temporary Password', tempPassword ? escapeHtml(tempPassword) : '')}
       ${row('Login URL', signInUrl)}
-      ${row('Mobile Number', contactPhone ? escapeHtml(contactPhone) : '')}
     </table>
     <p style="margin: 24px 0;">
       <a href="${signInUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Sign in to Procucev Portal</a>
@@ -1945,10 +1946,13 @@ function buildBuyerOnboardingWithRfqEmail({
   rfqTitle,
   deliveryDate,
   rfqs = [],
+  mobileNumber,
+  contactPhone,
 }) {
   const signInUrl = escapeHtml(buyerPortalUrl());
   const name = escapeHtml(buyerName || 'Valued Buyer');
   const formattedRfq = escapeHtml(rfqNumber || (rfqs.length > 0 ? rfqs.map((r) => r.rfqNumber).join(', ') : ''));
+  const phone = escapeHtml(mobileNumber || contactPhone || '9999999999');
 
   const inner = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
@@ -1970,13 +1974,14 @@ function buildBuyerOnboardingWithRfqEmail({
       <h3 style="font-size: 15px; color: #0f172a; margin: 20px 0 10px 0;">Your Account Login Credentials</h3>
       <table style="width: 100%; border-collapse: collapse; margin: 12px 0; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
         ${row('Login Identifier (Email)', escapeHtml(to))}
+        ${row('Login Identifier (Mobile)', phone)}
         ${row('Temporary Password', tempPassword ? escapeHtml(tempPassword) : '')}
         ${row('Portal Link', signInUrl)}
       </table>
 
       <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px 16px; margin: 18px 0; border-radius: 4px;">
         <p style="font-size: 13px; color: #92400e; margin: 0; line-height: 1.5;">
-          <strong>Action Required on First Login:</strong> For security and compliance, please sign in to the portal and complete mandatory profile verification (Email OTP verification, updating your phone number from the placeholder with SMS OTP verification, and setting a new permanent password).
+          <strong>Action Required on First Login:</strong> For security and compliance, please sign in to the portal using your email and mobile number (${phone}) and complete mandatory profile verification (Email OTP verification, updating your phone number from the placeholder with SMS OTP verification, and setting a new permanent password).
         </p>
       </div>
 
@@ -2017,6 +2022,7 @@ function buildBuyerProfileCompletionReminderEmail({
   recipientName,
   rfqNumber,
   rfqTitle,
+  quotesCount = 1,
 }) {
   const signInUrl = escapeHtml(buyerPortalUrl());
   const name = escapeHtml(recipientName || 'Valued Buyer');
@@ -2028,30 +2034,31 @@ function buildBuyerProfileCompletionReminderEmail({
 
       <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #86efac; border-radius: 8px; padding: 14px 18px; margin: 16px 0;">
         <p style="margin: 0; font-size: 15px; color: #166534; font-weight: 600;">
-          A quotation has been submitted for your RFQ <span style="font-family: monospace;">${formattedRfq}</span>!
+          ${quotesCount > 1 ? `${quotesCount} quotations have been submitted` : 'A quotation has been submitted'} for your RFQ <span style="font-family: monospace;">${formattedRfq}</span>!
         </p>
       </div>
 
       ${rfqTitle ? `<p style="font-size: 14px; color: #475569; margin: 0 0 16px 0;"><strong>Requisition:</strong> ${escapeHtml(rfqTitle)}</p>` : ''}
 
       <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 14px 18px; margin: 18px 0; border-radius: 4px;">
-        <h4 style="margin: 0 0 8px 0; color: #92400e; font-size: 14px;">Complete Verification to Unlock Full Quotation Details</h4>
+        <h4 style="margin: 0 0 8px 0; color: #92400e; font-size: 14px;">Update Your Profile to Access Quotations</h4>
         <p style="font-size: 13px; color: #78350f; margin: 0; line-height: 1.5;">
-          Vendors have submitted bids for your RFQ. To unlock full item-level quotes, unit prices, tax breakdown, and delivery commitments by email and on the portal, please sign in and complete mandatory verification:
+          Suppliers have submitted quotations for your requisition. To unlock full item-level quotes, unit prices, tax breakdown, and delivery commitments by email and in your portal, please sign in and complete mandatory profile details:
         </p>
         <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px; color: #78350f;">
           <li>Verify your corporate email via OTP</li>
-          <li>Replace your placeholder mobile with your valid phone number via SMS OTP</li>
+          <li>Replace temporary placeholder mobile (9999999999) with your verified phone number via SMS OTP</li>
           <li>Update your temporary password to a permanent secure password</li>
+          <li>Provide your registered company name, GSTIN (Goods and Services Tax Identification Number), and business address</li>
         </ul>
       </div>
 
       <p style="margin: 24px 0;">
-        <a href="${signInUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Complete Profile & View Quotations</a>
+        <a href="${signInUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Update Profile & View Quotations</a>
       </p>
 
       <p style="font-size: 14px; margin: 20px 0 24px 0; color: #334155;">
-        As soon as your verification is complete, available quotation details will also be delivered directly to this email address.
+        As soon as your profile is updated, all received quotations and competitive pricing will be unlocked and delivered to your inbox.
       </p>
 
       <p style="font-size: 15px; font-weight: bold; color: #0f172a; margin: 0;">
@@ -2064,8 +2071,8 @@ function buildBuyerProfileCompletionReminderEmail({
     from: fromAddress(),
     to,
     replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
-    subject: `[Action Required] Quotation Received for RFQ ${formattedRfq} - Complete Profile Verification`,
-    html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Alert - Profile Verification Required', inner),
+    subject: `[Action Required] Quotation Received for RFQ ${formattedRfq} - Update Profile to Access Quotes`,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Alert - Profile Update Required', inner),
   };
 }
 
