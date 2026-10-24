@@ -448,7 +448,7 @@ async function findLatestIngestionJob(sessionId, organizationId, jobType = null)
 async function findActiveIngestionJobs(sessionId, organizationId) {
   if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
-    `${INGESTION_JOB_SELECT} where session_id = $1 and organization_id = $2 and status in ('PENDING', 'PROCESSING') order by created_at desc`,
+    `${INGESTION_JOB_SELECT} where session_id = $1 and organization_id = $2 and status in ('PENDING', 'PROCESSING') order by created_at desc limit 50`,
     [sessionId, organizationId],
     { d1: true }
   );
@@ -477,7 +477,7 @@ async function findOrganizationCategoryMaster(organizationId) {
         and division is not null and division <> ''
       order by division, category`,
     [organizationId],
-    { d1: true }
+    { d1: true, useCache: true, tag: 'taxonomy', ttlMs: 60000 }
   );
 
   const grouped = new Map();
@@ -670,12 +670,15 @@ async function bulkUpsertVendorMasterRecords(sessionId, organizationId, rows = [
 }
 
 /** Every vendor-master row in a session, ordered as the sheet supplied them. */
-async function findVendorMasterRecords(sessionId, organizationId) {
+async function findVendorMasterRecords(sessionId, organizationId, limit = null) {
   if (!pool.hasStorage() || !sessionId || !organizationId) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const limitClause = hasLimit ? ' limit $3' : ' limit 2000';
+  const params = hasLimit ? [sessionId, organizationId, Math.min(Number(limit), 2000)] : [sessionId, organizationId];
   const rows = await pool.rows(
     `${VENDOR_MASTER_SELECT} where session_id = $1 and organization_id = $2
-      order by source_row_number nulls last, company_name`,
-    [sessionId, organizationId],
+      order by source_row_number nulls last, company_name${limitClause}`,
+    params,
     { d1: true }
   );
   return rows.map(mapRowToVendorMaster);
@@ -1369,12 +1372,15 @@ async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
 }
 
 /** Every mapping in a session, richest-spend first. */
-async function findCategoryMappings(sessionId, organizationId) {
+async function findCategoryMappings(sessionId, organizationId, limit = null) {
   if (!pool.hasStorage() || !sessionId || !organizationId) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const limitClause = hasLimit ? ' limit $3' : ' limit 2000';
+  const params = hasLimit ? [sessionId, organizationId, Math.min(Number(limit), 2000)] : [sessionId, organizationId];
   const rows = await pool.rows(
     `${MAPPING_SELECT} where session_id = $1 and organization_id = $2
-      order by total_spend desc, company_name`,
-    [sessionId, organizationId],
+      order by total_spend desc, company_name${limitClause}`,
+    params,
     { d1: true }
   );
   return rows.map(mapRowToMapping);
@@ -1753,18 +1759,21 @@ async function findCategorySegmentation(sessionId, organizationId) {
  * wizard. Only decided rows are returned — a pending suggestion is not a fact
  * about a vendor yet.
  */
-async function findApprovedMappingsForOrganization(organizationId) {
+async function findApprovedMappingsForOrganization(organizationId, limit = 500) {
   if (!pool.hasStorage() || !organizationId) return [];
+  const safeLimit = Math.min(Number.isInteger(Number(limit)) && Number(limit) > 0 ? Number(limit) : 500, 1000);
   const rows = await pool.rows(
     `${MAPPING_SELECT}
       where organization_id = $1
         and status in ($2, $3, $4)
-      order by updated_at desc`,
+      order by updated_at desc
+      limit $5`,
     [
       organizationId,
       VENDOR_MAPPING_STATUS.BUYER_APPROVED,
       VENDOR_MAPPING_STATUS.AI_MAPPED,
       VENDOR_MAPPING_STATUS.SELF_MAPPED,
+      safeLimit,
     ],
     { d1: true }
   );
@@ -1994,7 +2003,7 @@ async function findEmailLogs(sessionId, organizationId, { status, limit } = {}) 
     params.push(status);
     where += ` and status = $${params.length}`;
   }
-  params.push(counter(limit) || 500);
+  params.push(Math.min(counter(limit) || 500, 1000));
   const rows = await pool.rows(
     `select * from vendor_email_dispatch_log ${where} order by created_at desc limit $${params.length}`,
     params,

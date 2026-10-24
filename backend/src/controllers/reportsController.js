@@ -187,7 +187,7 @@ async function enrichVendorsForRfqs(rfqs, existingVendors = []) {
         const res = await pool.query(
           `SELECT id, email, created_at, updated_at, raw FROM vendors WHERE id IN (${placeholders})`,
           chunk,
-          { d1: true }
+          { d1: true, useCache: true, tag: 'vendors', ttlMs: 60000 }
         );
         for (const r of (res.rows || [])) {
           const v = typeof r.raw === 'string' ? JSON.parse(r.raw) : (r.raw || {});
@@ -394,8 +394,8 @@ async function getSellerReports(req, res, next) {
 
     const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
     const dataRows = (parsedLimit && Number.isInteger(parsedLimit) && parsedLimit > 0)
-      ? rows.slice(0, parsedLimit)
-      : rows;
+      ? rows.slice(0, Math.min(parsedLimit, 5000))
+      : (rows.length > 5000 ? rows.slice(0, 5000) : rows);
 
     return res.json({
       success: true,
@@ -517,8 +517,8 @@ async function getBuyerReports(req, res, next) {
 
     const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
     const dataRows = (parsedLimit && Number.isInteger(parsedLimit) && parsedLimit > 0)
-      ? rows.slice(0, parsedLimit)
-      : rows;
+      ? rows.slice(0, Math.min(parsedLimit, 5000))
+      : (rows.length > 5000 ? rows.slice(0, 5000) : rows);
 
     return res.json({
       success: true,
@@ -668,8 +668,8 @@ async function getRfqReports(req, res, next) {
 
     const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
     const dataRows = (parsedLimit && Number.isInteger(parsedLimit) && parsedLimit > 0)
-      ? rows.slice(0, parsedLimit)
-      : rows;
+      ? rows.slice(0, Math.min(parsedLimit, 5000))
+      : (rows.length > 5000 ? rows.slice(0, 5000) : rows);
 
     return res.json({
       success: true,

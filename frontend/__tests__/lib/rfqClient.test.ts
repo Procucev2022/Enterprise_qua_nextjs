@@ -1162,6 +1162,14 @@ describe('rfqClient RFQ persistence', () => {
       expect(lastPath()).toBe('/api/rfqs/rfq-1/vendor-candidates');
     });
 
+    test('passes limit parameter when provided', async () => {
+      global.fetch = reply(200, { success: true, data: [] });
+
+      await fetchVendorCandidates('rfq-1', 25);
+
+      expect(lastPath()).toBe('/api/rfqs/rfq-1/vendor-candidates?limit=25');
+    });
+
     test('attaches the session token when one is held', async () => {
       signIn();
       global.fetch = reply(200, { success: true, data: [] });

@@ -70,13 +70,9 @@ router.post('/', async (req, res, next) => {
   */
 router.get('/', (req, res, next) => {
   try {
-    let inquiries = storeService.getEnterpriseInquiries();
-    if (req.query && req.query.limit) {
-      const limit = Number(req.query.limit);
-      if (Number.isInteger(limit) && limit > 0) {
-        inquiries = inquiries.slice(0, limit);
-      }
-    }
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
+    const inquiries = storeService.getEnterpriseInquiries(limit);
     return res.json({
       success: true,
       data: inquiries,

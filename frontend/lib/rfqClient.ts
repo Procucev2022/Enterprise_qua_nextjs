@@ -588,12 +588,13 @@ export async function fetchAllRFQs(
  * admin. Being in this list grants no visibility by itself — only actually
  * inviting a vendor (inviteVendorsToRFQ) does.
  */
-export async function fetchVendorCandidates(rfqId: string): Promise<RFQVendorCandidatesResult> {
+export async function fetchVendorCandidates(rfqId: string, limit?: number): Promise<RFQVendorCandidatesResult> {
   const token = authClient.getToken();
+  const queryParam = limit && limit > 0 ? `?limit=${encodeURIComponent(limit)}` : '';
 
   let res: Response;
   try {
-    res = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/vendor-candidates`, {
+    res = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/vendor-candidates${queryParam}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
   } catch {

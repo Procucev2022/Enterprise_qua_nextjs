@@ -336,9 +336,13 @@ async function getRFQs(req, res, next) {
     } else {
       await storeService.syncRFQsFromDB();
     }
-    const rfqs = scopedRfqList(scope);
+    let rfqs = scopedRfqList(scope);
+    const limit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
+      ? Math.min(Number(req.query.limit), 500)
+      : 200;
+    rfqs = rfqs.slice(0, limit);
     const summaryOnly = req.query && req.query.summary === 'true';
-    let data = summaryOnly
+    const data = summaryOnly
       ? rfqs.map((r) => ({
           id: r.id,
           rfqNumber: r.rfqNumber,
@@ -356,12 +360,6 @@ async function getRFQs(req, res, next) {
           buyerAccountName: r.buyerAccountName,
         }))
       : rfqs;
-    if (req.query && req.query.limit) {
-      const limit = Number(req.query.limit);
-      if (Number.isInteger(limit) && limit > 0) {
-        data = data.slice(0, limit);
-      }
-    }
     logger.info('Fetching RFQs list', { role: scope.role, restricted: scope.restricted, count: data.length, summaryOnly }, 'RFQ_CONTROLLER');
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data });
   } catch (err) {
@@ -388,8 +386,13 @@ async function getAllRFQs(req, res, next) {
       .slice()
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 
+    const limit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
+      ? Math.min(Number(req.query.limit), 500)
+      : 200;
+    rfqs = rfqs.slice(0, limit);
+
     const summaryOnly = req.query && (req.query.summary === 'true' || req.query.summary === true);
-    let data = summaryOnly
+    const data = summaryOnly
       ? rfqs.map((r) => ({
           id: r.id,
           rfqNumber: r.rfqNumber,
@@ -420,13 +423,6 @@ async function getAllRFQs(req, res, next) {
         }))
       : rfqs;
 
-    if (req.query && req.query.limit) {
-      const limit = Number(req.query.limit);
-      if (Number.isInteger(limit) && limit > 0) {
-        data = data.slice(0, limit);
-      }
-    }
-
     logger.info('Fetching all RFQs for CM console', { count: data.length, summaryOnly }, 'RFQ_CONTROLLER');
     res.json({
       success: true,
@@ -451,7 +447,13 @@ async function getVendorCandidates(req, res, next) {
     if (!rfq || !(await canAccessRfq(req, rfq))) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    const candidates = storeService.candidateVendorsForRFQ(rfq);
+    const candidateLimit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
+      ? Math.min(Number(req.query.limit), 500)
+      : 100;
+    let candidates = storeService.candidateVendorsForRFQ(rfq, candidateLimit);
+    if (candidateLimit && Array.isArray(candidates) && candidates.length > candidateLimit) {
+      candidates = candidates.slice(0, candidateLimit);
+    }
     res.json({ success: true, data: candidates });
   } catch (err) {
     logger.error(`Error fetching vendor candidates for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');

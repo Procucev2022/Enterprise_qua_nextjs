@@ -17,12 +17,25 @@ const { queryCache } = require('./queryCache');
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
-async function getVendorsFromDB() {
+async function getVendorsFromDB(limit = null) {
   if (!pool.hasStorage()) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? 'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC LIMIT $1'
+    : 'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
-    'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC',
-    [],
-    { d1: true, useCache: true, tag: 'vendors', ttlMs: 60000 }
+    sql,
+    params,
+    {
+      d1: true,
+      d1Text: hasLimit
+        ? 'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC LIMIT ?'
+        : 'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC LIMIT 1000',
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
   );
   return (result && result.rows)
     ? result.rows.map((row) => {
@@ -214,7 +227,9 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       );
   const total = countResult.rows[0]?.total || 0;
 
-  const dataParams = [...params, limit, offset];
+  const effectiveLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 1000) : (limit !== undefined ? limit : 50);
+  const effectiveOffset = Number.isInteger(Number(offset)) && Number(offset) >= 0 ? Number(offset) : (offset !== undefined ? offset : 0);
+  const dataParams = [...params, effectiveLimit, effectiveOffset];
   const dataResult = await pool.query(
     `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
     dataParams,
@@ -304,7 +319,13 @@ async function countPublicVendorsMatchingCategories(signals) {
   const result = await pool.query(
     `SELECT COUNT(*)::int AS total FROM vendors ${wherePg}`,
     params,
-    { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${whereD1}` }
+    {
+      d1: true,
+      d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${whereD1}`,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
   );
   return result.rows[0]?.total || 0;
 }
@@ -357,12 +378,16 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
   const whereD1 = `WHERE (${d1OrGroups.join(' OR ')}) AND ${publicD1}`;
 
   const limitParam = params.length + 1;
+  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
   const result = await pool.query(
     `SELECT raw FROM vendors ${wherePg} ORDER BY created_at DESC LIMIT $${limitParam}`,
-    [...params, limit],
+    [...params, safeLimit],
     {
       d1: true,
       d1Text: `SELECT raw FROM vendors ${whereD1} ORDER BY created_at DESC LIMIT $${limitParam}`,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
     }
   );
   return (result && result.rows) ? result.rows.map((row) => parseRaw(row.raw)) : [];
@@ -413,6 +438,9 @@ async function getVendorByEmailFromDB(email) {
       d1Text: `SELECT raw FROM vendors
      WHERE lower(email) = lower($1) OR lower(json_extract(raw,'$.corporateEmail')) = lower($1)
      LIMIT 1`,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
     }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
@@ -460,7 +488,7 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
   const ids = Array.from(candidateSet);
   if (ids.length === 0) return [];
 
-  const maxLimit = typeof limit === 'number' && limit > 0 ? limit : 500;
+  const maxLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 500) : 500;
   const cacheKey = `buyer_vendors:${ids.sort().join(',')}:${maxLimit}`;
   const cached = queryCache.get(cacheKey);
   if (cached) return cached;
@@ -507,7 +535,12 @@ async function getVendorByIdFromDB(id) {
   const result = await pool.query(
     'SELECT raw FROM vendors WHERE id = $1 LIMIT 1',
     [id],
-    { d1: true }
+    {
+      d1: true,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
@@ -706,10 +739,10 @@ async function getRFQsFromDB(buyerAccountId = null, limit = null) {
   }
   const wherePg = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const whereD1 = d1Conditions.length > 0 ? `WHERE ${d1Conditions.join(' AND ')}` : '';
-  const hasLimit = Number.isInteger(limit) && limit > 0;
-  let limitClause = '';
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  let limitClause = 'LIMIT 1000';
   if (hasLimit) {
-    params.push(limit);
+    params.push(Math.min(Number(limit), 1000));
     limitClause = `LIMIT $${params.length}`;
   }
   const sql = `SELECT raw FROM rfqs ${wherePg} ORDER BY created_at DESC ${limitClause}`.trim();
@@ -815,14 +848,14 @@ async function getEvaluationsFromDB(limit = null) {
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
     ? 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT $1'
-    : 'SELECT raw FROM evaluations ORDER BY created_at DESC';
-  const params = hasLimit ? [Number(limit)] : [];
+    : 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
     sql,
     params,
     {
       d1: true,
-      d1Text: hasLimit ? 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT ?' : undefined,
+      d1Text: hasLimit ? 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT ?' : 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT 1000',
       useCache: true,
       tag: 'evaluations',
       ttlMs: 60000,
@@ -873,14 +906,14 @@ async function getVendorCatalogueFromDB(limit = null) {
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
     ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT $1'
-    : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC';
-  const params = hasLimit ? [Number(limit)] : [];
+    : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
     sql,
     params,
     {
       d1: true,
-      d1Text: hasLimit ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT ?' : undefined,
+      d1Text: hasLimit ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT ?' : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT 1000',
       useCache: true,
       tag: 'catalogue',
       ttlMs: 60000,
@@ -947,14 +980,14 @@ async function getBuyerAccountsFromDB(limit = null) {
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
     ? 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT $1'
-    : 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC';
-  const params = hasLimit ? [Number(limit)] : [];
+    : 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
     sql,
     params,
     {
       d1: true,
-      d1Text: hasLimit ? 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT ?' : undefined,
+      d1Text: hasLimit ? 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT ?' : 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT 1000',
       useCache: true,
       tag: 'buyer_accounts',
       ttlMs: 60000,
@@ -1044,9 +1077,9 @@ async function setActiveBuyerAccountInDB(id) {
 
 async function getAIFeedFromDB(limit = null) {
   if (!pool.hasStorage()) return [];
-  const hasLimit = Number.isInteger(limit) && limit > 0;
-  const params = hasLimit ? [limit] : [];
-  const limitClause = hasLimit ? 'LIMIT $1' : '';
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
+  const limitClause = hasLimit ? 'LIMIT $1' : 'LIMIT 1000';
   const sql = `SELECT raw FROM ai_feed ORDER BY sequence DESC ${limitClause}`.trim();
   const d1Sql = `SELECT raw FROM ai_feed ORDER BY rowid DESC ${limitClause}`.trim();
   const result = await pool.query(
@@ -1084,9 +1117,9 @@ async function upsertAIFeedItemInDB(item) {
 
 async function getAuditLogsFromDB(limit = null) {
   if (!pool.hasStorage()) return [];
-  const hasLimit = Number.isInteger(limit) && limit > 0;
-  const params = hasLimit ? [limit] : [];
-  const limitClause = hasLimit ? 'LIMIT $1' : '';
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
+  const limitClause = hasLimit ? 'LIMIT $1' : 'LIMIT 1000';
   const sql = `SELECT raw FROM audit_logs ORDER BY sequence DESC ${limitClause}`.trim();
   const d1Sql = `SELECT raw FROM audit_logs ORDER BY rowid DESC ${limitClause}`.trim();
   const result = await pool.query(
@@ -1107,6 +1140,7 @@ async function upsertAuditLogInDB(entry) {
     [id, JSON.stringify(entry)],
     { d1: true }
   );
+  queryCache.invalidate('audit_logs');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
@@ -1121,10 +1155,10 @@ async function getNotificationsFromDB(recipientId = null, limit = null) {
     conditions.push(`recipient_id = $${params.length}`);
   }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  const hasLimit = Number.isInteger(limit) && limit > 0;
-  let limitClause = '';
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  let limitClause = 'LIMIT 1000';
   if (hasLimit) {
-    params.push(limit);
+    params.push(Math.min(Number(limit), 1000));
     limitClause = `LIMIT $${params.length}`;
   }
   const sql = `SELECT raw FROM notifications ${where} ORDER BY sequence DESC ${limitClause}`.trim();
@@ -1150,6 +1184,7 @@ async function insertNotificationInDB(notification) {
     [id, recipientType, recipientId, kind, rfqId || null, !!read, JSON.stringify(notification)],
     { d1: true }
   );
+  queryCache.invalidate('notifications');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
@@ -1179,6 +1214,7 @@ async function bulkInsertNotificationsInDB(notifications) {
     values,
     { d1: true }
   );
+  queryCache.invalidate('notifications');
   return result.rows.map((row) => row.id);
 }
 
@@ -1199,6 +1235,7 @@ async function markNotificationReadInDB(id) {
      WHERE id = $1`,
     }
   );
+  queryCache.invalidate('notifications');
   return result.rowCount > 0;
 }
 
@@ -1216,6 +1253,7 @@ async function markAllNotificationsReadInDB(recipientType, recipientId) {
      WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = false`,
     }
   );
+  queryCache.invalidate('notifications');
   return result.rowCount;
 }
 
@@ -1226,7 +1264,7 @@ async function getZohoOAuthTokenFromDB() {
   const result = await pool.query(
     "SELECT access_token, expiry_time FROM zoho_oauth_token WHERE id = 'default'",
     [],
-    { d1: true }
+    { d1: true, useCache: true, tag: 'zoho_token', ttlMs: 60000 }
   );
   return result.rows[0] || null;
 }
@@ -1244,6 +1282,7 @@ async function upsertZohoOAuthTokenInDB({ accessToken, expiryTime }) {
     [accessToken || null, expiryTime || null],
     { d1: true }
   );
+  queryCache.invalidate('zoho_token');
   return result.rows[0] || null;
 }
 
@@ -1265,14 +1304,14 @@ async function getPaymentLinksFromDB(limit = null) {
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
     ? 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT $1'
-    : 'SELECT raw FROM payment_links ORDER BY created_at DESC';
-  const params = hasLimit ? [Number(limit)] : [];
+    : 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
     sql,
     params,
     {
       d1: true,
-      d1Text: hasLimit ? 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT ?' : undefined,
+      d1Text: hasLimit ? 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT ?' : 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT 1000',
       useCache: true,
       tag: 'payment_links',
       ttlMs: 60000,
@@ -1286,13 +1325,13 @@ async function getPaymentLinksByVendorFromDB(vendorId, limit = 50) {
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
     ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2'
-    : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC';
-  const params = hasLimit ? [vendorId, Number(limit)] : [vendorId];
+    : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
       ? 'SELECT raw FROM payment_links WHERE vendor_id = ? ORDER BY created_at DESC LIMIT ?'
-      : 'SELECT raw FROM payment_links WHERE vendor_id = ? ORDER BY created_at DESC',
+      : 'SELECT raw FROM payment_links WHERE vendor_id = ? ORDER BY created_at DESC LIMIT 1000',
     useCache: true,
     tag: 'payment_links',
     ttlMs: 60000,
@@ -1305,13 +1344,13 @@ async function getPaymentLinksByBuyerFromDB(buyerAccountId, limit = 50) {
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
     ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT $2'
-    : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC';
-  const params = hasLimit ? [buyerAccountId, Number(limit)] : [buyerAccountId];
+    : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [buyerAccountId, Math.min(Number(limit), 1000)] : [buyerAccountId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
       ? 'SELECT raw FROM payment_links WHERE buyer_account_id = ? ORDER BY created_at DESC LIMIT ?'
-      : 'SELECT raw FROM payment_links WHERE buyer_account_id = ? ORDER BY created_at DESC',
+      : 'SELECT raw FROM payment_links WHERE buyer_account_id = ? ORDER BY created_at DESC LIMIT 1000',
     useCache: true,
     tag: 'payment_links',
     ttlMs: 60000,
@@ -1338,9 +1377,15 @@ async function getPaymentLinkByIdFromDB(id) {
 async function getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId) {
   if (!pool.hasStorage()) return null;
   const result = await pool.query(
-    'SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1',
+    'SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1 LIMIT 1',
     [zohoPaymentLinkId],
-    { d1: true }
+    {
+      d1: true,
+      d1Text: 'SELECT raw FROM payment_links WHERE zoho_payment_link_id = ? LIMIT 1',
+      useCache: true,
+      tag: 'payment_links',
+      ttlMs: 60000,
+    }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
@@ -1439,8 +1484,8 @@ async function getPendingChaserJobsFromDB(limit = 100) {
      FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC LIMIT $1`
     : `SELECT id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
             vendor_email, vendor_contact_person, rfq_title, channel, fire_at
-     FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC`;
-  const params = hasLimit ? [Number(limit)] : [];
+     FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC LIMIT 1000`;
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
     sql,
     params,
@@ -1450,7 +1495,9 @@ async function getPendingChaserJobsFromDB(limit = 100) {
         ? `SELECT id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
             vendor_email, vendor_contact_person, rfq_title, channel, fire_at
      FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC LIMIT ?`
-        : undefined,
+        : `SELECT id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
+            vendor_email, vendor_contact_person, rfq_title, channel, fire_at
+     FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC LIMIT 1000`,
     }
   );
   return result.rows || [];
@@ -1463,6 +1510,7 @@ async function getPendingChaserJobsFromDB(limit = 100) {
  */
 async function claimDueChaserJobsFromDB(now, staleBefore, limit = 25) {
   if (!pool.hasStorage()) return [];
+  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
   const result = await pool.query(
     `UPDATE chaser_queue
      SET status='processing', updated_at=$1
@@ -1475,7 +1523,7 @@ async function claimDueChaserJobsFromDB(now, staleBefore, limit = 25) {
      )
      RETURNING id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
                vendor_email, vendor_contact_person, rfq_title, channel, fire_at`,
-    [now, staleBefore, limit],
+    [now, staleBefore, safeLimit],
     { d1: true }
   );
   return result.rows || [];
@@ -1510,7 +1558,13 @@ async function getRFQUnlockFromDB(vendorId, rfqId) {
   const result = await pool.query(
     `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 AND rfq_id = $2 LIMIT 1`,
     [vendorId, rfqId],
-    { d1: true }
+    {
+      d1: true,
+      d1Text: 'SELECT * FROM rfq_unlocks WHERE vendor_id = ? AND rfq_id = ? LIMIT 1',
+      useCache: true,
+      tag: 'vendor_credits',
+      ttlMs: 60000,
+    }
   );
   return result && result.rows ? result.rows[0] : null;
 }
@@ -1520,13 +1574,13 @@ async function getVendorUnlocksFromDB(vendorId, limit = 50) {
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
     ? `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 ORDER BY unlocked_at DESC LIMIT $2`
-    : `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 ORDER BY unlocked_at DESC`;
-  const params = hasLimit ? [vendorId, Number(limit)] : [vendorId];
+    : `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 ORDER BY unlocked_at DESC LIMIT 1000`;
+  const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
       ? `SELECT * FROM rfq_unlocks WHERE vendor_id = ? ORDER BY unlocked_at DESC LIMIT ?`
-      : `SELECT * FROM rfq_unlocks WHERE vendor_id = ? ORDER BY unlocked_at DESC`,
+      : `SELECT * FROM rfq_unlocks WHERE vendor_id = ? ORDER BY unlocked_at DESC LIMIT 1000`,
     useCache: true,
     tag: 'vendor_credits',
     ttlMs: 60000,
@@ -1559,13 +1613,13 @@ async function getVendorCreditTransactionsFromDB(vendorId, limit = 50) {
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const sql = hasLimit
     ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
-    : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC`;
-  const params = hasLimit ? [vendorId, Number(limit)] : [vendorId];
+    : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`;
+  const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
       ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = ? ORDER BY created_at DESC LIMIT ?`
-      : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = ? ORDER BY created_at DESC`,
+      : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = ? ORDER BY created_at DESC LIMIT 1000`,
     useCache: true,
     tag: 'vendor_credits',
     ttlMs: 60000,
@@ -1590,6 +1644,9 @@ async function countVendorsCreatedBetween(fromDate, toDate) {
       {
         d1: true,
         d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS count FROM vendors WHERE created_at >= $1 AND created_at <= $2`,
+        useCache: true,
+        tag: 'vendors',
+        ttlMs: 60000,
       }
     );
     return res && res.rows && res.rows[0] ? Number(res.rows[0].count) || 0 : 0;

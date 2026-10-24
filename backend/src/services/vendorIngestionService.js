@@ -555,11 +555,12 @@ async function confirmVendorMaster(sessionUser, sessionId, { rows, fileName, rep
 }
 
 /** The stored vendor master, for the preview table. */
-async function getVendorMasterPreview(sessionUser, sessionId) {
+async function getVendorMasterPreview(sessionUser, sessionId, limit = 100) {
   const context = await resolveBuyerContext(sessionUser);
   await requireSession(context, sessionId);
-  const records = await queries.findVendorMasterRecords(sessionId, context.organizationId);
-  return { records, total: records.length };
+  const records = await queries.findVendorMasterRecords(sessionId, context.organizationId, limit);
+  const total = await queries.countVendorMasterRecords(sessionId, context.organizationId);
+  return { records, total: total || records.length };
 }
 
 // ------------------------------------------------------------------------------
@@ -1721,9 +1722,9 @@ async function getAiClassificationLogs(sessionUser, sessionId, { limit } = {}) {
  * Consumed by the Vendor Summary screen so it can show the category a supplier
  * is genuinely empanelled under, rather than re-deriving one from a name.
  */
-async function getApprovedMappings(sessionUser) {
+async function getApprovedMappings(sessionUser, limit = 500) {
   const context = await resolveBuyerContext(sessionUser);
-  const mappings = await queries.findApprovedMappingsForOrganization(context.organizationId);
+  const mappings = await queries.findApprovedMappingsForOrganization(context.organizationId, limit);
   return {
     mappings: mappings.map((mapping) => ({
       vendorId: mapping.vendorId,

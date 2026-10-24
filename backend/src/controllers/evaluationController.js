@@ -4,13 +4,9 @@ const { logger } = require('../services/loggerService');
 function getEvaluations(req, res, next) {
   try {
     logger.info('Fetching vendor evaluations list', { query: req.query }, 'EVALUATION_CONTROLLER');
-    let evals = storeService.getEvaluations();
-    if (req.query && req.query.limit) {
-      const limit = Number(req.query.limit);
-      if (Number.isInteger(limit) && limit > 0) {
-        evals = evals.slice(0, limit);
-      }
-    }
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
+    const evals = storeService.getEvaluations(limit);
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: evals });
   } catch (err) {
     logger.error('Error fetching vendor evaluations', err, 'EVALUATION_CONTROLLER');

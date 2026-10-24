@@ -372,8 +372,11 @@ class StoreService {
   // ==========================================
   // 1. BUYER ACCOUNTS
   // ==========================================
-  getBuyerAccounts() {
-    return this.buyerAccounts;
+  getBuyerAccounts(limit = null) {
+    if (Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return (this.buyerAccounts || []).slice(0, Math.min(Number(limit), 500));
+    }
+    return (this.buyerAccounts || []).slice(0, 500);
   }
 
   getActiveBuyerAccount() {
@@ -684,35 +687,39 @@ class StoreService {
    * what this specific process happened to load at boot or write itself.
    * Same pattern as getPaymentLinksForVendor/getPaymentLinksForBuyer.
    */
-  async getVendors(scopedBuyerId = null) {
+  async getVendors(scopedBuyerId = null, limit = null) {
     if (pool.hasStorage()) {
-      const allFromDB = await domainQueries.getVendorsFromDB();
+      const allFromDB = await domainQueries.getVendorsFromDB(limit);
       const byId = new Map(this.vendors.map((v) => [v.id, v]));
       for (const vendor of allFromDB) byId.set(vendor.id, vendor);
       this.vendors = Array.from(byId.values());
     }
-    if (scopedBuyerId === 'all') {
-      return this.vendors;
+    let list = this.vendors;
+    if (scopedBuyerId !== 'all') {
+      list = list.filter((v) => {
+        // Platform / network vendors with no buyerId are public
+        if (!v.buyerId && !v.buyerAccountId) {
+          return true;
+        }
+        // Buyer-uploaded vendors are only visible if scopedBuyerId matches
+        if (!scopedBuyerId) {
+          return false;
+        }
+        const candidateIds = Array.isArray(scopedBuyerId)
+          ? scopedBuyerId.map((id) => String(id).toLowerCase())
+          : [String(scopedBuyerId).toLowerCase()];
+        return candidateIds.some(
+          (sId) =>
+            (v.buyerId && String(v.buyerId).toLowerCase() === sId) ||
+            (v.buyerAccountId && String(v.buyerAccountId).toLowerCase() === sId) ||
+            (v.buyerEmail && String(v.buyerEmail).toLowerCase() === sId)
+        );
+      });
     }
-    return this.vendors.filter((v) => {
-      // Platform / network vendors with no buyerId are public
-      if (!v.buyerId && !v.buyerAccountId) {
-        return true;
-      }
-      // Buyer-uploaded vendors are only visible if scopedBuyerId matches
-      if (!scopedBuyerId) {
-        return false;
-      }
-      const candidateIds = Array.isArray(scopedBuyerId)
-        ? scopedBuyerId.map((id) => String(id).toLowerCase())
-        : [String(scopedBuyerId).toLowerCase()];
-      return candidateIds.some(
-        (sId) =>
-          (v.buyerId && String(v.buyerId).toLowerCase() === sId) ||
-          (v.buyerAccountId && String(v.buyerAccountId).toLowerCase() === sId) ||
-          (v.buyerEmail && String(v.buyerEmail).toLowerCase() === sId)
-      );
-    });
+    if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return list.slice(0, Number(limit));
+    }
+    return list;
   }
 
   getVendorById(id, scopedBuyerId = null) {
@@ -2016,7 +2023,10 @@ class StoreService {
   async syncRFQsFromDB(force = false, buyerAccountId = null) {
     if (!pool.hasStorage()) return this.getRFQs(buyerAccountId);
     const now = Date.now();
-    if (!force && !buyerAccountId && this._lastRfqSyncTime && (now - this._lastRfqSyncTime < 25000)) {
+    const cacheKey = buyerAccountId || '__all__';
+    this._lastRfqSyncMap = this._lastRfqSyncMap || new Map();
+    const lastSync = this._lastRfqSyncMap.get(cacheKey) || (!buyerAccountId ? this._lastRfqSyncTime : 0);
+    if (!force && lastSync && (now - lastSync < 25000)) {
       return this.getRFQs(buyerAccountId);
     }
     if (this._syncRFQsPromise) {
@@ -2048,6 +2058,7 @@ class StoreService {
         if (!buyerAccountId) {
           this._lastRfqSyncTime = Date.now();
         }
+        this._lastRfqSyncMap.set(cacheKey, Date.now());
       } catch (err) {
         logger.error('Failed to sync RFQs from database', err, 'STORE_SERVICE');
       } finally {
@@ -2059,10 +2070,8 @@ class StoreService {
   }
 
   async getRFQByIdAsync(id) {
-    let dbQueried = false;
     if (pool.hasStorage()) {
       try {
-        dbQueried = true;
         const dbRfq = await domainQueries.getRFQByIdFromDB(id);
         if (dbRfq) {
           const idx = this.rfqs.findIndex((r) => r.id === dbRfq.id || r.rfqNumber === dbRfq.rfqNumber);
@@ -2074,13 +2083,12 @@ class StoreService {
           return this.getRFQById(id);
         }
       } catch (err) {
-        dbQueried = false;
         logger.warn('Failed to load RFQ from DB in getRFQByIdAsync', { id, error: err.message }, 'STORE_SERVICE');
       }
     }
     let rfq = this.getRFQById(id);
-    if (!rfq && pool.hasStorage() && !dbQueried) {
-      await this.syncRFQsFromDB();
+    if (!rfq && pool.hasStorage()) {
+      await this.syncRFQsFromDB(true);
       rfq = this.getRFQById(id);
     }
     return rfq;
@@ -3680,12 +3688,16 @@ class StoreService {
    * `inviteVendorsToRFQ` (via `assignedVendors`) does that. Flags which
    * candidates are already invited so a picker UI can show that state.
    */
-  candidateVendorsForRFQ(rfq) {
+  candidateVendorsForRFQ(rfq, limit = null) {
     const signals = this._rfqCategorySignals(rfq);
-    return this.vendors
+    const candidates = this.vendors
       .filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq))
       .filter((v) => signals.some((c) => this.vendorCoversCategory(v, c)))
       .map((v) => ({ ...v, alreadyInvited: this._isInvitedVendor(v, rfq) }));
+    if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return candidates.slice(0, Number(limit));
+    }
+    return candidates;
   }
 
   /**
@@ -4402,8 +4414,11 @@ class StoreService {
   // ==========================================
   // 4. EVALUATIONS
   // ==========================================
-  getEvaluations() {
-    return this.evaluations;
+  getEvaluations(limit = null) {
+    if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return this.evaluations.slice(0, Math.min(Number(limit), 500));
+    }
+    return this.evaluations.slice(0, 500);
   }
 
   createEvaluation(evalData) {
@@ -4459,10 +4474,10 @@ class StoreService {
   // 5. AUDIT LOGS & CRYPTO VERIFICATION
   // ==========================================
   getAuditLogs(limit = null) {
-    if (Number.isInteger(limit) && limit > 0) {
-      return this.auditLogs.slice(0, limit);
+    if (Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return this.auditLogs.slice(0, Math.min(Number(limit), 500));
     }
-    return this.auditLogs;
+    return this.auditLogs.slice(0, 500);
   }
 
   addAuditLog({ userEmail, action, rfqNumber, ipAddress }) {
@@ -4483,8 +4498,11 @@ class StoreService {
   // ==========================================
   // 6. AI BOT FEED
   // ==========================================
-  getAIFeed() {
-    return this.aiFeed;
+  getAIFeed(limit = null) {
+    if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return this.aiFeed.slice(0, Math.min(Number(limit), 500));
+    }
+    return this.aiFeed.slice(0, 500);
   }
 
   addAIFeedItem(feedItem) {
@@ -5083,9 +5101,14 @@ class StoreService {
   // Scoped per vendor. Called without a vendorId (the buyer-side catalogue
   // browse) it returns every product; the three unowned demo SKUs that used to
   // be visible only through that unfiltered path are gone.
-  getVendorCatalogue(vendorId) {
-    if (!vendorId) return this.vendorCatalogue;
-    return this.vendorCatalogue.filter((p) => p.vendorId === vendorId);
+  getVendorCatalogue(vendorId, limit = null) {
+    let items = !vendorId ? this.vendorCatalogue : this.vendorCatalogue.filter((p) => p.vendorId === vendorId);
+    if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      items = items.slice(0, Math.min(Number(limit), 500));
+    } else {
+      items = items.slice(0, 500);
+    }
+    return items;
   }
 
   getCatalogueProductById(id) {
@@ -5473,11 +5496,13 @@ class StoreService {
     return newRecord;
   }
 
-  getEnterpriseInquiries() {
+  getEnterpriseInquiries(limit = null) {
     if (!Array.isArray(this.enterpriseInquiries)) {
       this.enterpriseInquiries = loadPersistedInquiries();
     }
-    return this.enterpriseInquiries;
+    const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+    const effectiveLimit = hasLimit ? Math.min(Number(limit), 500) : 500;
+    return this.enterpriseInquiries.slice(0, effectiveLimit);
   }
 
   updateEnterpriseInquiry(id, updates) {

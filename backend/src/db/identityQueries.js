@@ -221,9 +221,10 @@ async function findUserByEmailAndPhone(email, phone) {
  * List accounts for the admin users screen.
  */
 async function listUsers(limit = 200) {
+  const capped = Math.min(Math.max(Number(limit) || 200, 1), 500);
   const result = await pool.rows(
     `${USER_SELECT} where u.is_active = true order by u.created_ts desc limit $1`,
-    [Number(limit)],
+    [capped],
     { d1: true }
   );
   return result.map(mapRowToUser).filter((u) => !!u.email);

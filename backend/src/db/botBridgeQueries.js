@@ -51,7 +51,7 @@ async function findUsersByPhone(phone) {
   if (variants.length === 0) return [];
   const placeholders = variants.map((_, index) => `$${index + 1}`).join(', ');
   const rows = await pool.rows(
-    `${BOT_USER_SELECT} where u.phone in (${placeholders}) order by u.created_ts desc`,
+    `${BOT_USER_SELECT} where u.phone in (${placeholders}) order by u.created_ts desc limit 50`,
     variants,
     { d1: true }
   );
@@ -75,11 +75,12 @@ async function findVendorIdByEmail(email) {
 }
 
 /** Accounts belonging to one organisation, active first. */
-async function findUsersByOrgUuid(orgUuid) {
+async function findUsersByOrgUuid(orgUuid, limit = 50) {
   if (!orgUuid) return [];
+  const capped = Math.min(Math.max(Number(limit) || 50, 1), 200);
   const rows = await pool.rows(
-    `${USER_SELECT} where u.org_uuid = $1 order by u.is_active desc, u.created_ts desc`,
-    [String(orgUuid)],
+    `${USER_SELECT} where u.org_uuid = $1 order by u.is_active desc, u.created_ts desc limit $2`,
+    [String(orgUuid), capped],
     { d1: true }
   );
   return rows.map(mapRowToUser);

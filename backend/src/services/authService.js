@@ -1077,11 +1077,11 @@ async function registerUser(payload, ipAddress) {
 /**
  * Get all registered users (for admin inspection).
  */
-async function getAllUsers() {
+async function getAllUsers(limit = 200) {
   if (!pool.hasStorage()) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
-  const users = await identityQueries.listUsers();
+  const users = await identityQueries.listUsers(limit);
   return users.map((u) => ({
     id: u.id,
     email: u.email,

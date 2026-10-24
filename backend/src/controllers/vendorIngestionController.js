@@ -108,7 +108,9 @@ async function uploadVendorMaster(req, res, next) {
 
 async function getVendorMasterPreview(req, res, next) {
   try {
-    const result = await vendorIngestionService.getVendorMasterPreview(req.user, req.params.sessionId);
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : 100;
+    const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 100;
+    const result = await vendorIngestionService.getVendorMasterPreview(req.user, req.params.sessionId, limit);
     return res.json({ success: true, data: result });
   } catch (err) {
     return respondWithError(err, res, next, 'Unexpected error loading the vendor master preview');
@@ -308,7 +310,9 @@ async function getAiLogs(req, res, next) {
 /** Approved mappings across every session — consumed by the Vendor Summary screen. */
 async function getApprovedMappings(req, res, next) {
   try {
-    const result = await vendorIngestionService.getApprovedMappings(req.user);
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 500;
+    const result = await vendorIngestionService.getApprovedMappings(req.user, limit);
     return res.json({ success: true, data: result });
   } catch (err) {
     return respondWithError(err, res, next, 'Unexpected error loading approved category mappings');
