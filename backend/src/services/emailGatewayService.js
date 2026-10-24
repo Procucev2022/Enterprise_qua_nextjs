@@ -473,104 +473,6 @@ async function getOrCreateBuyerAccount(email) {
   }
 }
 
-const inFlightBuyerRegistrations = new Map();
-
-/**
- * Concurrency-safe retrieval or autonomous creation of a buyer account for an unregistered sender.
- */
-async function getOrCreateBuyerAccount(email) {
-  const normEmail = String(email || '').trim().toLowerCase();
-  if (!normEmail) {
-    throw new Error('Email address is required for buyer onboarding.');
-  }
-
-  // 1. Check if already exists in storeService
-  let existing = await storeService.getBuyerAccountByEmail(normEmail);
-  if (existing) {
-    return { buyerAccount: existing, isNew: false, tempPassword: null };
-  }
-
-  // 2. Concurrency lock per email
-  if (inFlightBuyerRegistrations.has(normEmail)) {
-    return await inFlightBuyerRegistrations.get(normEmail);
-  }
-
-  const creationPromise = (async () => {
-    // Re-check after acquiring promise
-    existing = await storeService.getBuyerAccountByEmail(normEmail);
-    if (existing) {
-      return { buyerAccount: existing, isNew: false, tempPassword: null };
-    }
-
-    const tempPassword = storeService._generateTempPassword();
-    const displayName = normEmail.split('@')[0];
-    const orgName = `${displayName} Enterprises`;
-
-    // Create in identity database
-    let userResult = null;
-    try {
-      userResult = await identityQueries.insertBuyerAccount({
-        email: normEmail,
-        password: tempPassword,
-        phone: '9999999999',
-        fullName: displayName,
-        organizationName: orgName,
-        resetPasswordRequired: true,
-        verificationStatus: 'PENDING_ONBOARDING',
-        createdBy: 'email-gateway-autonomous',
-      });
-    } catch (dbErr) {
-      logger.error('Failed to create identity user for unregistered buyer', dbErr, 'EMAIL_GATEWAY');
-    }
-
-    const userId = userResult?.user?.id || `buyer-user-${Date.now()}`;
-    const orgId = userResult?.user?.orgId || `org-${Date.now()}`;
-
-    // Create in storeService (buyer_accounts)
-    const newBuyerAccount = storeService.addBuyerAccount({
-      id: userId,
-      organizationName: orgName,
-      brandName: displayName,
-      organizationType: 'Private Limited',
-      corporateEmail: normEmail,
-      contactPerson: displayName,
-      contactDesignation: 'Procurement Specialist',
-      mobileNumber: '+919999999999',
-      organizationId: orgId,
-      sourcingMode: 'mode_0',
-      subscriptionPlan: 'free_trial',
-      remainingFreeRFQs: 5,
-      status: 'PENDING_ONBOARDING',
-      onboardingRequired: true,
-      profileVerified: false,
-      emailVerified: false,
-      phoneVerified: false,
-      tempPasswordRequired: true,
-      isAutoRegistered: true,
-    });
-
-    logger.info(
-      `Autonomous buyer account created for unregistered sender ${normEmail}`,
-      { buyerAccountId: newBuyerAccount.id, sourcingMode: newBuyerAccount.sourcingMode },
-      'EMAIL_GATEWAY'
-    );
-
-    return {
-      buyerAccount: newBuyerAccount,
-      isNew: true,
-      tempPassword,
-      user: userResult?.user || null,
-    };
-  })();
-
-  inFlightBuyerRegistrations.set(normEmail, creationPromise);
-  try {
-    return await creationPromise;
-  } finally {
-    inFlightBuyerRegistrations.delete(normEmail);
-  }
-}
-
 /**
  * Resolves the registered buyer's default delivery location (city, state, pincode)
  * dynamically from the validated buyer account or linked organization profile.
@@ -2093,28 +1995,6 @@ async function processMessage(rawSource, config = resolveConfig()) {
             rfqNumber: ack.rfqNumber,
             rfqTitle: ack.rfqTitle,
           });
-      if (authorisation.isAutoRegistered && authorisation.tempPassword) {
-        try {
-          await mailerService.sendBuyerOnboardingWithRfqEmail({
-            to: message.fromAddress,
-            buyerName: buyerDisplayName(authorisation.buyerAccount, message),
-            tempPassword: authorisation.tempPassword,
-            rfqNumber: created.rfqNumber,
-            rfqTitle: created.title,
-            deliveryDate: created.targetDeliveryDate,
-          });
-        } catch (onboardErr) {
-          logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');
-        }
-      } else {
-        const ack = {
-          to: message.fromAddress,
-          buyerName: buyerDisplayName(authorisation.buyerAccount, message),
-          rfqNumber: created.rfqNumber,
-          rfqTitle: created.title,
-        };
-        try {
-          await mailerService.sendRfqAcknowledgementEmail(ack);
         } catch (ackErr) {
           logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
           await queueAcknowledgement(groupKey || created.id, ack);
