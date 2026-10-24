@@ -609,7 +609,17 @@ const VALIDATION_SCHEMAS = {
   vendorPresenceQuery: {
     identifiers: { type: 'string', required: false, maxLength: 2000 },
   },
+
+  transactionalEmailPreview: {
+    templateId: { type: 'string', required: true, minLength: 1, maxLength: 100, message: 'Template ID or number is required.' },
+  },
+
+  transactionalEmailSend: {
+    templateId: { type: 'string', required: true, minLength: 1, maxLength: 100, message: 'Template ID or number is required.' },
+    recipientEmail: { type: 'string', required: true, pattern: EMAIL_REGEX, message: 'A valid recipient email is required.' },
+  },
 };
+
 
 
 /**

@@ -223,9 +223,15 @@ function generateVendorOnboardingEmail(vendor, isExisting = false, tempPassword 
   };
 }
 
+const transactionalEmailTemplates = require('./transactionalEmailTemplates');
+
 module.exports = {
   getPublicFrontendUrl,
   getLogoUrl,
   generateStandardRFQEmail,
   generateVendorOnboardingEmail,
+  transactionalEmailTemplates,
+  renderTransactionalEmail: transactionalEmailTemplates.renderTransactionalEmail,
+  sendTransactionalEmail: transactionalEmailTemplates.sendTransactionalEmail,
 };
+
