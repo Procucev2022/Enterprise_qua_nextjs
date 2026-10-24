@@ -177,8 +177,11 @@ function toD1Sql(text) {
  * times, matching what toD1Sql's expansion actually needs.
  */
 function expandD1Params(text, params = []) {
+  const matches = text.match(/\$(\d+)/g);
+  if (!matches || matches.length === 0) {
+    return Array.isArray(params) ? params : [];
+  }
   const expanded = [];
-  const matches = text.match(/\$(\d+)/g) || [];
   for (const match of matches) {
     const index = Number(match.slice(1)) - 1;
     expanded.push(params[index]);

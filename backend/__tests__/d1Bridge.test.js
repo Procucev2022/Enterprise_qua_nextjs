@@ -144,6 +144,21 @@ describe('d1Bridge', () => {
 
       expect(result).toEqual({ rows: [], rowCount: 1 });
     });
+
+    it('binds params directly when query already uses ? placeholders', async () => {
+      const all = jest.fn().mockResolvedValue({ results: [{ id: 1 }] });
+      const bind = jest.fn().mockReturnValue({ all });
+      const prepare = jest.fn().mockReturnValue({ bind });
+      const db = { prepare };
+
+      const { queryD1, expandD1Params } = require('../src/db/d1Bridge');
+      expect(expandD1Params('select * from t where id = ?', ['abc'])).toEqual(['abc']);
+
+      const result = await queryD1(db, 'select * from t where id = ?', ['abc']);
+      expect(prepare).toHaveBeenCalledWith('select * from t where id = ?');
+      expect(bind).toHaveBeenCalledWith('abc');
+      expect(result).toEqual({ rows: [{ id: 1 }] });
+    });
   });
 
   describe('getD1HttpClient', () => {

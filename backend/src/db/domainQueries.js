@@ -30,7 +30,7 @@ async function getVendorsFromDB(limit = null) {
     {
       d1: true,
       d1Text: hasLimit
-        ? 'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC LIMIT ?'
+        ? 'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC LIMIT $1'
         : 'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC LIMIT 1000',
       useCache: true,
       tag: 'vendors',
@@ -855,7 +855,7 @@ async function getEvaluationsFromDB(limit = null) {
     params,
     {
       d1: true,
-      d1Text: hasLimit ? 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT ?' : 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT 1000',
+      d1Text: hasLimit ? 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT $1' : 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT 1000',
       useCache: true,
       tag: 'evaluations',
       ttlMs: 60000,
@@ -913,7 +913,7 @@ async function getVendorCatalogueFromDB(limit = null) {
     params,
     {
       d1: true,
-      d1Text: hasLimit ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT ?' : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT 1000',
+      d1Text: hasLimit ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT $1' : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT 1000',
       useCache: true,
       tag: 'catalogue',
       ttlMs: 60000,
@@ -987,7 +987,7 @@ async function getBuyerAccountsFromDB(limit = null) {
     params,
     {
       d1: true,
-      d1Text: hasLimit ? 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT ?' : 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT 1000',
+      d1Text: hasLimit ? 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT $1' : 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT 1000',
       useCache: true,
       tag: 'buyer_accounts',
       ttlMs: 60000,
@@ -1311,7 +1311,7 @@ async function getPaymentLinksFromDB(limit = null) {
     params,
     {
       d1: true,
-      d1Text: hasLimit ? 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT ?' : 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT 1000',
+      d1Text: hasLimit ? 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT $1' : 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT 1000',
       useCache: true,
       tag: 'payment_links',
       ttlMs: 60000,
@@ -1330,8 +1330,8 @@ async function getPaymentLinksByVendorFromDB(vendorId, limit = 50) {
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? 'SELECT raw FROM payment_links WHERE vendor_id = ? ORDER BY created_at DESC LIMIT ?'
-      : 'SELECT raw FROM payment_links WHERE vendor_id = ? ORDER BY created_at DESC LIMIT 1000',
+      ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2'
+      : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000',
     useCache: true,
     tag: 'payment_links',
     ttlMs: 60000,
@@ -1349,8 +1349,8 @@ async function getPaymentLinksByBuyerFromDB(buyerAccountId, limit = 50) {
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? 'SELECT raw FROM payment_links WHERE buyer_account_id = ? ORDER BY created_at DESC LIMIT ?'
-      : 'SELECT raw FROM payment_links WHERE buyer_account_id = ? ORDER BY created_at DESC LIMIT 1000',
+      ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT $2'
+      : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT 1000',
     useCache: true,
     tag: 'payment_links',
     ttlMs: 60000,
@@ -1365,7 +1365,7 @@ async function getPaymentLinkByIdFromDB(id) {
     [id],
     {
       d1: true,
-      d1Text: 'SELECT raw FROM payment_links WHERE id = ? LIMIT 1',
+      d1Text: 'SELECT raw FROM payment_links WHERE id = $1 LIMIT 1',
       useCache: true,
       tag: 'payment_links',
       ttlMs: 60000,
@@ -1381,7 +1381,7 @@ async function getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId) {
     [zohoPaymentLinkId],
     {
       d1: true,
-      d1Text: 'SELECT raw FROM payment_links WHERE zoho_payment_link_id = ? LIMIT 1',
+      d1Text: 'SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1 LIMIT 1',
       useCache: true,
       tag: 'payment_links',
       ttlMs: 60000,
@@ -1494,7 +1494,7 @@ async function getPendingChaserJobsFromDB(limit = 100) {
       d1Text: hasLimit
         ? `SELECT id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
             vendor_email, vendor_contact_person, rfq_title, channel, fire_at
-     FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC LIMIT ?`
+     FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC LIMIT $1`
         : `SELECT id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
             vendor_email, vendor_contact_person, rfq_title, channel, fire_at
      FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC LIMIT 1000`,
@@ -1560,7 +1560,7 @@ async function getRFQUnlockFromDB(vendorId, rfqId) {
     [vendorId, rfqId],
     {
       d1: true,
-      d1Text: 'SELECT * FROM rfq_unlocks WHERE vendor_id = ? AND rfq_id = ? LIMIT 1',
+      d1Text: 'SELECT * FROM rfq_unlocks WHERE vendor_id = $1 AND rfq_id = $2 LIMIT 1',
       useCache: true,
       tag: 'vendor_credits',
       ttlMs: 60000,
@@ -1579,8 +1579,8 @@ async function getVendorUnlocksFromDB(vendorId, limit = 50) {
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? `SELECT * FROM rfq_unlocks WHERE vendor_id = ? ORDER BY unlocked_at DESC LIMIT ?`
-      : `SELECT * FROM rfq_unlocks WHERE vendor_id = ? ORDER BY unlocked_at DESC LIMIT 1000`,
+      ? `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 ORDER BY unlocked_at DESC LIMIT $2`
+      : `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 ORDER BY unlocked_at DESC LIMIT 1000`,
     useCache: true,
     tag: 'vendor_credits',
     ttlMs: 60000,
@@ -1618,8 +1618,8 @@ async function getVendorCreditTransactionsFromDB(vendorId, limit = 50) {
   const result = await pool.query(sql, params, {
     d1: true,
     d1Text: hasLimit
-      ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = ? ORDER BY created_at DESC LIMIT ?`
-      : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = ? ORDER BY created_at DESC LIMIT 1000`,
+      ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
+      : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`,
     useCache: true,
     tag: 'vendor_credits',
     ttlMs: 60000,
