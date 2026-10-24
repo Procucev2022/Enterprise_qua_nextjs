@@ -169,9 +169,10 @@ function buildEmail1_RfqCreatedAccountAutoCreated(params = {}) {
   const rfqId = params.rfq_id || 'RFQ-2026';
   const rfqTitle = params.rfq_title || 'Procurement Requirement';
   const email = params.email || 'buyer@example.com';
+  const mobileNumber = params.mobile_number || params.mobileNumber || '9999999999';
   const tempPassword = params.temp_password || 'QuaAI#2026Auto';
   const loginUrl = params.login_url || `${getPublicFrontendUrl()}/login`;
-  const reviewUrl = params.review_url || loginUrl;
+  const reviewUrl = params.review_url || `${loginUrl}?redirect=/buyer/rfq-summary`;
 
   const subject = `Congratulations, your RFQ ${rfqId} is live on Qua AI`;
 
@@ -183,6 +184,7 @@ To save you time, we created a free Qua AI account for you with this email addre
 
 Your login details
 Login ID: ${email}
+Registered Mobile: ${mobileNumber}
 Temporary password: ${tempPassword} (valid for 48 hours)
 Login page: ${loginUrl}
 
@@ -220,6 +222,10 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
         <tr>
           <td style="padding: 6px 0; color: #64748b; width: 38%; font-weight: 600;">Login ID:</td>
           <td style="padding: 6px 0; color: #0f172a; font-family: monospace;">${escapeHtml(email)}</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Registered Mobile:</td>
+          <td style="padding: 6px 0; color: #0f172a; font-family: monospace; font-weight: 700;">${escapeHtml(mobileNumber)}</td>
         </tr>
         <tr>
           <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Temporary password:</td>
@@ -281,7 +287,7 @@ function buildEmail2_RfqCreated(params = {}) {
   const quoteDeadline = params.quote_deadline || 'Within 72 hours';
   const suppliersInvited = params.suppliers_invited !== undefined ? params.suppliers_invited : 5;
   const items = Array.isArray(params.items) ? params.items : [];
-  const rfqSummaryUrl = params.rfq_summary_url || `${getPublicFrontendUrl()}/buyer/rfqs`;
+  const rfqSummaryUrl = params.rfq_summary_url || `${getPublicFrontendUrl()}/buyer/rfq-summary`;
 
   const subject = `Congratulations, RFQ ${rfqId} is live. Qua AI is on it`;
 
@@ -644,7 +650,7 @@ function buildEmail5_QuotationsReadyToCompare(params = {}) {
   const rfqTitle = params.rfq_title || 'Procurement Requirement';
   const lowestPrice = params.lowest_price || '₹1,25,000';
   const fastestDelivery = params.fastest_delivery || '4 days';
-  const compareUrl = params.compare_url || `${getPublicFrontendUrl()}/buyer/rfqs/${encodeURIComponent(rfqId)}/comparison`;
+  const compareUrl = params.compare_url || `${getPublicFrontendUrl()}/buyer/rfq-summary`;
 
   const subject = `${quoteCount} quotes in for RFQ ${rfqId}: compare now`;
 
@@ -714,7 +720,7 @@ function buildEmail6_ActivateYourAccount(params = {}) {
   const firstName = resolveSalutation(params.first_name, 'there');
   const rfqId = params.rfq_id || 'RFQ-2026';
   const rfqTitle = params.rfq_title || 'your requirement';
-  const reviewUrl = params.review_url || `${getPublicFrontendUrl()}/login`;
+  const reviewUrl = params.review_url || `${getPublicFrontendUrl()}/login?redirect=/buyer/rfq-summary`;
 
   const subject = `Suppliers are waiting on RFQ ${rfqId}`;
 
@@ -772,7 +778,7 @@ function buildEmail7_RfqNeedsMoreInformation(params = {}) {
   const missingFields = Array.isArray(params.missing_fields) && params.missing_fields.length > 0
     ? params.missing_fields
     : [params.missing_field_1 || 'Line item quantity specification', params.missing_field_2 || 'Delivery pincode or site location'].filter(Boolean);
-  const addDetailsUrl = params.add_details_url || `${getPublicFrontendUrl()}/buyer/rfqs/${encodeURIComponent(rfqId)}/edit`;
+  const addDetailsUrl = params.add_details_url || `${getPublicFrontendUrl()}/buyer/rfq-summary`;
 
   const subject = `One detail needed to send RFQ ${rfqId} to suppliers`;
 
@@ -838,7 +844,7 @@ function buildEmail8_NoQuotesYet(params = {}) {
   const firstName = resolveSalutation(params.first_name, 'there');
   const rfqId = params.rfq_id || 'RFQ-2026';
   const rfqTitle = params.rfq_title || 'your RFQ';
-  const extendUrl = params.extend_url || `${getPublicFrontendUrl()}/buyer/rfqs/${encodeURIComponent(rfqId)}/extend`;
+  const extendUrl = params.extend_url || `${getPublicFrontendUrl()}/buyer/rfq-summary`;
 
   const subject = `RFQ ${rfqId}: let's get you more quotes`;
 

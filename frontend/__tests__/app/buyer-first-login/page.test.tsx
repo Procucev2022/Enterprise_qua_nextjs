@@ -23,8 +23,10 @@ jest.mock('@/lib/validationSchemas', () => {
 });
 
 const mockReplace = jest.fn();
+let mockSearchParams = new URLSearchParams();
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ replace: mockReplace }),
+  useSearchParams: () => mockSearchParams,
 }));
 
 const mockSetCurrentUserSession = jest.fn();
@@ -42,6 +44,7 @@ let mockCurrentUserSession: Record<string, unknown> | null = {
 
 describe('BuyerFirstLoginPage', () => {
   beforeEach(() => {
+    mockSearchParams = new URLSearchParams();
     mockCurrentUserSession = {
       email: 'buyer@example.com',
       name: 'Buyer Admin',
@@ -639,6 +642,32 @@ describe('BuyerFirstLoginPage', () => {
           'success'
         );
         expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
+      });
+    });
+
+    it('redirects to redirect param upon completing onboarding when redirect param is present', async () => {
+      mockSearchParams = new URLSearchParams('redirect=/buyer/rfq-summary');
+      const updatedUser = {
+        email: 'buyer@example.com',
+        role: 'buyer',
+        onboardingRequired: false,
+        passwordChangeRequired: false,
+        name: 'John Buyer',
+        orgName: 'Acme Global Ltd',
+      };
+      (authClient.completeBuyerOnboarding as jest.Mock).mockResolvedValue({
+        success: true,
+        user: updatedUser,
+        token: 'new-jwt-token',
+      });
+
+      render(<BuyerFirstLoginPage />);
+      fillValidForm();
+
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.submitBtn }));
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith('/buyer/rfq-summary');
       });
     });
 

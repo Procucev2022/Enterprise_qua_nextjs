@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useEffect, useState, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ShieldCheck,
   Mail,
@@ -28,8 +28,28 @@ import {
 } from '@/lib/validationSchemas';
 import { UI_STRINGS } from '@/lib/uiStrings';
 
-export default function BuyerFirstLoginPage() {
+function sanitizeRedirect(url: string | null | undefined): string {
+  if (!url || typeof url !== 'string' || !url.startsWith('/')) return '';
+  if (url === '/buyer/rfqs' || url.startsWith('/buyer/rfqs?')) {
+    return url.replace('/buyer/rfqs', '/buyer/rfq-summary');
+  }
+  return url;
+}
+
+function BuyerFirstLoginContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const hookRedirect = searchParams?.get('redirect') || searchParams?.get('returnUrl');
+  let windowRedirect: string | null = null;
+  if (typeof window !== 'undefined' && window.location?.search) {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      windowRedirect = sp.get('redirect') || sp.get('returnUrl');
+    } catch {
+      windowRedirect = null;
+    }
+  }
+  const redirectParam = sanitizeRedirect(hookRedirect || windowRedirect);
   const { currentUserSession, setCurrentUserSession, setIsLoggedIn, showToast } = useApp();
 
   const [emailOtp, setEmailOtp] = useState('');
@@ -61,14 +81,14 @@ export default function BuyerFirstLoginPage() {
 
   useEffect(() => {
     if (!currentUserSession) {
-      router.replace('/login');
+      router.replace(redirectParam ? `/login?redirect=${encodeURIComponent(redirectParam)}` : '/login');
     } else if (
       currentUserSession.role !== 'buyer' ||
       (!currentUserSession.onboardingRequired && !currentUserSession.passwordChangeRequired)
     ) {
-      router.replace(ROLE_LANDING_ROUTE.buyer);
+      router.replace(redirectParam || ROLE_LANDING_ROUTE.buyer);
     }
-  }, [currentUserSession, router]);
+  }, [currentUserSession, router, redirectParam]);
 
   useEffect(() => {
     return () => {
@@ -286,7 +306,7 @@ export default function BuyerFirstLoginPage() {
         UI_STRINGS.auth.buyerOnboarding.successMessage,
         'success'
       );
-      router.replace(ROLE_LANDING_ROUTE.buyer);
+      router.replace(redirectParam || ROLE_LANDING_ROUTE.buyer);
     } catch {
       setError('An error occurred during verification. Please try again.');
     } finally {
@@ -629,5 +649,13 @@ export default function BuyerFirstLoginPage() {
         </button>
       </form>
     </div>
+  );
+}
+
+export default function BuyerFirstLoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <BuyerFirstLoginContent />
+    </Suspense>
   );
 }

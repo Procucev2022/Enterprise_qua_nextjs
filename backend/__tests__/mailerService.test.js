@@ -1308,6 +1308,7 @@ describe('mailerService', () => {
       expect(email.text).toContain('Hi Ramesh,');
       expect(email.text).toContain('RFQ: RFQ262410215084 : Centrifugal Pumps');
       expect(email.text).toContain('Login ID: newbuyer@example.com');
+      expect(email.text).toContain('Registered Mobile: 9999999999');
       expect(email.text).toContain('Temporary password: TempPassword123 (valid for 48 hours)');
       expect(email.text).toContain('Three quick steps to finish');
       expect(email.text).toContain('Log in & review my RFQ');
@@ -1317,6 +1318,9 @@ describe('mailerService', () => {
       expect(email.text).toContain('Procucev Enterprise Solutions');
       expect(email.html).toContain('Hi <strong>Ramesh</strong>,');
       expect(email.html).toContain('TempPassword123');
+      expect(email.html).toContain('Registered Mobile:');
+      expect(email.html).toContain('9999999999');
+      expect(email.html).toContain('/login?redirect=/buyer/rfq-summary');
     });
 
     test('sendRfqAcknowledgementEmail delivers in test environment and dev with mocked transport', async () => {

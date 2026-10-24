@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useEffect, useState, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useApp, clearSessionCache } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { OTP_CODE_LENGTH, OTP_EXPIRY_MINUTES, ROLE_LANDING_ROUTE } from '@/lib/constants';
@@ -40,8 +40,28 @@ import {
 const AUTH = UI_STRINGS.auth;
 const MIN_PASSWORD_LENGTH = 8;
 
-export default function LoginPage() {
+function sanitizeRedirect(url: string | null | undefined): string {
+  if (!url || typeof url !== 'string' || !url.startsWith('/')) return '';
+  if (url === '/buyer/rfqs' || url.startsWith('/buyer/rfqs?')) {
+    return url.replace('/buyer/rfqs', '/buyer/rfq-summary');
+  }
+  return url;
+}
+
+function LoginPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const hookRedirect = searchParams?.get('redirect') || searchParams?.get('returnUrl');
+  let windowRedirect: string | null = null;
+  if (typeof window !== 'undefined' && window.location?.search) {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      windowRedirect = sp.get('redirect') || sp.get('returnUrl');
+    } catch {
+      windowRedirect = null;
+    }
+  }
+  const redirectParam = sanitizeRedirect(hookRedirect || windowRedirect);
   const {
     isLoggedIn,
     currentRole,
@@ -148,15 +168,20 @@ export default function LoginPage() {
   // Someone already signed in should not sit on the sign-in screen.
   useEffect(() => {
     if (isLoggedIn) {
+      const targetRoute =
+        redirectParam && redirectParam.startsWith('/')
+          ? redirectParam
+          : ROLE_LANDING_ROUTE[currentRole] || ROLE_LANDING_ROUTE.buyer;
+
       const destination =
         currentUserSession?.role === 'vendor' && currentUserSession.passwordChangeRequired
-          ? '/vendor-first-login'
+          ? (redirectParam ? `/vendor-first-login?redirect=${encodeURIComponent(targetRoute)}` : '/vendor-first-login')
           : currentUserSession?.role === 'buyer' && (currentUserSession.passwordChangeRequired || currentUserSession.onboardingRequired)
-          ? '/buyer-first-login'
-          : ROLE_LANDING_ROUTE[currentRole] || ROLE_LANDING_ROUTE.buyer;
+          ? (redirectParam ? `/buyer-first-login?redirect=${encodeURIComponent(targetRoute)}` : '/buyer-first-login')
+          : targetRoute;
       router.replace(destination);
     }
-  }, [isLoggedIn, currentRole, currentUserSession, router]);
+  }, [isLoggedIn, currentRole, currentUserSession, router, redirectParam]);
 
   /**
    * Commit a verified session and route to the landing screen for its role.
@@ -179,12 +204,17 @@ export default function LoginPage() {
       }),
       'success'
     );
+    const targetRoute =
+      redirectParam && redirectParam.startsWith('/')
+        ? redirectParam
+        : ROLE_LANDING_ROUTE[user.role] || ROLE_LANDING_ROUTE.buyer;
+
     router.replace(
       user.role === 'vendor' && user.passwordChangeRequired
-        ? '/vendor-first-login'
+        ? (redirectParam ? `/vendor-first-login?redirect=${encodeURIComponent(targetRoute)}` : '/vendor-first-login')
         : user.role === 'buyer' && (user.passwordChangeRequired || user.onboardingRequired)
-        ? '/buyer-first-login'
-        : ROLE_LANDING_ROUTE[user.role] || ROLE_LANDING_ROUTE.buyer
+        ? (redirectParam ? `/buyer-first-login?redirect=${encodeURIComponent(targetRoute)}` : '/buyer-first-login')
+        : targetRoute
     );
   };
 
@@ -218,7 +248,7 @@ export default function LoginPage() {
     try {
       const response = await authClient.loginWithPassword(email.toLowerCase(), loginPassword, mobile);
       if (response.success && response.user) {
-        if (response.user.role === 'buyer' && !initialSetupCompleted) {
+        if (response.user.role === 'buyer' && !initialSetupCompleted && !redirectParam) {
           setInitialSetupModalOpen(true);
         }
         establishSession(response.user);
@@ -325,7 +355,7 @@ export default function LoginPage() {
         mobile
       );
       if (response.success && response.user) {
-        if (response.user.role === 'buyer' && !initialSetupCompleted) {
+        if (response.user.role === 'buyer' && !initialSetupCompleted && !redirectParam) {
           setInitialSetupModalOpen(true);
         }
         establishSession(response.user);
@@ -1160,5 +1190,13 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageContent />
+    </Suspense>
   );
 }

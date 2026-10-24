@@ -257,7 +257,7 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
 
   const frontendUrl = getPublicFrontendUrl();
   const logoUrl = getLogoUrl();
-  const reviewUrl = `${frontendUrl}/buyer/rfqs?rfq=${encodeURIComponent(safeRfq.rfqNumber || '')}`;
+  const reviewUrl = `${frontendUrl}/buyer/rfq-summary`;
 
   return {
     from: fromAddress(),
@@ -1248,7 +1248,7 @@ function buildQuoteReceivedEmail(to, { rfq = {}, quote = {}, recipientName }) {
 
   const frontendUrl = getPublicFrontendUrl();
   const matrixUrl = `${frontendUrl}/buyer/quote-matrix?rfq=${encodeURIComponent(rfq.rfqNumber || rfq.id || '')}`;
-  const rfqDetailsUrl = `${frontendUrl}/buyer/rfqs?rfq=${encodeURIComponent(rfq.rfqNumber || rfq.id || '')}`;
+  const rfqDetailsUrl = `${frontendUrl}/buyer/rfq-details?rfq=${encodeURIComponent(rfq.rfqNumber || rfq.id || '')}`;
 
   let attachmentsHtml = '';
   if (Array.isArray(quote.attachments) && quote.attachments.length > 0) {
@@ -1985,13 +1985,14 @@ function buildBuyerOnboardingWithRfqEmail({
   const formattedRfq = cleanNumber ? cleanNumber : 'RFQ';
 
   const portalSignInUrl = loginUrl || buyerPortalUrl();
-  const rfqReviewUrl = reviewUrl || `${buyerPortalUrl()}/buyer/rfqs`;
+  const rfqReviewUrl = reviewUrl || `${getPublicFrontendUrl()}/login?redirect=/buyer/rfq-summary`;
 
   const rendered = buildEmail1_RfqCreatedAccountAutoCreated({
     first_name: buyerName,
     rfq_id: formattedRfq,
     rfq_title: rfqTitle || 'Procurement Requirement',
     email: to,
+    mobile_number: mobileNumber || '9999999999',
     temp_password: tempPassword || 'QuaAI#2026Auto',
     login_url: portalSignInUrl,
     review_url: rfqReviewUrl,
@@ -2221,7 +2222,7 @@ function buildRfqAcknowledgementEmail(params = {}) {
     quote_deadline: quoteDeadline || deadline || 'Within 72 hours',
     suppliers_invited: suppliersInvited !== undefined ? suppliersInvited : 5,
     items: normalizedItems,
-    rfq_summary_url: rfqSummaryUrl || `${buyerPortalUrl()}/buyer/rfqs`,
+    rfq_summary_url: rfqSummaryUrl || `${getPublicFrontendUrl()}/buyer/rfq-summary`,
   });
 
   return {

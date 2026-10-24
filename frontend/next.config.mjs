@@ -74,6 +74,25 @@ const nextConfig = {
       static: 0,
     },
   },
+  async redirects() {
+    return [
+      {
+        source: '/login/buyer/rfqs',
+        destination: '/login?redirect=/buyer/rfq-summary',
+        permanent: false,
+      },
+      {
+        source: '/login/buyer/rfq-summary',
+        destination: '/login?redirect=/buyer/rfq-summary',
+        permanent: false,
+      },
+      {
+        source: '/buyer/rfqs',
+        destination: '/buyer/rfq-summary',
+        permanent: false,
+      },
+    ];
+  },
   async rewrites() {
     return [
       {
