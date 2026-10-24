@@ -209,11 +209,25 @@ async function findExistingUsernames(emails = []) {
  */
 async function findUserByEmailAndPhone(email, phone) {
   if (!email || !phone) return null;
-  const result = await pool.rows(
+  const normalizedPhone = normalizePhone(phone);
+  let result = await pool.rows(
     `${USER_SELECT} where lower(u.username) = $1 and u.phone = $2 order by u.is_active desc, u.created_ts desc limit 1`,
-    [String(email).trim().toLowerCase(), normalizePhone(phone)],
+    [String(email).trim().toLowerCase(), normalizedPhone],
     { d1: true }
   );
+
+  // If not found with submitted phone, check if the user is an auto-registered buyer with placeholder phone
+  if (!result || result.length === 0) {
+    const placeholderPhone = normalizePhone('9999999999');
+    if (normalizedPhone === placeholderPhone) {
+      result = await pool.rows(
+        `${USER_SELECT} where lower(u.username) = $1 and (u.phone = $2 or u.phone = '9999999999') order by u.is_active desc, u.created_ts desc limit 1`,
+        [String(email).trim().toLowerCase(), placeholderPhone],
+        { d1: true }
+      );
+    }
+  }
+
   return mapRowToUser(result[0]);
 }
 
@@ -320,6 +334,8 @@ async function insertBuyerAccount({
   gstin = '',
   pan = '',
   createdBy = 'enterprise-workspace',
+  resetPasswordRequired = false,
+  verificationStatus = IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
 }) {
   if (!pool.hasStorage()) {
     throw new Error(pool.NOT_CONFIGURED_MESSAGE);
@@ -340,7 +356,7 @@ async function insertBuyerAccount({
   const taxGstin = (gstin || '').trim().toUpperCase();
   const taxPan = (pan || (taxGstin.length === 15 ? taxGstin.slice(2, 12) : '')).trim().toUpperCase();
 
-  const existing = await findUserByEmailAndPhone(normalizedEmail, normalizedPhone);
+  const existing = (await findUserByEmail(normalizedEmail)) || (await findUserByEmailAndPhone(normalizedEmail, normalizedPhone));
   if (existing) {
     return { created: false, reason: 'ALREADY_EXISTS', user: existing };
   }
@@ -439,11 +455,11 @@ async function insertBuyerAccount({
       `insert into "user"
          (uuid, username, email, password, full_name, first_name, phone,
           organization_name, org_uuid, role_uuid,
-          is_active, is_approved, self_client,
+          is_active, is_approved, self_client, reset_password,
           verification_status, created_ts, last_modified_ts)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-               1, 1, 0,
-               $11, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+               1, 1, 0, $11,
+               $12, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
       [
         userUuid,
         normalizedEmail,
@@ -455,7 +471,8 @@ async function insertBuyerAccount({
         orgName,
         orgUuid,
         roleUuid,
-        IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
+        resetPasswordRequired ? 1 : 0,
+        verificationStatus,
       ],
       { d1: true }
     );
@@ -471,6 +488,8 @@ async function insertBuyerAccount({
         orgName,
         mobile: normalizedPhone,
         status: 'ACTIVE',
+        resetPasswordRequired: Boolean(resetPasswordRequired),
+        verificationStatus,
       },
       organizationReused,
     };
@@ -557,8 +576,8 @@ async function insertBuyerAccount({
           source_type, verification_status, created_by, created_ts,
           last_modified_by, last_modified_ts)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-               true, false, true, false, true, false, false,
-               $12, $13, $14, now(), $15, now())`,
+               true, false, true, $12, true, false, false,
+               $13, $14, $15, now(), $16, now())`,
       [
         userUuid,
         normalizedEmail,
@@ -571,8 +590,9 @@ async function insertBuyerAccount({
         roleUuid,
         statusUuid,
         buildUniqueId(),
+        Boolean(resetPasswordRequired),
         IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
-        IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
+        verificationStatus,
         createdBy,
         createdBy,
       ]
@@ -589,6 +609,8 @@ async function insertBuyerAccount({
         orgName,
         mobile: normalizedPhone,
         status: 'ACTIVE',
+        resetPasswordRequired: Boolean(resetPasswordRequired),
+        verificationStatus,
       },
       organizationReused,
     };
@@ -1079,6 +1101,29 @@ async function updateUserPasswordByUuid(userUuid, newPassword, actorEmail) {
   return (result.rowCount || 0) > 0;
 }
 
+/**
+ * Update an account after completing buyer onboarding (phone + password + verification status).
+ */
+async function updateBuyerOnboardingStatus({
+  userUuid,
+  newPhone,
+  newPassword,
+  verificationStatus = 'EMAIL_VERIFIED',
+  actorEmail = 'buyer-onboarding',
+}) {
+  const normPhone = normalizePhone(newPhone);
+  const result = await pool.query(
+    'update "user" set phone = $1, password = $2, reset_password = false, verification_status = $3, last_modified_by = $4, last_modified_ts = now() where uuid = $5',
+    [normPhone, newPassword, verificationStatus, actorEmail, String(userUuid)],
+    {
+      d1: true,
+      d1Text:
+        'update "user" set phone = $1, password = $2, reset_password = 0, verification_status = $3, last_modified_by = $4, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where uuid = $5',
+    }
+  );
+  return (result.rowCount || 0) > 0;
+}
+
 module.exports = {
   normalizePhone,
   mapRoleName,
@@ -1097,6 +1142,7 @@ module.exports = {
   insertStaffAccount,
   updateUserPassword,
   updateUserPasswordByUuid,
+  updateBuyerOnboardingStatus,
   MASTER_TABLES,
   USER_SELECT,
 };

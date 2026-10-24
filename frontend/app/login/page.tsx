@@ -151,6 +151,8 @@ export default function LoginPage() {
       const destination =
         currentUserSession?.role === 'vendor' && currentUserSession.passwordChangeRequired
           ? '/vendor-first-login'
+          : currentUserSession?.role === 'buyer' && (currentUserSession.passwordChangeRequired || currentUserSession.onboardingRequired)
+          ? '/buyer-first-login'
           : ROLE_LANDING_ROUTE[currentRole] || ROLE_LANDING_ROUTE.buyer;
       router.replace(destination);
     }
@@ -180,6 +182,8 @@ export default function LoginPage() {
     router.replace(
       user.role === 'vendor' && user.passwordChangeRequired
         ? '/vendor-first-login'
+        : user.role === 'buyer' && (user.passwordChangeRequired || user.onboardingRequired)
+        ? '/buyer-first-login'
         : ROLE_LANDING_ROUTE[user.role] || ROLE_LANDING_ROUTE.buyer
     );
   };

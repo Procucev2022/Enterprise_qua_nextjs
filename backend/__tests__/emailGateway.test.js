@@ -369,7 +369,7 @@ describe('emailGatewayService.processMessage', () => {
     storeService.getBuyerAccountByEmail.mockReturnValue(null);
     const extract = mockExtraction();
 
-    const result = await emailGatewayService.processMessage(raw(), config());
+    const result = await emailGatewayService.processMessage(raw(), emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_AUTO_REGISTER: 'false' }));
 
     expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
     // Quota is not spent on a message that was never going to be accepted.
@@ -436,7 +436,7 @@ describe('emailGatewayService.processMessage', () => {
   test('catches errors gracefully if unauthorized buyer notification email fails to send', async () => {
     storeService.getBuyerAccountByEmail.mockReturnValue(null);
     jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockRejectedValueOnce(new Error('SMTP down'));
-    const result = await emailGatewayService.processMessage(raw(), config());
+    const result = await emailGatewayService.processMessage(raw(), emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_AUTO_REGISTER: 'false' }));
     expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
   });
 
@@ -1244,14 +1244,14 @@ describe('emailGatewayService.processLineItemsAndGroups', () => {
 
   test('splits items with different delivery dates into separate groups', () => {
     const rawItems = [
-      { itemName: 'Item 1', targetDate: '2026-10-01', deliveryCity: 'Bangalore' },
-      { itemName: 'Item 2', targetDate: '2026-10-05', deliveryCity: 'Bangalore' },
+      { itemName: 'Item 1', targetDate: '2028-10-01', deliveryCity: 'Bangalore' },
+      { itemName: 'Item 2', targetDate: '2028-10-05', deliveryCity: 'Bangalore' },
     ];
     const groups = emailGatewayService.processLineItemsAndGroups(rawItems, {}, buyerLoc);
 
     expect(groups).toHaveLength(2);
-    expect(groups[0].targetDate).toBe('2026-10-01');
-    expect(groups[1].targetDate).toBe('2026-10-05');
+    expect(groups[0].targetDate).toBe('2028-10-01');
+    expect(groups[1].targetDate).toBe('2028-10-05');
   });
 
   test('splits items with different delivery locations into separate groups', () => {
@@ -1299,7 +1299,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
           itemName: 'Industrial Pump',
           quantity: 2,
           unit: 'Nos',
-          targetDate: '2026-10-15',
+          targetDate: '2028-10-15',
           deliveryCity: 'Mumbai',
           deliveryState: 'Maharashtra',
           deliveryPincode: '400001',
@@ -1312,7 +1312,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(createSpy).toHaveBeenCalledTimes(1);
     const [payload] = createSpy.mock.calls[0];
-    expect(payload.targetDeliveryDate).toBe('2026-10-15');
+    expect(payload.targetDeliveryDate).toBe('2028-10-15');
     expect(payload.deliveryCity).toBe('Mumbai');
     expect(payload.deliveryState).toBe('Maharashtra');
     expect(payload.deliveryPincode).toBe('400001');
@@ -1356,7 +1356,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
           itemName: 'Industrial Pump',
           quantity: 2,
           unit: 'Nos',
-          targetDate: '2026-10-20',
+          targetDate: '2028-10-20',
           deliveryCity: '',
           deliveryState: '',
           deliveryPincode: '',
@@ -1369,7 +1369,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(createSpy).toHaveBeenCalledTimes(1);
     const [payload] = createSpy.mock.calls[0];
-    expect(payload.targetDeliveryDate).toBe('2026-10-20');
+    expect(payload.targetDeliveryDate).toBe('2028-10-20');
     expect(payload.deliveryCity).toBe('Bangalore');
     expect(payload.deliveryState).toBe('Karnataka');
     expect(payload.deliveryPincode).toBe('560001');
@@ -1464,8 +1464,8 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
       status: geminiService.EXTRACTION_STATUS.SUCCESS,
       lineItems: [
-        { itemName: 'Laptop Batch A', quantity: 10, unit: 'Nos', targetDate: '2026-09-21', deliveryCity: 'Bangalore' },
-        { itemName: 'Printer Batch B', quantity: 5, unit: 'Nos', targetDate: '2026-09-25', deliveryCity: 'Bangalore' },
+        { itemName: 'Laptop Batch A', quantity: 10, unit: 'Nos', targetDate: '2028-09-21', deliveryCity: 'Bangalore' },
+        { itemName: 'Printer Batch B', quantity: 5, unit: 'Nos', targetDate: '2028-09-25', deliveryCity: 'Bangalore' },
       ],
     });
 
@@ -1474,8 +1474,8 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(createSpy).toHaveBeenCalledTimes(2);
     expect(result.rfqs).toHaveLength(2);
-    expect(result.rfqs[0].targetDeliveryDate || createSpy.mock.calls[0][0].targetDeliveryDate).toBe('2026-09-21');
-    expect(result.rfqs[1].targetDeliveryDate || createSpy.mock.calls[1][0].targetDeliveryDate).toBe('2026-09-25');
+    expect(result.rfqs[0].targetDeliveryDate || createSpy.mock.calls[0][0].targetDeliveryDate).toBe('2028-09-21');
+    expect(result.rfqs[1].targetDeliveryDate || createSpy.mock.calls[1][0].targetDeliveryDate).toBe('2028-09-25');
   });
 
   test('TEST 8: Multiple items + different locations -> grouped into separate RFQs', async () => {
@@ -1555,7 +1555,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     const geminiSpy = jest.spyOn(geminiService, 'extractLineItems');
 
     const unregEml = fixtures.PLAIN_REQUISITION_EML.split(SENDER).join('stranger.buyer@outside.org');
-    const result = await emailGatewayService.processMessage(Buffer.from(unregEml, 'utf8'), config());
+    const result = await emailGatewayService.processMessage(Buffer.from(unregEml, 'utf8'), emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_AUTO_REGISTER: 'false' }));
 
     expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
     expect(mailerSpy).toHaveBeenCalledWith('stranger.buyer@outside.org', expect.anything());
@@ -3316,6 +3316,209 @@ Buyers - Raise unlimited RFQs for free
     expect(outcome.status).not.toBe(INGESTION_OUTCOME.INVALID_RFQ);
     expect(outcome.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(outcome.rfq.rfqNumber).toBe('RFQ-2026-9999');
+  });
+});
+
+describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', () => {
+  const buyerEmailV1 = 'buyer.v1@corp.com';
+  const buyerEmailV3 = 'buyer.v3@corp.com';
+  const buyerEmailV0 = 'buyer.v0@corp.com';
+  const buyerEmailV2 = 'buyer.v2@corp.com';
+  const vendorEmail = 'vendor.quotes@industrial.com';
+
+  const vendorRecord = {
+    id: 'vd-cc-test',
+    name: 'Industrial Spares Co',
+    email: vendorEmail,
+    freeQuotationCredits: 5,
+    quotedRfqIds: [],
+  };
+
+  function createTestRfq(id, rfqNumber, sourcingMode, buyerEmail) {
+    return {
+      id,
+      rfqNumber,
+      title: `Procurement for ${rfqNumber}`,
+      sourcingMode,
+      buyerAccountId: `buyer-${id}`,
+      buyerEmail,
+      corporateEmail: buyerEmail,
+      extractedEntities: [{ itemName: 'Centrifugal Pump', quantity: 2, unit: 'Nos' }],
+      quotes: [],
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // V1 and V3 failure scenarios: Buyer MUST be in CC
+  test('V1 RFQ (mode_1): failed quote email submission sends failure email WITH buyer in CC', async () => {
+    const rfqV1 = createTestRfq('rfq-v1', 'RFQ-V1-FAIL', 'mode_1', buyerEmailV1);
+    jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(buyerEmailV1);
+    jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue(null);
+    const failMailSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ sent: true });
+
+    const message = {
+      fromAddress: vendorEmail,
+      subject: 'Quotation for RFQ-V1-FAIL',
+      bodyText: 'Attached our proposal but extraction fails',
+      messageId: '<v1-fail@industrial.com>',
+    };
+
+    const outcome = await emailGatewayService.processVendorQuoteMessage(message, rfqV1, vendorRecord);
+
+    expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
+    expect(failMailSpy).toHaveBeenCalledTimes(1);
+    const failurePayload = failMailSpy.mock.calls[0][1];
+    expect(failurePayload.cc).toBeDefined();
+    expect(failurePayload.cc).toContain(buyerEmailV1);
+  });
+
+  test('V3 RFQ (mode_3): failed quote email submission sends failure email WITH buyer in CC', async () => {
+    const rfqV3 = createTestRfq('rfq-v3', 'RFQ-V3-FAIL', 'mode_3', buyerEmailV3);
+    jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(buyerEmailV3);
+    jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+      unitPrice: 0,
+      totalPrice: 0,
+    });
+    jest.spyOn(geminiService, 'extractQuotationFallback').mockReturnValue({ unitPrice: 0 });
+    const failMailSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ sent: true });
+
+    const message = {
+      fromAddress: vendorEmail,
+      subject: 'Quotation for RFQ-V3-FAIL',
+      bodyText: 'Price is zero',
+      messageId: '<v3-fail@industrial.com>',
+    };
+
+    const outcome = await emailGatewayService.processVendorQuoteMessage(message, rfqV3, vendorRecord);
+
+    expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
+    expect(failMailSpy).toHaveBeenCalledTimes(1);
+    const failurePayload = failMailSpy.mock.calls[0][1];
+    expect(failurePayload.cc).toBeDefined();
+    expect(failurePayload.cc).toContain(buyerEmailV3);
+  });
+
+  // V0 and V2 failure scenarios: Buyer must NOT be in CC
+  test('V0 RFQ (mode_0): failed quote email submission sends failure email WITHOUT buyer in CC', async () => {
+    const rfqV0 = createTestRfq('rfq-v0', 'RFQ-V0-FAIL', 'mode_0', buyerEmailV0);
+    jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(buyerEmailV0);
+    jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue(null);
+    const failMailSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ sent: true });
+
+    const message = {
+      fromAddress: vendorEmail,
+      subject: 'Quotation for RFQ-V0-FAIL',
+      bodyText: 'Proposal for RFQ-V0-FAIL',
+      cc: [buyerEmailV0],
+      messageId: '<v0-fail@industrial.com>',
+    };
+
+    const outcome = await emailGatewayService.processVendorQuoteMessage(message, rfqV0, vendorRecord);
+
+    expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
+    expect(failMailSpy).toHaveBeenCalledTimes(1);
+    const failurePayload = failMailSpy.mock.calls[0][1];
+    if (failurePayload.cc) {
+      expect(failurePayload.cc).not.toContain(buyerEmailV0);
+    } else {
+      expect(failurePayload.cc).toBeUndefined();
+    }
+  });
+
+  test('V2 RFQ (mode_2): failed quote email submission sends failure email WITHOUT buyer in CC', async () => {
+    const rfqV2 = createTestRfq('rfq-v2', 'RFQ-V2-FAIL', 'mode_2', buyerEmailV2);
+    jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(buyerEmailV2);
+    jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 0, totalPrice: 0 });
+    jest.spyOn(geminiService, 'extractQuotationFallback').mockReturnValue({ unitPrice: 0 });
+    const failMailSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ sent: true });
+
+    const message = {
+      fromAddress: vendorEmail,
+      subject: 'Quotation for RFQ-V2-FAIL',
+      bodyText: 'Zero price proposal',
+      cc: [buyerEmailV2],
+      messageId: '<v2-fail@industrial.com>',
+    };
+
+    const outcome = await emailGatewayService.processVendorQuoteMessage(message, rfqV2, vendorRecord);
+
+    expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
+    expect(failMailSpy).toHaveBeenCalledTimes(1);
+    const failurePayload = failMailSpy.mock.calls[0][1];
+    if (failurePayload.cc) {
+      expect(failurePayload.cc).not.toContain(buyerEmailV2);
+    } else {
+      expect(failurePayload.cc).toBeUndefined();
+    }
+  });
+
+  // Successful quotation submission scenarios: Buyer must NEVER be in CC
+  test('V1 RFQ (mode_1): successful quotation submission does NOT add buyer in CC', async () => {
+    const rfqV1 = createTestRfq('rfq-v1-success', 'RFQ-V1-OK', 'mode_1', buyerEmailV1);
+    jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(buyerEmailV1);
+    jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+      unitPrice: 4500,
+      totalPrice: 9000,
+      leadTimeDays: 5,
+    });
+    jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue(rfqV1);
+    jest.spyOn(storeService, 'consumeVendorQuotationCredit').mockReturnValue(true);
+    const ackSpy = jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+    jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue({ id: 'buyer-v1', corporateEmail: buyerEmailV1 });
+    jest.spyOn(storeService, 'isBuyerProfileUpdateRequired').mockReturnValue(false);
+
+    const message = {
+      fromAddress: vendorEmail,
+      subject: 'Quotation for RFQ-V1-OK',
+      bodyText: 'Unit Price: INR 4500',
+      cc: [buyerEmailV1],
+      messageId: '<v1-ok@industrial.com>',
+    };
+
+    const outcome = await emailGatewayService.processVendorQuoteMessage(message, rfqV1, vendorRecord);
+
+    expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+    expect(ackSpy).toHaveBeenCalledTimes(1);
+    const ackPayload = ackSpy.mock.calls[0][1];
+    expect(ackPayload.cc).toBeUndefined();
+  });
+
+  test('V3 RFQ (mode_3): successful quotation submission does NOT add buyer in CC', async () => {
+    const rfqV3 = createTestRfq('rfq-v3-success', 'RFQ-V3-OK', 'mode_3', buyerEmailV3);
+    jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(buyerEmailV3);
+    jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+      unitPrice: 3200,
+      totalPrice: 6400,
+      leadTimeDays: 4,
+    });
+    jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue(rfqV3);
+    jest.spyOn(storeService, 'consumeVendorQuotationCredit').mockReturnValue(true);
+    const ackSpy = jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+    jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue({ id: 'buyer-v3', corporateEmail: buyerEmailV3 });
+    jest.spyOn(storeService, 'isBuyerProfileUpdateRequired').mockReturnValue(false);
+
+    const message = {
+      fromAddress: vendorEmail,
+      subject: 'Quotation for RFQ-V3-OK',
+      bodyText: 'Unit Price: INR 3200',
+      messageId: '<v3-ok@industrial.com>',
+    };
+
+    const outcome = await emailGatewayService.processVendorQuoteMessage(message, rfqV3, vendorRecord);
+
+    expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+    expect(ackSpy).toHaveBeenCalledTimes(1);
+    const ackPayload = ackSpy.mock.calls[0][1];
+    expect(ackPayload.cc).toBeUndefined();
   });
 });
 

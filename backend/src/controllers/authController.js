@@ -264,6 +264,29 @@ async function changePassword(req, res, next) {
   }
 }
 
+async function completeBuyerOnboarding(req, res, next) {
+  try {
+    const ipAddress = getClientIp(req);
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.completeBuyerOnboarding, req.body);
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: Object.values(errors)[0] });
+    }
+
+    const result = await authService.completeBuyerOnboarding(req.user, req.body, ipAddress);
+    return res.json(result);
+  } catch (err) {
+    logger.warn(
+      'Buyer onboarding failed in authController',
+      { error: err.message, email: req.user?.email },
+      'AUTH_CONTROLLER'
+    );
+    return res.status(400).json({
+      success: false,
+      error: err.message || 'Failed to complete buyer onboarding profile.',
+    });
+  }
+}
+
 async function listUsers(req, res, next) {
   try {
     const rawLimit = req && req.query && req.query.limit;
@@ -286,5 +309,6 @@ module.exports = {
   getSession,
   logout,
   changePassword,
+  completeBuyerOnboarding,
   listUsers,
 };

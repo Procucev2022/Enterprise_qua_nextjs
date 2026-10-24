@@ -433,6 +433,38 @@ const VALIDATION_SCHEMAS = {
     code: { type: 'string', required: false },
   },
 
+  // Mandatory first-login profile completion for automatically created buyers
+  completeBuyerOnboarding: {
+    emailOtp: { type: 'string', required: true, pattern: OTP_CODE_REGEX, message: 'Valid 6-digit email OTP is required.' },
+    mobile: {
+      type: 'string',
+      required: true,
+      pattern: INDIAN_MOBILE_REGEX,
+      message: INDIAN_MOBILE_MESSAGE,
+      custom: (val) => {
+        const cleaned = String(val || '').replace(/\D/g, '');
+        if (cleaned.endsWith('9999999999') || cleaned === '9999999999') {
+          return 'Placeholder phone number 9999999999 must be replaced with your actual phone number.';
+        }
+        return null;
+      },
+    },
+    mobileOtp: { type: 'string', required: true, pattern: OTP_CODE_REGEX, message: 'Valid 6-digit SMS OTP is required.' },
+    currentPassword: { type: 'string', required: true, minLength: 1, message: 'Current temporary password is required.' },
+    newPassword: { type: 'string', required: true, minLength: PASSWORD_MIN_LENGTH, message: 'New password of at least 8 characters is required.' },
+    companyName: { type: 'string', required: true, minLength: 2, maxLength: 255, message: 'Company or organisation name is required.' },
+    contactName: { type: 'string', required: false, maxLength: 255 },
+    city: { type: 'string', required: false, maxLength: 255 },
+    state: { type: 'string', required: false, maxLength: 255 },
+    pincode: { type: 'string', required: false, pattern: INDIAN_PINCODE_REGEX, message: INDIAN_PINCODE_MESSAGE },
+    address: { type: 'string', required: false, maxLength: 500 },
+    street: { type: 'string', required: false, maxLength: 500 },
+    gstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
+    gstNumber: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
+    pan: { type: 'string', required: false, pattern: PAN_REGEX, message: PAN_MESSAGE },
+    panNumber: { type: 'string', required: false, pattern: PAN_REGEX, message: PAN_MESSAGE },
+  },
+
   // Buyer organisation profile submitted by PUT /api/buyer-profile/me.
   //
   // Ported from the fields ProcUserServiceImpl.updateBuyer patches onto the
@@ -577,7 +609,17 @@ const VALIDATION_SCHEMAS = {
   vendorPresenceQuery: {
     identifiers: { type: 'string', required: false, maxLength: 2000 },
   },
+
+  transactionalEmailPreview: {
+    templateId: { type: 'string', required: true, minLength: 1, maxLength: 100, message: 'Template ID or number is required.' },
+  },
+
+  transactionalEmailSend: {
+    templateId: { type: 'string', required: true, minLength: 1, maxLength: 100, message: 'Template ID or number is required.' },
+    recipientEmail: { type: 'string', required: true, pattern: EMAIL_REGEX, message: 'A valid recipient email is required.' },
+  },
 };
+
 
 
 /**
