@@ -41,6 +41,9 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
 
   const mustChangeVendorPassword =
     role === 'vendor' && currentUserSession?.passwordChangeRequired === true;
+  const mustCompleteBuyerOnboarding =
+    role === 'buyer' &&
+    (currentUserSession?.onboardingRequired === true || currentUserSession?.passwordChangeRequired === true);
   const sessionRole = currentRole;
 
   // Lazy-load data needed specifically by the active route.
@@ -59,11 +62,15 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
       router.replace('/vendor-first-login');
       return;
     }
+    if (mustCompleteBuyerOnboarding) {
+      router.replace('/buyer-first-login');
+      return;
+    }
     // Keep the sidebar aligned with the section actually being viewed.
     if (sessionRole !== role) {
       router.replace(ROLE_LANDING_ROUTE[sessionRole] || ROLE_LANDING_ROUTE.buyer);
     }
-  }, [isLoggedIn, sessionRole, role, router, mustChangeVendorPassword]);
+  }, [isLoggedIn, sessionRole, role, router, mustChangeVendorPassword, mustCompleteBuyerOnboarding]);
 
   const handleLogout = () => {
     clearSessionCache();
@@ -77,7 +84,7 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
   };
 
   // Avoid rendering another role's screens for the frame before the redirect.
-  if (!isLoggedIn || sessionRole !== role || mustChangeVendorPassword) {
+  if (!isLoggedIn || sessionRole !== role || mustChangeVendorPassword || mustCompleteBuyerOnboarding) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
         <p className="text-xs text-slate-500 dark:text-gray-400">{UI_STRINGS.auth.redirecting}</p>

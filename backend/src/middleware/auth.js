@@ -45,6 +45,12 @@ async function authenticate(req, res, next) {
   const isAllowedAuthEndpoint =
     reqPath.endsWith('/api/auth/change-password') ||
     reqPath.endsWith('/change-password') ||
+    reqPath.endsWith('/api/auth/complete-buyer-onboarding') ||
+    reqPath.endsWith('/complete-buyer-onboarding') ||
+    reqPath.endsWith('/api/auth/request-otp') ||
+    reqPath.endsWith('/request-otp') ||
+    reqPath.endsWith('/api/auth/verify-otp') ||
+    reqPath.endsWith('/verify-otp') ||
     reqPath.endsWith('/api/auth/session') ||
     reqPath.endsWith('/session') ||
     reqPath.endsWith('/api/auth/logout') ||
@@ -59,6 +65,19 @@ async function authenticate(req, res, next) {
       success: false,
       passwordChangeRequired: true,
       error: 'Change your temporary password before continuing.',
+    });
+  }
+
+  if (
+    verification.user.role === 'buyer' &&
+    (verification.user.onboardingRequired === true || verification.user.passwordChangeRequired === true) &&
+    !isAllowedAuthEndpoint
+  ) {
+    return res.status(403).json({
+      success: false,
+      onboardingRequired: true,
+      passwordChangeRequired: verification.user.passwordChangeRequired === true,
+      error: 'Complete your profile verification and password change before continuing.',
     });
   }
   return next();

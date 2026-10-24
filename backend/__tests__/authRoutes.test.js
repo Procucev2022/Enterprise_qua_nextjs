@@ -1478,5 +1478,59 @@ describe('Changing your own password', () => {
         'buyer@procucev.com'
       );
     });
+
+    test('changes password using valid OTP code', async () => {
+      const email = 'buyer@procucev.com';
+      await authSessionQueries.saveOtp(authService.buildOtpKey(email, '+919157154504'), '555666', Date.now() + 600000);
+      const res = await request(app)
+        .post('/api/auth/change-password')
+        .set(authHeader('buyer'))
+        .send({ code: '555666', newPassword: NEXT });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    test('rejects change password when OTP code is expired or invalid', async () => {
+      const email = 'buyer@procucev.com';
+      await authSessionQueries.saveOtp(authService.buildOtpKey(email, '+919157154504'), '555666', Date.now() - 10000);
+      const res = await request(app)
+        .post('/api/auth/change-password')
+        .set(authHeader('buyer'))
+        .send({ code: '555666', newPassword: NEXT });
+
+      expect(res.status).toBe(400);
+
+      const res2 = await request(app)
+        .post('/api/auth/change-password')
+        .set(authHeader('buyer'))
+        .send({ code: '111222', newPassword: NEXT });
+
+      expect(res2.status).toBe(400);
+    });
+
+    test('changes password using valid resetToken', async () => {
+      const resetToken = authService.generateSessionToken({
+        id: UUID,
+        email: 'buyer@procucev.com',
+        role: 'buyer',
+      });
+      const res = await request(app)
+        .post('/api/auth/change-password')
+        .set(authHeader('buyer'))
+        .send({ resetToken, newPassword: NEXT });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    test('rejects change password with invalid or revoked resetToken', async () => {
+      const res = await request(app)
+        .post('/api/auth/change-password')
+        .set(authHeader('buyer'))
+        .send({ resetToken: 'invalid.token.here', newPassword: NEXT });
+
+      expect(res.status).toBe(400);
+    });
   });
 });

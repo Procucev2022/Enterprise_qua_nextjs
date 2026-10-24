@@ -25,6 +25,7 @@ const botBridgeRoutes = require('./botBridge');
 const enterpriseInquiriesRoutes = require('./enterpriseInquiries');
 const reportsRoutes = require('./reports');
 const subscriptionRoutes = require('./subscriptions');
+const transactionalEmailRoutes = require('./transactionalEmails');
 
 // Mount sub-routers
 router.use('/subscriptions', subscriptionRoutes);
@@ -52,6 +53,8 @@ router.use('/pincode', pincodeRoutes);
 router.use('/bot', botBridgeRoutes);
 router.use('/enterprise-inquiries', enterpriseInquiriesRoutes);
 router.use('/reports', reportsRoutes);
+router.use('/transactional-emails', transactionalEmailRoutes);
 
 module.exports = router;
+
 
