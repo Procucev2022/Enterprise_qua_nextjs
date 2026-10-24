@@ -3860,8 +3860,6 @@ class StoreService {
           mailerService.sendRfqInviteEmail(vendor.email, {
             rfq: updatedRFQ,
             recipientName: vendor.contactPerson || vendor.name,
-            buyerEmail,
-            cc: buyerEmail || undefined,
             freeCreditsRemaining: creditInfo.freeCreditsRemaining,
             isSubscribed: creditInfo.isSubscribed,
           }),

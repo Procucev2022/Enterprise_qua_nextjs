@@ -2009,6 +2009,8 @@ const QUA_AI_EMAIL_SUPPORT = {
   COMPANY_NAME: 'Procucev Enterprise Solutions',
 };
 
+const VENDOR_QUOTE_SUPPORT_CC = process.env.VENDOR_QUOTE_SUPPORT_CC || '';
+
 
 /** Outcome of preparing an email for extraction. */
 const EMAIL_INGESTION_STATUS = {
@@ -2672,5 +2674,6 @@ module.exports = {
   MAJOR_CATEGORY_ALIASES: RFQ_CATEGORY_CLASSIFICATION.MAJOR_CATEGORY_ALIASES,
   QUA_AI_EMAIL_TEMPLATES,
   QUA_AI_EMAIL_SUPPORT,
+  VENDOR_QUOTE_SUPPORT_CC,
 };
 

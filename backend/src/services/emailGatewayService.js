@@ -44,6 +44,8 @@ const {
   hasUnlimitedRfqAccess,
   SYSTEM_ACTOR_EMAIL,
   VENDOR_QUOTE_SUPPORT_CC,
+  RFQ_MODES,
+  RFQ_MODE_MAP,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -1211,6 +1213,27 @@ function isVendorIssueOrQueryMessage(message) {
 }
 
 /**
+ * Determines whether an RFQ operates under Version 1 (Mode 1 - Client Roster)
+ * or Version 3 (Mode 3 - Hybrid Sourcing).
+ * For V1 and V3, vendor quotation failures CC the buyer; for V0 and V2, they do not.
+ */
+function isV1OrV3Rfq(rfq) {
+  if (!rfq) return false;
+  const rawMode = String(rfq.sourcingMode || rfq.sourcing_mode || rfq.mode || 'mode_1').trim().toLowerCase();
+  const normalized = (RFQ_MODE_MAP && RFQ_MODE_MAP[rawMode]) || rawMode;
+  if (normalized === RFQ_MODES.MODE_1 || normalized === RFQ_MODES.MODE_3) {
+    return true;
+  }
+  if (normalized === RFQ_MODES.MODE_0 || normalized === RFQ_MODES.MODE_2) {
+    return false;
+  }
+  if (normalized.includes('1') || normalized.includes('3') || normalized.includes('roster')) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Ingests a vendor quotation received via email into the referenced RFQ.
  */
 async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
@@ -1221,8 +1244,30 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   );
 
   const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
+  const isV1OrV3 = isV1OrV3Rfq(targetRfq);
   const incomingCc = Array.isArray(message.cc) ? message.cc : (message.cc ? [message.cc] : []);
-  const ccList = Array.from(new Set([buyerEmail, ...incomingCc, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean)));
+  const buyerNormalized = buyerEmail ? String(buyerEmail).toLowerCase().trim() : null;
+
+  // Sanitize incoming CC: If not V1 or V3, exclude buyer from CC on failure notifications
+  const sanitizedIncomingCc = incomingCc.filter((c) => {
+    if (!c) return false;
+    if (!isV1OrV3 && buyerNormalized && String(c).toLowerCase().trim() === buyerNormalized) {
+      return false;
+    }
+    return true;
+  });
+
+  // For failure notifications:
+  // For V1 and V3, if a vendor submits a quotation via email and the submission fails, send failure notification with buyer in CC.
+  // For V0 and V2, do NOT add buyer in CC.
+  const failureCcList = Array.from(
+    new Set([
+      isV1OrV3 ? buyerEmail : null,
+      ...sanitizedIncomingCc,
+      VENDOR_QUOTE_SUPPORT_CC,
+    ].filter(Boolean))
+  );
+  const failureCc = failureCcList.length > 0 ? failureCcList.join(', ') : undefined;
 
   // Validate vendor quotation eligibility: buyer-mapped vendors get unlimited quotations on their buyer's RFQs;
   // otherwise 5 free quotation credits, then active subscription required
@@ -1250,7 +1295,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           rfqTitle: targetRfq.title,
           vendorName: vendorRecord.name,
           upgradeUrl: typeof mailerService.vendorUpgradeUrl === 'function' ? mailerService.vendorUpgradeUrl() : undefined,
-          cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+          cc: failureCc,
         }),
       { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor credits exhausted email' }
     );
@@ -1305,7 +1350,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           vendorName: vendorRecord.name,
           reason: 'Quotation parsing failed due to AI extraction errors. Please ensure all quotation parameters are clearly stated.',
           missingFields: ['Quotation Details / AI Extraction'],
-          cc: ccList.length > 0 ? ccList.join(', ') : (buyerEmail || undefined),
+          cc: failureCc,
         }),
       { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote failure email' }
     );
@@ -1363,7 +1408,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           vendorName: vendorRecord.name,
           issueMessage: emailText.slice(0, 500),
           reason: 'Quotation creation has failed and no bid was generated because your email contains an issue or clarification query regarding the RFQ.',
-          cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+          cc: failureCc,
         }),
       { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor issue acknowledgment email' }
     );
@@ -1393,6 +1438,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           rfq: targetRfq,
           vendorName: vendorRecord.name,
           itemCount,
+          cc: failureCc,
         }),
       { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send complex RFQ portal redirect email' }
     );
@@ -1445,7 +1491,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           vendorName: vendorRecord.name,
           reason: 'Unit Price (₹) is mandatory and must be greater than 0.',
           missingFields: ['Unit Price (₹)'],
-          cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+          cc: failureCc,
         }),
       { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote failure email' }
     );
@@ -1515,6 +1561,8 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
         rfqTitle: targetRfq.title,
         vendorName: vendorRecord.name,
         quote,
+        buyerEmail,
+        cc: undefined,
       }),
     { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote acknowledgement email' }
   );
