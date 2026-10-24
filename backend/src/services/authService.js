@@ -7,6 +7,7 @@ const { AUTH_MESSAGES, IDENTITY_OTP_CONFIG, PASSWORD_MIN_LENGTH } = require('../
 const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
 const authSessionQueries = require('../db/authSessionQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
 const vendorPresenceService = require('./vendorPresenceService');
 
@@ -338,9 +339,16 @@ function toPublicUser(user) {
     mobile: user.mobile || '',
     passwordChangeRequired: user.resetPasswordRequired === true,
   };
+  const normStatus = String(user.verificationStatus || '').toLowerCase();
+  const cleanMobile = String(user.mobile || '').replace(/\D/g, '');
+  const isPlaceholderMobile = cleanMobile.endsWith('9999999999') || cleanMobile === '9999999999';
+
   const onboardingReq =
     user.onboardingRequired === true ||
-    (user.role === 'buyer' && (user.verificationStatus === 'pending_onboarding' || (user.resetPasswordRequired === true && user.mobile === '+919999999999')));
+    (user.role === 'buyer' && (
+      normStatus === 'pending_onboarding' ||
+      (user.resetPasswordRequired === true && isPlaceholderMobile)
+    ));
   if (onboardingReq) {
     result.onboardingRequired = true;
   }
@@ -997,6 +1005,12 @@ async function registerUser(payload, ipAddress) {
         remainingFreeRFQs: 5,
         accountSource: 'web_registration',
         status: 'ACTIVE_VERIFIED',
+        onboardingRequired: false,
+        profileVerified: true,
+        emailVerified: true,
+        phoneVerified: true,
+        tempPasswordRequired: false,
+        isAutoRegistered: false,
         organizationId: result.user?.orgId || null,
         id: result.user?.id || undefined,
       };
@@ -1106,9 +1120,17 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     city,
     state,
     pincode,
+    address,
+    street,
     gstin,
+    gstNumber,
     pan,
+    panNumber,
   } = payload || {};
+
+  const effectiveGstin = (gstin || gstNumber || '').trim().toUpperCase();
+  const effectivePan = (pan || panNumber || (effectiveGstin.length === 15 ? effectiveGstin.slice(2, 12) : '')).trim().toUpperCase();
+  const effectiveAddress = (address || street || '').trim();
 
   const normalizedEmail = (user.email || '').trim().toLowerCase();
   const cleanedMobile = String(mobile || '').replace(/\D/g, '');
@@ -1209,14 +1231,40 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     city: city || '',
     state: state || '',
     pincode: pincode || '',
-    gstin: gstin || '',
-    pan: pan || '',
+    address: effectiveAddress,
+    gstin: effectiveGstin,
+    pan: effectivePan,
+    profileVerified: true,
+    status: 'ACTIVE_VERIFIED',
     verificationStatus: 'verified',
     onboardingRequired: false,
     emailVerified: true,
     phoneVerified: true,
     isApproved: true,
   });
+
+  // Also update organization profile in database if available
+  if (dbUser.orgId) {
+    try {
+      await buyerProfileQueries.updateProfile(
+        dbUser.orgId,
+        {
+          companyName: companyName || dbUser.orgName,
+          contactName: contactName || dbUser.name,
+          city: city || undefined,
+          state: state || undefined,
+          pincode: pincode || undefined,
+          street: effectiveAddress || undefined,
+          gstNumber: effectiveGstin || undefined,
+          panNumber: effectivePan || undefined,
+        },
+        normalizedEmail,
+        dbUser.id
+      );
+    } catch (profileErr) {
+      logger.warn('Failed to update DB organization profile during onboarding', { error: profileErr.message }, 'AUTH_SERVICE');
+    }
+  }
 
   // 7. Dispatch pending quotation notifications if any were queued
   let dispatchedQuotes = [];

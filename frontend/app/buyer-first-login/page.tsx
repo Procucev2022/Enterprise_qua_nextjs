@@ -1,13 +1,31 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ShieldCheck, Mail, Phone, Lock, Building, CheckCircle2 } from 'lucide-react';
+import {
+  ShieldCheck,
+  Mail,
+  Phone,
+  Lock,
+  Building,
+  CheckCircle2,
+  FileText,
+  Users,
+  MapPin,
+  Loader2,
+} from 'lucide-react';
 import PasswordInput from '@/app/components/PasswordInput';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { PASSWORD_MIN_LENGTH, ROLE_LANDING_ROUTE } from '@/lib/constants';
-import { INDIAN_MOBILE_PATTERN } from '@/lib/validationSchemas';
+import {
+  INDIAN_MOBILE_PATTERN,
+  INDIAN_PINCODE_PATTERN,
+  GSTIN_PATTERN,
+  validatePincode,
+  PINCODE_PATTERN,
+  isDummyPincode,
+} from '@/lib/validationSchemas';
 import { UI_STRINGS } from '@/lib/uiStrings';
 
 export default function BuyerFirstLoginPage() {
@@ -26,8 +44,13 @@ export default function BuyerFirstLoginPage() {
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [pincode, setPincode] = useState('');
+  const [address, setAddress] = useState('');
   const [gstin, setGstin] = useState('');
   const [pan, setPan] = useState('');
+
+  const [pincodeValidating, setPincodeValidating] = useState(false);
+  const [pincodeError, setPincodeError] = useState<string | null>(null);
+  const pincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -46,6 +69,78 @@ export default function BuyerFirstLoginPage() {
       router.replace(ROLE_LANDING_ROUTE.buyer);
     }
   }, [currentUserSession, router]);
+
+  useEffect(() => {
+    return () => {
+      if (pincodeDebounceRef.current) {
+        clearTimeout(pincodeDebounceRef.current);
+      }
+    };
+  }, []);
+
+  const handlePincodeChange = (rawVal: string) => {
+    const val = rawVal.replace(/\D/g, '').slice(0, 6);
+    setPincode(val);
+
+    if (pincodeDebounceRef.current) {
+      clearTimeout(pincodeDebounceRef.current);
+    }
+
+    if (!val) {
+      setPincodeError(null);
+      setPincodeValidating(false);
+      return;
+    }
+
+    if (val.startsWith('0')) {
+      setPincodeError('PIN code cannot start with 0');
+      setPincodeValidating(false);
+      return;
+    }
+
+    if (isDummyPincode(val)) {
+      setPincodeError('Invalid or dummy PIN code');
+      setPincodeValidating(false);
+      return;
+    }
+
+    if (/^\d{6}$/.test(val)) {
+      setPincodeValidating(true);
+      pincodeDebounceRef.current = setTimeout(async () => {
+        try {
+          const res = await validatePincode(val);
+          if (!res.isValid) {
+            setPincodeError(res.message || 'Invalid PIN code');
+          } else {
+            setPincodeError(null);
+            const pos = res.postOffices || [];
+            if (pos.length > 0) {
+              const po = pos[0];
+              const matchedCity = po.District || po.Division || po.Name || '';
+              const matchedState = po.State || '';
+              if (matchedCity) setCity(matchedCity);
+              if (matchedState) setState(matchedState);
+            }
+          }
+        } catch {
+          setPincodeError(null);
+        } finally {
+          setPincodeValidating(false);
+        }
+      }, 350);
+    } else {
+      setPincodeError(null);
+      setPincodeValidating(false);
+    }
+  };
+
+  const handleGstinChange = (raw: string) => {
+    const upper = raw.toUpperCase().slice(0, 15);
+    setGstin(upper);
+    if (upper.length === 15) {
+      setPan(upper.slice(2, 12));
+    }
+  };
 
   const handleSendEmailOtp = async () => {
     if (!currentUserSession?.email) return;
@@ -129,9 +224,37 @@ export default function BuyerFirstLoginPage() {
       return;
     }
     if (!companyName.trim()) {
-      setError('Company name is required.');
+      setError(UI_STRINGS.auth.buyerOnboarding.companyNameRequired);
       return;
     }
+    const cleanGstin = gstin.trim().toUpperCase();
+    if (!cleanGstin) {
+      setError(UI_STRINGS.auth.buyerOnboarding.gstinRequired);
+      return;
+    }
+    if (!GSTIN_PATTERN.test(cleanGstin)) {
+      setError(UI_STRINGS.auth.buyerOnboarding.gstinInvalid);
+      return;
+    }
+    const cleanPincode = pincode.trim();
+    if (!cleanPincode) {
+      setError(UI_STRINGS.auth.buyerOnboarding.pincodeRequired);
+      return;
+    }
+    if (!INDIAN_PINCODE_PATTERN.test(cleanPincode)) {
+      setError(UI_STRINGS.auth.buyerOnboarding.pincodeInvalid);
+      return;
+    }
+    if (!city.trim()) {
+      setError(UI_STRINGS.auth.buyerOnboarding.cityRequired);
+      return;
+    }
+    if (!state.trim()) {
+      setError(UI_STRINGS.auth.buyerOnboarding.stateRequired);
+      return;
+    }
+
+    const derivedPan = cleanGstin.length === 15 ? cleanGstin.slice(2, 12) : (pan.trim() || undefined);
 
     setSaving(true);
     try {
@@ -143,11 +266,12 @@ export default function BuyerFirstLoginPage() {
         newPassword,
         companyName: companyName.trim(),
         contactName: contactName.trim() || undefined,
-        city: city.trim() || undefined,
-        state: state.trim() || undefined,
-        pincode: pincode.trim() || undefined,
-        gstin: gstin.trim() || undefined,
-        pan: pan.trim() || undefined,
+        city: city.trim(),
+        state: state.trim(),
+        pincode: cleanPincode,
+        address: address.trim() || undefined,
+        gstin: cleanGstin,
+        pan: derivedPan,
       });
 
       if (!result.success || !result.user || !result.token) {
@@ -334,69 +458,156 @@ export default function BuyerFirstLoginPage() {
             </div>
           </div>
 
-          {/* Section 4: Organisation Profile */}
-          <div className="rounded-xl border border-slate-200/80 dark:border-gray-800 p-4 bg-slate-50/50 dark:bg-gray-950/40 space-y-3">
+          {/* Section 4: Organisation & Statutory Profile */}
+          <div className="rounded-xl border border-slate-200/80 dark:border-gray-800 p-4 bg-slate-50/50 dark:bg-gray-950/40 space-y-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
               <Building size={16} className="text-indigo-600 dark:text-indigo-400" />
               <span>{UI_STRINGS.auth.buyerOnboarding.step4Title}</span>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <label htmlFor="company-name" className="text-xs font-medium text-slate-700 dark:text-gray-300">
-                  {UI_STRINGS.auth.buyerOnboarding.companyNameLabel}
-                </label>
-                <input
-                  id="company-name"
-                  type="text"
-                  value={companyName}
-                  onChange={(e) => setCompanyName(e.target.value)}
-                  placeholder="e.g. Acme Industrial Ltd"
-                  className="w-full rounded-lg border border-slate-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-slate-900 dark:text-white"
-                  required
-                />
-              </div>
+            <p className="text-xs text-slate-500 dark:text-gray-400">
+              {UI_STRINGS.auth.buyerOnboarding.step4Desc}
+            </p>
 
+            <div className="space-y-3">
+              {/* Full Name */}
               <div className="space-y-1">
                 <label htmlFor="contact-name" className="text-xs font-medium text-slate-700 dark:text-gray-300">
                   {UI_STRINGS.auth.buyerOnboarding.contactNameLabel}
                 </label>
-                <input
-                  id="contact-name"
-                  type="text"
-                  value={contactName}
-                  onChange={(e) => setContactName(e.target.value)}
-                  placeholder="Procurement Officer"
-                  className="w-full rounded-lg border border-slate-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-slate-900 dark:text-white"
-                />
+                <div className="relative">
+                  <Users className="absolute left-3 top-2.5 text-slate-400 dark:text-gray-500" size={14} />
+                  <input
+                    id="contact-name"
+                    type="text"
+                    value={contactName}
+                    onChange={(e) => setContactName(e.target.value)}
+                    placeholder={UI_STRINGS.auth.buyerOnboarding.contactNamePlaceholder}
+                    className="w-full rounded-lg border border-slate-300 dark:border-gray-700 bg-white dark:bg-gray-800 pl-9 pr-3 py-2 text-sm text-slate-900 dark:text-white"
+                  />
+                </div>
               </div>
 
+              {/* Company Name / Legal Name */}
               <div className="space-y-1">
-                <label htmlFor="buyer-city" className="text-xs font-medium text-slate-700 dark:text-gray-300">
-                  {UI_STRINGS.auth.buyerOnboarding.cityLabel}
+                <label htmlFor="company-name" className="text-xs font-medium text-slate-700 dark:text-gray-300">
+                  {UI_STRINGS.auth.buyerOnboarding.companyNameLabel} <span className="text-red-500">*</span>
                 </label>
-                <input
-                  id="buyer-city"
-                  type="text"
-                  value={city}
-                  onChange={(e) => setCity(e.target.value)}
-                  placeholder="e.g. Mumbai"
-                  className="w-full rounded-lg border border-slate-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-slate-900 dark:text-white"
-                />
+                <div className="relative">
+                  <Building size={14} className="absolute left-3 top-2.5 text-slate-400 dark:text-gray-500" />
+                  <input
+                    id="company-name"
+                    type="text"
+                    value={companyName}
+                    onChange={(e) => setCompanyName(e.target.value)}
+                    placeholder={UI_STRINGS.auth.buyerOnboarding.companyNamePlaceholder}
+                    className="w-full rounded-lg border border-slate-300 dark:border-gray-700 bg-white dark:bg-gray-800 pl-9 pr-3 py-2 text-sm text-slate-900 dark:text-white"
+                    required
+                  />
+                </div>
               </div>
 
+              {/* GSTIN / GST Number */}
               <div className="space-y-1">
-                <label htmlFor="buyer-pincode" className="text-xs font-medium text-slate-700 dark:text-gray-300">
-                  {UI_STRINGS.auth.buyerOnboarding.pincodeLabel}
+                <label htmlFor="buyer-gstin" className="text-xs font-medium text-slate-700 dark:text-gray-300">
+                  {UI_STRINGS.auth.buyerOnboarding.gstinLabel} <span className="text-red-500">*</span>
                 </label>
-                <input
-                  id="buyer-pincode"
-                  type="text"
-                  maxLength={6}
-                  value={pincode}
-                  onChange={(e) => setPincode(e.target.value)}
-                  placeholder="e.g. 400001"
-                  className="w-full rounded-lg border border-slate-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-slate-900 dark:text-white"
-                />
+                <div className="relative">
+                  <FileText size={14} className="absolute left-3 top-2.5 text-slate-400 dark:text-gray-500" />
+                  <input
+                    id="buyer-gstin"
+                    type="text"
+                    maxLength={15}
+                    value={gstin}
+                    onChange={(e) => handleGstinChange(e.target.value)}
+                    placeholder={UI_STRINGS.auth.buyerOnboarding.gstinPlaceholder}
+                    className="w-full rounded-lg border border-slate-300 dark:border-gray-700 bg-white dark:bg-gray-800 pl-9 pr-3 py-2 text-sm text-slate-900 dark:text-white font-mono uppercase tracking-wider"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Pincode, City, State Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between min-h-[16px]">
+                    <label htmlFor="buyer-pincode" className="text-xs font-medium text-slate-700 dark:text-gray-300">
+                      {UI_STRINGS.auth.buyerOnboarding.pincodeLabel} <span className="text-red-500">*</span>
+                    </label>
+                    {pincodeValidating && (
+                      <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
+                        <Loader2 size={10} className="animate-spin" /> Checking
+                      </span>
+                    )}
+                    {!pincodeValidating && pincode.length === 6 && !pincodeError && (
+                      <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
+                        <CheckCircle2 size={10} /> Valid
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    id="buyer-pincode"
+                    type="text"
+                    maxLength={6}
+                    value={pincode}
+                    onChange={(e) => handlePincodeChange(e.target.value)}
+                    placeholder={UI_STRINGS.auth.buyerOnboarding.pincodePlaceholder}
+                    className={`w-full rounded-lg border bg-white dark:bg-gray-800 px-3 py-2 text-sm text-slate-900 dark:text-white font-mono ${
+                      pincodeError ? 'border-red-400 dark:border-red-700' : 'border-slate-300 dark:border-gray-700'
+                    }`}
+                    required
+                  />
+                  {pincodeError && (
+                    <p className="text-[10px] text-rose-500 font-medium">{pincodeError}</p>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <label htmlFor="buyer-city" className="text-xs font-medium text-slate-700 dark:text-gray-300">
+                    {UI_STRINGS.auth.buyerOnboarding.cityLabel} <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    id="buyer-city"
+                    type="text"
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                    placeholder={UI_STRINGS.auth.buyerOnboarding.cityPlaceholder}
+                    className="w-full rounded-lg border border-slate-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-slate-900 dark:text-white"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label htmlFor="buyer-state" className="text-xs font-medium text-slate-700 dark:text-gray-300">
+                    {UI_STRINGS.auth.buyerOnboarding.stateLabel} <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    id="buyer-state"
+                    type="text"
+                    value={state}
+                    onChange={(e) => setState(e.target.value)}
+                    placeholder={UI_STRINGS.auth.buyerOnboarding.statePlaceholder}
+                    className="w-full rounded-lg border border-slate-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-slate-900 dark:text-white"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Address / Street */}
+              <div className="space-y-1">
+                <label htmlFor="buyer-address" className="text-xs font-medium text-slate-700 dark:text-gray-300">
+                  {UI_STRINGS.auth.buyerOnboarding.addressLabel}
+                </label>
+                <div className="relative">
+                  <MapPin size={14} className="absolute left-3 top-2.5 text-slate-400 dark:text-gray-500" />
+                  <input
+                    id="buyer-address"
+                    type="text"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    placeholder={UI_STRINGS.auth.buyerOnboarding.addressPlaceholder}
+                    className="w-full rounded-lg border border-slate-300 dark:border-gray-700 bg-white dark:bg-gray-800 pl-9 pr-3 py-2 text-sm text-slate-900 dark:text-white"
+                  />
+                </div>
               </div>
             </div>
           </div>

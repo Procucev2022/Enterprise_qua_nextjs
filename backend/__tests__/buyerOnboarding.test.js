@@ -489,9 +489,16 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
         emailOtp: '123456',
         mobileOtp: '654321',
         companyName: 'Branch Corp Renamed',
+        gstin: '27AAAAA0000A1Z5',
+        pan: 'AAAAA0000A',
+        address: 'Plot 42, Hinjewadi Phase 2',
       });
       expect(res.success).toBe(true);
       expect(res.user.orgName).toBe('Branch Corp Renamed');
+      const account = await storeService.getBuyerAccountByEmail(buyerEmail);
+      expect(account.gstin).toBe('27AAAAA0000A1Z5');
+      expect(account.pan).toBe('AAAAA0000A');
+      expect(account.address).toBe('Plot 42, Hinjewadi Phase 2');
     });
   });
 
@@ -594,6 +601,76 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
           quote: expect.objectContaining({ totalPrice: 50000 }),
         })
       );
+    });
+
+    test('for V0 RFQs: asks buyer to update profile on 1st quote, suppresses duplicate acknowledgment on 2nd quote, and releases quotes after profile update', async () => {
+      const v0BuyerEmail = 'v0.requisition.buyer@acmecorp.com';
+      storeService.addBuyerAccount({
+        corporateEmail: v0BuyerEmail,
+        organizationName: 'Acme Heavy Industries',
+        sourcingMode: 'mode_0',
+        onboardingRequired: true,
+        status: 'PENDING_ONBOARDING',
+        mobileNumber: '+919999999999',
+      });
+
+      const rfq = storeService.createRFQ({
+        id: 'rfq-v0-dedup-1',
+        rfqNumber: 'RFQ-V0-2026-999',
+        title: 'Industrial Valves',
+        buyerEmail: v0BuyerEmail,
+        sourcingMode: 'mode_0',
+        category: 'Mechanical',
+      });
+
+      const quote1 = {
+        vendorId: 'vendor-v1',
+        vendorName: 'Alpha Valves Ltd',
+        unitPrice: 15000,
+        totalPrice: 45000,
+      };
+
+      const quote2 = {
+        vendorId: 'vendor-v2',
+        vendorName: 'Beta Valves Corp',
+        unitPrice: 14000,
+        totalPrice: 42000,
+      };
+
+      jest.clearAllMocks();
+
+      // First quotation received: acknowledgment email sent once, quote queued, not directly exposed
+      const res1 = storeService.emailQuoteToBuyer(rfq, quote1);
+      expect(res1).toBe(true);
+      expect(mailerService.sendBuyerProfileCompletionReminderEmail).toHaveBeenCalledTimes(1);
+      expect(mailerService.sendBuyerProfileCompletionReminderEmail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: v0BuyerEmail,
+          rfqNumber: 'RFQ-V0-2026-999',
+        })
+      );
+      expect(mailerService.sendQuoteReceivedEmail).not.toHaveBeenCalled();
+
+      // Second quotation received for same RFQ: queued, but duplicate acknowledgment is NOT sent
+      const res2 = storeService.emailQuoteToBuyer(rfq, quote2);
+      expect(res2).toBe(true);
+      expect(mailerService.sendBuyerProfileCompletionReminderEmail).toHaveBeenCalledTimes(1); // Still 1, no duplicate
+      expect(mailerService.sendQuoteReceivedEmail).not.toHaveBeenCalled();
+
+      // Buyer now completes profile update
+      storeService.updateBuyerAccount(v0BuyerEmail, {
+        profileVerified: true,
+        onboardingRequired: false,
+        status: 'ACTIVE_VERIFIED',
+        phoneVerified: true,
+        phone: '9876543210',
+        gstin: '27AAAAA0000A1Z5',
+        address: 'Plot 55, Pune MIDC',
+      });
+
+      const dispatched = await storeService.dispatchPendingQuoteNotifications(v0BuyerEmail);
+      expect(dispatched.length).toBe(2);
+      expect(mailerService.sendQuoteReceivedEmail).toHaveBeenCalledTimes(2);
     });
   });
 
