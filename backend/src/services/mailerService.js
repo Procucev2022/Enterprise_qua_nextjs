@@ -9,6 +9,22 @@ const {
   RFQ_NOT_CREATED_NOTIFICATION,
   VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
 } = require('../config/constants');
+const {
+  buildEmail1_RfqCreatedAccountAutoCreated,
+  buildEmail2_RfqCreated,
+  buildEmail3_NewRfqIntimation,
+  buildEmail4_NewRfqToQuote,
+  buildEmail5_QuotationsReadyToCompare,
+  buildEmail6_ActivateYourAccount,
+  buildEmail7_RfqNeedsMoreInformation,
+  buildEmail8_NoQuotesYet,
+  buildEmail9_QuoteDeadlineReminder,
+  buildEmail10_LowOrZeroCredits,
+  buildEmail11_QuoteSubmitted,
+  buildEmail12_RfqRevisedBuyerQuestion,
+  buildEmail13_CompleteYourProfile,
+  renderTransactionalEmail,
+} = require('./transactionalEmailTemplates');
 
 // Force Node.js DNS resolver to prefer IPv4 over IPv6.
 // Cloud environments like Render lack IPv6 egress routing; without this,
@@ -1948,7 +1964,8 @@ async function sendBuyerCredentialsEmail(params) {
 }
 
 /**
- * Onboarding credentials and RFQ creation confirmation for an automatically registered buyer.
+ * Qua AI Email 1 — Unregistered Buyer RFQ Creation & Account Auto-Created.
+ * Sent when an unknown email address writes to RFQ@procucev.com.
  */
 function buildBuyerOnboardingWithRfqEmail({
   to,
@@ -1960,63 +1977,33 @@ function buildBuyerOnboardingWithRfqEmail({
   rfqs = [],
   mobileNumber,
   contactPhone,
+  loginUrl,
+  reviewUrl,
 }) {
-  const signInUrl = escapeHtml(buyerPortalUrl());
-  const name = escapeHtml(buyerName || 'Valued Buyer');
-  const formattedRfq = escapeHtml(rfqNumber || (rfqs.length > 0 ? rfqs.map((r) => r.rfqNumber).join(', ') : ''));
-  const phone = escapeHtml(mobileNumber || contactPhone || '9999999999');
+  const rawNumber = String(rfqNumber || (rfqs.length > 0 ? rfqs.map((r) => r.rfqNumber).join(', ') : '')).trim();
+  const cleanNumber = rawNumber.replace(/^#+/, '');
+  const formattedRfq = cleanNumber ? cleanNumber : 'RFQ';
 
-  const inner = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
-      <p style="font-size: 16px; margin: 0 0 16px 0;">Hi <strong>${name}</strong>,</p>
+  const portalSignInUrl = loginUrl || buyerPortalUrl();
+  const rfqReviewUrl = reviewUrl || `${buyerPortalUrl()}/buyer/rfqs`;
 
-      <p style="font-size: 15px; margin: 0 0 16px 0;">
-        Great news! We received your requirement and created your buyer account on <strong>Procucev Enterprise</strong> along with your <strong>RFQ <span style="color: #0284c7; font-family: monospace; font-size: 16px;">${formattedRfq}</span></strong>.
-      </p>
-
-      ${rfqTitle ? `<p style="font-size: 13px; color: #64748b; margin: 0 0 12px 0;"><strong>Requirement:</strong> ${escapeHtml(rfqTitle)}</p>` : ''}
-      ${deliveryDate ? `<p style="font-size: 13px; color: #64748b; margin: 0 0 16px 0;"><strong>Target Delivery Date:</strong> ${escapeHtml(deliveryDate)}</p>` : ''}
-
-      <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #86efac; border-radius: 8px; padding: 14px 18px; margin: 16px 0;">
-        <p style="margin: 0; font-size: 14px; color: #166534; font-weight: 600;">
-          Your RFQ has been dispatched to Procucev verified vendors under Private Approved Roster (V0) rules.
-        </p>
-      </div>
-
-      <h3 style="font-size: 15px; color: #0f172a; margin: 20px 0 10px 0;">Your Account Login Credentials</h3>
-      <table style="width: 100%; border-collapse: collapse; margin: 12px 0; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
-        ${row('Login Identifier (Email)', escapeHtml(to))}
-        ${row('Login Identifier (Mobile)', phone)}
-        ${row('Temporary Password', tempPassword ? escapeHtml(tempPassword) : '')}
-        ${row('Portal Link', signInUrl)}
-      </table>
-
-      <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px 16px; margin: 18px 0; border-radius: 4px;">
-        <p style="font-size: 13px; color: #92400e; margin: 0; line-height: 1.5;">
-          <strong>Action Required on First Login:</strong> For security and compliance, please sign in to the portal using your email and mobile number (${phone}) and complete mandatory profile verification (Email OTP verification, updating your phone number from the placeholder with SMS OTP verification, and setting a new permanent password).
-        </p>
-      </div>
-
-      <p style="margin: 24px 0;">
-        <a href="${signInUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Sign In to Buyer Portal</a>
-      </p>
-
-      <p style="font-size: 14px; margin: 20px 0 24px 0; color: #334155;">
-        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.CLOSING}
-      </p>
-
-      <p style="font-size: 15px; font-weight: bold; color: #0f172a; margin: 0;">
-        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}
-      </p>
-    </div>
-  `;
+  const rendered = buildEmail1_RfqCreatedAccountAutoCreated({
+    first_name: buyerName,
+    rfq_id: formattedRfq,
+    rfq_title: rfqTitle || 'Procurement Requirement',
+    email: to,
+    temp_password: tempPassword || 'QuaAI#2026Auto',
+    login_url: portalSignInUrl,
+    review_url: rfqReviewUrl,
+  });
 
   return {
     from: fromAddress(),
     to,
     replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
-    subject: `Your Procucev Account & RFQ Confirmation - ${formattedRfq || 'RFQ Created'}`,
-    html: wrapEmail('PROCUCEV ENTERPRISE', 'Account Onboarding & RFQ Confirmation', inner),
+    subject: rendered.subject,
+    text: rendered.text,
+    html: rendered.html,
   };
 }
 
@@ -2182,80 +2169,68 @@ async function sendVendorIngestionEmail(message, template) {
 }
 
 /**
- * Template E — Buyer RFQ Creation Acknowledgement.
- * Sent to the buyer once their requirement has been converted into an RFQ.
+ * Qua AI Email 2 — Registered Buyer RFQ Creation Acknowledgement.
+ * Sent to the buyer once their requirement has been converted into an RFQ or created on the platform.
  */
-function buildRfqAcknowledgementEmail({ to, buyerName, rfqNumber, rfqTitle }) {
+function buildRfqAcknowledgementEmail(params = {}) {
+  const {
+    to,
+    buyerName,
+    rfqNumber,
+    rfqTitle,
+    category,
+    itemCount,
+    deliveryLocation,
+    deliveryDate,
+    requiredBy,
+    quoteDeadline,
+    deadline,
+    suppliersInvited,
+    items = [],
+    rfqSummaryUrl,
+  } = params;
+
   const rawNumber = String(rfqNumber || '').trim();
   const cleanNumber = rawNumber.replace(/^#+/, '');
-  const formattedRfqNumber = cleanNumber ? `#${cleanNumber}` : '#RFQ';
-  const name = buyerName || 'Valued Buyer';
-  const subject = RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUBJECT.replace('{rfqNumber}', cleanNumber || 'RFQ');
+  const formattedRfqNumber = cleanNumber ? cleanNumber : 'RFQ';
 
-  const text = `Hi ${name},
+  const normalizedItems = Array.isArray(items) && items.length > 0
+    ? items.map((it) => ({
+        item_name: it.item_name || it.itemName || it.name || 'Item',
+        item_spec: it.item_spec || it.technicalSpecs || it.specifications || it.specs || it.description || 'Standard Specification',
+        qty: it.qty != null ? it.qty : (it.quantity != null ? it.quantity : 1),
+        uom: it.uom || it.unit || 'Nos',
+      }))
+    : [{
+        item_name: rfqTitle || 'Procurement Requirement',
+        item_spec: 'Standard Specification',
+        qty: 1,
+        uom: 'Lot',
+      }];
 
-Great news! Your requirement has been converted into RFQ ${formattedRfqNumber} and sent to verified suppliers on Procucev right now.
+  const count = itemCount !== undefined ? itemCount : normalizedItems.length;
 
-📩 ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.QUOTES_TIMELINE}
-
-${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.NEED_IT_FASTER}
-
-📞 Call: ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUPPORT_PHONE}
-✉️ Email: ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUPPORT_EMAIL}
-
-${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.CLOSING}
-
-${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}`;
-
-  const inner = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
-      <p style="font-size: 16px; margin: 0 0 16px 0;">Hi <strong>${name}</strong>,</p>
-
-      <p style="font-size: 15px; margin: 0 0 18px 0; line-height: 1.6;">
-        Great news! Your requirement has been converted into <strong>RFQ <span style="color: #0284c7; font-family: monospace; font-size: 16px;">${formattedRfqNumber}</span></strong> and sent to verified suppliers on Procucev right now.
-      </p>
-
-      ${rfqTitle ? `<p style="font-size: 13px; color: #64748b; margin: 0 0 16px 0;"><strong>Requisition:</strong> ${rfqTitle}</p>` : ''}
-
-      <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #86efac; border-radius: 8px; padding: 14px 18px; margin: 20px 0;">
-        <p style="margin: 0; font-size: 14px; color: #166534; font-weight: 600;">
-          📩 ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.QUOTES_TIMELINE}
-        </p>
-      </div>
-
-      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px 18px; margin: 20px 0;">
-        <p style="margin: 0 0 10px 0; font-size: 14px; font-weight: bold; color: #0f172a;">
-          ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.NEED_IT_FASTER}
-        </p>
-        <p style="margin: 0 0 8px 0; font-size: 13px;">
-          📞 <strong>Call:</strong> <a href="tel:+917996170801" style="color: #0284c7; text-decoration: none; font-weight: 600;">${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUPPORT_PHONE}</a>
-        </p>
-        <p style="margin: 0; font-size: 13px;">
-          ✉️ <strong>Email:</strong> <a href="mailto:RFQ@procucev.com" style="color: #0284c7; text-decoration: none;">RFQ@procucev.com</a> / <a href="mailto:support@procucev.com" style="color: #0284c7; text-decoration: none;">support@procucev.com</a>
-        </p>
-      </div>
-
-      <p style="font-size: 14px; margin: 20px 0 24px 0; color: #334155;">
-        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.CLOSING}
-      </p>
-
-      <p style="font-size: 15px; font-weight: bold; color: #0f172a; margin: 0;">
-        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}
-      </p>
-    </div>
-  `;
+  const rendered = buildEmail2_RfqCreated({
+    first_name: buyerName,
+    rfq_id: formattedRfqNumber,
+    rfq_title: rfqTitle || 'Procurement Requirement',
+    category: category || 'Industrial Supplies',
+    item_count: count,
+    delivery_location: deliveryLocation || 'As per RFQ Specification',
+    required_by: requiredBy || deliveryDate || 'To be scheduled',
+    quote_deadline: quoteDeadline || deadline || 'Within 72 hours',
+    suppliers_invited: suppliersInvited !== undefined ? suppliersInvited : 5,
+    items: normalizedItems,
+    rfq_summary_url: rfqSummaryUrl || `${buyerPortalUrl()}/buyer/rfqs`,
+  });
 
   return {
     from: fromAddress(),
     to,
     replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
-    subject,
-    text,
-    html: wrapEmail(
-      RFQ_ACKNOWLEDGEMENT_NOTIFICATION.HEADLINE,
-      RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUBLINE,
-      inner
-    ),
+    subject: rendered.subject,
+    text: rendered.text,
+    html: rendered.html,
   };
 }
 
@@ -2556,5 +2531,19 @@ module.exports = {
   buildEnterpriseInquiryBuyerConfirmationEmail,
   sendEnterpriseInquiryBuyerConfirmationEmail,
   sendTransactionalEmail,
+  buildEmail1_RfqCreatedAccountAutoCreated,
+  buildEmail2_RfqCreated,
+  buildEmail3_NewRfqIntimation,
+  buildEmail4_NewRfqToQuote,
+  buildEmail5_QuotationsReadyToCompare,
+  buildEmail6_ActivateYourAccount,
+  buildEmail7_RfqNeedsMoreInformation,
+  buildEmail8_NoQuotesYet,
+  buildEmail9_QuoteDeadlineReminder,
+  buildEmail10_LowOrZeroCredits,
+  buildEmail11_QuoteSubmitted,
+  buildEmail12_RfqRevisedBuyerQuestion,
+  buildEmail13_CompleteYourProfile,
+  renderTransactionalEmail,
 };
 

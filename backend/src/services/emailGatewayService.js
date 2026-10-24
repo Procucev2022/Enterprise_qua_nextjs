@@ -989,6 +989,12 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
           rfqTitle: saved.rfqTitle || row.subject,
           deliveryDate: saved.deliveryDate,
           mobileNumber: saved.mobileNumber || '9999999999',
+          category: saved.category,
+          deliveryLocation: saved.deliveryLocation,
+          requiredBy: saved.requiredBy || saved.deliveryDate,
+          quoteDeadline: saved.quoteDeadline || saved.deadline,
+          suppliersInvited: saved.suppliersInvited,
+          items: saved.items,
         });
       } else {
         await mailerService.sendRfqAcknowledgementEmail({
@@ -996,6 +1002,13 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
           buyerName: saved.buyerName,
           rfqNumber: row.rfq_number,
           rfqTitle: saved.rfqTitle || row.subject,
+          category: saved.category,
+          deliveryLocation: saved.deliveryLocation,
+          deliveryDate: saved.deliveryDate,
+          requiredBy: saved.requiredBy || saved.deliveryDate,
+          quoteDeadline: saved.quoteDeadline || saved.deadline,
+          suppliersInvited: saved.suppliersInvited,
+          items: saved.items,
         });
       }
       await record(INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry');
@@ -2019,6 +2032,23 @@ async function processMessage(rawSource, config = resolveConfig()) {
         authorisation?.buyerAccount?.phone ||
         '9999999999';
 
+      const rawEntities = Array.isArray(created.extractedEntities) && created.extractedEntities.length > 0
+        ? created.extractedEntities
+        : Array.isArray(created.items)
+          ? created.items
+          : [];
+
+      const normalizedLineItems = rawEntities.map((it) => ({
+        item_name: it.itemName || it.name || it.item_name || 'Line Item',
+        item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || 'Standard Specification',
+        qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : 1),
+        uom: it.unit || it.uom || 'Nos',
+      }));
+
+      const resolvedSuppliersCount = created.assignedVendors && created.assignedVendors.length > 0
+        ? created.assignedVendors.length
+        : (created.procucevVendorCount || 5);
+
       const ack = {
         to: message.fromAddress,
         buyerName: buyerDisplayName(authorisation.buyerAccount, message),
@@ -2027,31 +2057,26 @@ async function processMessage(rawSource, config = resolveConfig()) {
         deliveryDate: created.targetDeliveryDate,
         tempPassword: shouldSendOnboardingCredentials ? authorisation.tempPassword : null,
         mobileNumber: resolvedMobile,
+        category: created.category,
+        itemCount: normalizedLineItems.length || 1,
+        deliveryLocation: created.deliveryLocation,
+        requiredBy: created.targetDeliveryDate,
+        quoteDeadline: created.deadline,
+        deadline: created.deadline,
+        suppliersInvited: resolvedSuppliersCount,
+        items: normalizedLineItems,
       };
 
       if (shouldSendOnboardingCredentials) {
         try {
-          await mailerService.sendBuyerOnboardingWithRfqEmail({
-            to: ack.to,
-            buyerName: ack.buyerName,
-            tempPassword: ack.tempPassword,
-            rfqNumber: ack.rfqNumber,
-            rfqTitle: ack.rfqTitle,
-            deliveryDate: ack.deliveryDate,
-            mobileNumber: ack.mobileNumber,
-          });
+          await mailerService.sendBuyerOnboardingWithRfqEmail(ack);
         } catch (onboardErr) {
           logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');
           await queueAcknowledgement(groupKey || created.id, ack);
         }
       } else {
         try {
-          await mailerService.sendRfqAcknowledgementEmail({
-            to: ack.to,
-            buyerName: ack.buyerName,
-            rfqNumber: ack.rfqNumber,
-            rfqTitle: ack.rfqTitle,
-          });
+          await mailerService.sendRfqAcknowledgementEmail(ack);
         } catch (ackErr) {
           logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
           await queueAcknowledgement(groupKey || created.id, ack);
