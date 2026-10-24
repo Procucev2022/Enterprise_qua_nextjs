@@ -238,8 +238,8 @@ function describeConfigurationFault() {
  * told the gateway is not going to work.
  */
 function resolveConnectionState(config, { lastError, watching } = {}) {
-  if (!isConfigured(config)) return EMAIL_GATEWAY_STATE.NOT_CONFIGURED;
-  if (describeConfigurationFault(config)) return EMAIL_GATEWAY_STATE.CONNECTION_ERROR;
+  if (!emailGateway.isConfigured(config)) return EMAIL_GATEWAY_STATE.NOT_CONFIGURED;
+  if (emailGateway.describeConfigurationFault(config)) return EMAIL_GATEWAY_STATE.CONNECTION_ERROR;
   if (!config.enabled) return EMAIL_GATEWAY_STATE.SWITCHED_OFF;
   if (lastError) return EMAIL_GATEWAY_STATE.CONNECTION_ERROR;
   if (watching) return EMAIL_GATEWAY_STATE.ACTIVE_LISTENING;
@@ -2350,9 +2350,9 @@ async function pollVendorOnce(config = resolveVendorConfig()) {
 function startBuyerPolling(config = resolveConfig()) {
   if (runtime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
-  if (!isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  if (!emailGateway.isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
 
-  const configurationFault = describeConfigurationFault(config);
+  const configurationFault = emailGateway.describeConfigurationFault(config);
   if (configurationFault) {
     runtime.lastError = configurationFault;
     return { started: false, reason: configurationFault };
@@ -2380,9 +2380,9 @@ function startBuyerPolling(config = resolveConfig()) {
 function startVendorPolling(config = resolveVendorConfig()) {
   if (vendorRuntime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
-  if (!isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  if (!emailGateway.isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
 
-  const configurationFault = describeConfigurationFault(config);
+  const configurationFault = emailGateway.describeConfigurationFault(config);
   if (configurationFault) {
     vendorRuntime.lastError = configurationFault;
     return { started: false, reason: configurationFault };
@@ -2578,6 +2578,7 @@ const emailGateway = {
   resolveVendorFromEmail,
   processVendorQuoteMessage,
   processMessage,
+  isBounceOrAutoReplyMessage,
   isSystemOrAutomatedSender,
   isOwnNoticeSubject,
   shouldSendAutoReply,

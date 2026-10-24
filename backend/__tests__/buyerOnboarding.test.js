@@ -10,6 +10,7 @@ const authSessionQueries = require('../src/db/authSessionQueries');
 const identityQueries = require('../src/db/identityQueries');
 const geminiService = require('../src/services/geminiService');
 const pool = require('../src/db/pool');
+const rfqAttachmentService = require('../src/services/rfqAttachmentService');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
 const { EMAIL_GATEWAY_STATE } = require('../src/config/constants');
@@ -923,6 +924,236 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       expect(emailGatewayService.resolveConnectionState(enabledCfg, { lastError: 'Some error' })).toBe(EMAIL_GATEWAY_STATE.CONNECTION_ERROR);
       expect(emailGatewayService.resolveConnectionState(enabledCfg, { watching: true })).toBe(EMAIL_GATEWAY_STATE.ACTIVE_LISTENING);
       expect(emailGatewayService.resolveConnectionState(enabledCfg, { watching: false })).toBe(EMAIL_GATEWAY_STATE.SWITCHED_OFF);
+
+      // describeConfigurationFault branch in resolveConnectionState and startPolling
+      emailGatewayService.runtime.pollTimer = null;
+      emailGatewayService.vendorRuntime.pollTimer = null;
+      jest.spyOn(emailGatewayService, 'describeConfigurationFault').mockReturnValue('Missing configuration credentials');
+      expect(emailGatewayService.resolveConnectionState(enabledCfg)).toBe(EMAIL_GATEWAY_STATE.CONNECTION_ERROR);
+      expect(emailGatewayService.startBuyerPolling(enabledCfg)).toEqual({ started: false, reason: 'Missing configuration credentials' });
+      expect(emailGatewayService.startVendorPolling(enabledCfg)).toEqual({ started: false, reason: 'Missing configuration credentials' });
+    });
+
+    test('covers checkRfqCredits branch permutations', () => {
+      expect(emailGatewayService.checkRfqCredits(null, 'mode_0', 1)).toEqual({ ok: true, applies: false });
+      expect(emailGatewayService.checkRfqCredits({}, 'mode_0', 1)).toEqual({ ok: true, applies: false });
+      expect(emailGatewayService.checkRfqCredits({ id: 'b1', unlimitedAccess: true }, 'mode_1', 1)).toEqual({ ok: true, applies: false });
+      expect(emailGatewayService.checkRfqCredits({ id: 'b1', subscriptionPlan: 'version_1' }, 'mode_1', 1)).toEqual({ ok: true, applies: false });
+      expect(emailGatewayService.checkRfqCredits({ id: 'b1', subscriptionPlan: 'version_2' }, 'mode_1', 1)).toEqual({ ok: true, applies: false });
+      expect(emailGatewayService.checkRfqCredits({ id: 'b1', subscriptionPlan: 'version_3' }, 'mode_1', 1)).toEqual({ ok: true, applies: false });
+      expect(emailGatewayService.checkRfqCredits({ id: 'b1', subscriptionPlan: 'free_trial' }, 'mode_0', 1)).toEqual({ ok: true, applies: false });
+      expect(emailGatewayService.checkRfqCredits({ id: 'b1', subscriptionPlan: 'free_trial' }, 'v0', 1)).toEqual({ ok: true, applies: false });
+      expect(emailGatewayService.checkRfqCredits({ id: 'b1', subscriptionPlan: 'free_trial' }, 'version_0', 1)).toEqual({ ok: true, applies: false });
+      expect(emailGatewayService.checkRfqCredits({ id: 'b1', subscriptionPlan: 'free_trial' }, 'mode_1', 1)).toEqual({ ok: true, applies: true, remaining: 5, needed: 1 });
+      expect(emailGatewayService.checkRfqCredits({ id: 'b1', subscriptionPlan: 'free_trial', remainingFreeRFQs: 0 }, 'mode_1', 1)).toEqual({ ok: false, applies: true, remaining: 0, needed: 1 });
+      expect(emailGatewayService.checkRfqCredits({ id: 'b1', subscriptionPlan: 'free_trial', remainingFreeRFQs: 2 }, 'mode_1', 3)).toEqual({ ok: false, applies: true, remaining: 2, needed: 3 });
+    });
+
+    test('covers storeEmailAttachments branch permutations', async () => {
+      expect(await emailGatewayService.storeEmailAttachments(null)).toEqual([]);
+      expect(await emailGatewayService.storeEmailAttachments({})).toEqual([]);
+      expect(await emailGatewayService.storeEmailAttachments({ attachments: null })).toEqual([]);
+      expect(await emailGatewayService.storeEmailAttachments({ attachments: [] })).toEqual([]);
+      expect(await emailGatewayService.storeEmailAttachments({ attachments: [null, { content: null }] })).toEqual([]);
+
+      jest.spyOn(rfqAttachmentService, 'saveAttachment').mockResolvedValueOnce({
+        status: rfqAttachmentService.ATTACHMENT_STATUS.SAVED,
+        attachment: { id: 'att-101', fileName: 'spec.pdf' },
+      });
+      const saved = await emailGatewayService.storeEmailAttachments({
+        attachments: [{ fileName: 'spec.pdf', contentType: 'application/pdf', content: Buffer.from('PDF content') }],
+      });
+      expect(saved).toEqual([{ id: 'att-101', fileName: 'spec.pdf' }]);
+
+      jest.spyOn(rfqAttachmentService, 'saveAttachment').mockResolvedValueOnce({
+        status: rfqAttachmentService.ATTACHMENT_STATUS.UNSUPPORTED_TYPE,
+      });
+      const unsupp = await emailGatewayService.storeEmailAttachments({
+        attachments: [{ fileName: 'spec.exe', contentType: 'application/x-msdownload', content: 'exe content' }],
+      });
+      expect(unsupp).toEqual([]);
+
+      jest.spyOn(rfqAttachmentService, 'saveAttachment').mockRejectedValueOnce(new Error('S3 connection failure'));
+      const failed = await emailGatewayService.storeEmailAttachments({
+        attachments: [{ fileName: 'err.pdf', contentType: 'application/pdf', content: 'content' }],
+      });
+      expect(failed).toEqual([]);
+    });
+
+    test('covers isBounceOrAutoReplyMessage and isSystemOrAutomatedSender branches', () => {
+      // isBounceOrAutoReplyMessage
+      expect(emailGatewayService.isBounceOrAutoReplyMessage(null)).toBe(false);
+      expect(emailGatewayService.isBounceOrAutoReplyMessage({ fromAddress: 'postmaster@domain.com' })).toBe(true);
+      expect(emailGatewayService.isBounceOrAutoReplyMessage({ fromAddress: 'mailer-daemon@domain.com' })).toBe(true);
+      expect(emailGatewayService.isBounceOrAutoReplyMessage({ fromAddress: 'mail-daemon@domain.com' })).toBe(true);
+      expect(emailGatewayService.isBounceOrAutoReplyMessage({ fromAddress: 'bounce@domain.com' })).toBe(true);
+      expect(emailGatewayService.isBounceOrAutoReplyMessage({ fromAddress: 'bounces@domain.com' })).toBe(true);
+      expect(emailGatewayService.isBounceOrAutoReplyMessage({ fromAddress: 'user@domain.com', subject: 'Undeliverable: Requisition' })).toBe(true);
+      expect(emailGatewayService.isBounceOrAutoReplyMessage({ fromAddress: 'user@domain.com', subject: 'Delivery status notification' })).toBe(true);
+      expect(emailGatewayService.isBounceOrAutoReplyMessage({ fromAddress: 'user@domain.com', subject: 'Mail delivery failed: return' })).toBe(true);
+      expect(emailGatewayService.isBounceOrAutoReplyMessage({ fromAddress: 'user@domain.com', subject: 'Returned mail for user' })).toBe(true);
+      expect(emailGatewayService.isBounceOrAutoReplyMessage({ fromAddress: 'user@domain.com', subject: 'Failure Notice' })).toBe(true);
+      expect(emailGatewayService.isBounceOrAutoReplyMessage({ fromAddress: 'user@domain.com', subject: 'Standard Buyer Request' })).toBe(false);
+
+      // isSystemOrAutomatedSender
+      expect(emailGatewayService.isSystemOrAutomatedSender(null)).toBe(false);
+      expect(emailGatewayService.isSystemOrAutomatedSender('')).toBe(false);
+      expect(emailGatewayService.isSystemOrAutomatedSender('no-reply@domain.com')).toBe(true);
+      expect(emailGatewayService.isSystemOrAutomatedSender('do_not_reply@domain.com')).toBe(true);
+      expect(emailGatewayService.isSystemOrAutomatedSender('alerts@updates.example.com')).toBe(true);
+      expect(emailGatewayService.isSystemOrAutomatedSender('admin@accounts.google.com')).toBe(true);
+      expect(emailGatewayService.isSystemOrAutomatedSender('support@google.com')).toBe(true);
+      expect(emailGatewayService.isSystemOrAutomatedSender('notify@notifications.google.com')).toBe(true);
+      expect(emailGatewayService.isSystemOrAutomatedSender('service@googlemail.com')).toBe(true);
+      expect(emailGatewayService.isSystemOrAutomatedSender('genuinebuyer@enterprise.com')).toBe(false);
+    });
+
+    test('covers isOwnNoticeSubject branches', () => {
+      expect(emailGatewayService.isOwnNoticeSubject(null)).toBe(false);
+      expect(emailGatewayService.isOwnNoticeSubject('Enterprise QUA - Buyer Registration Required')).toBe(true);
+      expect(emailGatewayService.isOwnNoticeSubject('Re[1]: Action Required – Quotation Could Not Be Processed')).toBe(true);
+      expect(emailGatewayService.isOwnNoticeSubject('Fwd: Action Required – 5 free quotation credits exhausted')).toBe(true);
+      expect(emailGatewayService.isOwnNoticeSubject('Portal bidding required for rfq #123')).toBe(true);
+      expect(emailGatewayService.isOwnNoticeSubject('Inquiry logged for rfq #123')).toBe(true);
+      expect(emailGatewayService.isOwnNoticeSubject('Action required: category mismatch')).toBe(true);
+      expect(emailGatewayService.isOwnNoticeSubject('Action Required – Your RFQ Email Could Not Be Processed')).toBe(true);
+      expect(emailGatewayService.isOwnNoticeSubject('Great news! Your requirement has been converted into RFQ #123')).toBe(true);
+      expect(emailGatewayService.isOwnNoticeSubject('Urgent Quotation for Steel Pipes')).toBe(false);
+    });
+
+    test('covers shouldSendAutoReply and sendAutoReply branches', async () => {
+      expect(await emailGatewayService.shouldSendAutoReply(null, 'UNAUTHORIZED_SENDER')).toEqual({
+        allowed: false,
+        reason: 'no sender address',
+      });
+      expect(
+        await emailGatewayService.shouldSendAutoReply({ fromAddress: 'no-reply@test.com' }, 'UNAUTHORIZED_SENDER')
+      ).toEqual({
+        allowed: false,
+        reason: 'automated sender address',
+      });
+      expect(
+        await emailGatewayService.shouldSendAutoReply(
+          { fromAddress: 'user@test.com', automatedReason: 'list-id' },
+          'UNAUTHORIZED_SENDER'
+        )
+      ).toEqual({
+        allowed: false,
+        reason: 'automated message (list-id)',
+      });
+      expect(
+        await emailGatewayService.shouldSendAutoReply({ fromAddress: 'user@test.com' }, 'UNKNOWN_COOLDOWN_KIND')
+      ).toEqual({
+        allowed: true,
+      });
+      expect(
+        await emailGatewayService.shouldSendAutoReply(
+          { fromAddress: 'user@test.com', subject: 'Enterprise QUA - Buyer Registration Required' },
+          emailGatewayService.AUTO_REPLY_KIND.UNAUTHORIZED_SENDER
+        )
+      ).toEqual({
+        allowed: false,
+        reason: 'reply to our own notice',
+      });
+      expect(
+        await emailGatewayService.shouldSendAutoReply(
+          { fromAddress: 'user@procucev.com' },
+          emailGatewayService.AUTO_REPLY_KIND.UNAUTHORIZED_SENDER
+        )
+      ).toEqual({
+        allowed: false,
+        reason: 'platform domain',
+      });
+
+      // In-memory cooldown limit
+      const msg = { fromAddress: 'burst.sender@external.com', subject: 'RFQ Inquiry' };
+      const kind = emailGatewayService.AUTO_REPLY_KIND.UNAUTHORIZED_SENDER;
+      const res1 = await emailGatewayService.shouldSendAutoReply(msg, kind);
+      expect(res1.allowed).toBe(true);
+      const res2 = await emailGatewayService.shouldSendAutoReply(msg, kind);
+      expect(res2.allowed).toBe(false);
+      expect(res2.reason).toBe('notice limit reached for this sender');
+
+      // Database cooldown failure branch
+      emailGatewayService.resetAutoReplyMemory();
+      jest.spyOn(emailGatewayQueries, 'countRecentOutcomes').mockRejectedValueOnce(new Error('DB read timeout'));
+      const dbErr = await emailGatewayService.shouldSendAutoReply({ fromAddress: 'dberr@external.com' }, kind);
+      expect(dbErr.allowed).toBe(false);
+      expect(dbErr.reason).toBe('cooldown unavailable');
+
+      // sendAutoReply branches
+      const sendMock = jest.fn().mockResolvedValue({ success: true });
+      expect(await emailGatewayService.sendAutoReply(null, kind, sendMock)).toBe(false);
+
+      const sendThrowMock = jest.fn().mockRejectedValue(new Error('Send failure'));
+      expect(await emailGatewayService.sendAutoReply({ fromAddress: 'throw@other.com' }, kind, sendThrowMock)).toBe(false);
+
+      emailGatewayService.resetAutoReplyMemory();
+      expect(await emailGatewayService.sendAutoReply({ fromAddress: 'throw@other.com' }, kind, sendMock)).toBe(true);
+    });
+
+    test('covers getOrCreateBuyerAccount validation and error branches', async () => {
+      await expect(emailGatewayService.getOrCreateBuyerAccount('')).rejects.toThrow(
+        'Email address is required for buyer onboarding.'
+      );
+
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        id: 'buyer-existing-err',
+        status: 'PENDING_ONBOARDING',
+      });
+      jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValueOnce(new Error('Identity DB connection error'));
+      jest.spyOn(identityQueries, 'updateUserPassword').mockRejectedValueOnce(new Error('Password persistence error'));
+
+      const accRes = await emailGatewayService.getOrCreateBuyerAccount('errbuyer@industrial-corp.com');
+      expect(accRes.buyerAccount.id).toBe('buyer-existing-err');
+      expect(accRes.isOnboardingPending).toBe(true);
+    });
+
+    test('covers resolveVendorFromEmail edge cases', async () => {
+      expect(await emailGatewayService.resolveVendorFromEmail(null)).toBeNull();
+      expect(await emailGatewayService.resolveVendorFromEmail('rfqprocucev@gmail.com')).toBeNull();
+      expect(await emailGatewayService.resolveVendorFromEmail('srinu20252026@gmail.com')).toBeNull();
+
+      const matchedTarget = await emailGatewayService.resolveVendorFromEmail('assigned@targetvendor.com', {
+        assignedVendors: [{ email: 'assigned@targetvendor.com', vendorId: 'v-assigned-101' }],
+      });
+      expect(matchedTarget).toEqual({ email: 'assigned@targetvendor.com', vendorId: 'v-assigned-101' });
+    });
+
+    test('covers resolveSenderAuthorisation and getOrCreateBuyerAccount temp password resolution branches', async () => {
+      // 1. resolveSenderAuthorisation with existing temp password
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce({
+        verificationStatus: 'PENDING_ONBOARDING',
+        password: 'existing-temp-pwd',
+      });
+      const authWithExisting = await emailGatewayService.resolveSenderAuthorisation(
+        'pending@example.com',
+        {},
+        { status: 'PENDING_ONBOARDING' }
+      );
+      expect(authWithExisting.tempPassword).toBe('existing-temp-pwd');
+
+      // 2. resolveSenderAuthorisation with findUserByEmail throwing error
+      jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValueOnce(new Error('Find error'));
+      jest.spyOn(identityQueries, 'updateUserPassword').mockRejectedValueOnce(new Error('Update error'));
+      const authWithThrow = await emailGatewayService.resolveSenderAuthorisation(
+        'pending-throw@example.com',
+        {},
+        { status: 'PENDING_ONBOARDING' }
+      );
+      expect(authWithThrow.tempPassword).toBeTruthy();
+
+      // 3. getOrCreateBuyerAccount with resetPasswordRequired
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        id: 'buyer-reset-pw',
+        onboardingRequired: true,
+      });
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce({
+        resetPasswordRequired: true,
+        password: 'reset-pwd-123',
+      });
+      const resetAcc = await emailGatewayService.getOrCreateBuyerAccount('resetbuyer@example.com');
+      expect(resetAcc.tempPassword).toBe('reset-pwd-123');
     });
   });
 });
