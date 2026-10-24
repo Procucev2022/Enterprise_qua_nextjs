@@ -3790,3 +3790,11 @@ Error: Process completed with exit code 1.
 1s
 ```
 
+---
+
+### 2026-10-23T22:14:06+05:30
+
+```text
+for register buyer the rfq is created but for un register buyer not get acknowledgemnt and the create buyer account credentials also
+```
+

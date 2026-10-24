@@ -269,12 +269,42 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig(),
   const allowedSenders = Array.isArray(config && config.allowedSenders) ? config.allowedSenders : [];
   const allowedDomains = Array.isArray(config && config.allowedDomains) ? config.allowedDomains : [];
 
+  const isOnboardingPending = Boolean(
+    buyerAccount &&
+    (buyerAccount.status === 'PENDING_ONBOARDING' ||
+     buyerAccount.onboardingRequired === true ||
+     buyerAccount.tempPasswordRequired === true ||
+     buyerAccount.isAutoRegistered === true)
+  );
+
+  let tempPassword = null;
+  if (isOnboardingPending) {
+    try {
+      const idUser = await identityQueries.findUserByEmail(address);
+      if (idUser && (idUser.verificationStatus === 'PENDING_ONBOARDING' || idUser.resetPasswordRequired)) {
+        tempPassword = idUser.password || null;
+      }
+    } catch (err) {
+      logger.warn('Failed to query identity user password in resolveSenderAuthorisation', { address, error: err.message }, 'EMAIL_GATEWAY');
+    }
+    if (!tempPassword) {
+      tempPassword = storeService._generateTempPassword();
+      try {
+        await identityQueries.updateUserPassword(address, tempPassword);
+      } catch (pwErr) {
+        logger.warn('Failed to persist fresh temp password in resolveSenderAuthorisation', { address, error: pwErr.message }, 'EMAIL_GATEWAY');
+      }
+    }
+  }
+
   if (allowedSenders.length > 0) {
     if (!allowedSenders.includes(address)) {
       return {
         allowed: false,
         reason: EMAIL_GATEWAY_MESSAGES.SENDER_NOT_LISTED.replace('{address}', address),
         buyerAccount,
+        isOnboardingPending,
+        tempPassword,
       };
     }
     // Still needs an owning account: an RFQ with no buyerAccountId is invisible.
@@ -285,7 +315,7 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig(),
         buyerAccount: null,
       };
     }
-    return { allowed: true, reason: null, buyerAccount };
+    return { allowed: true, reason: null, buyerAccount, isOnboardingPending, tempPassword };
   }
 
   if (allowedDomains.length > 0) {
@@ -295,6 +325,8 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig(),
         allowed: false,
         reason: EMAIL_GATEWAY_MESSAGES.DOMAIN_NOT_LISTED.replace('{domain}', domain || address),
         buyerAccount,
+        isOnboardingPending,
+        tempPassword,
       };
     }
   }
@@ -307,7 +339,7 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig(),
     };
   }
 
-  return { allowed: true, reason: null, buyerAccount };
+  return { allowed: true, reason: null, buyerAccount, isOnboardingPending, tempPassword };
 }
 
 const inFlightBuyerRegistrations = new Map();
@@ -321,10 +353,41 @@ async function getOrCreateBuyerAccount(email) {
     throw new Error('Email address is required for buyer onboarding.');
   }
 
+  const resolvePendingTempPassword = async (account) => {
+    const isPending = Boolean(
+      account &&
+      (account.status === 'PENDING_ONBOARDING' ||
+       account.onboardingRequired === true ||
+       account.tempPasswordRequired === true ||
+       account.isAutoRegistered === true)
+    );
+    let tempPassword = null;
+    if (isPending) {
+      try {
+        const idUser = await identityQueries.findUserByEmail(normEmail);
+        if (idUser && (idUser.verificationStatus === 'PENDING_ONBOARDING' || idUser.resetPasswordRequired)) {
+          tempPassword = idUser.password || null;
+        }
+      } catch (err) {
+        logger.warn('Failed to resolve identity user temp password in getOrCreateBuyerAccount', { email: normEmail, error: err.message }, 'EMAIL_GATEWAY');
+      }
+      if (!tempPassword) {
+        tempPassword = storeService._generateTempPassword();
+        try {
+          await identityQueries.updateUserPassword(normEmail, tempPassword);
+        } catch (pwErr) {
+          logger.warn('Failed to persist fresh temp password in getOrCreateBuyerAccount', { email: normEmail, error: pwErr.message }, 'EMAIL_GATEWAY');
+        }
+      }
+    }
+    return { isPending, tempPassword };
+  };
+
   // 1. Check if already exists in storeService
   let existing = await storeService.getBuyerAccountByEmail(normEmail);
   if (existing) {
-    return { buyerAccount: existing, isNew: false, tempPassword: null };
+    const { isPending, tempPassword } = await resolvePendingTempPassword(existing);
+    return { buyerAccount: existing, isNew: false, isOnboardingPending: isPending, tempPassword };
   }
 
   // 2. Concurrency lock per email
@@ -336,7 +399,8 @@ async function getOrCreateBuyerAccount(email) {
     // Re-check after acquiring promise
     existing = await storeService.getBuyerAccountByEmail(normEmail);
     if (existing) {
-      return { buyerAccount: existing, isNew: false, tempPassword: null };
+      const { isPending, tempPassword } = await resolvePendingTempPassword(existing);
+      return { buyerAccount: existing, isNew: false, isOnboardingPending: isPending, tempPassword };
     }
 
     const tempPassword = storeService._generateTempPassword();
@@ -395,6 +459,7 @@ async function getOrCreateBuyerAccount(email) {
     return {
       buyerAccount: newBuyerAccount,
       isNew: true,
+      isOnboardingPending: true,
       tempPassword,
       user: userResult?.user || null,
     };
@@ -862,10 +927,13 @@ const ACK_RETRIES_PER_POLL = 5;
  */
 async function queueAcknowledgement(rfqKey, ack) {
   if (!rfqKey) return;
+  const detailObj = { buyerName: ack.buyerName, rfqTitle: ack.rfqTitle };
+  if (ack.tempPassword) detailObj.tempPassword = ack.tempPassword;
+  if (ack.deliveryDate) detailObj.deliveryDate = ack.deliveryDate;
   await emailGatewayQueries.recordProcessed({
     messageId: `${rfqKey}#ack`,
     status: INGESTION_OUTCOME.ACK_PENDING,
-    detail: JSON.stringify({ buyerName: ack.buyerName, rfqTitle: ack.rfqTitle }),
+    detail: JSON.stringify(detailObj),
     fromAddress: ack.to,
     subject: ack.rfqTitle,
     rfqNumber: ack.rfqNumber,
@@ -910,12 +978,23 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
       saved = {};
     }
     try {
-      await mailerService.sendRfqAcknowledgementEmail({
-        to: row.from_address,
-        buyerName: saved.buyerName,
-        rfqNumber: row.rfq_number,
-        rfqTitle: saved.rfqTitle || row.subject,
-      });
+      if (saved.tempPassword) {
+        await mailerService.sendBuyerOnboardingWithRfqEmail({
+          to: row.from_address,
+          buyerName: saved.buyerName,
+          tempPassword: saved.tempPassword,
+          rfqNumber: row.rfq_number,
+          rfqTitle: saved.rfqTitle || row.subject,
+          deliveryDate: saved.deliveryDate,
+        });
+      } else {
+        await mailerService.sendRfqAcknowledgementEmail({
+          to: row.from_address,
+          buyerName: saved.buyerName,
+          rfqNumber: row.rfq_number,
+          rfqTitle: saved.rfqTitle || row.subject,
+        });
+      }
       await record(INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry');
       outcome.sent += 1;
     } catch (err) {
@@ -960,7 +1039,23 @@ function buyerDisplayName(buyerAccount, message) {
 }
 
 /** Tell a registered buyer their email did not become an RFQ, within the auto-reply guards. */
-function notifyRfqNotCreated(message, reason, { buyerAccount = null, config = {}, count, max } = {}) {
+function notifyRfqNotCreated(message, reason, { buyerAccount = null, config = {}, count, max, authorisation = null } = {}) {
+  // If the buyer is unverified / pending onboarding and has a temporary password, dispatch their credentials too!
+  if (
+    authorisation &&
+    (authorisation.isAutoRegistered || authorisation.isOnboardingPending) &&
+    authorisation.tempPassword
+  ) {
+    mailerService.sendBuyerCredentialsEmail({
+      to: message.fromAddress,
+      recipientName: buyerDisplayName(buyerAccount, message),
+      tempPassword: authorisation.tempPassword,
+      contactPhone: buyerAccount?.mobileNumber || '',
+    }).catch((err) => {
+      logger.error('Failed to dispatch buyer credentials on failed RFQ creation', err, 'EMAIL_GATEWAY');
+    });
+  }
+
   return sendAutoReply(
     message,
     AUTO_REPLY_KIND.RFQ_NOT_CREATED,
@@ -1648,7 +1743,8 @@ async function processMessage(rawSource, config = resolveConfig()) {
         allowed: true,
         reason: null,
         buyerAccount: onboardResult.buyerAccount,
-        isAutoRegistered: onboardResult.isNew,
+        isAutoRegistered: Boolean(onboardResult.isNew || onboardResult.isAutoRegistered),
+        isOnboardingPending: Boolean(onboardResult.isNew || onboardResult.isOnboardingPending),
         tempPassword: onboardResult.tempPassword,
       };
     } else {
@@ -1670,7 +1766,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
   // nothing about the email. It is thrown so the poller retries it; once the
   // retries run out the buyer is told, instead of the requirement being
   // recorded as "no line items" and dropped after one try.
-  const notifyContext = { buyerAccount: authorisation.buyerAccount, config };
+  const notifyContext = { buyerAccount: authorisation.buyerAccount, config, authorisation };
   const giveUpNotice = () => notifyRfqNotCreated(message, 'PROCESSING_FAILED', notifyContext);
   const extractionTimeoutMs = Number(config?.extractionTimeoutMs || EXTRACTION_TIMEOUT_MS);
   let extraction;
@@ -1861,28 +1957,43 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
     // Dispatch RFQ creation acknowledgement email to the buyer
     if (message.fromAddress) {
-      if (authorisation.isAutoRegistered && authorisation.tempPassword) {
+      const shouldSendOnboardingCredentials = Boolean(
+        groupIndex === 0 &&
+        (authorisation.isAutoRegistered || authorisation.isOnboardingPending) &&
+        authorisation.tempPassword
+      );
+
+      const ack = {
+        to: message.fromAddress,
+        buyerName: buyerDisplayName(authorisation.buyerAccount, message),
+        rfqNumber: created.rfqNumber,
+        rfqTitle: created.title,
+        deliveryDate: created.targetDeliveryDate,
+        tempPassword: shouldSendOnboardingCredentials ? authorisation.tempPassword : null,
+      };
+
+      if (shouldSendOnboardingCredentials) {
         try {
           await mailerService.sendBuyerOnboardingWithRfqEmail({
-            to: message.fromAddress,
-            buyerName: buyerDisplayName(authorisation.buyerAccount, message),
-            tempPassword: authorisation.tempPassword,
-            rfqNumber: created.rfqNumber,
-            rfqTitle: created.title,
-            deliveryDate: created.targetDeliveryDate,
+            to: ack.to,
+            buyerName: ack.buyerName,
+            tempPassword: ack.tempPassword,
+            rfqNumber: ack.rfqNumber,
+            rfqTitle: ack.rfqTitle,
+            deliveryDate: ack.deliveryDate,
           });
         } catch (onboardErr) {
           logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');
+          await queueAcknowledgement(groupKey || created.id, ack);
         }
       } else {
-        const ack = {
-          to: message.fromAddress,
-          buyerName: buyerDisplayName(authorisation.buyerAccount, message),
-          rfqNumber: created.rfqNumber,
-          rfqTitle: created.title,
-        };
         try {
-          await mailerService.sendRfqAcknowledgementEmail(ack);
+          await mailerService.sendRfqAcknowledgementEmail({
+            to: ack.to,
+            buyerName: ack.buyerName,
+            rfqNumber: ack.rfqNumber,
+            rfqTitle: ack.rfqTitle,
+          });
         } catch (ackErr) {
           logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
           await queueAcknowledgement(groupKey || created.id, ack);

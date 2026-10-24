@@ -12,6 +12,7 @@ const geminiService = require('../src/services/geminiService');
 const pool = require('../src/db/pool');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
+const { EMAIL_GATEWAY_STATE } = require('../src/config/constants');
 
 describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation', () => {
   const SENDER = 'newprocurement.buyer@industrial-corp.com';
@@ -43,6 +44,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
     jest.spyOn(mailerService, 'sendBuyerOnboardingWithRfqEmail').mockResolvedValue({ success: true, messageId: 'msg-onboard-101' });
     jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ success: true, messageId: 'msg-remind-101' });
     jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ success: true, messageId: 'msg-quote-101' });
+    jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ success: true, messageId: 'msg-cred-101' });
   });
 
   afterEach(() => {
@@ -619,4 +621,310 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       expect([403, 404]).toContain(res.status);
     });
   });
+
+  describe('Scenario 21: Unregistered / Pending Onboarding Credentials & RFQ Acknowledgement', () => {
+    test('sends sendBuyerOnboardingWithRfqEmail to a buyer who already has PENDING_ONBOARDING status in DB', async () => {
+      const email = 'pending.retry.buyer@testdomain.com';
+      storeService.addBuyerAccount({
+        id: 'buyer-pending-retry-1',
+        corporateEmail: email,
+        organizationName: 'Pending Retry Corp',
+        status: 'PENDING_ONBOARDING',
+        onboardingRequired: true,
+        tempPasswordRequired: true,
+      });
+
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({
+        id: 'usr-pending-1',
+        email,
+        password: 'StoredTempPass123',
+        verificationStatus: 'PENDING_ONBOARDING',
+        resetPasswordRequired: true,
+      });
+
+      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+        status: geminiService.EXTRACTION_STATUS.SUCCESS,
+        model: 'gemini-test',
+        documentTitle: 'Industrial Valves',
+        lineItems: [
+          { itemName: 'Gate Valve 4 inch', quantity: 10, unit: 'Nos', targetDate: '2029-11-20' },
+        ],
+      });
+
+      const raw = makeRawEmail(email, 'Please supply 10 gate valves.');
+      const outcome = await emailGatewayService.processMessage(raw, {
+        allowedSenders: [],
+        allowedDomains: [],
+        autoRegisterUnregisteredBuyers: true,
+      });
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.INGESTED);
+      expect(mailerService.sendBuyerOnboardingWithRfqEmail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: email,
+          tempPassword: 'StoredTempPass123',
+        })
+      );
+    });
+
+    test('sends sendBuyerCredentialsEmail when line item extraction fails for an unregistered buyer', async () => {
+      const email = 'failed.extract.buyer@testdomain.com';
+      jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ success: true, messageId: 'msg-cred-1' });
+      jest.spyOn(mailerService, 'sendRfqNotCreatedEmail').mockResolvedValue({ success: true });
+
+      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+        status: geminiService.EXTRACTION_STATUS.NO_ITEMS_FOUND,
+        model: 'gemini-test',
+        lineItems: [],
+      });
+
+      const raw = makeRawEmail(email, 'Hello team, what is your price?');
+      const outcome = await emailGatewayService.processMessage(raw, {
+        allowedSenders: [],
+        allowedDomains: [],
+        autoRegisterUnregisteredBuyers: true,
+      });
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+      expect(mailerService.sendBuyerCredentialsEmail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: email,
+          tempPassword: expect.any(String),
+        })
+      );
+    });
+
+    test('retryPendingAcknowledgements sends onboarding email when tempPassword is saved in detail', async () => {
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
+        {
+          message_id: 'msg-ack-test#ack',
+          from_address: 'retry.ack.buyer@domain.com',
+          subject: 'RFQ Requisition',
+          rfq_number: 'RFQ-RETRY-001',
+          detail: JSON.stringify({
+            buyerName: 'Retry Buyer',
+            rfqTitle: 'Pumps',
+            tempPassword: 'RetryTempPass456',
+            deliveryDate: '2029-12-01',
+          }),
+          processed_at: new Date().toISOString(),
+        },
+      ]);
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements();
+      expect(outcome.sent).toBe(1);
+      expect(mailerService.sendBuyerOnboardingWithRfqEmail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'retry.ack.buyer@domain.com',
+          tempPassword: 'RetryTempPass456',
+          rfqNumber: 'RFQ-RETRY-001',
+        })
+      );
+    });
+
+    test('queues acknowledgement when sendBuyerOnboardingWithRfqEmail throws', async () => {
+      const email = 'fail.send.onboard@domain.com';
+      jest.spyOn(mailerService, 'sendBuyerOnboardingWithRfqEmail').mockRejectedValue(new Error('SMTP timeout'));
+
+      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+        status: geminiService.EXTRACTION_STATUS.SUCCESS,
+        model: 'gemini-test',
+        documentTitle: 'Pressure Gauges',
+        lineItems: [
+          { itemName: 'Pressure Gauge 0-10 bar', quantity: 20, unit: 'Nos', targetDate: '2029-11-20' },
+        ],
+      });
+
+      const raw = makeRawEmail(email, 'Please supply 20 pressure gauges.');
+      const outcome = await emailGatewayService.processMessage(raw, {
+        allowedSenders: [],
+        allowedDomains: [],
+        autoRegisterUnregisteredBuyers: true,
+      });
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.INGESTED);
+      expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: expect.stringContaining('#ack'),
+          status: INGESTION_OUTCOME.ACK_PENDING,
+          fromAddress: email,
+        })
+      );
+    });
+
+    test('handles identity lookup failure and generates fresh temp password in getOrCreateBuyerAccount', async () => {
+      const email = 'existing.nopw@domain.com';
+      storeService.addBuyerAccount({
+        id: 'buyer-nopw-1',
+        corporateEmail: email,
+        organizationName: 'No PW Corp',
+        status: 'PENDING_ONBOARDING',
+      });
+
+      jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValue(new Error('DB unreachable'));
+      const updatePwSpy = jest.spyOn(identityQueries, 'updateUserPassword').mockResolvedValue(true);
+
+      const result = await emailGatewayService.getOrCreateBuyerAccount(email);
+      expect(result.isOnboardingPending).toBe(true);
+      expect(typeof result.tempPassword).toBe('string');
+      expect(updatePwSpy).toHaveBeenCalledWith(email, result.tempPassword);
+    });
+
+    test('resolveSenderAuthorisation handles allowedSenders and allowedDomains with pending onboarding', async () => {
+      const email = 'allowed.pending@alloweddomain.com';
+      storeService.addBuyerAccount({
+        id: 'buyer-allowed-pending-1',
+        corporateEmail: email,
+        organizationName: 'Allowed Pending Corp',
+        status: 'PENDING_ONBOARDING',
+      });
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({
+        email,
+        password: 'AllowedTempPass123',
+        verificationStatus: 'PENDING_ONBOARDING',
+      });
+
+      // Allowed sender list match
+      const auth1 = await emailGatewayService.resolveSenderAuthorisation(email, {
+        allowedSenders: [email],
+      });
+      expect(auth1.allowed).toBe(true);
+      expect(auth1.tempPassword).toBe('AllowedTempPass123');
+
+      // Allowed domain list match
+      const auth2 = await emailGatewayService.resolveSenderAuthorisation(email, {
+        allowedDomains: ['alloweddomain.com'],
+      });
+      expect(auth2.allowed).toBe(true);
+      expect(auth2.tempPassword).toBe('AllowedTempPass123');
+
+      // Sender not in allowed list
+      const auth3 = await emailGatewayService.resolveSenderAuthorisation('other@other.com', {
+        allowedSenders: [email],
+      });
+      expect(auth3.allowed).toBe(false);
+
+      // Domain not in allowed list
+      const auth4 = await emailGatewayService.resolveSenderAuthorisation(email, {
+        allowedDomains: ['someotherdomain.com'],
+      });
+      expect(auth4.allowed).toBe(false);
+    });
+
+    test('dispatches credentials email when RFQ extraction fails for an auto-registered sender', async () => {
+      const email = 'failed.extract.buyer@industrial-corp.com';
+      jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ success: true, messageId: 'msg-fail-cred' });
+      jest.spyOn(mailerService, 'sendRfqNotCreatedEmail').mockResolvedValue({ success: true });
+      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+        status: geminiService.EXTRACTION_STATUS.FAILED,
+        model: 'gemini-test',
+        lineItems: [],
+      });
+
+      const raw = makeRawEmail(email, 'Unable to parse text requisition');
+      const outcome = await emailGatewayService.processMessage(raw, {
+        allowedSenders: [],
+        allowedDomains: [],
+        autoRegisterUnregisteredBuyers: true,
+      });
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+      expect(mailerService.sendBuyerCredentialsEmail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: email,
+          tempPassword: expect.any(String),
+        })
+      );
+    });
+
+    test('handles error if sendBuyerCredentialsEmail fails during failed RFQ notification', async () => {
+      const email = 'failed.email.buyer@industrial-corp.com';
+      jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockRejectedValue(new Error('SMTP down'));
+      jest.spyOn(mailerService, 'sendRfqNotCreatedEmail').mockResolvedValue({ success: true });
+      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+        status: geminiService.EXTRACTION_STATUS.FAILED,
+        model: 'gemini-test',
+        lineItems: [],
+      });
+
+      const raw = makeRawEmail(email, 'Vague text request');
+      const outcome = await emailGatewayService.processMessage(raw, {
+        allowedSenders: [],
+        allowedDomains: [],
+        autoRegisterUnregisteredBuyers: true,
+      });
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+    });
+
+    test('retryPendingAcknowledgements handles invalid JSON detail and sending failures', async () => {
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
+        {
+          id: 'ack-bad-json',
+          message_id: 'msg-bad#ack',
+          from_address: 'bad.json@domain.com',
+          subject: 'RFQ Requisition',
+          rfq_number: 'RFQ-BAD-001',
+          detail: '{invalid-json',
+          processed_at: new Date().toISOString(),
+        },
+        {
+          id: 'ack-fail-send',
+          message_id: 'msg-fail#ack',
+          from_address: 'fail.send@domain.com',
+          subject: 'RFQ Requisition',
+          rfq_number: 'RFQ-FAIL-001',
+          detail: JSON.stringify({ buyerName: 'Fail Buyer', tempPassword: 'Pass' }),
+          processed_at: new Date().toISOString(),
+        },
+      ]);
+      jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue({ success: true });
+      jest.spyOn(mailerService, 'sendBuyerOnboardingWithRfqEmail').mockRejectedValue(new Error('Send failed'));
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements();
+      expect(outcome.sent).toBe(1);
+      expect(outcome.stillPending).toBe(1);
+    });
+
+    test('covers resolveConnectionState, resolveVendorConfig, and isConfigured branches', () => {
+      const cfg = emailGatewayService.resolveVendorConfig({
+        VENDOR_EMAIL_GATEWAY_ENABLED: 'false',
+        VENDOR_EMAIL_GATEWAY_POLL_MS: '5000',
+        VENDOR_EMAIL_GATEWAY_MAX_PER_POLL: '2',
+        VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS: 'a@b.com, c@d.com',
+        VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS: 'b.com, d.com',
+      });
+      expect(cfg.enabled).toBe(false);
+      expect(cfg.allowedSenders).toEqual(['a@b.com', 'c@d.com']);
+      expect(cfg.allowedDomains).toEqual(['b.com', 'd.com']);
+      expect(emailGatewayService.describeConfigurationFault(cfg)).toBeNull();
+
+      // isConfigured
+      jest.spyOn(mailerService, 'isVendorGmailApiConfigured').mockReturnValue(false);
+      expect(emailGatewayService.isConfigured(cfg)).toBe(false);
+      jest.spyOn(mailerService, 'isVendorGmailApiConfigured').mockReturnValue(true);
+      expect(emailGatewayService.isConfigured(cfg)).toBe(true);
+
+      const buyerCfg = { isVendorMailbox: false };
+      jest.spyOn(mailerService, 'isGmailApiConfigured').mockReturnValue(false);
+      expect(emailGatewayService.isConfigured(buyerCfg)).toBe(false);
+      jest.spyOn(mailerService, 'isGmailApiConfigured').mockReturnValue(true);
+      expect(emailGatewayService.isConfigured(buyerCfg)).toBe(true);
+
+      // resolveConnectionState with disabled config
+      jest.spyOn(mailerService, 'isVendorGmailApiConfigured').mockReturnValue(false);
+      expect(emailGatewayService.resolveConnectionState(cfg)).toBe(EMAIL_GATEWAY_STATE.NOT_CONFIGURED);
+
+      jest.spyOn(mailerService, 'isVendorGmailApiConfigured').mockReturnValue(true);
+      expect(emailGatewayService.resolveConnectionState(cfg, { watching: true })).toBe(EMAIL_GATEWAY_STATE.SWITCHED_OFF);
+
+      // resolveConnectionState with enabled config
+      const enabledCfg = { ...cfg, enabled: true };
+      expect(emailGatewayService.resolveConnectionState(enabledCfg, { lastError: 'Some error' })).toBe(EMAIL_GATEWAY_STATE.CONNECTION_ERROR);
+      expect(emailGatewayService.resolveConnectionState(enabledCfg, { watching: true })).toBe(EMAIL_GATEWAY_STATE.ACTIVE_LISTENING);
+      expect(emailGatewayService.resolveConnectionState(enabledCfg, { watching: false })).toBe(EMAIL_GATEWAY_STATE.SWITCHED_OFF);
+    });
+  });
 });
+
+
