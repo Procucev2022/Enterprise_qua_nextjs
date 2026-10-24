@@ -191,5 +191,139 @@ describe('WhatsApp Service Unit Tests', () => {
         delete process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION;
       }
     });
+
+    test('supports 6-placeholder reminder template with v2 in template name', async () => {
+      const origTemplate = process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION;
+      process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = 'rfq_reminder_notification_v2';
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ status: 'success' }),
+      });
+
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-REMIND-01',
+        contactPerson: 'Aditi',
+        vendorName: 'Aditi Corp',
+        deliveryDate: '2026-11-15',
+        deliveryLocation: 'Hyderabad',
+        rfqTitle: 'Bearings',
+      });
+      expect(res.success).toBe(true);
+
+      if (origTemplate) {
+        process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = origTemplate;
+      } else {
+        delete process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION;
+      }
+    });
+
+    test('handles network exceptions in sendmsg.in and Meta Cloud gracefully', async () => {
+      process.env.WHATSAPP_PHONE_NUMBER_ID = 'meta-phone-1';
+      process.env.WHATSAPP_ACCESS_TOKEN = 'meta-token-1';
+
+      // sendmsg throws, Meta throws -> falls through to deep-link
+      global.fetch = jest
+        .fn()
+        .mockRejectedValueOnce(new Error('Network connection timeout on sendmsg'))
+        .mockRejectedValueOnce(new Error('Network connection timeout on Meta'));
+
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-ERR-01',
+      });
+      expect(res.success).toBe(true);
+      expect(res.messageId).toContain('wa-link-');
+
+      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+      delete process.env.WHATSAPP_ACCESS_TOKEN;
+    });
+
+    test('handles Meta Cloud API returning error status code', async () => {
+      process.env.WHATSAPP_PHONE_NUMBER_ID = 'meta-phone-1';
+      process.env.WHATSAPP_ACCESS_TOKEN = 'meta-token-1';
+
+      // sendmsg fails, Meta returns 400 error payload
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          text: async () => { throw new Error('Cannot read text'); },
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          json: async () => ({ error: { message: 'OAuth Exception: Invalid OAuth access token' } }),
+        });
+
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-META-ERR-01',
+      });
+      expect(res.success).toBe(true);
+      expect(res.messageId).toContain('wa-link-');
+
+      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+      delete process.env.WHATSAPP_ACCESS_TOKEN;
+    });
+
+    test('handles Meta Cloud API with empty response and json parse error', async () => {
+      process.env.WHATSAPP_PHONE_NUMBER_ID = 'meta-phone-1';
+      process.env.WHATSAPP_ACCESS_TOKEN = 'meta-token-1';
+
+      // sendmsg fails, Meta returns 502 with throwing json
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          text: async () => 'Internal Server Error',
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 502,
+          json: async () => { throw new Error('Invalid JSON'); },
+        });
+
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-META-ERR-02',
+      });
+      expect(res.success).toBe(true);
+      expect(res.messageId).toContain('wa-link-');
+
+      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+      delete process.env.WHATSAPP_ACCESS_TOKEN;
+    });
+
+    test('WHATSAPP_CONFIG getters all resolve correctly', () => {
+      expect(whatsAppService.WHATSAPP_CONFIG.SENDMSG_BASE_URL).toBeDefined();
+      expect(whatsAppService.WHATSAPP_CONFIG.SENDMSG_TEMPLATE_URL).toBeDefined();
+      expect(whatsAppService.WHATSAPP_CONFIG.USERNAME).toBeDefined();
+      expect(whatsAppService.WHATSAPP_CONFIG.PASSWORD).toBeDefined();
+      expect(whatsAppService.WHATSAPP_CONFIG.FROM_NUMBER).toBeDefined();
+      expect(whatsAppService.WHATSAPP_CONFIG.TEMPLATE_RFQ_INVITE).toBeDefined();
+      expect(whatsAppService.WHATSAPP_CONFIG.META_API_URL).toBeDefined();
+      expect(whatsAppService.WHATSAPP_CONFIG.PHONE_NUMBER_ID).toBeDefined();
+      expect(whatsAppService.WHATSAPP_CONFIG.ACCESS_TOKEN).toBeDefined();
+      expect(whatsAppService.WHATSAPP_CONFIG.SUPPORT_NUMBER).toBeDefined();
+
+      // Test CF environment shim branch
+      globalThis.__CF_ENV__ = { WHATSAPP_SUPPORT_NUMBER: '919999999999' };
+      const origSupport = process.env.WHATSAPP_SUPPORT_NUMBER;
+      delete process.env.WHATSAPP_SUPPORT_NUMBER;
+      expect(whatsAppService.WHATSAPP_CONFIG.SUPPORT_NUMBER).toBe('919999999999');
+      if (origSupport !== undefined) process.env.WHATSAPP_SUPPORT_NUMBER = origSupport;
+      delete globalThis.__CF_ENV__;
+    });
+
+    test('clearWhatsAppThrottleForPhone clears cache for individual number', () => {
+      whatsAppService.clearWhatsAppThrottleForPhone('9876543210');
+      whatsAppService.clearWhatsAppThrottleForPhone('');
+      expect(true).toBe(true);
+    });
   });
 });

@@ -3673,4 +3673,22 @@ In buyer side, when we are uploading vendors, it is showing in website for somet
 Please remove any non needed file, so that i can commit
 ```
 
+---
+
+### 2026-10-23T20:01:12+05:30
+
+```text
+Remove all harcoded env from code, & create env file for prod & dev if any credentials exists in code.
+```
+
+---
+
+### 2026-10-24T05:26:12+05:30
+
+```text
+resume
+```
+
+
+
 

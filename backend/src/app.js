@@ -8,6 +8,12 @@ dotenv.config();
 try {
   // eslint-disable-next-line no-undef
   if (typeof __dirname !== 'undefined') {
+    const fs = require('fs');
+    const targetEnv = process.env.APP_ENV || (process.env.NODE_ENV === 'production' ? 'prod' : 'dev');
+    const envSpecificPath = path.resolve(__dirname, `../.env.${targetEnv}`);
+    if (fs.existsSync(envSpecificPath)) {
+      dotenv.config({ path: envSpecificPath });
+    }
     dotenv.config({ path: path.resolve(__dirname, '../.env') });
   }
 } catch {

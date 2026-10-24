@@ -19,7 +19,13 @@
 
 const fs   = require('fs');
 const path = require('path');
-
+const targetEnv = process.argv.includes('--prod')
+  ? 'prod'
+  : (process.argv.includes('--dev') ? 'dev' : (process.env.APP_ENV || (process.env.NODE_ENV === 'production' ? 'prod' : 'dev')));
+const envSpecific = path.resolve(__dirname, `../.env.${targetEnv}`);
+if (fs.existsSync(envSpecific)) {
+  require('dotenv').config({ path: envSpecific });
+}
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const ACCOUNT_ID  = process.env.CLOUDFLARE_ACCOUNT_ID;

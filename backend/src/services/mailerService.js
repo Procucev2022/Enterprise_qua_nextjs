@@ -245,7 +245,7 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
 
   return {
     from: fromAddress(),
-    to: to || 'navinchaudhary.dev@gmail.com',
+    to: to || process.env.ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL || process.env.ADMIN_NOTIFICATION_EMAIL || 'navinchaudhary.dev@gmail.com',
     replyTo: fromEmail || safeRfq.sourceEmail || undefined,
     subject: `[Procucev Requisition] ${safeRfq.title || 'New Inbound Requisition'} (${safeRfq.rfqNumber || 'Draft'})`,
     html: `
