@@ -533,6 +533,10 @@ function deliveryPlan(channel, critical) {
   if (!mailTransport.isWorkersRuntime()) {
     const step = smtpStep('smtp:buyer', 'SMTP', Boolean(process.env.SMTP_USER && process.env.SMTP_PASSWORD), getTransporter);
     if (step) steps.push(step);
+    if (channel === DELIVERY_CHANNEL.BUYER && !step && Boolean(getEnv('VENDOR_SMTP_USER') && getEnv('VENDOR_SMTP_PASSWORD'))) {
+      const fallback = smtpStep('smtp:vendor:fallback', 'vendor SMTP (buyer fallback)', true, getVendorTransporter);
+      if (fallback) steps.push(fallback);
+    }
   }
   return steps;
 }
