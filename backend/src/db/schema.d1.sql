@@ -231,6 +231,7 @@ CREATE INDEX IF NOT EXISTS idx_vendors_email ON vendors (email);
 CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category);
 CREATE INDEX IF NOT EXISTS idx_vendors_created_at ON vendors (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vendors_source ON vendors (source);
+CREATE INDEX IF NOT EXISTS idx_vendors_status ON vendors (status);
 
 CREATE TABLE IF NOT EXISTS rfqs (
   id TEXT PRIMARY KEY,
@@ -244,7 +245,9 @@ CREATE TABLE IF NOT EXISTS rfqs (
   raw TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_rfqs_rfq_number ON rfqs (rfq_number);
+CREATE INDEX IF NOT EXISTS idx_rfqs_category ON rfqs (category);
 CREATE INDEX IF NOT EXISTS idx_rfqs_status ON rfqs (status);
+CREATE INDEX IF NOT EXISTS idx_rfqs_status_created ON rfqs (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_rfqs_sourcing_mode ON rfqs (sourcing_mode);
 CREATE INDEX IF NOT EXISTS idx_rfqs_created_at ON rfqs (created_at DESC);
 
@@ -257,6 +260,8 @@ CREATE TABLE IF NOT EXISTS evaluations (
   raw TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_evaluations_vendor_id ON evaluations (vendor_id);
+CREATE INDEX IF NOT EXISTS idx_evaluations_status ON evaluations (status);
+CREATE INDEX IF NOT EXISTS idx_evaluations_created_at ON evaluations (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS vendor_catalogue (
   id TEXT PRIMARY KEY,
@@ -268,6 +273,8 @@ CREATE TABLE IF NOT EXISTS vendor_catalogue (
   raw TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_vendor_catalogue_vendor_id ON vendor_catalogue (vendor_id);
+CREATE INDEX IF NOT EXISTS idx_vendor_catalogue_category ON vendor_catalogue (category);
+CREATE INDEX IF NOT EXISTS idx_vendor_catalogue_sku ON vendor_catalogue (sku);
 
 CREATE TABLE IF NOT EXISTS buyer_accounts (
   id TEXT PRIMARY KEY,
@@ -279,6 +286,8 @@ CREATE TABLE IF NOT EXISTS buyer_accounts (
   raw TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_buyer_accounts_corporate_email ON buyer_accounts (corporate_email);
+CREATE INDEX IF NOT EXISTS idx_buyer_accounts_is_active ON buyer_accounts (is_active);
+CREATE INDEX IF NOT EXISTS idx_buyer_accounts_status ON buyer_accounts (status);
 
 CREATE TABLE IF NOT EXISTS ai_feed (
   id TEXT PRIMARY KEY,
@@ -287,6 +296,7 @@ CREATE TABLE IF NOT EXISTS ai_feed (
   raw TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_feed_sequence ON ai_feed (sequence);
+CREATE INDEX IF NOT EXISTS idx_ai_feed_created_at ON ai_feed (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
@@ -295,6 +305,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   raw TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_logs_sequence ON audit_logs (sequence);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS notifications (
   id TEXT PRIMARY KEY,

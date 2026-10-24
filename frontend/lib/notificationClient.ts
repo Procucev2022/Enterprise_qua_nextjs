@@ -24,12 +24,13 @@ function authHeaders(): Record<string, string> {
  * to an empty list with `success: false`, so the bell can quietly keep whatever
  * it last showed instead of flashing an error.
  */
-export async function fetchNotifications(): Promise<NotificationListResult> {
+export async function fetchNotifications(options: { limit?: number } = {}): Promise<NotificationListResult> {
   if (!authClient.getToken()) return EMPTY;
 
+  const url = options.limit ? `/api/notifications?limit=${options.limit}` : '/api/notifications';
   let res: Response;
   try {
-    res = await fetch('/api/notifications', { headers: authHeaders() });
+    res = await fetch(url, { headers: authHeaders() });
   } catch {
     return { ...EMPTY, success: false, error: UI_STRINGS.auth.networkUnreachable };
   }

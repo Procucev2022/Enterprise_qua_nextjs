@@ -165,14 +165,14 @@ class StoreService {
           // subset" that individual DB fallbacks paper over — hydration
           // should actually honor that instead of loading everything.
           domainQueries.getVendorsPageFromDB({ limit: MAX_HYDRATION_VENDORS, offset: 0 }),
-          domainQueries.getRFQsFromDB(),
-          domainQueries.getEvaluationsFromDB(),
-          domainQueries.getVendorCatalogueFromDB(),
-          domainQueries.getBuyerAccountsFromDB(),
-          domainQueries.getAIFeedFromDB(),
-          domainQueries.getAuditLogsFromDB(),
-          domainQueries.getNotificationsFromDB(),
-          domainQueries.getPaymentLinksFromDB(),
+          domainQueries.getRFQsFromDB(null, 100),
+          domainQueries.getEvaluationsFromDB(100),
+          domainQueries.getVendorCatalogueFromDB(100),
+          domainQueries.getBuyerAccountsFromDB(100),
+          domainQueries.getAIFeedFromDB(100),
+          domainQueries.getAuditLogsFromDB(100),
+          domainQueries.getNotificationsFromDB(null, 100),
+          domainQueries.getPaymentLinksFromDB(100),
         ]);
 
       this.vendors = vendorPage.rows;
@@ -1696,7 +1696,7 @@ class StoreService {
    */
   async getPaymentLinksByStatusIn(statuses) {
     if (pool.hasStorage()) {
-      const allFromDB = await domainQueries.getPaymentLinksFromDB();
+      const allFromDB = await domainQueries.getPaymentLinksFromDB(100);
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
       for (const link of allFromDB) {
         byId.set(link.id, link);
@@ -1714,9 +1714,9 @@ class StoreService {
    */
   async getPaymentLinksForVendor(vendorId) {
     if (pool.hasStorage()) {
-      const allFromDB = await domainQueries.getPaymentLinksFromDB();
+      const fromDB = await domainQueries.getPaymentLinksByVendorFromDB(vendorId);
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
-      for (const link of allFromDB) byId.set(link.id, link);
+      for (const link of fromDB) byId.set(link.id, link);
       this.paymentLinks = Array.from(byId.values());
     }
     return this.paymentLinks
@@ -1727,9 +1727,9 @@ class StoreService {
   /** Same as getPaymentLinksForVendor, scoped to a buyer account instead. */
   async getPaymentLinksForBuyer(buyerAccountId) {
     if (pool.hasStorage()) {
-      const allFromDB = await domainQueries.getPaymentLinksFromDB();
+      const fromDB = await domainQueries.getPaymentLinksByBuyerFromDB(buyerAccountId);
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
-      for (const link of allFromDB) byId.set(link.id, link);
+      for (const link of fromDB) byId.set(link.id, link);
       this.paymentLinks = Array.from(byId.values());
     }
     return this.paymentLinks
@@ -1746,13 +1746,21 @@ class StoreService {
     const cached = this.paymentLinks.find((l) => l.id === id);
     if (cached) return cached;
     if (!pool.hasStorage()) return null;
-    const allFromDB = await domainQueries.getPaymentLinksFromDB();
-    const fromDB = allFromDB.find((l) => l.id === id);
-    if (!fromDB) return null;
-    if (!this.paymentLinks.some((l) => l.id === fromDB.id)) {
-      this.paymentLinks.unshift(fromDB);
+    const fromDB = typeof domainQueries.getPaymentLinkByIdFromDB === 'function'
+      ? await domainQueries.getPaymentLinkByIdFromDB(id)
+      : null;
+    if (fromDB) {
+      if (!this.paymentLinks.some((l) => l.id === fromDB.id)) {
+        this.paymentLinks.unshift(fromDB);
+      }
+      return fromDB;
     }
-    return fromDB;
+    const allFromDB = await domainQueries.getPaymentLinksFromDB(50);
+    const link = allFromDB.find((l) => l.id === id);
+    if (link && !this.paymentLinks.some((l) => l.id === link.id)) {
+      this.paymentLinks.unshift(link);
+    }
+    return link || null;
   }
 
   createPaymentLinkRecord({
@@ -1982,9 +1990,14 @@ class StoreService {
     return closedList;
   }
 
-  getRFQs() {
+  getRFQs(buyerAccountId = null) {
     this.checkAndClose48HourRFQs();
-    return this.rfqs.map((r) => {
+    let list = this.rfqs;
+    if (buyerAccountId) {
+      const targetId = String(buyerAccountId).toLowerCase();
+      list = list.filter((r) => String(r.buyerAccountId || '').toLowerCase() === targetId);
+    }
+    return list.map((r) => {
       let item = r;
       if (item && (item.poFinalised || item.poNumber) && item.status === 'Closed') {
         item = { ...item, status: 'PO Generated', poFinalised: true };
@@ -2000,18 +2013,20 @@ class StoreService {
    * Re-sync RFQs from Neon PostgreSQL so records inserted by external processes
    * (e.g. check-email CLI, background workers) are merged into memory.
    */
-  async syncRFQsFromDB(force = false) {
-    if (!pool.hasStorage()) return this.getRFQs();
+  async syncRFQsFromDB(force = false, buyerAccountId = null) {
+    if (!pool.hasStorage()) return this.getRFQs(buyerAccountId);
     const now = Date.now();
-    if (!force && this._lastRfqSyncTime && (now - this._lastRfqSyncTime < 25000)) {
-      return this.getRFQs();
+    if (!force && !buyerAccountId && this._lastRfqSyncTime && (now - this._lastRfqSyncTime < 25000)) {
+      return this.getRFQs(buyerAccountId);
     }
     if (this._syncRFQsPromise) {
       return this._syncRFQsPromise;
     }
     this._syncRFQsPromise = (async () => {
       try {
-        const allFromDB = await domainQueries.getRFQsFromDB();
+        const allFromDB = buyerAccountId
+          ? await domainQueries.getRFQsFromDB(buyerAccountId, 100)
+          : await domainQueries.getRFQsFromDB(null, 200);
         if (Array.isArray(allFromDB)) {
           const byId = new Map(this.rfqs.map((r) => [r.id, r]));
           for (const rfq of allFromDB) {
@@ -2030,20 +2045,24 @@ class StoreService {
             (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
           );
         }
-        this._lastRfqSyncTime = Date.now();
+        if (!buyerAccountId) {
+          this._lastRfqSyncTime = Date.now();
+        }
       } catch (err) {
         logger.error('Failed to sync RFQs from database', err, 'STORE_SERVICE');
       } finally {
         this._syncRFQsPromise = null;
       }
-      return this.getRFQs();
+      return this.getRFQs(buyerAccountId);
     })();
     return this._syncRFQsPromise;
   }
 
   async getRFQByIdAsync(id) {
+    let dbQueried = false;
     if (pool.hasStorage()) {
       try {
+        dbQueried = true;
         const dbRfq = await domainQueries.getRFQByIdFromDB(id);
         if (dbRfq) {
           const idx = this.rfqs.findIndex((r) => r.id === dbRfq.id || r.rfqNumber === dbRfq.rfqNumber);
@@ -2055,11 +2074,12 @@ class StoreService {
           return this.getRFQById(id);
         }
       } catch (err) {
+        dbQueried = false;
         logger.warn('Failed to load RFQ from DB in getRFQByIdAsync', { id, error: err.message }, 'STORE_SERVICE');
       }
     }
     let rfq = this.getRFQById(id);
-    if (!rfq && pool.hasStorage()) {
+    if (!rfq && pool.hasStorage() && !dbQueried) {
       await this.syncRFQsFromDB();
       rfq = this.getRFQById(id);
     }
@@ -3045,11 +3065,15 @@ class StoreService {
   // vendor row or buyer account from the session and passes its id here.
 
   /** Every notification addressed to one recipient, newest first. */
-  getNotificationsFor(recipientType, recipientId) {
+  getNotificationsFor(recipientType, recipientId, limit = null) {
     if (!recipientId) return [];
-    return this.notifications.filter(
+    const list = this.notifications.filter(
       (n) => n.recipientType === recipientType && n.recipientId === recipientId
     );
+    if (Number.isInteger(limit) && limit > 0) {
+      return list.slice(0, limit);
+    }
+    return list;
   }
 
   /** Count of that recipient's unread notifications. */
@@ -4434,7 +4458,10 @@ class StoreService {
   // ==========================================
   // 5. AUDIT LOGS & CRYPTO VERIFICATION
   // ==========================================
-  getAuditLogs() {
+  getAuditLogs(limit = null) {
+    if (Number.isInteger(limit) && limit > 0) {
+      return this.auditLogs.slice(0, limit);
+    }
     return this.auditLogs;
   }
 
@@ -5393,17 +5420,28 @@ class StoreService {
       }
     }
 
+    let scopedCatalogue = [];
+    if (sessionEmail) {
+      const email = String(sessionEmail).toLowerCase();
+      const ownVendor = (this.vendors || []).find((v) => (v.email || '').toLowerCase() === email);
+      if (ownVendor) {
+        scopedCatalogue = (this.vendorCatalogue || []).filter((p) => p.vendorId === ownVendor.id);
+      }
+    } else if (!scopedBuyerId) {
+      scopedCatalogue = (this.vendorCatalogue || []).slice(0, 50);
+    }
+
     return {
-      buyerAccounts: this.buyerAccounts,
+      buyerAccounts: (this.buyerAccounts || []).slice(0, 50),
       activeBuyerAccount: this.activeBuyerAccount,
       vendors,
       vendorsTotal,
-      evaluations: this.evaluations,
-      auditLogs: this.auditLogs,
+      evaluations: (this.evaluations || []).slice(0, 50),
+      auditLogs: (this.auditLogs || []).slice(0, 50),
       aiFeed: [],
       systemConfig: this.systemConfig,
       azureHealth: this.azureHealth,
-      vendorCatalogue: this.vendorCatalogue,
+      vendorCatalogue: scopedCatalogue,
     };
   }
 

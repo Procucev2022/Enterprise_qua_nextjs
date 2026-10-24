@@ -265,6 +265,9 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     const filtered = rootResolvers.evaluations({ vendorName: 'Resolver Evaluation' });
     expect(filtered.length).toBeGreaterThan(0);
 
+    const limited = rootResolvers.evaluations({ limit: 1 });
+    expect(limited.length).toBeLessThanOrEqual(1);
+
     expect(rootResolvers.evaluations({ vendorName: 'no-such-vendor' })).toEqual([]);
   });
 
@@ -311,6 +314,9 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
 
     const bySearchSku = rootResolvers.catalogue({ search: 'SKU' });
     expect(bySearchSku.length).toBeGreaterThan(0);
+
+    const limited = rootResolvers.catalogue({ limit: 1 });
+    expect(limited.length).toBeLessThanOrEqual(1);
   });
 
   test('aiFeed, systemConfig, dbHealth, optimizationMetrics, diagnoseLogErrors, auditPerformance resolvers execute', async () => {

@@ -392,12 +392,17 @@ async function getSellerReports(req, res, next) {
       return res.status(400).json({ success: false, error: 'Invalid requestType for seller report' });
     }
 
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const dataRows = (parsedLimit && Number.isInteger(parsedLimit) && parsedLimit > 0)
+      ? rows.slice(0, parsedLimit)
+      : rows;
+
     return res.json({
       success: true,
       reportType: requestType,
       dateRange: { startDate: formatDateISO(fromDate), endDate: formatDateISO(toDate) },
       totalRecords: rows.length,
-      data: rows,
+      data: dataRows,
     });
   } catch (err) {
     logger.error('Error in getSellerReports', err, LOG_CATEGORY);
@@ -510,12 +515,17 @@ async function getBuyerReports(req, res, next) {
       return res.status(400).json({ success: false, error: 'Invalid requestType for buyer report' });
     }
 
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const dataRows = (parsedLimit && Number.isInteger(parsedLimit) && parsedLimit > 0)
+      ? rows.slice(0, parsedLimit)
+      : rows;
+
     return res.json({
       success: true,
       reportType: requestType,
       dateRange: { startDate: formatDateISO(fromDate), endDate: formatDateISO(toDate) },
       totalRecords: rows.length,
-      data: rows,
+      data: dataRows,
     });
   } catch (err) {
     logger.error('Error in getBuyerReports', err, LOG_CATEGORY);
@@ -656,12 +666,17 @@ async function getRfqReports(req, res, next) {
       return res.status(400).json({ success: false, error: 'Invalid requestType for RFQ report' });
     }
 
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const dataRows = (parsedLimit && Number.isInteger(parsedLimit) && parsedLimit > 0)
+      ? rows.slice(0, parsedLimit)
+      : rows;
+
     return res.json({
       success: true,
       reportType: requestType,
       dateRange: { startDate: formatDateISO(fromDate), endDate: formatDateISO(toDate) },
       totalRecords: rows.length,
-      data: rows,
+      data: dataRows,
     });
   } catch (err) {
     logger.error('Error in getRfqReports', err, LOG_CATEGORY);

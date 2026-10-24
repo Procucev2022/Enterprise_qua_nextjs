@@ -468,6 +468,60 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
   });
 
+  test('POST /graphql supports batched queries array and handles empty batch validation', async () => {
+    // 1. Valid batched queries
+    const batchOperations = [
+      { query: 'query { systemConfig { maintenanceMode } }' },
+      { query: 'query { dbHealth { isConfigured provider } }' },
+      { query: 'query { optimizationMetrics { cache { hits misses } } }' },
+    ];
+
+    const res = await request(app)
+      .post('/graphql')
+      .send(batchOperations)
+      .expect(200);
+
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBe(3);
+    expect(res.body[0].data.systemConfig).toBeDefined();
+    expect(res.body[1].data.dbHealth).toBeDefined();
+    expect(res.body[2].data.optimizationMetrics).toBeDefined();
+
+    // 2. Empty batch returns 400
+    const emptyRes = await request(app)
+      .post('/graphql')
+      .send([])
+      .expect(400);
+
+    expect(emptyRes.body.errors[0].message).toMatch(/Batched query array must not be empty/i);
+  });
+
+  test('POST /graphql executes composite multi-entity query in a single roundtrip', async () => {
+    const compositeQuery = `
+      query CompositeDashboard {
+        rfqs(limit: 5) { id rfqNumber title }
+        buyerAccounts(limit: 3) { id organizationName }
+        systemConfig { maintenanceMode }
+        optimizationMetrics {
+          cache { activeEntries cacheHitRatio }
+          auditing { totalQueriesExecuted }
+        }
+      }
+    `;
+
+    const res = await request(app)
+      .post('/graphql')
+      .set(authHeader('buyer'))
+      .send({ query: compositeQuery })
+      .expect(200);
+
+    expect(res.body.data).toBeDefined();
+    expect(res.body.data.rfqs).toBeDefined();
+    expect(res.body.data.buyerAccounts).toBeDefined();
+    expect(res.body.data.systemConfig).toBeDefined();
+    expect(res.body.data.optimizationMetrics).toBeDefined();
+  });
+
   test('handleGraphQL controller catches unhandled errors via next', async () => {
     const req = {
       method: 'POST',

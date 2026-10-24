@@ -70,7 +70,13 @@ router.post('/', async (req, res, next) => {
   */
 router.get('/', (req, res, next) => {
   try {
-    const inquiries = storeService.getEnterpriseInquiries();
+    let inquiries = storeService.getEnterpriseInquiries();
+    if (req.query && req.query.limit) {
+      const limit = Number(req.query.limit);
+      if (Number.isInteger(limit) && limit > 0) {
+        inquiries = inquiries.slice(0, limit);
+      }
+    }
     return res.json({
       success: true,
       data: inquiries,

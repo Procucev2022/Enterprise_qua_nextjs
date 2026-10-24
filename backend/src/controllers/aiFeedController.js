@@ -35,7 +35,7 @@ async function getAIFeed(req, res, next) {
 
     if (scope.restricted) {
       if (scope.buyerAccountId) {
-        const buyerRfqs = storeService.getRFQs().filter((r) => r.buyerAccountId === scope.buyerAccountId);
+        const buyerRfqs = storeService.getRFQs(scope.buyerAccountId).filter((r) => r.buyerAccountId === scope.buyerAccountId);
         const buyerRfqNumbers = new Set(buyerRfqs.map((r) => r.rfqNumber).filter(Boolean));
 
         feed = all.filter((item) => {
@@ -49,6 +49,13 @@ async function getAIFeed(req, res, next) {
         });
       } else {
         feed = [];
+      }
+    }
+
+    if (req.query && req.query.limit) {
+      const limit = Number(req.query.limit);
+      if (Number.isInteger(limit) && limit > 0) {
+        feed = feed.slice(0, limit);
       }
     }
 

@@ -3689,6 +3689,130 @@ Remove all harcoded env from code, & create env file for prod & dev if any crede
 resume
 ```
 
+---
+
+### 2026-10-24T05:39:27+05:30
+
+```text
+Too much DB utilization, 
+
+Database Optimization & GraphQL Integration: Configure assistant instructions to audit database queries for efficiency and integrate GraphQL to streamline data fetching across the application. 
+
+Additionally, implement optimizations to minimize database compute hours, reduce resource usage, and enhance overall infrastructure efficiency.
+```
+
+---
+
+### 2026-10-24T06:16:40+05:30
+
+```text
+ok, resume
+```
+
+---
+
+### 2026-10-24T06:21:24+05:30
+
+```text
+is there any place where too much unnecessary data is getting fetched & can be avoided
+```
+
+---
+
+### 2026-10-24T06:27:13+05:30
+
+```text
+Please do all these optimizations
+```
+
+---
+
+### 2026-10-24T06:43:36+05:30
+
+```text
+is there any other place left where too much unnecessary data is getting fetched & can be avoided & optimized
+```
+
+---
+
+### 2026-10-24T06:50:39+05:30
+
+```text
+Please do all these optimizations
+```
+
+---
+
+### 2026-10-24T07:04:31+05:30
+
+```text
+ok
+```
+
+---
+
+### 2026-10-24T08:15:09+05:30
+
+```text
+is there any other place left where too much unnecessary data is getting fetched & can be avoided & optimized
+```
+
+---
+
+### 2026-10-24T08:18:23+05:30
+
+```text
+Please do all these optimizations
+```
+
+---
+
+### 2026-10-24T08:53:33+05:30
+
+```text
+ok
+```
+
+---
+
+### 2026-10-24T08:57:38+05:30
+
+```text
+is there any other place left where too much unnecessary data is getting fetched & can be avoided & optimized
+```
+
+---
+
+### 2026-10-24T09:02:24+05:30
+
+```text
+Please do all these optimizations
+```
+
+---
+
+### 2026-10-24T09:09:37+05:30
+
+```text
+is there any other place left where too much unnecessary data is getting fetched & can be avoided & optimized. Please do all these optimizations
+```
+
+---
+
+### 2026-10-24T09:10:06+05:30
+
+```text
+is there any other place left where too much unnecessary data is getting fetched & can be avoided & optimized. Please do all these optimizations
+```
+
+
+
+
+
+
+
+
+
 
 
 

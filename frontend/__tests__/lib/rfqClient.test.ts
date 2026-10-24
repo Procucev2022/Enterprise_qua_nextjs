@@ -965,6 +965,15 @@ describe('rfqClient RFQ persistence', () => {
       expect(lastPath()).toBe('/api/rfqs');
     });
 
+    test('passes options (summary and limit) query params when provided', async () => {
+      global.fetch = reply(200, { success: true, data: [RFQ] });
+
+      const res = await fetchRFQList({ summary: true, limit: 25 });
+
+      expect(res.success && res.rfqs).toEqual([RFQ]);
+      expect(lastPath()).toBe('/api/rfqs?summary=true&limit=25');
+    });
+
     // An empty list is a valid answer: a buyer who has raised nothing has none.
     test('accepts an empty list', async () => {
       global.fetch = reply(200, { success: true, data: [] });
@@ -1065,6 +1074,13 @@ describe('rfqClient RFQ persistence', () => {
 
       expect(res.success && res.rfqs).toEqual([RFQ]);
       expect(lastPath()).toBe('/api/rfqs/all');
+    });
+
+    test('accepts summary and limit options', async () => {
+      global.fetch = reply(200, { success: true, data: [RFQ] });
+
+      await fetchAllRFQs({ summary: true, limit: 10 });
+      expect(lastPath()).toBe('/api/rfqs/all?summary=true&limit=10');
     });
 
     test('attaches the session token when one is held', async () => {

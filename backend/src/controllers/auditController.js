@@ -3,8 +3,9 @@ const { logger } = require('../services/loggerService');
 
 function getAuditLogs(req, res, next) {
   try {
-    logger.info('Fetching cryptographic audit trail', { query: req.query }, 'AUDIT_CONTROLLER');
-    const logs = storeService.getAuditLogs();
+    const limit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    logger.info('Fetching cryptographic audit trail', { query: req.query, limit }, 'AUDIT_CONTROLLER');
+    const logs = storeService.getAuditLogs(limit);
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: logs });
   } catch (err) {
     logger.error('Error fetching audit logs', err, 'AUDIT_CONTROLLER');

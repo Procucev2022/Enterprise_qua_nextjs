@@ -214,7 +214,8 @@ const rootResolvers = {
     if (args.vendorName) {
       evals = evals.filter((e) => e.vendorName && e.vendorName.toLowerCase().includes(args.vendorName.toLowerCase()));
     }
-    return evals;
+    const limit = args.limit || 50;
+    return evals.slice(0, limit);
   },
 
   auditLogs: (args = {}) => {
@@ -228,7 +229,7 @@ const rootResolvers = {
   },
 
   catalogue: (args = {}) => {
-    const { category, search } = args;
+    const { category, search, limit = 50 } = args;
     let items = storeService.getVendorCatalogue();
     if (category) {
       items = items.filter((i) => i.category && i.category.toLowerCase().includes(category.toLowerCase()));
@@ -237,7 +238,7 @@ const rootResolvers = {
       const q = search.toLowerCase();
       items = items.filter((i) => (i.name && i.name.toLowerCase().includes(q)) || (i.sku && i.sku.toLowerCase().includes(q)));
     }
-    return items;
+    return items.slice(0, limit);
   },
 
   aiFeed: async (args = {}, context) => {

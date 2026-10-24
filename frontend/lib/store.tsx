@@ -697,7 +697,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsLoadingRFQs(true);
     }
     try {
-      const result = await fetchRFQList();
+      const result = await fetchRFQList({ limit: 100 });
       if (!result.success) {
         console.error('Failed to load RFQs:', result.error);
         return;
@@ -869,7 +869,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     try {
       const activeBuyerId = activeBuyerAccount?.id;
-      const queryParam = activeBuyerId ? `?buyerAccountId=${encodeURIComponent(activeBuyerId)}` : '';
+      const queryParam = activeBuyerId ? `?buyerAccountId=${encodeURIComponent(activeBuyerId)}&limit=50` : '?limit=50';
       const res = await fetch(`/api/ai-feed${queryParam}`, { headers: authFetchHeaders() });
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {

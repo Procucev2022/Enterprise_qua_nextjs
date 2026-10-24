@@ -224,6 +224,13 @@ async function getVendors(req, res, next) {
       });
     }
 
+    if (req.query && req.query.limit) {
+      const limit = Number(req.query.limit);
+      if (Number.isInteger(limit) && limit > 0) {
+        vendors = vendors.slice(0, limit);
+      }
+    }
+
     res.json({
       success: true,
       source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',

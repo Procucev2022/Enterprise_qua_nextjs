@@ -495,12 +495,18 @@ export async function fetchRFQById(identifier: string): Promise<RFQFetchResult> 
  * Reads the authenticated, org-scoped endpoint. There is no way to ask for
  * anything wider: the previous global list is what leaked RFQs between buyers.
  */
-export async function fetchRFQList(): Promise<RFQListResult> {
+export async function fetchRFQList(
+  options: { summary?: boolean; limit?: number } = {}
+): Promise<RFQListResult> {
   const token = authClient.getToken();
+  const params = new URLSearchParams();
+  if (options.summary) params.set('summary', 'true');
+  if (options.limit) params.set('limit', String(options.limit));
+  const queryStr = params.toString() ? `?${params.toString()}` : '';
 
   let res: Response;
   try {
-    res = await fetch('/api/rfqs', {
+    res = await fetch(`/api/rfqs${queryStr}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
   } catch {
@@ -536,12 +542,18 @@ export async function fetchRFQList(): Promise<RFQListResult> {
  * wider view of the buyer-scoped `fetchRFQList`, it is a separate oversight
  * endpoint. The rows come back newest first.
  */
-export async function fetchAllRFQs(): Promise<RFQListResult> {
+export async function fetchAllRFQs(
+  options: { summary?: boolean; limit?: number } = {}
+): Promise<RFQListResult> {
   const token = authClient.getToken();
+  const params = new URLSearchParams();
+  if (options.summary) params.set('summary', 'true');
+  if (options.limit) params.set('limit', String(options.limit));
+  const queryStr = params.toString() ? `?${params.toString()}` : '';
 
   let res: Response;
   try {
-    res = await fetch('/api/rfqs/all', {
+    res = await fetch(`/api/rfqs/all${queryStr}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
   } catch {

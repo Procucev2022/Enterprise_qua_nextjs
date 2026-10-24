@@ -6,10 +6,12 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
 
   beforeEach(() => {
     originalPool = pool.pool;
+    if (pool.queryCache) pool.queryCache.clear();
   });
 
   afterEach(() => {
     pool.pool = originalPool;
+    if (pool.queryCache) pool.queryCache.clear();
     jest.restoreAllMocks();
   });
 
@@ -615,6 +617,27 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY created_at DESC'), []);
     });
 
+    test('getRFQsFromDB with buyerAccountId and limit applies filtering and limit clause', async () => {
+      const rfq = { id: 'rfq-scoped', buyerAccountId: 'buyer-acc-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: rfq }] }) };
+
+      const res = await domainQueries.getRFQsFromDB('buyer-acc-1', 25);
+      expect(res).toEqual([rfq]);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain("raw->>'buyerAccountId' = $1");
+      expect(sql).toContain('LIMIT $2');
+      expect(params).toEqual(['buyer-acc-1', 25]);
+    });
+
+    test('getRFQsByBuyerFromDB delegates to getRFQsFromDB with limit', async () => {
+      const rfq = { id: 'rfq-scoped-2' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: rfq }] }) };
+
+      const res = await domainQueries.getRFQsByBuyerFromDB('buyer-acc-2', 15);
+      expect(res).toEqual([rfq]);
+      expect(pool.pool.query.mock.calls[0][1]).toEqual(['buyer-acc-2', 15]);
+    });
+
     test('upsertRFQInDB serializes the RFQ and returns the stored raw row', async () => {
       const rfq = {
         id: 'rfq-1',
@@ -889,6 +912,17 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY sequence DESC'), []);
     });
 
+    test('getAIFeedFromDB applies limit clause when limit is specified', async () => {
+      const item = { id: 'feed-top' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: item }] }) };
+
+      const res = await domainQueries.getAIFeedFromDB(10);
+      expect(res).toEqual([item]);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('LIMIT $1');
+      expect(params).toEqual([10]);
+    });
+
     test('upsertAIFeedItemInDB inserts the item and trims the table to the newest 100 rows', async () => {
       const item = { id: 'feed-1', title: 'Call placed' };
       const queryMock = jest.fn().mockResolvedValue({ rows: [{ raw: item }] });
@@ -933,6 +967,17 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
 
       await expect(domainQueries.getAuditLogsFromDB()).resolves.toEqual([entry]);
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY sequence DESC'), []);
+    });
+
+    test('getAuditLogsFromDB applies limit clause when limit is specified', async () => {
+      const entry = { id: 'log-top' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: entry }] }) };
+
+      const res = await domainQueries.getAuditLogsFromDB(50);
+      expect(res).toEqual([entry]);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('LIMIT $1');
+      expect(params).toEqual([50]);
     });
 
     test('upsertAuditLogInDB serializes the entry and returns the stored raw row', async () => {
@@ -985,6 +1030,17 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
 
       await expect(domainQueries.getNotificationsFromDB()).resolves.toEqual([NTF]);
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY sequence DESC'), []);
+    });
+
+    test('getNotificationsFromDB applies recipientId filter and limit clause', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: NTF }] }) };
+
+      const res = await domainQueries.getNotificationsFromDB('v-1', 20);
+      expect(res).toEqual([NTF]);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('recipient_id = $1');
+      expect(sql).toContain('LIMIT $2');
+      expect(params).toEqual(['v-1', 20]);
     });
 
     test('insertNotificationInDB serializes the row and passes the typed columns', async () => {

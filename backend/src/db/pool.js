@@ -12,6 +12,8 @@
 
 const { Pool } = require('pg');
 const { getD1Binding, getD1HttpClient, queryD1 } = require('./d1Bridge');
+const { queryCache } = require('./queryCache');
+const { queryAuditor } = require('./queryAuditor');
 
 const DEFAULT_POOL_MAX = 10;
 const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
@@ -149,15 +151,60 @@ function hasStorage() {
  * param instead of one array.
  */
 async function query(text, params = [], options = {}) {
-  // Cloudflare D1 is the primary datastore (Workers binding or HTTP REST client)
   const d1 = getD1Binding() || getD1HttpClient();
+  const sql = options.d1Text || text;
+  const boundParams = options.d1Params || params;
+  const isWrite = /^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|UPSERT)\b/i.test(sql);
+
+  // Auto-invalidation on write queries
+  if (isWrite) {
+    const table = queryAuditor.detectTable(sql);
+    if (table && table !== 'other') {
+      queryCache.invalidate(table);
+      if (table === 'rfqs') queryCache.invalidate('rfqs');
+      if (table === 'vendors') queryCache.invalidate('vendors');
+      if (table === 'buyer_accounts') queryCache.invalidate('buyer_accounts');
+      if (table === 'evaluations') queryCache.invalidate('evaluations');
+      if (table === 'vendor_catalogue') queryCache.invalidate('catalogue');
+      if (table === 'category_division' || table === 'org_division_category') queryCache.invalidate('taxonomy');
+      if (table === 'ai_feed') queryCache.invalidate('ai_feed');
+    }
+  }
+
+  // 1. Check Query Cache if cacheable read
+  const cacheKey = options.cacheKey || (options.useCache ? queryCache.generateKey(sql, boundParams) : null);
+  if (options.useCache && cacheKey && !isWrite) {
+    const cachedData = queryCache.get(cacheKey, boundParams);
+    if (cachedData !== null) {
+      queryAuditor.auditQuery(sql, boundParams, 0, true);
+      return { rows: cachedData, rowCount: cachedData.length, isCacheHit: true };
+    }
+  }
+
+  // 2. Query execution with latency measurement
+  const startTime = Date.now();
+  let result;
   if (d1) {
-    return queryD1(d1, options.d1Text || text, options.d1Params || params);
+    result = await queryD1(d1, sql, boundParams);
+  } else {
+    if (!poolModule.pool) {
+      throw new Error(NOT_CONFIGURED_MESSAGE);
+    }
+    result = await poolModule.pool.query(text, params);
   }
-  if (!poolModule.pool) {
-    throw new Error(NOT_CONFIGURED_MESSAGE);
+  const durationMs = Date.now() - startTime;
+
+  // 3. Continuous query auditing
+  queryAuditor.auditQuery(sql, boundParams, durationMs, false);
+
+  // 4. Cache storage if cache was enabled for this query
+  if (options.useCache && cacheKey && !isWrite && result && Array.isArray(result.rows)) {
+    const ttlMs = options.ttlMs || 60000;
+    const tag = options.tag || queryAuditor.detectTable(sql) || 'general';
+    queryCache.set(cacheKey, boundParams, result.rows, { tag, ttlMs, executionDurationMs: durationMs });
   }
-  return poolModule.pool.query(text, params);
+
+  return result;
 }
 
 /**
@@ -369,5 +416,7 @@ poolModule.withTransaction = withTransaction;
 poolModule.checkDatabaseHealth = checkDatabaseHealth;
 poolModule.checkDomainDBHealth = checkDatabaseHealth;
 poolModule.closePool = closePool;
+poolModule.queryCache = queryCache;
+poolModule.queryAuditor = queryAuditor;
 
 module.exports = poolModule;

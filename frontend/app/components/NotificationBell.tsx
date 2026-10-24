@@ -53,7 +53,7 @@ export default function NotificationBell() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
-    const result = await fetchNotifications();
+    const result = await fetchNotifications({ limit: 50 });
     if (result.success) {
       setNotifications(result.notifications);
       setUnreadCount(result.unreadCount);

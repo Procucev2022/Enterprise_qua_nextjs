@@ -23,6 +23,7 @@
 const crypto = require('crypto');
 const pool = require('./pool');
 const { getD1Binding, getD1HttpClient } = require('./d1Bridge');
+const { queryCache } = require('./queryCache');
 
 function hasD1() {
   return Boolean(getD1Binding() || getD1HttpClient());
@@ -545,7 +546,7 @@ async function findCategoryTaxonomy() {
         and cd.category is not null and cd.category <> ''
       order by ord.first_seen, cd.division, cd.category`,
     [],
-    { d1: true }
+    { d1: true, useCache: true, tag: 'taxonomy', ttlMs: 300000 }
   );
 
   const byDivision = new Map();

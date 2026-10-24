@@ -38,7 +38,13 @@ function assertBuyerAccountRole(req, res) {
 function getBuyerAccounts(req, res, next) {
   try {
     logger.info('Fetching buyer accounts', {}, 'BUYER_ACCOUNT_CONTROLLER');
-    const accounts = storeService.getBuyerAccounts();
+    let accounts = storeService.getBuyerAccounts();
+    if (req.query && req.query.limit) {
+      const limit = Number(req.query.limit);
+      if (Number.isInteger(limit) && limit > 0) {
+        accounts = accounts.slice(0, limit);
+      }
+    }
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: accounts });
   } catch (err) {
     logger.error('Error fetching buyer accounts', err, 'BUYER_ACCOUNT_CONTROLLER');
