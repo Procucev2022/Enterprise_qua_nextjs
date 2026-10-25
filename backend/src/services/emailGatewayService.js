@@ -2032,10 +2032,12 @@ async function processMessage(rawSource, config = resolveConfig()) {
         authorisation.tempPassword
       );
 
-      const resolvedMobile =
+      const rawMobile =
         authorisation?.buyerAccount?.mobileNumber ||
         authorisation?.buyerAccount?.phone ||
+        authorisation?.user?.phone ||
         '9999999999';
+      const resolvedMobile = String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || '9999999999';
 
       const rawEntities = Array.isArray(created.extractedEntities) && created.extractedEntities.length > 0
         ? created.extractedEntities

@@ -111,6 +111,7 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.text).toContain('Hi Ananya,');
       expect(result.text).toContain('RFQ-9901 : Centrifugal Water Pumps');
       expect(result.text).toContain('Login ID: ananya@acme.com');
+      expect(result.text).toContain('Registered Mobile: 9999999999');
       expect(result.text).toContain('Temporary password: TempPassword123!');
       expect(result.text).toContain('Three quick steps to finish');
       expect(result.text).toContain('Log in & review my RFQ');
@@ -118,6 +119,8 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(result.html).toContain('RFQ-9901');
       expect(result.html).toContain('Centrifugal Water Pumps');
       expect(result.html).toContain('TempPassword123!');
+      expect(result.html).toContain('Registered Mobile:');
+      expect(result.html).toContain('9999999999');
     });
 
     test('falls back safely with empty params', () => {

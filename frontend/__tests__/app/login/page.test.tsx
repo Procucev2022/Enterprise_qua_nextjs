@@ -17,8 +17,10 @@ jest.mock('@/lib/authClient', () => ({
 }));
 
 const mockReplace = jest.fn();
+let mockSearchParams = new URLSearchParams();
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
+  useSearchParams: () => mockSearchParams,
 }));
 
 const AUTH = UI_STRINGS.auth;
@@ -64,6 +66,7 @@ describe('LoginPage', () => {
   };
 
   beforeEach(() => {
+    mockSearchParams = new URLSearchParams();
     mockStore();
   });
 
@@ -151,6 +154,48 @@ describe('LoginPage', () => {
       expect(setIsLoggedIn).toHaveBeenCalledWith(true);
       expect(setCurrentRole).toHaveBeenCalledWith('buyer');
       expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
+      expect(setInitialSetupModalOpen).toHaveBeenCalledWith(true);
+    });
+
+    it('redirects to redirect param and does not open initial setup modal when redirect is present', async () => {
+      mockSearchParams = new URLSearchParams('redirect=/buyer/rfq-summary');
+
+      (authClient.loginWithPassword as jest.Mock).mockResolvedValue({
+        success: true,
+        user: BUYER_SESSION,
+        token: 'jwt',
+      });
+
+      render(<LoginPage />);
+      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
+      typeInto(/^Password$/i, 'Pass@123');
+      fireEvent.click(submitButton(/Sign In/i));
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith('/buyer/rfq-summary');
+      });
+      expect(setInitialSetupModalOpen).not.toHaveBeenCalled();
+    });
+
+    it('sanitizes legacy /buyer/rfqs redirect to /buyer/rfq-summary', async () => {
+      mockSearchParams = new URLSearchParams('redirect=/buyer/rfqs');
+
+      (authClient.loginWithPassword as jest.Mock).mockResolvedValue({
+        success: true,
+        user: BUYER_SESSION,
+        token: 'jwt',
+      });
+
+      render(<LoginPage />);
+      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
+      typeInto(/^Password$/i, 'Pass@123');
+      fireEvent.click(submitButton(/Sign In/i));
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith('/buyer/rfq-summary');
+      });
     });
 
     it('routes first-login vendors to password setup before opening the dashboard', async () => {
