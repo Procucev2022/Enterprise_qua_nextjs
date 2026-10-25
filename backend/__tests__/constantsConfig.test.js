@@ -396,3 +396,262 @@ describe('RFQ_MODES and centralized constants', () => {
     expect(SOURCING_MODES[3].code).toBe('Mode 3');
   });
 });
+
+describe('BUYER and VENDOR subscription plans pricing getters', () => {
+  const { BUYER_SUBSCRIPTION_PLANS, VENDOR_SUBSCRIPTION_PLANS } = require('../src/config/constants');
+
+  test('reads buyer plan price getters with env overrides and defaults', () => {
+    const v1 = BUYER_SUBSCRIPTION_PLANS.find((p) => p.id === 'version_1');
+    const v2 = BUYER_SUBSCRIPTION_PLANS.find((p) => p.id === 'version_2');
+    const v3 = BUYER_SUBSCRIPTION_PLANS.find((p) => p.id === 'version_3');
+
+    expect(v1.price).toBe('₹4,999');
+    expect(v2.price).toBe('₹7,499');
+    expect(v3.price).toBe('₹9,999');
+
+    process.env.BUYER_V1_12M_PRICE = '5500';
+    process.env.BUYER_VERSION_2_12M_PRICE = '8000';
+    process.env.BUYER_V3_12M_PRICE = '12000';
+
+    expect(v1.price).toBe('₹5,500');
+    expect(v2.price).toBe('₹8,000');
+    expect(v3.price).toBe('₹12,000');
+
+    delete process.env.BUYER_V1_12M_PRICE;
+    delete process.env.BUYER_VERSION_2_12M_PRICE;
+    delete process.env.BUYER_V3_12M_PRICE;
+  });
+
+  test('reads vendor plan price getters with env overrides and defaults', () => {
+    const conn = VENDOR_SUBSCRIPTION_PLANS.find((p) => p.id === 'connect');
+    const sel = VENDOR_SUBSCRIPTION_PLANS.find((p) => p.id === 'select');
+
+    expect(conn.price).toBe('₹7,499');
+    expect(sel.price).toBe('₹14,999');
+
+    process.env.SELLER_CONNECT_PRICE = '8500';
+    process.env.SELLER_SELECT_PRICE = '16000';
+
+    expect(conn.price).toBe('₹8,500');
+    expect(sel.price).toBe('₹16,000');
+
+    delete process.env.SELLER_CONNECT_PRICE;
+    delete process.env.SELLER_SELECT_PRICE;
+  });
+});
+
+describe('GEMINI_CONFIG getters and setters', () => {
+  const { GEMINI_CONFIG } = require('../src/config/constants');
+
+  test('manages PRIMARY_MODEL and FALLBACK_MODELS', () => {
+    const origModels = [...GEMINI_CONFIG.MODELS];
+
+    expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe(origModels[0] || 'gemini-3.5-flash-lite');
+    expect(GEMINI_CONFIG.FALLBACK_MODELS).toEqual(origModels.slice(1));
+
+    GEMINI_CONFIG.PRIMARY_MODEL = 'gemini-custom';
+    expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-custom');
+    GEMINI_CONFIG.PRIMARY_MODEL = ''; // falsy does nothing
+
+    GEMINI_CONFIG.FALLBACK_MODELS = ['fallback-1', 'fallback-2'];
+    expect(GEMINI_CONFIG.FALLBACK_MODELS).toEqual(['fallback-1', 'fallback-2']);
+
+    GEMINI_CONFIG.FALLBACK_MODELS = 'alt-1, alt-2';
+    expect(GEMINI_CONFIG.FALLBACK_MODELS).toEqual(['alt-1', 'alt-2']);
+
+    GEMINI_CONFIG.FALLBACK_MODELS = null;
+    expect(GEMINI_CONFIG.FALLBACK_MODELS).toEqual([]);
+
+    GEMINI_CONFIG.MODELS = [];
+    expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-3.5-flash-lite');
+
+    GEMINI_CONFIG.MODELS = origModels;
+  });
+});
+
+describe('VENDOR_ASSIGNMENT_LIMITS and getEnvNumber', () => {
+  const { VENDOR_ASSIGNMENT_LIMITS } = require('../src/config/constants');
+
+  test('reads limits from globalThis.__CF_ENV__ and process.env', () => {
+    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(5);
+    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(5);
+
+    process.env.MAX_CLIENT_VENDORS_PER_CATEGORY = '12';
+    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(12);
+
+    globalThis.__CF_ENV__ = {
+      MAX_CLIENT_VENDORS_PER_CATEGORY: '20',
+      MAX_PROCUCEV_VENDORS_PER_CATEGORY: '15',
+    };
+    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(20);
+    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(15);
+
+    globalThis.__CF_ENV__.MAX_CLIENT_VENDORS_PER_CATEGORY = 'invalid';
+    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(5);
+
+    delete globalThis.__CF_ENV__;
+    delete process.env.MAX_CLIENT_VENDORS_PER_CATEGORY;
+  });
+});
+
+describe('ZOHO_CONFIG Cloudflare env and fallback branches', () => {
+  test('reads from globalThis.__CF_ENV__ when present', () => {
+    globalThis.__CF_ENV__ = {
+      ZOHO_MODE: 'live',
+      ZOHO_SANDBOX_REFRESH_TOKEN: 'cf-sb-token',
+    };
+    const { ZOHO_CONFIG } = loadConstants();
+    // Live mode with only sandbox token gracefully falls back to sandbox
+    expect(ZOHO_CONFIG.MODE).toBe('sandbox');
+    delete globalThis.__CF_ENV__;
+  });
+});
+
+describe('ZOHO_SUBSCRIPTION_PRICING and ZOHO_BUYER_SUBSCRIPTION_PRICING proxies', () => {
+  const {
+    ZOHO_SUBSCRIPTION_PRICING,
+    ZOHO_BUYER_SUBSCRIPTION_PRICING,
+    computeZohoPlanAmount,
+    computeZohoBuyerPlanAmount,
+    getSubscriptionPricingConfig,
+  } = require('../src/config/constants');
+
+  test('seller pricing proxy get, set, delete, has, ownKeys, descriptor', () => {
+    expect('connect' in ZOHO_SUBSCRIPTION_PRICING).toBe(true);
+    expect(ZOHO_SUBSCRIPTION_PRICING.connect).toBeGreaterThan(0);
+    expect(ZOHO_SUBSCRIPTION_PRICING.nonexistent).toBeUndefined();
+
+    ZOHO_SUBSCRIPTION_PRICING.custom_plan = 5000;
+    expect(ZOHO_SUBSCRIPTION_PRICING.custom_plan).toBe(5000);
+    expect('custom_plan' in ZOHO_SUBSCRIPTION_PRICING).toBe(true);
+
+    const desc = Object.getOwnPropertyDescriptor(ZOHO_SUBSCRIPTION_PRICING, 'custom_plan');
+    expect(desc.value).toBe(5000);
+    expect(Object.getOwnPropertyDescriptor(ZOHO_SUBSCRIPTION_PRICING, 'nonexistent')).toBeUndefined();
+
+    expect(Object.keys(ZOHO_SUBSCRIPTION_PRICING)).toContain('custom_plan');
+
+    delete ZOHO_SUBSCRIPTION_PRICING.custom_plan;
+    expect(ZOHO_SUBSCRIPTION_PRICING.custom_plan).toBeUndefined();
+  });
+
+  test('buyer pricing proxy get, set, delete, has, ownKeys, descriptor', () => {
+    expect('version_1' in ZOHO_BUYER_SUBSCRIPTION_PRICING).toBe(true);
+    expect(ZOHO_BUYER_SUBSCRIPTION_PRICING.version_1).toBeDefined();
+
+    ZOHO_BUYER_SUBSCRIPTION_PRICING.test_plan = { '12_months': 3000, '6_months': 3500 };
+    expect(ZOHO_BUYER_SUBSCRIPTION_PRICING.test_plan['12_months']).toBe(3000);
+    expect('test_plan' in ZOHO_BUYER_SUBSCRIPTION_PRICING).toBe(true);
+
+    const desc = Object.getOwnPropertyDescriptor(ZOHO_BUYER_SUBSCRIPTION_PRICING, 'test_plan');
+    expect(desc.value['12_months']).toBe(3000);
+    expect(Object.getOwnPropertyDescriptor(ZOHO_BUYER_SUBSCRIPTION_PRICING, 'nonexistent_key')).toBeUndefined();
+
+    delete ZOHO_BUYER_SUBSCRIPTION_PRICING.test_plan;
+  });
+
+  test('computeZohoPlanAmount with overrides and durations', () => {
+    expect(computeZohoPlanAmount('nonexistent')).toBeNull();
+    expect(computeZohoPlanAmount('connect', '6_months')).toBeGreaterThan(0);
+
+    ZOHO_SUBSCRIPTION_PRICING.override_plan = 1000;
+    expect(computeZohoPlanAmount('override_plan', '12_months')).toBe(1180);
+    ZOHO_SUBSCRIPTION_PRICING.override_plan = 0;
+    expect(computeZohoPlanAmount('override_plan', '12_months')).toBeNull();
+    delete ZOHO_SUBSCRIPTION_PRICING.override_plan;
+  });
+
+  test('computeZohoBuyerPlanAmount with durations and edge cases', () => {
+    expect(computeZohoBuyerPlanAmount('nonexistent')).toBeNull();
+    expect(computeZohoBuyerPlanAmount('version_1', '6_months')).toBeGreaterThan(0);
+    expect(computeZohoBuyerPlanAmount('version_1', '12_months')).toBeGreaterThan(0);
+
+    ZOHO_BUYER_SUBSCRIPTION_PRICING.zero_plan = 0;
+    expect(computeZohoBuyerPlanAmount('zero_plan')).toBeNull();
+    delete ZOHO_BUYER_SUBSCRIPTION_PRICING.zero_plan;
+  });
+
+  test('getSubscriptionPricingConfig returns complete pricing hierarchy', () => {
+    const config = getSubscriptionPricingConfig();
+    expect(config.gstPercent).toBe(18);
+    expect(config.buyer.version_1).toBeDefined();
+    expect(config.buyer.version_2).toBeDefined();
+    expect(config.buyer.version_3).toBeDefined();
+    expect(config.seller.connect).toBeDefined();
+    expect(config.seller.select).toBeDefined();
+  });
+});
+
+describe('unwrapAccountData and unlimited access helpers', () => {
+  const {
+    unwrapAccountData,
+    hasUnlimitedRfqAccess,
+    hasUnlimitedQuoteAccess,
+    hasUnlimitedDownloadAccess,
+    resolveBuyerSourcingMode,
+  } = require('../src/config/constants');
+
+  test('unwrapAccountData unwraps JSON raw string and raw object via hasUnlimitedRfqAccess', () => {
+    expect(hasUnlimitedRfqAccess(null)).toBe(false);
+    expect(hasUnlimitedRfqAccess('string')).toBe(false);
+    expect(hasUnlimitedRfqAccess({ raw: '{"unlimitedRfqAccess":true}' })).toBe(true);
+    expect(hasUnlimitedRfqAccess({ raw: 'invalid-json', isUnlimited: true })).toBe(true);
+    expect(hasUnlimitedRfqAccess({ raw: { isUnlimited: true } })).toBe(true);
+  });
+
+  test('hasUnlimitedRfqAccess detects all database flags', () => {
+    expect(hasUnlimitedRfqAccess(null)).toBe(false);
+    expect(hasUnlimitedRfqAccess({ unlimitedRfqAccess: true })).toBe(true);
+    expect(hasUnlimitedRfqAccess({ unlimitedAccess: true })).toBe(true);
+    expect(hasUnlimitedRfqAccess({ isUnlimited: true })).toBe(true);
+    expect(hasUnlimitedRfqAccess({ subscriptionPlan: 'unlimited' })).toBe(true);
+    expect(hasUnlimitedRfqAccess({ subscriptionPlan: 'free_trial' })).toBe(false);
+  });
+
+  test('hasUnlimitedQuoteAccess detects all database flags', () => {
+    expect(hasUnlimitedQuoteAccess(null)).toBe(false);
+    expect(hasUnlimitedQuoteAccess({ unlimitedQuoteSubmissions: true })).toBe(true);
+    expect(hasUnlimitedQuoteAccess({ unlimitedQuotes: true })).toBe(true);
+    expect(hasUnlimitedQuoteAccess({ unlimitedAccess: true })).toBe(true);
+    expect(hasUnlimitedQuoteAccess({ isUnlimited: true })).toBe(true);
+    expect(hasUnlimitedQuoteAccess({})).toBe(false);
+  });
+
+  test('hasUnlimitedDownloadAccess detects all database flags', () => {
+    expect(hasUnlimitedDownloadAccess(null)).toBe(false);
+    expect(hasUnlimitedDownloadAccess({ unlimitedRfqDownloads: true })).toBe(true);
+    expect(hasUnlimitedDownloadAccess({ unlimitedDownloads: true })).toBe(true);
+    expect(hasUnlimitedDownloadAccess({ unlimitedAccess: true })).toBe(true);
+    expect(hasUnlimitedDownloadAccess({ isUnlimited: true })).toBe(true);
+    expect(hasUnlimitedDownloadAccess({})).toBe(false);
+  });
+
+  test('resolveBuyerSourcingMode handles unlimited and multiple subscriptions branches', () => {
+    // Unlimited account respecting preferredMode
+    expect(resolveBuyerSourcingMode({ isUnlimited: true }, 'mode_0')).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({ isUnlimited: true }, 'mode_1')).toBe('mode_1');
+    expect(resolveBuyerSourcingMode({ isUnlimited: true }, 'mode_2')).toBe('mode_2');
+    expect(resolveBuyerSourcingMode({ isUnlimited: true }, 'mode_3')).toBe('mode_3');
+    expect(resolveBuyerSourcingMode({ isUnlimited: true })).toBe('mode_3');
+
+    // Subscriptions array with various tiers
+    expect(resolveBuyerSourcingMode({
+      subscriptions: [{ plan: 'version_1', status: 'active' }],
+    })).toBe('mode_1');
+
+    expect(resolveBuyerSourcingMode({
+      subscriptions: [{ plan: 'version_0', status: 'active' }],
+    })).toBe('mode_0');
+
+    expect(resolveBuyerSourcingMode({
+      subscriptions: [
+        { plan: 'version_1', expiresAt: new Date(Date.now() - 1000).toISOString() }, // expired
+      ],
+    })).toBe('mode_0');
+
+    // Single plan strings
+    expect(resolveBuyerSourcingMode('unlimited')).toBe('mode_3');
+    expect(resolveBuyerSourcingMode('version_2')).toBe('mode_2');
+    expect(resolveBuyerSourcingMode('version_1')).toBe('mode_1');
+  });
+});

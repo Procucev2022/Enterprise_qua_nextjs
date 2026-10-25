@@ -780,5 +780,174 @@ describe('largeFileIngestionService unit tests', () => {
       const resFalse = await largeFileIngestionService.cancelJob(null, 'bad-sess');
       expect(resFalse).toBe(false);
     });
+
+    it('handles binding.delete error gracefully in deleteFromR2', async () => {
+      const mockBinding = {
+        delete: jest.fn().mockRejectedValueOnce(new Error('R2 binding delete failure')),
+      };
+      jest.spyOn(r2Client, 'getBinding').mockReturnValue(mockBinding);
+      await expect(largeFileIngestionService.deleteFromR2('uploads/test-key')).resolves.not.toThrow();
+    });
+
+    it('normalizes arbitrary date string format in normalizePoDate', () => {
+      expect(largeFileIngestionService.normalizePoDate('June 15, 2025')).toBeDefined();
+      expect(largeFileIngestionService.normalizePoDate('invalid date string')).toBeNull();
+    });
+
+    it('collects batch errors in processFileJob batch and remainder loops', async () => {
+      jest.spyOn(queries, 'findSession').mockResolvedValue({
+        id: 'sess-err-collect',
+        organizationId: 'org-1',
+        status: VENDOR_INGESTION_SESSION_STATUS.DRAFT,
+        currentStep: VENDOR_INGESTION_STEP.VENDOR_MASTER,
+      });
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+      jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+
+      // Process batch with errors in both main batch and remainder batch
+      const csvContent = 'Company Name,Contact Email\n,bad1@v.com\nVendor B,b@v.com\n,bad3@v.com';
+      mockR2Client(csvContent);
+
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-err-batch',
+        sessionId: 'sess-err-collect',
+        organizationId: 'org-1',
+        r2Key: 'uploads/test.csv',
+        fileName: 'test.csv',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 2, // row 1 & row 2 in main batch (row 1 has error), row 3 in remainder batch (row 3 has error)
+      });
+    });
+
+    it('handles job cancellation in processFileJob main loop', async () => {
+      jest.spyOn(queries, 'findSession').mockResolvedValue({
+        id: 'sess-cancel-loop',
+        organizationId: 'org-1',
+        status: VENDOR_INGESTION_SESSION_STATUS.DRAFT,
+        currentStep: VENDOR_INGESTION_STEP.VENDOR_MASTER,
+      });
+      const updateSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      largeFileIngestionService.activeCancellations.add('job-cancel-loop');
+      const csvContent = 'Company Name,Contact Email\nVendor A,a@v.com';
+      mockR2Client(csvContent);
+
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-cancel-loop',
+        sessionId: 'sess-cancel-loop',
+        organizationId: 'org-1',
+        r2Key: 'uploads/test.csv',
+        fileName: 'test.csv',
+        jobType: 'VENDOR_MASTER',
+      });
+
+      expect(updateSpy).toHaveBeenCalledWith(
+        'job-cancel-loop',
+        'org-1',
+        expect.objectContaining({ status: 'FAILED', errorMessage: 'Cancelled by user' })
+      );
+      largeFileIngestionService.activeCancellations.clear();
+      jest.restoreAllMocks();
+    });
+
+    it('handles job cancellation in processFileJob remainder loop', async () => {
+      jest.spyOn(queries, 'findSession').mockResolvedValue({
+        id: 'sess-cancel-rem',
+        organizationId: 'org-1',
+        status: VENDOR_INGESTION_SESSION_STATUS.DRAFT,
+        currentStep: VENDOR_INGESTION_STEP.VENDOR_MASTER,
+      });
+      const updateSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      let checkCount = 0;
+      jest.spyOn(largeFileIngestionService.activeCancellations, 'has').mockImplementation((id) => {
+        if (id === 'job-cancel-rem') {
+          checkCount++;
+          // First check is in the loop (line 539) -> return false
+          // Second check is in the remainder batch (line 584) -> return true
+          return checkCount >= 2;
+        }
+        return false;
+      });
+
+      const csvContent = 'Company Name,Contact Email\nVendor A,a@v.com';
+      mockR2Client(csvContent);
+
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-cancel-rem',
+        sessionId: 'sess-cancel-rem',
+        organizationId: 'org-1',
+        r2Key: 'uploads/test.csv',
+        fileName: 'test.csv',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 5, // 1 row, stays in remainder batch
+      });
+
+      expect(updateSpy).toHaveBeenCalledWith(
+        'job-cancel-rem',
+        'org-1',
+        expect.objectContaining({ status: 'FAILED', errorMessage: 'Cancelled by user' })
+      );
+      jest.restoreAllMocks();
+    });
+
+    it('logs error when background array worker rejects inside setImmediate', async () => {
+      jest.spyOn(queries, 'createIngestionJob').mockResolvedValue({ id: 'job-array-fail', status: 'PENDING' });
+      // To cause processArrayJob to reject, have both findSession and updateIngestionJobProgress reject
+      jest.spyOn(queries, 'findSession').mockRejectedValue(new Error('Fatal DB failure'));
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockRejectedValue(new Error('Secondary DB failure'));
+
+      await largeFileIngestionService.startIngestionJob({
+        sessionUser: { organizationId: 'org-1' },
+        sessionId: 'sess-1',
+        jobType: 'VENDOR_MASTER',
+        fileName: 'test.xlsx',
+        rows: new Array(5001).fill({ companyName: 'Vendor A' }), // > 5000 triggers background array worker
+      });
+
+      // Allow setImmediate to run
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      jest.restoreAllMocks();
+    });
+
+    it('handles job cancellation in processArrayJob loop', async () => {
+      jest.spyOn(queries, 'findSession').mockResolvedValue({
+        id: 'sess-cancel-arr',
+        organizationId: 'org-1',
+      });
+      const updateSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      largeFileIngestionService.activeCancellations.add('job-cancel-arr');
+
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-cancel-arr',
+        sessionId: 'sess-cancel-arr',
+        organizationId: 'org-1',
+        rows: [{ companyName: 'Vendor A' }, { companyName: 'Vendor B' }],
+        fileName: 'test.xlsx',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 1,
+      });
+
+      expect(updateSpy).toHaveBeenCalledWith(
+        'job-cancel-arr',
+        'org-1',
+        expect.objectContaining({ status: 'FAILED', errorMessage: 'Cancelled by user' })
+      );
+      largeFileIngestionService.activeCancellations.clear();
+    });
+
+    it('startIngestionJob returns job directly when neither buffer nor rows is provided', async () => {
+      jest.spyOn(queries, 'createIngestionJob').mockResolvedValue({ id: 'job-meta-only', status: 'PENDING' });
+      const job = await largeFileIngestionService.startIngestionJob({
+        sessionUser: { organizationId: 'org-1' },
+        sessionId: 'sess-1',
+        jobType: 'VENDOR_MASTER',
+        fileName: 'none.csv',
+      });
+      expect(job.id).toBe('job-meta-only');
+    });
   });
 });
+

@@ -25,6 +25,14 @@ const customJestConfig = {
     '!**/node_modules/**',
   ],
   coverageReporters: ['json-summary', 'lcov', 'text-summary'],
+  coverageThreshold: {
+    global: {
+      statements: 90,
+      branches: 90,
+      functions: 90,
+      lines: 90,
+    },
+  },
 };
 
 module.exports = createJestConfig(customJestConfig);

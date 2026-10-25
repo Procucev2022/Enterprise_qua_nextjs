@@ -153,4 +153,75 @@ describe('RfqUpgradePlanModal', () => {
 
     expect(mockOnSwitchToMode0).toHaveBeenCalled();
   });
+
+  it('handles close buttons and remaining credits display', () => {
+    render(
+      <RfqUpgradePlanModal
+        isOpen={true}
+        onClose={mockOnClose}
+        targetMode="mode_1"
+        remainingCredits={2}
+      />
+    );
+
+    expect(screen.getByText(/Your free trial allocation \(2 remaining\) is exhausted/i)).toBeInTheDocument();
+
+    const closeHeaderBtn = screen.getByRole('button', { name: /Close modal/i });
+    fireEvent.click(closeHeaderBtn);
+    expect(mockOnClose).toHaveBeenCalled();
+
+    const cancelBtn = screen.getByRole('button', { name: /Cancel & Keep Editing/i });
+    fireEvent.click(cancelBtn);
+    expect(mockOnClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('handles unknown targetMode and displays payment initiation failure', async () => {
+    mockCreateBuyerPaymentLink.mockResolvedValue(null);
+
+    render(
+      <RfqUpgradePlanModal
+        isOpen={true}
+        onClose={mockOnClose}
+        targetMode={'unknown_mode' as any}
+        remainingCredits={0}
+      />
+    );
+
+    expect(screen.getByText(/You don't have credits to publish the RFQ in unknown_mode/i)).toBeInTheDocument();
+
+    const payBtn = screen.getByRole('button', { name: /Proceed to Pay/i });
+    fireEvent.click(payBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Could not initialize secure payment gateway/i)).toBeInTheDocument();
+    });
+  });
+
+  it('handles payment link generation exception with fallback message', async () => {
+    mockCreateBuyerPaymentLink.mockRejectedValue(new Error('Network payment timeout'));
+
+    render(
+      <RfqUpgradePlanModal
+        isOpen={true}
+        onClose={mockOnClose}
+        targetMode="mode_1"
+      />
+    );
+
+    const payBtn = screen.getByRole('button', { name: /Proceed to Pay/i });
+    fireEvent.click(payBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Network payment timeout/i)).toBeInTheDocument();
+    });
+
+    // Test rejection with non-Error or empty message to hit fallback
+    mockCreateBuyerPaymentLink.mockRejectedValueOnce({});
+    fireEvent.click(payBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Payment initiation failed\. Please try again\./i)).toBeInTheDocument();
+    });
+  });
 });
+
+

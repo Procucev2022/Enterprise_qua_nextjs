@@ -983,4 +983,236 @@ describe('Reports Controller & Endpoints Suite', () => {
       countSpy.mockRestore();
     });
   });
+
+  describe('Comprehensive branch boost for reportsController', () => {
+    const pool = require('../src/db/pool');
+    const domainQueries = require('../src/db/domainQueries');
+
+    test('parseDateRange with start > end clamps range', () => {
+      const res = parseDateRange('2026-10-01', '2026-05-01');
+      expect(res.fromDate).toBeInstanceOf(Date);
+      expect(res.toDate).toBeInstanceOf(Date);
+      expect(res.fromDate.getTime()).toBeLessThan(res.toDate.getTime());
+    });
+
+    test('getSellerReports with sellerSummary requestType calls loadAllVendorsForReport', async () => {
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const vendorsSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
+        rows: [
+          {
+            id: 'v-db-all-1',
+            name: 'Vendor 1',
+            createdAt: '2026-02-01T00:00:00Z',
+            contactPerson: 'Contact 1',
+            deliveryLocation: ['Delhi', 'Noida'],
+            rfqDownloadsUsed: 3,
+          },
+        ],
+      });
+
+      const res = await request(app)
+        .get('/api/reports/seller-report?requestType=sellerSummary&startDate=2026-01-01&endDate=2026-12-31&limit=5')
+        .set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(vendorsSpy).toHaveBeenCalled();
+
+      // DB returns empty rows
+      vendorsSpy.mockResolvedValueOnce({ rows: [] });
+      const resEmpty = await request(app)
+        .get('/api/reports/seller-report?requestType=sellerSummary')
+        .set(authHeader('category_manager'))
+        .expect(200);
+      expect(resEmpty.body.success).toBe(true);
+
+      // DB error in loadAllVendorsForReport falls back to cache
+      vendorsSpy.mockRejectedValueOnce(new Error('Vendors DB failed'));
+      const resFallback = await request(app)
+        .get('/api/reports/seller-report?requestType=sellerSummary')
+        .set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(resFallback.body.success).toBe(true);
+
+      hasStorageSpy.mockRestore();
+      vendorsSpy.mockRestore();
+    });
+
+    test('sellerCategoryReport with vendor without majorCategory', async () => {
+      storeService.vendors = [
+        {
+          id: 'v-cat-no-maj',
+          name: 'Vendor No Major',
+          minorCategories: ['Cat1', 'Cat2', 'Cat3'],
+          deliveryLocation: ['Mumbai', 'Pune'],
+        },
+      ];
+
+      const res = await request(app)
+        .get('/api/reports/seller-report?requestType=sellerCategoryReport&limit=10')
+        .set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.length).toBeGreaterThan(0);
+    });
+
+    test('enrichVendorsForRfqs handles last_login_at and city without state, string and object raw', async () => {
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (typeof sql === 'string' && sql.includes('FROM vendors')) {
+          return {
+            rows: [
+              {
+                id: 'v-enrich-1',
+                email: 'enrich1@example.com',
+                created_at: '2026-01-01T00:00:00Z',
+                updated_at: '2026-01-02T00:00:00Z',
+                raw: JSON.stringify({
+                  id: 'v-enrich-1',
+                  name: 'Enrich 1',
+                  last_login_at: '2026-02-01T00:00:00Z',
+                  city: 'Pune',
+                  // no state, no location, no lastLogin
+                }),
+              },
+              {
+                id: 'v-enrich-2',
+                email: 'enrich2@example.com',
+                raw: {
+                  id: 'v-enrich-2',
+                  name: 'Enrich 2',
+                  lastLoginDate: '2026-02-02T00:00:00Z',
+                  city: 'Nagpur',
+                  state: 'Maharashtra',
+                },
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      });
+
+      storeService.rfqs = [
+        {
+          id: 'rfq-en-1',
+          createdAt: '2026-03-01T00:00:00Z',
+          assignedVendors: [{ id: 'v-enrich-1' }],
+          quotes: [{ vendorId: 'v-enrich-2', submittedAt: '2026-03-02T00:00:00Z' }],
+        },
+      ];
+
+      const res = await request(app)
+        .get('/api/reports/seller-report?requestType=sellerReport&startDate=2026-01-01&endDate=2026-12-31')
+        .set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      hasStorageSpy.mockRestore();
+      querySpy.mockRestore();
+    });
+
+    test('formatDateISO and formatMode additional variations', () => {
+      expect(formatMode('mode_0')).toBe('Mode 0');
+      expect(formatDateISO(new Date('2026-04-05'))).toBe('2026-04-05');
+    });
+
+    test('buyer and rfq reports with various empty and present fields and limit queries', async () => {
+      storeService.buyerAccounts = [
+        {
+          id: 'b-rep-1',
+          organizationName: 'Buyer 1',
+          corporateEmail: 'buyer1@test.com',
+          contactPerson: 'Buyer Contact 1',
+          mobileNumber: '9999999999',
+          city: 'Delhi',
+          state: 'Delhi',
+          last_login_at: '2026-01-01T00:00:00Z',
+          sourcingMode: 'mode_2',
+        },
+        {
+          id: 'b-rep-2',
+          organizationName: 'Buyer 2',
+          city: 'Bengaluru',
+          // no state
+        },
+      ];
+
+      storeService.rfqs = [
+        {
+          id: 'rfq-b-1',
+          rfqNumber: 'RFQ-B-1',
+          buyerAccountId: 'b-rep-1',
+          buyerEmail: 'buyer1@test.com',
+          category: 'Pumps',
+          status: 'PO Generated',
+          poNumber: 'PO-999',
+          poFinalised: true,
+          poApprovedDate: '2026-02-01',
+          targetDeliveryDate: '2026-03-01',
+          deadline: '2026-01-15',
+          createdAt: '2026-01-02T00:00:00Z',
+          assignedVendors: [{ id: 'v-1', name: 'V1', email: 'v1@test.com' }],
+          quotes: [
+            {
+              vendorId: 'v-1',
+              vendorName: 'V1',
+              unitPrice: 1000,
+              totalPrice: 2000,
+              submittedAt: '2026-01-05T00:00:00Z',
+              awardedAt: '2026-02-01T00:00:00Z',
+              complianceStatus: 'Compliant',
+              leadTimeDays: 10,
+              warrantyYears: 2,
+            },
+          ],
+        },
+        {
+          id: 'rfq-b-2',
+          rfqNumber: 'RFQ-B-2',
+          buyerAccountId: 'b-rep-2',
+          status: 'Closed',
+          createdAt: '2026-01-03T00:00:00Z',
+          quotes: [], // empty quotes to hit quotes.length === 0 in rfqSummaryReport
+        },
+        {
+          id: 'rfq-b-3',
+          rfqNumber: 'RFQ-B-3',
+          buyerAccountId: 'b-rep-1',
+          status: 'Open',
+          createdAt: '2026-01-04T00:00:00Z',
+          quotes: [], // buyer found and quotes empty
+        },
+      ];
+
+      const resBuyer = await request(app)
+        .get('/api/reports/buyer-report?startDate=2026-01-01&endDate=2026-12-31&limit=2')
+        .set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(resBuyer.body.success).toBe(true);
+
+      const resRfq = await request(app)
+        .get('/api/reports/rfq-report?startDate=2026-01-01&endDate=2026-12-31&limit=2')
+        .set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(resRfq.body.success).toBe(true);
+
+      const resRfqSum = await request(app)
+        .get('/api/reports/rfq-report?requestType=rfqSummaryReport&startDate=2026-01-01&endDate=2026-12-31&limit=2')
+        .set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(resRfqSum.body.success).toBe(true);
+
+      const resDaily = await request(app)
+        .get('/api/reports/daily-activity?limit=2')
+        .set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(resDaily.body.success).toBe(true);
+    });
+  });
 });

@@ -425,4 +425,132 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
       'You do not have permission to perform this action.'
     );
   });
+
+  describe('GraphQL Resolvers Dedicated Branch Boost', () => {
+    test('rfqInScope covers vendor v0/v2/v3 mode branches and category signals', async () => {
+      const vendorUser = { role: 'vendor', email: TEST_USERS.vendor.email, sub: 'usr-v-1' };
+      const vendorContext = contextFor('vendor');
+
+      // Create v0 RFQ with signals
+      const v0Rfq = storeService.createRFQ(
+        {
+          title: 'V0 RFQ for Vendor',
+          category: 'Machinery',
+          sourcingMode: 'mode_0',
+          status: 'Open',
+        },
+        null
+      );
+
+      // Mode 0 covered by category signals
+      jest.spyOn(storeService, 'vendorCoversRFQ').mockReturnValue(false);
+      jest.spyOn(storeService, '_rfqCategorySignals').mockReturnValue(['Machinery']);
+      jest.spyOn(storeService, 'vendorCoversCategory').mockReturnValue(true);
+
+      const rfqFound = await rootResolvers.rfq({ id: v0Rfq.id }, vendorContext);
+      expect(rfqFound).toBeDefined();
+
+      // Mode 0 with empty category signals
+      jest.spyOn(storeService, '_rfqCategorySignals').mockReturnValue([]);
+      const rfqEmptySig = await rootResolvers.rfq({ id: v0Rfq.id }, vendorContext);
+      expect(rfqEmptySig).toBeDefined();
+
+      // Mode 1 where vendor does not cover RFQ returns null (line 90)
+      const v1Rfq = storeService.createRFQ(
+        {
+          title: 'V1 Private RFQ',
+          category: 'Secret',
+          sourcingMode: 'mode_1',
+          status: 'Open',
+        },
+        null
+      );
+      const rfqNotAllowed = await rootResolvers.rfq({ id: v1Rfq.id }, vendorContext);
+      expect(rfqNotAllowed).toBeNull();
+    });
+
+    test('vendors and vendor queries handle buyer role and explicit buyerId args', async () => {
+      const buyerCtx = { req: { user: { role: 'buyer', email: TEST_USERS.buyer.email } } };
+
+      // vendors with buyer context
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ id: 'b-acct-1' });
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(false);
+      jest.spyOn(storeService, 'getVendors').mockResolvedValue([
+        { id: 'v-b-1', name: 'Vendor 1', email: 'v1@test.com' },
+      ]);
+
+      const vendorsBuyer = await rootResolvers.vendors({}, buyerCtx);
+      expect(Array.isArray(vendorsBuyer)).toBe(true);
+
+      // vendors with explicit args.buyerId
+      const vendorsExplicit = await rootResolvers.vendors({ buyerId: 'b-explicit' }, {});
+      expect(Array.isArray(vendorsExplicit)).toBe(true);
+
+      // vendor by id with buyer context
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue({ id: 'v-b-1' });
+      const vendorById = await rootResolvers.vendor({ id: 'v-b-1' }, buyerCtx);
+      expect(vendorById.id).toBe('v-b-1');
+
+      // vendor by id with explicit args.buyerId
+      const vendorExplicit = await rootResolvers.vendor({ id: 'v-b-1', buyerId: 'b-explicit' }, {});
+      expect(vendorExplicit.id).toBe('v-b-1');
+    });
+
+    test('vendor query by email with database storage and buyerId ownership filtering', async () => {
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+
+      const scopedVendor = {
+        id: 'v-scoped-1',
+        email: 'scoped@test.com',
+        buyerId: 'b-owner-1',
+      };
+      jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(scopedVendor);
+
+      // Matches buyerId
+      const foundMatch = await rootResolvers.vendor({ email: 'scoped@test.com', buyerId: 'b-owner-1' }, {});
+      expect(foundMatch).toEqual(scopedVendor);
+
+      // Mismatched buyerId returns null
+      const foundMismatch = await rootResolvers.vendor({ email: 'scoped@test.com', buyerId: 'b-other' }, {});
+      expect(foundMismatch).toBeNull();
+
+      // No buyerId provided on a buyer-scoped vendor returns null
+      const foundNoBuyer = await rootResolvers.vendor({ email: 'scoped@test.com' }, {});
+      expect(foundNoBuyer).toBeNull();
+    });
+
+    test('aiFeed query filters items for authenticated buyer role', async () => {
+      const buyerCtx = { req: { user: { role: 'buyer', email: 'buyer.feed@procucev.com' } } };
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ id: 'b-feed-acct' });
+      jest.spyOn(storeService, 'getRFQs').mockReturnValue([
+        { id: 'rfq-f-1', rfqNumber: 'RFQ-FEED-99', buyerAccountId: 'b-feed-acct' },
+      ]);
+      jest.spyOn(storeService, 'getAIFeed').mockReturnValue([
+        { id: 'feed-1', buyerAccountId: 'b-feed-acct', title: 'Feed 1' },
+        { id: 'feed-2', rfqNumber: 'RFQ-FEED-99', title: 'Feed 2' },
+        { id: 'feed-3', buyerAccountId: 'b-other-acct', title: 'Feed 3' },
+      ]);
+
+      const feed = await rootResolvers.aiFeed({}, buyerCtx);
+      expect(feed.length).toBe(2);
+      expect(feed.map((f) => f.id)).toEqual(['feed-1', 'feed-2']);
+    });
+
+    test('updateRFQ returns null when called by vendor role or RFQ is not in scope', async () => {
+      // Vendor role returns null
+      const vendorUpdate = await rootResolvers.updateRFQ(
+        { id: seededRfq.id, input: { status: 'Closed' } },
+        contextFor('vendor')
+      );
+      expect(vendorUpdate).toBeNull();
+
+      // Non-existent RFQ returns null
+      const missingUpdate = await rootResolvers.updateRFQ(
+        { id: 'rfq-non-existent-999', input: { status: 'Closed' } },
+        contextFor('buyer')
+      );
+      expect(missingUpdate).toBeNull();
+    });
+  });
 });
+

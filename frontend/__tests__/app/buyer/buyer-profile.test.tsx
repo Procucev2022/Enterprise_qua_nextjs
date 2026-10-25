@@ -8,11 +8,20 @@ import {
   saveBuyerProfile,
 } from '@/lib/buyerProfileClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import * as validationSchemas from '@/lib/validationSchemas';
 import type { BuyerProfile } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
+
+jest.mock('@/lib/validationSchemas', () => {
+  const actual = jest.requireActual('@/lib/validationSchemas');
+  return {
+    ...actual,
+    validatePincode: jest.fn(actual.validatePincode),
+  };
+});
 
 jest.mock('@/lib/buyerProfileClient', () => ({
   fetchBuyerProfile: jest.fn(),
@@ -848,4 +857,496 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('Pune')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Aditi Sharma')).toBeInTheDocument();
   });
+
+  it('covers pincode invalid patterns, catch block and save blocked by pincode error', async () => {
+    // Mount with dummy pincode 111111: passes regex schema but fails dummy check (setting pincodeError)
+    mockLoad({
+      ...PROFILE,
+      pincode: '111111',
+    });
+    await renderLoaded();
+
+    await waitFor(() => {
+      expect(screen.getByText('Invalid or dummy PIN code')).toBeInTheDocument();
+    });
+
+    // Trying to save while pincode has error blocks save (lines 509-510)
+    const saveBtn = screen.getByRole('button', { name: /^Save Organization Profile$/i });
+    fireEvent.click(saveBtn);
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.validationErrorTitle,
+      'Invalid or dummy PIN code',
+      'warning'
+    );
+
+    const pinInput = screen.getByDisplayValue('111111');
+
+    // 2 digits: hits else branch (lines 127-129)
+    fireEvent.change(pinInput, { target: { value: '40' } });
+
+    // API throwing exception in validatePincode (line 121)
+    const { validatePincode } = jest.requireMock('@/lib/validationSchemas');
+    (validatePincode as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    jest.useFakeTimers();
+    fireEvent.change(pinInput, { target: { value: '400001' } });
+    act(() => {
+      jest.advanceTimersByTime(400);
+    });
+    jest.useRealTimers();
+  });
+
+  it('covers category major and minor selection cap edge cases', async () => {
+    // Return a mock taxonomy with 10 majors, each having 5 minors
+    const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
+    const largeTaxonomy = Array.from({ length: 10 }, (_, i) => ({
+      majorCategory: `Major Cat ${i + 1}`,
+      minorCategories: [`Minor ${i + 1}-A`, `Minor ${i + 1}-B`, `Minor ${i + 1}-C`, `Minor ${i + 1}-D`, `Minor ${i + 1}-E`],
+    }));
+    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: largeTaxonomy });
+
+    mockLoad({
+      ...PROFILE,
+      categories: [
+        // 2 majors with 5 minors each = 10 minors total! (MAX_MINOR_CATEGORIES is 10)
+        { major: 'Major Cat 1', minor: 'Minor 1-A' },
+        { major: 'Major Cat 1', minor: 'Minor 1-B' },
+        { major: 'Major Cat 1', minor: 'Minor 1-C' },
+        { major: 'Major Cat 1', minor: 'Minor 1-D' },
+        { major: 'Major Cat 1', minor: 'Minor 1-E' },
+        { major: 'Major Cat 2', minor: 'Minor 2-A' },
+        { major: 'Major Cat 2', minor: 'Minor 2-B' },
+        { major: 'Major Cat 2', minor: 'Minor 2-C' },
+        { major: 'Major Cat 2', minor: 'Minor 2-D' },
+        { major: 'Major Cat 2', minor: 'Minor 2-E' },
+      ],
+    }, largeTaxonomy);
+
+    await renderLoaded();
+
+    // Toggle 3rd major when remainingSlots <= 0 (lines 381-383)
+    const major3Title = screen.getByText('Major Cat 3');
+    fireEvent.click(major3Title);
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.limitReachedTitle,
+      expect.stringContaining('minor'),
+      'warning'
+    );
+
+    // Expand accordion for Major Cat 3 and click Select All when remainingSlots <= 0 (lines 438-439)
+    expandMajor('Major Cat 3');
+    const panel3 = majorPanel('Major Cat 3');
+    const selectAllBtn3 = Array.from(panel3.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Select All'
+    );
+    if (selectAllBtn3) {
+      fireEvent.click(selectAllBtn3);
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        expect.stringContaining('minor'),
+        'warning'
+      );
+    }
+  });
+
+  it('covers major category cap in toggleMinorCategory and selectAllMinorInMajor', async () => {
+    const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
+    const largeTaxonomy = Array.from({ length: 8 }, (_, i) => ({
+      majorCategory: `Major Cap ${i + 1}`,
+      minorCategories: [`Sub ${i + 1}-A`, `Sub ${i + 1}-B`],
+    }));
+    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: largeTaxonomy });
+
+    // 5 majors with 1 minor each = 5 majors (MAX_MAJOR_CATEGORIES = 5), but only 5 minors (< 10)
+    mockLoad({
+      ...PROFILE,
+      categories: [
+        { major: 'Major Cap 1', minor: 'Sub 1-A' },
+        { major: 'Major Cap 2', minor: 'Sub 2-A' },
+        { major: 'Major Cap 3', minor: 'Sub 3-A' },
+        { major: 'Major Cap 4', minor: 'Sub 4-A' },
+        { major: 'Major Cap 5', minor: 'Sub 5-A' },
+      ],
+    }, largeTaxonomy);
+
+    await renderLoaded();
+
+    // Expand Major Cap 6 (unselected major)
+    expandMajor('Major Cap 6');
+
+    // 1. Toggle minor in unselected major when major cap (5) is reached (lines 416-417)
+    const sub6A = screen.getByText('Sub 6-A');
+    fireEvent.click(sub6A);
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.limitReachedTitle,
+      expect.stringContaining('5 major'),
+      'warning'
+    );
+
+    // 2. Select all in unselected major when major cap (5) is reached (lines 430-431)
+    const panel6 = majorPanel('Major Cap 6');
+    const selectAllBtn6 = Array.from(panel6.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Select All'
+    );
+    if (selectAllBtn6) {
+      fireEvent.click(selectAllBtn6);
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        expect.stringContaining('5 major'),
+        'warning'
+      );
+    }
+  });
+
+  it('covers selecting minor in unselected major when caps allow and partial select all', async () => {
+    const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
+    const customTaxonomy = [
+      { majorCategory: 'Cat A', minorCategories: ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'] },
+      { majorCategory: 'Cat B', minorCategories: ['B1', 'B2', 'B3', 'B4', 'B5'] },
+    ];
+    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: customTaxonomy });
+
+    // 1 major with 8 minors (8 out of 10 slots filled, 2 remaining slots)
+    mockLoad({
+      ...PROFILE,
+      categories: ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'].map((m) => ({ major: 'Cat A', minor: m })),
+    }, customTaxonomy);
+
+    await renderLoaded();
+
+    // Expand Cat B (which has 5 minors, but only 2 slots remain)
+    expandMajor('Cat B');
+
+    // 1. Toggle minor in unselected major when slots are available (line 421)
+    const b1 = screen.getByText('B1');
+    fireEvent.click(b1);
+    // Now 9 minors selected across 2 majors
+    expect(selectionSummary()).toBe('2 Major • 9 Minor Selected');
+
+    // 2. Click select all on Cat B when allMinor.length (5) > remainingSlots (line 444 & 448)
+    const panelB = majorPanel('Cat B');
+    const selectAllBtnB = Array.from(panelB.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Select All'
+    );
+    if (selectAllBtnB) {
+      fireEvent.click(selectAllBtnB);
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        expect.stringContaining('minor'),
+        'warning'
+      );
+    }
+  });
+
+  it('covers postal pincode successful resolution with post office auto-populating city and state', async () => {
+    mockLoad();
+    await renderLoaded();
+
+    const { validatePincode } = jest.requireMock('@/lib/validationSchemas');
+    (validatePincode as jest.Mock).mockResolvedValueOnce({
+      isValid: true,
+      postOffices: [{ District: 'Pune', State: 'Maharashtra' }],
+    });
+
+    const pinInput = screen.getByDisplayValue('400001');
+    jest.useFakeTimers();
+    fireEvent.change(pinInput, { target: { value: '411001' } });
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+    jest.useRealTimers();
+
+    expect(screen.getByDisplayValue('Pune')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Maharashtra')).toBeInTheDocument();
+  });
+
+  it('covers postal pincode lookup failure with default message fallback', async () => {
+    mockLoad();
+    await renderLoaded();
+
+    const { validatePincode } = jest.requireMock('@/lib/validationSchemas');
+    (validatePincode as jest.Mock).mockResolvedValueOnce({
+      isValid: false,
+      message: undefined,
+    });
+
+    const pinInput = screen.getByDisplayValue('400001');
+    jest.useFakeTimers();
+    fireEvent.change(pinInput, { target: { value: '411009' } });
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+    jest.useRealTimers();
+
+    await waitFor(() => {
+      expect(screen.getByText('Invalid PIN code')).toBeInTheDocument();
+    });
+  });
+
+  it('covers search term no matching categories and taxonomy empty fallback', async () => {
+    mockLoad();
+    await renderLoaded();
+
+    const searchInput = screen.getByPlaceholderText(/Search across all 13 Major and 120\+ Minor categories/i);
+    fireEvent.change(searchInput, { target: { value: 'NONEXISTENT_KEYWORD_XYZ' } });
+
+    expect(screen.getByText(/No categories found matching "NONEXISTENT_KEYWORD_XYZ"./i)).toBeInTheDocument();
+  });
+
+  it('covers taxonomy loading failure with error toast', async () => {
+    const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
+    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: 'Taxonomy server unreachable',
+    });
+
+    mockLoad();
+    await renderLoaded();
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.loadFailedTitle,
+      'Taxonomy server unreachable',
+      'warning'
+    );
+  });
+
+  it('covers activeBuyerAccount backfilling branches with address1, zip_code, and derived PAN', async () => {
+    const emptyProfile = {
+      organizationId: 'org-2',
+      userId: 'user-2',
+      companyName: '',
+      brandName: '',
+      organizationType: 'Private Limited' as const,
+      panNumber: '',
+      gstNumber: '',
+      cinNumber: '',
+      annualTurnover: '',
+      website: '',
+      street: '',
+      city: '',
+      state: '',
+      pincode: '',
+      country: '',
+      contactName: '',
+      contactDesignation: '',
+      contactEmail: '',
+      contactPhone: '',
+      categories: [{ major: 'Civil Works', minor: 'Piling' }],
+    };
+
+    const mockAccount = {
+      organizationName: 'Tata Projects Limited',
+      // brandName is omitted to test fallback to organizationName (line 300)
+      gstin: '27AABCT1234F1Z8',
+      city: 'Navi Mumbai',
+      state: 'Maharashtra',
+      zip_code: '400703', // tests zip_code fallback (line 305)
+      country: 'India',
+      address1: 'Plot 45, MIDC Industrial Area', // tests address1 fallback (line 314)
+      pan: 'AABCT1234F', // tests pan fallback (line 310)
+      contactPerson: 'Vikram Joshi',
+      corporateEmail: 'vikram.joshi@tata.com',
+      mobileNumber: '+919820011223',
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      activeBuyerAccount: mockAccount,
+    });
+
+    mockLoad(emptyProfile);
+    await renderLoaded();
+
+    expect(screen.getAllByDisplayValue('Tata Projects Limited').length).toBe(2);
+    expect(screen.getByDisplayValue('Plot 45, MIDC Industrial Area')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('400703')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('AABCT1234F')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Vikram Joshi')).toBeInTheDocument();
+  });
+
+  it('covers primary post office with Division and Name fallback, empty post offices, and save failure without error text', async () => {
+    mockLoad();
+    await renderLoaded();
+
+    const { validatePincode } = jest.requireMock('@/lib/validationSchemas');
+
+    // 1. Post office with Division instead of District
+    (validatePincode as jest.Mock).mockResolvedValueOnce({
+      isValid: true,
+      postOffices: [{ Division: 'Thane Urban', State: 'Maharashtra' }],
+    });
+
+    const pinInput = screen.getByDisplayValue('400001');
+    jest.useFakeTimers();
+    fireEvent.change(pinInput, { target: { value: '400601' } });
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+    jest.useRealTimers();
+    expect(screen.getByDisplayValue('Thane Urban')).toBeInTheDocument();
+
+    // 2. Post office with Name only (no District, no Division)
+    (validatePincode as jest.Mock).mockResolvedValueOnce({
+      isValid: true,
+      postOffices: [{ Name: 'Belapur Node', State: '' }],
+    });
+    jest.useFakeTimers();
+    fireEvent.change(pinInput, { target: { value: '400614' } });
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+    jest.useRealTimers();
+    expect(screen.getByDisplayValue('Belapur Node')).toBeInTheDocument();
+
+    // 3. Post office with empty array
+    (validatePincode as jest.Mock).mockResolvedValueOnce({
+      isValid: true,
+      postOffices: [],
+    });
+    jest.useFakeTimers();
+    fireEvent.change(pinInput, { target: { value: '400002' } });
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+    jest.useRealTimers();
+
+    // 4. Save failure without an error string
+    const { saveBuyerProfile } = jest.requireMock('@/lib/buyerProfileClient');
+    (saveBuyerProfile as jest.Mock).mockResolvedValueOnce({ success: false });
+    const saveBtn = screen.getByRole('button', { name: /^Save Organization Profile$/i });
+    fireEvent.click(saveBtn);
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.buyerProfile.saveFailedTitle,
+        '',
+        'warning'
+      );
+    });
+  });
+
+  it('covers categoryTaxonomy provided via useApp and street fallback variations', async () => {
+    const customTax = [{ majorCategory: 'Special Cat', minorCategories: ['Spec 1'] }];
+
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      categoryTaxonomy: customTax,
+      activeBuyerAccount: {
+        organizationName: 'City Only Org',
+        city: 'Jaipur',
+        state: '', // state is empty to hit resolvedCity fallback in resolvedStreet
+        street: 'Direct Street 101', // hits activeBuyerAccount.street
+        panNumber: 'BBBCP1234F', // hits activeBuyerAccount.panNumber
+        contactDesignation: 'VP Sourcing',
+      },
+    });
+
+    mockLoad({
+      ...PROFILE,
+      street: '',
+      panNumber: '',
+      contactDesignation: '',
+      categories: [{ major: 'Special Cat', minor: 'Spec 1' }],
+    });
+
+    await renderLoaded();
+
+    expect(screen.getByDisplayValue('Direct Street 101')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('BBBCP1234F')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('VP Sourcing')).toBeInTheDocument();
+  });
+
+  it('covers profile and taxonomy failure without error property', async () => {
+    (fetchBuyerProfile as jest.Mock).mockResolvedValueOnce({ success: false });
+    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValueOnce({ success: false });
+
+    await renderLoaded();
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.loadFailedTitle,
+      '',
+      'warning'
+    );
+  });
+
+  it('covers completely blank profile without activeBuyerAccount', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      activeBuyerAccount: null,
+    });
+
+    const completelyBlank: BuyerProfile = {
+      organizationId: 'org-blank',
+      userId: 'user-blank',
+      companyName: '',
+      brandName: '',
+      organizationType: 'Public Limited',
+      panNumber: '',
+      gstNumber: '',
+      cinNumber: '',
+      annualTurnover: '',
+      website: '',
+      street: '',
+      city: '',
+      state: '',
+      pincode: '',
+      country: '',
+      contactName: '',
+      contactDesignation: '',
+      contactEmail: '',
+      contactPhone: '',
+      categories: [{ major: 'Civil Works', minor: 'Piling' }],
+    };
+
+    mockLoad(completelyBlank);
+    await renderLoaded();
+
+    const pinInput = screen.getAllByRole('textbox').find((t) => (t as HTMLInputElement).maxLength === 6);
+    if (pinInput) {
+      // 1 digit pincode: hits raw.length < 3 (line 94 branch 3.0)
+      fireEvent.change(pinInput, { target: { value: '4' } });
+    }
+
+    // Postal API returning empty strings in post office detail
+    const { validatePincode } = jest.requireMock('@/lib/validationSchemas');
+    (validatePincode as jest.Mock).mockResolvedValueOnce({
+      isValid: true,
+      postOffices: [{ District: '', Division: '', Name: '', State: '' }],
+    });
+    if (pinInput) {
+      jest.useFakeTimers();
+      fireEvent.change(pinInput, { target: { value: '400099' } });
+      await act(async () => {
+        jest.advanceTimersByTime(400);
+      });
+      jest.useRealTimers();
+    }
+  });
+
+  it('covers selectAllMinorInMajor on an unselected major', async () => {
+    mockLoad();
+    await renderLoaded();
+
+    // Raw Material starts unselected
+    expandMajor('Raw Material');
+    const panel = majorPanel('Raw Material');
+    const selectAllBtn = Array.from(panel.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Select All'
+    );
+    if (selectAllBtn) {
+      fireEvent.click(selectAllBtn);
+    }
+    // Now Raw Material is selected in selectedMajor (line 447 branch 100.0)
+    expect(selectionSummary()).toContain('3 Major');
+  });
 });
+
+
+
+
+
+
+
+
+

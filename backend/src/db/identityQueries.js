@@ -26,24 +26,10 @@
 
 const crypto = require('crypto');
 const pool = require('./pool');
-const { getD1Binding, getD1HttpClient } = require('./d1Bridge');
+const d1Bridge = require('./d1Bridge');
 
-// True when D1 is reachable at all — either the real Workers binding, or the
-// REST API client (the only D1 path available to a plain `node scripts/*.js`
-// run outside Workers, e.g. the create-buyer/vendor/staff CLI scripts). The
-// `{ d1: true }` queries inside each branch below already resolve through
-// both paths correctly via pool.query's own binding -> HTTP client -> pg
-// priority order — gating the branch choice on the binding alone, as this
-// used to, sent every one of these scripts down the pg/Aiven fallback branch
-// below instead whenever run from a plain terminal (no Workers binding ever
-// exists there), silently writing a "successfully created" account into a
-// stray leftover Postgres database the live app never reads from, while
-// every READ in the very same script (findUserByEmail, resolveMasterUuid)
-// already went to the real D1 database via { d1: true } — confirmed live: a
-// vendor account insert reported real-looking uuids, then its own
-// read-back verification immediately after reported found=false.
 function hasD1() {
-  return Boolean(getD1Binding() || getD1HttpClient());
+  return Boolean(d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient());
 }
 const {
   IDENTITY_ROLE_MAP,

@@ -643,4 +643,109 @@ describe('AuthClient.changePassword', () => {
 
     expect(res.error).toBe(UI_STRINGS.auth.serverErrorFallback);
   });
+
+  describe('AuthClient completeBuyerOnboarding and branch boosts', () => {
+    test('completeBuyerOnboarding handles success, 401, json parse failure, and error responses', async () => {
+      authClient.setSession(null, 'test-jwt-token');
+
+      // Success
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          token: 'refreshed-jwt',
+          user: { id: 'usr-1', email: 'b@b.com', role: 'buyer', name: 'Buyer' },
+        }),
+      });
+
+      const resSuccess = await authClient.completeBuyerOnboarding({
+        corporateEmail: 'b@b.com',
+        newPassword: 'pass',
+        contactPerson: 'Buyer',
+        phone: '9999999999',
+        organizationName: 'Org',
+      } as any);
+
+      expect(resSuccess.success).toBe(true);
+      expect(authClient.getToken()).toBe('refreshed-jwt');
+
+      // 401 unauthorized
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ success: false, error: 'Unauthorized' }),
+      });
+      const res401 = await authClient.completeBuyerOnboarding({} as any);
+      expect(res401.success).toBe(false);
+      expect(authClient.getToken()).toBeNull();
+
+      // 401 without error reason
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ success: false }),
+      });
+      const res401NoReason = await authClient.completeBuyerOnboarding({} as any);
+      expect(res401NoReason.error).toBe(UI_STRINGS.auth.sessionExpired);
+
+      // JSON parse failure
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => {
+          throw new Error('Not JSON');
+        },
+      });
+      const resJsonFail = await authClient.completeBuyerOnboarding({} as any);
+      expect(resJsonFail.error).toBe(UI_STRINGS.auth.serverErrorFallback);
+
+      // Non-ok with no error message
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({ success: false }),
+      });
+      const res500NoMsg = await authClient.completeBuyerOnboarding({} as any);
+      expect(res500NoMsg.error).toBe(UI_STRINGS.auth.serverErrorFallback);
+    });
+
+    test('changePassword supports codeOrOptions string and object, and 6-digit current password', async () => {
+      authClient.setSession(null, 'test-jwt-token');
+
+      // String codeOrOptions
+      let capturedBody: any;
+      global.fetch = jest.fn().mockImplementation(async (_, opts) => {
+        capturedBody = JSON.parse(opts.body);
+        return {
+          ok: true,
+          json: async () => ({ success: true, token: 'new-token', user: { id: 'u-1', email: 'u@test.com', role: 'buyer', name: 'U' } }),
+        };
+      });
+
+      await authClient.changePassword('oldpass', 'newpass', '654321');
+      expect(capturedBody.code).toBe('654321');
+      expect(capturedBody.currentPassword).toBe('oldpass');
+
+      // Object codeOrOptions with code and resetToken
+      await authClient.changePassword('123456', 'newpass', { code: '111111', resetToken: 'rst-abc' });
+      expect(capturedBody.resetToken).toBe('rst-abc');
+      expect(capturedBody.code).toBe('123456'); // currentPasswordOrCode was 6 digits
+
+      // Success updates session
+      expect(authClient.getToken()).toBe('new-token');
+    });
+
+    test('logout with explicit email', async () => {
+      authClient.setSession({ id: 'u1', email: 'session@test.com', role: 'buyer', name: 'B', orgId: 'o1', orgName: 'O' }, 'tok');
+      let capturedEmail: string | undefined;
+      global.fetch = jest.fn().mockImplementation(async (_, opts) => {
+        const body = JSON.parse(opts.body);
+        capturedEmail = body.email;
+        return { ok: true, json: async () => ({ success: true }) };
+      });
+
+      await authClient.logout('custom@test.com');
+      expect(capturedEmail).toBe('custom@test.com');
+      expect(authClient.getToken()).toBeNull();
+    });
+  });
 });

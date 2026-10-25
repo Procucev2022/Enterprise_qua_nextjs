@@ -573,5 +573,19 @@ describe('VendorProfilePage Comprehensive Suite', () => {
     expect(screen.getByPlaceholderText(/Min 8 characters/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Re-enter new password/i)).toBeInTheDocument();
   });
+
+  it('renders VendorProfileUnderscoreRoute cleanly', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const VendorProfileUnderscoreRoute = require('@/app/vendor/vendor_profile/page').default;
+    render(
+      <AppProvider>
+        <VendorProfileUnderscoreRoute />
+      </AppProvider>
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Section 4: Security/i)).toBeInTheDocument();
+    });
+  });
 });
+
 

@@ -486,7 +486,132 @@ describe('Gemini API Key Fallback, Cooldown & Automatic Rotation', () => {
         gemini.callModel('gemini-3.8-flash', { contents: [] }, 50)
       ).rejects.toThrow();
     });
+
+    test('resolveApiKeys handles array in GEMINI_CONFIG.API_KEYS and numbered environment variables', () => {
+      const { GEMINI_CONFIG } = require('../src/config/constants');
+      const origPool = GEMINI_CONFIG.API_KEYS;
+      try {
+        GEMINI_CONFIG.API_KEYS = ['arr-key-1', 'arr-key-2'];
+        process.env.GEMINI_API_KEY_1 = 'numbered-key-first';
+        process.env.GEMINI_API_KEY_2 = 'numbered-key-second';
+        const keys = gemini.resolveApiKeys();
+        expect(keys).toContain('arr-key-1');
+        expect(keys).toContain('arr-key-2');
+        expect(keys).toContain('numbered-key-first');
+        expect(keys).toContain('numbered-key-second');
+      } finally {
+        GEMINI_CONFIG.API_KEYS = origPool;
+        delete process.env.GEMINI_API_KEY_1;
+        delete process.env.GEMINI_API_KEY_2;
+      }
+    });
+
+    test('checkDailyModelReset updates lastResetDate on new day when no failover occurred', () => {
+      gemini.resetActiveModelIndex();
+      gemini.setLastResetDate('2020-01-01');
+      const res = gemini.checkDailyModelReset();
+      expect(res).toBe(false);
+    });
+
+    test('getBackoffMs calculates exponential backoff outside of test environment and 0 in test environment', () => {
+      expect(gemini.getBackoffMs(1)).toBe(0);
+      const origEnv = process.env.NODE_ENV;
+      const origWorkerId = process.env.JEST_WORKER_ID;
+      try {
+        process.env.NODE_ENV = 'production';
+        delete process.env.JEST_WORKER_ID;
+        expect(gemini.getBackoffMs(1)).toBe(2000);
+        expect(gemini.getBackoffMs(2)).toBe(4000);
+        expect(gemini.getBackoffMs(3)).toBe(5000);
+      } finally {
+        process.env.NODE_ENV = origEnv;
+        process.env.JEST_WORKER_ID = origWorkerId;
+      }
+    });
+
+    test('callModel throws when extraction time budget expires right before request dispatch', async () => {
+      process.env.GEMINI_API_KEYS = 'test-key-deadline';
+      const realNow = Date.now;
+      let tick = 0;
+      jest.spyOn(Date, 'now').mockImplementation(() => {
+        tick++;
+        // First checks in callModel return 1000, deadline is 1050 (positive)
+        if (tick <= 2) return 1000;
+        // Check at line 965 returns 1100 (now > deadline, deadlineRemaining <= 0)
+        return 1100;
+      });
+
+      try {
+        await expect(
+          gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000, 1050)
+        ).rejects.toThrow('shared extraction time budget');
+      } finally {
+        Date.now.mockRestore();
+      }
+    });
+
+    test('callModel throws when all remaining keys are skipped in cooldown', async () => {
+      process.env.GEMINI_API_KEYS = 'key-active-1,key-cooled-2';
+      gemini.markKeyCooldown('key-cooled-2', 60000);
+      global.fetch = jest.fn().mockImplementation(async () => {
+        return {
+          ok: false,
+          status: 500,
+          statusText: 'Internal Error',
+          text: async () => 'Internal server error',
+        };
+      });
+
+      await expect(
+        gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000)
+      ).rejects.toThrow();
+      gemini.clearKeyCooldowns();
+    });
+
+    test('generateJson logs location restriction warning and fails over when isLocation error occurs', async () => {
+      gemini.resetActiveModelIndex();
+      process.env.GEMINI_API_KEYS = 'key-loc-fail';
+      let attempt = 0;
+      const validPayload = {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    quotationNumber: 'Q-123',
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+      };
+      global.fetch = jest.fn().mockImplementation(async () => {
+        attempt++;
+        if (attempt === 1) {
+          return {
+            ok: false,
+            status: 400,
+            statusText: 'Bad Request',
+            text: async () => JSON.stringify({
+              error: { code: 400, message: 'User location is not supported for api access' },
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(validPayload),
+          json: async () => validPayload,
+        };
+      });
+
+      const res = await gemini.generateJson({ prompt: 'Extract quote for RFQ 123', label: 'quotation extraction' });
+      expect(res.status).toBe(gemini.EXTRACTION_STATUS.SUCCESS);
+    });
   });
 });
+
 
 

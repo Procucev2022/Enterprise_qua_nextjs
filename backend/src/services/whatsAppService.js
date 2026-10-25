@@ -27,7 +27,7 @@ const WHATSAPP_CONFIG = {
   get USERNAME() { return getEnv('WHATSAPP_USERNAME', ''); },
   get PASSWORD() { return getEnv('WHATSAPP_PASSWORD', ''); },
   get FROM_NUMBER() { return getEnv('WHATSAPP_FROM_NUMBER', ''); },
-  get TEMPLATE_RFQ_INVITE() { return getEnv('WHATSAPP_TEMPLATE_RFQ_NOTIFICATION', 'rfq_notification_for_sellers_for_rfq_feb_5'); },
+  get TEMPLATE_RFQ_INVITE() { return getEnv('WHATSAPP_TEMPLATE_RFQ_INVITE', getEnv('WHATSAPP_TEMPLATE_RFQ_NOTIFICATION', 'rfq_notification_for_sellers_for_rfq_feb_5')); },
 
   // ── Meta Cloud API (secondary) ────────────────────────────────────────────
   get META_API_URL() { return getEnv('WHATSAPP_API_URL', 'https://graph.facebook.com/v19.0'); },

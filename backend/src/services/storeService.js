@@ -11,6 +11,7 @@ const {
   VENDOR_FREE_CREDITS_LIMIT,
   VENDOR_ASSIGNMENT_LIMITS,
   MAJOR_CATEGORY_ALIASES,
+  INQUIRIES_PERSISTENCE_FILE,
 } = require('../config/constants');
 const crypto = require('crypto');
 const pool = require('../db/pool');
@@ -4696,6 +4697,10 @@ class StoreService {
       return this.aiFeed.slice(0, Math.min(Number(limit), 500));
     }
     return this.aiFeed.slice(0, 500);
+  }
+
+  addFeedItem(feedItem) {
+    return this.addAIFeedItem(feedItem);
   }
 
   addAIFeedItem(feedItem) {

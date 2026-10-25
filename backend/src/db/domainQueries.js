@@ -12,7 +12,7 @@
 // ==============================================================================
 
 const pool = require('./pool');
-const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
+const d1Bridge = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
@@ -618,7 +618,7 @@ async function deleteVendorInDB(id) {
 async function bulkInsertVendorsInDB(vendors) {
   if (!pool.hasStorage() || vendors.length === 0) return [];
 
-  const d1 = getD1Binding() || getD1HttpClient();
+  const d1 = d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient();
   if (d1) {
     const statements = vendors.map((vendor) => ({
       text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
@@ -634,7 +634,7 @@ async function bulkInsertVendorsInDB(vendors) {
         JSON.stringify(vendor),
       ],
     }));
-    const results = await batchD1(d1, statements);
+    const results = await d1Bridge.batchD1(d1, statements);
     queryCache.invalidate('vendors');
     return results.flatMap((result) => result.rows.map((row) => row.email));
   }

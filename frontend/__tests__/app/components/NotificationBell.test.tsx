@@ -269,4 +269,42 @@ describe('NotificationBell — non-inbox roles', () => {
     render(<NotificationBell />);
     expect(mockFetch).not.toHaveBeenCalled();
   });
+
+  it('routes correctly for po_approved, rfq_final_comparison, po_awarded, and rfq_closed', async () => {
+    mockStore({ currentRole: 'buyer', isLoggedIn: true, aiFeed: [] });
+    mockFetch.mockResolvedValue({
+      success: true,
+      notifications: [
+        ntf({ id: 'n-po-app', kind: 'po_approved', rfqNumber: 'RFQ-POA-1', title: 'PO Approved' }),
+        ntf({ id: 'n-final', kind: 'rfq_final_comparison', rfqNumber: 'RFQ-FIN-1', title: 'Final Comparison' }),
+        ntf({ id: 'n-awarded', kind: 'po_awarded', rfqNumber: 'RFQ-AWD-1', title: 'PO Awarded' }),
+        ntf({ id: 'n-closed', kind: 'rfq_closed', rfqNumber: 'RFQ-CLS-1', title: 'RFQ Closed' }),
+      ],
+      unreadCount: 4,
+    });
+
+    render(<NotificationBell />);
+    await waitFor(() => expect(screen.getByText('4')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /unread notification/i }));
+
+    // Click po_approved
+    fireEvent.click(await screen.findByText('PO Approved'));
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/buyer/quote-matrix?rfq=RFQ-POA-1'));
+
+    // Open again and click rfq_final_comparison
+    fireEvent.click(screen.getByRole('button', { name: /notification/i }));
+    fireEvent.click(await screen.findByText('Final Comparison'));
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/buyer/quote-matrix?rfq=RFQ-FIN-1'));
+
+    // Open again and click po_awarded
+    fireEvent.click(screen.getByRole('button', { name: /notification/i }));
+    fireEvent.click(await screen.findByText('PO Awarded'));
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/vendor/quotation-form?rfq=RFQ-AWD-1'));
+
+    // Open again and click rfq_closed
+    fireEvent.click(screen.getByRole('button', { name: /notification/i }));
+    fireEvent.click(await screen.findByText('RFQ Closed'));
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/vendor/quotation-form?rfq=RFQ-CLS-1'));
+  });
 });

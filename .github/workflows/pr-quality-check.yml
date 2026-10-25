@@ -118,10 +118,6 @@ jobs:
           path: frontend/coverage
         continue-on-error: true
 
-      - name: Verify Master Coverage Gate
-        run: npm run check:coverage
-        continue-on-error: true
-
       - name: Post PR Summary Comment
         if: github.event_name == 'pull_request'
         continue-on-error: true
@@ -176,3 +172,13 @@ jobs:
             } catch (commentErr) {
               core.warning(`Unable to post/update PR comment: ${commentErr.message}. Ensure GitHub Actions has Read and write permissions in Repository Settings > Actions > General.`);
             }
+
+      - name: Enforce Strict 90% Per-File Coverage Gate
+        run: npm run check:coverage
+
+      - name: Enforce PR Quality Gate Status
+        run: |
+          if [ "${{ needs.backend-gate.result }}" != "success" ] || [ "${{ needs.frontend-gate.result }}" != "success" ]; then
+            echo "❌ CI Quality Gate Failed: Prerequisite backend or frontend gate did not succeed."
+            exit 1
+          fi

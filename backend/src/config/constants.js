@@ -1,6 +1,10 @@
+const path = require('path');
+
 // ==============================================================================
 // PROCUCEV ENTERPRISE (QUA AI 2.0) - CONSTANTS, TAXONOMIES & SYSTEM DEFAULTS
 // ==============================================================================
+
+const INQUIRIES_PERSISTENCE_FILE = path.join(__dirname, '../../data/enterprise_inquiries.json');
 
 /**
  * Centralized RFQ Modes Enum / Constants
@@ -2676,5 +2680,6 @@ module.exports = {
   QUA_AI_EMAIL_TEMPLATES,
   QUA_AI_EMAIL_SUPPORT,
   VENDOR_QUOTE_SUPPORT_CC,
+  INQUIRIES_PERSISTENCE_FILE,
 };
 

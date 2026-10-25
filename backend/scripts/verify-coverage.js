@@ -17,14 +17,14 @@ const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
 
 const BENCHMARKS = {
   statements: 90.0,
-  branches: 84.0,
+  branches: 90.0,
   functions: 90.0,
   lines: 90.0,
 };
 const metrics = ['statements', 'branches', 'functions', 'lines'];
 
 console.log('\n========================================================================================================');
-console.log('                   BACKEND PER-FILE UNIT TEST CODE COVERAGE REPORT                      ');
+console.log('                   BACKEND PER-FILE UNIT TEST CODE COVERAGE REPORT (>= 90%)             ');
 console.log('========================================================================================================\n');
 
 let failedFiles = [];
@@ -105,25 +105,19 @@ if (summary.total) {
 }
 
 console.log(`Files Processed: ${passedFiles.length + failedFiles.length}`);
-console.log(`Passed: \x1b[32m${passedFiles.length}\x1b[0m`);
+console.log(`Passed (>= 90% Statements, Branches, Functions, Lines): \x1b[32m${passedFiles.length}\x1b[0m`);
 console.log(`Failed in any metric:   \x1b[31m${failedFiles.length}\x1b[0m\n`);
 
-const totalPassed = summary.total &&
-  parseFloat(summary.total.statements.pct) >= BENCHMARKS.statements &&
-  parseFloat(summary.total.branches.pct) >= BENCHMARKS.branches &&
-  parseFloat(summary.total.functions.pct) >= BENCHMARKS.functions &&
-  parseFloat(summary.total.lines.pct) >= BENCHMARKS.lines;
-
-if (!totalPassed) {
-  console.error('\x1b[31m[ERROR] Total coverage does not meet requirements:\x1b[0m');
+if (failedFiles.length > 0) {
+  console.error('\x1b[31m[ERROR] Strict Per-File Coverage Benchmark Failed (>= 90% across Statements, Branches, Functions, Lines):\x1b[0m');
   failedFiles.forEach((f) => {
     console.error(
       ` - ${f.file} -> Statements: ${f.stPct.toFixed(1)}%, Branches: ${f.brPct.toFixed(1)}%, Functions: ${f.fnPct.toFixed(1)}%, Lines: ${f.lnPct.toFixed(1)}%`
     );
   });
-  console.error('\n\x1b[31mCoverage benchmark failed. Total coverage must achieve >= 90% in Statements, Functions, Lines and >= 85% in Branches.\x1b[0m\n');
+  console.error(`\n\x1b[31mStrict 90% per-file coverage benchmark failed for ${failedFiles.length} file(s). Every application file must achieve >= 90% individually.\x1b[0m\n`);
   process.exit(1);
 } else {
-  console.log('\x1b[32m[SUCCESS] Enterprise Backend Coverage Gate Passed (Total Coverage >= 90% Statements/Functions/Lines, >= 85% Branches)!\x1b[0m\n');
+  console.log('\x1b[32m[SUCCESS] Enterprise Backend Coverage Gate Passed (100% of files achieve >= 90% Statements, Branches, Functions, Lines)!\x1b[0m\n');
   process.exit(0);
 }

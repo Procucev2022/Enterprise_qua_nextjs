@@ -244,6 +244,128 @@ describe('Buyer profile service', () => {
       dbPool.pool = null;
       await expect(buyerProfileService.getProfile(SESSION)).rejects.toMatchObject({ status: 503 });
     });
+
+    test('auto-heals missing address and tax details from storeService buyer account', async () => {
+      const partialProfile = {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        companyName: 'Test Corp',
+        street: null,
+        city: null,
+        state: null,
+        pincode: null,
+        gstNumber: null,
+        panNumber: null,
+        country: '',
+      };
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: { ...partialProfile } });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        address1: 'B-10 Sector 5',
+        city: 'Noida',
+        state: 'UP',
+        pincode: '201301',
+        gstin: '07AAACL1234F1Z5',
+        country: 'India',
+      });
+      const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ found: true });
+
+      const profile = await buyerProfileService.getProfile(SESSION);
+      expect(profile.street).toBe('B-10 Sector 5');
+      expect(profile.city).toBe('Noida');
+      expect(profile.state).toBe('UP');
+      expect(profile.pincode).toBe('201301');
+      expect(profile.gstNumber).toBe('07AAACL1234F1Z5');
+      expect(profile.panNumber).toBe('AAACL1234F');
+      expect(profile.country).toBe('India');
+      expect(updateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          organizationId: 'org-1',
+          patch: expect.objectContaining({
+            street: 'B-10 Sector 5',
+            city: 'Noida',
+            state: 'UP',
+            pincode: '201301',
+            gstNumber: '07AAACL1234F1Z5',
+            panNumber: 'AAACL1234F',
+          }),
+        })
+      );
+    });
+
+    test('auto-heals with city and state fallback when address is missing', async () => {
+      const partialProfile = {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        companyName: 'Test Corp',
+        street: null,
+        city: null,
+        state: null,
+        pincode: null,
+        gstNumber: null,
+        panNumber: null,
+      };
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: { ...partialProfile } });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        zipCode: '560001',
+        gstNumber: '29AAACL1234F1Z5',
+      });
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockRejectedValue(new Error('DB write failed'));
+
+      const profile = await buyerProfileService.getProfile(SESSION);
+      expect(profile.street).toBe('Bengaluru, Karnataka');
+      expect(profile.pincode).toBe('560001');
+      expect(profile.gstNumber).toBe('29AAACL1234F1Z5');
+      expect(profile.panNumber).toBe('AAACL1234F');
+    });
+
+    test('auto-heals PAN from GSTIN when buyer account not found in storeService', async () => {
+      const partialProfile = {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        companyName: 'Test Corp',
+        street: 'Main Road',
+        gstNumber: '27AAACL1234F1Z5',
+        panNumber: null,
+      };
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: { ...partialProfile } });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+      const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ found: true });
+
+      const profile = await buyerProfileService.getProfile(SESSION);
+      expect(profile.panNumber).toBe('AAACL1234F');
+      expect(updateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          patch: { panNumber: 'AAACL1234F' },
+        })
+      );
+    });
+
+    test('handles storeService and updateProfile errors gracefully in auto-healing', async () => {
+      const partialProfile = {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        companyName: 'Test Corp',
+        gstNumber: '27AAACL1234F1Z5',
+        panNumber: null,
+      };
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: { ...partialProfile } });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockRejectedValue(new Error('store offline'));
+
+      const profile = await buyerProfileService.getProfile(SESSION);
+      expect(profile.companyName).toBe('Test Corp');
+    });
+  });
+
+  describe('resolveOrganizationId lookup failure in getDispatchTemplates', () => {
+    test('reports 503 when organization lookup throws in resolveOrganizationId', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValue(new Error('DB failure'));
+      await expect(buyerProfileService.getDispatchTemplates(SESSION)).rejects.toMatchObject({
+        status: 503,
+        message: BUYER_PROFILE_MESSAGES.PROFILE_LOAD_FAILED,
+      });
+    });
   });
 
   // ── Vendor onboarding dispatch templates (Template A / Template B) ─────────
@@ -522,12 +644,95 @@ describe('Buyer profile service', () => {
     });
   });
 
-  describe('BuyerProfileError', () => {
+  describe('BuyerProfileError and branch coverage edge cases', () => {
     test('defaults to a 400 with no details', () => {
       const err = new buyerProfileService.BuyerProfileError('bad input');
       expect(err.name).toBe('BuyerProfileError');
       expect(err.status).toBe(400);
       expect(err.details).toBeNull();
+    });
+
+    test('auto-heals with address, zip_code, gst, and pan properties on buyer account', async () => {
+      const partialProfile = {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        companyName: 'Test Corp',
+        street: null,
+        city: null,
+        state: null,
+        pincode: null,
+        gstNumber: null,
+        panNumber: null,
+        country: '',
+      };
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: { ...partialProfile } });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        address: 'Plot 44',
+        city: 'Ahmedabad',
+        zip_code: '380001',
+        gst: '24AAACL1234F1Z5',
+        pan: 'AAACL1234F',
+      });
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ found: true });
+
+      const profile = await buyerProfileService.getProfile(SESSION);
+      expect(profile.street).toBe('Plot 44');
+      expect(profile.city).toBe('Ahmedabad');
+      expect(profile.pincode).toBe('380001');
+      expect(profile.gstNumber).toBe('24AAACL1234F1Z5');
+      expect(profile.panNumber).toBe('AAACL1234F');
+      expect(profile.country).toBe('India');
+    });
+
+    test('auto-heals street with city only when state is absent', async () => {
+      const partialProfile = {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        companyName: 'Test Corp',
+        street: null,
+        city: null,
+      };
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: { ...partialProfile } });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        city: 'Delhi',
+      });
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ found: true });
+
+      const profile = await buyerProfileService.getProfile(SESSION);
+      expect(profile.street).toBe('Delhi');
+    });
+
+    test('catches updateProfile error during PAN auto-healing in getProfile', async () => {
+      const partialProfile = {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        companyName: 'Test Corp',
+        street: 'Existing Street',
+        gstNumber: '27AAACL1234F1Z5',
+        panNumber: null,
+      };
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: { ...partialProfile } });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockRejectedValue(new Error('PAN update failed'));
+
+      const profile = await buyerProfileService.getProfile(SESSION);
+      expect(profile.panNumber).toBe('AAACL1234F');
+    });
+
+    test('saveDispatchTemplate falls back to null actor when session email is omitted', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: STORED_PROFILE });
+      const upsertSpy = jest.spyOn(buyerProfileQueries, 'upsertDispatchTemplate').mockResolvedValue({ success: true });
+
+      await buyerProfileService.saveDispatchTemplate({ sub: 'user-1' }, 'category_mapped', { subject: 'Test', message: 'Body' });
+      expect(upsertSpy).toHaveBeenCalledWith('org-1', 'category_mapped', { subject: 'Test', message: 'Body' }, null);
+    });
+
+    test('saveProfile audits updated profile successfully', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: STORED_PROFILE });
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ updated: true });
+
+      const res = await buyerProfileService.saveProfile(SESSION, { companyName: 'Brand Corp', brandName: 'BrandOnly' });
+      expect(res.profile).toEqual(STORED_PROFILE);
     });
   });
 });

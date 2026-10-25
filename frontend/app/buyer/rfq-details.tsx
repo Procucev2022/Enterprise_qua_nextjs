@@ -2713,6 +2713,16 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                               All Answered
                             </span>
                           )}
+                          {activeChannel.inquiry && (
+                            <button
+                              type="button"
+                              onClick={() => setReplyModalInquiry(activeChannel.inquiry || null)}
+                              className="px-2 py-0.5 rounded text-[9px] font-bold bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 inline-flex items-center gap-1"
+                            >
+                              <Reply size={10} />
+                              <span>Reply</span>
+                            </button>
+                          )}
                         </div>
                         <div className="text-[10px] text-slate-400 flex items-center gap-2 truncate">
                           {activeChannel.contactPerson && (

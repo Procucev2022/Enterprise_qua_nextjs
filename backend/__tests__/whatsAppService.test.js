@@ -325,5 +325,83 @@ describe('WhatsApp Service Unit Tests', () => {
       whatsAppService.clearWhatsAppThrottleForPhone('');
       expect(true).toBe(true);
     });
+
+    test('covers placeholder fallbacks for v2 and legacy templates', async () => {
+      process.env.NODE_ENV = 'production';
+      process.env.WHATSAPP_USERNAME = 'user';
+      process.env.WHATSAPP_PASSWORD = 'pass';
+      process.env.WHATSAPP_FROM_NUMBER = '919000000000';
+
+      // v2 template with empty fields
+      process.env.WHATSAPP_TEMPLATE_RFQ_INVITE = 'rfq_reminder_notification_v2';
+      process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = 'rfq_reminder_notification_v2';
+      let capturedBody = null;
+      global.fetch = jest.fn().mockImplementation(async (url, opts) => {
+        capturedBody = JSON.parse(opts.body);
+        return { ok: true, text: async () => JSON.stringify({ status: 'success' }) };
+      });
+
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210' });
+      expect(res.success).toBe(true);
+      const ph1 = capturedBody.whatsapptosend[0].placeholders[0];
+      expect(ph1['1']).toBe('Supplier Partner');
+      expect(ph1['2']).toBe('RFQ Requirement');
+      expect(ph1['3']).toBe('N/A');
+      expect(ph1['4']).toBe('As per RFQ');
+      expect(ph1['5']).toBe('India');
+
+      // legacy template with empty fields
+      whatsAppService.clearWhatsAppThrottleForPhone('9876543210');
+      process.env.WHATSAPP_TEMPLATE_RFQ_INVITE = 'legacy_rfq_invite';
+      process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = 'legacy_rfq_invite';
+      await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210' });
+      const ph2 = capturedBody.whatsapptosend[0].placeholders[0];
+      expect(ph2['1']).toBe('N/A');
+      expect(ph2['2']).toBe('As per RFQ');
+      expect(ph2['3']).toBe('As per RFQ');
+      expect(ph2['4']).toBe('Procurement Requisition');
+
+      delete process.env.WHATSAPP_TEMPLATE_RFQ_INVITE;
+      delete process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION;
+      delete process.env.WHATSAPP_USERNAME;
+      delete process.env.WHATSAPP_PASSWORD;
+      delete process.env.WHATSAPP_FROM_NUMBER;
+      process.env.NODE_ENV = 'test';
+    });
+
+    test('handles sendmsg.in gateway status errors in 200 response with array and object payloads', async () => {
+      process.env.NODE_ENV = 'production';
+      process.env.WHATSAPP_USERNAME = 'user';
+      process.env.WHATSAPP_PASSWORD = 'pass';
+      process.env.WHATSAPP_FROM_NUMBER = '919000000000';
+
+      // Array body with Status and error property
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify([{ Status: 'Error', error: 'Balance zero' }]),
+      });
+
+      const res1 = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210', rfqNumber: 'RFQ-ARR-ERR' });
+      expect(res1.success).toBe(true); // Falls back to deep-link
+      expect(res1.messageId).toContain('wa-link-');
+
+      // Object body with failure status and reason property
+      whatsAppService.clearWhatsAppThrottleForPhone('9876543210');
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ status: 'failure', reason: 'Blocked recipient' }),
+      });
+
+      const res2 = await whatsAppService.sendRFQInvitationWhatsApp({ phone: '9876543210', rfqNumber: 'RFQ-OBJ-ERR' });
+      expect(res2.success).toBe(true); // Falls back to deep-link
+      expect(res2.messageId).toContain('wa-link-');
+
+      delete process.env.WHATSAPP_USERNAME;
+      delete process.env.WHATSAPP_PASSWORD;
+      delete process.env.WHATSAPP_FROM_NUMBER;
+      process.env.NODE_ENV = 'test';
+    });
   });
 });

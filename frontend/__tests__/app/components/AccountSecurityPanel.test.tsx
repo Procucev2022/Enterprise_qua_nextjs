@@ -247,4 +247,87 @@ describe('AccountSecurityPanel in-flight state', () => {
 
     expect(await screen.findByRole('button', { name: strings.updatePasswordAction })).toBeEnabled();
   });
+
+  it('rejects empty new password with validation error', () => {
+    mount();
+    fireEvent.click(submitButton());
+    expect(mockShowToast).toHaveBeenCalledWith(
+      strings.validationErrorTitle,
+      strings.weakPasswordMessage,
+      'warning'
+    );
+  });
+
+  it('handles missing session email when requesting OTP', async () => {
+    (authClient.getSessionUser as jest.Mock).mockReturnValueOnce(null);
+    mount();
+    const forgotBtn = screen.getByRole('button', { name: /Forgot Password\? Reset via Code/i });
+    fireEvent.click(forgotBtn);
+    expect(mockShowToast).toHaveBeenCalledWith(
+      strings.validationErrorTitle,
+      'No active account session found. Please sign in again.',
+      'warning'
+    );
+  });
+
+  it('handles requestOtp errors with custom error and fallback error', async () => {
+    requestOtp.mockResolvedValueOnce({ success: false, error: 'SMS gateway quota reached' });
+    mount();
+    const forgotBtn = screen.getByRole('button', { name: /Forgot Password\? Reset via Code/i });
+    fireEvent.click(forgotBtn);
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith(
+        strings.changeFailedTitle,
+        'SMS gateway quota reached',
+        'warning'
+      );
+    });
+
+    // Fallback error when error is falsy
+    requestOtp.mockResolvedValueOnce({ success: false, error: '' });
+    fireEvent.click(forgotBtn);
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith(
+        strings.changeFailedTitle,
+        'Failed to dispatch verification code. Please try again.',
+        'warning'
+      );
+    });
+  });
+
+  it('strips non-digits in OTP input, exercises Resend Code button, and handles reset token error', async () => {
+    mount();
+    const forgotBtn = screen.getByRole('button', { name: /Forgot Password\? Reset via Code/i });
+    fireEvent.click(forgotBtn);
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(1));
+
+    const codeInput = screen.getByPlaceholderText(strings.verificationCodePlaceholder);
+    fireEvent.change(codeInput, { target: { value: 'ab12cd34' } });
+    expect((codeInput as HTMLInputElement).value).toBe('1234');
+
+    // Click Resend Code button
+    const resendBtn = screen.getByRole('button', { name: /Resend Code/i });
+    fireEvent.click(resendBtn);
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(2));
+
+    // Change password rejected with reset token error (triggers OTP prompt)
+    changePassword.mockResolvedValueOnce({ success: false, error: 'Expired reset token provided' });
+    fillValid(VALID_NEW);
+    // Clear code input to test !verificationCode branch
+    fireEvent.change(codeInput, { target: { value: '' } });
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(3));
+
+    // Change password rejected with empty error (fallback message)
+    changePassword.mockResolvedValueOnce({ success: false, error: '' });
+    fireEvent.change(codeInput, { target: { value: '999999' } });
+    fireEvent.click(submitButton());
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith(
+        strings.changeFailedTitle,
+        strings.changeFailedFallback,
+        'warning'
+      );
+    });
+  });
 });

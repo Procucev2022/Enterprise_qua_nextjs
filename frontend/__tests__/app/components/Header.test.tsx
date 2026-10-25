@@ -1,8 +1,9 @@
 import React from 'react';
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import Header from '@/app/components/Header';
+import Header, { formatSessionCountdown } from '@/app/components/Header';
 import * as storeModule from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { authClient } from '@/lib/authClient';
 
 jest.mock('@/lib/store');
 
@@ -528,6 +529,131 @@ describe('Header Session Timer and Auto Logout', () => {
       expect.stringContaining('logged out automatically'),
       'warning'
     );
+    jest.useRealTimers();
+  });
+
+  it('covers active plan versions, vendor zero credits, and modal backdrop click', () => {
+    // 1. formatSessionCountdown helper directly
+    expect(formatSessionCountdown(3665)).toBe('01:01:05');
+    expect(formatSessionCountdown(0)).toBe('00:00');
+
+    // 2. version_1, version_2, version_3, and unlimited active plan
+    const base = (storeModule.useApp as jest.Mock)();
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...base,
+      isLoggedIn: true,
+      currentRole: 'buyer',
+      activeSubscription: 'version_1',
+    });
+    const { rerender } = render(<Header />);
+    expect(screen.getByText('Mode 1')).toBeInTheDocument();
+
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...base,
+      isLoggedIn: true,
+      currentRole: 'buyer',
+      activeSubscription: 'version_2',
+    });
+    rerender(<Header />);
+    expect(screen.getByText('Mode 2')).toBeInTheDocument();
+
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...base,
+      isLoggedIn: true,
+      currentRole: 'buyer',
+      activeSubscription: 'version_3',
+    });
+    rerender(<Header />);
+    expect(screen.getByText('Mode 3')).toBeInTheDocument();
+
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...base,
+      isLoggedIn: true,
+      currentRole: 'buyer',
+      activeSubscription: 'unlimited',
+    });
+    rerender(<Header />);
+    expect(screen.getByText('unlimited')).toBeInTheDocument();
+
+    // 3. Vendor with 0 credits and undefined credits
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...base,
+      isLoggedIn: true,
+      currentRole: 'vendor',
+      vendorFreeCreditsRemaining: 0,
+    });
+    rerender(<Header />);
+    expect(screen.getByText('0')).toBeInTheDocument();
+
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...base,
+      isLoggedIn: true,
+      currentRole: 'vendor',
+      vendorFreeCreditsRemaining: undefined,
+    });
+    rerender(<Header />);
+    expect(screen.getByText('5')).toBeInTheDocument();
+
+    // 4. Admin role opening account modal and closing via backdrop click
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...base,
+      isLoggedIn: true,
+      currentRole: 'admin',
+    });
+    rerender(<Header />);
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
+    fireEvent.click(screen.getByText(UI_STRINGS.accountSecurity.menuLabel));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside modal content should not close it
+    fireEvent.click(screen.getByText(UI_STRINGS.accountSecurity.panelTitle));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // Click backdrop closes it
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('covers session timer keydown events and warning color intervals', () => {
+    jest.useFakeTimers();
+    // 2 minutes left (amber)
+    localStorage.setItem('procucev_session_expires_at', String(Date.now() + 120_000));
+    const { rerender } = render(<Header />);
+    let timer = screen.getByTestId('header-session-timer');
+    expect(timer.className).toContain('text-amber');
+
+    // 30 seconds left (rose)
+    localStorage.setItem('procucev_session_expires_at', String(Date.now() + 30_000));
+    rerender(<Header />);
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    timer = screen.getByTestId('header-session-timer');
+    expect(timer.className).toContain('text-rose');
+
+    // Keydown on timer (Enter, Space, other key)
+    fireEvent.keyDown(timer, { key: 'Enter' });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Session Extended',
+      expect.stringContaining('30 minutes'),
+      'info'
+    );
+
+    fireEvent.keyDown(timer, { key: ' ' });
+    expect(mockShowToast).toHaveBeenCalledTimes(2);
+
+    fireEvent.keyDown(timer, { key: 'Tab' });
+    expect(mockShowToast).toHaveBeenCalledTimes(2);
+
+    // Auto logout where logout rejects to cover catch callback (func 13)
+    (authClient.logout as jest.Mock).mockRejectedValueOnce(new Error('Logout network error'));
+    localStorage.setItem('procucev_session_expires_at', String(Date.now() - 1000));
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+
     jest.useRealTimers();
   });
 });
