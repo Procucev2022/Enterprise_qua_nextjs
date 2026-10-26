@@ -166,30 +166,35 @@ describe('WhatsApp Service Unit Tests', () => {
       delete process.env.WHATSAPP_ACCESS_TOKEN;
     });
 
-    test('uses legacy template formatting when template does not include v2 or reminder', async () => {
-      const origTemplate = process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION;
-      process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = 'legacy_seller_template';
-
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ status: 'success' }),
+    test('formats placeholders strictly for rfq_notification_for_sellers_for_rfq_feb_5 without rogue keys', async () => {
+      let sentPayload = null;
+      global.fetch = jest.fn().mockImplementation((url, opts) => {
+        sentPayload = JSON.parse(opts.body);
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ status: 'success' }),
+        });
       });
 
       const res = await whatsAppService.sendRFQInvitationWhatsApp({
         phone: '9876543210',
-        rfqNumber: 'RFQ-LEGACY-01',
+        rfqNumber: 'RFQ-FEB5-01',
         deliveryDate: '2026-11-01',
         deliveryLocation: 'Ahmedabad',
-        rfqTitle: 'Pumps',
+        rfqTitle: 'Industrial Pumps',
       });
       expect(res.success).toBe(true);
-
-      if (origTemplate) {
-        process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = origTemplate;
-      } else {
-        delete process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION;
-      }
+      expect(sentPayload).toBeDefined();
+      const placeholders = sentPayload.whatsapptosend[0].placeholders[0];
+      expect(placeholders).toEqual({
+        '1': 'RFQ-FEB5-01',
+        '2': '2026-11-01',
+        '3': 'Ahmedabad',
+        '4': 'Industrial Pumps',
+        '5': expect.stringContaining('RFQ-FEB5-01'),
+      });
+      expect(placeholders['0']).toBeUndefined();
     });
   });
 });

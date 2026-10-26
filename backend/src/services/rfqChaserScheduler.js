@@ -97,6 +97,8 @@ async function _dispatchWhatsApp(rfq, vendor, jobId) {
       rfqNumber: rfq.rfqNumber,
       rfqTitle: rfq.title,
       vendorEmail: vendor.email,
+      deliveryDate: rfq.targetDeliveryDate || rfq.deadline,
+      deliveryLocation: rfq.deliveryLocation || rfq.deliveryCity,
     });
     logger.info(
       `[CHASER] WhatsApp → ${vendor.name} (${phone}) for ${rfq.rfqNumber}: ${result.success ? `ok (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
