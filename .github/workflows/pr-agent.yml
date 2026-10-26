@@ -29,7 +29,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           # 1. Generate Git Diff
-          git diff origin/${{ github.event.pull_request.base.ref }}...HEAD > pr_diff.txt
+          git diff origin/${{ github.event.pull_request.base.ref }}...HEAD -- . ':!package-lock.json' ':!*.lock' ':!yarn.lock' ':!pnpm-lock.yaml' > pr_diff.txt || git diff origin/${{ github.event.pull_request.base.ref }}...HEAD > pr_diff.txt
           head -n 2000 pr_diff.txt > trimmed_diff.txt
 
           if [ -z "$GEMINI_API_KEY" ]; then
@@ -37,42 +37,68 @@ jobs:
             exit 1
           fi
 
-          # 2. Call Gemini API
-          PAYLOAD=$(jq -n --rawfile diff trimmed_diff.txt '{
+          # 2. Prepare Payload
+          jq -n --rawfile diff trimmed_diff.txt '{
             contents: [{
               parts: [{
                 text: ("You are a senior developer. Review this Git PR diff concisely for bugs, security risks, or code quality issues:\n\n" + $diff)
               }]
             }]
-          }')
+          }' > payload.json
 
-          HTTP_STATUS=$(curl -s --connect-timeout 15 --max-time 180 -o gemini_response.json -w "%{http_code}" -X POST \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
-            -H "x-goog-api-key: ${GEMINI_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
+          # 3. Call Gemini API with model fallback and safe timeout handling
+          CANDIDATE_MODELS=("gemini-3.5-flash-lite" "gemini-3.5-flash" "gemini-3.8-flash")
+          REVIEW_TEXT=""
+          LAST_STATUS=""
+          LAST_RESPONSE=""
 
-          RESPONSE=$(cat gemini_response.json 2>/dev/null || true)
-          echo "=== Gemini API Response (HTTP $HTTP_STATUS) ==="
-          echo "$RESPONSE"
+          for MODEL in "${CANDIDATE_MODELS[@]}"; do
+            echo "Attempting review with model: ${MODEL}..."
+            rm -f gemini_response.json
 
-          ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
-          FINISH_REASON=$(echo "$RESPONSE" | jq -r '.candidates[0].finishReason // empty' 2>/dev/null)
-          REVIEW_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
+            # Prevent exit code 28 (CURLE_OPERATION_TIMEDOUT) from aborting under set -e
+            HTTP_STATUS=$(curl -s --connect-timeout 15 --max-time 90 -o gemini_response.json -w "%{http_code}" -X POST \
+              "https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent" \
+              -H "x-goog-api-key: ${GEMINI_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -d @payload.json || echo "TIMEOUT")
+
+            RESPONSE=$(cat gemini_response.json 2>/dev/null || true)
+            echo "=== Model ${MODEL} Response (HTTP ${HTTP_STATUS}) ==="
+            echo "${RESPONSE}"
+
+            LAST_STATUS="${HTTP_STATUS}"
+            LAST_RESPONSE="${RESPONSE}"
+
+            if [ "${HTTP_STATUS}" = "200" ]; then
+              TEXT=$(echo "${RESPONSE}" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
+              if [ -n "${TEXT}" ]; then
+                REVIEW_TEXT="${TEXT}"
+                echo "Successfully received review from ${MODEL}."
+                break
+              fi
+            fi
+            echo "Model ${MODEL} failed or returned status ${HTTP_STATUS}. Trying next fallback model if available..."
+          done
 
           if [ -z "$REVIEW_TEXT" ]; then
+            ERROR_MSG=$(echo "$LAST_RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
+            FINISH_REASON=$(echo "$LAST_RESPONSE" | jq -r '.candidates[0].finishReason // empty' 2>/dev/null)
+
             if [ -n "$ERROR_MSG" ]; then
-              REVIEW_TEXT=$(printf "### ⚠️ Gemini Review Error (HTTP %s)\n\n**Reason:** %s" "$HTTP_STATUS" "$ERROR_MSG")
+              REVIEW_TEXT=$(printf "### ⚠️ Gemini Review Error (HTTP %s)\n\n**Reason:** %s" "$LAST_STATUS" "$ERROR_MSG")
             elif [ -n "$FINISH_REASON" ] && [ "$FINISH_REASON" != "STOP" ]; then
               REVIEW_TEXT=$(printf "### ⚠️ Gemini Review Incomplete\n\n**Finish Reason:** %s" "$FINISH_REASON")
+            elif [ "$LAST_STATUS" = "TIMEOUT" ]; then
+              REVIEW_TEXT=$(printf "### ⚠️ Gemini Review Timed Out\n\nThe request to Gemini API exceeded the connection/operation timeout.")
             else
-              REVIEW_TEXT=$(printf "### ⚠️ Gemini Review Failed (HTTP %s)\n\n**Raw API Response:**\n\`\`\`json\n%s\n\`\`\`" "$HTTP_STATUS" "$RESPONSE")
+              REVIEW_TEXT=$(printf "### ⚠️ Gemini Review Failed (HTTP %s)\n\n**Raw API Response:**\n\`\`\`json\n%s\n\`\`\`" "$LAST_STATUS" "$LAST_RESPONSE")
             fi
           fi
 
-          # 3. Post Comment to PR
+          # 4. Post Comment to PR
           jq -n --arg body "$REVIEW_TEXT" '{body: $body}' | curl -s -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            -d @-
+            -d @- || echo "::warning::Failed to post review comment to PR"
