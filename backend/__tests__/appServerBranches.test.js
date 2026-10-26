@@ -1,4 +1,5 @@
 const request = require('supertest');
+const path = require('path');
 const { app, bootstrapServer, start } = require('../src/server');
 const storeService = require('../src/services/storeService');
 const pool = require('../src/db/pool');
@@ -126,29 +127,56 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
     test('app.js env loading variations in isolated modules', () => {
       const origAppEnv = process.env.APP_ENV;
       const origNodeEnv = process.env.NODE_ENV;
+      const fileSystem = require('fs');
+      const originalExistsSync = fileSystem.existsSync;
+      const config = jest.fn(() => ({ parsed: {} }));
+      let presentEnvironmentPath = null;
+      let environmentLookupError = false;
+      const existsSync = jest.spyOn(fileSystem, 'existsSync').mockImplementation((file) => {
+        if (typeof file === 'string' && path.basename(file).startsWith('.env')) {
+          if (environmentLookupError) throw new Error('Environment filesystem unavailable');
+          return path.resolve(file) === presentEnvironmentPath;
+        }
+        return originalExistsSync(file);
+      });
+      // Clean CI checkouts contain no ignored .env files. Drive both presence
+      // outcomes explicitly and prevent isolated modules from reading local
+      // developer credentials while exercising application configuration.
+      jest.doMock('dotenv', () => ({ config }));
 
       try {
-        process.env.APP_ENV = 'dev';
-        process.env.NODE_ENV = 'development';
-        jest.isolateModules(() => {
-          const loadedApp = require('../src/app');
-          expect(loadedApp).toBeDefined();
-        });
+        for (const [appEnv, nodeEnv, expectedFile, exists] of [
+          ['ci-explicit', 'production', '.env.ci-explicit', true],
+          ['ci-missing', 'development', '.env.ci-missing', false],
+          [undefined, 'production', '.env.prod', true],
+          [undefined, 'development', '.env.dev', false],
+        ]) {
+          if (appEnv === undefined) delete process.env.APP_ENV;
+          else process.env.APP_ENV = appEnv;
+          process.env.NODE_ENV = nodeEnv;
+          const specificPath = path.resolve(__dirname, '..', expectedFile);
+          presentEnvironmentPath = exists ? specificPath : null;
+          config.mockClear();
+          existsSync.mockClear();
+          jest.isolateModules(() => {
+            expect(require('../src/app')).toBeDefined();
+          });
+          expect(config).toHaveBeenNthCalledWith(1);
+          expect(existsSync).toHaveBeenCalledWith(specificPath);
+          if (exists) expect(config).toHaveBeenCalledWith({ path: specificPath });
+          else expect(config).not.toHaveBeenCalledWith({ path: specificPath });
+          expect(config).toHaveBeenCalledWith({ path: path.resolve(__dirname, '../.env') });
+        }
 
-        // Test non-existent env file to cover fs.existsSync false branch
-        process.env.APP_ENV = 'nonexistent_test_env_xyz';
+        environmentLookupError = true;
+        config.mockClear();
         jest.isolateModules(() => {
-          const loadedApp = require('../src/app');
-          expect(loadedApp).toBeDefined();
+          expect(require('../src/app')).toBeDefined();
         });
-
-        delete process.env.APP_ENV;
-        process.env.NODE_ENV = 'production';
-        jest.isolateModules(() => {
-          const loadedApp = require('../src/app');
-          expect(loadedApp).toBeDefined();
-        });
+        expect(config).toHaveBeenNthCalledWith(1);
+        expect(config).not.toHaveBeenCalledWith({ path: path.resolve(__dirname, '../.env') });
       } finally {
+        jest.dontMock('dotenv');
         if (origAppEnv !== undefined) process.env.APP_ENV = origAppEnv;
         else delete process.env.APP_ENV;
         if (origNodeEnv !== undefined) process.env.NODE_ENV = origNodeEnv;
