@@ -20,13 +20,17 @@ jobs:
       - name: Get PR Diff & Run Gemini Review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.COPILOT_REVIEW_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
           # 1. Generate Git Diff
           git diff origin/${{ github.event.pull_request.base.ref }}...HEAD > pr_diff.txt
           head -n 2000 pr_diff.txt > trimmed_diff.txt
+
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::GEMINI_API_KEY secret is not set or empty!"
+          fi
 
           # 2. Call Gemini API
           PAYLOAD=$(jq -n --rawfile diff trimmed_diff.txt '{
@@ -37,12 +41,37 @@ jobs:
             }]
           }')
 
-          RESPONSE=$(curl -s -X POST \
+          HTTP_STATUS=$(curl -s -o gemini_response.json -w "%{http_code}" -X POST \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
 
-          REVIEW_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // "Failed to generate review."')
+          RESPONSE=$(cat gemini_response.json 2>/dev/null || true)
+          echo "=== Gemini API Response (HTTP $HTTP_STATUS) ==="
+          echo "$RESPONSE"
+
+          ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
+          FINISH_REASON=$(echo "$RESPONSE" | jq -r '.candidates[0].finishReason // empty' 2>/dev/null)
+          REVIEW_TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
+
+          if [ -z "$REVIEW_TEXT" ]; then
+            if [ -n "$ERROR_MSG" ]; then
+              REVIEW_TEXT="### ⚠️ Gemini Review Error (HTTP $HTTP_STATUS)
+
+**Reason:** $ERROR_MSG"
+            elif [ -n "$FINISH_REASON" ] && [ "$FINISH_REASON" != "STOP" ]; then
+              REVIEW_TEXT="### ⚠️ Gemini Review Incomplete
+
+**Finish Reason:** $FINISH_REASON"
+            else
+              REVIEW_TEXT="### ⚠️ Gemini Review Failed (HTTP $HTTP_STATUS)
+
+**Raw API Response:**
+\`\`\`json
+$RESPONSE
+\`\`\`"
+            fi
+          fi
 
           # 3. Post Comment to PR
           jq -n --arg body "$REVIEW_TEXT" '{body: $body}' | curl -s -X POST \
