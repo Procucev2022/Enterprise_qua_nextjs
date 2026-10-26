@@ -32,7 +32,7 @@ jobs:
           PAYLOAD=$(jq -n --rawfile diff trimmed_diff.txt '{
             contents: [{
               parts: [{
-                text: "You are a senior developer. Review this Git PR diff concisely for bugs, security risks, or code quality issues:\n\n" + $diff
+                text: ("You are a senior developer. Review this Git PR diff concisely for bugs, security risks, or code quality issues:\n\n" + $diff)
               }]
             }]
           }')
