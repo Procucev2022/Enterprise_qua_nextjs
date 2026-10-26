@@ -34,6 +34,7 @@ jobs:
 
           if [ -z "$GEMINI_API_KEY" ]; then
             echo "::error::GEMINI_API_KEY secret is not set or empty!"
+            exit 1
           fi
 
           # 2. Call Gemini API
@@ -45,8 +46,9 @@ jobs:
             }]
           }')
 
-          HTTP_STATUS=$(curl -s -o gemini_response.json -w "%{http_code}" -X POST \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${GEMINI_API_KEY}" \
+          HTTP_STATUS=$(curl -s --connect-timeout 15 --max-time 180 -o gemini_response.json -w "%{http_code}" -X POST \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
+            -H "x-goog-api-key: ${GEMINI_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
 
