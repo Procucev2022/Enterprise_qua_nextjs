@@ -1307,4 +1307,36 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       expect(unclassifiedUnknownMajor.minorCategory).toBe('SomeCustomMinorY');
     });
   });
+
+  describe('ensureFutureDeliveryDate', () => {
+    test('enforces current date + 5 days fallback when date is past', () => {
+      const pastDate = '2020-01-01';
+      const result = ingestion.ensureFutureDeliveryDate(pastDate, 5);
+      const expected = new Date();
+      expected.setDate(expected.getDate() + 5);
+      const expectedIso = expected.toISOString().slice(0, 10);
+      expect(result).toBe(expectedIso);
+    });
+
+    test('enforces current date + 5 days fallback when date is missing, empty or invalid', () => {
+      const expected = new Date();
+      expected.setDate(expected.getDate() + 5);
+      const expectedIso = expected.toISOString().slice(0, 10);
+
+      expect(ingestion.ensureFutureDeliveryDate(null, 5)).toBe(expectedIso);
+      expect(ingestion.ensureFutureDeliveryDate('', 5)).toBe(expectedIso);
+      expect(ingestion.ensureFutureDeliveryDate('invalid-date', 5)).toBe(expectedIso);
+      expect(ingestion.ensureFutureDeliveryDate(undefined, 5)).toBe(expectedIso);
+    });
+
+    test('preserves valid future date without modification', () => {
+      const future = new Date();
+      future.setDate(future.getDate() + 25);
+      const futureIso = future.toISOString().slice(0, 10);
+
+      const result = ingestion.ensureFutureDeliveryDate(futureIso, 5);
+      expect(result).toBe(futureIso);
+    });
+  });
 });
+

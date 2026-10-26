@@ -3642,8 +3642,677 @@ okay start working you need to do some thing
 
 ---
 
-### 2026-10-23T16:17:05+05:30
+### 2026-10-23T14:39:31+05:30
 
 ```text
-Please remove the “Close RFQ” button from the vendor side. Currently, when a vendor clicks it, the RFQ gets closed. Only the buyer and Category Manager should have permission to close an RFQ.
+continue and after this feature implemented  create a new branch and raise the pr
 ```
+
+---
+
+### 2026-10-23T16:16:03+05:30
+
+```text
+run locally to check how it is working
+```
+
+---
+
+### 2026-10-23T16:26:20+05:30
+
+```text
+i send the email to dev email create we check the flow
+```
+
+---
+
+### 2026-10-23T16:28:53+05:30
+
+```text
+@[TerminalName: cmd, ProcessId: 6600] 
+```
+
+---
+
+### 2026-10-23T16:43:06+05:30
+
+```text
+send the credentials from here then i check it is working or not
+```
+
+---
+
+### 2026-10-23T17:13:06+05:30
+
+```text
+veerababu.v@procucev.com this email as already existing use 
+srinu20262025@gmail.com
+```
+
+---
+
+### 2026-10-23T21:51:32+05:30
+
+```text
+FAIL __tests__/supportChat.test.js
+● Test suite failed to run
+Jest encountered an unexpected token
+Jest failed to parse a file. This happens e.g. when your code or its dependencies use non-standard JavaScript syntax, or when Jest is not configured to support such syntax.
+Out of the box Jest supports Babel, which will be used to transform your files into valid JS based on your Babel configuration.
+By default "node_modules" folder is ignored by transformers.
+Here's what you can do:
+• If you are trying to use ECMAScript Modules, see https://jestjs.io/docs/ecmascript-modules for how to enable it.
+• If you are trying to use TypeScript, see https://jestjs.io/docs/getting-started#using-typescript
+• To have some of your "node_modules" files transformed, you can specify a custom "transformIgnorePatterns" in your config.
+• If you need a custom transformation specify a "transform" option in your config.
+• If you simply want to mock your non-JS modules (e.g. binary assets) you can stub them out with the "moduleNameMapper" config option.
+You'll find more details and examples of these config options in the docs:
+https://jestjs.io/docs/configuration
+For information about custom transformations, see:
+https://jestjs.io/docs/code-transformation
+Details:
+SyntaxError: /home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/src/services/emailGatewayService.js: Identifier 'authorisation' has already been declared. (1631:8)
+1629 | // 2. Otherwise process as Inbound Buyer RFQ Requisition
+1630 | let authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
+> 1631 | const authorisation = await resolveSenderAuthorisation(message.fromAddress, config, buyerAccount);
+| ^
+1632 | if (!authorisation.allowed) {
+1633 | const isDomainOrSenderRestricted =
+1634 | (Array.isArray(config?.allowedSenders) && config.allowedSenders.length > 0 && !config.allowedSenders.includes(String(message.fromAddress || '').toLowerCase())) ||
+9 | const rfqSummaryService = require('../services/rfqSummaryService');
+10 | const { logger } = require('../services/loggerService');
+> 11 | const emailGatewayService = require('../services/emailGatewayService');
+| ^
+12 | const emailIngestionService = require('../services/emailIngestionService');
+13 | const mailerService = require('../services/mailerService');
+14 | const extractionStagingService = require('../services/extractionStagingService');
+at constructor (node_modules/@babel/parser/src/parse-error.ts:96:45)
+at Parser.toParseError [as raise] (node_modules/@babel/parser/src/tokenizer/index.ts:1504:19)
+at ScopeHandler.raise [as checkRedeclarationInScope] (node_modules/@babel/parser/src/util/scope.ts:164:19)
+at ScopeHandler.checkRedeclarationInScope [as declareName] (node_modules/@babel/parser/src/util/scope.ts:118:12)
+at Parser.declareName [as declareNameFromIdentifier] (node_modules/@babel/parser/src/parser/lval.ts:876:16)
+at Parser.declareNameFromIdentifier [as checkIdentifier] (node_modules/@babel/parser/src/parser/lval.ts:871:12)
+at Parser.checkIdentifier [as checkLVal] (node_modules/@babel/parser/src/parser/lval.ts:763:12)
+at Parser.checkLVal [as parseVarId] (node_modules/@babel/parser/src/parser/statement.ts:1633:10)
+at Parser.parseVarId [as parseVar] (node_modules/@babel/parser/src/parser/statement.ts:1582:12)
+at Parser.parseVar [as parseVarStatement] (node_modules/@babel/parser/src/parser/statement.ts:1251:10)
+at Parser.parseVarStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:612:21)
+at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:482:17)
+at Parser.parseStatementLike [as parseStatementListItem] (node_modules/@babel/parser/src/parser/statement.ts:431:17)
+at Parser.parseStatementListItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1444:16)
+at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1417:10)
+at Parser.parseBlockBody [as parseBlock] (node_modules/@babel/parser/src/parser/statement.ts:1385:10)
+at Parser.parseBlock [as parseFunctionBody] (node_modules/@babel/parser/src/parser/expression.ts:2651:24)
+at Parser.parseFunctionBody [as parseFunctionBodyAndFinish] (node_modules/@babel/parser/src/parser/expression.ts:2620:10)
+at parseFunctionBodyAndFinish (node_modules/@babel/parser/src/parser/statement.ts:1695:12)
+at Parser.callback [as withSmartMixTopicForbiddingContext] (node_modules/@babel/parser/src/parser/expression.ts:3201:14)
+at Parser.withSmartMixTopicForbiddingContext [as parseFunction] (node_modules/@babel/parser/src/parser/statement.ts:1693:10)
+at Parser.parseFunction [as parseFunctionStatement] (node_modules/@babel/parser/src/parser/statement.ts:1080:17)
+at Parser.parseFunctionStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:673:23)
+at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:482:17)
+at Parser.parseStatementLike [as parseModuleItem] (node_modules/@babel/parser/src/parser/statement.ts:419:17)
+at Parser.parseModuleItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1443:16)
+at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1417:10)
+at Parser.parseBlockBody [as parseProgram] (node_modules/@babel/parser/src/parser/statement.ts:229:10)
+at Parser.parseProgram [as parseTopLevel] (node_modules/@babel/parser/src/parser/statement.ts:203:25)
+at Parser.parseTopLevel [as parse] (node_modules/@babel/parser/src/parser/index.ts:83:25)
+at parse (node_modules/@babel/parser/src/index.ts:86:38)
+at parser (node_modules/@babel/core/src/parser/index.ts:29:19)
+at parser.next (<anonymous>)
+at normalizeFile (node_modules/@babel/core/src/transformation/normalize-file.ts:49:24)
+at normalizeFile.next (<anonymous>)
+at run (node_modules/@babel/core/src/transformation/index.ts:41:36)
+at run.next (<anonymous>)
+at transform (node_modules/@babel/core/src/transform.ts:29:20)
+at transform.next (<anonymous>)
+at evaluateSync (node_modules/gensync/index.js:251:28)
+at sync (node_modules/gensync/index.js:89:14)
+at fn (node_modules/@babel/core/src/errors/rewrite-stack-trace.ts:99:14)
+at transformSync (node_modules/@babel/core/src/transform.ts:66:52)
+at ScriptTransformer.transformSource (node_modules/@jest/transform/build/ScriptTransformer.js:545:31)
+at ScriptTransformer._transformAndBuildScript (node_modules/@jest/transform/build/ScriptTransformer.js:674:40)
+at ScriptTransformer.transform (node_modules/@jest/transform/build/ScriptTransformer.js:726:19)
+at Object.require (src/controllers/rfqController.js:11:29)
+at Object.require (src/routes/rfqs.js:3:23)
+at Object.require (src/routes/index.js:4:19)
+at Object.require (src/app.js:17:19)
+at Object.require (__tests__/supportChat.test.js:2:13)
+Test Suites: 42 failed, 57 passed, 99 total
+Tests: 1369 passed, 1369 total
+Snapshots: 0 total
+Time: 50.848 s
+Ran all test suites.
+Force exiting Jest: Have you considered using --detectOpenHandles to detect async operations that kept running after all tests finished?
+Error: Process completed with exit code 1.
+0s
+0s
+0s
+1s
+```
+
+---
+
+### 2026-10-23T22:14:06+05:30
+
+```text
+for register buyer the rfq is created but for un register buyer not get acknowledgemnt and the create buyer account credentials also
+```
+
+---
+
+### 2026-10-24T08:02:39+05:30
+
+```text
+FAIL __tests__/vendorCategories.test.js
+● Test suite failed to run
+Jest encountered an unexpected token
+Jest failed to parse a file. This happens e.g. when your code or its dependencies use non-standard JavaScript syntax, or when Jest is not configured to support such syntax.
+Out of the box Jest supports Babel, which will be used to transform your files into valid JS based on your Babel configuration.
+By default "node_modules" folder is ignored by transformers.
+Here's what you can do:
+• If you are trying to use ECMAScript Modules, see [https://jestjs.io/docs/ecmascript-modules](https://jestjs.io/docs/ecmascript-modules) for how to enable it.
+• If you are trying to use TypeScript, see [https://jestjs.io/docs/getting-started#using-typescript](https://jestjs.io/docs/getting-started#using-typescript)
+• To have some of your "node_modules" files transformed, you can specify a custom "transformIgnorePatterns" in your config.
+• If you need a custom transformation specify a "transform" option in your config.
+• If you simply want to mock your non-JS modules (e.g. binary assets) you can stub them out with the "moduleNameMapper" config option.
+You'll find more details and examples of these config options in the docs:
+[https://jestjs.io/docs/configuration](https://jestjs.io/docs/configuration)
+For information about custom transformations, see:
+[https://jestjs.io/docs/code-transformation](https://jestjs.io/docs/code-transformation)
+Details:
+SyntaxError: /home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/src/services/emailGatewayService.js: Identifier 'inFlightBuyerRegistrations' has already been declared. (476:6)
+474 | }
+475 |
+> 476 | const inFlightBuyerRegistrations = new Map();
+| ^
+477 |
+478 | /**
+479 | * Concurrency-safe retrieval or autonomous creation of a buyer account for an unregistered sender.
+9 | const rfqSummaryService = require('../services/rfqSummaryService');
+10 | const { logger } = require('../services/loggerService');
+> 11 | const emailGatewayService = require('../services/emailGatewayService');
+| ^
+12 | const emailIngestionService = require('../services/emailIngestionService');
+13 | const mailerService = require('../services/mailerService');
+14 | const extractionStagingService = require('../services/extractionStagingService');
+at constructor (node_modules/@babel/parser/src/parse-error.ts:96:45)
+at Parser.toParseError [as raise] (node_modules/@babel/parser/src/tokenizer/index.ts:1504:19)
+at ScopeHandler.raise [as checkRedeclarationInScope] (node_modules/@babel/parser/src/util/scope.ts:164:19)
+at ScopeHandler.checkRedeclarationInScope [as declareName] (node_modules/@babel/parser/src/util/scope.ts:118:12)
+at Parser.declareName [as declareNameFromIdentifier] (node_modules/@babel/parser/src/parser/lval.ts:876:16)
+at Parser.declareNameFromIdentifier [as checkIdentifier] (node_modules/@babel/parser/src/parser/lval.ts:871:12)
+at Parser.checkIdentifier [as checkLVal] (node_modules/@babel/parser/src/parser/lval.ts:763:12)
+at Parser.checkLVal [as parseVarId] (node_modules/@babel/parser/src/parser/statement.ts:1633:10)
+at Parser.parseVarId [as parseVar] (node_modules/@babel/parser/src/parser/statement.ts:1582:12)
+at Parser.parseVar [as parseVarStatement] (node_modules/@babel/parser/src/parser/statement.ts:1251:10)
+at Parser.parseVarStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:612:21)
+at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:482:17)
+at Parser.parseStatementLike [as parseModuleItem] (node_modules/@babel/parser/src/parser/statement.ts:419:17)
+at Parser.parseModuleItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1443:16)
+at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1417:10)
+at Parser.parseBlockBody [as parseProgram] (node_modules/@babel/parser/src/parser/statement.ts:229:10)
+at Parser.parseProgram [as parseTopLevel] (node_modules/@babel/parser/src/parser/statement.ts:203:25)
+at Parser.parseTopLevel [as parse] (node_modules/@babel/parser/src/parser/index.ts:83:25)
+at parse (node_modules/@babel/parser/src/index.ts:86:38)
+at parser (node_modules/@babel/core/src/parser/index.ts:29:19)
+at parser.next (<anonymous>)
+at normalizeFile (node_modules/@babel/core/src/transformation/normalize-file.ts:49:24)
+at normalizeFile.next (<anonymous>)
+at run (node_modules/@babel/core/src/transformation/index.ts:41:36)
+at run.next (<anonymous>)
+at transform (node_modules/@babel/core/src/transform.ts:29:20)
+at transform.next (<anonymous>)
+at evaluateSync (node_modules/gensync/index.js:251:28)
+at sync (node_modules/gensync/index.js:89:14)
+at fn (node_modules/@babel/core/src/errors/rewrite-stack-trace.ts:99:14)
+at transformSync (node_modules/@babel/core/src/transform.ts:66:52)
+at ScriptTransformer.transformSource (node_modules/@jest/transform/build/ScriptTransformer.js:545:31)
+at ScriptTransformer._transformAndBuildScript (node_modules/@jest/transform/build/ScriptTransformer.js:674:40)
+at ScriptTransformer.transform (node_modules/@jest/transform/build/ScriptTransformer.js:726:19)
+at Object.require (src/controllers/rfqController.js:11:29)
+at Object.require (src/routes/rfqs.js:3:23)
+at Object.require (src/routes/index.js:4:19)
+at Object.require (src/app.js:17:19)
+at Object.require (__tests__/vendorCategories.test.js:2:13)
+FAIL __tests__/historicalData.test.js
+● Test suite failed to run
+Jest encountered an unexpected token
+Jest failed to parse a file. This happens e.g. when your code or its dependencies use non-standard JavaScript syntax, or when Jest is not configured to support such syntax.
+Out of the box Jest supports Babel, which will be used to transform your files into valid JS based on your Babel configuration.
+By default "node_modules" folder is ignored by transformers.
+Here's what you can do:
+• If you are trying to use ECMAScript Modules, see [https://jestjs.io/docs/ecmascript-modules](https://jestjs.io/docs/ecmascript-modules) for how to enable it.
+• If you are trying to use TypeScript, see [https://jestjs.io/docs/getting-started#using-typescript](https://jestjs.io/docs/getting-started#using-typescript)
+• To have some of your "node_modules" files transformed, you can specify a custom "transformIgnorePatterns" in your config.
+• If you need a custom transformation specify a "transform" option in your config.
+• If you simply want to mock your non-JS modules (e.g. binary assets) you can stub them out with the "moduleNameMapper" config option.
+You'll find more details and examples of these config options in the docs:
+[https://jestjs.io/docs/configuration](https://jestjs.io/docs/configuration)
+For information about custom transformations, see:
+[https://jestjs.io/docs/code-transformation](https://jestjs.io/docs/code-transformation)
+Details:
+SyntaxError: /home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/src/services/emailGatewayService.js: Identifier 'inFlightBuyerRegistrations' has already been declared. (476:6)
+474 | }
+475 |
+> 476 | const inFlightBuyerRegistrations = new Map();
+| ^
+477 |
+478 | /**
+479 | * Concurrency-safe retrieval or autonomous creation of a buyer account for an unregistered sender.
+9 | const rfqSummaryService = require('../services/rfqSummaryService');
+10 | const { logger } = require('../services/loggerService');
+> 11 | const emailGatewayService = require('../services/emailGatewayService');
+| ^
+12 | const emailIngestionService = require('../services/emailIngestionService');
+13 | const mailerService = require('../services/mailerService');
+14 | const extractionStagingService = require('../services/extractionStagingService');
+at constructor (node_modules/@babel/parser/src/parse-error.ts:96:45)
+at Parser.toParseError [as raise] (node_modules/@babel/parser/src/tokenizer/index.ts:1504:19)
+at ScopeHandler.raise [as checkRedeclarationInScope] (node_modules/@babel/parser/src/util/scope.ts:164:19)
+at ScopeHandler.checkRedeclarationInScope [as declareName] (node_modules/@babel/parser/src/util/scope.ts:118:12)
+at Parser.declareName [as declareNameFromIdentifier] (node_modules/@babel/parser/src/parser/lval.ts:876:16)
+at Parser.declareNameFromIdentifier [as checkIdentifier] (node_modules/@babel/parser/src/parser/lval.ts:871:12)
+at Parser.checkIdentifier [as checkLVal] (node_modules/@babel/parser/src/parser/lval.ts:763:12)
+at Parser.checkLVal [as parseVarId] (node_modules/@babel/parser/src/parser/statement.ts:1633:10)
+at Parser.parseVarId [as parseVar] (node_modules/@babel/parser/src/parser/statement.ts:1582:12)
+at Parser.parseVar [as parseVarStatement] (node_modules/@babel/parser/src/parser/statement.ts:1251:10)
+at Parser.parseVarStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:612:21)
+at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:482:17)
+at Parser.parseStatementLike [as parseModuleItem] (node_modules/@babel/parser/src/parser/statement.ts:419:17)
+at Parser.parseModuleItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1443:16)
+at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1417:10)
+at Parser.parseBlockBody [as parseProgram] (node_modules/@babel/parser/src/parser/statement.ts:229:10)
+at Parser.parseProgram [as parseTopLevel] (node_modules/@babel/parser/src/parser/statement.ts:203:25)
+at Parser.parseTopLevel [as parse] (node_modules/@babel/parser/src/parser/index.ts:83:25)
+at parse (node_modules/@babel/parser/src/index.ts:86:38)
+at parser (node_modules/@babel/core/src/parser/index.ts:29:19)
+at parser.next (<anonymous>)
+at normalizeFile (node_modules/@babel/core/src/transformation/normalize-file.ts:49:24)
+at normalizeFile.next (<anonymous>)
+at run (node_modules/@babel/core/src/transformation/index.ts:41:36)
+at run.next (<anonymous>)
+at transform (node_modules/@babel/core/src/transform.ts:29:20)
+at transform.next (<anonymous>)
+at evaluateSync (node_modules/gensync/index.js:251:28)
+at sync (node_modules/gensync/index.js:89:14)
+at fn (node_modules/@babel/core/src/errors/rewrite-stack-trace.ts:99:14)
+at transformSync (node_modules/@babel/core/src/transform.ts:66:52)
+at ScriptTransformer.transformSource (node_modules/@jest/transform/build/ScriptTransformer.js:545:31)
+at ScriptTransformer._transformAndBuildScript (node_modules/@jest/transform/build/ScriptTransformer.js:674:40)
+at ScriptTransformer.transform (node_modules/@jest/transform/build/ScriptTransformer.js:726:19)
+at Object.require (src/controllers/rfqController.js:11:29)
+at Object.require (src/routes/rfqs.js:3:23)
+at Object.require (src/routes/index.js:4:19)
+at Object.require (src/app.js:17:19)
+at Object.require (__tests__/historicalData.test.js:2:13)
+FAIL __tests__/supportChat.test.js
+● Test suite failed to run
+Jest encountered an unexpected token
+Jest failed to parse a file. This happens e.g. when your code or its dependencies use non-standard JavaScript syntax, or when Jest is not configured to support such syntax.
+Out of the box Jest supports Babel, which will be used to transform your files into valid JS based on your Babel configuration.
+By default "node_modules" folder is ignored by transformers.
+Here's what you can do:
+• If you are trying to use ECMAScript Modules, see [https://jestjs.io/docs/ecmascript-modules](https://jestjs.io/docs/ecmascript-modules) for how to enable it.
+• If you are trying to use TypeScript, see [https://jestjs.io/docs/getting-started#using-typescript](https://jestjs.io/docs/getting-started#using-typescript)
+• To have some of your "node_modules" files transformed, you can specify a custom "transformIgnorePatterns" in your config.
+• If you need a custom transformation specify a "transform" option in your config.
+• If you simply want to mock your non-JS modules (e.g. binary assets) you can stub them out with the "moduleNameMapper" config option.
+You'll find more details and examples of these config options in the docs:
+[https://jestjs.io/docs/configuration](https://jestjs.io/docs/configuration)
+For information about custom transformations, see:
+[https://jestjs.io/docs/code-transformation](https://jestjs.io/docs/code-transformation)
+Details:
+SyntaxError: /home/runner/work/Enterprise_qua_nextjs/Enterprise_qua_nextjs/backend/src/services/emailGatewayService.js: Identifier 'inFlightBuyerRegistrations' has already been declared. (476:6)
+474 | }
+475 |
+> 476 | const inFlightBuyerRegistrations = new Map();
+| ^
+477 |
+478 | /**
+479 | * Concurrency-safe retrieval or autonomous creation of a buyer account for an unregistered sender.
+9 | const rfqSummaryService = require('../services/rfqSummaryService');
+10 | const { logger } = require('../services/loggerService');
+> 11 | const emailGatewayService = require('../services/emailGatewayService');
+| ^
+12 | const emailIngestionService = require('../services/emailIngestionService');
+13 | const mailerService = require('../services/mailerService');
+14 | const extractionStagingService = require('../services/extractionStagingService');
+at constructor (node_modules/@babel/parser/src/parse-error.ts:96:45)
+at Parser.toParseError [as raise] (node_modules/@babel/parser/src/tokenizer/index.ts:1504:19)
+at ScopeHandler.raise [as checkRedeclarationInScope] (node_modules/@babel/parser/src/util/scope.ts:164:19)
+at ScopeHandler.checkRedeclarationInScope [as declareName] (node_modules/@babel/parser/src/util/scope.ts:118:12)
+at Parser.declareName [as declareNameFromIdentifier] (node_modules/@babel/parser/src/parser/lval.ts:876:16)
+at Parser.declareNameFromIdentifier [as checkIdentifier] (node_modules/@babel/parser/src/parser/lval.ts:871:12)
+at Parser.checkIdentifier [as checkLVal] (node_modules/@babel/parser/src/parser/lval.ts:763:12)
+at Parser.checkLVal [as parseVarId] (node_modules/@babel/parser/src/parser/statement.ts:1633:10)
+at Parser.parseVarId [as parseVar] (node_modules/@babel/parser/src/parser/statement.ts:1582:12)
+at Parser.parseVar [as parseVarStatement] (node_modules/@babel/parser/src/parser/statement.ts:1251:10)
+at Parser.parseVarStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:612:21)
+at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:482:17)
+at Parser.parseStatementLike [as parseModuleItem] (node_modules/@babel/parser/src/parser/statement.ts:419:17)
+at Parser.parseModuleItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1443:16)
+at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1417:10)
+at Parser.parseBlockBody [as parseProgram] (node_modules/@babel/parser/src/parser/statement.ts:229:10)
+at Parser.parseProgram [as parseTopLevel] (node_modules/@babel/parser/src/parser/statement.ts:203:25)
+at Parser.parseTopLevel [as parse] (node_modules/@babel/parser/src/parser/index.ts:83:25)
+at parse (node_modules/@babel/parser/src/index.ts:86:38)
+at parser (node_modules/@babel/core/src/parser/index.ts:29:19)
+at parser.next (<anonymous>)
+at normalizeFile (node_modules/@babel/core/src/transformation/normalize-file.ts:49:24)
+at normalizeFile.next (<anonymous>)
+at run (node_modules/@babel/core/src/transformation/index.ts:41:36)
+at run.next (<anonymous>)
+at transform (node_modules/@babel/core/src/transform.ts:29:20)
+at transform.next (<anonymous>)
+at evaluateSync (node_modules/gensync/index.js:251:28)
+at sync (node_modules/gensync/index.js:89:14)
+at fn (node_modules/@babel/core/src/errors/rewrite-stack-trace.ts:99:14)
+at transformSync (node_modules/@babel/core/src/transform.ts:66:52)
+at ScriptTransformer.transformSource (node_modules/@jest/transform/build/ScriptTransformer.js:545:31)
+at ScriptTransformer._transformAndBuildScript (node_modules/@jest/transform/build/ScriptTransformer.js:674:40)
+at ScriptTransformer.transform (node_modules/@jest/transform/build/ScriptTransformer.js:726:19)
+at Object.require (src/controllers/rfqController.js:11:29)
+at Object.require (src/routes/rfqs.js:3:23)
+at Object.require (src/routes/index.js:4:19)
+at Object.require (src/app.js:17:19)
+at Object.require (__tests__/supportChat.test.js:2:13)
+Test Suites: 42 failed, 57 passed, 99 total
+Tests: 1369 passed, 1369 total
+Snapshots: 0 total
+Time: 49.042 s
+Ran all test suites.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+Error: Process completed with exit code 1.
+```
+
+---
+
+### 2026-10-24T09:45:10+05:30
+
+```text
+this is working as expected now we need to add the mobile number for login credentials 9999999999
+and for login now verification of phone number is working email and change the password and it should ask the that full GMST number company name now address also asking add gst number like registeration 
+```
+
+---
+
+### 2026-10-24T11:02:33+05:30
+
+```text
+Once the buyer receive the quotation, ask them to update the profile to get the quotes insted of directly share the quote in v0 via email we should ask to update the profile mail acknowledgment should go after receive one quotation for that rfq
+```
+
+---
+
+### 2026-10-24T11:36:24+05:30
+
+```text
+check don't change any existing functonaliity of register buyer
+```
+
+---
+
+### 2026-10-24T11:37:03+05:30
+
+```text
+create a new branch and raise the pr
+```
+
+---
+
+### 2026-10-24T17:35:04+05:30
+
+```text
+Verify that RFQ details are successfully sent to the selected vendors.
+Do not add the buyer in CC when sending RFQ invitations to vendors.
+For V1 and V3, if a vendor submits a quotation via email and the submission fails, send the failure notification with the buyer in CC.
+Do not add the buyer in CC for successful quotation submissions.
+Test both successful and failed email quotation scenarios and verify the CC behavior.
+```
+
+---
+
+### 2026-10-24T18:31:03+05:30
+
+```text
+Qua AI: Transactional Email Templates
+Email 1 : RFQ created from email, account auto-created
+Who: Unregistered buyer
+Trigger: An unknown email address writes to RFQ@procucev.com. Qua AI creates a profile with the email ID and dummy details, creates the RFQ, then sends this email.
+Subject: Congratulations, your RFQ rfq_id is live on Qua AI
+Body:
+Hi first_name | there,
+Congratulations! We received your requirement and Qua AI has already turned it into a structured RFQ: rfq_id : rfq_title. Matching suppliers are being lined up now.
+To save you time, we created a free Qua AI account for you with this email address.
+Your login details
+Login ID: email
+Temporary password: temp_password (valid for 48 hours)
+Login page: login_url
+Three quick steps to finish
+Log in and set your own password.
+Complete your profile: company name, GSTIN, delivery address and phone number. We've used placeholder details for now; suppliers quote more accurately once these are real.
+Go to RFQ Summary to review rfq_id.
+[ Log in & review my RFQ ] (CTA Button)
+Suppliers start quoting within about 24 hours. Qua AI follows up with them and sends you the quotations side by side.
+Next time, just email your requirement to RFQ@procucev.com again.
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 2 : RFQ created
+Who: Registered buyer
+Trigger: A logged-in buyer creates an RFQ on the platform, or a registered buyer's email to RFQ@procucev.com is converted into an RFQ.
+Subject: Congratulations, RFQ rfq_id is live. Qua AI is on it
+Body:
+Hi first_name,
+Congratulations! Your RFQ is live and has gone out to suppliers_invited matched suppliers.
+Now sit back and relax. Qua AI follows up with every supplier by email, SMS and WhatsApp, so you don't have to. As soon as quotations come in, we'll share them with you in a side-by-side comparison.
+RFQ Summary
+Field
+Details
+RFQ ID
+rfq_id
+Title
+rfq_title
+Category
+category
+Line items
+item_count
+Delivery location
+delivery_location
+Required by
+required_by
+Quotes due
+quote_deadline
+Suppliers invited
+suppliers_invited
+Items requested
+#
+Item
+Specification
+Qty
+Unit
+n
+item_name
+item_spec
+qty
+uom
+Spotted something to change? You can edit the RFQ until the first quote arrives.
+[ View RFQ Summary ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 3 : New RFQ intimation
+Who: Unregistered vendor
+Trigger: Qua AI matches an RFQ to a supplier in the Procucev network who has no account yet.
+Subject: New buyer enquiry for category: quote by quote_deadline
+Body:
+Hi first_name | there,
+A verified buyer is looking for suppliers in category, and Qua AI has matched your business to the requirement.
+RFQ at a glance
+Field
+Details
+Requirement
+rfq_title
+Buyer
+buyer_industry company, buyer_city
+Line items
+item_count
+Delivery to
+delivery_location
+Required by
+required_by
+Quotes close
+quote_deadline
+To see the full specifications and submit your quotation:
+Click the button below. Your account is already set up with this email.
+Complete your company profile: name, GSTIN, product categories and contact details. It takes about 3 minutes.
+Go to RFQs → Recent RFQs, open rfq_id and submit your quote.
+[ Complete profile & quote now ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to info@procucev.com
+Team Qua AI
+Procucev Enterprise Solutions
+Email 4 : New RFQ to quote
+Who: Registered vendor
+Trigger: A new RFQ matches the categories on a registered vendor's profile.
+Subject: New RFQ rfq_id: rfq_title, quotes close quote_deadline
+Body:
+Hi first_name,
+A new RFQ matching your categories just came in. Buyers usually shortlist from the first few quotes, so submitting early improves your chances.
+RFQ at a glance
+Field
+Details
+RFQ ID
+rfq_id
+Requirement
+rfq_title
+Buyer
+buyer_industry company, buyer_city
+Line items
+item_count
+Delivery to
+delivery_location
+Required by
+required_by
+Quotes close
+quote_deadline
+[ Submit my quote ] (CTA Button)
+Your credit balance: credit_balance credits.
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 5 : Quotations ready to compare
+Who: Buyer (registered or auto-created)
+Trigger: First quotation received on an RFQ, then a final digest when the quote deadline passes.
+Subject: quote_count quotes in for RFQ rfq_id: compare now
+Body:
+Hi first_name,
+Good news. quote_count suppliers have quoted on rfq_title. The lowest landed price is lowest_price, and the fastest delivery is fastest_delivery.
+Qua AI has laid them out side by side: price, delivery, payment terms and supplier rating.
+[ View & compare quotes ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to info@procucev.com
+Team Qua AI
+Procucev Enterprise Solutions
+Email 6 : Activate your account
+Who: Unregistered buyer (account auto-created in Email 1)
+Trigger: No login 24 hours after Email 1; repeat once at 72 hours.
+Subject: Suppliers are waiting on RFQ rfq_id
+Body:
+Hi first_name | there,
+Your RFQ rfq_title is live, but your profile still has placeholder details. Suppliers quote faster and more accurately when they see the right company details.
+It takes 2 minutes: log in, complete your profile, then check RFQ Summary.
+[ Log in & review my RFQ ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 7 : RFQ needs more information
+Who: Buyer (registered or unregistered)
+Trigger: Qua AI can't confirm a quantity, specification, delivery location or attachment from the buyer's email or upload.
+Subject: One detail needed to send RFQ rfq_id to suppliers
+Body:
+Hi first_name,
+We've structured most of your requirement, but couldn't confirm the following:
+missing_field_1
+missing_field_2
+Add these and we'll send the RFQ to suppliers straight away. You can also simply reply to this email with the details.
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+[ Add missing details ] (CTA Button)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 8 : No quotes yet
+Who: Buyer
+Trigger: Zero quotes received 48 hours before the quote deadline.
+Subject: RFQ rfq_id: let's get you more quotes
+Body:
+Hi first_name,
+Suppliers are still reviewing rfq_title, but no quotes have come in yet. Qua AI is following up with them now.
+To widen the response, you can extend the deadline or let us invite more suppliers from the Procucev network.
+[ Extend deadline / invite more suppliers ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 9 : Quote deadline reminder
+Who: Vendor (registered or unregistered)
+Trigger: 24 hours before the quote deadline, to vendors who were notified or viewed the RFQ but haven't quoted.
+Subject: 24 hours left to quote on rfq_title
+Body:
+Hi first_name,
+RFQ rfq_id closes on quote_deadline. quote_count suppliers have already quoted. Submit yours to stay in the running.
+[ Submit my quote ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 10 : Low or zero credits
+Who: Registered vendor
+Trigger: Credit balance falls below 2, or the vendor tries to open an RFQ with zero credits.
+Subject: You have credit_balance credits left: don't miss the next RFQ
+Body:
+Hi first_name,
+Your Qua AI credit balance is down to credit_balance. In the last 30 days, matched_rfq_count RFQs matched your categories. Without credits, you can't open new RFQs or quote on them.
+A package of 50 credits costs ₹7,500 (₹150 per RFQ).
+[ Buy 50 credits ] → buy_credits_url
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 11 : Quote submitted
+Who: Vendor
+Trigger: Vendor submits a quotation on an RFQ.
+Subject: Your quote for RFQ rfq_id has been received
+Body:
+Hi first_name,
+Thank you. Your quote of quote_value for rfq_title has reached the buyer.
+The buyer will review all quotes after quote_deadline. You can revise your quote any time before then.
+[ View my quote ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 12 : RFQ revised / buyer question
+Who: Vendor (notified on or quoted on the RFQ)
+Trigger: Buyer edits the RFQ (quantity, spec, date) or posts a clarification question.
+Subject: Update on RFQ rfq_id: please review
+Body:
+Hi first_name,
+The buyer has updated rfq_title:
+change_summary
+If you've already quoted, please check whether your quote still applies and revise it if needed. The deadline is now quote_deadline.
+[ Review changes ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+Email 13 : Complete your profile
+Who: Unregistered vendor (received Email 3)
+Trigger: Profile not completed 48 hours after Email 3.
+Subject: Your RFQ for category closes quote_deadline
+Body:
+Hi first_name | there,
+A buyer in buyer_city is still waiting for quotes on rfq_title. Finish your profile in 3 minutes to see the full specifications and submit your quote.
+[ Complete profile & quote ] (CTA Button)
+For any further questions or clarifications, please reach out to +91 8247722944/email to [info@procucev.com](mailto:info@procucev.com)
+Team Qua AI
+Procucev Enterprise Solutions
+
+
+
+u already implements this templates but in dev not working as previously only please check and fix
+```
+
+

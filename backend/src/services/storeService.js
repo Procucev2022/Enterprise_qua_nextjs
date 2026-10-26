@@ -31,6 +31,7 @@ const mailerService = require('./mailerService');
 const whatsAppService = require('./whatsAppService');
 const smsService = require('./smsService');
 const rfqChaserScheduler = require('./rfqChaserScheduler');
+const rfqIngestionService = require('./rfqIngestionService');
 const { logger } = require('./loggerService');
 
 // Bound on the vendors table read at boot hydration (see hydrateFromDB) —
@@ -123,6 +124,14 @@ class StoreService {
     this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
     this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
     this.isHydratedFromDB = false;
+    this._pendingQuoteNotifications = new Map();
+    this._rfqQuoteAckSent = new Set();
+    if (this._delayedQuoteTimers) {
+      this._delayedQuoteTimers.forEach((timers) => {
+        if (Array.isArray(timers)) timers.forEach((t) => clearTimeout(t));
+      });
+      this._delayedQuoteTimers = new Map();
+    }
   }
 
   /**
@@ -532,8 +541,11 @@ class StoreService {
     return newAcc;
   }
 
-  updateBuyerAccount(id, updates) {
-    const idx = this.buyerAccounts.findIndex((a) => a.id === id);
+  updateBuyerAccount(idOrEmail, updates) {
+    const key = String(idOrEmail || '').trim().toLowerCase();
+    const idx = this.buyerAccounts.findIndex(
+      (a) => a.id === idOrEmail || (a.corporateEmail && a.corporateEmail.toLowerCase() === key)
+    );
     if (idx === -1) return null;
 
     const updated = {
@@ -544,7 +556,7 @@ class StoreService {
     this.buyerAccounts[idx] = updated;
     this._persistBuyerAccount(updated);
 
-    if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
+    if (this.activeBuyerAccount && this.activeBuyerAccount.id === updated.id) {
       this.activeBuyerAccount = updated;
     }
 
@@ -703,11 +715,14 @@ class StoreService {
       if (!scopedBuyerId) {
         return false;
       }
-      const sId = String(scopedBuyerId).toLowerCase();
-      return (
-        (v.buyerId && String(v.buyerId).toLowerCase() === sId) ||
-        (v.buyerAccountId && String(v.buyerAccountId).toLowerCase() === sId) ||
-        (v.buyerEmail && String(v.buyerEmail).toLowerCase() === sId)
+      const candidateIds = Array.isArray(scopedBuyerId)
+        ? scopedBuyerId.map((id) => String(id).toLowerCase())
+        : [String(scopedBuyerId).toLowerCase()];
+      return candidateIds.some(
+        (sId) =>
+          (v.buyerId && String(v.buyerId).toLowerCase() === sId) ||
+          (v.buyerAccountId && String(v.buyerAccountId).toLowerCase() === sId) ||
+          (v.buyerEmail && String(v.buyerEmail).toLowerCase() === sId)
       );
     });
   }
@@ -718,11 +733,15 @@ class StoreService {
     if (scopedBuyerId === 'all') return vendor;
     if (!vendor.buyerId && !vendor.buyerAccountId) return vendor;
     if (!scopedBuyerId) return undefined;
-    const sId = String(scopedBuyerId).toLowerCase();
-    const matches =
-      (vendor.buyerId && String(vendor.buyerId).toLowerCase() === sId) ||
-      (vendor.buyerAccountId && String(vendor.buyerAccountId).toLowerCase() === sId) ||
-      (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId);
+    const candidateIds = Array.isArray(scopedBuyerId)
+      ? scopedBuyerId.map((id) => String(id).toLowerCase())
+      : [String(scopedBuyerId).toLowerCase()];
+    const matches = candidateIds.some(
+      (sId) =>
+        (vendor.buyerId && String(vendor.buyerId).toLowerCase() === sId) ||
+        (vendor.buyerAccountId && String(vendor.buyerAccountId).toLowerCase() === sId) ||
+        (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId)
+    );
     return matches ? vendor : undefined;
   }
 
@@ -2111,6 +2130,20 @@ class StoreService {
     const rfqNumber = rfqData.rfqNumber || this.generateRFQNumber();
     const id = rfqData.id || `rfq-${Date.now()}`;
 
+    const resolvedBuyer =
+      requestingBuyerAccount ||
+      (rfqData.buyerEmail
+        ? this.buyerAccounts.find(
+            (a) =>
+              a.corporateEmail &&
+              a.corporateEmail.toLowerCase() === String(rfqData.buyerEmail).trim().toLowerCase()
+          )
+        : null);
+
+    const buyerEmail =
+      rfqData.buyerEmail ||
+      (resolvedBuyer ? resolvedBuyer.corporateEmail : (rfqData.raisedByEmail || rfqData.sourceEmail || null));
+
     const newRFQ = {
       id,
       rfqNumber,
@@ -2120,10 +2153,16 @@ class StoreService {
       // and routed it to the wrong vendor pool.
       category: rfqData.category || null,
       createdAt: rfqData.createdAt || new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
-      // No hardcoded fallback date. A fixed '2026-09-20' was previously stamped on
-      // any RFQ that arrived without one, so an RFQ could show a deadline the
-      deadline: rfqData.deadline || rfqData.targetDeliveryDate || rfqData.target_delivery_date || null,
-      targetDeliveryDate: rfqData.targetDeliveryDate || rfqData.target_delivery_date || rfqData.deadline || null,
+      deadline: rfqData.deadline
+        ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
+        : (rfqData.targetDeliveryDate
+            ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
+            : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
+      targetDeliveryDate: rfqData.targetDeliveryDate
+        ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
+        : (rfqData.deadline
+            ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
+            : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
       // Budget was previously dropped here, so an RFQ saved through the API came
       // back from hydration with no budget at all: the portfolio value totalled
       // zero and the quote matrix crashed reading it. It is validated as a
@@ -2150,7 +2189,8 @@ class StoreService {
         : (rfqData.source !== undefined ? rfqData.source : null),
       sourceFileName: rfqData.sourceFileName || null,
       sourceEmail: rfqData.sourceEmail || null,
-      raisedByEmail: requestingBuyerAccount ? requestingBuyerAccount.corporateEmail : rfqData.raisedByEmail || null,
+      buyerEmail,
+      raisedByEmail: resolvedBuyer ? resolvedBuyer.corporateEmail : (rfqData.raisedByEmail || buyerEmail || null),
       status: rfqData.status || 'Quotes Pending',
       // Stamped from the authenticated caller's own buyer account (resolved
       // by the controller/resolver from the session, never trusted from the
@@ -2158,15 +2198,15 @@ class StoreService {
       // Falls back to the legacy system-wide "active" buyer account only for
       // callers that don't have a per-request buyer identity to resolve
       // (e.g. historical-data ingestion, admin-driven creation).
-      buyerAccountId: requestingBuyerAccount
-        ? requestingBuyerAccount.id
+      buyerAccountId: resolvedBuyer
+        ? resolvedBuyer.id
         : this.activeBuyerAccount ? this.activeBuyerAccount.id : null,
-      buyerAccountName: requestingBuyerAccount
-        ? requestingBuyerAccount.organizationName
+      buyerAccountName: resolvedBuyer
+        ? resolvedBuyer.organizationName
         : this.activeBuyerAccount ? this.activeBuyerAccount.organizationName : null,
       sourcingMode: rfqData.source === 'email_gateway'
-        ? (requestingBuyerAccount ? resolveBuyerSourcingMode(requestingBuyerAccount) : (rfqData.sourcingMode || 'mode_0'))
-        : (rfqData.sourcingMode || (requestingBuyerAccount && requestingBuyerAccount.subscriptionPlan && requestingBuyerAccount.subscriptionPlan !== 'free_trial' ? resolveBuyerSourcingMode(requestingBuyerAccount) : 'mode_1')),
+        ? (resolvedBuyer ? resolveBuyerSourcingMode(resolvedBuyer) : (rfqData.sourcingMode || 'mode_0'))
+        : (rfqData.sourcingMode || (resolvedBuyer && resolvedBuyer.subscriptionPlan && resolvedBuyer.subscriptionPlan !== 'free_trial' ? resolveBuyerSourcingMode(resolvedBuyer) : 'mode_1')),
       quotesCount: rfqData.quotes ? rfqData.quotes.length : 0,
       chasingActive: rfqData.chasingActive !== undefined ? rfqData.chasingActive : true,
       allocatedTime: rfqData.allocatedTime || RFQ_DEFAULTS.ALLOCATED_TIME,
@@ -2235,7 +2275,6 @@ class StoreService {
     // 2. Dispatch an email to the vendor requesting them to update their category/business details.
     // 3. Record an audit log.
     const rfqCategorySignals = this._rfqCategorySignals(newRFQ);
-    const buyerEmail = requestingBuyerAccount ? requestingBuyerAccount.corporateEmail : rfqData.raisedByEmail || null;
     const maxClientPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY;
     const distinctCategories = this._rfqDistinctCategories(newRFQ);
 
@@ -2791,6 +2830,31 @@ class StoreService {
           { rfqNumber: freshRfq.rfqNumber, quotesCount: quotes.length, buyerEmail: buyer.corporateEmail },
           'STORE_SERVICE'
         );
+
+        if (this.isBuyerProfileUpdateRequired(buyer, freshRfq)) {
+          logger.info(
+            `[AUTO_CLOSURE] Buyer ${buyer.corporateEmail} profile verification is pending. Queueing quotes and omitting unsealed comparison email for RFQ ${freshRfq.rfqNumber}.`,
+            { rfqNumber: freshRfq.rfqNumber, quotesCount: quotes.length },
+            'STORE_SERVICE'
+          );
+          if (Array.isArray(quotes)) {
+            quotes.forEach((q) => this.queuePendingQuoteNotification(buyer.corporateEmail, { rfq: freshRfq, quote: q }));
+          }
+          if (!this.hasQuoteAckBeenSent(freshRfq)) {
+            this.markQuoteAckSent(freshRfq);
+            this._background(
+              mailerService.sendBuyerProfileCompletionReminderEmail({
+                to: buyer.corporateEmail,
+                recipientName: buyer.organizationName,
+                rfqNumber: freshRfq.rfqNumber,
+                rfqTitle: freshRfq.title,
+                quotesCount: quotes.length,
+              }),
+              'Failed to dispatch profile completion reminder email on auto-closure'
+            );
+          }
+          return;
+        }
 
         // Send comparison email
         if (buyer.corporateEmail) {
@@ -3796,8 +3860,6 @@ class StoreService {
           mailerService.sendRfqInviteEmail(vendor.email, {
             rfq: updatedRFQ,
             recipientName: vendor.contactPerson || vendor.name,
-            buyerEmail,
-            cc: buyerEmail || undefined,
             freeCreditsRemaining: creditInfo.freeCreditsRemaining,
             isSubscribed: creditInfo.isSubscribed,
           }),
@@ -4316,6 +4378,65 @@ class StoreService {
     this._delayedQuoteTimers.set(rfq.id, list);
   }
 
+  isBuyerProfileUpdateRequired(buyer, rfq) {
+    if (!buyer) return false;
+
+    // 1. Pending onboarding / placeholder phone / autonomous registration
+    // strictly requires profile completion across all modes.
+    const isPendingOnboarding = Boolean(
+      buyer.onboardingRequired === true ||
+      buyer.status === 'PENDING_ONBOARDING' ||
+      buyer.verificationStatus === 'PENDING_ONBOARDING' ||
+      buyer.isAutoRegistered === true ||
+      buyer.tempPasswordRequired === true ||
+      buyer.profileVerified === false ||
+      buyer.phoneVerified === false ||
+      String(buyer.phone || buyer.mobileNumber || '').includes('9999999999')
+    );
+    if (isPendingOnboarding) {
+      return true;
+    }
+
+    // 2. For V0 (mode_0), check if the buyer has completed / verified their profile.
+    // If the buyer is an already registered and verified buyer (e.g. status ACTIVE_VERIFIED,
+    // profileVerified: true, onboardingRequired: false, real phone), their existing workflow
+    // and quote delivery are 100% preserved without change.
+    // Otherwise, V0 requires them to complete their profile before accessing quotes.
+    const isV0 =
+      (rfq && (rfq.sourcingMode === 'mode_0' || rfq.sourcingMode === 'v0' || rfq.sourcingMode === 'version_0')) ||
+      buyer.sourcingMode === 'mode_0' ||
+      buyer.sourcingMode === 'v0';
+
+    if (isV0) {
+      const isRegisteredVerifiedBuyer = Boolean(
+        buyer.profileVerified === true ||
+        buyer.accountSource === 'web_registration' ||
+        ((buyer.status === 'ACTIVE_VERIFIED' || buyer.status === 'ACTIVE') && buyer.onboardingRequired === false)
+      );
+      return !isRegisteredVerifiedBuyer;
+    }
+
+    // For standard non-V0 sourcing modes, registered buyers are never blocked.
+    return false;
+  }
+
+
+
+  hasQuoteAckBeenSent(rfq) {
+    if (!rfq) return false;
+    this._rfqQuoteAckSent = this._rfqQuoteAckSent || new Set();
+    const idKey = rfq.id ? String(rfq.id) : null;
+    const numKey = rfq.rfqNumber ? String(rfq.rfqNumber) : null;
+    return Boolean((idKey && this._rfqQuoteAckSent.has(idKey)) || (numKey && this._rfqQuoteAckSent.has(numKey)));
+  }
+
+  markQuoteAckSent(rfq) {
+    if (!rfq) return;
+    this._rfqQuoteAckSent = this._rfqQuoteAckSent || new Set();
+    if (rfq.id) this._rfqQuoteAckSent.add(String(rfq.id));
+    if (rfq.rfqNumber) this._rfqQuoteAckSent.add(String(rfq.rfqNumber));
+  }
+
   /**
    * Email a submitted quote to the RFQ's owning buyer. Fired from addQuoteToRFQ.
    *
@@ -4323,24 +4444,103 @@ class StoreService {
    * - If the RFQ is within the 48-hour bidding integrity window (and non-V0),
    *   mailerService sends a sealed quotation alert to the buyer (notifying them
    *   that a bid landed while preserving integrity until the window concludes).
-   * - For V0, closed, or post-48h RFQs, mailerService sends the unsealed quote details.
+   * - If the buyer is unverified or in V0 without profile completion, full quote details
+   *   are queued in pendingQuoteNotifications, and a single quotation acknowledgment
+   *   is dispatched instructing the buyer to update their profile to access their quotes.
+   * - Otherwise, mailerService sends the unsealed quote details.
    */
   emailQuoteToBuyer(rfq, quote) {
     if (!rfq) return false;
     const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
     if (!buyerEmail) return false;
 
-    const buyer = (rfq.buyerAccountId && this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId)) || {
+    const buyer = (rfq.buyerAccountId && this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId)) ||
+      (this.buyerAccounts && this.buyerAccounts.find((a) => String(a.corporateEmail || '').trim().toLowerCase() === String(buyerEmail).trim().toLowerCase())) || {
       id: rfq.buyerAccountId || null,
       corporateEmail: buyerEmail,
       organizationName: rfq.buyerAccountName || rfq.buyerName || 'Buyer',
     };
+
+    const isPendingVerification = this.isBuyerProfileUpdateRequired(buyer, rfq);
+
+    if (isPendingVerification) {
+      logger.info(
+        `Buyer ${buyer.corporateEmail} profile update/verification is pending. Queueing quotation and sending profile completion acknowledgment for RFQ ${rfq.rfqNumber}`,
+        { rfqNumber: rfq.rfqNumber, quoteVendor: quote.vendorName },
+        'STORE_SERVICE'
+      );
+      this.queuePendingQuoteNotification(buyer.corporateEmail, { rfq, quote });
+
+      if (!this.hasQuoteAckBeenSent(rfq)) {
+        this.markQuoteAckSent(rfq);
+        this._background(
+          mailerService.sendBuyerProfileCompletionReminderEmail({
+            to: buyer.corporateEmail,
+            recipientName: buyer.organizationName,
+            rfqNumber: rfq.rfqNumber,
+            rfqTitle: rfq.title,
+            quotesCount: 1,
+          }),
+          'Failed to email profile completion reminder to buyer'
+        );
+        this.addAuditLog({
+          userEmail: buyer.corporateEmail,
+          action: `Notification outcome: Sent quotation acknowledgment and profile update reminder to ${buyer.corporateEmail} for RFQ ${rfq.rfqNumber}`,
+        });
+      }
+      return true;
+    }
 
     this._background(
       mailerService.sendQuoteReceivedEmail(buyer.corporateEmail, { rfq, quote, recipientName: buyer.organizationName }),
       'Failed to email quote to buyer'
     );
     return true;
+  }
+
+  queuePendingQuoteNotification(buyerEmail, { rfq, quote }) {
+    if (!buyerEmail || !rfq || !quote) return;
+    const normEmail = String(buyerEmail).trim().toLowerCase();
+    this._pendingQuoteNotifications = this._pendingQuoteNotifications || new Map();
+    const list = this._pendingQuoteNotifications.get(normEmail) || [];
+    const quoteKey = `${rfq.id || rfq.rfqNumber}:${quote.id || quote.vendorId || quote.vendorName}`;
+    const alreadyQueued = list.some((item) => {
+      const existingKey = `${item.rfq.id || item.rfq.rfqNumber}:${item.quote.id || item.quote.vendorId || item.quote.vendorName}`;
+      return existingKey === quoteKey;
+    });
+    if (!alreadyQueued) {
+      list.push({ rfq, quote });
+      this._pendingQuoteNotifications.set(normEmail, list);
+    }
+  }
+
+  async dispatchPendingQuoteNotifications(buyerEmail) {
+    if (!buyerEmail) return [];
+    const normEmail = String(buyerEmail).trim().toLowerCase();
+    const list = this._pendingQuoteNotifications ? (this._pendingQuoteNotifications.get(normEmail) || []) : [];
+    if (this._pendingQuoteNotifications) {
+      this._pendingQuoteNotifications.delete(normEmail);
+    }
+
+    const buyer = (await this.getBuyerAccountByEmail(normEmail)) || {
+      corporateEmail: normEmail,
+      organizationName: 'Valued Buyer',
+    };
+
+    const dispatched = [];
+    for (const item of list) {
+      try {
+        await mailerService.sendQuoteReceivedEmail(normEmail, {
+          rfq: item.rfq,
+          quote: item.quote,
+          recipientName: buyer.organizationName,
+        });
+        dispatched.push(item);
+      } catch (err) {
+        logger.error(`Failed to dispatch pending quote notification to ${normEmail}`, err, 'STORE_SERVICE');
+      }
+    }
+    return dispatched;
   }
 
   /**
@@ -5334,7 +5534,9 @@ class StoreService {
         }
       }
     } else if (scopedBuyerId && pool.hasStorage()) {
-      const ownVendors = await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
+      const ownVendors = sessionEmail
+        ? await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS, sessionEmail)
+        : await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
       const remaining = Math.max(0, MAX_BOOTSTRAP_VENDORS - ownVendors.length);
       const publicPage = remaining > 0
         ? await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true })
@@ -5355,8 +5557,25 @@ class StoreService {
       // LIMIT to lean on here.
       const allVendors = await this.getVendors(scopedBuyerId);
       vendorsTotal = allVendors.length;
-      const ownVendors = scopedBuyerId ? allVendors.filter((v) => v.buyerId === scopedBuyerId || v.buyerAccountId === scopedBuyerId) : [];
-      const publicVendors = scopedBuyerId ? allVendors.filter((v) => !(v.buyerId === scopedBuyerId || v.buyerAccountId === scopedBuyerId)) : allVendors;
+      const candidateIds = new Set();
+      if (Array.isArray(scopedBuyerId)) scopedBuyerId.forEach((id) => id && candidateIds.add(String(id).toLowerCase()));
+      else if (scopedBuyerId) candidateIds.add(String(scopedBuyerId).toLowerCase());
+      if (sessionEmail) candidateIds.add(String(sessionEmail).toLowerCase());
+
+      const ownVendors = candidateIds.size > 0
+        ? allVendors.filter((v) =>
+            candidateIds.has(String(v.buyerId || '').toLowerCase()) ||
+            candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) ||
+            candidateIds.has(String(v.buyerEmail || '').toLowerCase())
+          )
+        : [];
+      const publicVendors = candidateIds.size > 0
+        ? allVendors.filter((v) =>
+            !candidateIds.has(String(v.buyerId || '').toLowerCase()) &&
+            !candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) &&
+            !candidateIds.has(String(v.buyerEmail || '').toLowerCase())
+          )
+        : allVendors;
       vendors = [...ownVendors, ...publicVendors].slice(0, MAX_BOOTSTRAP_VENDORS);
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();

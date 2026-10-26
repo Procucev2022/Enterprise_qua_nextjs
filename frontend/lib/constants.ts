@@ -1120,4 +1120,119 @@ export function hasUnlimitedAccess(emailOrSession?: { email?: string } | string 
   return UNLIMITED_ACCESS_EMAILS.has(email);
 }
 
+export const QUA_AI_TRANSACTIONAL_EMAIL_TEMPLATES = {
+  EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED: {
+    id: 'EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED',
+    number: 1,
+    name: 'RFQ created from email, account auto-created',
+    who: 'Unregistered buyer',
+    trigger: 'An unknown email address writes to RFQ@procucev.com. Qua AI creates a profile with the email ID and dummy details, creates the RFQ, then sends this email.',
+    subject: 'Congratulations, your RFQ {rfq_id} is live on Qua AI',
+  },
+  EMAIL_2_RFQ_CREATED: {
+    id: 'EMAIL_2_RFQ_CREATED',
+    number: 2,
+    name: 'RFQ created',
+    who: 'Registered buyer',
+    trigger: "A logged-in buyer creates an RFQ on the platform, or a registered buyer's email to RFQ@procucev.com is converted into an RFQ.",
+    subject: 'Congratulations, RFQ {rfq_id} is live. Qua AI is on it',
+  },
+  EMAIL_3_NEW_RFQ_INTIMATION: {
+    id: 'EMAIL_3_NEW_RFQ_INTIMATION',
+    number: 3,
+    name: 'New RFQ intimation',
+    who: 'Unregistered vendor',
+    trigger: 'Qua AI matches an RFQ to a supplier in the Procucev network who has no account yet.',
+    subject: 'New buyer enquiry for {category}: quote by {quote_deadline}',
+  },
+  EMAIL_4_NEW_RFQ_TO_QUOTE: {
+    id: 'EMAIL_4_NEW_RFQ_TO_QUOTE',
+    number: 4,
+    name: 'New RFQ to quote',
+    who: 'Registered vendor',
+    trigger: "A new RFQ matches the categories on a registered vendor's profile.",
+    subject: 'New RFQ {rfq_id}: {rfq_title}, quotes close {quote_deadline}',
+  },
+  EMAIL_5_QUOTATIONS_READY_TO_COMPARE: {
+    id: 'EMAIL_5_QUOTATIONS_READY_TO_COMPARE',
+    number: 5,
+    name: 'Quotations ready to compare',
+    who: 'Buyer (registered or auto-created)',
+    trigger: 'First quotation received on an RFQ, then a final digest when the quote deadline passes.',
+    subject: '{quote_count} quotes in for RFQ {rfq_id}: compare now',
+  },
+  EMAIL_6_ACTIVATE_YOUR_ACCOUNT: {
+    id: 'EMAIL_6_ACTIVATE_YOUR_ACCOUNT',
+    number: 6,
+    name: 'Activate your account',
+    who: 'Unregistered buyer (account auto-created in Email 1)',
+    trigger: 'No login 24 hours after Email 1; repeat once at 72 hours.',
+    subject: 'Suppliers are waiting on RFQ {rfq_id}',
+  },
+  EMAIL_7_RFQ_NEEDS_MORE_INFORMATION: {
+    id: 'EMAIL_7_RFQ_NEEDS_MORE_INFORMATION',
+    number: 7,
+    name: 'RFQ needs more information',
+    who: 'Buyer (registered or unregistered)',
+    trigger: "Qua AI can't confirm a quantity, specification, delivery location or attachment from the buyer's email or upload.",
+    subject: 'One detail needed to send RFQ {rfq_id} to suppliers',
+  },
+  EMAIL_8_NO_QUOTES_YET: {
+    id: 'EMAIL_8_NO_QUOTES_YET',
+    number: 8,
+    name: 'No quotes yet',
+    who: 'Buyer',
+    trigger: 'Zero quotes received 48 hours before the quote deadline.',
+    subject: "RFQ {rfq_id}: let's get you more quotes",
+  },
+  EMAIL_9_QUOTE_DEADLINE_REMINDER: {
+    id: 'EMAIL_9_QUOTE_DEADLINE_REMINDER',
+    number: 9,
+    name: 'Quote deadline reminder',
+    who: 'Vendor (registered or unregistered)',
+    trigger: "24 hours before the quote deadline, to vendors who were notified or viewed the RFQ but haven't quoted.",
+    subject: '24 hours left to quote on {rfq_title}',
+  },
+  EMAIL_10_LOW_OR_ZERO_CREDITS: {
+    id: 'EMAIL_10_LOW_OR_ZERO_CREDITS',
+    number: 10,
+    name: 'Low or zero credits',
+    who: 'Registered vendor',
+    trigger: 'Credit balance falls below 2, or the vendor tries to open an RFQ with zero credits.',
+    subject: "You have {credit_balance} credits left: don't miss the next RFQ",
+  },
+  EMAIL_11_QUOTE_SUBMITTED: {
+    id: 'EMAIL_11_QUOTE_SUBMITTED',
+    number: 11,
+    name: 'Quote submitted',
+    who: 'Vendor',
+    trigger: 'Vendor submits a quotation on an RFQ.',
+    subject: 'Your quote for RFQ {rfq_id} has been received',
+  },
+  EMAIL_12_RFQ_REVISED_BUYER_QUESTION: {
+    id: 'EMAIL_12_RFQ_REVISED_BUYER_QUESTION',
+    number: 12,
+    name: 'RFQ revised / buyer question',
+    who: 'Vendor (notified on or quoted on the RFQ)',
+    trigger: 'Buyer edits the RFQ (quantity, spec, date) or posts a clarification question.',
+    subject: 'Update on RFQ {rfq_id}: please review',
+  },
+  EMAIL_13_COMPLETE_YOUR_PROFILE: {
+    id: 'EMAIL_13_COMPLETE_YOUR_PROFILE',
+    number: 13,
+    name: 'Complete your profile',
+    who: 'Unregistered vendor (received Email 3)',
+    trigger: 'Profile not completed 48 hours after Email 3.',
+    subject: 'Your RFQ for {category} closes {quote_deadline}',
+  },
+} as const;
+
+export const QUA_AI_EMAIL_SUPPORT = {
+  PHONE: '+91 8247722944',
+  EMAIL: 'info@procucev.com',
+  TEAM_SIGNATURE: 'Team Qua AI',
+  COMPANY_NAME: 'Procucev Enterprise Solutions',
+} as const;
+
+
 
