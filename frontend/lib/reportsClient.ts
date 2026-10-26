@@ -133,7 +133,8 @@ export const REPORT_OPTIONS: ReportConfig[] = [
 export async function fetchReportData(
   reportConfig: ReportConfig,
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  limit?: number
 ): Promise<{ success: boolean; data?: any[]; summary?: any; totalRecords?: number; error?: string }> {
   try {
     const params = new URLSearchParams();
@@ -142,6 +143,7 @@ export async function fetchReportData(
     }
     if (startDate !== undefined && startDate !== null) params.append('startDate', startDate);
     if (endDate !== undefined && endDate !== null) params.append('endDate', endDate);
+    if (limit !== undefined && limit !== null && limit > 0) params.append('limit', String(limit));
 
     const url = `${reportConfig.endpoint}?${params.toString()}`;
     const token = authClient.getToken();

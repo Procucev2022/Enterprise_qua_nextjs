@@ -1,0 +1,70 @@
+[
+  {
+    "id": "ent-inq-1792936819678-4phuo",
+    "companyName": "Patch Test Co",
+    "email": "patch@test.com",
+    "mobile": "+919988776655",
+    "buyerAccountId": null,
+    "notes": "Called buyer today",
+    "status": "CONTACTED",
+    "createdAt": "2026-10-25T14:00:19.678Z",
+    "updatedAt": "2026-10-25T14:00:19.683Z",
+    "contactedBy": "Navin Manager",
+    "contactedAt": "2026-10-25T14:00:19.683Z"
+  },
+  {
+    "id": "ent-inq-1792936819666-618eo",
+    "companyName": "Limit Test Co 2",
+    "email": "limit2@test.com",
+    "mobile": "+919988776652",
+    "buyerAccountId": null,
+    "notes": "",
+    "status": "NEW",
+    "createdAt": "2026-10-25T14:00:19.666Z",
+    "updatedAt": "2026-10-25T14:00:19.666Z"
+  },
+  {
+    "id": "ent-inq-1792936819665-kl28q",
+    "companyName": "Limit Test Co 1",
+    "email": "limit1@test.com",
+    "mobile": "+919988776651",
+    "buyerAccountId": null,
+    "notes": "",
+    "status": "NEW",
+    "createdAt": "2026-10-25T14:00:19.665Z",
+    "updatedAt": "2026-10-25T14:00:19.665Z"
+  },
+  {
+    "id": "ent-inq-1792936819640-po3lg",
+    "companyName": "Resilient Co",
+    "email": "contact@resilient.com",
+    "mobile": "+919811122233",
+    "buyerAccountId": null,
+    "notes": "",
+    "status": "NEW",
+    "createdAt": "2026-10-25T14:00:19.640Z",
+    "updatedAt": "2026-10-25T14:00:19.640Z"
+  },
+  {
+    "id": "ent-inq-1792936819630-3podh",
+    "companyName": "Global Enterprises Inc",
+    "email": "global@enterprise.com",
+    "mobile": "+919876500000",
+    "buyerAccountId": "acc-global-1",
+    "notes": "Interested in annual tier 3 contract",
+    "status": "NEW",
+    "createdAt": "2026-10-25T14:00:19.630Z",
+    "updatedAt": "2026-10-25T14:00:19.630Z"
+  },
+  {
+    "id": "ent-inq-1792936809713-3fftj",
+    "companyName": "Acme Corp",
+    "email": "acme@example.com",
+    "mobile": "9876543210",
+    "buyerAccountId": null,
+    "notes": "Interested in annual license",
+    "status": "IN_REVIEW",
+    "createdAt": "2026-10-25T14:00:09.713Z",
+    "updatedAt": "2026-10-25T14:00:09.715Z"
+  }
+]

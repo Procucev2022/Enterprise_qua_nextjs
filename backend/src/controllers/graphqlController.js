@@ -9,6 +9,44 @@ const { logger } = require('../services/loggerService');
 async function handleGraphQL(req, res, next) {
   try {
     const isPost = req.method === 'POST';
+
+    // Support standard batched queries array: req.body is an array of operations
+    if (isPost && Array.isArray(req.body)) {
+      if (req.body.length === 0) {
+        return res.status(400).json({
+          errors: [{ message: 'Batched query array must not be empty.' }],
+        });
+      }
+      const startBatch = Date.now();
+      const results = await Promise.all(
+        req.body.map(async (op) => {
+          let opVars = op?.variables;
+          if (typeof opVars === 'string') {
+            try {
+              opVars = JSON.parse(opVars);
+            } catch {
+              opVars = {};
+            }
+          }
+          return graphql({
+            schema,
+            source: op?.query || '',
+            rootValue: rootResolvers,
+            contextValue: { req, res },
+            variableValues: opVars || {},
+            operationName: op?.operationName,
+          });
+        })
+      );
+      const batchDuration = Date.now() - startBatch;
+      logger.info(
+        `GraphQL Batched Query Executed (${req.body.length} operations, ${batchDuration}ms)`,
+        { operationCount: req.body.length, durationMs: batchDuration },
+        'GRAPHQL_API'
+      );
+      return res.json(results);
+    }
+
     const query = isPost ? req.body?.query : req.query?.query;
     let variables = isPost ? req.body?.variables : req.query?.variables;
     const operationName = isPost ? req.body?.operationName : req.query?.operationName;

@@ -153,12 +153,41 @@ describe('Email Template Generation Service', () => {
     delete process.env.FRONTEND_URL;
     delete process.env.PUBLIC_FRONTEND_URL;
 
-    expect(getPublicFrontendUrl()).toBe('http://localhost:3000');
-    expect(getLogoUrl()).toBe('https://procucev-enterprise-frontend.procucev-enterprise.workers.dev/procucev-logo.png');
-
     globalThis.__CF_ENV__ = { PUBLIC_FRONTEND_URL: 'https://cf-test-frontend.workers.dev/' };
     expect(getPublicFrontendUrl()).toBe('https://cf-test-frontend.workers.dev');
     expect(getLogoUrl()).toBe('https://cf-test-frontend.workers.dev/procucev-logo.png');
     delete globalThis.__CF_ENV__;
+  });
+
+  test('getPublicFrontendUrl rewrites srinivas-mukku.workers.dev in production environments', () => {
+    const origNodeEnv = process.env.NODE_ENV;
+    process.env.PUBLIC_FRONTEND_URL = 'https://srinivas-mukku.workers.dev/';
+
+    process.env.NODE_ENV = 'production';
+    expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+
+    process.env.NODE_ENV = 'test';
+    globalThis.__CF_ENV__ = { ENVIRONMENT: 'prod' };
+    expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+
+    globalThis.__CF_ENV__ = { ENVIRONMENT: 'production' };
+    expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+
+    globalThis.__CF_ENV__ = { NODE_ENV: 'production' };
+    expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+
+    delete globalThis.__CF_ENV__;
+    expect(getPublicFrontendUrl()).toBe('https://srinivas-mukku.workers.dev');
+
+    delete process.env.PUBLIC_FRONTEND_URL;
+    process.env.NODE_ENV = 'production';
+    expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+
+    process.env.NODE_ENV = 'test';
+    globalThis.__CF_ENV__ = { NODE_ENV: 'production' };
+    expect(getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+
+    delete globalThis.__CF_ENV__;
+    process.env.NODE_ENV = origNodeEnv;
   });
 });

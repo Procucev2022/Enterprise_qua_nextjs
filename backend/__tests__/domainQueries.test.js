@@ -6,10 +6,12 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
 
   beforeEach(() => {
     originalPool = pool.pool;
+    if (pool.queryCache) pool.queryCache.clear();
   });
 
   afterEach(() => {
     pool.pool = originalPool;
+    if (pool.queryCache) pool.queryCache.clear();
     jest.restoreAllMocks();
   });
 
@@ -615,6 +617,27 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY created_at DESC'), []);
     });
 
+    test('getRFQsFromDB with buyerAccountId and limit applies filtering and limit clause', async () => {
+      const rfq = { id: 'rfq-scoped', buyerAccountId: 'buyer-acc-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: rfq }] }) };
+
+      const res = await domainQueries.getRFQsFromDB('buyer-acc-1', 25);
+      expect(res).toEqual([rfq]);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain("raw->>'buyerAccountId' = $1");
+      expect(sql).toContain('LIMIT $2');
+      expect(params).toEqual(['buyer-acc-1', 25]);
+    });
+
+    test('getRFQsByBuyerFromDB delegates to getRFQsFromDB with limit', async () => {
+      const rfq = { id: 'rfq-scoped-2' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: rfq }] }) };
+
+      const res = await domainQueries.getRFQsByBuyerFromDB('buyer-acc-2', 15);
+      expect(res).toEqual([rfq]);
+      expect(pool.pool.query.mock.calls[0][1]).toEqual(['buyer-acc-2', 15]);
+    });
+
     test('upsertRFQInDB serializes the RFQ and returns the stored raw row', async () => {
       const rfq = {
         id: 'rfq-1',
@@ -889,6 +912,17 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY sequence DESC'), []);
     });
 
+    test('getAIFeedFromDB applies limit clause when limit is specified', async () => {
+      const item = { id: 'feed-top' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: item }] }) };
+
+      const res = await domainQueries.getAIFeedFromDB(10);
+      expect(res).toEqual([item]);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('LIMIT $1');
+      expect(params).toEqual([10]);
+    });
+
     test('upsertAIFeedItemInDB inserts the item and trims the table to the newest 100 rows', async () => {
       const item = { id: 'feed-1', title: 'Call placed' };
       const queryMock = jest.fn().mockResolvedValue({ rows: [{ raw: item }] });
@@ -933,6 +967,17 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
 
       await expect(domainQueries.getAuditLogsFromDB()).resolves.toEqual([entry]);
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY sequence DESC'), []);
+    });
+
+    test('getAuditLogsFromDB applies limit clause when limit is specified', async () => {
+      const entry = { id: 'log-top' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: entry }] }) };
+
+      const res = await domainQueries.getAuditLogsFromDB(50);
+      expect(res).toEqual([entry]);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('LIMIT $1');
+      expect(params).toEqual([50]);
     });
 
     test('upsertAuditLogInDB serializes the entry and returns the stored raw row', async () => {
@@ -985,6 +1030,17 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
 
       await expect(domainQueries.getNotificationsFromDB()).resolves.toEqual([NTF]);
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY sequence DESC'), []);
+    });
+
+    test('getNotificationsFromDB applies recipientId filter and limit clause', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: NTF }] }) };
+
+      const res = await domainQueries.getNotificationsFromDB('v-1', 20);
+      expect(res).toEqual([NTF]);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('recipient_id = $1');
+      expect(sql).toContain('LIMIT $2');
+      expect(params).toEqual(['v-1', 20]);
     });
 
     test('insertNotificationInDB serializes the row and passes the typed columns', async () => {
@@ -1195,6 +1251,414 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('upsertPaymentLinkInDB returns null when nothing came back', async () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
       await expect(domainQueries.upsertPaymentLinkInDB({ id: 'pl-3' })).resolves.toBeNull();
+    });
+
+    test('getPaymentLinksByVendorFromDB maps rows with and without limit', async () => {
+      const link = { id: 'pl-v1', vendorId: 'v-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+
+      await expect(domainQueries.getPaymentLinksByVendorFromDB('v-1', 10)).resolves.toEqual([link]);
+      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('LIMIT $2'), ['v-1', 10]);
+
+      await expect(domainQueries.getPaymentLinksByVendorFromDB('v-1', 0)).resolves.toEqual([link]);
+      pool.pool = null;
+      await expect(domainQueries.getPaymentLinksByVendorFromDB('v-1')).resolves.toEqual([]);
+      await expect(domainQueries.getPaymentLinksByVendorFromDB('')).resolves.toEqual([]);
+    });
+
+    test('getPaymentLinksByBuyerFromDB maps rows with and without limit', async () => {
+      const link = { id: 'pl-b1', buyerAccountId: 'b-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+
+      await expect(domainQueries.getPaymentLinksByBuyerFromDB('b-1', 5)).resolves.toEqual([link]);
+      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('LIMIT $2'), ['b-1', 5]);
+
+      await expect(domainQueries.getPaymentLinksByBuyerFromDB('b-1', 0)).resolves.toEqual([link]);
+      pool.pool = null;
+      await expect(domainQueries.getPaymentLinksByBuyerFromDB('b-1')).resolves.toEqual([]);
+      await expect(domainQueries.getPaymentLinksByBuyerFromDB('')).resolves.toEqual([]);
+    });
+
+    test('getPaymentLinkByIdFromDB returns matching row or null', async () => {
+      const link = { id: 'pl-id-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+
+      await expect(domainQueries.getPaymentLinkByIdFromDB('pl-id-1')).resolves.toEqual(link);
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.getPaymentLinkByIdFromDB('pl-missing')).resolves.toBeNull();
+      pool.pool = null;
+      await expect(domainQueries.getPaymentLinkByIdFromDB('pl-id-1')).resolves.toBeNull();
+      await expect(domainQueries.getPaymentLinkByIdFromDB('')).resolves.toBeNull();
+    });
+  });
+
+  describe('RFQs by number and id', () => {
+    test('getRFQByNumberFromDB returns matching RFQ or null', async () => {
+      const rfq = { id: 'rfq-1', rfqNumber: 'RFQ-001' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: rfq }] }) };
+
+      await expect(domainQueries.getRFQByNumberFromDB('RFQ-001')).resolves.toEqual(rfq);
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.getRFQByNumberFromDB('RFQ-999')).resolves.toBeNull();
+      pool.pool = null;
+      await expect(domainQueries.getRFQByNumberFromDB('RFQ-001')).resolves.toBeNull();
+    });
+
+    test('getRFQByIdFromDB returns matching RFQ or null', async () => {
+      const rfq = { id: 'rfq-1', rfqNumber: 'RFQ-001' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: rfq }] }) };
+
+      await expect(domainQueries.getRFQByIdFromDB('rfq-1')).resolves.toEqual(rfq);
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.getRFQByIdFromDB('missing')).resolves.toBeNull();
+      pool.pool = null;
+      await expect(domainQueries.getRFQByIdFromDB('rfq-1')).resolves.toBeNull();
+    });
+  });
+
+  describe('vendors by buyer and per category', () => {
+    test('getPublicVendorsPerCategoryFromDB returns deduplicated vendors', async () => {
+      const v1 = { id: 'v1', email: 'v1@test.com' };
+      const v2 = { id: 'v2', email: 'v2@test.com' };
+      pool.pool = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ raw: v1 }, { raw: v2 }] })
+          .mockResolvedValueOnce({ rows: [{ raw: v2 }] }),
+      };
+
+      const res = await domainQueries.getPublicVendorsPerCategoryFromDB(['Pumps', 'Valves'], 5);
+      expect(res).toEqual([v1, v2]);
+
+      pool.pool = null;
+      await expect(domainQueries.getPublicVendorsPerCategoryFromDB(['Pumps'])).resolves.toEqual([]);
+      pool.pool = { query: jest.fn() };
+      await expect(domainQueries.getPublicVendorsPerCategoryFromDB([])).resolves.toEqual([]);
+    });
+
+    test('getVendorsByBuyerFromDB resolves candidate emails and returns vendors', async () => {
+      const buyerAcc = { id: 'buyer-acc-1' };
+      const v = { id: 'v-b1', name: 'Buyer Vendor' };
+      pool.pool = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ raw: buyerAcc }] }) // getBuyerAccountByEmailFromDB
+          .mockResolvedValueOnce({ rows: [{ raw: v }] }), // getVendorsByBuyerFromDB
+      };
+
+      const res = await domainQueries.getVendorsByBuyerFromDB(['b-1'], 100, 'buyer@company.com');
+      expect(res).toEqual([v]);
+
+      pool.pool = null;
+      await expect(domainQueries.getVendorsByBuyerFromDB('b-1')).resolves.toEqual([]);
+      pool.pool = { query: jest.fn() };
+      await expect(domainQueries.getVendorsByBuyerFromDB(null, 50, null)).resolves.toEqual([]);
+    });
+
+    test('getVendorsPageFromDB handles search query with length <= 3 and > 3', async () => {
+      const v = { id: 'v-short', name: 'ABC Corp' };
+      pool.pool = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+          .mockResolvedValueOnce({ rows: [{ raw: v }] })
+          .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+          .mockResolvedValueOnce({ rows: [{ raw: v }] }),
+      };
+
+      const res1 = await domainQueries.getVendorsPageFromDB({
+        search: 'abc',
+        email: 'abc@corp.com',
+        category: 'Electronics',
+        publicOnly: true,
+        scopedBuyerId: 'b-1',
+        limit: 10,
+        offset: 0,
+      });
+
+      expect(res1.rows).toEqual([v]);
+      expect(res1.total).toBe(1);
+
+      const res2 = await domainQueries.getVendorsPageFromDB({
+        search: 'long search term',
+        limit: 'invalid',
+        offset: -5,
+      });
+      expect(res2.rows).toEqual([v]);
+    });
+
+    test('bulkInsertVendorsInDB works with D1 binding and fallback', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      const spyBinding = jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({
+        prepare: jest.fn().mockReturnValue({ bind: jest.fn().mockReturnValue({}) }),
+      });
+      const spyBatch = jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([
+        { rows: [{ email: 'v1@test.com' }] },
+      ]);
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ email: 'v1@test.com' }] }) };
+
+      const res = await domainQueries.bulkInsertVendorsInDB([{ id: 'v1', email: 'v1@test.com' }]);
+      expect(res).toEqual(['v1@test.com']);
+      spyBinding.mockRestore();
+      spyBatch.mockRestore();
+
+      // Test with empty array
+      expect(await domainQueries.bulkInsertVendorsInDB([])).toEqual([]);
+    });
+  });
+
+  describe('Chaser Queue', () => {
+    const job = {
+      id: 'job-1',
+      rfqNumber: 'RFQ-001',
+      rfqId: 'rfq-1',
+      vendorId: 'v-1',
+      vendorName: 'Vendor One',
+      vendorPhone: '+919999999999',
+      vendorEmail: 'v1@test.com',
+      vendorContactPerson: 'John',
+      rfqTitle: 'Pumps RFQ',
+      channel: 'email',
+      fireAt: '2026-10-25T10:00:00Z',
+    };
+
+    test('insertChaserJobInDB inserts a job', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 1 }) };
+      const res = await domainQueries.insertChaserJobInDB(job);
+      expect(res).toEqual(job);
+      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO chaser_queue'), expect.any(Array));
+
+      pool.pool = null;
+      await expect(domainQueries.insertChaserJobInDB(job)).resolves.toBeNull();
+    });
+
+    test('markChaserJobFiredInDB updates job status', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 1 }) };
+      await domainQueries.markChaserJobFiredInDB('job-1');
+      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining("status='fired'"), ['job-1']);
+
+      pool.pool = null;
+      await domainQueries.markChaserJobFiredInDB('job-1'); // safe no-op
+    });
+
+    test('markChaserJobFailedInDB updates job status with error', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 1 }) };
+      await domainQueries.markChaserJobFailedInDB('job-1', 'SMTP timeout');
+      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining("status='failed'"), ['job-1', 'SMTP timeout']);
+
+      await domainQueries.markChaserJobFailedInDB('job-1');
+      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining("status='failed'"), ['job-1', 'unknown']);
+
+      pool.pool = null;
+      await domainQueries.markChaserJobFailedInDB('job-1');
+    });
+
+    test('cancelChaserJobsForRFQInDB cancels pending jobs for RFQ', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 2 }) };
+      await domainQueries.cancelChaserJobsForRFQInDB('RFQ-001');
+      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining("status='cancelled'"), ['RFQ-001']);
+
+      pool.pool = null;
+      await domainQueries.cancelChaserJobsForRFQInDB('RFQ-001');
+    });
+
+    test('getPendingChaserJobsFromDB fetches pending jobs', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'job-1' }] }) };
+      const res1 = await domainQueries.getPendingChaserJobsFromDB(20);
+      expect(res1).toEqual([{ id: 'job-1' }]);
+
+      const res2 = await domainQueries.getPendingChaserJobsFromDB(0);
+      expect(res2).toEqual([{ id: 'job-1' }]);
+
+      pool.pool = null;
+      await expect(domainQueries.getPendingChaserJobsFromDB()).resolves.toEqual([]);
+    });
+
+    test('insertChaserJobInDB handles null optional fields', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 1 }) };
+      const minimalJob = {
+        id: 'job-min',
+        rfqNumber: 'RFQ-002',
+        rfqId: 'rfq-2',
+        vendorId: 'v-2',
+        vendorName: 'Vendor Two',
+        channel: 'sms',
+        fireAt: '2026-10-25T11:00:00Z',
+      };
+      const res = await domainQueries.insertChaserJobInDB(minimalJob);
+      expect(res).toEqual(minimalJob);
+    });
+
+    test('claimDueChaserJobsFromDB handles limit edge cases', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await domainQueries.claimDueChaserJobsFromDB('now', 'stale', 'invalid');
+      await domainQueries.claimDueChaserJobsFromDB('now', 'stale', 200);
+      pool.pool = { query: jest.fn().mockResolvedValue({}) };
+      const emptyRes = await domainQueries.claimDueChaserJobsFromDB('now', 'stale', 10);
+      expect(emptyRes).toEqual([]);
+    });
+
+    test('getVendorsPageFromDB with skipCount: true and cached key', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'v1', raw: { id: 'v1' } }] }) };
+      const res = await domainQueries.getVendorsPageFromDB({
+        limit: 10,
+        offset: 0,
+        skipCount: true,
+      });
+      expect(res.total).toBe(0);
+      expect(res.rows).toHaveLength(1);
+    });
+
+    test('bulkInsertVendorsInDB under Postgres driver handles null attributes', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      pool.pool = {
+        query: jest.fn().mockResolvedValue({ rows: [{ email: null }] }),
+      };
+
+      const res = await domainQueries.bulkInsertVendorsInDB([
+        { id: 'v-sparse' },
+      ]);
+      expect(res).toEqual([null]);
+      d1Bridge.getD1Binding.mockRestore();
+      d1Bridge.getD1HttpClient.mockRestore();
+    });
+
+    test('countVendorsCreatedBetween handles Date instances, invalid dates, and empty/error query', async () => {
+      pool.pool = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ count: '42' }] })
+          .mockResolvedValueOnce({ rows: [] })
+          .mockRejectedValueOnce(new Error('DB error')),
+      };
+
+      const d1 = new Date('2026-01-01');
+      const d2 = new Date('2026-02-01');
+      expect(await domainQueries.countVendorsCreatedBetween(d1, d2)).toBe(42);
+
+      const d3 = new Date('2026-03-01');
+      const d4 = new Date('2026-04-01');
+      expect(await domainQueries.countVendorsCreatedBetween(d3, d4)).toBe(0);
+
+      const d5 = new Date('2026-05-01');
+      const d6 = new Date('2026-06-01');
+      expect(await domainQueries.countVendorsCreatedBetween(d5, d6)).toBe(0);
+
+      expect(await domainQueries.countVendorsCreatedBetween('invalid-date', d1)).toBe(0);
+    });
+
+    test('covers default parameters in createBulkImportSessionInDB, getRFQsByBuyerFromDB, and getPublicVendorsMatchingCategories', async () => {
+      pool.pool = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ id: 'sess-1' }] })
+          .mockResolvedValueOnce({ rows: [{ raw: { id: 'rfq-b' } }] })
+          .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-capped' } }] })
+          .mockResolvedValueOnce({ rows: [{ raw: { id: 'rfq-sparse' } }] }),
+      };
+
+      const sess = await domainQueries.createBulkImportSessionInDB('sess-1', 'admin@example.com');
+      expect(sess).toEqual({ id: 'sess-1' });
+
+      const rfqs = await domainQueries.getRFQsByBuyerFromDB('buyer-1');
+      expect(rfqs).toHaveLength(1);
+
+      const capped = await domainQueries.getPublicVendorsMatchingCategories(['Steels'], 9999);
+      expect(capped).toHaveLength(1);
+
+      const sparseRfq = await domainQueries.upsertRFQInDB({ id: 'rfq-sparse' });
+      expect(sparseRfq).toEqual({ id: 'rfq-sparse' });
+    });
+
+    test('claimDueChaserJobsFromDB atomically claims due jobs', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'job-1' }] }) };
+      const res = await domainQueries.claimDueChaserJobsFromDB('2026-10-25T10:00:00Z', '2026-10-25T09:45:00Z', 10);
+      expect(res).toEqual([{ id: 'job-1' }]);
+
+      pool.pool = null;
+      await expect(domainQueries.claimDueChaserJobsFromDB('now', 'stale')).resolves.toEqual([]);
+    });
+  });
+
+  describe('RFQ Unlocks & Vendor Credit Transactions', () => {
+    test('unlockRFQInDB inserts an unlock record', async () => {
+      const unlockRow = { id: 'u-1', vendor_id: 'v-1', rfq_id: 'rfq-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [unlockRow] }) };
+
+      const res = await domainQueries.unlockRFQInDB({ id: 'u-1', vendorId: 'v-1', rfqId: 'rfq-1' });
+      expect(res).toEqual(unlockRow);
+
+      pool.pool = null;
+      await expect(domainQueries.unlockRFQInDB({ id: 'u-1', vendorId: 'v-1', rfqId: 'rfq-1' })).resolves.toBeNull();
+    });
+
+    test('getRFQUnlockFromDB looks up unlock record', async () => {
+      const unlockRow = { id: 'u-1', vendor_id: 'v-1', rfq_id: 'rfq-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [unlockRow] }) };
+
+      const res = await domainQueries.getRFQUnlockFromDB('v-1', 'rfq-1');
+      expect(res).toEqual(unlockRow);
+
+      pool.pool = null;
+      await expect(domainQueries.getRFQUnlockFromDB('v-1', 'rfq-1')).resolves.toBeNull();
+    });
+
+    test('getVendorUnlocksFromDB lists unlocks for a vendor', async () => {
+      const unlockRows = [{ id: 'u-1' }, { id: 'u-2' }];
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: unlockRows }) };
+
+      const res1 = await domainQueries.getVendorUnlocksFromDB('v-1', 10);
+      expect(res1).toEqual(unlockRows);
+
+      const res2 = await domainQueries.getVendorUnlocksFromDB('v-1', 0);
+      expect(res2).toEqual(unlockRows);
+
+      pool.pool = null;
+      await expect(domainQueries.getVendorUnlocksFromDB('v-1')).resolves.toEqual([]);
+      await expect(domainQueries.getVendorUnlocksFromDB('')).resolves.toEqual([]);
+    });
+
+    test('handles empty results in upsertRFQInDB, unlockRFQInDB, getRFQUnlock, getVendorUnlocks, and credit transactions', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      expect(await domainQueries.upsertRFQInDB({ id: 'rfq-none' })).toBeNull();
+
+      pool.pool = { query: jest.fn().mockResolvedValue(null) };
+      expect(await domainQueries.unlockRFQInDB({ id: 'u-none' })).toBeNull();
+      expect(await domainQueries.getRFQUnlockFromDB('v-none', 'rfq-none')).toBeNull();
+      expect(await domainQueries.getVendorUnlocksFromDB('v-none')).toEqual([]);
+      expect(await domainQueries.recordCreditTransactionInDB({ id: 'tx-none' })).toBeNull();
+      expect(await domainQueries.getVendorCreditTransactionsFromDB('v-none')).toEqual([]);
+    });
+
+    test('recordCreditTransactionInDB records a transaction', async () => {
+      const txRow = { id: 'tx-1', vendor_id: 'v-1', amount: 10 };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [txRow] }) };
+
+      const res = await domainQueries.recordCreditTransactionInDB({
+        id: 'tx-1',
+        vendorId: 'v-1',
+        rfqId: 'rfq-1',
+        transactionType: 'CREDIT_PURCHASE',
+        amount: 10,
+        balanceAfter: 20,
+        idempotencyKey: 'idemp-1',
+      });
+      expect(res).toEqual(txRow);
+
+      pool.pool = null;
+      await expect(domainQueries.recordCreditTransactionInDB({ id: 'tx-1' })).resolves.toBeNull();
+    });
+
+    test('getVendorCreditTransactionsFromDB lists transactions for a vendor', async () => {
+      const txRows = [{ id: 'tx-1' }];
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: txRows }) };
+
+      const res1 = await domainQueries.getVendorCreditTransactionsFromDB('v-1', 10);
+      expect(res1).toEqual(txRows);
+
+      const res2 = await domainQueries.getVendorCreditTransactionsFromDB('v-1', 0);
+      expect(res2).toEqual(txRows);
+
+      pool.pool = null;
+      await expect(domainQueries.getVendorCreditTransactionsFromDB('v-1')).resolves.toEqual([]);
+      await expect(domainQueries.getVendorCreditTransactionsFromDB('')).resolves.toEqual([]);
     });
   });
 });

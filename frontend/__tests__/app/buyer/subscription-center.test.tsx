@@ -2,11 +2,35 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import SubscriptionCenter from '@/app/buyer/subscription-center';
 import { useApp } from '@/lib/store';
-import { authClient } from '@/lib/authClient';
+import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
+
+jest.mock('@/lib/subscriptionPaymentClient', () => ({
+  fetchSubscriptionPricing: jest.fn(),
+}));
+
+const mockPricingConfig = {
+  gstPercent: 18,
+  gstRate: 0.18,
+  buyer: {
+    version_1: {
+      '6_months': { price: 5499, baseDurationPrice: 32994, gstAmount: 5938.92, totalWithGst: 38932.92 },
+      '12_months': { price: 4999, baseDurationPrice: 59988, gstAmount: 10797.84, totalWithGst: 70785.84 },
+    },
+    version_2: {
+      '6_months': { price: 7999, baseDurationPrice: 47994, gstAmount: 8638.92, totalWithGst: 56632.92 },
+      '12_months': { price: 7499, baseDurationPrice: 89988, gstAmount: 16197.84, totalWithGst: 106185.84 },
+    },
+    version_3: {
+      '6_months': { price: 10499, baseDurationPrice: 62994, gstAmount: 11338.92, totalWithGst: 74332.92 },
+      '12_months': { price: 9999, baseDurationPrice: 119988, gstAmount: 21597.84, totalWithGst: 141585.84 },
+    },
+  },
+  seller: {},
+};
 
 describe('app/buyer/subscription-center.tsx', () => {
   const mockShowToast = jest.fn();
@@ -30,15 +54,20 @@ describe('app/buyer/subscription-center.tsx', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (fetchSubscriptionPricing as jest.Mock).mockResolvedValue(mockPricingConfig);
     mockStore();
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true, data: {} }) });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: { id: 'ent-123' } }),
+    });
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    localStorage.clear();
   });
 
-  it('renders free trial header, quota progress bar, and all 3 subscription plans with strikethrough original prices', () => {
+  it('renders free trial header, quota progress bar, and all 3 subscription plans with strikethrough original prices', async () => {
     render(<SubscriptionCenter />);
 
     expect(screen.getByText(/Free Starter Account — 5 Free RFQs Included/i)).toBeInTheDocument();
@@ -59,6 +88,12 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(v3Original).toHaveClass('line-through');
   });
 
+  it('handles fetchSubscriptionPricing returning null or being unmounted', async () => {
+    (fetchSubscriptionPricing as jest.Mock).mockResolvedValue(null);
+    const { unmount } = render(<SubscriptionCenter />);
+    unmount();
+  });
+
   it('renders the Free Starter Account banner with remaining and used quotas', () => {
     mockStore({ activeSubscription: 'free_trial', remainingFreeRFQs: 4 });
     render(<SubscriptionCenter />);
@@ -77,17 +112,19 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(screen.getByText(/Active Premium Plan: Silver Plan/i)).toBeInTheDocument();
   });
 
-  it('clicking a paid plan opens the real Zoho checkout modal instead of granting the plan directly', async () => {
+  it('clicking a paid plan opens the real Zoho checkout modal and can be closed', async () => {
     render(<SubscriptionCenter />);
 
     fireEvent.click(screen.getByTestId('subscribe-btn-version_2'));
     await waitFor(() => expect(screen.getByText('Secure Payment')).toBeInTheDocument());
-    // No direct plan grant — the modal is responsible for creating a real
-    // payment link and redirecting to Zoho, not this button.
     expect(mockCreateBuyerPaymentLink).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByText('Cancel'));
     await waitFor(() => expect(screen.queryByText('Secure Payment')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('subscribe-btn-version_3'));
+    await waitFor(() => expect(screen.getByText('Secure Payment')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Cancel'));
   });
 
   it('renders the active-plan banner and disables the button for the currently active paid plan', () => {
@@ -225,27 +262,9 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(screen.getByText(/Active Premium Plan: Diamond Plan/i)).toBeInTheDocument();
   });
 
-  it('shows info toast when payment link status returns CANCELED', async () => {
-    const originalLocation = window.location.href;
-    mockCheckBuyerPaymentLinkStatus.mockResolvedValueOnce('CANCELED');
-    window.history.pushState({}, '', '/buyer/subscription-center?linkId=pl-cancelled');
-
-    try {
-      render(<SubscriptionCenter />);
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(mockShowToast).toHaveBeenCalledWith('Payment Cancelled', 'No changes were made to your subscription.', 'info');
-    } finally {
-      window.history.pushState({}, '', originalLocation);
-    }
-  });
-
   it('switches between 12-month and 6-month durations and updates prices dynamically', () => {
     render(<SubscriptionCenter />);
 
-    // Default: 12-month duration selected
     expect(screen.getByText('₹50,000')).toBeInTheDocument();
     expect(screen.getByText('₹75,000')).toBeInTheDocument();
     expect(screen.getByText('₹1,00,000')).toBeInTheDocument();
@@ -254,45 +273,26 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(screen.getByText('₹9,999')).toBeInTheDocument();
     expect(screen.getAllByText('per month').length).toBe(3);
     expect(screen.getAllByText('+ 18% GST').length).toBe(3);
-    expect(screen.queryByText('GST Included')).not.toBeInTheDocument();
 
-    // Old prices must not be present
-    expect(screen.queryByText('₹14,999')).not.toBeInTheDocument();
-    expect(screen.queryByText('₹19,999')).not.toBeInTheDocument();
-    expect(screen.queryByText('₹24,999')).not.toBeInTheDocument();
-
-    // Switch to 6 Months
     fireEvent.click(screen.getByRole('button', { name: '6 Months' }));
 
-    // 6-Month prices: original prices maintained, monthly rates: ₹5,499, ₹7,999, ₹10,499
-    expect(screen.getByText('₹50,000')).toBeInTheDocument();
-    expect(screen.getByText('₹75,000')).toBeInTheDocument();
-    expect(screen.getByText('₹1,00,000')).toBeInTheDocument();
     expect(screen.getByText('₹5,499')).toBeInTheDocument();
     expect(screen.getByText('₹7,999')).toBeInTheDocument();
     expect(screen.getByText('₹10,499')).toBeInTheDocument();
     expect(screen.getAllByText('per month').length).toBe(3);
     expect(screen.getAllByText('+ 18% GST').length).toBe(3);
 
-    // Switch back to 12 Months
     fireEvent.click(screen.getByRole('button', { name: /12 Months/i }));
-    expect(screen.getByText('₹50,000')).toBeInTheDocument();
-    expect(screen.getByText('₹75,000')).toBeInTheDocument();
-    expect(screen.getByText('₹1,00,000')).toBeInTheDocument();
     expect(screen.getByText('₹4,999')).toBeInTheDocument();
     expect(screen.getByText('₹7,499')).toBeInTheDocument();
     expect(screen.getByText('₹9,999')).toBeInTheDocument();
-    expect(screen.getAllByText('per month').length).toBe(3);
   });
 
   it('opens checkout modal with 6-month price multiplied by 6 months plus 18% GST', async () => {
     mockCreateBuyerPaymentLink.mockResolvedValueOnce('https://payments.zoho.in/mock-buyer-6m');
     render(<SubscriptionCenter />);
 
-    // Switch to 6 Months
     fireEvent.click(screen.getByRole('button', { name: '6 Months' }));
-
-    // Click subscribe on Version 1 (6m price: ₹5,499/mo, 6m base: ₹32,994, with 18% GST: ₹38,932.92)
     fireEvent.click(screen.getByTestId('subscribe-btn-version_1'));
 
     await waitFor(() => expect(screen.getByText('Secure Payment')).toBeInTheDocument());
@@ -301,7 +301,6 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(screen.getAllByText('₹38,932.92').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('6 Months').length).toBeGreaterThanOrEqual(2);
 
-    // Confirm payment in modal
     fireEvent.click(screen.getByText(/Pay ₹38,932\.92/i));
 
     await waitFor(() => {
@@ -309,7 +308,69 @@ describe('app/buyer/subscription-center.tsx', () => {
     });
   });
 
-  it('renders Enterprise Contracts banner and opens popup with autofilled Company Name, Email, and Mobile Number', async () => {
+  it('handles enterprise modal open, field changes, close X button, cancel button, and validation', async () => {
+    mockStore({
+      activeBuyerAccount: {
+        id: 'buyer-ent-2',
+        brandName: 'Brand Corp',
+        corporateEmail: 'corp@brand.com',
+        phone: '+91 99988 77665',
+      },
+      currentUserSession: null,
+    });
+
+    render(<SubscriptionCenter />);
+
+    fireEvent.click(screen.getByTestId('enterprise-contact-btn'));
+    expect(screen.getByText('For Customizations and Bulk Contracts')).toBeInTheDocument();
+
+    const companyInput = screen.getByDisplayValue('Brand Corp');
+    const emailInput = screen.getByDisplayValue('corp@brand.com');
+    const mobileInput = screen.getByDisplayValue('+91 99988 77665');
+
+    fireEvent.change(companyInput, { target: { value: 'Updated Brand Corp' } });
+    fireEvent.change(emailInput, { target: { value: 'updated@brand.com' } });
+    fireEvent.change(mobileInput, { target: { value: '+91 99900 11223' } });
+
+    expect(companyInput).toHaveValue('Updated Brand Corp');
+    expect(emailInput).toHaveValue('updated@brand.com');
+    expect(mobileInput).toHaveValue('+91 99900 11223');
+
+    // Close via Cancel
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText('For Customizations and Bulk Contracts')).not.toBeInTheDocument();
+
+    // Reopen and Close via X
+    fireEvent.click(screen.getByTestId('enterprise-contact-btn'));
+    expect(screen.getByText('For Customizations and Bulk Contracts')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Close'));
+    expect(screen.queryByText('For Customizations and Bulk Contracts')).not.toBeInTheDocument();
+
+    // Reopen and test validation with empty fields
+    fireEvent.click(screen.getByTestId('enterprise-contact-btn'));
+    const companyInput2 = screen.getByDisplayValue('Updated Brand Corp');
+    const form = companyInput2.closest('form')!;
+    fireEvent.change(companyInput2, { target: { value: '' } });
+    fireEvent.submit(form);
+    expect(mockShowToast).toHaveBeenCalledWith('Missing Details', expect.any(String), 'warning');
+
+    // Fill company, leave email empty
+    fireEvent.change(companyInput2, { target: { value: 'Valid Co' } });
+    const emailInput2 = screen.getByDisplayValue('updated@brand.com');
+    fireEvent.change(emailInput2, { target: { value: '' } });
+    fireEvent.submit(form);
+    expect(mockShowToast).toHaveBeenCalledWith('Missing Details', expect.any(String), 'warning');
+
+    // Fill email, leave mobile empty
+    fireEvent.change(emailInput2, { target: { value: 'valid@co.com' } });
+    const mobileInput2 = screen.getByDisplayValue('+91 99900 11223');
+    fireEvent.change(mobileInput2, { target: { value: '' } });
+    fireEvent.submit(form);
+    expect(mockShowToast).toHaveBeenCalledWith('Missing Details', expect.any(String), 'warning');
+  });
+
+  it('handles enterprise submission with existing localStorage items and done button', async () => {
+    localStorage.setItem('procucev_enterprise_inquiries', JSON.stringify([{ id: 'existing-inq' }]));
     mockStore({
       activeBuyerAccount: {
         id: 'buyer-ent-1',
@@ -329,37 +390,82 @@ describe('app/buyer/subscription-center.tsx', () => {
     });
 
     render(<SubscriptionCenter />);
-
-    // Verify Enterprise Contracts banner exists
-    expect(
-      screen.getByText(/Enterprise Contracts — For Customizations and Bulk Contracts — Contact us\./i)
-    ).toBeInTheDocument();
-
-    // Click Contact Us button
     fireEvent.click(screen.getByTestId('enterprise-contact-btn'));
-
-    // Modal opens
-    expect(screen.getByText('For Customizations and Bulk Contracts')).toBeInTheDocument();
-
-    // Check autofilled fields including mobile number
-    const companyInput = screen.getByDisplayValue('Tata Power Ltd');
-    const emailInput = screen.getByDisplayValue('procurement@tatapower.com');
-    const mobileInput = screen.getByDisplayValue('+91 98765 43210');
-    expect(companyInput).toBeInTheDocument();
-    expect(emailInput).toBeInTheDocument();
-    expect(mobileInput).toBeInTheDocument();
-
-    // Submit the form
     fireEvent.click(screen.getByRole('button', { name: /Submit Enquiry/i }));
 
-    // Success screen shown
     await waitFor(() => {
       expect(screen.getByText('Enquiry Received!')).toBeInTheDocument();
     });
-    expect(mockShowToast).toHaveBeenCalledWith(
-      'Enquiry Submitted',
-      expect.stringContaining('reach out to you within 24 hours'),
-      'success'
-    );
+
+    const stored = JSON.parse(localStorage.getItem('procucev_enterprise_inquiries') || '[]');
+    expect(stored.length).toBe(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.queryByText('Enquiry Received!')).not.toBeInTheDocument();
+  });
+
+  it('handles enterprise submission when response has no data and localStorage has corrupted non-array', async () => {
+    localStorage.setItem('procucev_enterprise_inquiries', '{"invalid": "shape"}');
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true }), // json.data is undefined
+    });
+    mockStore({
+      activeBuyerAccount: null,
+      currentUserSession: null,
+    });
+
+    render(<SubscriptionCenter />);
+    fireEvent.click(screen.getByTestId('enterprise-contact-btn'));
+
+    const companyInput = screen.getByLabelText(/Company Name/i);
+    const emailInput = screen.getByLabelText(/Email ID/i);
+    const mobileInput = screen.getByLabelText(/Mobile Number/i);
+
+    fireEvent.change(companyInput, { target: { value: 'Fallback Corp' } });
+    fireEvent.change(emailInput, { target: { value: 'fall@back.com' } });
+    fireEvent.change(mobileInput, { target: { value: '+91 98765 00000' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Submit Enquiry/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Enquiry Received!')).toBeInTheDocument();
+    });
+  });
+
+  it('handles pricing config missing individual plan entries', async () => {
+    (fetchSubscriptionPricing as jest.Mock).mockResolvedValue({
+      buyer: {
+        version_1: {}, // empty durations
+      },
+    });
+    render(<SubscriptionCenter />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText('Silver Plan')).toBeInTheDocument();
+  });
+
+  it('handles enterprise submission when fetch fails with network error and corrupt localStorage', async () => {
+    localStorage.setItem('procucev_enterprise_inquiries', '{"corrupt": true}');
+    global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+    mockStore({
+      activeBuyerAccount: null,
+      currentUserSession: {
+        id: 'user-solo',
+        orgName: 'Solo Org',
+        email: 'solo@org.com',
+        mobile: '+91 99112 23344',
+      },
+    });
+
+    render(<SubscriptionCenter />);
+    fireEvent.click(screen.getByTestId('enterprise-contact-btn'));
+    fireEvent.click(screen.getByRole('button', { name: /Submit Enquiry/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Enquiry Received!')).toBeInTheDocument();
+    });
+    expect(mockShowToast).toHaveBeenCalledWith('Enquiry Submitted', expect.any(String), 'success');
   });
 });

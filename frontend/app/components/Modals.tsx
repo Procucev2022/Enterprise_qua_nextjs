@@ -83,7 +83,7 @@ export function PurchaseOrderModal({
   unitPrice,
   leadTime,
   deliveryDate,
-  lineItems,
+  lineItems = [],
   rfq,
   quote,
   buyerAccount,

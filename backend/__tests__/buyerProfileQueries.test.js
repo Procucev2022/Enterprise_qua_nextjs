@@ -877,6 +877,154 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       // Should NOT have run the fallback query for organization since exact user matched
       expect(calls.some((c) => c.sql.includes('lower(o.organization_name)'))).toBe(false);
     });
+
+    test('handles loadCategories failure gracefully when user is found', async () => {
+      jest.spyOn(dbPool, 'rows').mockImplementation((sql) => {
+        if (sql.includes('from "user" u')) {
+          return Promise.resolve([{
+            org_uuid: 'org-fail-cat',
+            user_uuid: 'user-fail-cat',
+            organization_name: 'Beta Ltd',
+            user_email: 'beta@example.com',
+          }]);
+        }
+        return Promise.reject(new Error('Category fetch failed'));
+      });
+
+      const res = await buyerProfileQueries.findProfileByIdentifier({
+        userId: 'user-fail-cat',
+      });
+
+      expect(res.found).toBe(true);
+      expect(res.profile.companyName).toBe('Beta Ltd');
+      expect(res.profile.categories).toEqual([]);
+    });
+
+    test('handles db error in user conditions query', async () => {
+      jest.spyOn(dbPool, 'rows').mockRejectedValueOnce(new Error('DB connection failed'));
+
+      const res = await buyerProfileQueries.findProfileByIdentifier({
+        email: 'error@example.com',
+      });
+
+      expect(res).toEqual({
+        found: false,
+        reason: 'DB_ERROR',
+        error: 'DB connection failed',
+      });
+    });
+
+    test('falls back to organization-level identifiers when user identity is omitted', async () => {
+      jest.spyOn(dbPool, 'rows').mockImplementation((sql) => {
+        if (sql.includes('o.uuid = $1')) {
+          return Promise.resolve([{
+            org_uuid: 'org-fallback-1',
+            user_uuid: 'user-fallback-1',
+            organization_name: 'Gamma Corp',
+            user_email: 'admin@gamma.com',
+          }]);
+        }
+        return Promise.resolve([{ division: 'Services', category: 'Consulting' }]);
+      });
+
+      const res = await buyerProfileQueries.findProfileByIdentifier({
+        organizationId: 'org-fallback-1',
+        organizationName: 'Gamma Corp',
+      });
+
+      expect(res.found).toBe(true);
+      expect(res.profile.companyName).toBe('Gamma Corp');
+      expect(res.profile.categories).toEqual([{ major: 'Services', minor: 'Consulting' }]);
+    });
+
+    test('falls back to organization-level identifiers and handles category load error', async () => {
+      jest.spyOn(dbPool, 'rows').mockImplementation((sql) => {
+        if (sql.includes('o.uuid = $1')) {
+          return Promise.resolve([{
+            org_uuid: 'org-fallback-2',
+            user_uuid: 'user-fallback-2',
+            organization_name: 'Delta Corp',
+            user_email: 'admin@delta.com',
+          }]);
+        }
+        return Promise.reject(new Error('Category load error'));
+      });
+
+      const res = await buyerProfileQueries.findProfileByIdentifier({
+        organizationId: 'org-fallback-2',
+      });
+
+      expect(res.found).toBe(true);
+      expect(res.profile.categories).toEqual([]);
+    });
+
+    test('handles db error in organization fallback query', async () => {
+      jest.spyOn(dbPool, 'rows').mockRejectedValueOnce(new Error('Org DB query failed'));
+
+      const res = await buyerProfileQueries.findProfileByIdentifier({
+        organizationName: 'Failing Org',
+      });
+
+      expect(res).toEqual({
+        found: false,
+        reason: 'DB_ERROR',
+        error: 'Org DB query failed',
+      });
+    });
+  });
+
+  // ── findCategoryTaxonomy ──────────────────────────────────────────────────
+  describe('findCategoryTaxonomy', () => {
+    test('builds taxonomy with legacy category mappings and defaults', async () => {
+      const mockRows = [
+        { division: ' ', category: ' ' }, // Should be skipped
+        { division: 'IT & Telecom', category: 'Cloud Infrastructure' },
+        { division: 'IT & Telecom', category: 'cloud infrastructure' }, // Duplicate case should be skipped
+        { division: 'new category-product', category: 'Custom Widget' },
+        { division: 'new category product', category: 'Custom Gizmo' },
+        { division: 'others - new product', category: 'Custom Hardware' },
+        { division: 'new category', category: 'Special Equipment' },
+        { division: 'new category-service', category: 'Custom Advisory' },
+        { division: 'new category service', category: 'Custom Repair' },
+        { division: 'others - new service', category: 'Custom Maintenance' },
+      ];
+
+      jest.spyOn(dbPool, 'rows').mockResolvedValueOnce(mockRows);
+
+      const taxonomy = await buyerProfileQueries.findCategoryTaxonomy();
+      expect(Array.isArray(taxonomy)).toBe(true);
+
+      const itTelecom = taxonomy.find((t) => t.majorCategory === 'IT & Telecom');
+      expect(itTelecom).toBeDefined();
+      expect(itTelecom.minorCategories).toEqual(['Cloud Infrastructure']);
+
+      const newProduct = taxonomy.find((t) => t.majorCategory === 'Others – New Product');
+      expect(newProduct).toBeDefined();
+      expect(newProduct.minorCategories).toContain('Custom Widget');
+      expect(newProduct.minorCategories).toContain('Custom Gizmo');
+      expect(newProduct.minorCategories).toContain('Custom Hardware');
+      expect(newProduct.minorCategories).toContain('Special Equipment');
+
+      const newService = taxonomy.find((t) => t.majorCategory === 'Others – New Service');
+      expect(newService).toBeDefined();
+      expect(newService.minorCategories).toContain('Custom Advisory');
+      expect(newService.minorCategories).toContain('Custom Repair');
+      expect(newService.minorCategories).toContain('Custom Maintenance');
+    });
+
+    test('automatically seeds default Others – New Service when only Others – New Product exists', async () => {
+      const mockRows = [
+        { division: 'Others – New Product', category: 'Innovative Drone' },
+      ];
+
+      jest.spyOn(dbPool, 'rows').mockResolvedValueOnce(mockRows);
+
+      const taxonomy = await buyerProfileQueries.findCategoryTaxonomy();
+      const newService = taxonomy.find((t) => t.majorCategory === 'Others – New Service');
+      expect(newService).toBeDefined();
+      expect(newService.minorCategories).toContain('Consulting');
+      expect(newService.minorCategories).toContain('Maintenance & AMC');
+    });
   });
 });
 

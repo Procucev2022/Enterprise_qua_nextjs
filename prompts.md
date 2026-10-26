@@ -3650,6 +3650,172 @@ continue and after this feature implemented  create a new branch and raise the p
 
 ---
 
+### 2026-10-23T17:40:37+05:30
+
+```text
+In buyer side, when we are uploading vendors, it is showing in website for sometime, but after some time, Vendor uploaded data is getting missed, Can you please tell what could be the issue?
+```
+
+---
+
+### 2026-10-23T18:15:59+05:30
+
+```text
+1. We don't use postgres, everything should go D1 database, remove everything related to postgres, & make sure it is going to D1. 
+2. Please implement all remaining fixes.
+```
+
+---
+
+### 2026-10-23T19:00:01+05:30
+
+```text
+Please remove any non needed file, so that i can commit
+```
+
+---
+
+### 2026-10-23T20:01:12+05:30
+
+```text
+Remove all harcoded env from code, & create env file for prod & dev if any credentials exists in code.
+```
+
+---
+
+### 2026-10-24T05:26:12+05:30
+
+```text
+resume
+```
+
+---
+
+### 2026-10-24T05:39:27+05:30
+
+```text
+Too much DB utilization, 
+
+Database Optimization & GraphQL Integration: Configure assistant instructions to audit database queries for efficiency and integrate GraphQL to streamline data fetching across the application. 
+
+Additionally, implement optimizations to minimize database compute hours, reduce resource usage, and enhance overall infrastructure efficiency.
+```
+
+---
+
+### 2026-10-24T06:16:40+05:30
+
+```text
+ok, resume
+```
+
+---
+
+### 2026-10-24T06:21:24+05:30
+
+```text
+is there any place where too much unnecessary data is getting fetched & can be avoided
+```
+
+---
+
+### 2026-10-24T06:27:13+05:30
+
+```text
+Please do all these optimizations
+```
+
+---
+
+### 2026-10-24T06:43:36+05:30
+
+```text
+is there any other place left where too much unnecessary data is getting fetched & can be avoided & optimized
+```
+
+---
+
+### 2026-10-24T06:50:39+05:30
+
+```text
+Please do all these optimizations
+```
+
+---
+
+### 2026-10-24T07:04:31+05:30
+
+```text
+ok
+```
+
+---
+
+### 2026-10-24T08:15:09+05:30
+
+```text
+is there any other place left where too much unnecessary data is getting fetched & can be avoided & optimized
+```
+
+---
+
+### 2026-10-24T08:18:23+05:30
+
+```text
+Please do all these optimizations
+```
+
+---
+
+### 2026-10-24T08:53:33+05:30
+
+```text
+ok
+```
+
+---
+
+### 2026-10-24T08:57:38+05:30
+
+```text
+is there any other place left where too much unnecessary data is getting fetched & can be avoided & optimized
+```
+
+---
+
+### 2026-10-24T09:02:24+05:30
+
+```text
+Please do all these optimizations
+```
+
+---
+
+### 2026-10-24T09:09:37+05:30
+
+```text
+is there any other place left where too much unnecessary data is getting fetched & can be avoided & optimized. Please do all these optimizations
+```
+
+---
+
+### 2026-10-24T09:10:06+05:30
+
+```text
+is there any other place left where too much unnecessary data is getting fetched & can be avoided & optimized. Please do all these optimizations
+```
+
+
+
+
+
+
+
+
+
+
+
+
 ### 2026-10-23T16:16:03+05:30
 
 ```text
@@ -4348,3 +4514,52 @@ continue
 
 
 
+---
+### 2026-10-25T17:15:06+05:30
+```text
+unit test coverage not upto mark. please add remaining unit tests
+
+
+---
+### 2026-10-25T18:00:00+05:30
+```text
+Fix failing unit test only
+```
+
+---
+### 2026-10-25T19:00:00+05:30
+```text
+temporarily allow lower branch coverage in these few files to make the commit in these files, which is future would be improved.
+```
+
+---
+### 2026-10-25T19:14:14+05:30
+```text
+resume
+```
+
+---
+### 2026-10-25T19:29:12+05:30
+```text
+Do not lower the temporary benchmark than existing, the code coverage should not fall than existing
+```
+
+---
+### 2026-10-26T08:38:24+05:30
+```text
+# Context from my IDE setup:
+
+## Active file: .github/workflows/deploy-dev.yml
+
+## Open tabs:
+- deploy-dev.yml: .github/workflows/deploy-dev.yml
+- vendorScreenRemainingBranches.test.tsx: frontend/__tests__/app/vendor/vendorScreenRemainingBranches.test.tsx
+- types.test.ts: frontend/__tests__/lib/types.test.ts
+- verify-coverage.cjs: frontend/scripts/verify-coverage.cjs
+- coverage-policy.cjs: scripts/coverage-policy.cjs
+
+## My request:
+a lot of github action PR check are failing, can you please check & fix.&#x20;
+
+[https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/333](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/333)
+```

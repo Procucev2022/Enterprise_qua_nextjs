@@ -85,15 +85,15 @@ const SMS_GATEWAY_CONFIG = {
   },
 
   get USER() {
-    return getEnv('SMS_GATEWAY_USER', 'Procucev_OTP');
+    return getEnv('SMS_GATEWAY_USER', '');
   },
 
   get RFQ_USER() {
-    return getEnv('SMS_GATEWAY_RFQ_USER', 'ProcucevWapp1');
+    return getEnv('SMS_GATEWAY_RFQ_USER', '');
   },
 
   get PASS() {
-    return getEnv('SMS_GATEWAY_PASS', 'TzlzyMcFEZRF');
+    return getEnv('SMS_GATEWAY_PASS', '');
   },
 
   get RFQ_PASS() {

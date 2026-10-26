@@ -10,6 +10,11 @@ import type {
   RFQItem,
 } from '@/lib/types';
 
+const mockPush = jest.fn();
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ push: mockPush, replace: jest.fn(), back: jest.fn() }),
+}));
+
 jest.mock('@/lib/rfqClient', () => ({
   createRFQ: jest.fn(),
   uploadRFQAttachment: jest.fn(),
@@ -60,6 +65,7 @@ const rfqClient = require('@/lib/rfqClient');
 
 const MODAL = UI_STRINGS.manualRfqModal;
 const MANUAL = UI_STRINGS.manualRfq;
+const EXTRACTION = UI_STRINGS.rfqExtraction;
 
 const onClose = jest.fn();
 const onCreated = jest.fn();
@@ -428,6 +434,8 @@ describe('ManualRFQModal: saving', () => {
       expect(screen.getByRole('button', { name: MODAL.savingAction })).toBeDisabled()
     );
     expect(screen.getByRole('button', { name: MODAL.cancelAction })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: MODAL.closeAria }));
+    expect(onClose).not.toHaveBeenCalled();
 
     release({ success: true, rfq: savedRFQ() });
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
@@ -1194,5 +1202,1112 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
     });
   });
+
+  describe('ManualRFQModal: branch coverage booster', () => {
+    it('covers confirmation screen navigation and closing actions', async () => {
+      rfqClient.createRFQ.mockResolvedValueOnce({
+        success: true,
+        rfq: savedRFQ({ sourcingMode: 'mode_0', category: '' }),
+      });
+      renderModal();
+      fillRow();
+      fillDelivery();
+      const mode0Radio = screen.getByLabelText(SOURCING_MODES[0].shortLabel);
+      fireEvent.click(mode0Radio);
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(screen.getByText('RFQ Created & Forwarded to Category Manager')).toBeInTheDocument();
+      });
+
+      // Click View Quotation Matrix
+      const matrixBtn = screen.getByRole('button', { name: /View Quotation Matrix/i });
+      fireEvent.click(matrixBtn);
+      expect(mockPush).toHaveBeenCalledWith(expect.stringContaining('/buyer/quote-matrix?rfq='));
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it('covers Done / Close button and Create Another RFQ on confirmation screen', async () => {
+      rfqClient.createRFQ.mockResolvedValueOnce({
+        success: true,
+        rfq: savedRFQ({ sourcingMode: 'mode_0', category: '' }),
+      });
+      renderModal();
+      fillRow();
+      fillDelivery();
+      const mode0Radio = screen.getByLabelText(SOURCING_MODES[0].shortLabel);
+      fireEvent.click(mode0Radio);
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(screen.getByText('RFQ Created & Forwarded to Category Manager')).toBeInTheDocument();
+      });
+
+      // Test "Create Another RFQ"
+      const anotherBtn = screen.getByRole('button', { name: /Create Another RFQ/i });
+      fireEvent.click(anotherBtn);
+      expect(screen.queryByText('RFQ Created & Forwarded to Category Manager')).not.toBeInTheDocument();
+
+      // Submit again and click "Done / Close"
+      rfqClient.createRFQ.mockResolvedValueOnce({
+        success: true,
+        rfq: savedRFQ({ sourcingMode: 'mode_0', category: '' }),
+      });
+      fillRow();
+      fillDelivery();
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+      await waitFor(() => {
+        expect(screen.getByText('RFQ Created & Forwarded to Category Manager')).toBeInTheDocument();
+      });
+      const doneBtn = screen.getByRole('button', { name: /Done \/ Close/i });
+      fireEvent.click(doneBtn);
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it('covers Auto-Categorize All when all items already have categories', async () => {
+      const mockShowToast = jest.fn();
+      useApp.mockReturnValue({
+        showToast: mockShowToast,
+        buyerVendors: [],
+      });
+      renderModal();
+      fillRow();
+      const autoCatBtn = screen.getByRole('button', { name: /Auto-Categorize All/i });
+      fireEvent.click(autoCatBtn);
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        EXTRACTION.classifySuccessTitle,
+        'All line items already have a category.',
+        'info'
+      );
+    });
+
+    it('covers Auto-Categorize All with unclassified items and progress tracking', async () => {
+      const mockShowToast = jest.fn();
+      useApp.mockReturnValue({
+        showToast: mockShowToast,
+        buyerVendors: [],
+      });
+      (rfqClient.classifyLineItems as jest.Mock).mockImplementationOnce(
+        async (_items: any[], onProgress?: (p: { processed: number; total: number }) => void) => {
+          if (onProgress) {
+            onProgress({ processed: 1, total: 1 });
+          }
+          return {
+            success: true,
+            data: {
+              extractedEntities: [
+                {
+                  id: 'row-1',
+                  itemName: 'Industrial Valve',
+                  majorCategory: categoriesData[0].majorCategory,
+                  minorCategory: categoriesData[0].minorCategories[0],
+                },
+              ],
+            },
+          };
+        }
+      );
+
+      renderModal();
+      const row = firstRow();
+      fireEvent.change(within(row).getByLabelText(MODAL.colItem), {
+        target: { value: 'Industrial Valve' },
+      });
+      const autoCatBtn = screen.getByRole('button', { name: /Auto-Categorize All/i });
+      fireEvent.click(autoCatBtn);
+
+      await waitFor(() => {
+        expect(rfqClient.classifyLineItems).toHaveBeenCalled();
+      });
+    });
+
+    it('covers Auto-Categorize All failure and exception handling', async () => {
+      const mockShowToast = jest.fn();
+      useApp.mockReturnValue({
+        showToast: mockShowToast,
+        buyerVendors: [],
+      });
+      (rfqClient.classifyLineItems as jest.Mock).mockResolvedValueOnce({
+        success: false,
+        error: 'Classification failed on AI server',
+      });
+
+      renderModal();
+      const row = firstRow();
+      fireEvent.change(within(row).getByLabelText(MODAL.colItem), {
+        target: { value: 'Test Item' },
+      });
+      const autoCatBtn = screen.getByRole('button', { name: /Auto-Categorize All/i });
+      fireEvent.click(autoCatBtn);
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(
+          EXTRACTION.fallbackTitle,
+          'Classification failed on AI server',
+          'warning'
+        );
+      });
+
+      // Test exception path
+      (rfqClient.classifyLineItems as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+      fireEvent.click(autoCatBtn);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(
+          EXTRACTION.fallbackTitle,
+          EXTRACTION.classifyFailed,
+          'warning'
+        );
+      });
+    });
+
+    it('covers vendor category update email dispatch: success, warning, and error', async () => {
+      const mockShowToast = jest.fn();
+      const testVendor = {
+        id: 'v-mismatch-1',
+        name: 'Mismatch Vendor',
+        email: 'mismatch@vendor.com',
+        source: 'buyer_uploaded',
+        majorCategory: 'Packaging Material',
+      };
+      useApp.mockReturnValue({
+        showToast: mockShowToast,
+        buyerVendors: [testVendor],
+      });
+
+      renderModal();
+      fillRow();
+
+      // Switch to Mismatch category tab
+      const mismatchTab = await screen.findByRole('button', { name: /Mismatch/i });
+      fireEvent.click(mismatchTab);
+
+      // Click Request Category Update email button
+      const emailBtn = await screen.findByRole('button', { name: /Send Email to Update Category/i });
+      fireEvent.click(emailBtn);
+
+      await waitFor(() => {
+        expect(rfqClient.requestVendorCategoryUpdateEmail).toHaveBeenCalledWith(
+          expect.objectContaining({
+            vendorId: 'v-mismatch-1',
+            vendorEmail: 'mismatch@vendor.com',
+          })
+        );
+        expect(mockShowToast).toHaveBeenCalledWith(
+          'Category Update Email Sent',
+          expect.stringContaining('mismatch@vendor.com'),
+          'success'
+        );
+      });
+
+      // Test failure response
+      (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockResolvedValueOnce({
+        success: false,
+        error: 'SMTP quota exceeded',
+      });
+      fireEvent.click(emailBtn);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(
+          'Email Delivery Issue',
+          'SMTP quota exceeded',
+          'warning'
+        );
+      });
+
+      // Test error response
+      (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockRejectedValueOnce(
+        new Error('Network timeout')
+      );
+      fireEvent.click(emailBtn);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(
+          'Error',
+          'Network timeout',
+          'warning'
+        );
+      });
+    });
+
+    it('covers pincode validation branch edge cases: dummy, invalid format, and server rejection', async () => {
+      renderModal();
+      const pinInput = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder);
+
+      // Dummy pincode: 000000
+      fireEvent.change(pinInput, { target: { value: '000000' } });
+      expect(pinInput).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getByText('Invalid')).toBeInTheDocument();
+
+      // Invalid format with non-digits
+      fireEvent.change(pinInput, { target: { value: '400@#!' } });
+      expect(pinInput).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getByText('Invalid')).toBeInTheDocument();
+
+      // Empty pincode clears error
+      fireEvent.change(pinInput, { target: { value: '' } });
+      expect(screen.queryByText('Invalid')).not.toBeInTheDocument();
+
+      // 6-digit valid digits, but API returns isValid: false
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{ Status: 'Error', Message: 'No record found' }],
+      } as Response);
+      fireEvent.change(pinInput, { target: { value: '999999' } });
+      await waitFor(() => {
+        expect(screen.getByText('Invalid')).toBeInTheDocument();
+      });
+
+      // API throws error
+      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Pincode API down'));
+      fireEvent.change(pinInput, { target: { value: '999998' } });
+    });
+
+    it('covers supporting documents and extraction file size limit and exceptions', async () => {
+      (rfqClient.extractLineItemsFromDocument as jest.Mock).mockResolvedValue({
+        success: false,
+        reason: 'NO_TABLE',
+        error: 'No tabular items detected',
+      });
+      renderModal();
+
+      // File > 15MB
+      const hugeFile = new File(['x'], 'huge_file.pdf', { type: 'application/pdf' });
+      Object.defineProperty(hugeFile, 'size', { value: 16 * 1024 * 1024 });
+
+      const attachInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(attachInput, { target: { files: [hugeFile] } });
+      await waitFor(() => {
+        expect(screen.getByText(/File exceeds the 15 MB limit/i)).toBeInTheDocument();
+      });
+
+      // Upload throws error
+      (rfqClient.uploadRFQAttachment as jest.Mock).mockRejectedValueOnce(new Error('Storage service offline'));
+      const normalFile = new File(['normal content'], 'doc_err.pdf', { type: 'application/pdf' });
+      fireEvent.change(attachInput, { target: { files: [normalFile] } });
+      await waitFor(() => {
+        expect(screen.getByText(/Storage service offline/i)).toBeInTheDocument();
+      });
+
+      // Extraction with file > 15MB
+      const extractFileHuge = new File(['x'], 'extract_huge.pdf', { type: 'application/pdf' });
+      Object.defineProperty(extractFileHuge, 'size', { value: 16 * 1024 * 1024 });
+      fireEvent.change(attachInput, { target: { files: [extractFileHuge] } });
+
+      const extractBtn = screen.getByRole('button', { name: new RegExp(MODAL.extractAction, 'i') });
+      fireEvent.click(extractBtn);
+      await waitFor(() => {
+        expect(screen.getByText(/File exceeds the 15 MB limit/i)).toBeInTheDocument();
+      });
+
+      // Recovery: Enter Manually button
+      const enterManuallyBtn = await screen.findByTestId('manual-enter-fallback');
+      fireEvent.click(enterManuallyBtn);
+      expect(screen.queryByTestId('manual-enter-fallback')).not.toBeInTheDocument();
+
+      // Extraction API failure
+      const validDoc = new File(['doc content'], 'spec.pdf', { type: 'application/pdf' });
+      fireEvent.change(attachInput, { target: { files: [validDoc] } });
+      await waitFor(() => {
+        expect(extractBtn).toBeEnabled();
+      });
+      fireEvent.click(extractBtn);
+      await waitFor(() => {
+        expect(screen.getByTestId('manual-enter-fallback')).toBeInTheDocument();
+      });
+    });
+
+    it('covers quota exhausted actions: Use V0, Upgrade Plan, and save blocking', async () => {
+      useApp.mockReturnValue({
+        activeSubscription: 'free_trial',
+        remainingFreeRFQs: 0,
+        activeBuyerAccount: { subscriptionPlan: 'free_trial', remainingFreeRFQs: 0 },
+      });
+      renderModal();
+      fillRow();
+      fillDelivery();
+
+      // Initially quota exhausted banner and bottom upgrade link are both present
+      expect(screen.getByTestId('manual-rfq-quota-exhausted-banner')).toBeInTheDocument();
+      const upgradeLink = screen.getByRole('link', { name: /Please Upgrade Your Plan/i });
+      fireEvent.click(upgradeLink);
+      expect(screen.getByTestId('rfq-upgrade-plan-modal')).toBeInTheDocument();
+
+      // Close upgrade plan modal using Close modal button
+      const closeUpgradeBtn = screen.getByRole('button', { name: 'Close modal' });
+      fireEvent.click(closeUpgradeBtn);
+      expect(screen.queryByTestId('rfq-upgrade-plan-modal')).not.toBeInTheDocument();
+
+      // Open upgrade plan modal via top banner link
+      const topUpgradeLink = screen.getByRole('link', { name: MODAL.upgradePlanAction });
+      fireEvent.click(topUpgradeLink);
+      expect(screen.getByTestId('rfq-upgrade-plan-modal')).toBeInTheDocument();
+
+      // Click "Publish in Mode 0 (Free)" inside upgrade modal to switch to Mode 0
+      const switchToMode0Btn = screen.getByRole('button', { name: /Publish in Mode 0 \(Free\)/i });
+      fireEvent.click(switchToMode0Btn);
+      expect(screen.queryByTestId('rfq-upgrade-plan-modal')).not.toBeInTheDocument();
+
+      // Now sourcing mode is Mode 0: quota banner is gone, save button appears
+      expect(screen.queryByTestId('manual-rfq-quota-exhausted-banner')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: MODAL.saveAction })).toBeInTheDocument();
+
+      // Clicking an unentitled mode card (e.g. Mode 1) directly opens the upgrade modal
+      const mode1Card = screen.getByTestId('manual-mode-mode_1');
+      fireEvent.click(mode1Card);
+      expect(screen.getByTestId('rfq-upgrade-plan-modal')).toBeInTheDocument();
+      const cancelBtn = screen.getByRole('button', { name: /Cancel & Keep Editing/i });
+      fireEvent.click(cancelBtn);
+      expect(screen.queryByTestId('rfq-upgrade-plan-modal')).not.toBeInTheDocument();
+    });
+
+    it('covers Mode 1 vendor selection toolbar: search, category tabs, item click, and bulk select', async () => {
+      const v1 = {
+        id: 'v-matched-1',
+        name: 'Alpha Engineering',
+        email: 'alpha@eng.com',
+        source: 'buyer_uploaded',
+        majorCategory: categoriesData[0].majorCategory,
+      };
+      const v2 = {
+        id: 'v-matched-2',
+        name: 'Beta Automation',
+        email: 'beta@auto.com',
+        source: 'buyer_uploaded',
+        majorCategory: categoriesData[0].majorCategory,
+      };
+      const v3 = {
+        id: 'v-other-3',
+        name: 'Gamma Packaging',
+        email: 'gamma@pkg.com',
+        source: 'buyer_uploaded',
+        majorCategory: 'Packaging Material',
+      };
+      useApp.mockReturnValue({
+        buyerVendors: [v1, v2, v3],
+      });
+
+      renderModal();
+      fillRow();
+
+      // Toolbar search input
+      const searchInput = screen.getByPlaceholderText(/Search suppliers by name/i);
+      fireEvent.change(searchInput, { target: { value: 'Alpha' } });
+      expect(screen.getByText(/Alpha Engineering/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Beta Automation/i)).not.toBeInTheDocument();
+
+      // Clear search
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // Click "All" tab
+      const allTab = screen.getByRole('button', { name: /^All \(/i });
+      fireEvent.click(allTab);
+      expect(screen.getByText(/Gamma Packaging/i)).toBeInTheDocument();
+
+      // Click vendor card to toggle selection
+      const vendorCard = screen.getByText(/Alpha Engineering/i).closest('div[class*="cursor-pointer"]') as HTMLElement;
+      fireEvent.click(vendorCard);
+      fireEvent.click(vendorCard);
+
+      // Deselect All / Select All toggle
+      const selectAllBtn = screen.getByRole('button', { name: /Select All|Deselect All/i });
+      fireEvent.click(selectAllBtn);
+      fireEvent.click(selectAllBtn);
+
+      // Click "Matched" tab
+      const matchedTab = screen.getByRole('button', { name: /^Matched \(/i });
+      fireEvent.click(matchedTab);
+
+      // Search with no matches
+      fireEvent.change(searchInput, { target: { value: 'Nonexistent Vendor' } });
+      expect(screen.getByText(/No Category-Matched Vendors|No Vendors Found/i)).toBeInTheDocument();
+      fireEvent.change(searchInput, { target: { value: '' } });
+    });
+
+    it('covers AI Matching Info panel toggle in Mode 2 and Mode 3, plus Mode 2 toolbar and email', async () => {
+      const v1 = {
+        id: 'v-mode2-1',
+        name: 'Omega Electronics',
+        email: 'omega@elec.com',
+        source: 'buyer_uploaded',
+        majorCategory: categoriesData[0].majorCategory,
+      };
+      const v2 = {
+        id: 'v-mode2-2',
+        name: 'Delta Plastics',
+        email: 'delta@plastics.com',
+        source: 'buyer_uploaded',
+        majorCategory: 'Packaging Material',
+      };
+      const mockShowToast = jest.fn();
+      useApp.mockReturnValue({
+        showToast: mockShowToast,
+        activeSubscription: 'version_3',
+        buyerVendors: [v1, v2],
+      });
+      renderModal();
+      fillRow();
+
+      // Select Mode 2
+      const mode2Card = screen.getByTestId('manual-mode-mode_2');
+      fireEvent.click(mode2Card);
+
+      // Toggle AI Matching Info panel in Mode 2
+      const aiInfoBtn = screen.getByRole('button', { name: /AI Matching Info/i });
+      fireEvent.click(aiInfoBtn);
+      expect(screen.getByText(/How QUA AI Categorizes & Matches Suppliers/i)).toBeInTheDocument();
+
+      // Close AI Matching Info panel in Mode 2
+      const closeAiInfoBtn = screen.getByRole('button', { name: /✕ Close/i });
+      fireEvent.click(closeAiInfoBtn);
+      expect(screen.queryByText(/How QUA AI Categorizes & Matches Suppliers/i)).not.toBeInTheDocument();
+
+      // Mode 2 vendor roster toolbar: Search, All tab, Mismatched tab, item click, bulk select
+      const searchInput = screen.getByPlaceholderText(/Search suppliers by name/i);
+      fireEvent.change(searchInput, { target: { value: 'Omega' } });
+      expect(screen.getByText(/Omega Electronics/i)).toBeInTheDocument();
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      const allTab = screen.getByRole('button', { name: /^All \(/i });
+      fireEvent.click(allTab);
+      expect(screen.getByText(/Delta Plastics/i)).toBeInTheDocument();
+
+      // Toggle selection on vendor card in Mode 2
+      const card2 = screen.getByText(/Omega Electronics/i).closest('div[class*="cursor-pointer"]') as HTMLElement;
+      fireEvent.click(card2);
+      fireEvent.click(card2);
+
+      // Mode 2 Deselect/Select All
+      const selectAllBtn = screen.getByRole('button', { name: /Select All|Deselect All/i });
+      fireEvent.click(selectAllBtn);
+      fireEvent.click(selectAllBtn);
+
+      // Mode 2 Mismatched tab and Category Update Email
+      const mismatchTab = screen.getByRole('button', { name: /Mismatch/i });
+      fireEvent.click(mismatchTab);
+      const emailBtn = await screen.findByRole('button', { name: /Send Email to Update Category/i });
+      fireEvent.click(emailBtn);
+      await waitFor(() => {
+        expect(rfqClient.requestVendorCategoryUpdateEmail).toHaveBeenCalledWith(
+          expect.objectContaining({ vendorId: 'v-mode2-2', vendorEmail: 'delta@plastics.com' })
+        );
+      });
+
+      // Now switch to Mode 3
+      const mode3Card = screen.getByTestId('manual-mode-mode_3');
+      fireEvent.click(mode3Card);
+
+      // Toggle AI Matching Info in Mode 3
+      const aiInfoBtn3 = screen.getByRole('button', { name: /AI Matching Info/i });
+      fireEvent.click(aiInfoBtn3);
+      expect(screen.getByText(/How QUA AI Categorizes & Matches Suppliers/i)).toBeInTheDocument();
+      const closeAiInfoBtn3 = screen.getByRole('button', { name: /✕ Close/i });
+      fireEvent.click(closeAiInfoBtn3);
+      expect(screen.queryByText(/How QUA AI Categorizes & Matches Suppliers/i)).not.toBeInTheDocument();
+
+      // Mode 3 shows double-blind approved vendors
+      expect(screen.getByText(/Double-Blind Autonomous Sourcing/i)).toBeInTheDocument();
+    });
+
+    it('covers Mode 1 submission with 0 matched vendors and shortlist adjustment notification', async () => {
+      const mockShowToast = jest.fn();
+      const vMismatch = {
+        id: 'v-mis-1',
+        name: 'Mismatched Vendor',
+        email: 'mis@vendor.com',
+        source: 'buyer_uploaded',
+        majorCategory: 'Packaging Material', // Distinct from categoriesData[0].majorCategory ('Civil Works')
+      };
+      useApp.mockReturnValue({
+        showToast: mockShowToast,
+        buyerVendors: [vMismatch],
+      });
+
+      renderModal();
+      fillRow();
+      fillDelivery();
+
+      // Submit with only mismatched vendor in candidate pool
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(/requires at least one private vendor to be selected before creating the RFQ/i)
+        ).toBeInTheDocument();
+      });
+    });
+
+    it('uploads pending unuploaded documents during final save', async () => {
+      (rfqClient.uploadRFQAttachment as jest.Mock)
+        .mockResolvedValueOnce({
+          success: false,
+          error: 'Temporary R2 failure',
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          data: attachment({ id: 'att-pending', fileName: 'pending_contract.pdf' }),
+        });
+
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: savedRFQ(),
+      });
+
+      renderModal();
+      fillRow();
+      fillDelivery();
+
+      // Attach file (first upload fails, keeping file in pendingFilesRef)
+      const pendingFile = new File(['contract body'], 'pending_contract.pdf', { type: 'application/pdf' });
+      const attachInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(attachInput, { target: { files: [pendingFile] } });
+
+      // Save button (second upload attempt in handleSubmit succeeds, then createRFQ called)
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(rfqClient.createRFQ).toHaveBeenCalled();
+        expect(onCreated).toHaveBeenCalled();
+      });
+    });
+
+    it('covers initial activeBuyerAccount prefill of deliveryLocation and pincode', async () => {
+      // 1. With city and state
+      useApp.mockReturnValue({
+        activeBuyerAccount: {
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560001',
+        },
+      });
+      const { unmount } = renderModal();
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Bengaluru, Karnataka');
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('560001');
+      unmount();
+
+      // 2. With primaryPlantLocation (no city/state)
+      useApp.mockReturnValue({
+        activeBuyerAccount: {
+          primaryPlantLocation: 'Whitefield Campus',
+          pincode: '560066',
+        },
+      });
+      const { unmount: unmount2 } = renderModal();
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Whitefield Campus');
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('560066');
+      unmount2();
+    });
+
+    it('covers useApp and useRouter throw catch fallback in constructor', () => {
+      useApp.mockImplementationOnce(() => {
+        throw new Error('No App Context');
+      });
+      const { unmount } = renderModal();
+      expect(screen.getByTestId('manual-rfq-modal')).toBeInTheDocument();
+      unmount();
+
+      // useRouter throws error to cover line 158
+      const nav = require('next/navigation');
+      const spy = jest.spyOn(nav, 'useRouter').mockImplementationOnce(() => {
+        throw new Error('No router');
+      });
+      const { unmount: unmount2 } = renderModal();
+      expect(screen.getByTestId('manual-rfq-modal')).toBeInTheDocument();
+      unmount2();
+      spy.mockRestore();
+    });
+
+    it('covers categoryFetchSignals debounced fetchAllVendors execution', async () => {
+      (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+        success: true,
+        candidates: [{ id: 'cand-1', name: 'Auto Fetched Vendor', majorCategory: categoriesData[0].majorCategory }],
+      });
+      renderModal();
+      fillRow();
+
+      // Wait for 400ms for categoryFetchSignals debounce timer
+      await waitFor(() => {
+        expect(rfqClient.fetchAllVendors).toHaveBeenCalledWith(
+          expect.objectContaining({ search: categoriesData[0].majorCategory })
+        );
+      });
+    });
+
+    it('covers handleSendCategoryUpdateEmail edge cases and badge statuses', async () => {
+      const mockShowToast = jest.fn();
+      const vNoName = {
+        id: 'v-no-name',
+        email: 'noname@vendor.com',
+        contactPerson: 'Jane Doe',
+        source: 'buyer_uploaded',
+        majorCategory: 'Non Matching',
+      };
+      const vNoContact = {
+        id: 'v-no-contact',
+        email: 'nocontact@vendor.com',
+        source: 'buyer_uploaded',
+        majorCategory: 'Non Matching',
+      };
+      useApp.mockReturnValue({
+        showToast: mockShowToast,
+        buyerVendors: [vNoName, vNoContact],
+      });
+
+      renderModal();
+      fillRow();
+
+      // Switch to mismatch tab
+      const mismatchTab = await screen.findByRole('button', { name: /Mismatch/i });
+      fireEvent.click(mismatchTab);
+
+      // Trigger email for vNoName with empty response error fallback
+      (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockResolvedValueOnce({
+        success: false,
+      });
+      const emailBtns = screen.getAllByRole('button', { name: /Send Email to Update Category/i });
+      fireEvent.click(emailBtns[0]);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('Email Delivery Issue', 'Failed to dispatch email.', 'warning');
+      });
+
+      // Trigger email for vNoContact with empty error thrown
+      (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockRejectedValueOnce({});
+      fireEvent.click(emailBtns[1]);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('Error', 'Failed to send update email.', 'warning');
+      });
+
+      // Trigger email with success to show "Update Email Sent ✓" badge
+      (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockResolvedValueOnce({
+        success: true,
+      });
+      fireEvent.click(emailBtns[0]);
+      await waitFor(() => {
+        expect(screen.getByText(/Update Email Sent ✓/i)).toBeInTheDocument();
+      });
+    });
+
+    it('covers debounced pincode API validation with valid and invalid server responses', async () => {
+      renderModal();
+      const pinInput = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder);
+
+      // 1. Debounced valid 6-digit pin
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{
+          Status: 'Success',
+          PostOffice: [{ Name: 'Indiranagar', District: 'Bengaluru', State: 'Karnataka' }],
+        }],
+      } as Response);
+      fireEvent.change(pinInput, { target: { value: '560038' } });
+      await waitFor(() => {
+        expect(screen.getByText('Valid')).toBeInTheDocument();
+      });
+
+      // 2. Debounced invalid 6-digit pin with custom message
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{ Status: 'Error', Message: 'No record found' }],
+      } as Response);
+      fireEvent.change(pinInput, { target: { value: '999991' } });
+      await waitFor(() => {
+        expect(screen.getByText('Invalid')).toBeInTheDocument();
+      });
+
+      // 3. Debounced 6-digit pin with fetch rejection (network fallback)
+      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network offline'));
+      fireEvent.change(pinInput, { target: { value: '999992' } });
+      await new Promise((r) => setTimeout(r, 400));
+
+      // 4. Blur on non-6-digit pin (skips validation)
+      fireEvent.change(pinInput, { target: { value: '12' } });
+      fireEvent.blur(pinInput);
+
+      // 5. Blur on 6-digit pin with rejection
+      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Postal timeout'));
+      fireEvent.change(pinInput, { target: { value: '560002' } });
+      fireEvent.blur(pinInput);
+    });
+
+    it('covers handleAutoCategorizeAll with mixed classified, unclassified, and invalid taxonomy items', async () => {
+      const mockShowToast = jest.fn();
+      useApp.mockReturnValue({
+        showToast: mockShowToast,
+        buyerVendors: [],
+      });
+
+      renderModal();
+
+      // Add multiple rows
+      const addRowBtn = screen.getByRole('button', { name: MODAL.addItemAction });
+      fireEvent.click(addRowBtn);
+      fireEvent.click(addRowBtn);
+      fireEvent.click(addRowBtn);
+
+      const rows = screen.getAllByRole('row').slice(1);
+      // Row 0: already has majorCategory
+      fireEvent.change(within(rows[0]).getByLabelText(MODAL.colItem), { target: { value: 'Existing Item 1' } });
+      fireEvent.change(within(rows[0]).getByLabelText(MODAL.colMajor), { target: { value: categoriesData[0].majorCategory } });
+
+      // Row 1: also already has majorCategory
+      fireEvent.change(within(rows[1]).getByLabelText(MODAL.colItem), { target: { value: 'Existing Item 2' } });
+      fireEvent.change(within(rows[1]).getByLabelText(MODAL.colMajor), { target: { value: categoriesData[1].majorCategory } });
+
+      // Row 2: unclassified
+      fireEvent.change(within(rows[2]).getByLabelText(MODAL.colItem), { target: { value: 'Pump Valve' } });
+
+      // Row 3: unclassified with invalid category from AI
+      fireEvent.change(within(rows[3]).getByLabelText(MODAL.colItem), { target: { value: 'Alien Tech' } });
+
+      (rfqClient.classifyLineItems as jest.Mock).mockImplementationOnce(async (items: any[]) => ({
+        success: true,
+        data: {
+          extractedEntities: [
+            {
+              id: 'non-matching-id',
+              itemName: 'Something Else',
+              majorCategory: categoriesData[0].majorCategory,
+            },
+            {
+              id: items[0]?.id,
+              itemName: 'Pump Valve',
+              majorCategory: categoriesData[0].majorCategory,
+              minorCategory: categoriesData[0].minorCategories[0],
+            },
+            {
+              id: items[1]?.id,
+              itemName: 'Alien Tech',
+              majorCategory: 'Completely Invalid Major',
+            },
+          ],
+        },
+      }));
+
+      const autoCatBtn = screen.getByRole('button', { name: /Auto-Categorize All/i });
+      fireEvent.click(autoCatBtn);
+
+      await waitFor(() => {
+        expect(rfqClient.classifyLineItems).toHaveBeenCalled();
+      });
+    });
+
+    it('covers extraction request failure and handleEnterManually on empty rows', async () => {
+      const { buildExtractionRequest } = require('@/lib/documentExtraction');
+      (buildExtractionRequest as jest.Mock).mockRejectedValueOnce(new Error('Extraction builder corrupt file'));
+
+      renderModal();
+      const validDoc = new File(['bad body'], 'corrupt.pdf', { type: 'application/pdf' });
+      const attachInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(attachInput, { target: { files: [validDoc] } });
+
+      const extractBtn = screen.getByTestId('manual-extract');
+      await waitFor(() => expect(extractBtn).toBeEnabled());
+      fireEvent.click(extractBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Extraction builder corrupt file/i)).toBeInTheDocument();
+      });
+
+      // Remove the only row so lineItems is empty, then click handleEnterManually
+      const deleteRowBtn = screen.getByRole('button', { name: new RegExp(MODAL.untitledItem, 'i') });
+      fireEvent.click(deleteRowBtn);
+      const enterManuallyBtn = screen.getByTestId('manual-enter-fallback');
+      fireEvent.click(enterManuallyBtn);
+      expect(screen.getAllByRole('row').length).toBeGreaterThan(1);
+    });
+
+    it('covers Mode 1 and Mode 2 vendor cards with string minorCategories, vendorSelectedCategories, and view-all button', async () => {
+      const vStringMinor = {
+        id: 'v-str-minor',
+        name: 'String Minor Vendor',
+        email: 'str@vendor.com',
+        source: 'buyer_uploaded',
+        majorCategory: 'Packaging Material',
+        minorCategories: 'Cartons, Bubble Wrap',
+      };
+      const vArraySelected = {
+        id: 'v-arr-sel',
+        name: 'Array Selected Vendor',
+        email: 'arr@vendor.com',
+        source: 'buyer_uploaded',
+        majorCategory: 'Packaging Material',
+        vendorSelectedCategories: ['Boxes'],
+      };
+      const vNoCategories = {
+        id: 'v-no-cat',
+        name: 'No Category Vendor',
+        email: 'none@vendor.com',
+        source: 'buyer_uploaded',
+      };
+      useApp.mockReturnValue({
+        activeSubscription: 'version_3',
+        buyerVendors: [vStringMinor, vArraySelected, vNoCategories],
+      });
+
+      const { unmount } = renderModal();
+      fillRow();
+
+      // Mode 1: With RFQ category set to Civil Works, matched count is 0
+      // Click "View all 3 private vendors →" button
+      const viewAllBtn = screen.getByRole('button', { name: /View all 3 private vendors →/i });
+      fireEvent.click(viewAllBtn);
+      expect(screen.getByText(/String Minor Vendor/i)).toBeInTheDocument();
+      expect(screen.getByText(/Array Selected Vendor/i)).toBeInTheDocument();
+
+      // Search in Mode 1 by email, category
+      const searchInput = screen.getByPlaceholderText(/Search suppliers by name/i);
+      fireEvent.change(searchInput, { target: { value: 'str@vendor.com' } });
+      expect(screen.getByText(/String Minor Vendor/i)).toBeInTheDocument();
+      fireEvent.change(searchInput, { target: { value: 'Packaging Material' } });
+      expect(screen.getByText(/String Minor Vendor/i)).toBeInTheDocument();
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // Switch to Mode 2
+      const mode2Card = screen.getByTestId('manual-mode-mode_2');
+      fireEvent.click(mode2Card);
+
+      // In Mode 2, click "Matched" tab so modalVendorCategoryTab is 'matched'
+      const matchedTab = screen.getByRole('button', { name: /^Matched \(/i });
+      fireEvent.click(matchedTab);
+
+      // In Mode 2, click "View all 3 private vendors →" button
+      const viewAllBtnMode2 = screen.getByRole('button', { name: /View all 3 private vendors →/i });
+      fireEvent.click(viewAllBtnMode2);
+      expect(screen.getByText(/String Minor Vendor/i)).toBeInTheDocument();
+
+      // In Mode 2, search by email and category
+      fireEvent.change(searchInput, { target: { value: 'none@vendor.com' } });
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // In Mode 2, search by contact person
+      fireEvent.change(searchInput, { target: { value: 'None Contact' } });
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // Switch to Mode 3
+      const mode3Card = screen.getByTestId('manual-mode-mode_3');
+      fireEvent.click(mode3Card);
+      expect(screen.getByText('General Industrial')).toBeInTheDocument();
+      unmount();
+
+      // Mode 2 when no category signals on RFQ (categoryFetchSignals.length === 0)
+      const { unmount: unmountNoCat } = renderModal();
+      const mode2CardNoCat = screen.getByTestId('manual-mode-mode_2');
+      fireEvent.click(mode2CardNoCat);
+      expect(screen.getByTitle('String Minor Vendor')).toBeInTheDocument();
+      unmountNoCat();
+    });
+
+    it('covers Mode 2 and Mode 3 empty directory states', () => {
+      useApp.mockReturnValue({
+        activeSubscription: 'version_3',
+        buyerVendors: [],
+      });
+      renderModal();
+      fillRow();
+
+      // Mode 2 with 0 vendors
+      const mode2Card = screen.getByTestId('manual-mode-mode_2');
+      fireEvent.click(mode2Card);
+      expect(screen.getByText(/No vendors found in directory/i)).toBeInTheDocument();
+
+      // Mode 3 with 0 vendors
+      const mode3Card = screen.getByTestId('manual-mode-mode_3');
+      fireEvent.click(mode3Card);
+      expect(screen.getByText(/No private vendors uploaded yet/i)).toBeInTheDocument();
+    });
+
+    it('covers quota banner useV0Action and upgrade link target modes', () => {
+      useApp.mockReturnValue({
+        activeSubscription: 'free_trial',
+        remainingFreeRFQs: 0,
+        activeBuyerAccount: { subscriptionPlan: 'free_trial', remainingFreeRFQs: 0 },
+      });
+      // Test top useV0 button
+      const { unmount: unmount1 } = renderModal();
+      fillRow();
+      fillDelivery();
+      const useV0Btns = screen.getAllByRole('button', { name: MODAL.useV0Action });
+      expect(useV0Btns).toHaveLength(2);
+      fireEvent.click(useV0Btns[0]);
+      expect(screen.queryByTestId('manual-rfq-quota-exhausted-banner')).not.toBeInTheDocument();
+      unmount1();
+
+      // Test bottom useV0 button
+      const { unmount: unmount2 } = renderModal();
+      fillRow();
+      fillDelivery();
+      const useV0Btns2 = screen.getAllByRole('button', { name: MODAL.useV0Action });
+      fireEvent.click(useV0Btns2[1]);
+      expect(screen.queryByTestId('manual-rfq-quota-exhausted-banner')).not.toBeInTheDocument();
+      unmount2();
+    });
+
+    it('covers custom category in withStoredValue and clearing item quantity', async () => {
+      renderModal();
+      const row = firstRow();
+
+      // Quantity change to empty string
+      const qtyInput = within(row).getByLabelText(MODAL.colQty);
+      fireEvent.change(qtyInput, { target: { value: '10' } });
+      fireEvent.change(qtyInput, { target: { value: '' } });
+      expect(qtyInput).toHaveValue(null);
+
+      // Re-select same major when minor is selected to keep minor (line 1185 keepMinor true branch)
+      const majorSelect = within(row).getByLabelText(MODAL.colMajor);
+      fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
+      const minorSelect = within(row).getByLabelText(MODAL.colMinor);
+      fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+      fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
+
+      // Document extraction with a custom category not in taxonomy
+      (rfqClient.extractLineItemsFromDocument as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        data: {
+          title: 'Custom Robotics Rig',
+          estimatedBudget: 500000,
+          extractedEntities: [
+            {
+              id: 'ent-custom-1',
+              itemName: 'Autonomous Drone Unit',
+              majorCategory: 'Robotics & Aerial Inspection Specialty',
+              minorCategory: 'Inspection Drones',
+              quantity: 2,
+              unit: 'Sets',
+            },
+          ],
+        },
+      });
+
+      const customDoc = new File(['robotics content'], 'robotics.pdf', { type: 'application/pdf' });
+      const attachInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(attachInput, { target: { files: [customDoc] } });
+
+      const extractBtn = screen.getByTestId('manual-extract');
+      await waitFor(() => expect(extractBtn).toBeEnabled());
+      fireEvent.click(extractBtn);
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Custom Robotics Rig')).toBeInTheDocument();
+      });
+
+      // withStoredValue line 91 rendered with the custom category in option list
+      expect(screen.getByText('Robotics & Aerial Inspection Specialty')).toBeInTheDocument();
+
+      // Extraction with empty major category to test line 546 dominantMajorCategory fallback
+      (rfqClient.extractLineItemsFromDocument as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        data: {
+          title: 'Uncategorized Hardware Spec',
+          estimatedBudget: null,
+          extractedEntities: [
+            {
+              id: 'ent-no-cat',
+              itemName: 'Generic Hardware Fastener',
+              majorCategory: '',
+              minorCategory: '',
+              quantity: 50,
+              unit: 'Nos',
+            },
+          ],
+        },
+      });
+      const uncatDoc = new File(['uncat hardware'], 'hardware.pdf', { type: 'application/pdf' });
+      fireEvent.change(attachInput, { target: { files: [uncatDoc] } });
+      await waitFor(() => expect(extractBtn).toBeEnabled());
+      fireEvent.click(extractBtn);
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Generic Hardware Fastener')).toBeInTheDocument();
+      });
+    });
+
+    it('covers Mode 1 submission with selectedVendorIds candidatePool filter', async () => {
+      const v1 = {
+        id: 'v-mode1-select-1',
+        name: '',
+        email: '',
+        contactPerson: 'Alpha Contact Person',
+        mobile: '9876543210',
+        source: 'buyer_uploaded',
+        majorCategory: categoriesData[0].majorCategory,
+      };
+      const v2 = {
+        id: 'v-mode1-select-2',
+        name: 'Beta Pipes Ltd',
+        email: 'beta@pipes.com',
+        contactPerson: '',
+        mobileNumber: '9123456789',
+        source: 'buyer_uploaded',
+        majorCategory: categoriesData[0].majorCategory,
+      };
+      useApp.mockReturnValue({
+        activeSubscription: 'version_3',
+        buyerVendors: [v1, v2],
+      });
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: savedRFQ({
+          category: categoriesData[0].majorCategory,
+          budget: 50000,
+          extractedEntities: [
+            { id: 'e1', itemName: 'Pumps', quantity: 2, unit: 'pcs', targetDate: '', technicalSpecs: '', confidence: 1, category: categoriesData[0].majorCategory, majorCategory: categoriesData[0].majorCategory, minorCategory: '' },
+            { id: 'e2', itemName: 'Valves', quantity: 5, unit: 'pcs', targetDate: '', technicalSpecs: '', confidence: 1, category: categoriesData[0].majorCategory, majorCategory: categoriesData[0].majorCategory, minorCategory: '' },
+          ],
+          sourcingMode: 'mode_1',
+          assignedVendors: [{ id: 'v-mode1-select-2', name: 'Beta Pipes Ltd' }],
+        }),
+      });
+
+      renderModal();
+      fillRow();
+      fillDelivery();
+
+      // Click vendor card for v1 (which has no name, so card displays contactPerson)
+      const v1Card = screen.getByText(/Alpha Contact Person/i).closest('div[class*="cursor-pointer"]') as HTMLElement;
+      fireEvent.click(v1Card);
+
+      // Submit form in Mode 1 with selectedVendorIds.length > 0
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(rfqClient.createRFQ).toHaveBeenCalledWith(
+          expect.objectContaining({
+            assignedVendors: expect.arrayContaining([
+              expect.objectContaining({ id: 'v-mode1-select-2' }),
+            ]),
+          })
+        );
+        expect(screen.getByText(/₹50,000/i)).toBeInTheDocument();
+      });
+    });
+
+    it('covers attachment upload rejection during final save', async () => {
+      (rfqClient.createRFQ as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        rfq: savedRFQ(),
+      });
+      (rfqClient.uploadRFQAttachment as jest.Mock)
+        .mockResolvedValueOnce({
+          success: false,
+          error: 'Immediate attach fail',
+        })
+        .mockRejectedValueOnce(new Error('R2 fatal throw during submit'));
+
+      renderModal();
+      fillRow();
+      fillDelivery();
+
+      // Attach document so pendingFilesRef has files
+      const file1 = new File(['file 1 body'], 'failed_upload.pdf', { type: 'application/pdf' });
+      const attachInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(attachInput, { target: { files: [file1] } });
+
+      // Click save
+      fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+      await waitFor(() => {
+        expect(rfqClient.createRFQ).toHaveBeenCalled();
+        expect(onCreated).toHaveBeenCalled();
+      });
+    });
+  });
 });
+
 

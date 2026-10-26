@@ -111,7 +111,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
   const load = async () => {
     setLoading(true);
     setError(null);
-    const result = await fetchAllRFQs();
+    const result = await fetchAllRFQs({ summary: true, limit: 100 });
     if (result.success) {
       setRfqs(result.rfqs);
     } else {

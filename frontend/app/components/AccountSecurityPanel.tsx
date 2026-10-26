@@ -51,8 +51,8 @@ export default function AccountSecurityPanel() {
       if (result.success) {
         setShowOtpInput(true);
         showToast(
-          strings.codeSentTitle || 'Verification Code Sent',
-          strings.codeSentMessage || 'A 6-digit verification code has been dispatched to your registered contact.',
+          strings.codeSentTitle,
+          strings.codeSentMessage,
           'success'
         );
       } else {
@@ -160,7 +160,7 @@ export default function AccountSecurityPanel() {
           <div className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
             <div className="flex items-center justify-between">
               <label htmlFor="verification-code" className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
-                {strings.verificationCodeLabel || 'Verification Code'}
+                {strings.verificationCodeLabel}
               </label>
               <button
                 type="button"
@@ -168,7 +168,7 @@ export default function AccountSecurityPanel() {
                 disabled={isSendingOtp}
                 className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
               >
-                {isSendingOtp ? strings.sendingCodeAction : strings.resendCodeAction || 'Resend Code'}
+                {isSendingOtp ? strings.sendingCodeAction : strings.resendCodeAction}
               </button>
             </div>
             <input
@@ -177,7 +177,7 @@ export default function AccountSecurityPanel() {
               maxLength={6}
               value={verificationCode}
               onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ''))}
-              placeholder={strings.verificationCodePlaceholder || 'Enter 6-digit code'}
+              placeholder={strings.verificationCodePlaceholder}
               className="w-full px-3 py-1.5 rounded-lg border border-indigo-300 dark:border-indigo-700 text-xs font-mono font-bold tracking-widest bg-white dark:bg-gray-950 text-slate-900 dark:text-white"
             />
             <p className="text-[10px] text-indigo-600 dark:text-indigo-400">

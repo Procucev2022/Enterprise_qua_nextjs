@@ -195,6 +195,32 @@ describe('Enterprise Inquiries Email Notification & Route', () => {
       expect(typeof res.body.total).toBe('number');
     });
 
+    test('GET /api/enterprise-inquiries respects limit query parameter', async () => {
+      storeService.addEnterpriseInquiry({
+        companyName: 'Limit Test Co 1',
+        email: 'limit1@test.com',
+        mobile: '+919988776651',
+      });
+      storeService.addEnterpriseInquiry({
+        companyName: 'Limit Test Co 2',
+        email: 'limit2@test.com',
+        mobile: '+919988776652',
+      });
+
+      const res = await supertest(app)
+        .get('/api/enterprise-inquiries?limit=1')
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.length).toBeLessThanOrEqual(1);
+
+      // Also exercise non-positive / non-integer limit
+      const resInvalid = await supertest(app)
+        .get('/api/enterprise-inquiries?limit=invalid')
+        .expect(200);
+      expect(resInvalid.body.success).toBe(true);
+    });
+
     test('PATCH /api/enterprise-inquiries/:id updates status, notes, contactedBy', async () => {
       const created = storeService.addEnterpriseInquiry({
         companyName: 'Patch Test Co',

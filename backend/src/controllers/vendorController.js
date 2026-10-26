@@ -173,7 +173,11 @@ async function getVendors(req, res, next) {
       });
     }
 
-    let vendors = await storeService.getVendors(buyerId);
+    const hasFilters = Boolean(search || email || category);
+    const limitQuery = (!hasFilters && req.query && req.query.limit)
+      ? Math.min(Number(req.query.limit), 500)
+      : null;
+    let vendors = await storeService.getVendors(buyerId, limitQuery);
     if (search) {
       const q = String(search).toLowerCase().trim();
       vendors = vendors.filter((v) =>
@@ -222,6 +226,13 @@ async function getVendors(req, res, next) {
         data: pageData.map(withoutTemporaryPassword),
         pagination: { page: pageNumber, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
       });
+    }
+
+    if (req.query && req.query.limit) {
+      const limit = Number(req.query.limit);
+      if (Number.isInteger(limit) && limit > 0) {
+        vendors = vendors.slice(0, Math.min(limit, 500));
+      }
     }
 
     res.json({
@@ -865,10 +876,10 @@ async function getVendorRfqCredits(req, res, next) {
 
     let vendor = null;
     if (id && id !== 'me' && id !== 'current') {
-      vendor = storeService.getVendorById(id, 'all');
+      vendor = storeService.getVendorById(id, 'all') || (await storeService.getVendorByIdWithDBFallback(id, 'all'));
     }
     if (!vendor && user.email) {
-      vendor = storeService.getVendorById(user.email, 'all');
+      vendor = storeService.getVendorById(user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(user.email, 'all'));
     }
 
     if (!vendor) {

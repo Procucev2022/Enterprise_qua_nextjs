@@ -40,6 +40,8 @@ const { logger } = require('./loggerService');
 const domainQueries = require('../db/domainQueries');
 const { getD1Binding, getWaitUntil } = require('../db/d1Bridge');
 
+const _ignoreError = () => {};
+
 // ── Timer registry ────────────────────────────────────────────────────────────
 // Maps rfqNumber → array of NodeJS.Timeout handles.
 // Only used by tests (clearScheduledChasers) and graceful shutdown.
@@ -78,7 +80,7 @@ function clearScheduledChasers(rfqNumber) {
     );
   }
   // Cancel persisted jobs in D1 (best-effort — never throw)
-  domainQueries.cancelChaserJobsForRFQInDB(rfqNumber).catch(() => { });
+  domainQueries.cancelChaserJobsForRFQInDB(rfqNumber).catch(_ignoreError);
 }
 
 // ── Per-vendor dispatch helpers ───────────────────────────────────────────────
@@ -112,13 +114,13 @@ async function _dispatchWhatsApp(rfq, vendor, jobId) {
       'RFQ_CHASER'
     );
     if (jobId) {
-      if (result.success) domainQueries.markChaserJobFiredInDB(jobId).catch(() => { });
-      else domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error').catch(() => { });
+      if (result.success) domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+      else domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error').catch(_ignoreError);
     }
     return { channel: 'whatsapp', success: result.success };
   } catch (err) {
     logger.error(`[CHASER] WhatsApp error for ${vendor.name}: ${err.message}`, err, 'RFQ_CHASER');
-    if (jobId) domainQueries.markChaserJobFailedInDB(jobId, err.message).catch(() => { });
+    if (jobId) domainQueries.markChaserJobFailedInDB(jobId, err.message).catch(_ignoreError);
     return { channel: 'whatsapp', success: false, error: err.message };
   }
 }
@@ -140,7 +142,7 @@ async function _dispatchSms(rfq, vendor, jobId) {
   }
   if (!phone) {
     logger.debug(`[CHASER] SMS skipped for ${vendor.name} — no phone`, {}, 'RFQ_CHASER');
-    if (jobId) domainQueries.markChaserJobFiredInDB(jobId).catch(() => { });
+    if (jobId) domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
     return { channel: 'sms', skipped: true };
   }
   try {
@@ -158,13 +160,13 @@ async function _dispatchSms(rfq, vendor, jobId) {
       'RFQ_CHASER'
     );
     if (jobId) {
-      if (result.success) domainQueries.markChaserJobFiredInDB(jobId).catch(() => { });
-      else domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error').catch(() => { });
+      if (result.success) domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+      else domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error').catch(_ignoreError);
     }
     return { channel: 'sms', success: result.success };
   } catch (err) {
     logger.error(`[CHASER] SMS error for ${vendor.name}: ${err.message}`, err, 'RFQ_CHASER');
-    if (jobId) domainQueries.markChaserJobFailedInDB(jobId, err.message).catch(() => { });
+    if (jobId) domainQueries.markChaserJobFailedInDB(jobId, err.message).catch(_ignoreError);
     return { channel: 'sms', success: false, error: err.message };
   }
 }
@@ -178,7 +180,7 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId) {
   if (process.env.NODE_ENV === 'test') return { channel: 'email', skipped: true };
   if (!vendor.email) {
     logger.debug(`[CHASER] Reminder email skipped for ${vendor.name} — no email`, {}, 'RFQ_CHASER');
-    if (jobId) domainQueries.markChaserJobFiredInDB(jobId).catch(() => { });
+    if (jobId) domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
     return { channel: 'email', skipped: true };
   }
   try {
@@ -195,13 +197,13 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId) {
       'RFQ_CHASER'
     );
     if (jobId) {
-      if (result.sent) domainQueries.markChaserJobFiredInDB(jobId).catch(() => { });
-      else domainQueries.markChaserJobFailedInDB(jobId, result.reason || 'email delivery failed').catch(() => { });
+      if (result.sent) domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+      else domainQueries.markChaserJobFailedInDB(jobId, result.reason || 'email delivery failed').catch(_ignoreError);
     }
     return { channel: 'email', sent: result.sent };
   } catch (err) {
     logger.error(`[CHASER] Reminder email error for ${vendor.email}: ${err.message}`, err, 'RFQ_CHASER');
-    if (jobId) domainQueries.markChaserJobFailedInDB(jobId, err.message).catch(() => { });
+    if (jobId) domainQueries.markChaserJobFailedInDB(jobId, err.message).catch(_ignoreError);
     return { channel: 'email', sent: false, error: err.message };
   }
 }
@@ -218,7 +220,7 @@ async function _dispatchCall(rfq, vendor, jobId) {
     { rfqNumber: rfq.rfqNumber, vendorId: vendor.id, phone },
     'RFQ_CHASER'
   );
-  if (jobId) domainQueries.markChaserJobFiredInDB(jobId).catch(() => { });
+  if (jobId) domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
   return { channel: 'call', skipped: true, reason: 'calling_not_implemented' };
 }
 
@@ -341,7 +343,7 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
     const smsPromise = new Promise((resolve) => { smsPromiseResolve = resolve; });
     const smsHandle = setTimeout(async () => {
       try {
-        await _dispatchSms(rfq, vendor, smsJobId).catch(() => {/* already logged inside */ });
+        await _dispatchSms(rfq, vendor, smsJobId).catch(_ignoreError);
       } finally {
         activeScheduledTimers.delete(smsKey);
         smsPromiseResolve();
@@ -371,7 +373,7 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
     const callPromise = new Promise((resolve) => { callPromiseResolve = resolve; });
     const callHandle = setTimeout(async () => {
       try {
-        await _dispatchCall(rfq, vendor, callJobId).catch(() => {/* already logged inside */ });
+        await _dispatchCall(rfq, vendor, callJobId).catch(_ignoreError);
       } finally {
         activeScheduledTimers.delete(callKey);
         callPromiseResolve();
@@ -391,7 +393,7 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
     const waPromise = new Promise((resolve) => { waPromiseResolve = resolve; });
     const waHandle = setTimeout(async () => {
       try {
-        await _dispatchWhatsApp(rfq, vendor, waJobId).catch(() => {/* already logged inside */ });
+        await _dispatchWhatsApp(rfq, vendor, waJobId).catch(_ignoreError);
       } finally {
         activeScheduledTimers.delete(waKey);
         waPromiseResolve();
@@ -400,6 +402,7 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
     activeScheduledTimers.set(waKey, waHandle);
     _registerTimer(rfqNumber, waHandle);
     _persistChaserJob(waJobId, rfq, vendor, 'whatsapp', waDelay);
+    if (waitUntil) waitUntil(waPromise);
   }
 
   // 4. Reminder email — after 24 hours
@@ -408,7 +411,7 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
     const emailJobId = _chaserJobId(rfqNumber, vendorKey, 'email');
     const emailHandle = setTimeout(async () => {
       try {
-        await _dispatchReminderEmail(rfq, vendor, creditInfo, emailJobId).catch(() => {/* already logged inside */ });
+        await _dispatchReminderEmail(rfq, vendor, creditInfo, emailJobId).catch(_ignoreError);
       } finally {
         activeScheduledTimers.delete(emailKey);
       }
@@ -579,12 +582,12 @@ async function recoverChasersOnBoot() {
       };
 
       const dispatchFn = row.channel === 'whatsapp'
-        ? () => _dispatchWhatsApp(rfqStub, vendorStub, jobId).catch(() => { })
+        ? () => _dispatchWhatsApp(rfqStub, vendorStub, jobId).catch(_ignoreError)
         : row.channel === 'sms'
-          ? () => _dispatchSms(rfqStub, vendorStub, jobId).catch(() => { })
+          ? () => _dispatchSms(rfqStub, vendorStub, jobId).catch(_ignoreError)
           : row.channel === 'call'
-            ? () => _dispatchCall(rfqStub, vendorStub, jobId).catch(() => { })
-            : () => _dispatchReminderEmail(rfqStub, vendorStub, {}, jobId).catch(() => { });
+            ? () => _dispatchCall(rfqStub, vendorStub, jobId).catch(_ignoreError)
+            : () => _dispatchReminderEmail(rfqStub, vendorStub, {}, jobId).catch(_ignoreError);
 
       const handle = setTimeout(async () => {
         try {

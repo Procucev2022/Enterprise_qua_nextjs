@@ -181,11 +181,16 @@ function resolveVendorConfig(env = process.env) {
     // IMAP support was removed — see resolveConfig()'s comment. The vendor
     // mailbox is read exclusively via the vendor Gmail REST API identity
     // (VENDOR_GMAIL_* in mailerService).
-    user: (env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').trim(),
+    user: (
+      env.VENDOR_EMAIL_GATEWAY_USER ||
+      VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS ||
+      ''
+    ).trim(),
     address: (
       env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
       env.VENDOR_EMAIL_GATEWAY_USER ||
-      'srinu20252026@gmail.com'
+      VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS ||
+      ''
     ).trim(),
     mailbox: (env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
     pollIntervalMs: Math.max(

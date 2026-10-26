@@ -289,7 +289,9 @@ async function completeBuyerOnboarding(req, res, next) {
 
 async function listUsers(req, res, next) {
   try {
-    const users = await authService.getAllUsers();
+    const rawLimit = req && req.query && req.query.limit;
+    const limit = rawLimit ? Math.min(Math.max(parseInt(rawLimit, 10) || 200, 1), 500) : 200;
+    const users = await authService.getAllUsers(limit);
     res.json({ success: true, count: users.length, data: users });
   } catch (err) {
     logger.error('Error listing users', err, 'AUTH_CONTROLLER');

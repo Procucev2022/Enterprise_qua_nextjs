@@ -90,6 +90,26 @@ describe('BuyerFirstLoginPage', () => {
     });
   });
 
+  it.each([
+    ['/buyer/rfqs', '/buyer/rfq-summary'],
+    ['/buyer/rfqs?source=email', '/buyer/rfq-summary?source=email'],
+  ])('preserves the normalized legacy return URL when login is required (%s)', async (returnUrl, destination) => {
+    mockSearchParams = new URLSearchParams({ returnUrl });
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      currentUserSession: null,
+      setCurrentUserSession: mockSetCurrentUserSession,
+      setIsLoggedIn: mockSetIsLoggedIn,
+      showToast: mockShowToast,
+    });
+
+    render(<BuyerFirstLoginPage />);
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith(`/login?redirect=${encodeURIComponent(destination)}`);
+    });
+    expect(screen.queryByRole('dialog', { name: UI_STRINGS.auth.buyerOnboarding.title })).not.toBeInTheDocument();
+  });
+
   it('redirects buyers who do not need onboarding or password change', async () => {
     mockCurrentUserSession = {
       email: 'buyer@example.com',

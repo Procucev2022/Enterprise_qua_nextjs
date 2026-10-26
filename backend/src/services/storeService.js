@@ -11,6 +11,7 @@ const {
   VENDOR_FREE_CREDITS_LIMIT,
   VENDOR_ASSIGNMENT_LIMITS,
   MAJOR_CATEGORY_ALIASES,
+  INQUIRIES_PERSISTENCE_FILE,
 } = require('../config/constants');
 const crypto = require('crypto');
 const pool = require('../db/pool');
@@ -174,14 +175,14 @@ class StoreService {
           // subset" that individual DB fallbacks paper over — hydration
           // should actually honor that instead of loading everything.
           domainQueries.getVendorsPageFromDB({ limit: MAX_HYDRATION_VENDORS, offset: 0 }),
-          domainQueries.getRFQsFromDB(),
-          domainQueries.getEvaluationsFromDB(),
-          domainQueries.getVendorCatalogueFromDB(),
-          domainQueries.getBuyerAccountsFromDB(),
-          domainQueries.getAIFeedFromDB(),
-          domainQueries.getAuditLogsFromDB(),
-          domainQueries.getNotificationsFromDB(),
-          domainQueries.getPaymentLinksFromDB(),
+          domainQueries.getRFQsFromDB(null, 100),
+          domainQueries.getEvaluationsFromDB(100),
+          domainQueries.getVendorCatalogueFromDB(100),
+          domainQueries.getBuyerAccountsFromDB(100),
+          domainQueries.getAIFeedFromDB(100),
+          domainQueries.getAuditLogsFromDB(100),
+          domainQueries.getNotificationsFromDB(null, 100),
+          domainQueries.getPaymentLinksFromDB(100),
         ]);
 
       this.vendors = vendorPage.rows;
@@ -381,8 +382,11 @@ class StoreService {
   // ==========================================
   // 1. BUYER ACCOUNTS
   // ==========================================
-  getBuyerAccounts() {
-    return this.buyerAccounts;
+  getBuyerAccounts(limit = null) {
+    if (Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return (this.buyerAccounts || []).slice(0, Math.min(Number(limit), 500));
+    }
+    return (this.buyerAccounts || []).slice(0, 500);
   }
 
   getActiveBuyerAccount() {
@@ -696,35 +700,39 @@ class StoreService {
    * what this specific process happened to load at boot or write itself.
    * Same pattern as getPaymentLinksForVendor/getPaymentLinksForBuyer.
    */
-  async getVendors(scopedBuyerId = null) {
+  async getVendors(scopedBuyerId = null, limit = null) {
     if (pool.hasStorage()) {
-      const allFromDB = await domainQueries.getVendorsFromDB();
+      const allFromDB = await domainQueries.getVendorsFromDB(limit);
       const byId = new Map(this.vendors.map((v) => [v.id, v]));
       for (const vendor of allFromDB) byId.set(vendor.id, vendor);
       this.vendors = Array.from(byId.values());
     }
-    if (scopedBuyerId === 'all') {
-      return this.vendors;
+    let list = this.vendors;
+    if (scopedBuyerId !== 'all') {
+      list = list.filter((v) => {
+        // Platform / network vendors with no buyerId are public
+        if (!v.buyerId && !v.buyerAccountId) {
+          return true;
+        }
+        // Buyer-uploaded vendors are only visible if scopedBuyerId matches
+        if (!scopedBuyerId) {
+          return false;
+        }
+        const candidateIds = Array.isArray(scopedBuyerId)
+          ? scopedBuyerId.map((id) => String(id).toLowerCase())
+          : [String(scopedBuyerId).toLowerCase()];
+        return candidateIds.some(
+          (sId) =>
+            (v.buyerId && String(v.buyerId).toLowerCase() === sId) ||
+            (v.buyerAccountId && String(v.buyerAccountId).toLowerCase() === sId) ||
+            (v.buyerEmail && String(v.buyerEmail).toLowerCase() === sId)
+        );
+      });
     }
-    return this.vendors.filter((v) => {
-      // Platform / network vendors with no buyerId are public
-      if (!v.buyerId && !v.buyerAccountId) {
-        return true;
-      }
-      // Buyer-uploaded vendors are only visible if scopedBuyerId matches
-      if (!scopedBuyerId) {
-        return false;
-      }
-      const candidateIds = Array.isArray(scopedBuyerId)
-        ? scopedBuyerId.map((id) => String(id).toLowerCase())
-        : [String(scopedBuyerId).toLowerCase()];
-      return candidateIds.some(
-        (sId) =>
-          (v.buyerId && String(v.buyerId).toLowerCase() === sId) ||
-          (v.buyerAccountId && String(v.buyerAccountId).toLowerCase() === sId) ||
-          (v.buyerEmail && String(v.buyerEmail).toLowerCase() === sId)
-      );
-    });
+    if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return list.slice(0, Number(limit));
+    }
+    return list;
   }
 
   getVendorById(id, scopedBuyerId = null) {
@@ -1708,7 +1716,7 @@ class StoreService {
    */
   async getPaymentLinksByStatusIn(statuses) {
     if (pool.hasStorage()) {
-      const allFromDB = await domainQueries.getPaymentLinksFromDB();
+      const allFromDB = await domainQueries.getPaymentLinksFromDB(100);
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
       for (const link of allFromDB) {
         byId.set(link.id, link);
@@ -1726,9 +1734,9 @@ class StoreService {
    */
   async getPaymentLinksForVendor(vendorId) {
     if (pool.hasStorage()) {
-      const allFromDB = await domainQueries.getPaymentLinksFromDB();
+      const fromDB = await domainQueries.getPaymentLinksByVendorFromDB(vendorId);
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
-      for (const link of allFromDB) byId.set(link.id, link);
+      for (const link of fromDB) byId.set(link.id, link);
       this.paymentLinks = Array.from(byId.values());
     }
     return this.paymentLinks
@@ -1739,9 +1747,9 @@ class StoreService {
   /** Same as getPaymentLinksForVendor, scoped to a buyer account instead. */
   async getPaymentLinksForBuyer(buyerAccountId) {
     if (pool.hasStorage()) {
-      const allFromDB = await domainQueries.getPaymentLinksFromDB();
+      const fromDB = await domainQueries.getPaymentLinksByBuyerFromDB(buyerAccountId);
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
-      for (const link of allFromDB) byId.set(link.id, link);
+      for (const link of fromDB) byId.set(link.id, link);
       this.paymentLinks = Array.from(byId.values());
     }
     return this.paymentLinks
@@ -1758,13 +1766,21 @@ class StoreService {
     const cached = this.paymentLinks.find((l) => l.id === id);
     if (cached) return cached;
     if (!pool.hasStorage()) return null;
-    const allFromDB = await domainQueries.getPaymentLinksFromDB();
-    const fromDB = allFromDB.find((l) => l.id === id);
-    if (!fromDB) return null;
-    if (!this.paymentLinks.some((l) => l.id === fromDB.id)) {
-      this.paymentLinks.unshift(fromDB);
+    const fromDB = typeof domainQueries.getPaymentLinkByIdFromDB === 'function'
+      ? await domainQueries.getPaymentLinkByIdFromDB(id)
+      : null;
+    if (fromDB) {
+      if (!this.paymentLinks.some((l) => l.id === fromDB.id)) {
+        this.paymentLinks.unshift(fromDB);
+      }
+      return fromDB;
     }
-    return fromDB;
+    const allFromDB = await domainQueries.getPaymentLinksFromDB(50);
+    const link = allFromDB.find((l) => l.id === id);
+    if (link && !this.paymentLinks.some((l) => l.id === link.id)) {
+      this.paymentLinks.unshift(link);
+    }
+    return link || null;
   }
 
   createPaymentLinkRecord({
@@ -1994,9 +2010,14 @@ class StoreService {
     return closedList;
   }
 
-  getRFQs() {
+  getRFQs(buyerAccountId = null) {
     this.checkAndClose48HourRFQs();
-    return this.rfqs.map((r) => {
+    let list = this.rfqs;
+    if (buyerAccountId) {
+      const targetId = String(buyerAccountId).toLowerCase();
+      list = list.filter((r) => String(r.buyerAccountId || '').toLowerCase() === targetId);
+    }
+    return list.map((r) => {
       let item = r;
       if (item && (item.poFinalised || item.poNumber) && item.status === 'Closed') {
         item = { ...item, status: 'PO Generated', poFinalised: true };
@@ -2012,18 +2033,23 @@ class StoreService {
    * Re-sync RFQs from Neon PostgreSQL so records inserted by external processes
    * (e.g. check-email CLI, background workers) are merged into memory.
    */
-  async syncRFQsFromDB(force = false) {
-    if (!pool.hasStorage()) return this.getRFQs();
+  async syncRFQsFromDB(force = false, buyerAccountId = null) {
+    if (!pool.hasStorage()) return this.getRFQs(buyerAccountId);
     const now = Date.now();
-    if (!force && this._lastRfqSyncTime && (now - this._lastRfqSyncTime < 25000)) {
-      return this.getRFQs();
+    const cacheKey = buyerAccountId || '__all__';
+    this._lastRfqSyncMap = this._lastRfqSyncMap || new Map();
+    const lastSync = this._lastRfqSyncMap.get(cacheKey) || (!buyerAccountId ? this._lastRfqSyncTime : 0);
+    if (!force && lastSync && (now - lastSync < 25000)) {
+      return this.getRFQs(buyerAccountId);
     }
     if (this._syncRFQsPromise) {
       return this._syncRFQsPromise;
     }
     this._syncRFQsPromise = (async () => {
       try {
-        const allFromDB = await domainQueries.getRFQsFromDB();
+        const allFromDB = buyerAccountId
+          ? await domainQueries.getRFQsFromDB(buyerAccountId, 100)
+          : await domainQueries.getRFQsFromDB(null, 200);
         if (Array.isArray(allFromDB)) {
           const byId = new Map(this.rfqs.map((r) => [r.id, r]));
           for (const rfq of allFromDB) {
@@ -2042,13 +2068,16 @@ class StoreService {
             (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
           );
         }
-        this._lastRfqSyncTime = Date.now();
+        if (!buyerAccountId) {
+          this._lastRfqSyncTime = Date.now();
+        }
+        this._lastRfqSyncMap.set(cacheKey, Date.now());
       } catch (err) {
         logger.error('Failed to sync RFQs from database', err, 'STORE_SERVICE');
       } finally {
         this._syncRFQsPromise = null;
       }
-      return this.getRFQs();
+      return this.getRFQs(buyerAccountId);
     })();
     return this._syncRFQsPromise;
   }
@@ -2072,7 +2101,7 @@ class StoreService {
     }
     let rfq = this.getRFQById(id);
     if (!rfq && pool.hasStorage()) {
-      await this.syncRFQsFromDB();
+      await this.syncRFQsFromDB(true);
       rfq = this.getRFQById(id);
     }
     return rfq;
@@ -3102,11 +3131,15 @@ class StoreService {
   // vendor row or buyer account from the session and passes its id here.
 
   /** Every notification addressed to one recipient, newest first. */
-  getNotificationsFor(recipientType, recipientId) {
+  getNotificationsFor(recipientType, recipientId, limit = null) {
     if (!recipientId) return [];
-    return this.notifications.filter(
+    const list = this.notifications.filter(
       (n) => n.recipientType === recipientType && n.recipientId === recipientId
     );
+    if (Number.isInteger(limit) && limit > 0) {
+      return list.slice(0, limit);
+    }
+    return list;
   }
 
   /** Count of that recipient's unread notifications. */
@@ -3713,12 +3746,16 @@ class StoreService {
    * `inviteVendorsToRFQ` (via `assignedVendors`) does that. Flags which
    * candidates are already invited so a picker UI can show that state.
    */
-  candidateVendorsForRFQ(rfq) {
+  candidateVendorsForRFQ(rfq, limit = null) {
     const signals = this._rfqCategorySignals(rfq);
-    return this.vendors
+    const candidates = this.vendors
       .filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq))
       .filter((v) => signals.some((c) => this.vendorCoversCategory(v, c)))
       .map((v) => ({ ...v, alreadyInvited: this._isInvitedVendor(v, rfq) }));
+    if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return candidates.slice(0, Number(limit));
+    }
+    return candidates;
   }
 
   /**
@@ -4590,8 +4627,11 @@ class StoreService {
   // ==========================================
   // 4. EVALUATIONS
   // ==========================================
-  getEvaluations() {
-    return this.evaluations;
+  getEvaluations(limit = null) {
+    if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return this.evaluations.slice(0, Math.min(Number(limit), 500));
+    }
+    return this.evaluations.slice(0, 500);
   }
 
   createEvaluation(evalData) {
@@ -4646,8 +4686,11 @@ class StoreService {
   // ==========================================
   // 5. AUDIT LOGS & CRYPTO VERIFICATION
   // ==========================================
-  getAuditLogs() {
-    return this.auditLogs;
+  getAuditLogs(limit = null) {
+    if (Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return this.auditLogs.slice(0, Math.min(Number(limit), 500));
+    }
+    return this.auditLogs.slice(0, 500);
   }
 
   addAuditLog({ userEmail, action, rfqNumber, ipAddress }) {
@@ -4668,8 +4711,15 @@ class StoreService {
   // ==========================================
   // 6. AI BOT FEED
   // ==========================================
-  getAIFeed() {
-    return this.aiFeed;
+  getAIFeed(limit = null) {
+    if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      return this.aiFeed.slice(0, Math.min(Number(limit), 500));
+    }
+    return this.aiFeed.slice(0, 500);
+  }
+
+  addFeedItem(feedItem) {
+    return this.addAIFeedItem(feedItem);
   }
 
   addAIFeedItem(feedItem) {
@@ -5268,9 +5318,14 @@ class StoreService {
   // Scoped per vendor. Called without a vendorId (the buyer-side catalogue
   // browse) it returns every product; the three unowned demo SKUs that used to
   // be visible only through that unfiltered path are gone.
-  getVendorCatalogue(vendorId) {
-    if (!vendorId) return this.vendorCatalogue;
-    return this.vendorCatalogue.filter((p) => p.vendorId === vendorId);
+  getVendorCatalogue(vendorId, limit = null) {
+    let items = !vendorId ? this.vendorCatalogue : this.vendorCatalogue.filter((p) => p.vendorId === vendorId);
+    if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
+      items = items.slice(0, Math.min(Number(limit), 500));
+    } else {
+      items = items.slice(0, 500);
+    }
+    return items;
   }
 
   getCatalogueProductById(id) {
@@ -5607,17 +5662,28 @@ class StoreService {
       }
     }
 
+    let scopedCatalogue = [];
+    if (sessionEmail) {
+      const email = String(sessionEmail).toLowerCase();
+      const ownVendor = (this.vendors || []).find((v) => (v.email || '').toLowerCase() === email);
+      if (ownVendor) {
+        scopedCatalogue = (this.vendorCatalogue || []).filter((p) => p.vendorId === ownVendor.id);
+      }
+    } else if (!scopedBuyerId) {
+      scopedCatalogue = (this.vendorCatalogue || []).slice(0, 50);
+    }
+
     return {
-      buyerAccounts: this.buyerAccounts,
+      buyerAccounts: (this.buyerAccounts || []).slice(0, 50),
       activeBuyerAccount: this.activeBuyerAccount,
       vendors,
       vendorsTotal,
-      evaluations: this.evaluations,
-      auditLogs: this.auditLogs,
+      evaluations: (this.evaluations || []).slice(0, 50),
+      auditLogs: (this.auditLogs || []).slice(0, 50),
       aiFeed: [],
       systemConfig: this.systemConfig,
       azureHealth: this.azureHealth,
-      vendorCatalogue: this.vendorCatalogue,
+      vendorCatalogue: scopedCatalogue,
     };
   }
 
@@ -5649,11 +5715,13 @@ class StoreService {
     return newRecord;
   }
 
-  getEnterpriseInquiries() {
+  getEnterpriseInquiries(limit = null) {
     if (!Array.isArray(this.enterpriseInquiries)) {
       this.enterpriseInquiries = loadPersistedInquiries();
     }
-    return this.enterpriseInquiries;
+    const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+    const effectiveLimit = hasLimit ? Math.min(Number(limit), 500) : 500;
+    return this.enterpriseInquiries.slice(0, effectiveLimit);
   }
 
   updateEnterpriseInquiry(id, updates) {

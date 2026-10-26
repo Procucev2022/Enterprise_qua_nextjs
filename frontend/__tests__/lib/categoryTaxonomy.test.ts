@@ -269,5 +269,48 @@ describe('categoryTaxonomy module', () => {
     ]);
     expect(getMajorCategories()).toContain('Others – New Product');
     expect(getMajorCategories()).toContain('Others – New Service');
+
+    // getDefaultCategoryTaxonomy
+    const { getDefaultCategoryTaxonomy, hasMinorCategory, hasMajorCategory, countMinorCategories } = require('@/lib/categoryTaxonomy');
+    const defaultTax = getDefaultCategoryTaxonomy();
+    expect(defaultTax.length).toBeGreaterThan(0);
+
+    // hasMinorCategory and hasMajorCategory with defaults
+    clearCategoryTaxonomy();
+    expect(hasMinorCategory('Civil Works', 'Roofing')).toBe(true);
+    expect(hasMinorCategory('Civil Works', 'Nonexistent Minor')).toBe(false);
+    expect(hasMinorCategory('', 'Roofing')).toBe(false);
+    expect(hasMinorCategory('Civil Works', '')).toBe(false);
+    expect(hasMajorCategory('Civil Works')).toBe(true);
+    expect(hasMajorCategory('')).toBe(false);
+    expect(hasMajorCategory('Nonexistent Major')).toBe(false);
+
+    // countMinorCategories with undefined minorCategories
+    setCategoryTaxonomy([
+      { majorCategory: 'Cat 1', minorCategories: undefined as any },
+      { majorCategory: 'Cat 2', minorCategories: ['M1', 'M2'] },
+    ]);
+    expect(countMinorCategories()).toBe(2);
+
+    // findMajorForMinor static defaults fallback when cleared
+    clearCategoryTaxonomy();
+    const { findMajorForMinor } = require('@/lib/categoryTaxonomy');
+    expect(findMajorForMinor('Roofing')).toBe('Civil Works');
+    expect(findMajorForMinor('Unknown Totally Absent Minor')).toBe('');
+
+    // Transform branches with empty minorCategories
+    setCategoryTaxonomy([
+      { majorCategory: 'new category-product', minorCategories: [] },
+      { majorCategory: 'new category-service', minorCategories: [] },
+      { majorCategory: 'others - new product', minorCategories: [] },
+      { majorCategory: 'others - new service', minorCategories: [] },
+      { majorCategory: 'new category', minorCategories: ['Custom'] },
+    ]);
+    expect(getMajorCategories()).toContain('Others – New Product');
+
+    // Multi-word keyword rule match
+    const multiWordMatch = autoCategorizeItem('Air Purifiers for cleanroom', '');
+    expect(multiWordMatch.majorCategory).toBe('Others – New Product');
   });
 });
+

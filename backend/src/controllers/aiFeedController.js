@@ -30,12 +30,14 @@ async function getAIFeed(req, res, next) {
   try {
     const scope = await resolveAiFeedReadScope(req);
     logger.info('Fetching AI opportunity feed alerts', { restricted: scope.restricted, buyerAccountId: scope.buyerAccountId }, 'AI_FEED_CONTROLLER');
-    const all = storeService.getAIFeed();
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 50;
+    const all = storeService.getAIFeed(scope.restricted ? null : limit);
     let feed = all;
 
     if (scope.restricted) {
       if (scope.buyerAccountId) {
-        const buyerRfqs = storeService.getRFQs().filter((r) => r.buyerAccountId === scope.buyerAccountId);
+        const buyerRfqs = storeService.getRFQs(scope.buyerAccountId).filter((r) => r.buyerAccountId === scope.buyerAccountId);
         const buyerRfqNumbers = new Set(buyerRfqs.map((r) => r.rfqNumber).filter(Boolean));
 
         feed = all.filter((item) => {
@@ -50,6 +52,10 @@ async function getAIFeed(req, res, next) {
       } else {
         feed = [];
       }
+    }
+
+    if (limit) {
+      feed = feed.slice(0, limit);
     }
 
     res.json({ success: true, data: feed });
