@@ -27,11 +27,11 @@ async function main() {
     console.log(`[INIT] Store hydration note: ${err.message}`);
   }
 
-  // 3. Ensure buyer account for manavyagnik7563@gmail.com
-  const BUYER_EMAIL = 'manavyagnik7563@gmail.com';
+  // 3. Ensure buyer account for test.buyer@procucev.com
+  const BUYER_EMAIL = 'test.buyer@procucev.com';
   const BUYER_PHONE = '9000000001';
-  const BUYER_NAME = 'Manav Yagnik';
-  const BUYER_ORG = 'Manav Enterprise';
+  const BUYER_NAME = 'Test Buyer';
+  const BUYER_ORG = 'Test Enterprise';
 
   let buyer = storeService.buyerAccounts.find(
     (b) => (b.corporateEmail || '').toLowerCase() === BUYER_EMAIL.toLowerCase()

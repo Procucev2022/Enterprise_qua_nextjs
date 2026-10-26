@@ -180,7 +180,7 @@ describe('mailerService delivery routing', () => {
 
     const withoutSender = loadMailer({ GMAIL_REFRESH_TOKEN: 'buyer', QUOTE_ALERT_GMAIL_REFRESH_TOKEN: 'quote' }, { buyer: rateLimited });
     await withoutSender.mailer.sendRfqNotCreatedEmail({ to: 'b@example.com', reason: 'NO_LINE_ITEMS' });
-    expect(withoutSender.sends[1].raw).toMatch(/Reply-To: .*manav\.procucev@gmail\.com/i);
+    expect(withoutSender.sends[1].raw).toMatch(/Reply-To: .*navin\.procucev@gmail\.com/i);
   });
 
   test('vendor mail sent from a borrowed mailbox keeps CC and replies to the vendor gateway', async () => {

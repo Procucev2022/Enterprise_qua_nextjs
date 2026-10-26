@@ -5,7 +5,7 @@ const emailGatewayService = require('./services/emailGatewayService');
 const zohoReconciliationService = require('./services/zohoReconciliationService');
 const rfqChaserScheduler = require('./services/rfqChaserScheduler');
 const { logger } = require('./services/loggerService');
-const PORT = process.env.PORT || 4000; // Reloaded with SMTP_FROM=manav.procucev@gmail.com
+const PORT = process.env.PORT || 4000;
 
 /**
  * Report database reachability at boot.

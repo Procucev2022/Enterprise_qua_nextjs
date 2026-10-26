@@ -1743,7 +1743,7 @@ describe('mailerService', () => {
           process.env.GMAIL_CLIENT_ID = 'client-id';
           process.env.GMAIL_CLIENT_SECRET = 'client-secret';
           process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN = 'quote-alert-refresh-token';
-          process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL = 'manav.procucev@gmail.com';
+          process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL = 'navin.procucev@gmail.com';
           jest.doMock('googleapis', () => ({
             google: {
               auth: { OAuth2: jest.fn(() => ({ setCredentials: jest.fn() })) },
@@ -1771,7 +1771,7 @@ describe('mailerService', () => {
         expect(res.sent).toBe(true);
         expect(res.messageId).toBe('quote-alert-msg-1');
         const decodedRaw = Buffer.from(sendArgs.requestBody.raw, 'base64url').toString('utf8');
-        expect(decodedRaw).toContain('manav.procucev@gmail.com');
+        expect(decodedRaw).toContain('navin.procucev@gmail.com');
       });
 
       test('sendQuoteReceivedEmail falls back to the buyer Gmail API when the quote-alert mailbox is not configured', async () => {
