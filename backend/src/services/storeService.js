@@ -4381,42 +4381,61 @@ class StoreService {
   isBuyerProfileUpdateRequired(buyer, rfq) {
     if (!buyer) return false;
 
-    // 1. Pending onboarding / placeholder phone / autonomous registration
-    // strictly requires profile completion across all modes.
+    // A profile update reminder is ONLY required for an unregistered buyer whose account was
+    // auto-created via inbound email and who has NOT yet logged in and completed their profile onboarding.
+    // Existing registered buyers, and auto-created buyers who have already completed/verified their profile,
+    // must NEVER be asked to update their profile — quotations must be shared directly with them.
+
+    // 1. Explicitly completed / verified profile or confirmed onboarding complete:
+    if (
+      buyer.onboardingRequired === false ||
+      buyer.profileVerified === true ||
+      buyer.accountSource === 'web_registration' ||
+      buyer.verificationStatus === 'verified'
+    ) {
+      const hasPlaceholderPhone = Boolean(
+        String(buyer.phone || buyer.mobileNumber || '').includes('9999999999') ||
+        String(buyer.phone || buyer.mobileNumber || '').includes('0000000000')
+      );
+      if (!hasPlaceholderPhone) {
+        return false;
+      }
+    }
+
+    // 2. Identify if this buyer is an unregistered / auto-created buyer whose onboarding is pending:
     const isPendingOnboarding = Boolean(
       buyer.onboardingRequired === true ||
       buyer.status === 'PENDING_ONBOARDING' ||
       buyer.verificationStatus === 'PENDING_ONBOARDING' ||
-      buyer.isAutoRegistered === true ||
+      (buyer.isAutoRegistered === true && buyer.onboardingRequired !== false) ||
       buyer.tempPasswordRequired === true ||
       buyer.profileVerified === false ||
       buyer.phoneVerified === false ||
-      String(buyer.phone || buyer.mobileNumber || '').includes('9999999999')
+      String(buyer.phone || buyer.mobileNumber || '').includes('9999999999') ||
+      String(buyer.phone || buyer.mobileNumber || '').includes('0000000000')
     );
+
     if (isPendingOnboarding) {
+      // If the buyer is an established active account without explicit pending onboarding flags,
+      // do not block them.
+      const isEstablishedActiveBuyer = Boolean(
+        (buyer.status === 'ACTIVE' || buyer.status === 'ACTIVE_VERIFIED') &&
+        buyer.onboardingRequired !== true &&
+        buyer.status !== 'PENDING_ONBOARDING' &&
+        buyer.profileVerified !== false &&
+        buyer.phoneVerified !== false &&
+        !String(buyer.phone || buyer.mobileNumber || '').includes('9999999999') &&
+        !String(buyer.phone || buyer.mobileNumber || '').includes('0000000000')
+      );
+      if (isEstablishedActiveBuyer) {
+        return false;
+      }
       return true;
     }
 
-    // 2. For V0 (mode_0), check if the buyer has completed / verified their profile.
-    // If the buyer is an already registered and verified buyer (e.g. status ACTIVE_VERIFIED,
-    // profileVerified: true, onboardingRequired: false, real phone), their existing workflow
-    // and quote delivery are 100% preserved without change.
-    // Otherwise, V0 requires them to complete their profile before accessing quotes.
-    const isV0 =
-      (rfq && (rfq.sourcingMode === 'mode_0' || rfq.sourcingMode === 'v0' || rfq.sourcingMode === 'version_0')) ||
-      buyer.sourcingMode === 'mode_0' ||
-      buyer.sourcingMode === 'v0';
-
-    if (isV0) {
-      const isRegisteredVerifiedBuyer = Boolean(
-        buyer.profileVerified === true ||
-        buyer.accountSource === 'web_registration' ||
-        ((buyer.status === 'ACTIVE_VERIFIED' || buyer.status === 'ACTIVE') && buyer.onboardingRequired === false)
-      );
-      return !isRegisteredVerifiedBuyer;
-    }
-
-    // For standard non-V0 sourcing modes, registered buyers are never blocked.
+    // 3. For any existing registered buyer across all sourcing modes (mode_0, mode_1, mode_2, mode_3):
+    // If they have no pending onboarding markers, never ask them to update profile.
+    // Directly share the quotation.
     return false;
   }
 

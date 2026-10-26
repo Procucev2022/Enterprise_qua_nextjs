@@ -4315,4 +4315,36 @@ Procucev Enterprise Solutions
 u already implements this templates but in dev not working as previously only please check and fix
 ```
 
+---
+
+### 2026-10-24T21:43:03+05:30
+
+```text
+The Log in & Review My RFQ button is redirecting to a 404 page. Please check and fix the redirect flow.
+
+The current URL is:  
+https://procucev-enterprise-frontend.procucev-enterprise.workers.dev/login
+after login it redirect to rfq summary but if the buyer login via portal it ask  to upload vendor add as current functionality don't change that functionality
+
+
+Unregistered buyer RFQ creation via email is working, and the account and email template are created as expected. However, I noticed one issue: the buyer’s mobile number is missing from the acknowledgment email. Without it, the buyer is unable to log in add 9999999999 this mobile number for unregister buyer email template 
+```
+
+---
+
+### 2026-10-26T14:12:02+05:30
+
+```text
+for existing buyer also asking to update the profile but only ask to un register buyer after create the account and rfq don't login and update the profile   for the first time quote receive it ask to update the profile if he already update the profile directly share the quotation
+```
+
+---
+
+### 2026-10-26T14:13:14+05:30
+
+```text
+continue
+```
+
+
 
