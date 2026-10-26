@@ -5362,6 +5362,8 @@ class StoreService {
               rfqNumber: rfq.rfqNumber,
               rfqTitle: rfq.title,
               vendorEmail: vendor.email,
+              deliveryDate: rfq.targetDeliveryDate || rfq.deadline,
+              deliveryLocation: rfq.deliveryLocation || rfq.deliveryCity,
             }).then((result) => {
               logger.info(
                 `[CHASER] WhatsApp to ${vendor.name} (${vendorPhone}): ${result.success ? `delivered (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,

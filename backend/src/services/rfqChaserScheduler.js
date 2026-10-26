@@ -45,6 +45,10 @@ const { getD1Binding, getWaitUntil } = require('../db/d1Bridge');
 // Only used by tests (clearScheduledChasers) and graceful shutdown.
 const pendingTimers = new Map();
 
+// Maps `${rfqNumber}:${vendorKey}:${channel}` → NodeJS.Timeout handle.
+// Ensures identical chaser timers are never scheduled twice for the same vendor & channel.
+const activeScheduledTimers = new Map();
+
 function _registerTimer(rfqNumber, handle) {
   if (!pendingTimers.has(rfqNumber)) pendingTimers.set(rfqNumber, []);
   pendingTimers.get(rfqNumber).push(handle);
@@ -58,6 +62,14 @@ function clearScheduledChasers(rfqNumber) {
   const handles = pendingTimers.get(rfqNumber) || [];
   handles.forEach((h) => clearTimeout(h));
   pendingTimers.delete(rfqNumber);
+
+  for (const [key, handle] of activeScheduledTimers.entries()) {
+    if (key.startsWith(`${rfqNumber}:`)) {
+      clearTimeout(handle);
+      activeScheduledTimers.delete(key);
+    }
+  }
+
   if (handles.length > 0) {
     logger.info(
       `Cleared ${handles.length} pending chaser timer(s) for ${rfqNumber}`,
@@ -84,12 +96,6 @@ async function _dispatchWhatsApp(rfq, vendor, jobId) {
     return { channel: 'whatsapp', skipped: true };
   }
   try {
-    // Clear this phone's throttle entry so the chaser always fires regardless
-    // of whether an immediate invite was sent within the last 30s.  The
-    // immediate send in inviteVendorsToRFQ and this scheduled chaser are two
-    // deliberately separate sends — throttle must not suppress either one.
-    whatsAppService.clearWhatsAppThrottleForPhone(phone);
-
     const result = await whatsAppService.sendRFQInvitationWhatsApp({
       phone,
       vendorName: vendor.name,
@@ -97,6 +103,8 @@ async function _dispatchWhatsApp(rfq, vendor, jobId) {
       rfqNumber: rfq.rfqNumber,
       rfqTitle: rfq.title,
       vendorEmail: vendor.email,
+      deliveryDate: rfq.targetDeliveryDate || rfq.deadline,
+      deliveryLocation: rfq.deliveryLocation || rfq.deliveryCity,
     });
     logger.info(
       `[CHASER] WhatsApp → ${vendor.name} (${phone}) for ${rfq.rfqNumber}: ${result.success ? `ok (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
@@ -136,9 +144,6 @@ async function _dispatchSms(rfq, vendor, jobId) {
     return { channel: 'sms', skipped: true };
   }
   try {
-    // Same throttle-bypass rationale as _dispatchWhatsApp above.
-    smsService.clearSmsThrottleForPhone(phone);
-
     const bidUrl = whatsAppService.generateOneClickBidUrl(rfq.rfqNumber, vendor.email);
     const result = await smsService.sendRFQChaserSms({
       mobile: phone,
@@ -217,17 +222,30 @@ async function _dispatchCall(rfq, vendor, jobId) {
   return { channel: 'call', skipped: true, reason: 'calling_not_implemented' };
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
+/**
+ * Resolves a stable string key for a vendor to deduplicate timers and job IDs.
+ * @param {object} vendor
+ * @returns {string}
+ */
+function _vendorKey(vendor) {
+  if (!vendor) return 'unknown';
+  if (vendor.id) return String(vendor.id).trim();
+  const phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
+  if (phone) return String(phone).replace(/\D/g, '').slice(-10);
+  if (vendor.email) return String(vendor.email).toLowerCase().trim();
+  return String(vendor.name || 'unknown').toLowerCase().trim();
+}
 
 /**
- * Generates a unique chaser job ID.
+ * Generates a deterministic chaser job ID.
  * @param {string} rfqNumber
- * @param {string} vendorId
+ * @param {string} vendorIdOrKey
  * @param {string} channel
  * @returns {string}
  */
-function _chaserJobId(rfqNumber, vendorId, channel) {
-  return `chaser-${rfqNumber}-${vendorId}-${channel}-${Date.now()}`;
+function _chaserJobId(rfqNumber, vendorIdOrKey, channel) {
+  const safeVendorKey = String(vendorIdOrKey || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return `chaser-${rfqNumber}-${safeVendorKey}-${channel}`;
 }
 
 /**
@@ -277,6 +295,8 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
     rfq.sourcingMode === 'v0' ||
     rfq.sourcingMode === 'version_0';
 
+  const vendorKey = _vendorKey(vendor);
+
   const smsDelay = process.env.NODE_ENV === 'test'
     ? (CHASER_DELAYS.SMS_MS ?? 5 * 60 * 1000)
     : Math.max(5 * 60 * 1000, Number(CHASER_DELAYS.SMS_MS) || (5 * 60 * 1000));
@@ -299,7 +319,7 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
           ['email', emailDelay],
         ];
     jobs.forEach(([channel, delay]) => {
-      const jobId = _chaserJobId(rfqNumber, vendor.id, channel);
+      const jobId = _chaserJobId(rfqNumber, vendorKey, channel);
       const persistPromise = _persistChaserJob(jobId, rfq, vendor, channel, delay);
       if (waitUntil) waitUntil(persistPromise);
     });
@@ -314,19 +334,24 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
   const waitUntil = getWaitUntil();
 
   // 1. SMS reminder — within 5 minutes of RFQ (reusing approved RFQ chaser SMS template)
-  const smsJobId = _chaserJobId(rfqNumber, vendor.id, 'sms');
-  let smsPromiseResolve;
-  const smsPromise = new Promise((resolve) => { smsPromiseResolve = resolve; });
-  const smsHandle = setTimeout(async () => {
-    try {
-      await _dispatchSms(rfq, vendor, smsJobId).catch(() => {/* already logged inside */ });
-    } finally {
-      smsPromiseResolve();
-    }
-  }, smsDelay);
-  _registerTimer(rfqNumber, smsHandle);
-  _persistChaserJob(smsJobId, rfq, vendor, 'sms', smsDelay);
-  if (waitUntil) waitUntil(smsPromise);
+  const smsKey = `${rfqNumber}:${vendorKey}:sms`;
+  if (!activeScheduledTimers.has(smsKey)) {
+    const smsJobId = _chaserJobId(rfqNumber, vendorKey, 'sms');
+    let smsPromiseResolve;
+    const smsPromise = new Promise((resolve) => { smsPromiseResolve = resolve; });
+    const smsHandle = setTimeout(async () => {
+      try {
+        await _dispatchSms(rfq, vendor, smsJobId).catch(() => {/* already logged inside */ });
+      } finally {
+        activeScheduledTimers.delete(smsKey);
+        smsPromiseResolve();
+      }
+    }, smsDelay);
+    activeScheduledTimers.set(smsKey, smsHandle);
+    _registerTimer(rfqNumber, smsHandle);
+    _persistChaserJob(smsJobId, rfq, vendor, 'sms', smsDelay);
+    if (waitUntil) waitUntil(smsPromise);
+  }
 
   // For V0 (Free Starter Trial): Only SMS notification is sent after 5 minutes. No follow-up notifications (Call, WhatsApp, Email).
   if (isV0) {
@@ -339,41 +364,59 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
   }
 
   // 2. Call reminder — after 6 hours (flow preserved, calling functionality deferred)
-  const callJobId = _chaserJobId(rfqNumber, vendor.id, 'call');
-  let callPromiseResolve;
-  const callPromise = new Promise((resolve) => { callPromiseResolve = resolve; });
-  const callHandle = setTimeout(async () => {
-    try {
-      await _dispatchCall(rfq, vendor, callJobId).catch(() => {/* already logged inside */ });
-    } finally {
-      callPromiseResolve();
-    }
-  }, callDelay);
-  _registerTimer(rfqNumber, callHandle);
-  _persistChaserJob(callJobId, rfq, vendor, 'call', callDelay);
-  if (waitUntil) waitUntil(callPromise);
+  const callKey = `${rfqNumber}:${vendorKey}:call`;
+  if (!activeScheduledTimers.has(callKey)) {
+    const callJobId = _chaserJobId(rfqNumber, vendorKey, 'call');
+    let callPromiseResolve;
+    const callPromise = new Promise((resolve) => { callPromiseResolve = resolve; });
+    const callHandle = setTimeout(async () => {
+      try {
+        await _dispatchCall(rfq, vendor, callJobId).catch(() => {/* already logged inside */ });
+      } finally {
+        activeScheduledTimers.delete(callKey);
+        callPromiseResolve();
+      }
+    }, callDelay);
+    activeScheduledTimers.set(callKey, callHandle);
+    _registerTimer(rfqNumber, callHandle);
+    _persistChaserJob(callJobId, rfq, vendor, 'call', callDelay);
+    if (waitUntil) waitUntil(callPromise);
+  }
 
   // 3. WhatsApp reminder — after another 6 hours (12h total from RFQ)
-  const waJobId = _chaserJobId(rfqNumber, vendor.id, 'whatsapp');
-  let waPromiseResolve;
-  const waPromise = new Promise((resolve) => { waPromiseResolve = resolve; });
-  const waHandle = setTimeout(async () => {
-    try {
-      await _dispatchWhatsApp(rfq, vendor, waJobId).catch(() => {/* already logged inside */ });
-    } finally {
-      waPromiseResolve();
-    }
-  }, waDelay);
-  _registerTimer(rfqNumber, waHandle);
-  _persistChaserJob(waJobId, rfq, vendor, 'whatsapp', waDelay);
+  const waKey = `${rfqNumber}:${vendorKey}:whatsapp`;
+  if (!activeScheduledTimers.has(waKey)) {
+    const waJobId = _chaserJobId(rfqNumber, vendorKey, 'whatsapp');
+    let waPromiseResolve;
+    const waPromise = new Promise((resolve) => { waPromiseResolve = resolve; });
+    const waHandle = setTimeout(async () => {
+      try {
+        await _dispatchWhatsApp(rfq, vendor, waJobId).catch(() => {/* already logged inside */ });
+      } finally {
+        activeScheduledTimers.delete(waKey);
+        waPromiseResolve();
+      }
+    }, waDelay);
+    activeScheduledTimers.set(waKey, waHandle);
+    _registerTimer(rfqNumber, waHandle);
+    _persistChaserJob(waJobId, rfq, vendor, 'whatsapp', waDelay);
+  }
 
   // 4. Reminder email — after 24 hours
-  const emailJobId = _chaserJobId(rfqNumber, vendor.id, 'email');
-  const emailHandle = setTimeout(() => {
-    _dispatchReminderEmail(rfq, vendor, creditInfo, emailJobId).catch(() => {/* already logged inside */ });
-  }, emailDelay);
-  _registerTimer(rfqNumber, emailHandle);
-  _persistChaserJob(emailJobId, rfq, vendor, 'email', emailDelay);
+  const emailKey = `${rfqNumber}:${vendorKey}:email`;
+  if (!activeScheduledTimers.has(emailKey)) {
+    const emailJobId = _chaserJobId(rfqNumber, vendorKey, 'email');
+    const emailHandle = setTimeout(async () => {
+      try {
+        await _dispatchReminderEmail(rfq, vendor, creditInfo, emailJobId).catch(() => {/* already logged inside */ });
+      } finally {
+        activeScheduledTimers.delete(emailKey);
+      }
+    }, emailDelay);
+    activeScheduledTimers.set(emailKey, emailHandle);
+    _registerTimer(rfqNumber, emailHandle);
+    _persistChaserJob(emailJobId, rfq, vendor, 'email', emailDelay);
+  }
 
   logger.info(
     `[CHASER] Scheduled for ${vendor.name} on ${rfqNumber}: SMS +${smsDelay}ms, Call +${callDelay}ms, WhatsApp +${waDelay}ms, Email +${emailDelay}ms`,
@@ -459,13 +502,34 @@ async function dispatchDueChaserJobs(limit = 25) {
  */
 function scheduleRFQChasers(rfq, vendors, getCreditInfo = () => ({})) {
   if (!rfq || !Array.isArray(vendors) || vendors.length === 0) return;
+
+  // Deduplicate vendors by ID / phone / email so duplicate vendor records are not passed
+  const seenVendorKeys = new Set();
+  const dedupedVendors = [];
   vendors.forEach((vendor) => {
+    if (!vendor) return;
+    const key = vendor.id
+      ? `id:${String(vendor.id).trim()}`
+      : vendor.phone
+        ? `phone:${String(vendor.phone).replace(/\D/g, '').slice(-10)}`
+        : vendor.email
+          ? `email:${String(vendor.email).toLowerCase().trim()}`
+          : vendor.name
+            ? `name:${String(vendor.name).toLowerCase().trim()}`
+            : null;
+
+    if (key && seenVendorKeys.has(key)) return;
+    if (key) seenVendorKeys.add(key);
+    dedupedVendors.push(vendor);
+  });
+
+  dedupedVendors.forEach((vendor) => {
     const credit = typeof getCreditInfo === 'function' ? getCreditInfo(vendor) : (getCreditInfo || {});
     scheduleVendorChaser(rfq, vendor, credit);
   });
   logger.info(
-    `[CHASER] Queued chaser sequence for ${vendors.length} vendor(s) on ${rfq.rfqNumber}`,
-    { rfqNumber: rfq.rfqNumber, vendorCount: vendors.length },
+    `[CHASER] Queued chaser sequence for ${dedupedVendors.length} vendor(s) on ${rfq.rfqNumber}`,
+    { rfqNumber: rfq.rfqNumber, vendorCount: dedupedVendors.length },
     'RFQ_CHASER'
   );
 }
@@ -493,6 +557,11 @@ async function recoverChasersOnBoot() {
     let recovered = 0;
 
     for (const row of pending) {
+      const jobKey = `${row.rfq_number}:${row.vendor_id || 'unknown'}:${row.channel}`;
+      if (activeScheduledTimers.has(jobKey)) {
+        continue;
+      }
+
       const fireAt = new Date(row.fire_at).getTime();
       const delay = Math.max(0, fireAt - now);
       const jobId = row.id;
@@ -517,7 +586,14 @@ async function recoverChasersOnBoot() {
             ? () => _dispatchCall(rfqStub, vendorStub, jobId).catch(() => { })
             : () => _dispatchReminderEmail(rfqStub, vendorStub, {}, jobId).catch(() => { });
 
-      const handle = setTimeout(dispatchFn, delay);
+      const handle = setTimeout(async () => {
+        try {
+          await dispatchFn();
+        } finally {
+          activeScheduledTimers.delete(jobKey);
+        }
+      }, delay);
+      activeScheduledTimers.set(jobKey, handle);
       _registerTimer(row.rfq_number, handle);
       recovered++;
 
@@ -542,9 +618,12 @@ module.exports = {
   recoverChasersOnBoot,
   dispatchDueChaserJobs,
   pendingTimers,
+  activeScheduledTimers,
   // Exported for unit tests only — not part of the public contract
   _dispatchWhatsApp,
   _dispatchSms,
   _dispatchCall,
   _dispatchReminderEmail,
+  _chaserJobId,
+  _vendorKey,
 };
