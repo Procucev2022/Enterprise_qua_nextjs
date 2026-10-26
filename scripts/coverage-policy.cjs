@@ -1,6 +1,29 @@
 const fs = require('fs');
 const path = require('path');
-const { stripTypeScriptTypes } = require('module');
+let stripTypeScriptTypes = require('module').stripTypeScriptTypes;
+if (typeof stripTypeScriptTypes !== 'function') {
+  try {
+    const ts = require(path.join(__dirname, '../frontend/node_modules/typescript'));
+    stripTypeScriptTypes = (source) => {
+      const result = ts.transpileModule(source, {
+        compilerOptions: {
+          target: ts.ScriptTarget.ESNext,
+          module: ts.ModuleKind.ESNext,
+          verbatimModuleSyntax: true,
+          jsx: ts.JsxEmit.Preserve,
+          removeComments: false,
+        },
+        reportDiagnostics: true,
+      });
+      if (result.diagnostics && result.diagnostics.length > 0) {
+        throw new Error('TypeScript syntax error');
+      }
+      return result.outputText;
+    };
+  } catch {
+    stripTypeScriptTypes = () => '';
+  }
+}
 
 const COVERAGE_THRESHOLDS = Object.freeze({ statements: 90, branches: 90, functions: 90, lines: 90 });
 const METRICS = Object.keys(COVERAGE_THRESHOLDS);

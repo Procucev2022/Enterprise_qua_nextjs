@@ -135,7 +135,7 @@ test.each(['deploy-dev.yml', 'deploy-prod.yml'])('%s blocks deployment on both w
 });
 
 test('the workspace workflow verifies migrations and both project inventories, including on pushes', () => {
-  const yaml = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/pr-quality-check.yml'), 'utf8');
+  const yaml = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/pr-quality-check.yml'), 'utf8').replace(/\r\n/g, '\n');
   expect(yaml).toContain('branches: [main, prod,');
   expect(yaml).toContain('image: postgres:16');
   expect(yaml).toContain('run: npm run db:migrate --prefix backend');

@@ -301,10 +301,12 @@ describe('catalogue workbook preview validation', () => {
     mockApp.currentUserSession = null;
     mockApp.vendorCatalogue = Array.from({ length: 99 }, (_, index) => ({ id: `${index}`, sku: `ITEM-${index}`, name: 'Existing', category: 'Pumps', specs: '', unitPrice: 1, leadTimeDays: 1, moq: 1 }));
     jest.mocked(parseCatalogueWorkbook).mockReturnValue({ success: true, error: null, rows: [row(), row({ rowNumber: 3, sku: 'IMPORTED-2' })] });
-    render(<ItemCatalogue />);
+    const { container } = render(<ItemCatalogue />);
     upload(new File(['workbook'], 'catalogue.xlsx'));
-    const importButton = await screen.findByRole('button', { name: /Import Valid Rows/ });
-    fireEvent.click(importButton);
+    await waitFor(() => expect(parseCatalogueWorkbook).toHaveBeenCalled());
+    await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(1));
+    const importButton = screen.getByRole('button', { name: /Import Valid Rows/ });
+    await act(async () => { fireEvent.click(importButton); });
     expect(showToast).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('1'), 'warning');
     expect(global.fetch).not.toHaveBeenCalled();
   });

@@ -63,6 +63,7 @@ jobs:
         id: tests
         run: npm run test:coverage --prefix backend
         env:
+          NODE_OPTIONS: --max-old-space-size=4096
           DATABASE_URL: ''
           CLOUDFLARE_ACCOUNT_ID: ''
           CLOUDFLARE_D1_DATABASE_ID: ''

@@ -356,6 +356,47 @@ describe('Buyer profile service', () => {
       const profile = await buyerProfileService.getProfile(SESSION);
       expect(profile.companyName).toBe('Test Corp');
     });
+
+    test('auto-heals with city only and pan directly when state is not available', async () => {
+      const partialProfile = {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        companyName: 'Test Corp',
+        street: null,
+        city: null,
+        state: null,
+        pincode: null,
+        country: '',
+      };
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: { ...partialProfile } });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        city: 'Jaipur',
+        pan: 'ABCDE1234F',
+      });
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ found: true });
+
+      const profile = await buyerProfileService.getProfile(SESSION);
+      expect(profile.street).toBe('Jaipur');
+      expect(profile.panNumber).toBe('ABCDE1234F');
+      expect(profile.country).toBe('India');
+    });
+
+    test('auto-heals with direct street from buyer account', async () => {
+      const partialProfile = {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        companyName: 'Test Corp',
+        street: null,
+      };
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: { ...partialProfile } });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        street: '123 MG Road',
+      });
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ found: true });
+
+      const profile = await buyerProfileService.getProfile(SESSION);
+      expect(profile.street).toBe('123 MG Road');
+    });
   });
 
   describe('resolveOrganizationId lookup failure in getDispatchTemplates', () => {
@@ -619,6 +660,90 @@ describe('Buyer profile service', () => {
       await expect(
         buyerProfileService.saveProfile(SESSION, { companyName: 'ACME Ltd' })
       ).rejects.toMatchObject({ status: 503 });
+    });
+
+    test('syncs storeService buyer account with real phone and dispatches notifications', async () => {
+      mockHappyPath();
+      const updateAccSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({});
+      const dispatchSpy = jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue({});
+
+      await buyerProfileService.saveProfile(SESSION, {
+        companyName: 'ACME Real Ltd',
+        contactName: 'Alice',
+        contactPhone: '9876543210',
+        city: 'Mumbai',
+        state: 'Maharashtra',
+        pincode: '400001',
+        gstNumber: '27AAAAA0000A1Z5',
+        panNumber: 'AAAAA0000A',
+      });
+
+      expect(updateAccSpy).toHaveBeenCalledWith(
+        SESSION.email,
+        expect.objectContaining({
+          organizationName: 'ACME Real Ltd',
+          phone: '9876543210',
+          phoneVerified: true,
+          status: 'ACTIVE_VERIFIED',
+        })
+      );
+      expect(dispatchSpy).toHaveBeenCalledWith(SESSION.email);
+    });
+
+    test('syncs storeService with placeholder phone without verifying phone', async () => {
+      mockHappyPath();
+      const updateAccSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({});
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue({});
+
+      await buyerProfileService.saveProfile(SESSION, {
+        companyName: 'ACME Placeholder Ltd',
+        contactPhone: '9999999999',
+      });
+
+      expect(updateAccSpy).toHaveBeenCalledWith(
+        SESSION.email,
+        expect.not.objectContaining({
+          phoneVerified: true,
+        })
+      );
+    });
+
+    test('syncs storeService with 0000000000 placeholder phone', async () => {
+      mockHappyPath();
+      const updateAccSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({});
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue({});
+
+      await buyerProfileService.saveProfile(SESSION, {
+        companyName: 'ACME Zero Ltd',
+        contactPhone: '0000000000',
+      });
+
+      expect(updateAccSpy).toHaveBeenCalledWith(
+        SESSION.email,
+        expect.not.objectContaining({
+          phoneVerified: true,
+        })
+      );
+    });
+
+    test('syncs storeService successfully with valid profile data', async () => {
+      mockHappyPath();
+      jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({});
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue({});
+
+      const result = await buyerProfileService.saveProfile(SESSION, { companyName: 'ACME Valid', city: 'Pune' });
+      expect(result).toBeDefined();
+    });
+
+    test('handles storeService sync errors gracefully without throwing', async () => {
+      mockHappyPath();
+      jest.spyOn(storeService, 'updateBuyerAccount').mockImplementation(() => {
+        throw new Error('Store sync failed');
+      });
+
+      await expect(
+        buyerProfileService.saveProfile(SESSION, { companyName: 'ACME Ltd', contactPhone: '9876543210' })
+      ).resolves.toBeDefined();
     });
   });
 
