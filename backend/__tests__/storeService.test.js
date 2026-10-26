@@ -2959,6 +2959,24 @@ describe('demo RFQ seeding', () => {
       // 11. Non-V0 buyer with placeholder 9999999999 phone returns true
       expect(storeService.isBuyerProfileUpdateRequired({ phone: '+919999999999' })).toBe(true);
       expect(storeService.isBuyerProfileUpdateRequired({ mobileNumber: '9999999999' })).toBe(true);
+
+      // 12. Existing buyer with status ACTIVE and real phone in mode_0 returns false (not blocked)
+      expect(storeService.isBuyerProfileUpdateRequired({ id: 'b-exist-active', status: 'ACTIVE', phone: '9876543210' }, { sourcingMode: 'mode_0' })).toBe(false);
+
+      // 13. Existing buyer with only corporateEmail and real phone in mode_0 returns false
+      expect(storeService.isBuyerProfileUpdateRequired({ corporateEmail: 'existing.buyer@industry.com', phone: '9876543210' }, { sourcingMode: 'mode_0' })).toBe(false);
+
+      // 14. Auto-created buyer after completing profile update returns false
+      expect(
+        storeService.isBuyerProfileUpdateRequired({
+          isAutoRegistered: true,
+          onboardingRequired: false,
+          profileVerified: true,
+          phoneVerified: true,
+          status: 'ACTIVE_VERIFIED',
+          phone: '9876543210',
+        }, { sourcingMode: 'mode_0' })
+      ).toBe(false);
     });
 
     test('hasQuoteAckBeenSent and markQuoteAckSent track acknowledgments accurately', () => {
@@ -3107,6 +3125,89 @@ describe('demo RFQ seeding', () => {
           rfq: expect.objectContaining({ rfqNumber: 'RFQ-REG-Q-1' }),
           quote,
           recipientName: 'Tata Steel Procurement',
+        })
+      );
+
+      quoteSpy.mockRestore();
+      remindSpy.mockRestore();
+      queueSpy.mockRestore();
+    });
+
+    test('emailQuoteToBuyer dispatches quotation email directly to existing buyer with status ACTIVE without requiring profile completion', () => {
+      const quoteSpy = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
+      const remindSpy = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
+      const queueSpy = jest.spyOn(storeService, 'queuePendingQuoteNotification');
+
+      const existingBuyer = storeService.addBuyerAccount({
+        id: 'buyer-existing-quote-test',
+        organizationName: 'Existing Industries Ltd',
+        corporateEmail: 'existing.buyer@industry.com',
+        status: 'ACTIVE',
+        mobileNumber: '+919876543210',
+      });
+
+      const rfq = storeService.createRFQ(
+        { id: 'rfq-exist-quote-1', rfqNumber: 'RFQ-EXIST-Q-1', title: 'Flanges & Valves', sourcingMode: 'mode_0' },
+        existingBuyer
+      );
+
+      const quote = { id: 'q-exist-1', vendorId: 'v-flange', vendorName: 'Precision Flanges', totalPrice: 85000 };
+
+      const outcome = storeService.emailQuoteToBuyer(rfq, quote);
+
+      expect(outcome).toBe(true);
+      expect(queueSpy).not.toHaveBeenCalled();
+      expect(remindSpy).not.toHaveBeenCalled();
+      expect(quoteSpy).toHaveBeenCalledWith(
+        'existing.buyer@industry.com',
+        expect.objectContaining({
+          rfq: expect.objectContaining({ rfqNumber: 'RFQ-EXIST-Q-1' }),
+          quote,
+          recipientName: 'Existing Industries Ltd',
+        })
+      );
+
+      quoteSpy.mockRestore();
+      remindSpy.mockRestore();
+      queueSpy.mockRestore();
+    });
+
+    test('emailQuoteToBuyer dispatches quotation email directly to auto-created buyer after they updated their profile', () => {
+      const quoteSpy = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
+      const remindSpy = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
+      const queueSpy = jest.spyOn(storeService, 'queuePendingQuoteNotification');
+
+      const autoBuyer = storeService.addBuyerAccount({
+        id: 'buyer-auto-updated-test',
+        organizationName: 'Auto Created Buyer Org',
+        corporateEmail: 'auto.buyer.updated@test.com',
+        status: 'ACTIVE_VERIFIED',
+        onboardingRequired: false,
+        profileVerified: true,
+        phoneVerified: true,
+        isAutoRegistered: false,
+        tempPasswordRequired: false,
+        mobileNumber: '+919876543210',
+      });
+
+      const rfq = storeService.createRFQ(
+        { id: 'rfq-auto-updated-1', rfqNumber: 'RFQ-AUTO-UP-1', title: 'Electrical Panels', sourcingMode: 'mode_0' },
+        autoBuyer
+      );
+
+      const quote = { id: 'q-auto-1', vendorId: 'v-elec', vendorName: 'Power Switchgears', totalPrice: 210000 };
+
+      const outcome = storeService.emailQuoteToBuyer(rfq, quote);
+
+      expect(outcome).toBe(true);
+      expect(queueSpy).not.toHaveBeenCalled();
+      expect(remindSpy).not.toHaveBeenCalled();
+      expect(quoteSpy).toHaveBeenCalledWith(
+        'auto.buyer.updated@test.com',
+        expect.objectContaining({
+          rfq: expect.objectContaining({ rfqNumber: 'RFQ-AUTO-UP-1' }),
+          quote,
+          recipientName: 'Auto Created Buyer Org',
         })
       );
 

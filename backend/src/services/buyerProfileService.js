@@ -418,6 +418,36 @@ async function saveProfile(sessionUser, body = {}, ipAddress) {
     ipAddress,
   });
 
+  if (email) {
+    try {
+      const isRealPhone = Boolean(
+        patch.contactPhone &&
+        !String(patch.contactPhone).includes('9999999999') &&
+        !String(patch.contactPhone).includes('0000000000')
+      );
+      storeService.updateBuyerAccount(email, {
+        organizationName: patch.companyName,
+        contactPerson: patch.contactName,
+        ...(patch.contactPhone ? { phone: patch.contactPhone, mobileNumber: patch.contactPhone } : {}),
+        city: patch.city,
+        state: patch.state,
+        pincode: patch.pincode,
+        gstin: patch.gstNumber,
+        pan: patch.panNumber,
+        profileVerified: true,
+        ...(isRealPhone ? { phoneVerified: true } : {}),
+        status: 'ACTIVE_VERIFIED',
+        verificationStatus: 'verified',
+        onboardingRequired: false,
+        isAutoRegistered: false,
+        tempPasswordRequired: false,
+      });
+      await storeService.dispatchPendingQuoteNotifications(email);
+    } catch (syncErr) {
+      logger.warn('Failed to sync storeService buyerAccount in saveProfile', { error: syncErr.message, email }, LOG_CATEGORY);
+    }
+  }
+
   return {
     profile: saved.found ? saved.profile : null,
     categoryCount: result.categoryCount,

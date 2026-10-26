@@ -20,13 +20,15 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
     smsService.clearSmsThrottleCache();
     whatsAppService.clearWhatsAppThrottleCache();
 
-    // 1. Create a buyer account with 0 free credits and free trial plan
+    // 1. Create an unverified buyer account with 0 free credits and free trial plan
     buyerAccount = storeService.addBuyerAccount({
       organizationName: 'Acme Test Corp',
       corporateEmail: BUYER_EMAIL,
       contactPhone: '+919876543210',
       subscriptionPlan: 'free_trial',
       remainingFreeRFQs: 0, // 0 credits remaining
+      onboardingRequired: true,
+      profileVerified: false,
     });
 
     const token = authService.generateSessionToken({

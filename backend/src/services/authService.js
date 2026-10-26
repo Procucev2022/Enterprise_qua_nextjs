@@ -1226,8 +1226,11 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   // 6. Update buyer account in storeService
   const updatedBuyer = storeService.updateBuyerAccount(normalizedEmail, {
     companyName: companyName || dbUser.orgName,
+    organizationName: companyName || dbUser.orgName,
     contactName: contactName || dbUser.name,
+    contactPerson: contactName || dbUser.name,
     phone: cleanedMobile,
+    mobileNumber: cleanedMobile,
     city: city || '',
     state: state || '',
     pincode: pincode || '',
@@ -1241,6 +1244,8 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     emailVerified: true,
     phoneVerified: true,
     isApproved: true,
+    isAutoRegistered: false,
+    tempPasswordRequired: false,
   });
 
   // Also update organization profile in database if available
