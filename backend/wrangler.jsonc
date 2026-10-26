@@ -34,7 +34,8 @@
     "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
     "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
     "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
-    "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_reminder_notification_v2",
+    "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_notification_for_sellers_for_rfq_feb_5",
+    "WHATSAPP_SUPPORT_NUMBER": "+917090170801",
     "SMS_GATEWAY_URL": "https://sms.sendmsg.in/datasend",
     "SMS_GATEWAY_SENDER": "PROCUC",
     "SMS_GATEWAY_SMSGID": "1102294821",
@@ -108,7 +109,12 @@
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
         "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
+<<<<<<< HEAD
         "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_reminder_notification_v2",
+=======
+        "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_notification_for_sellers_for_rfq_feb_5",
+        "WHATSAPP_SUPPORT_NUMBER": "+917090170801",
+>>>>>>> origin/main
         "SMS_GATEWAY_URL": "https://sms.sendmsg.in/datasend",
         "SMS_GATEWAY_SENDER": "PROCUC",
         "SMS_GATEWAY_SMSGID": "1102294821",
@@ -154,7 +160,12 @@
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
         "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
+<<<<<<< HEAD
         "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_reminder_notification_v2",
+=======
+        "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_notification_for_sellers_for_rfq_feb_5",
+        "WHATSAPP_SUPPORT_NUMBER": "+917090170801",
+>>>>>>> origin/main
         "SMS_GATEWAY_URL": "https://sms.sendmsg.in/datasend",
         "SMS_GATEWAY_SENDER": "PROCUC",
         "SMS_GATEWAY_SMSGID": "1102294821",
@@ -208,7 +219,12 @@
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
         "WHATSAPP_BASE_URL": "https://media.sendmsg.in",
         "WHATSAPP_TEMPLATE_BASE_URL": "https://wsapi.sendmsg.in",
+<<<<<<< HEAD
         "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_reminder_notification_v2",
+=======
+        "WHATSAPP_TEMPLATE_RFQ_NOTIFICATION": "rfq_notification_for_sellers_for_rfq_feb_5",
+        "WHATSAPP_SUPPORT_NUMBER": "+917090170801",
+>>>>>>> origin/main
         "SMS_GATEWAY_URL": "https://sms.sendmsg.in/datasend",
         "SMS_GATEWAY_SENDER": "PROCUC",
         "SMS_GATEWAY_SMSGID": "1102294821",

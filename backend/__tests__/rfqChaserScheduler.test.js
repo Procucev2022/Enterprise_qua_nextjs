@@ -760,4 +760,59 @@ describe('recoverChasersOnBoot and dispatch error handling', () => {
   });
 });
 
+// ── Deduplication & Duplicate Prevention ──────────────────────────────────────
 
+describe('Deduplication & Duplicate Prevention', () => {
+  test('scheduleRFQChasers deduplicates identical vendor stubs in the array', () => {
+    // Array contains same vendor twice
+    scheduler.scheduleRFQChasers(RFQ, [VENDOR, VENDOR]);
+    // Exactly 4 timers registered (not 8)
+    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(4);
+  });
+
+  test('scheduleVendorChaser skips scheduling duplicate timers if invoked multiple times', () => {
+    scheduler.scheduleVendorChaser(RFQ, VENDOR);
+    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(4);
+
+    // Repeated call for same RFQ and vendor
+    scheduler.scheduleVendorChaser(RFQ, VENDOR);
+    // Still exactly 4 timers
+    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(4);
+  });
+
+  test('clearScheduledChasers clears activeScheduledTimers', () => {
+    scheduler.scheduleVendorChaser(RFQ, VENDOR);
+    expect(scheduler.activeScheduledTimers.size).toBe(4);
+
+    scheduler.clearScheduledChasers(RFQ.rfqNumber);
+    expect(scheduler.activeScheduledTimers.size).toBe(0);
+    expect(scheduler.pendingTimers.has(RFQ.rfqNumber)).toBe(false);
+  });
+
+  test('_chaserJobId generates deterministic, repeatable job IDs without timestamps', () => {
+    const id1 = scheduler._chaserJobId('RFQ-123', 'v-456', 'sms');
+    const id2 = scheduler._chaserJobId('RFQ-123', 'v-456', 'sms');
+    expect(id1).toBe('chaser-RFQ-123-v-456-sms');
+    expect(id2).toBe('chaser-RFQ-123-v-456-sms');
+  });
+
+  test('_dispatchSms does not wipe out recent throttle cache', async () => {
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    const sendSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({
+      success: true,
+      messageId: 'sms-1',
+    });
+
+    // First dispatch
+    await scheduler._dispatchSms(RFQ, VENDOR);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+
+    // Second dispatch directly following should NOT clear throttle before calling sendRFQChaserSms
+    await scheduler._dispatchSms(RFQ, VENDOR);
+    expect(sendSpy).toHaveBeenCalledTimes(2);
+
+    process.env.NODE_ENV = origEnv;
+  });
+});
