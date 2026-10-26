@@ -2797,15 +2797,15 @@ again not showing the number of procucev vendors can assign this rfq in v2
 Failed to load RFQs: The RFQ could not be read. Try again, and if it persists the API may be unavailable.
 591 | // Reported rather than silently swallowed, but the list is left alone: a
 592 | // transient failure should not blank a dashboard the buyer is reading.
-> 593 | console.error('Failed to load RFQs:', result.error);
-| ^
-594 | return;
-595 | }
-596 |
-at error (lib/store.tsx:593:15)
-at refreshFromDB (lib/store.tsx:643:9)
-[CI failure log on Frontend Build, Lint, Typecheck & Coverage -> Run Frontend Unit Tests & 90% Coverage Gate]
 
+> 593 | console.error('Failed to load RFQs:', result.error);
+> | ^
+> 594 | return;
+> 595 | }
+> 596 |
+> at error (lib/store.tsx:593:15)
+> at refreshFromDB (lib/store.tsx:643:9)
+> [CI failure log on Frontend Build, Lint, Typecheck & Coverage -> Run Frontend Unit Tests & 90% Coverage Gate]
 
 ## 2026-10-12
 
@@ -2816,9 +2816,10 @@ can you implement this easy task and dont create workflow and only direct code a
 3. Display the RFQ version (v0/V1/V2/v3) on the left side of the RFQ number in the Operational Monitoring Kanban. Ensure the version is clearly visible for easy identification.
 4. Display the buyer's phone number in the Category Manager's Buyer RFQ Console under the buyer details section. Ensure the phone number is clearly visible and correctly mapped to the respective buyer.
 5. In category manager - Bulk Vendor Upload Status: When uploading vendor data, the system displays "Upload Completed" with a red X icon even when all records are duplicates and zero vendors are imported. The status message should accurately reflect the upload result, displaying "No Vendors Imported" or "Upload Failed" when no records are imported, and "Upload Partially Completed" when only some records are imported successfully.
-7. Please remove the AI Quality / Match Score section from the Vendor Comparison page, including the percentage score, progress bar, and parameter breakdown (P, L, W).
+6. Please remove the AI Quality / Match Score section from the Vendor Comparison page, including the percentage score, progress bar, and parameter breakdown (P, L, W).
 
 ## 2026-10-13 — Category Manager single/bulk vendor invite + coverage/push + bugs
+
 category manager side implement single vendor invite features in this model and implement this direct and dont create workflow i need urgent
 
 first pass coverage and push and then start implement on bug
@@ -2831,7 +2832,7 @@ Implement fix 4 for 503, kind of issue, that it should start with fallback model
 
 No need of flag, it is expected to happen always, please remove this flag, GEMINI_START_WITH_FALLBACK=false
 
-Also, no need of two gemini models env variables (GEMINI_PRIMARY_MODEL, GEMINI_FALLBACK_MODELS), use one env variable for "GEMINI_MODELS" where all models can be provided in order, such as gemini 3.8 flash, gemini 3.7 flash, gemini 3.6 flash, gemini 3.5 flash, gemini 3.5 flash lite, gemini 3.1 flash lite. 
+Also, no need of two gemini models env variables (GEMINI_PRIMARY_MODEL, GEMINI_FALLBACK_MODELS), use one env variable for "GEMINI_MODELS" where all models can be provided in order, such as gemini 3.8 flash, gemini 3.7 flash, gemini 3.6 flash, gemini 3.5 flash, gemini 3.5 flash lite, gemini 3.1 flash lite.
 
 With these many backup, it is difficult for code to fail on 503.
 
@@ -2919,18 +2920,17 @@ Search the entire application for existing hardcoded V1/V2/V3 or old version str
 ## 2026-10-19T15:58:55+05:30
 
 ```text
-Buyer Portal	RFQ Details	Add an Extend RFQ option beside Close RFQ, allowing buyers to extend the RFQ deadline by 24 or 48 hours. Update and display the revised closing deadline.				Anurag 
+Buyer Portal	RFQ Details	Add an Extend RFQ option beside Close RFQ, allowing buyers to extend the RFQ deadline by 24 or 48 hours. Update and display the revised closing deadline.				Anurag
 
-om buyer porter only on oper RFA we are giving an only ome time exptention of  24 to 48 hrs only can extentend theri RFA button right complete this feature the button will be above close RFA only for the RFA tha are open 
+om buyer porter only on oper RFA we are giving an only ome time exptention of  24 to 48 hrs only can extentend theri RFA button right complete this feature the button will be above close RFA only for the RFA tha are open
 ```
 
-
 ```text
-search where I need to  chnage the backend I dont't most of the api calling are happending form the production link check 
+search where I need to  chnage the backend I dont't most of the api calling are happending form the production link check
 
 --prefix backend" "npm run dev --prefix frontend"
 
-[FRONTEND] 
+[FRONTEND]
 [FRONTEND] > procucev-enterprise-frontend@2.1.0 dev
 [FRONTEND] > next dev -p 3000
 [FRONTEND]
@@ -2952,7 +2952,7 @@ search where I need to  chnage the backend I dont't most of the api calling are 
 [BACKEND] [nodemon] starting `node src/server.js`
 [FRONTEND]  ✓ Ready in 9.2s
 [BACKEND] [INFO] [SERVER] Database connected: PostgreSQL (defaultdb) — 104 active accounts, 20069 vendors, 35 RFQs, 2231ms
-[BACKEND] [INFO] [STORE_SERVICE] Domain records loaded from PostgreSQL {"vendors":500,"vendorsTotal":610016,"rfqs":268,"evaluations":1,"vendorCatalogue":2,"buyerAccounts":17,"aiFeed":100,"auditLogs":5909,"notifications":2789,"paymentLinks":74}      
+[BACKEND] [INFO] [STORE_SERVICE] Domain records loaded from PostgreSQL {"vendors":500,"vendorsTotal":610016,"rfqs":268,"evaluations":1,"vendorCatalogue":2,"buyerAccounts":17,"aiFeed":100,"auditLogs":5909,"notifications":2789,"paymentLinks":74}
 [BACKEND] [INFO] [RFQ_CHASER] [CHASER] Boot recovery: no pending chasers in D1.
 [BACKEND] [INFO] [SERVER] Email ingestion gateway not started: undefined
 [BACKEND] [INFO] [ZOHO_RECONCILIATION] Zoho payment-link reconciliation polling every 600s
@@ -2978,25 +2978,25 @@ search where I need to  chnage the backend I dont't most of the api calling are 
 [FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 162ms
 [FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 504ms
 [FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 131ms
-[BACKEND] ^CTerminate batch job (Y/N)? 
+[BACKEND] ^CTerminate batch job (Y/N)?
 [FRONTEND] Terminate batch job (Y/N)?
 
 
- *  History restored 
+ *  History restored
 
 PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>  npm run dev
 
 > procucev-enterprise-root@2.1.0 dev
 > concurrently -k -n "BACKEND,FRONTEND" -c "bgBlue.bold,bgGreen.bold" "npm run dev --prefix backend" "npm run dev --prefix frontend"
 
-[FRONTEND] 
+[FRONTEND]
 [FRONTEND] > procucev-enterprise-frontend@2.1.0 dev
 [FRONTEND] > next dev -p 3000
-[FRONTEND] 
-[BACKEND] 
+[FRONTEND]
+[BACKEND]
 [BACKEND] > procucev-enterprise-node@2.1.0 dev
 [BACKEND] > nodemon src/server.js
-[BACKEND] 
+[BACKEND]
 [BACKEND] [nodemon] 3.1.14
 [BACKEND] [nodemon] to restart at any time, enter `rs`
 [BACKEND] [nodemon] watching path(s): *.*
@@ -3020,17 +3020,18 @@ PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>  npm run dev
 [BACKEND] [ERROR] [SERVER] Database UNAVAILABLE (PostgreSQL): getaddrinfo ENOTFOUND enterprise-qua-dev-anshulstartups-bcb8.k.aivencloud.com. Logins and all data-backed requests will be rejected until this is resolved.
 [FRONTEND]  ✓ Compiled /_not-found in 1180ms (727 modules)
 [FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 2372ms
-[BACKEND] [INFO] [STORE_SERVICE] Domain records loaded from PostgreSQL {"vendors":500,"vendorsTotal":610016,"rfqs":268,"evaluations":1,"vendorCatalogue":2,"buyerAccounts":17,"aiFeed":100,"auditLogs":5916,"notifications":2789,"paymentLinks":74}      
+[BACKEND] [INFO] [STORE_SERVICE] Domain records loaded from PostgreSQL {"vendors":500,"vendorsTotal":610016,"rfqs":268,"evaluations":1,"vendorCatalogue":2,"buyerAccounts":17,"aiFeed":100,"auditLogs":5916,"notifications":2789,"paymentLinks":74}
 [FRONTEND]  GET /buyer/dashboard 200 in 681ms
 [FRONTEND]  ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
 [FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 108ms
 [BACKEND] [INFO] [RFQ_CHASER] [CHASER] Boot recovery: no pending chasers in D1.
 [BACKEND] [INFO] [SERVER] Email ingestion gateway not started: undefined
 [BACKEND] [INFO] [ZOHO_RECONCILIATION] Zoho payment-link reconciliation polling every 600s
-[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404
 
  or any thing missing just tell me I will add in env
 ```
+
 ### 2026-10-19T13:03:44.7692728+05:30
 
 ```text
@@ -3066,10 +3067,10 @@ Are gemini API keys hardcoded in software ? or they are getting using from cloud
 ### 2026-10-21T12:57:14+05:30
 
 ```text
-Why there is a concept of 2 gemini api key env variables. 
+Why there is a concept of 2 gemini api key env variables.
 "GEMINI_API_KEY" & "GEMINI_BACKUP_KEYS"
 
-Ideal behaviour should be 
+Ideal behaviour should be
 
 "Multiple Gemini API Keys Rotation: Support a comma-separated list of multiple Gemini API keys to expand rate limits on free tier accounts. Implement a round-robin strategy to cycle through each key sequentially for incoming requests. "
 ```
@@ -3089,7 +3090,7 @@ Can we remove this "GEMINI_BACKUP_KEYS" variable from code
 ### 2026-10-21T13:37:41+05:30
 
 ```text
-We have added gemini API key in @[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\backend\wrangler.jsonc] , 
+We have added gemini API key in @[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\backend\wrangler.jsonc] ,
 
 Why we have hardcoded these env in code, these should be taken from env file or something?
 ```
@@ -3151,7 +3152,7 @@ Some github files conflicts, can you please check & fix
 ### 2026-10-21T17:00:41+05:30
 
 ```text
-Can you please check the logs: 
+Can you please check the logs:
 
 Still gemini took too long
 ```
@@ -3159,7 +3160,7 @@ Still gemini took too long
 ### 2026-10-21T17:17:34+05:30
 
 ```text
-@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-10-21T11_42_19.044Z.csv] @[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-10-21T11_46_00.564Z.csv] 
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-10-21T11_42_19.044Z.csv] @[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-10-21T11_46_00.564Z.csv]
 
 Check the logs, Still gemini extraction taking too much time, Can you tell what is the issue, & how we can reduce extraction time?
 ```
@@ -3187,6 +3188,7 @@ Please implement these fixes
 ```text
 Can you try this fix via Zero-Null Compact Prompt approach only
 ```
+
 ### 2026-10-21T18:33:24+05:30
 
 ```text
@@ -3249,17 +3251,17 @@ What should be the best order of gemini models for this AI extraction use case, 
 
 ### 2026-10-22T06:39:36+05:30
 
-```text
+````text
 Please use this model order
 
 ```text
     'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash'
-```
+````
 
 ### 2026-10-22T12:35:26+05:30
 
 ```text
-For V1 RFQs whose category is not selected by the vendor, the email asking the vendor to log in and update categories is not working. Vendor profile also says no procurement categories are configured. for vendor profile just nned to dot h just can add his own category here  vedor can update his own categories 
+For V1 RFQs whose category is not selected by the vendor, the email asking the vendor to log in and update categories is not working. Vendor profile also says no procurement categories are configured. for vendor profile just nned to dot h just can add his own category here  vedor can update his own categories
 ```
 
 ### 2026-10-22T13:19:39+05:30
@@ -3277,8 +3279,9 @@ ypu are doing a lot of extra thing just need to do  vendo twill type the categor
 ### 2026-10-22T19:43:53+05:30
 
 ```text
-The categoreis adde must be shown to the buyer after adding up ?? 
+The categoreis adde must be shown to the buyer after adding up ??
 ```
+
 ### 2026-10-22T13:24:55+05:30
 
 ```text
@@ -3607,7 +3610,7 @@ continue
 ### 2026-10-23T12:02:20+05:30
 
 ```text
-RFQ details should be visible to all vendors, even if they have not received an invitation. Vendors should be able to view RFQs across V0, V2, and V3, and submit quotations according to the applicable free-credit and subscription rules. 
+RFQ details should be visible to all vendors, even if they have not received an invitation. Vendors should be able to view RFQs across V0, V2, and V3, and submit quotations according to the applicable free-credit and subscription rules.
  This is buyer-invited vendors, quotation submission should be unlimited for RFQs created by that specific buyer. However, when submitting quotations for RFQs from other buyers, the vendor should be prompted to subscribe after using the 5 free quotation credits. This functionality was working previously. Please check and fix the issue.
 
 only need to do two thing one comparing changes in prod last commit and 2nd last commit from prod-v2 and just check where the function have been remove and add it and create branch and raise pr and update the prod it will be working
@@ -3661,7 +3664,7 @@ In buyer side, when we are uploading vendors, it is showing in website for somet
 ### 2026-10-23T18:15:59+05:30
 
 ```text
-1. We don't use postgres, everything should go D1 database, remove everything related to postgres, & make sure it is going to D1. 
+1. We don't use postgres, everything should go D1 database, remove everything related to postgres, & make sure it is going to D1.
 2. Please implement all remaining fixes.
 ```
 
@@ -3694,9 +3697,9 @@ resume
 ### 2026-10-24T05:39:27+05:30
 
 ```text
-Too much DB utilization, 
+Too much DB utilization,
 
-Database Optimization & GraphQL Integration: Configure assistant instructions to audit database queries for efficiency and integrate GraphQL to streamline data fetching across the application. 
+Database Optimization & GraphQL Integration: Configure assistant instructions to audit database queries for efficiency and integrate GraphQL to streamline data fetching across the application.
 
 Additionally, implement optimizations to minimize database compute hours, reduce resource usage, and enhance overall infrastructure efficiency.
 ```
@@ -3805,17 +3808,6 @@ is there any other place left where too much unnecessary data is getting fetched
 is there any other place left where too much unnecessary data is getting fetched & can be avoided & optimized. Please do all these optimizations
 ```
 
-
-
-
-
-
-
-
-
-
-
-
 ### 2026-10-23T16:16:03+05:30
 
 ```text
@@ -3835,7 +3827,7 @@ i send the email to dev email create we check the flow
 ### 2026-10-23T16:28:53+05:30
 
 ```text
-@[TerminalName: cmd, ProcessId: 6600] 
+@[TerminalName: cmd, ProcessId: 6600]
 ```
 
 ---
@@ -3851,7 +3843,7 @@ send the credentials from here then i check it is working or not
 ### 2026-10-23T17:13:06+05:30
 
 ```text
-veerababu.v@procucev.com this email as already existing use 
+veerababu.v@procucev.com this email as already existing use
 srinu20262025@gmail.com
 ```
 
@@ -4197,7 +4189,7 @@ Error: Process completed with exit code 1.
 
 ```text
 this is working as expected now we need to add the mobile number for login credentials 9999999999
-and for login now verification of phone number is working email and change the password and it should ask the that full GMST number company name now address also asking add gst number like registeration 
+and for login now verification of phone number is working email and change the password and it should ask the that full GMST number company name now address also asking add gst number like registeration
 ```
 
 ---
@@ -4488,12 +4480,12 @@ u already implements this templates but in dev not working as previously only pl
 ```text
 The Log in & Review My RFQ button is redirecting to a 404 page. Please check and fix the redirect flow.
 
-The current URL is:  
+The current URL is:
 https://procucev-enterprise-frontend.procucev-enterprise.workers.dev/login
 after login it redirect to rfq summary but if the buyer login via portal it ask  to upload vendor add as current functionality don't change that functionality
 
 
-Unregistered buyer RFQ creation via email is working, and the account and email template are created as expected. However, I noticed one issue: the buyer’s mobile number is missing from the acknowledgment email. Without it, the buyer is unable to log in add 9999999999 this mobile number for unregister buyer email template 
+Unregistered buyer RFQ creation via email is working, and the account and email template are created as expected. However, I noticed one issue: the buyer’s mobile number is missing from the acknowledgment email. Without it, the buyer is unable to log in add 9999999999 this mobile number for unregister buyer email template
 ```
 
 ---
@@ -4512,11 +4504,11 @@ for existing buyer also asking to update the profile but only ask to un register
 continue
 ```
 
-
-
 ---
+
 ### 2026-10-25T17:15:06+05:30
-```text
+
+````text
 unit test coverage not upto mark. please add remaining unit tests
 
 
@@ -4524,28 +4516,36 @@ unit test coverage not upto mark. please add remaining unit tests
 ### 2026-10-25T18:00:00+05:30
 ```text
 Fix failing unit test only
-```
+````
 
 ---
+
 ### 2026-10-25T19:00:00+05:30
+
 ```text
 temporarily allow lower branch coverage in these few files to make the commit in these files, which is future would be improved.
 ```
 
 ---
+
 ### 2026-10-25T19:14:14+05:30
+
 ```text
 resume
 ```
 
 ---
+
 ### 2026-10-25T19:29:12+05:30
+
 ```text
 Do not lower the temporary benchmark than existing, the code coverage should not fall than existing
 ```
 
 ---
+
 ### 2026-10-26T08:38:24+05:30
+
 ```text
 # Context from my IDE setup:
 
@@ -4561,5 +4561,33 @@ Do not lower the temporary benchmark than existing, the code coverage should not
 ## My request:
 a lot of github action PR check are failing, can you please check & fix.&#x20;
 
-[https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/333](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/333)
+
+
+---
+
+### 2026-10-26T22:16:36+05:30
+
+```text
+Fix the responsive layout of all QUA/EQUA email templates for desktop, tablet, and mobile devices.
+
+Current Issue:
+- On laptops, the email content is centered in a narrow container with excessive empty space on both sides.
+- On mobile devices, the email content displays correctly and uses the available screen width.
+
+Requirements:
+1. Optimize the email template width for desktop, using a centered container with a suitable maximum width of approximately 700–800px.
+2. Keep the content responsive on mobile, using `width: 100%` and appropriate side padding.
+3. Use email-client-compatible HTML tables and inline CSS instead of relying only on Flexbox, Grid, or external stylesheets.
+4. Apply `max-width`, `width: 100%`, `box-sizing: border-box`, and responsive padding where supported.
+5. Ensure tables, RFQ details, logos, headings, buttons, and text wrap correctly without overflow or overlapping.
+6. Preserve the existing design, branding, colors, fonts, and all dynamic template variables.
+7. Test the rendered output to ensure responsiveness across desktop, tablet, and mobile screen sizes.
+```
+
+---
+
+### 2026-10-26T23:03:48+05:30
+
+```text
+raise the pr
 ```
