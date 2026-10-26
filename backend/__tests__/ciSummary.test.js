@@ -1,6 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const yaml = require('js-yaml');
 const summary = require('../../scripts/generate-ci-summary');
 
 let workspace;
@@ -144,4 +145,20 @@ test('the workspace workflow verifies migrations and both project inventories, i
   expect(yaml).toContain('CI_MIGRATIONS_STATUS: ${{ needs.backend-gate.outputs.migrations }}');
   expect(yaml).toMatch(/Upload Backend Coverage & Test Results\s+if: always\(\)/);
   expect(yaml).toMatch(/Upload Frontend Coverage & Test Results\s+if: always\(\)/);
+});
+
+test('PostgreSQL readiness arguments stay inside one Docker health command', () => {
+  const workflow = yaml.safeLoad(fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/pr-quality-check.yml'), 'utf8'));
+  const postgres = workflow.jobs['backend-gate'].services.postgres;
+  // Service options are passed directly to Docker, rather than through bash.
+  // Only double quotes group the readiness command for the runner's argument parser.
+  const argumentsList = postgres.options.match(/"[^"]*"|\S+/g)
+    .map((argument) => argument.startsWith('"') ? argument.slice(1, -1) : argument);
+
+  expect(argumentsList).toEqual([
+    '--health-cmd', `pg_isready -U ${postgres.env.POSTGRES_USER} -d ${postgres.env.POSTGRES_DB}`,
+    '--health-interval', '10s', '--health-timeout', '5s', '--health-retries', '5',
+  ]);
+  expect(argumentsList).not.toContain('-U');
+  expect(argumentsList).not.toContain('-d');
 });

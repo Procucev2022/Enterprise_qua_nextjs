@@ -1,10 +1,12 @@
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const { spawnSync } = require('child_process');
 const policy = require('../../scripts/coverage-policy.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const JEST_CLI = path.resolve(__dirname, '../node_modules/jest/bin/jest.js');
+const FRONTEND_JEST_CONFIG = path.join(REPO_ROOT, 'frontend/jest.config.cjs');
 const FIXTURE_DIRECTORY = path.join(REPO_ROOT, 'scratch/coverage-policy-tests');
 const METRICS = ['statements', 'branches', 'functions', 'lines'];
 const fixtureRoots = [];
@@ -350,17 +352,51 @@ describe('file-backed coverage checks and CLI wrappers', () => {
 });
 
 describe('native Jest coverage enforcement', () => {
+  function frontendConfig(source = fs.readFileSync(FRONTEND_JEST_CONFIG, 'utf8')) {
+    const configModule = { exports: {} };
+    vm.runInNewContext(source, {
+      module: configModule,
+      require(specifier) {
+        if (specifier === 'next/jest') return () => (config) => config;
+        if (specifier === '../scripts/coverage-policy.cjs') return policy;
+        throw new Error(`Unexpected frontend Jest configuration dependency: ${specifier}`);
+      },
+    }, { filename: FRONTEND_JEST_CONFIG, timeout: 1000 });
+    return configModule.exports;
+  }
+
   function projectConfig(project) {
     if (project === 'backend') return require('../jest.config.js');
-    let frontendConfig;
-    const nextJestPath = require.resolve('../../frontend/node_modules/next/jest');
-    jest.isolateModules(() => {
-      jest.doMock(nextJestPath, () => () => (config) => config);
-      frontendConfig = require('../../frontend/jest.config.cjs');
-    });
-    jest.dontMock(nextJestPath);
-    return frontendConfig;
+    return frontendConfig();
   }
+
+  test('checks the actual frontend configuration in a checkout without frontend dependencies', () => {
+    const testFixture = fixture('backend', []);
+    writeFile(path.join(testFixture.root, 'backend/__tests__/coveragePolicy.test.js'), fs.readFileSync(__filename));
+    writeFile(path.join(testFixture.root, 'scripts/coverage-policy.cjs'), fs.readFileSync(path.join(REPO_ROOT, 'scripts/coverage-policy.cjs')));
+    writeFile(path.join(testFixture.root, 'frontend/jest.config.cjs'), fs.readFileSync(FRONTEND_JEST_CONFIG));
+    const frontendModules = path.join(testFixture.root, 'frontend/node_modules');
+    expect(fs.existsSync(frontendModules)).toBe(false);
+    const configPath = path.join(testFixture.root, 'isolated-jest.config.json');
+    writeFile(configPath, JSON.stringify({
+      rootDir: testFixture.root,
+      testEnvironment: 'node',
+      testMatch: ['<rootDir>/backend/__tests__/coveragePolicy.test.js'],
+      transform: {},
+    }));
+    const result = spawnSync(process.execPath, [
+      JEST_CLI, '--config', configPath, '--runInBand', '--silent',
+      '--testNamePattern', '^native Jest coverage enforcement frontend instruments every application file and enforces thresholds per source file$',
+    ], { cwd: testFixture.root, encoding: 'utf8', timeout: 15000 });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('1 passed');
+    expect(fs.existsSync(frontendModules)).toBe(false);
+  });
+
+  test('rejects undeclared dependencies introduced into the frontend configuration', () => {
+    const source = `${fs.readFileSync(FRONTEND_JEST_CONFIG, 'utf8')}\nrequire('frontend-installation-only');`;
+    expect(() => frontendConfig(source)).toThrow('Unexpected frontend Jest configuration dependency: frontend-installation-only');
+  });
 
   test.each(['backend', 'frontend'])('%s instruments every application file and enforces thresholds per source file', (project) => {
     const config = projectConfig(project);

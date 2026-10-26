@@ -2983,12 +2983,36 @@ describe('IngestionWizard: comprehensive branch booster', () => {
   });
 
   describe('IngestionWizard: targeted branch booster v3', () => {
-    it('covers entitledSourcingModes exception fallback (lines 320-324)', () => {
-      (entitledSourcingModes as jest.Mock).mockImplementationOnce(() => {
-        throw new Error('Fallback error');
+    it('keeps the default sourcing modes usable when resolving the active plan fails', async () => {
+      const actualEntitlements = jest.requireActual<typeof import('@/lib/constants')>('@/lib/constants').entitledSourcingModes;
+      const mockEntitlements = jest.mocked(entitledSourcingModes);
+      mockEntitlements.mockImplementation((plan, remaining, unlimited) => {
+        // The component obtains its initial default outside the guarded plan
+        // lookup. Only the active-plan lookup should exercise the catch path.
+        if (plan === 'version_3') throw new Error('Plan entitlement lookup failed');
+        return actualEntitlements(plan, remaining, unlimited);
       });
-      renderWizard();
-      expect(screen.getByTestId('mode-mode_0')).toBeInTheDocument();
+
+      try {
+        await act(async () => {
+          renderWizard({ forceSubscription: 'version_3', forceRemainingFreeRFQs: 5 });
+        });
+        expect(mockEntitlements).toHaveBeenCalledWith(null);
+        expect(mockEntitlements).toHaveBeenCalledWith('version_3', 5);
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_1'));
+        });
+        expect(screen.getByTestId('sourcing-mode-btn-mode_1')).toHaveAttribute('aria-checked', 'true');
+        expect(screen.queryByTestId('rfq-upgrade-plan-modal')).not.toBeInTheDocument();
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_3'));
+        });
+        expect(screen.getByTestId('rfq-upgrade-plan-modal')).toBeInTheDocument();
+      } finally {
+        mockEntitlements.mockImplementation(actualEntitlements);
+      }
     });
 
     it('covers activeBuyerAccount delivery location auto-prefill (lines 338-350)', async () => {

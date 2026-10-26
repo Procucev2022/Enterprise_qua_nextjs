@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import BuyerProfilePage from '@/app/buyer/buyer-profile';
 import { useApp } from '@/lib/store';
 import {
@@ -1157,7 +1157,16 @@ describe('app/buyer/buyer-profile.tsx', () => {
     mockLoad(emptyProfile);
     await renderLoaded();
 
-    expect(screen.getAllByDisplayValue('Tata Projects Limited').length).toBe(2);
+    const legalEntityField = screen.getByText(/^Legal Entity Name \*/).parentElement;
+    const brandDivisionField = screen.getByText('Brand / Procurement Division').parentElement;
+    if (!legalEntityField || !brandDivisionField) throw new Error('Organization identity fields are missing.');
+
+    // Loading enables Save before the account backfill effect has necessarily
+    // committed its brand-name fallback, particularly under React 19 scheduling.
+    await waitFor(() => {
+      expect(within(legalEntityField).getByRole('textbox')).toHaveValue(mockAccount.organizationName);
+      expect(within(brandDivisionField).getByRole('textbox')).toHaveValue(mockAccount.organizationName);
+    });
     expect(screen.getByDisplayValue('Plot 45, MIDC Industrial Area')).toBeInTheDocument();
     expect(screen.getByDisplayValue('400703')).toBeInTheDocument();
     expect(screen.getByDisplayValue('AABCT1234F')).toBeInTheDocument();

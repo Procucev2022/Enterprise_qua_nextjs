@@ -4511,3 +4511,23 @@ resume
 ```text
 Do not lower the temporary benchmark than existing, the code coverage should not fall than existing
 ```
+
+---
+### 2026-10-26T08:38:24+05:30
+```text
+# Context from my IDE setup:
+
+## Active file: .github/workflows/deploy-dev.yml
+
+## Open tabs:
+- deploy-dev.yml: .github/workflows/deploy-dev.yml
+- vendorScreenRemainingBranches.test.tsx: frontend/__tests__/app/vendor/vendorScreenRemainingBranches.test.tsx
+- types.test.ts: frontend/__tests__/lib/types.test.ts
+- verify-coverage.cjs: frontend/scripts/verify-coverage.cjs
+- coverage-policy.cjs: scripts/coverage-policy.cjs
+
+## My request:
+a lot of github action PR check are failing, can you please check & fix.&#x20;
+
+[https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/333](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/333)
+```
