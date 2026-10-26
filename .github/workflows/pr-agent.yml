@@ -2,7 +2,11 @@ name: Direct Gemini PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: gemini-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   review:
@@ -56,20 +60,11 @@ jobs:
 
           if [ -z "$REVIEW_TEXT" ]; then
             if [ -n "$ERROR_MSG" ]; then
-              REVIEW_TEXT="### ⚠️ Gemini Review Error (HTTP $HTTP_STATUS)
-
-**Reason:** $ERROR_MSG"
+              REVIEW_TEXT=$(printf "### ⚠️ Gemini Review Error (HTTP %s)\n\n**Reason:** %s" "$HTTP_STATUS" "$ERROR_MSG")
             elif [ -n "$FINISH_REASON" ] && [ "$FINISH_REASON" != "STOP" ]; then
-              REVIEW_TEXT="### ⚠️ Gemini Review Incomplete
-
-**Finish Reason:** $FINISH_REASON"
+              REVIEW_TEXT=$(printf "### ⚠️ Gemini Review Incomplete\n\n**Finish Reason:** %s" "$FINISH_REASON")
             else
-              REVIEW_TEXT="### ⚠️ Gemini Review Failed (HTTP $HTTP_STATUS)
-
-**Raw API Response:**
-\`\`\`json
-$RESPONSE
-\`\`\`"
+              REVIEW_TEXT=$(printf "### ⚠️ Gemini Review Failed (HTTP %s)\n\n**Raw API Response:**\n\`\`\`json\n%s\n\`\`\`" "$HTTP_STATUS" "$RESPONSE")
             fi
           fi
 
