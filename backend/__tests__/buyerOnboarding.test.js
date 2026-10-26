@@ -603,6 +603,41 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       );
     });
 
+    test('sends full quote details directly to an existing registered buyer without asking for profile completion', async () => {
+      const existingEmail = 'existing.corp.buyer@testsite.com';
+      storeService.addBuyerAccount({
+        corporateEmail: existingEmail,
+        organizationName: 'Existing Registered Site',
+        phone: '9876543210',
+        status: 'ACTIVE',
+      });
+
+      const rfq = storeService.createRFQ({
+        title: 'Industrial Compressors',
+        buyerEmail: existingEmail,
+        sourcingMode: 'mode_0',
+        category: 'Mechanical',
+      });
+
+      const quote = {
+        vendorId: 'vendor-compressor',
+        vendorName: 'Atlas Compressors Ltd',
+        unitPrice: 40000,
+        totalPrice: 80000,
+        leadTimeDays: 5,
+      };
+
+      const result = storeService.emailQuoteToBuyer(rfq, quote);
+      expect(result).toBe(true);
+      expect(mailerService.sendBuyerProfileCompletionReminderEmail).not.toHaveBeenCalled();
+      expect(mailerService.sendQuoteReceivedEmail).toHaveBeenCalledWith(
+        existingEmail,
+        expect.objectContaining({
+          quote: expect.objectContaining({ totalPrice: 80000 }),
+        })
+      );
+    });
+
     test('for V0 RFQs: asks buyer to update profile on 1st quote, suppresses duplicate acknowledgment on 2nd quote, and releases quotes after profile update', async () => {
       const v0BuyerEmail = 'v0.requisition.buyer@acmecorp.com';
       storeService.addBuyerAccount({
