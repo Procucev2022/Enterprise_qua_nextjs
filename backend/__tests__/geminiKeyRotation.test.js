@@ -531,22 +531,24 @@ describe('Gemini API Key Fallback, Cooldown & Automatic Rotation', () => {
 
     test('callModel throws when extraction time budget expires right before request dispatch', async () => {
       process.env.GEMINI_API_KEYS = 'test-key-deadline';
-      const realNow = Date.now;
-      let tick = 0;
-      jest.spyOn(Date, 'now').mockImplementation(() => {
-        tick++;
-        // First checks in callModel return 1000, deadline is 1050 (positive)
-        if (tick <= 2) return 1000;
-        // Check at line 965 returns 1100 (now > deadline, deadlineRemaining <= 0)
-        return 1100;
-      });
+      const originalDisableTimeout = GEMINI_CONFIG.DISABLE_TIMEOUT;
+      const originalEnvDisableTimeout = process.env.GEMINI_DISABLE_TIMEOUT;
+      GEMINI_CONFIG.DISABLE_TIMEOUT = false;
+      process.env.GEMINI_DISABLE_TIMEOUT = 'false';
+      global.fetch = jest.fn();
+      // The initial budget check passes; the dispatch check sees an expired deadline.
+      jest.spyOn(Date, 'now').mockReturnValueOnce(1000).mockReturnValue(1100);
 
       try {
         await expect(
           gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000, 1050)
         ).rejects.toThrow('shared extraction time budget');
+        expect(global.fetch).not.toHaveBeenCalled();
       } finally {
         Date.now.mockRestore();
+        GEMINI_CONFIG.DISABLE_TIMEOUT = originalDisableTimeout;
+        if (originalEnvDisableTimeout === undefined) delete process.env.GEMINI_DISABLE_TIMEOUT;
+        else process.env.GEMINI_DISABLE_TIMEOUT = originalEnvDisableTimeout;
       }
     });
 

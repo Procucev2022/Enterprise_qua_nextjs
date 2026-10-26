@@ -1,4 +1,5 @@
 const nextJest = require('next/jest');
+const { COVERAGE_THRESHOLDS } = require('../scripts/coverage-policy.cjs');
 
 const createJestConfig = nextJest({
   dir: './',
@@ -19,19 +20,16 @@ const customJestConfig = {
     '**/?(*.)+(spec|test).[jt]s?(x)',
   ],
   collectCoverageFrom: [
-    'app/**/*.{ts,tsx}',
-    'lib/**/*.{ts,tsx}',
+    'app/**/*.{js,jsx,ts,tsx}',
+    'lib/**/*.{js,jsx,ts,tsx}',
     '!**/*.d.ts',
     '!**/node_modules/**',
   ],
-  coverageReporters: ['json-summary', 'lcov', 'text-summary'],
+  coverageReporters: ['json', 'json-summary', 'lcov', 'text-summary'],
   coverageThreshold: {
-    global: {
-      statements: 90,
-      branches: 90,
-      functions: 90,
-      lines: 90,
-    },
+    global: COVERAGE_THRESHOLDS,
+    './app/**/*.{js,jsx,ts,tsx}': COVERAGE_THRESHOLDS,
+    './lib/**/*.{js,jsx,ts,tsx}': COVERAGE_THRESHOLDS,
   },
 };
 

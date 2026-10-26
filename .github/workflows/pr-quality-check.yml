@@ -1,12 +1,14 @@
-name: PR Quality Gate
+name: Workspace Quality Gate
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: ["**"]
+    branches: ['**']
+  push:
+    branches: [main, prod, 'prod-*', 'prod/**', production, 'production-*', 'production/**']
 
 concurrency:
-  group: pr-qc-${{ github.event.pull_request.number || github.ref }}
+  group: quality-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -15,74 +17,134 @@ permissions:
   pull-requests: write
 
 env:
-  CI: "true"
-  NODE_OPTIONS: "--max-old-space-size=4096"
+  CI: 'true'
+  NODE_OPTIONS: '--max-old-space-size=4096'
 
 jobs:
   backend-gate:
     name: Backend Tests, Migrations & Coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    outputs:
+      tests: ${{ steps.tests.outcome }}
+      coverage: ${{ steps.coverage.outcome }}
+      migrations: ${{ steps.migrations.outcome }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: procucev_ci
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd 'pg_isready -U postgres -d procucev_ci'
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20.x
-          cache: "npm"
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
 
       - name: Install Dependencies
-        run: npm ci --prefix backend --legacy-peer-deps || npm install --prefix backend --legacy-peer-deps
+        id: install
+        run: npm ci --prefix backend --legacy-peer-deps
 
-      - name: Run Backend Unit Tests & 90% Coverage Gate
+      - name: Run Backend Unit Tests & 90% Per-File Coverage Gate
+        id: tests
         run: npm run test:coverage --prefix backend
+        env:
+          DATABASE_URL: ''
+          CLOUDFLARE_ACCOUNT_ID: ''
+          CLOUDFLARE_D1_DATABASE_ID: ''
+          CLOUDFLARE_API_TOKEN: ''
 
-      - name: Upload Backend Coverage Artifact
+      - name: Verify Backend Source Inventory & Per-File Coverage
+        id: coverage
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run check:coverage --prefix backend
+
+      - name: Verify Database Migrations Against Disposable PostgreSQL
+        id: migrations
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run db:migrate --prefix backend
+        env:
+          DATABASE_URL: postgresql://postgres@localhost:5432/procucev_ci
+
+      - name: Upload Backend Coverage & Test Results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
-          path: backend/coverage/**
-          if-no-files-found: warn
+          path: backend/coverage/
+          if-no-files-found: error
 
   frontend-gate:
     name: Frontend Build, Lint, Typecheck & Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      tests: ${{ steps.tests.outcome }}
+      coverage: ${{ steps.coverage.outcome }}
+      build: ${{ steps.build.outcome }}
+      typecheck: ${{ steps.typecheck.outcome }}
+      lint: ${{ steps.lint.outcome }}
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20.x
-          cache: "npm"
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install Dependencies
-        run: npm ci --prefix frontend --legacy-peer-deps || npm install --prefix frontend --legacy-peer-deps
+        id: install
+        run: npm ci --prefix frontend --legacy-peer-deps
+
+      - name: Next.js Production Build
+        id: build
+        run: npm run build --prefix frontend
+
+      - name: Run Frontend Unit Tests & 90% Per-File Coverage Gate
+        id: tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run test:coverage --prefix frontend
+
+      - name: Verify Frontend Source Inventory & Per-File Coverage
+        id: coverage
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run check:coverage --prefix frontend
 
       - name: TypeScript Typecheck
+        id: typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run typecheck --prefix frontend
 
       - name: ESLint Static Analysis
+        id: lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run lint --prefix frontend
 
-      - name: Run Frontend Unit Tests & 90% Coverage Gate
-        run: npm run test:coverage --prefix frontend
-
-      - name: Next.js Production Build
-        run: npm run build --prefix frontend
-
-      - name: Upload Frontend Coverage Artifact
+      - name: Upload Frontend Coverage & Test Results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
-          path: frontend/coverage/**
-          if-no-files-found: warn
+          path: frontend/coverage/
+          if-no-files-found: error
 
   quality-summary:
     name: Master Quality & PR Summary
@@ -90,19 +152,24 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
+    env:
+      CI_BACKEND_TESTS_STATUS: ${{ needs.backend-gate.outputs.tests }}
+      CI_BACKEND_COVERAGE_STATUS: ${{ needs.backend-gate.outputs.coverage }}
+      CI_FRONTEND_TESTS_STATUS: ${{ needs.frontend-gate.outputs.tests }}
+      CI_FRONTEND_COVERAGE_STATUS: ${{ needs.frontend-gate.outputs.coverage }}
+      CI_BUILD_STATUS: ${{ needs.frontend-gate.outputs.build }}
+      CI_TYPECHECK_STATUS: ${{ needs.frontend-gate.outputs.typecheck }}
+      CI_LINT_STATUS: ${{ needs.frontend-gate.outputs.lint }}
+      CI_MIGRATIONS_STATUS: ${{ needs.backend-gate.outputs.migrations }}
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20.x
+          node-version: 22
 
       - name: Download Backend Coverage
         uses: actions/download-artifact@v4
@@ -118,67 +185,42 @@ jobs:
           path: frontend/coverage
         continue-on-error: true
 
+      - name: Generate Quality Summary
+        if: always()
+        run: node scripts/generate-ci-summary.js > quality-summary.md
+
       - name: Post PR Summary Comment
-        if: github.event_name == 'pull_request'
+        if: ${{ always() && github.event_name == 'pull_request' }}
         continue-on-error: true
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const path = require('path');
-            const { execSync } = require('child_process');
-
-            let summaryMarkdown = '';
-            try {
-              const summaryScript = path.resolve('scripts/generate-ci-summary.js');
-              summaryMarkdown = execSync(`node ${summaryScript}`, { encoding: 'utf8' });
-            } catch (err) {
-              summaryMarkdown = '## 🚀 Quality Gate Execution Completed';
+            const marker = '<!-- procucev-ci-summary-comment -->';
+            const body = `${marker}\n${fs.readFileSync('quality-summary.md', 'utf8')}`;
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((comment) => comment.user.type === 'Bot' && comment.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
             }
 
-            try {
-              core.summary.addRaw(summaryMarkdown).write();
-            } catch (summaryErr) {
-              console.warn('Unable to write to step summary:', summaryErr);
-            }
-
-            const botCommentIdentifier = '<!-- procucev-ci-summary-comment -->';
-            const body = `${botCommentIdentifier}\n${summaryMarkdown}`;
-
-            try {
-              const { data: comments } = await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-              });
-
-              const existingComment = comments.find((c) => c.body && c.body.includes(botCommentIdentifier));
-              if (existingComment) {
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: existingComment.id,
-                  body: body,
-                });
-              } else {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: body,
-                });
-              }
-            } catch (commentErr) {
-              core.warning(`Unable to post/update PR comment: ${commentErr.message}. Ensure GitHub Actions has Read and write permissions in Repository Settings > Actions > General.`);
-            }
-
-      - name: Enforce Strict 90% Per-File Coverage Gate
+      - name: Enforce Strict Workspace Source Inventory & 90% Per-File Coverage
+        if: always()
         run: npm run check:coverage
 
-      - name: Enforce PR Quality Gate Status
+      - name: Enforce Workspace Quality Gate Status
+        if: always()
+        env:
+          BACKEND_RESULT: ${{ needs.backend-gate.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-gate.result }}
         run: |
-          if [ "${{ needs.backend-gate.result }}" != "success" ] || [ "${{ needs.frontend-gate.result }}" != "success" ]; then
-            echo "❌ CI Quality Gate Failed: Prerequisite backend or frontend gate did not succeed."
+          if [ "$BACKEND_RESULT" != 'success' ] || [ "$FRONTEND_RESULT" != 'success' ]; then
+            echo 'Workspace quality gate failed: backend or frontend verification did not succeed.'
             exit 1
-          fi
+          fi

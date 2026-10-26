@@ -20,6 +20,30 @@
 // and a Postgres domain pool — and the MySQL one is gone along with its driver.
 // ==============================================================================
 
+const fs = jest.requireActual('fs');
+const os = require('os');
+const path = require('path');
+
+// Every suite gets its own inquiry ledger. The production store uses a local
+// JSON file even without a database; sharing that file let API and CRUD tests
+// overwrite workspace data and leak records into later suites.
+const inquiryTestDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'enterprise-inquiry-tests-'));
+const inquiryTestFile = path.join(inquiryTestDirectory, 'enterprise_inquiries.json');
+const workspaceInquiryFile = path.resolve(__dirname, '../../data/enterprise_inquiries.json');
+const inquiryPath = (file) => typeof file === 'string' && path.resolve(file) === workspaceInquiryFile
+  ? inquiryTestFile : file;
+jest.doMock('fs', () => ({
+  ...fs,
+  existsSync: (file) => fs.existsSync(inquiryPath(file)),
+  readFileSync: (file, ...args) => fs.readFileSync(inquiryPath(file), ...args),
+  writeFileSync: (file, ...args) => fs.writeFileSync(inquiryPath(file), ...args),
+}));
+
+afterAll(() => {
+  if (fs.existsSync(inquiryTestFile)) fs.unlinkSync(inquiryTestFile);
+  fs.rmdirSync(inquiryTestDirectory);
+});
+
 const pool = require('../../src/db/pool');
 const authSessionQueries = require('../../src/db/authSessionQueries');
 const storeService = require('../../src/services/storeService');

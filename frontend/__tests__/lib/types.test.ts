@@ -9,6 +9,11 @@ import type {
 } from '@/lib/types';
 
 describe('lib/types', () => {
+  it('erases domain type declarations without exposing runtime values', () => {
+    const runtimeTypes = jest.requireActual<typeof import('@/lib/types')>('@/lib/types');
+    expect(Object.keys(runtimeTypes)).toEqual([]);
+  });
+
   it('should support type assignments correctly', () => {
     const role: UserRole = 'buyer';
     expect(role).toBe('buyer');
