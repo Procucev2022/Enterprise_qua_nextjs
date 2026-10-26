@@ -4,7 +4,9 @@ const path = require('path');
 // PROCUCEV ENTERPRISE (QUA AI 2.0) - CONSTANTS, TAXONOMIES & SYSTEM DEFAULTS
 // ==============================================================================
 
-const INQUIRIES_PERSISTENCE_FILE = path.join(__dirname, '../../data/enterprise_inquiries.json');
+const INQUIRIES_PERSISTENCE_FILE = typeof __dirname !== 'undefined'
+  ? path.join(__dirname, '../../data/enterprise_inquiries.json')
+  : './data/enterprise_inquiries.json';
 
 /**
  * Centralized RFQ Modes Enum / Constants
