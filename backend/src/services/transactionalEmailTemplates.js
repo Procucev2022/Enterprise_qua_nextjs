@@ -88,54 +88,131 @@ function wrapQuaAiEmail({
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <title>${escapeHtml(title)}</title>
+  <style type="text/css">
+    body, table, td, p, a, li, blockquote {
+      -webkit-text-size-adjust: 100%;
+      -ms-text-size-adjust: 100%;
+    }
+    table, td {
+      mso-table-lspace: 0pt;
+      mso-table-rspace: 0pt;
+    }
+    img {
+      -ms-interpolation-mode: bicubic;
+      border: 0;
+      height: auto;
+      line-height: 100%;
+      outline: none;
+      text-decoration: none;
+      max-width: 100%;
+    }
+    table {
+      border-collapse: collapse !important;
+    }
+    body {
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+    }
+    @media only screen and (max-width: 640px) {
+      .email-wrapper {
+        width: 100% !important;
+      }
+      .email-wrapper-cell {
+        padding: 12px 6px !important;
+      }
+      .email-container {
+        width: 100% !important;
+        max-width: 100% !important;
+        border-radius: 6px !important;
+      }
+      .email-header {
+        padding: 16px 18px !important;
+      }
+      .email-content {
+        padding: 20px 16px !important;
+      }
+      .email-footer {
+        padding: 12px 16px !important;
+      }
+      .stack-cell {
+        display: block !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        text-align: left !important;
+        box-sizing: border-box !important;
+      }
+      .responsive-table {
+        width: 100% !important;
+      }
+    }
+  </style>
 </head>
-<body style="margin: 0; padding: 24px 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; line-height: 1.6;">
-  <div style="max-width: 620px; margin: 0 auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
-    
-    <!-- Header -->
-    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 22px 28px; border-bottom: 3px solid #0284c7;">
-      <table style="width: 100%; border-collapse: collapse;">
+<body style="margin: 0; padding: 20px 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; line-height: 1.6; -webkit-font-smoothing: antialiased;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #f1f5f9; border-collapse: collapse;">
+    <tr>
+      <td align="center" class="email-wrapper-cell" style="padding: 20px 10px;">
+        <!--[if (gte mso 9)|(IE)]>
+        <table align="center" border="0" cellspacing="0" cellpadding="0" width="750" style="width:750px;">
         <tr>
-          <td style="vertical-align: middle;">
-            <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
-              <img src="${logoUrl}" alt="Procucev Enterprise" height="34" style="height: 34px; max-height: 38px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />
-            </a>
-          </td>
-          <td style="text-align: right; vertical-align: middle;">
-            <div style="display: inline-block; background: rgba(2, 132, 199, 0.25); border: 1px solid rgba(56, 189, 248, 0.4); padding: 4px 10px; border-radius: 4px;">
-              <span style="font-size: 11px; font-weight: 700; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.8px;">QUA AI 2.0</span>
+        <td align="center" valign="top" width="750" style="width:750px;">
+        <![endif]-->
+        <div class="email-container" style="max-width: 750px; width: 100%; margin: 0 auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); box-sizing: border-box; text-align: left;">
+          
+          <!-- Header -->
+          <div class="email-header" style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 22px 28px; border-bottom: 3px solid #0284c7; box-sizing: border-box;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td class="logo-cell" style="vertical-align: middle; padding-right: 12px;">
+                  <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
+                    <img src="${logoUrl}" alt="Procucev Enterprise" height="34" style="height: 34px; max-height: 38px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />
+                  </a>
+                </td>
+                <td class="badge-cell" style="text-align: right; vertical-align: middle;">
+                  <div style="display: inline-block; background: rgba(2, 132, 199, 0.25); border: 1px solid rgba(56, 189, 248, 0.4); padding: 4px 10px; border-radius: 4px;">
+                    <span style="font-size: 11px; font-weight: 700; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.8px;">QUA AI 2.0</span>
+                  </div>
+                  <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Autonomous SCM Intelligence</div>
+                </td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- Main Content Area -->
+          <div class="email-content" style="padding: 28px 28px 24px 28px; background-color: #ffffff; box-sizing: border-box; word-break: break-word;">
+            ${innerHtml}
+
+            <!-- Support and Clarifications Section -->
+            <div style="margin-top: 28px; padding-top: 18px; border-top: 1px solid #e2e8f0; font-size: 13px; color: #475569; box-sizing: border-box;">
+              <p style="margin: 0 0 14px 0;">
+                For any further questions or clarifications, please reach out to <strong>${escapeHtml(supportPhone)}</strong> / email to <a href="mailto:${escapeHtml(supportEmail)}" style="color: #0284c7; text-decoration: underline;">${escapeHtml(supportEmail)}</a>
+              </p>
+              <p style="margin: 0; font-weight: 700; color: #0f172a;">
+                ${escapeHtml(QUA_AI_EMAIL_SUPPORT.TEAM_SIGNATURE)}<br/>
+                <span style="font-weight: 500; color: #64748b;">${escapeHtml(QUA_AI_EMAIL_SUPPORT.COMPANY_NAME)}</span>
+              </p>
             </div>
-            <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Autonomous SCM Intelligence</div>
-          </td>
+          </div>
+
+          <!-- Footer Notice -->
+          <div class="email-footer" style="background-color: #f8fafc; padding: 14px 28px; border-top: 1px solid #f1f5f9; text-align: center; box-sizing: border-box;">
+            <p style="font-size: 11px; color: #94a3b8; margin: 0;">
+              This is an automated transactional notification sent by Qua AI Autonomous Procurement System.
+            </p>
+          </div>
+
+        </div>
+        <!--[if (gte mso 9)|(IE)]>
+        </td>
         </tr>
-      </table>
-    </div>
-
-    <!-- Main Content Area -->
-    <div style="padding: 28px 28px 24px 28px; background-color: #ffffff;">
-      ${innerHtml}
-
-      <!-- Support and Clarifications Section -->
-      <div style="margin-top: 28px; padding-top: 18px; border-top: 1px solid #e2e8f0; font-size: 13px; color: #475569;">
-        <p style="margin: 0 0 14px 0;">
-          For any further questions or clarifications, please reach out to <strong>${escapeHtml(supportPhone)}</strong> / email to <a href="mailto:${escapeHtml(supportEmail)}" style="color: #0284c7; text-decoration: underline;">${escapeHtml(supportEmail)}</a>
-        </p>
-        <p style="margin: 0; font-weight: 700; color: #0f172a;">
-          ${escapeHtml(QUA_AI_EMAIL_SUPPORT.TEAM_SIGNATURE)}<br/>
-          <span style="font-weight: 500; color: #64748b;">${escapeHtml(QUA_AI_EMAIL_SUPPORT.COMPANY_NAME)}</span>
-        </p>
-      </div>
-    </div>
-
-    <!-- Footer Notice -->
-    <div style="background-color: #f8fafc; padding: 14px 28px; border-top: 1px solid #f1f5f9; text-align: center;">
-      <p style="font-size: 11px; color: #94a3b8; margin: 0;">
-        This is an automated transactional notification sent by Qua AI Autonomous Procurement System.
-      </p>
-    </div>
-
-  </div>
+        </table>
+        <![endif]-->
+      </td>
+    </tr>
+  </table>
 </body>
 </html>`;
 }
@@ -147,7 +224,7 @@ function renderCtaButton(label, url) {
   const targetUrl = url || getPublicFrontendUrl();
   return `
     <div style="text-align: center; margin: 26px 0;">
-      <a href="${escapeHtml(targetUrl)}" style="background-color: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block; box-shadow: 0 2px 4px rgba(2, 132, 199, 0.25);">
+      <a href="${escapeHtml(targetUrl)}" style="background-color: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block; box-shadow: 0 2px 4px rgba(2, 132, 199, 0.25); max-width: 100%; box-sizing: border-box; word-break: break-word;">
         ${escapeHtml(label)}
       </a>
     </div>

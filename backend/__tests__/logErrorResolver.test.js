@@ -12,8 +12,12 @@ describe('LogErrorResolver Unit Tests', () => {
   });
 
   afterAll(() => {
-    if (fs.existsSync(tempLogsDir)) {
-      fs.rmSync(tempLogsDir, { recursive: true, force: true });
+    try {
+      if (fs.existsSync(tempLogsDir)) {
+        fs.rmSync(tempLogsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    } catch (_) {
+      // Ignore transient file lock on Windows during test runner teardown
     }
   });
 
