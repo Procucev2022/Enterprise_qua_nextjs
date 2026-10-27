@@ -91,16 +91,6 @@ function generateStandardRFQEmail(rfq, vendor) {
           <![endif]-->
           <div class="email-container" style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; width: 100%; max-width: 100%; margin: 0; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
             <div class="email-header" style="background: linear-gradient(135deg, #1e3a8a, #0284c7); padding: 20px 24px; border-radius: 8px 8px 0 0; color: white; box-sizing: border-box; width: 100%;">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #f8fafc; border-collapse: collapse;">
-      <tr>
-        <td align="center" class="email-wrapper-cell" style="padding: 20px 10px;">
-          <!--[if (gte mso 9)|(IE)]>
-          <table align="center" border="0" cellspacing="0" cellpadding="0" width="750" style="width:750px;">
-          <tr>
-          <td align="center" valign="top" width="750" style="width:750px;">
-          <![endif]-->
-          <div class="email-container" style="font-family: Arial, sans-serif; max-width: 750px; width: 100%; margin: 0 auto; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
-            <div class="email-header" style="background: linear-gradient(135deg, #1e3a8a, #0284c7); padding: 24px; border-radius: 8px 8px 0 0; color: white; box-sizing: border-box;">
               <div style="margin-bottom: 12px;">
                 <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
                   <img src="${logoUrl}" alt="Procucev Enterprise" height="38" style="height: 38px; max-height: 42px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />
@@ -220,16 +210,6 @@ function generateVendorOnboardingEmail(vendor, isExisting = false, tempPassword 
           <![endif]-->
           <div class="email-container" style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; width: 100%; max-width: 100%; margin: 0; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
             <div class="email-header" style="background: #0f172a; padding: 20px 24px; border-radius: 8px 8px 0 0; color: white; box-sizing: border-box; width: 100%;">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #f8fafc; border-collapse: collapse;">
-      <tr>
-        <td align="center" class="email-wrapper-cell" style="padding: 20px 10px;">
-          <!--[if (gte mso 9)|(IE)]>
-          <table align="center" border="0" cellspacing="0" cellpadding="0" width="750" style="width:750px;">
-          <tr>
-          <td align="center" valign="top" width="750" style="width:750px;">
-          <![endif]-->
-          <div class="email-container" style="font-family: Arial, sans-serif; max-width: 750px; width: 100%; margin: 0 auto; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
-            <div class="email-header" style="background: #0f172a; padding: 24px; border-radius: 8px 8px 0 0; color: white; box-sizing: border-box;">
               <div style="margin-bottom: 12px;">
                 <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
                   <img src="${logoUrl}" alt="Procucev Enterprise" height="38" style="height: 38px; max-height: 42px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />

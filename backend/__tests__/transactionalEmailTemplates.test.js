@@ -622,7 +622,6 @@ describe('Qua AI Transactional Email Templates Suite', () => {
     });
 
     test('wrapQuaAiEmail enforces responsive layout with full-width container, mobile media queries and presentation tables', () => {
-    test('wrapQuaAiEmail enforces responsive layout with 750px max width, mobile media queries and presentation tables', () => {
       const html = wrapQuaAiEmail({
         title: 'Responsive Check',
         innerHtml: '<p>Responsive test content</p>',
@@ -630,8 +629,6 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(html).toContain('max-width: 100%');
       expect(html).toContain('width: 100%');
       expect(html).toContain('background-color: #ffffff');
-      expect(html).toContain('max-width: 750px');
-      expect(html).toContain('width: 100%');
       expect(html).toContain('box-sizing: border-box');
       expect(html).toContain('role="presentation"');
       expect(html).toContain('class="email-wrapper"');
