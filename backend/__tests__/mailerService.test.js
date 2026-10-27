@@ -2071,6 +2071,7 @@ describe('mailerService', () => {
     });
 
     test('wrapEmail and mailerService templates produce responsive full-width presentation table layouts', () => {
+    test('wrapEmail and mailerService templates produce responsive 750px presentation table layouts', () => {
       const invite = mailerService.buildRfqInviteEmail('vendor@example.com', {
         recipientName: 'Vendor Lead',
         rfq: { rfqNumber: 'RFQ-RESP-01', title: 'Motors' },
@@ -2078,6 +2079,8 @@ describe('mailerService', () => {
       expect(invite.html).toContain('max-width: 100%');
       expect(invite.html).toContain('width: 100%');
       expect(invite.html).toContain('background-color: #ffffff');
+      expect(invite.html).toContain('max-width: 750px');
+      expect(invite.html).toContain('width: 100%');
       expect(invite.html).toContain('box-sizing: border-box');
       expect(invite.html).toContain('role="presentation"');
       expect(invite.html).toContain('class="email-wrapper"');
@@ -2089,6 +2092,8 @@ describe('mailerService', () => {
       expect(req.html).toContain('max-width: 100%');
       expect(req.html).toContain('width: 100%');
       expect(req.html).toContain('background-color: #ffffff');
+      expect(req.html).toContain('max-width: 750px');
+      expect(req.html).toContain('width: 100%');
       expect(req.html).toContain('box-sizing: border-box');
       expect(req.html).toContain('role="presentation"');
     });
