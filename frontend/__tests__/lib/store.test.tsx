@@ -2422,6 +2422,41 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       expect(ctx().buyerVendors.find((v: { id: string }) => v.id === createdVendor.id)).toBeUndefined();
     });
 
+    it('handles deleteMultipleBuyerVendors with bulk-delete API and empty input', async () => {
+      const ctx = await mountStore();
+
+      let v1: any;
+      let v2: any;
+      await act(async () => {
+        v1 = await ctx().addBuyerVendor({
+          name: 'Multi Del Vendor 1',
+          majorCategory: 'Mechanical',
+          email: 'multi1@vendor.com',
+        } as any);
+        v2 = await ctx().addBuyerVendor({
+          name: 'Multi Del Vendor 2',
+          majorCategory: 'Electrical',
+          email: 'multi2@vendor.com',
+        } as any);
+      });
+
+      expect(ctx().buyerVendors.some((v: any) => v.id === v1.id)).toBe(true);
+      expect(ctx().buyerVendors.some((v: any) => v.id === v2.id)).toBe(true);
+
+      // Call deleteMultipleBuyerVendors with empty input (no-op)
+      await act(async () => {
+        await ctx().deleteMultipleBuyerVendors([]);
+      });
+
+      // Call deleteMultipleBuyerVendors with IDs
+      await act(async () => {
+        await ctx().deleteMultipleBuyerVendors([v1.id, v2.id]);
+      });
+
+      expect(ctx().buyerVendors.some((v: any) => v.id === v1.id)).toBe(false);
+      expect(ctx().buyerVendors.some((v: any) => v.id === v2.id)).toBe(false);
+    });
+
     it('handles addBuyerVendor API error and network failure in update/delete', async () => {
       const ctx = await mountStore();
 

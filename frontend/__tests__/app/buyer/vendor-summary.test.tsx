@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import VendorSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
@@ -49,6 +49,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   const mockAddBuyerVendor = jest.fn();
   const mockUpdateBuyerVendor = jest.fn();
   const mockDeleteBuyerVendor = jest.fn();
+  const mockDeleteMultipleBuyerVendors = jest.fn();
 
   const mockBuyerVendors: any[] = [
     {
@@ -191,6 +192,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       addBuyerVendor: mockAddBuyerVendor,
       updateBuyerVendor: mockUpdateBuyerVendor,
       deleteBuyerVendor: mockDeleteBuyerVendor,
+      deleteMultipleBuyerVendors: mockDeleteMultipleBuyerVendors,
       categoryTaxonomy: [
         { majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] },
         { majorCategory: 'Electrical', minorCategories: ['Cables', 'Transformers'] },
@@ -1700,6 +1702,130 @@ describe('app/buyer/vendor-summary.tsx', () => {
       // Deselect all by clicking again
       fireEvent.click(selectAll);
       expect(screen.queryByRole('button', { name: /Export Selected/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Multiple Vendor Delete Feature', () => {
+    it('opens bulk delete modal, shows selected suppliers, and cancels deletion', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const selectApex = screen.getByTestId('select-vendor-v-1');
+      const selectGlobal = screen.getByTestId('select-vendor-v-2');
+
+      // Select two vendors
+      fireEvent.click(selectApex);
+      fireEvent.click(selectGlobal);
+
+      const bulkDeleteBtn = screen.getByTestId('bulk-delete-vendors-button');
+      expect(bulkDeleteBtn).toHaveTextContent('Delete Selected (2)');
+
+      // Open bulk delete modal
+      fireEvent.click(bulkDeleteBtn);
+      expect(screen.getByText(/Delete Multiple Vendors \(2\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/Irreversible Action/i)).toBeInTheDocument();
+      expect(screen.getByTestId('confirm-bulk-delete-button')).toBeInTheDocument();
+
+      // Cancel via Cancel button
+      const cancelBtn = screen.getByRole('button', { name: /^Cancel$/i });
+      fireEvent.click(cancelBtn);
+      expect(screen.queryByText(/Delete Multiple Vendors \(2\)/i)).not.toBeInTheDocument();
+
+      // Open again and close via X button
+      fireEvent.click(screen.getByTestId('bulk-delete-vendors-button'));
+      const closeX = screen.getByTestId('close-bulk-delete-modal');
+      fireEvent.click(closeX);
+      expect(screen.queryByText(/Delete Multiple Vendors \(2\)/i)).not.toBeInTheDocument();
+    });
+
+    it('confirms bulk delete and calls deleteMultipleBuyerVendors', async () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const selectAll = screen.getByTestId('select-all-vendors-checkbox');
+      fireEvent.click(selectAll);
+
+      const bulkDeleteBtn = screen.getByTestId('bulk-delete-vendors-button');
+      fireEvent.click(bulkDeleteBtn);
+
+      const confirmBtn = screen.getByTestId('confirm-bulk-delete-button');
+      await act(async () => {
+        fireEvent.click(confirmBtn);
+      });
+
+      expect(mockDeleteMultipleBuyerVendors).toHaveBeenCalledWith(
+        expect.arrayContaining(['v-1', 'v-2'])
+      );
+      expect(screen.queryByTestId('confirm-bulk-delete-button')).not.toBeInTheDocument();
+    });
+
+    it('falls back to deleteBuyerVendor when deleteMultipleBuyerVendors is undefined', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: mockEvaluationRecords,
+        currentMode: 'mode_3',
+        rfqs: mockRFQs,
+        showToast: mockShowToast,
+        buyerVendors: mockBuyerVendors,
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [
+          { majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] },
+        ],
+        reviseVendorRating: mockReviseVendorRating,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const selectApex = screen.getByTestId('select-vendor-v-1');
+      fireEvent.click(selectApex);
+
+      fireEvent.click(screen.getByTestId('bulk-delete-vendors-button'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('confirm-bulk-delete-button'));
+      });
+
+      expect(mockDeleteBuyerVendor).toHaveBeenCalledWith('v-1');
+    });
+
+    it('handles bulk delete exception gracefully', async () => {
+      mockDeleteMultipleBuyerVendors.mockRejectedValueOnce(new Error('Network failure'));
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const selectApex = screen.getByTestId('select-vendor-v-1');
+      fireEvent.click(selectApex);
+
+      fireEvent.click(screen.getByTestId('bulk-delete-vendors-button'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('confirm-bulk-delete-button'));
+      });
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Error',
+        expect.stringContaining('Failed to delete selected vendors'),
+        'warning'
+      );
     });
   });
 

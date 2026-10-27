@@ -215,6 +215,7 @@ interface AppContextType {
   addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => Promise<VendorEntry | null>;
   updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => void;
   deleteBuyerVendor: (vendorId: string) => void;
+  deleteMultipleBuyerVendors: (vendorIds: string[]) => Promise<void>;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
   generateVendorOnboardingEmail: (vendor: VendorEntry, isExisting: boolean, tempPassword?: string) => VendorOnboardingEmailPayload;
   selectedOnboardingEmail: VendorOnboardingEmailPayload | null;
@@ -1826,6 +1827,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     showToast('Vendor Removed', 'Vendor deleted from directory.', 'info');
   };
 
+  const deleteMultipleBuyerVendors = async (vendorIds: string[]) => {
+    if (!Array.isArray(vendorIds) || vendorIds.length === 0) return;
+    const idsSet = new Set(vendorIds);
+    setBuyerVendors((prev) => prev.filter((v) => !idsSet.has(v.id)));
+
+    // Asynchronously delete from backend database
+    try {
+      const res = await fetch('/api/vendors/bulk-delete', {
+        method: 'POST',
+        headers: {
+          ...authFetchHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ vendorIds }),
+      });
+      if (!res.ok) {
+        // Fallback to sequential deletion if endpoint returned error
+        await Promise.allSettled(
+          vendorIds.map((id) =>
+            fetch(`/api/vendors/${encodeURIComponent(id)}`, {
+              method: 'DELETE',
+              headers: authFetchHeaders(),
+            })
+          )
+        );
+      }
+    } catch (err) {
+      console.error('Failed to sync bulk vendor deletion to backend:', err);
+      // Fallback
+      await Promise.allSettled(
+        vendorIds.map((id) =>
+          fetch(`/api/vendors/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: authFetchHeaders(),
+          })
+        )
+      );
+    }
+
+    addAuditLog(`Removed ${vendorIds.length} vendor record(s) from buyer vendor master.`);
+    showToast('Vendors Removed', `Successfully deleted ${vendorIds.length} supplier record(s).`, 'info');
+  };
+
   // Dynamic Matching Logic based on Minor & Major Categories
   const matchSuitableVendors = (
     entities: ExtractedEntity[],
@@ -2840,6 +2884,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addBuyerVendor,
         updateBuyerVendor,
         deleteBuyerVendor,
+        deleteMultipleBuyerVendors,
         matchSuitableVendors,
         generateVendorOnboardingEmail,
         selectedOnboardingEmail,
