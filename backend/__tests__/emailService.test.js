@@ -191,17 +191,19 @@ describe('Email Template Generation Service', () => {
     process.env.NODE_ENV = origNodeEnv;
   });
 
-  test('generateStandardRFQEmail and generateVendorOnboardingEmail produce responsive 750px layouts', () => {
+  test('generateStandardRFQEmail and generateVendorOnboardingEmail produce responsive full-width layouts', () => {
     const rfqPayload = generateStandardRFQEmail({ rfqNumber: 'RFQ-RESP-01', title: 'Test' }, {});
-    expect(rfqPayload.htmlBody).toContain('max-width: 750px');
+    expect(rfqPayload.htmlBody).toContain('max-width: 100%');
     expect(rfqPayload.htmlBody).toContain('width: 100%');
+    expect(rfqPayload.htmlBody).toContain('background-color: #ffffff');
     expect(rfqPayload.htmlBody).toContain('box-sizing: border-box');
     expect(rfqPayload.htmlBody).toContain('role="presentation"');
     expect(rfqPayload.htmlBody).toContain('class="email-wrapper"');
 
     const vendorPayload = generateVendorOnboardingEmail({ name: 'Acme', email: 'test@acme.com' });
-    expect(vendorPayload.htmlBody).toContain('max-width: 750px');
+    expect(vendorPayload.htmlBody).toContain('max-width: 100%');
     expect(vendorPayload.htmlBody).toContain('width: 100%');
+    expect(vendorPayload.htmlBody).toContain('background-color: #ffffff');
     expect(vendorPayload.htmlBody).toContain('box-sizing: border-box');
     expect(vendorPayload.htmlBody).toContain('role="presentation"');
   });
