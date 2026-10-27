@@ -4607,3 +4607,29 @@ again the email screen not come fully both sides so much of space use this type 
 ```text
 raise the pr
 ```
+
+---
+
+### 2026-10-27T09:14:22+05:30
+
+```text
+Run npm run check:coverage --prefix backend
+
+> procucev-enterprise-node@2.1.0 check:coverage
+> node scripts/verify-coverage.js
+
+backend: 108/111 executable application files meet 90% in statements, branches, functions and lines.
+src/services/emailService.js: statements 79.55% < 90%.
+src/services/emailService.js: branches 70.51% < 90%.
+src/services/emailService.js: functions 83.33% < 90%.
+src/services/emailService.js: lines 79.55% < 90%.
+src/services/mailerService.js: statements 88.19% < 90%.
+src/services/mailerService.js: branches 76.48% < 90%.
+src/services/mailerService.js: lines 89.82% < 90%.
+src/services/transactionalEmailTemplates.js: statements 42.79% < 90%.
+src/services/transactionalEmailTemplates.js: branches 38.46% < 90%.
+src/services/transactionalEmailTemplates.js: functions 57.14% < 90%.
+src/services/transactionalEmailTemplates.js: lines 43.46% < 90%.
+Error: Process completed with exit code 1.
+```
+
