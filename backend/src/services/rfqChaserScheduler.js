@@ -184,12 +184,17 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId) {
     return { channel: 'email', skipped: true };
   }
   try {
+    const isBuyerUploaded = mailerService.isBuyerUploadedVendor
+      ? mailerService.isBuyerUploadedVendor(vendor)
+      : false;
     const result = await mailerService.sendRfqInviteEmail(vendor.email, {
       rfq,
       recipientName: vendor.contactPerson || vendor.name,
       freeCreditsRemaining: creditInfo.freeCreditsRemaining ?? null,
       isSubscribed: creditInfo.isSubscribed ?? false,
       isReminder: true,
+      vendor,
+      isBuyerUploaded,
     });
     logger.info(
       `[CHASER] Reminder email → ${vendor.email} for ${rfq.rfqNumber}: ${result.sent ? 'sent' : `not sent — ${result.reason || 'unknown'}`}`,

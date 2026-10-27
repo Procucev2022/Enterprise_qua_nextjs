@@ -3872,14 +3872,16 @@ class StoreService {
 
       // Real in-app notification
       const categoryLabel = updatedRFQ.category || this._rfqCategorySignals(updatedRFQ)[0] || 'your categories';
+      const isBuyerUploaded = this.isBuyerUploaded(vendor);
+      const buyerDisplayName = isBuyerUploaded && updatedRFQ.buyerAccountName ? updatedRFQ.buyerAccountName : 'A buyer';
       const notification = this._buildNotification({
         recipientType: 'vendor',
         recipientId: vendor.id,
         kind: 'rfq_category_match',
         rfq: updatedRFQ,
         title: `New RFQ in ${categoryLabel}`,
-        message: `${updatedRFQ.buyerAccountName || 'A buyer'} invited you to ${updatedRFQ.rfqNumber} — ${updatedRFQ.title}.`,
-        meta: { category: categoryLabel, buyerAccountName: updatedRFQ.buyerAccountName || null },
+        message: `${buyerDisplayName} invited you to ${updatedRFQ.rfqNumber} — ${updatedRFQ.title}.`,
+        meta: { category: categoryLabel, buyerAccountName: isBuyerUploaded ? (updatedRFQ.buyerAccountName || null) : null },
       });
       this.notifications.unshift(notification);
       this._persistNotification(notification);
@@ -3893,12 +3895,17 @@ class StoreService {
           { vendorId: vendor.id, freeCreditsRemaining: creditInfo.freeCreditsRemaining, isSubscribed: creditInfo.isSubscribed },
           'STORE_SERVICE'
         );
+        const resolvedVendor = (vendor.id ? this.getVendorById(vendor.id, 'all') : null) || vendor;
+        const resolvedIsBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
         this._background(
           mailerService.sendRfqInviteEmail(vendor.email, {
             rfq: updatedRFQ,
             recipientName: vendor.contactPerson || vendor.name,
             freeCreditsRemaining: creditInfo.freeCreditsRemaining,
             isSubscribed: creditInfo.isSubscribed,
+            vendor: resolvedVendor,
+            isBuyerUploaded: resolvedIsBuyerUploaded,
+            buyerEmail,
           }),
           'Failed to email RFQ invite to vendor'
         );
@@ -3998,17 +4005,19 @@ class StoreService {
 
     const categoryLabel = rfq.category || this._rfqCategorySignals(rfq)[0] || 'your categories';
 
-    const created = matches.map((vendor) =>
-      this._buildNotification({
+    const created = matches.map((vendor) => {
+      const isBuyerUploaded = this.isBuyerUploaded(vendor);
+      const buyerDisplayName = isBuyerUploaded && rfq.buyerAccountName ? rfq.buyerAccountName : 'A buyer';
+      return this._buildNotification({
         recipientType: 'vendor',
         recipientId: vendor.id,
         kind: 'rfq_category_match',
         rfq,
         title: `New RFQ in ${categoryLabel}`,
-        message: `${rfq.buyerAccountName || 'A buyer'} raised ${rfq.rfqNumber} — ${rfq.title}.`,
-        meta: { category: categoryLabel, buyerAccountName: rfq.buyerAccountName || null },
-      })
-    );
+        message: `${buyerDisplayName} raised ${rfq.rfqNumber} — ${rfq.title}.`,
+        meta: { category: categoryLabel, buyerAccountName: isBuyerUploaded ? (rfq.buyerAccountName || null) : null },
+      });
+    });
 
     this.notifications.unshift(...created);
     this._persistNotificationBatch(created);
@@ -4295,13 +4304,17 @@ class StoreService {
     for (const vendor of recipients) {
       if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
         allEmails.add(vendor.email.toLowerCase());
-        const creditInfo = this.checkVendorQuotationEligibility(vendor);
+        const resolvedVendor = (vendor.id ? this.getVendorById(vendor.id, 'all') : null) || vendor;
+        const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
+        const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
         this._background(
           mailerService.sendRfqInviteEmail(vendor.email, {
             rfq,
             recipientName: vendor.contactPerson || vendor.name,
             freeCreditsRemaining: creditInfo.freeCreditsRemaining,
             isSubscribed: creditInfo.isSubscribed,
+            vendor: resolvedVendor,
+            isBuyerUploaded,
           }),
           'Failed to email RFQ invite to matched vendor'
         );
@@ -4311,14 +4324,17 @@ class StoreService {
     for (const vendor of assigned) {
       if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
         allEmails.add(vendor.email.toLowerCase());
-        const resolvedVendor = this.getVendorById(vendor.id || vendor.email, 'all');
-        const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor || vendor);
+        const resolvedVendor = this.getVendorById(vendor.id || vendor.email, 'all') || vendor;
+        const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
+        const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
         this._background(
           mailerService.sendRfqInviteEmail(vendor.email, {
             rfq,
             recipientName: vendor.contactPerson || vendor.name,
             freeCreditsRemaining: creditInfo.freeCreditsRemaining,
             isSubscribed: creditInfo.isSubscribed,
+            vendor: resolvedVendor,
+            isBuyerUploaded,
           }),
           'Failed to email RFQ invite to assigned vendor'
         );
