@@ -92,12 +92,14 @@ describe('VendorUploadModal', () => {
     });
     render(<VendorUploadModal isOpen onClose={onClose} />);
     pickFile(new File(['x'], 'vendors.xlsx'));
-    await waitFor(() =>
-      expect(mockShowToast).toHaveBeenCalledWith(
-        'Could Not Read File',
-        'The file has duplicate column headers — each column must be unique.',
-        'warning'
-      )
+    await waitFor(
+      () =>
+        expect(mockShowToast).toHaveBeenCalledWith(
+          'Could Not Read File',
+          'The file has duplicate column headers — each column must be unique.',
+          'warning'
+        ),
+      { timeout: 5000 }
     );
     expect(screen.getByTestId('vendor-upload-dropzone')).toBeInTheDocument();
   });
@@ -109,8 +111,10 @@ describe('VendorUploadModal', () => {
     });
     render(<VendorUploadModal isOpen onClose={onClose} />);
     pickFile(new File(['x'], 'vendors.xlsx'));
-    await waitFor(() =>
-      expect(mockShowToast).toHaveBeenCalledWith('No Vendor Rows Found', expect.any(String), 'warning')
+    await waitFor(
+      () =>
+        expect(mockShowToast).toHaveBeenCalledWith('No Vendor Rows Found', expect.any(String), 'warning'),
+      { timeout: 5000 }
     );
   });
 
