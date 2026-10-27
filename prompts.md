@@ -4633,3 +4633,27 @@ src/services/transactionalEmailTemplates.js: lines 43.46% < 90%.
 Error: Process completed with exit code 1.
 ```
 
+---
+
+### 2026-10-27T10:44:52+05:30
+
+```text
+**Requirement: Conditionally Display Buyer Company Name in Vendor Email Templates**
+
+Update all relevant RFQ email templates based on the vendor source:
+
+1. If the buyer uploads their own vendor list, display the buyer's company name only in emails sent to those buyer-uploaded vendors.
+2. If the RFQ is sent to Procucev platform vendors, do not display the buyer's company name in the email template.
+3. Apply this condition to all relevant RFQ invitation and notification email templates.
+4. Identify the vendor source from the existing database or vendor assignment logic; do not rely on email addresses or hardcoded company names.
+5. Preserve all other email content, RFQ details, branding, and dynamic variables.
+6. Test both scenarios to ensure the buyer's company name is visible only to buyer-uploaded vendors and hidden from Procucev platform vendors.
+```
+
+---
+
+### 2026-10-27T12:12:17+05:30
+
+```text
+raise pr
+```
