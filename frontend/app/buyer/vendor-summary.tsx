@@ -93,6 +93,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     addBuyerVendor,
     updateBuyerVendor,
     deleteBuyerVendor,
+    deleteMultipleBuyerVendors,
     categoryTaxonomy,
     reviseVendorRating,
     openRatingRevisionEmailModal,
@@ -101,6 +102,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   } = useApp();
 
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
+  const [bulkDeleteModalOpen, setBulkDeleteModalOpen] = useState(false);
+  const [isDeletingBulk, setIsDeletingBulk] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [selectedStatus, setSelectedStatus] = useState('ALL');
@@ -485,6 +488,33 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     deleteBuyerVendor(selectedVendorForCrud.id);
     setDeleteModalOpen(false);
     setSelectedVendorForCrud(null);
+  };
+
+  // Open Bulk Delete Modal
+  const handleOpenBulkDeleteModal = () => {
+    if (selectedVendorIds.length === 0) return;
+    setBulkDeleteModalOpen(true);
+  };
+
+  // Confirm Bulk Delete Vendors
+  const handleBulkDeleteConfirm = async () => {
+    if (selectedVendorIds.length === 0) return;
+    setIsDeletingBulk(true);
+    try {
+      const idsToDelete = [...selectedVendorIds];
+      if (typeof deleteMultipleBuyerVendors === 'function') {
+        await deleteMultipleBuyerVendors(idsToDelete);
+      } else if (typeof deleteBuyerVendor === 'function') {
+        idsToDelete.forEach((id) => deleteBuyerVendor(id));
+      }
+      setSelectedVendorIds([]);
+      setBulkDeleteModalOpen(false);
+    } catch (err) {
+      console.error('Failed to bulk delete vendors:', err);
+      showToast('Error', 'Failed to delete selected vendors. Please try again.', 'warning');
+    } finally {
+      setIsDeletingBulk(false);
+    }
   };
 
   // Helper for granular source badges / origin notes
@@ -1253,7 +1283,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           )}
         </div>
         {selectedVendorIds.length > 0 && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
               onClick={handleClearSelection}
@@ -1267,6 +1297,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               className="btn btn-secondary btn-xs font-semibold"
             >
               Export Selected ({selectedVendorIds.length})
+            </button>
+            <button
+              type="button"
+              data-testid="bulk-delete-vendors-button"
+              onClick={handleOpenBulkDeleteModal}
+              className="btn btn-rose btn-xs font-bold flex items-center gap-1.5 shadow-xs bg-rose-600 hover:bg-rose-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+            >
+              <Trash2 size={12} />
+              Delete Selected ({selectedVendorIds.length})
             </button>
           </div>
         )}
@@ -2238,6 +2277,118 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 className="btn btn-rose btn-sm font-bold flex items-center gap-1.5 shadow-md bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl"
               >
                 <Trash2 size={13} /> Delete Vendor
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* BULK DELETE VENDORS CONFIRMATION MODAL */}
+      {/* ========================================================================= */}
+      {bulkDeleteModalOpen && (
+        <div className="modal-overlay !z-[1100]">
+          <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-rose-200 dark:border-rose-900/60 animate-fade-in flex flex-col gap-4">
+            <div className="flex items-start justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800/60 shrink-0">
+                  <Trash2 size={22} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Delete Multiple Vendors ({selectedVendorIds.length})
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                    Are you sure you want to permanently delete these {selectedVendorIds.length} supplier records?
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="close-bulk-delete-modal"
+                onClick={() => setBulkDeleteModalOpen(false)}
+                disabled={isDeletingBulk}
+                className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-rose-50/70 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 text-xs text-rose-800 dark:text-rose-300 flex items-start gap-2.5">
+              <AlertCircle size={16} className="shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
+              <div>
+                <p className="font-semibold">Irreversible Action</p>
+                <p className="text-[11px] mt-0.5 text-rose-700/90 dark:text-rose-300/90">
+                  This will permanently delete {selectedVendorIds.length} selected vendor records from your private buyer master list and backend database.
+                </p>
+              </div>
+            </div>
+
+            {/* List Preview of Selected Vendors */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-1">
+                <span>Selected Suppliers ({selectedVendorIds.length})</span>
+                <span className="text-[10px] lowercase text-slate-400 font-normal">scroll to view all</span>
+              </div>
+              <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800 divide-y divide-slate-100 dark:divide-gray-800/60">
+                {selectedVendorIds.map((id) => {
+                  const vendor = buyerFilteredVendors.find((v) => v.id === id) || buyerVendors.find((v) => v.id === id);
+                  return (
+                    <div key={id} className="pt-1.5 first:pt-0 flex items-center justify-between gap-2 text-xs">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                          {vendor ? vendor.name : id}
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate flex items-center gap-1.5">
+                          <span>{id}</span>
+                          {vendor?.majorCategory && (
+                            <>
+                              <span>•</span>
+                              <span>{vendor.majorCategory}</span>
+                            </>
+                          )}
+                          {vendor?.email && (
+                            <>
+                              <span>•</span>
+                              <span>{vendor.email}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <span className="badge badge-rose text-[9px] font-bold shrink-0">
+                        To Delete
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
+              <button
+                type="button"
+                onClick={() => setBulkDeleteModalOpen(false)}
+                disabled={isDeletingBulk}
+                className="btn btn-ghost btn-sm font-semibold text-slate-600 dark:text-slate-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-bulk-delete-button"
+                onClick={handleBulkDeleteConfirm}
+                disabled={isDeletingBulk}
+                className="btn btn-rose btn-sm font-bold flex items-center gap-1.5 shadow-md bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl disabled:opacity-50"
+              >
+                {isDeletingBulk ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" /> Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={13} /> Delete {selectedVendorIds.length} Vendor{selectedVendorIds.length === 1 ? '' : 's'}
+                  </>
+                )}
               </button>
             </div>
           </div>
