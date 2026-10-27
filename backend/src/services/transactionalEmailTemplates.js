@@ -151,19 +151,19 @@ function wrapQuaAiEmail({
     }
   </style>
 </head>
-<body style="margin: 0; padding: 20px 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; line-height: 1.6; -webkit-font-smoothing: antialiased;">
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #f1f5f9; border-collapse: collapse;">
+<body style="margin: 0; padding: 0; background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; line-height: 1.6; -webkit-font-smoothing: antialiased;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
     <tr>
-      <td align="center" class="email-wrapper-cell" style="padding: 20px 10px;">
+      <td align="left" class="email-wrapper-cell" style="padding: 16px 20px; background-color: #ffffff;">
         <!--[if (gte mso 9)|(IE)]>
-        <table align="center" border="0" cellspacing="0" cellpadding="0" width="750" style="width:750px;">
+        <table align="left" border="0" cellspacing="0" cellpadding="0" width="100%" style="width:100%;">
         <tr>
-        <td align="center" valign="top" width="750" style="width:750px;">
+        <td align="left" valign="top" width="100%" style="width:100%;">
         <![endif]-->
-        <div class="email-container" style="max-width: 750px; width: 100%; margin: 0 auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); box-sizing: border-box; text-align: left;">
+        <div class="email-container" style="width: 100%; max-width: 100%; margin: 0; background-color: #ffffff; border-radius: 8px; overflow: hidden; border: 1px solid #e2e8f0; box-sizing: border-box; text-align: left;">
           
           <!-- Header -->
-          <div class="email-header" style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 22px 28px; border-bottom: 3px solid #0284c7; box-sizing: border-box;">
+          <div class="email-header" style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 20px 24px; border-bottom: 3px solid #0284c7; box-sizing: border-box; width: 100%;">
             <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%; border-collapse: collapse;">
               <tr>
                 <td class="logo-cell" style="vertical-align: middle; padding-right: 12px;">
@@ -182,7 +182,7 @@ function wrapQuaAiEmail({
           </div>
 
           <!-- Main Content Area -->
-          <div class="email-content" style="padding: 28px 28px 24px 28px; background-color: #ffffff; box-sizing: border-box; word-break: break-word;">
+          <div class="email-content" style="padding: 24px 24px 20px 24px; background-color: #ffffff; box-sizing: border-box; word-break: break-word; width: 100%;">
             ${innerHtml}
 
             <!-- Support and Clarifications Section -->
@@ -198,7 +198,7 @@ function wrapQuaAiEmail({
           </div>
 
           <!-- Footer Notice -->
-          <div class="email-footer" style="background-color: #f8fafc; padding: 14px 28px; border-top: 1px solid #f1f5f9; text-align: center; box-sizing: border-box;">
+          <div class="email-footer" style="background-color: #ffffff; padding: 14px 24px; border-top: 1px solid #e2e8f0; text-align: center; box-sizing: border-box; width: 100%;">
             <p style="font-size: 11px; color: #94a3b8; margin: 0;">
               This is an automated transactional notification sent by Qua AI Autonomous Procurement System.
             </p>

@@ -4591,3 +4591,11 @@ Requirements:
 ```text
 raise the pr
 ```
+
+---
+
+### 2026-10-27T08:13:31+05:30
+
+```text
+again the email screen not come fully both sides so much of space use this type of resolution for phone now it is okay but in laptop only it comes in middle
+```

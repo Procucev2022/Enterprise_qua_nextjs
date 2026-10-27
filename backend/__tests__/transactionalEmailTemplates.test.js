@@ -621,13 +621,14 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(resolveTemplateKey('EMAIL_1')).toBe('EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED');
     });
 
-    test('wrapQuaAiEmail enforces responsive layout with 750px max width, mobile media queries and presentation tables', () => {
+    test('wrapQuaAiEmail enforces responsive layout with full-width container, mobile media queries and presentation tables', () => {
       const html = wrapQuaAiEmail({
         title: 'Responsive Check',
         innerHtml: '<p>Responsive test content</p>',
       });
-      expect(html).toContain('max-width: 750px');
+      expect(html).toContain('max-width: 100%');
       expect(html).toContain('width: 100%');
+      expect(html).toContain('background-color: #ffffff');
       expect(html).toContain('box-sizing: border-box');
       expect(html).toContain('role="presentation"');
       expect(html).toContain('class="email-wrapper"');

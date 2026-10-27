@@ -265,16 +265,16 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
     replyTo: fromEmail || safeRfq.sourceEmail || undefined,
     subject: `[Procucev Requisition] ${safeRfq.title || 'New Inbound Requisition'} (${safeRfq.rfqNumber || 'Draft'})`,
     html: `
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #f8fafc; border-collapse: collapse;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
         <tr>
-          <td align="center" class="email-wrapper-cell" style="padding: 20px 10px;">
+          <td align="left" class="email-wrapper-cell" style="padding: 16px 20px; background-color: #ffffff;">
             <!--[if (gte mso 9)|(IE)]>
-            <table align="center" border="0" cellspacing="0" cellpadding="0" width="750" style="width:750px;">
+            <table align="left" border="0" cellspacing="0" cellpadding="0" width="100%" style="width:100%;">
             <tr>
-            <td align="center" valign="top" width="750" style="width:750px;">
+            <td align="left" valign="top" width="100%" style="width:100%;">
             <![endif]-->
-            <div class="email-container" style="font-family: Arial, sans-serif; max-width: 750px; width: 100%; margin: 0 auto; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
-              <div class="email-header" style="background: #0f172a; padding: 22px 24px; border-radius: 8px 8px 0 0; color: white; box-sizing: border-box;">
+            <div class="email-container" style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; width: 100%; max-width: 100%; margin: 0; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
+              <div class="email-header" style="background: #0f172a; padding: 22px 24px; border-radius: 8px 8px 0 0; color: white; box-sizing: border-box; width: 100%;">
                 <div style="margin-bottom: 12px;">
                   <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
                     <img src="${logoUrl}" alt="Procucev Enterprise" height="36" style="height: 36px; max-height: 40px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />
@@ -679,16 +679,16 @@ function wrapEmail(headline, subline, innerHtml) {
   const frontendUrl = getPublicFrontendUrl();
   const logoUrl = getLogoUrl();
   return `
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #f8fafc; border-collapse: collapse;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
       <tr>
-        <td align="center" class="email-wrapper-cell" style="padding: 20px 10px;">
+        <td align="left" class="email-wrapper-cell" style="padding: 16px 20px; background-color: #ffffff;">
           <!--[if (gte mso 9)|(IE)]>
-          <table align="center" border="0" cellspacing="0" cellpadding="0" width="750" style="width:750px;">
+          <table align="left" border="0" cellspacing="0" cellpadding="0" width="100%" style="width:100%;">
           <tr>
-          <td align="center" valign="top" width="750" style="width:750px;">
+          <td align="left" valign="top" width="100%" style="width:100%;">
           <![endif]-->
-          <div class="email-container" style="font-family: Arial, sans-serif; max-width: 750px; width: 100%; margin: 0 auto; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
-            <div class="email-header" style="background: #ffffff; padding: 22px 26px; border-radius: 8px 8px 0 0; border: 1px solid #e2e8f0; border-bottom: 3px solid #0284c7; box-sizing: border-box;">
+          <div class="email-container" style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; width: 100%; max-width: 100%; margin: 0; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
+            <div class="email-header" style="background: #ffffff; padding: 20px 24px; border-radius: 8px 8px 0 0; border: 1px solid #e2e8f0; border-bottom: 3px solid #0284c7; box-sizing: border-box; width: 100%;">
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%; border-collapse: collapse;">
                 <tr>
                   <td class="logo-cell" style="vertical-align: middle; padding-right: 12px;">
@@ -704,7 +704,7 @@ function wrapEmail(headline, subline, innerHtml) {
                 </tr>
               </table>
             </div>
-            <div class="email-content" style="padding: 26px 26px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px; box-sizing: border-box; word-break: break-word;">
+            <div class="email-content" style="padding: 24px 24px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px; box-sizing: border-box; word-break: break-word; width: 100%;">
               ${innerHtml}
               <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
               <p style="font-size: 12px; color: #64748b; margin: 0;">Procucev Enterprise · You are receiving this because your organisation is registered on the platform.</p>
@@ -753,10 +753,10 @@ function buildOtpEmail(to, code, expiresInSeconds, context = {}) {
     // heavily, since it is widely abused for phishing) was landing in spam.
     // No images, no links — only the code.
     html: `
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; border-collapse: collapse;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
       <tr>
-        <td align="center" style="padding: 20px 10px;">
-          <div style="font-family: Arial, sans-serif; max-width: 600px; width: 100%; margin: 0 auto; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 24px;">
+        <td align="left" style="padding: 16px 20px; background-color: #ffffff;">
+          <div style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; width: 100%; max-width: 100%; margin: 0; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 24px;">
             <p style="font-size: 13px; font-weight: 600; color: #64748b; letter-spacing: 0.5px; margin: 0 0 4px;">PROCUCEV ENTERPRISE</p>
             <p style="font-size: 16px; font-weight: 600; margin: 0 0 16px;">${headline}</p>
             <p style="margin: 0;">Your one-time verification code is:</p>
