@@ -379,6 +379,49 @@ describe('API Route Endpoints', () => {
       const res = await request(app).delete(`/api/vendors/${testVendorId}`).set(authHeader('vendor'));
       expect(res.statusCode).toBe(200);
     });
+
+    test('POST /api/vendors/bulk-delete deletes multiple vendors and handles edge cases', async () => {
+      // 1. Missing vendorIds returns 400
+      const missingRes = await request(app).post('/api/vendors/bulk-delete').set(authHeader('buyer')).send({});
+      expect(missingRes.statusCode).toBe(400);
+
+      // 2. Unauthenticated returns 401
+      const unauthRes = await request(app).post('/api/vendors/bulk-delete').send({ vendorIds: ['v-1'] });
+      expect(unauthRes.statusCode).toBe(401);
+
+      // 3. Buyer creates a couple of vendors
+      const v1Res = await request(app).post('/api/vendors').set(authHeader('buyer')).send({
+        name: 'Bulk Delete Candidate 1',
+        majorCategory: 'Mechanical',
+        email: 'bulk1@buyer-test.com',
+      });
+      const v2Res = await request(app).post('/api/vendors').set(authHeader('buyer')).send({
+        name: 'Bulk Delete Candidate 2',
+        majorCategory: 'Electrical',
+        email: 'bulk2@buyer-test.com',
+      });
+      expect(v1Res.statusCode).toBe(201);
+      expect(v2Res.statusCode).toBe(201);
+
+      const id1 = v1Res.body.data.id;
+      const id2 = v2Res.body.data.id;
+
+      // 4. Bulk delete both as buyer
+      const bulkRes = await request(app)
+        .post('/api/vendors/bulk-delete')
+        .set(authHeader('buyer'))
+        .send({ vendorIds: [id1, id2, 'v-hist-nonexistent-999'] });
+
+      expect(bulkRes.statusCode).toBe(200);
+      expect(bulkRes.body.success).toBe(true);
+      expect(bulkRes.body.deletedCount).toBe(3);
+      expect(bulkRes.body.deletedIds).toContain(id1);
+      expect(bulkRes.body.deletedIds).toContain(id2);
+
+      // 5. Verify they no longer exist
+      const check1 = await request(app).get(`/api/vendors/${id1}`).set(authHeader('buyer'));
+      expect(check1.statusCode).toBe(404);
+    });
   });
 
   // 4. RFQs

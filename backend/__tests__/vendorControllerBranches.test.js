@@ -862,6 +862,83 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       );
       expect(res.json).toHaveBeenCalledWith({ recorded: true });
     });
+
+    test('covers updateVendor, updateSubscription, and catch branches in vendorController', async () => {
+      const next = jest.fn();
+
+      // updateVendor 404
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      const resUp404 = mockRes();
+      await vendorController.updateVendor({ params: { id: 'missing-v' }, body: {} }, resUp404, next);
+      expect(resUp404.status).toHaveBeenCalledWith(404);
+
+      // generateOnboardingEmailPreview catch
+      jest.spyOn(storeService, 'getVendorById').mockImplementation(() => {
+        throw new Error('Onboarding email error');
+      });
+      await vendorController.generateOnboardingEmailPreview(
+        { params: { id: 'v1' }, user: { role: 'admin' } },
+        mockRes(),
+        next
+      );
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+
+      // updateSubscription 404
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+      const resSub404 = mockRes();
+      await vendorController.updateSubscription(
+        { params: { id: 'missing-v' }, user: { role: 'admin' }, body: { plan: 'premium' } },
+        resSub404,
+        next
+      );
+      expect(resSub404.status).toHaveBeenCalledWith(404);
+
+      // updateSubscription catch
+      jest.spyOn(storeService, 'getVendorById').mockImplementation(() => {
+        throw new Error('Sub update error');
+      });
+      await vendorController.updateSubscription(
+        { params: { id: 'v1' }, user: { role: 'admin' }, body: {} },
+        mockRes(),
+        next
+      );
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+
+      // downloadInvoice catch
+      jest.spyOn(storeService, 'getVendorById').mockImplementation(() => {
+        throw new Error('Download invoice error');
+      });
+      await vendorController.downloadInvoice({ params: { id: 'v1', linkId: 'l1' } }, mockRes(), next);
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+
+      // updateCategories 404
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      const resCat404 = mockRes();
+      await vendorController.updateCategories({ params: { id: 'missing-v' }, body: {} }, resCat404, next);
+      expect(resCat404.status).toHaveBeenCalledWith(404);
+
+      // bulkImportVendors with existing sessionId
+      jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue({ id: 'sess-existing' });
+      jest.spyOn(domainQueries, 'incrementBulkImportSessionInDB').mockResolvedValue(true);
+      jest.spyOn(storeService, 'bulkAddVendors').mockResolvedValue({
+        results: [{ rowNumber: 1, vendor: { id: 'v1' }, hasIssues: false }],
+        importedCount: 1,
+        duplicateCount: 0,
+        missingEmailCount: 0,
+      });
+      const resSess = mockRes();
+      await vendorController.bulkImportVendors(
+        {
+          user: { role: 'admin' },
+          body: { sessionId: 'sess-existing', vendors: [{ name: 'V', email: 'v@v.com', majorCategory: 'Tools' }] },
+        },
+        resSess,
+        next
+      );
+      expect(resSess.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, data: expect.objectContaining({ sessionId: 'sess-existing' }) })
+      );
+    });
   });
 });
 

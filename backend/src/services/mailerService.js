@@ -799,8 +799,101 @@ function emailGatewayAddress() {
   return process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com';
 }
 
+/**
+ * Determines whether a vendor is a buyer-uploaded vendor based on vendor entity attributes,
+ * vendor source taxonomy, or explicit flags. Procucev platform vendors return false.
+ * Does not rely on email addresses or hardcoded company names.
+ *
+ * @param {Object} [vendor]
+ * @param {Object} [context]
+ * @param {Object} [rfq]
+ * @returns {boolean}
+ */
+function isBuyerUploadedVendor(vendor, context = {}, rfq = {}) {
+  const ctx = context || {};
+  if (typeof ctx.isBuyerUploaded === 'boolean') {
+    return ctx.isBuyerUploaded;
+  }
+  if (typeof ctx.isProcucevVendor === 'boolean') {
+    return !ctx.isProcucevVendor;
+  }
+  const v = vendor || ctx.vendor;
+  if (v && typeof v.isBuyerUploaded === 'boolean') {
+    return v.isBuyerUploaded;
+  }
+  if (v && typeof v.isProcucevVendor === 'boolean') {
+    return !v.isProcucevVendor;
+  }
+  if (!v && !ctx.vendorSource && !ctx.source) {
+    return false;
+  }
+  if (v && (v.addedByBuyerCompany || v.buyerAccountId || v.buyerId)) {
+    return true;
+  }
+  const rawSource = (v && v.source) || ctx.vendorSource || ctx.source || '';
+  const s = String(rawSource).toLowerCase().trim();
+  if (
+    s === 'buyer_uploaded' ||
+    s === 'vendor_master_ingestion' ||
+    s === 'historical_purchase_dump' ||
+    s === 'buyer_manual' ||
+    s === 'buyer_excel' ||
+    s === 'excel_upload' ||
+    s === 'po_ingestion' ||
+    s === 'client_uploaded' ||
+    s === 'buyer' ||
+    s.includes('buyer') ||
+    s.includes('ingestion') ||
+    s.includes('purchase_dump')
+  ) {
+    return true;
+  }
+  if (
+    s === 'procucev' ||
+    s === 'procucev_network' ||
+    s === 'platform' ||
+    s === 'marketplace' ||
+    s === 'self_registration' ||
+    s.includes('procucev') ||
+    s.includes('platform')
+  ) {
+    return false;
+  }
+  if (v && v.id) {
+    const id = String(v.id).toLowerCase().trim();
+    if (
+      id.startsWith('v-hist-') ||
+      id.startsWith('v-navin-') ||
+      id.startsWith('vm-') ||
+      id.startsWith('v-ingest-') ||
+      id.startsWith('v-buyer-')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildRfqInviteEmail(to, context = {}) {
-  const { rfq = {}, recipientName, buyerEmail, cc, freeCreditsRemaining, isSubscribed, isReminder = false } = context;
+  const {
+    rfq = {},
+    recipientName,
+    buyerEmail,
+    cc,
+    freeCreditsRemaining,
+    isSubscribed,
+    isReminder = false,
+    vendor,
+  } = context;
+  const isBuyerVendor = isBuyerUploadedVendor(vendor, context, rfq);
+  const buyerName = rfq.buyerAccountName ? String(rfq.buyerAccountName).trim() : null;
+  const introMessage = isReminder
+    ? (isBuyerVendor && buyerName
+        ? `This is a reminder to submit your quotation for the verified business enquiry from <strong>${buyerName}</strong> matching your category.`
+        : 'This is a reminder to submit your quotation for the following verified business enquiry matching your category.')
+    : (isBuyerVendor
+        ? `We have a new verified business enquiry from ${buyerName ? `<strong>${buyerName}</strong>` : 'a corporate buyer'} that matches your category. Please review the details below:`
+        : 'We have a new verified business enquiry that matches your category. Please review the details below:');
   const items = Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.length > 0
     ? rfq.extractedEntities
     : Array.isArray(rfq.items) && rfq.items.length > 0
@@ -848,7 +941,7 @@ function buildRfqInviteEmail(to, context = {}) {
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
     <p>Greetings from <strong>Procucev!</strong></p>
     <p>QUA by <strong>Procucev</strong> is a trusted AI B2B marketplace connecting genuine buyers and quality sellers across India.</p>
-    <p>${isReminder ? 'This is a reminder to submit your quotation for the following verified business enquiry matching your category.' : `We have a new verified business enquiry from ${rfq.buyerAccountName ? `<strong>${rfq.buyerAccountName}</strong>` : 'a corporate buyer'} that matches your category. Please review the details below:`}</p>
+    <p>${introMessage}</p>
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('RFQ Number', rfq.rfqNumber)}
       ${row('Requirement', rfq.title)}
@@ -1651,7 +1744,11 @@ function buildVendorCategoryMismatchEmail(toOrParams, maybeContext) {
     buyerAccountName,
     buyerEmail,
     cc,
+    vendor,
   } = context;
+
+  const isBuyerVendor = isBuyerUploadedVendor(vendor, context, rfq);
+  const displayBuyer = isBuyerVendor && buyerAccountName;
 
   const targetRfqNumber = rfqNumber || rfq.rfqNumber || 'RFQ';
   const targetTitle = rfqTitle || rfq.title || 'Procurement Requisition';
@@ -1663,7 +1760,7 @@ function buildVendorCategoryMismatchEmail(toOrParams, maybeContext) {
 
   const inner = `
     <p>${vendorName ? `Dear <strong>${vendorName}</strong>,` : 'Hello,'}</p>
-    <p>You were identified as a potential supplier for RFQ <strong>#${targetRfqNumber}</strong> (${targetTitle})${buyerAccountName ? ` released by <strong>${buyerAccountName}</strong>` : ''}.</p>
+    <p>You were identified as a potential supplier for RFQ <strong>#${targetRfqNumber}</strong> (${targetTitle})${displayBuyer ? ` released by <strong>${buyerAccountName}</strong>` : ''}.</p>
     
     <div style="background: #fffbeb; border: 1px solid #f59e0b; color: #92400e; padding: 14px; border-radius: 6px; margin: 16px 0;">
       <strong>⚠️ Category Mismatch Identified – Business Profile Update Required</strong><br/>
@@ -2522,6 +2619,7 @@ module.exports = {
   sendRfqInviteEmail,
   sendQuoteReceivedEmail,
   buildRfqInviteEmail,
+  isBuyerUploadedVendor,
   buildQuoteReceivedEmail,
   sendRequisitionNotificationEmail,
   buildRequisitionEmail,

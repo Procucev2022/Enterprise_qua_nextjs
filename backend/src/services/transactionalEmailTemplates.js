@@ -524,6 +524,17 @@ function buildEmail3_NewRfqIntimation(params = {}) {
   const rfqId = params.rfq_id || 'RFQ-2026';
   const ctaUrl = params.cta_url || `${getPublicFrontendUrl()}/vendor/register?rfq=${encodeURIComponent(rfqId)}`;
 
+  const isBuyerVendor = Boolean(
+    params.is_buyer_uploaded ||
+    params.isBuyerUploaded ||
+    (params.vendor && (params.vendor.isBuyerUploaded || params.vendor.addedByBuyerCompany || params.vendor.buyerAccountId || params.vendor.buyerId)) ||
+    (params.vendor_source && String(params.vendor_source).toLowerCase().includes('buyer'))
+  );
+  const buyerCompany = (params.buyer_company || params.buyer_account_name || params.buyer_name || '').trim();
+  const buyerDisplay = isBuyerVendor && buyerCompany
+    ? buyerCompany
+    : `${buyerIndustry} company, ${buyerCity}`;
+
   const subject = `New buyer enquiry for ${category}: quote by ${quoteDeadline}`;
 
   const text = `Hi ${firstName},
@@ -532,7 +543,7 @@ A verified buyer is looking for suppliers in ${category}, and Qua AI has matched
 
 RFQ at a glance
 Requirement: ${rfqTitle}
-Buyer: ${buyerIndustry} company, ${buyerCity}
+Buyer: ${buyerDisplay}
 Line items: ${itemCount}
 Delivery to: ${deliveryLocation}
 Required by: ${requiredBy}
@@ -567,7 +578,7 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
       </tr>
       <tr style="border-bottom: 1px solid #e2e8f0;">
         <td style="padding: 8px 14px; font-weight: 600; color: #64748b;">Buyer</td>
-        <td style="padding: 8px 14px; color: #0f172a;">${escapeHtml(buyerIndustry)} company, ${escapeHtml(buyerCity)}</td>
+        <td style="padding: 8px 14px; color: #0f172a;">${escapeHtml(buyerDisplay)}</td>
       </tr>
       <tr style="border-bottom: 1px solid #e2e8f0;">
         <td style="padding: 8px 14px; font-weight: 600; color: #64748b;">Line items</td>
@@ -630,6 +641,17 @@ function buildEmail4_NewRfqToQuote(params = {}) {
   const creditBalance = params.credit_balance !== undefined ? params.credit_balance : 5;
   const quoteUrl = params.quote_url || `${getPublicFrontendUrl()}/vendor/rfqs/${encodeURIComponent(rfqId)}`;
 
+  const isBuyerVendor = Boolean(
+    params.is_buyer_uploaded ||
+    params.isBuyerUploaded ||
+    (params.vendor && (params.vendor.isBuyerUploaded || params.vendor.addedByBuyerCompany || params.vendor.buyerAccountId || params.vendor.buyerId)) ||
+    (params.vendor_source && String(params.vendor_source).toLowerCase().includes('buyer'))
+  );
+  const buyerCompany = (params.buyer_company || params.buyer_account_name || params.buyer_name || '').trim();
+  const buyerDisplay = isBuyerVendor && buyerCompany
+    ? buyerCompany
+    : `${buyerIndustry} company, ${buyerCity}`;
+
   const subject = `New RFQ ${rfqId}: ${rfqTitle}, quotes close ${quoteDeadline}`;
 
   const text = `Hi ${firstName},
@@ -639,7 +661,7 @@ A new RFQ matching your categories just came in. Buyers usually shortlist from t
 RFQ at a glance
 RFQ ID: ${rfqId}
 Requirement: ${rfqTitle}
-Buyer: ${buyerIndustry} company, ${buyerCity}
+Buyer: ${buyerDisplay}
 Line items: ${itemCount}
 Delivery to: ${deliveryLocation}
 Required by: ${requiredBy}
@@ -675,7 +697,7 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
       </tr>
       <tr style="border-bottom: 1px solid #e2e8f0;">
         <td style="padding: 8px 14px; font-weight: 600; color: #64748b;">Buyer</td>
-        <td style="padding: 8px 14px; color: #0f172a;">${escapeHtml(buyerIndustry)} company, ${escapeHtml(buyerCity)}</td>
+        <td style="padding: 8px 14px; color: #0f172a;">${escapeHtml(buyerDisplay)}</td>
       </tr>
       <tr style="border-bottom: 1px solid #e2e8f0;">
         <td style="padding: 8px 14px; font-weight: 600; color: #64748b;">Line items</td>
@@ -1140,11 +1162,21 @@ function buildEmail12_RfqRevisedBuyerQuestion(params = {}) {
   const quoteDeadline = params.quote_deadline || '2026-11-20 18:00 IST';
   const reviewChangesUrl = params.review_changes_url || `${getPublicFrontendUrl()}/vendor/rfqs/${encodeURIComponent(rfqId)}`;
 
+  const isBuyerVendor = Boolean(
+    params.is_buyer_uploaded ||
+    params.isBuyerUploaded ||
+    (params.vendor && (params.vendor.isBuyerUploaded || params.vendor.addedByBuyerCompany || params.vendor.buyerAccountId || params.vendor.buyerId)) ||
+    (params.vendor_source && String(params.vendor_source).toLowerCase().includes('buyer'))
+  );
+  const buyerCompany = (params.buyer_company || params.buyer_account_name || params.buyer_name || '').trim();
+  const buyerIntroText = isBuyerVendor && buyerCompany ? buyerCompany : 'The buyer';
+  const buyerIntroHtml = isBuyerVendor && buyerCompany ? `<strong>${escapeHtml(buyerCompany)}</strong>` : 'The buyer';
+
   const subject = `Update on RFQ ${rfqId}: please review`;
 
   const text = `Hi ${firstName},
 
-The buyer has updated ${rfqTitle}:
+${buyerIntroText} has updated ${rfqTitle}:
 ${changeSummary}
 
 If you've already quoted, please check whether your quote still applies and revise it if needed. The deadline is now ${quoteDeadline}.
@@ -1161,7 +1193,7 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
       Hi <strong>${escapeHtml(firstName)}</strong>,
     </p>
     <p style="font-size: 15px; margin: 0 0 14px 0; color: #334155;">
-      The buyer has updated <strong>${escapeHtml(rfqTitle)}</strong>:
+      ${buyerIntroHtml} has updated <strong>${escapeHtml(rfqTitle)}</strong>:
     </p>
 
     <!-- Change Summary Box -->
