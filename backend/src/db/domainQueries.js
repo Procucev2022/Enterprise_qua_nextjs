@@ -497,14 +497,16 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
   const limitPlaceholder = `$${ids.length + 1}`;
 
   const pgQuery = `SELECT raw FROM vendors
-     WHERE (lower(raw->>'buyerId') IN (${placeholders})
+     WHERE source NOT IN ('category_manager_upload', 'excel')
+       AND (lower(raw->>'buyerId') IN (${placeholders})
         OR lower(raw->>'buyerAccountId') IN (${placeholders})
         OR lower(raw->>'buyerEmail') IN (${placeholders}))
      ORDER BY created_at DESC
      LIMIT ${limitPlaceholder}`;
 
   const d1Query = `SELECT raw FROM vendors
-     WHERE (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
+     WHERE source NOT IN ('category_manager_upload', 'excel')
+       AND (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
         OR lower(json_extract(raw,'$.buyerAccountId')) IN (${placeholders})
         OR lower(json_extract(raw,'$.buyerEmail')) IN (${placeholders}))
      ORDER BY created_at DESC

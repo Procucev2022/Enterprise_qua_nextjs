@@ -3653,6 +3653,14 @@ continue and after this feature implemented  create a new branch and raise the p
 
 ---
 
+### 2026-10-23T16:17:05+05:30
+
+```text
+Please remove the “Close RFQ” button from the vendor side. Currently, when a vendor clicks it, the RFQ gets closed. Only the buyer and Category Manager should have permission to close an RFQ.
+```
+
+---
+
 ### 2026-10-23T17:40:37+05:30
 
 ```text
