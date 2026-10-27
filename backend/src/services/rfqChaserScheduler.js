@@ -301,14 +301,16 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
 
   const smsDelay = process.env.NODE_ENV === 'test'
     ? (CHASER_DELAYS.SMS_MS ?? 5 * 60 * 1000)
-    : Math.max(5 * 60 * 1000, Number(CHASER_DELAYS.SMS_MS) || (5 * 60 * 1000));
+    : (CHASER_DELAYS.SMS_MS !== undefined && !isNaN(Number(CHASER_DELAYS.SMS_MS))
+        ? Math.max(0, Number(CHASER_DELAYS.SMS_MS))
+        : (5 * 60 * 1000));
   const callDelay = CHASER_DELAYS.CALL_MS;
   const waDelay = process.env.NODE_ENV === 'test'
     ? (CHASER_DELAYS.WHATSAPP_MS ?? 12 * 60 * 60 * 1000)
-    : Math.max(12 * 60 * 60 * 1000, Number(CHASER_DELAYS.WHATSAPP_MS) || (12 * 60 * 60 * 1000));
+    : Math.max(0, Number(CHASER_DELAYS.WHATSAPP_MS) || (12 * 60 * 60 * 1000));
   const emailDelay = process.env.NODE_ENV === 'test'
     ? (CHASER_DELAYS.EMAIL_MS ?? 24 * 60 * 60 * 1000)
-    : Math.max(24 * 60 * 60 * 1000, Number(CHASER_DELAYS.EMAIL_MS) || (24 * 60 * 60 * 1000));
+    : Math.max(0, Number(CHASER_DELAYS.EMAIL_MS) || (24 * 60 * 60 * 1000));
 
   if (getD1Binding()) {
     const waitUntil = getWaitUntil();
