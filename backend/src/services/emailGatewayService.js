@@ -1953,7 +1953,6 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
     const { draft, classification } = await rfqIngestionService.buildRFQDraft({
       lineItems: group.items,
-      title: extraction.documentTitle || message.subject,
       category: extraction.category,
       estimatedBudget: extraction.estimatedBudget,
       source: 'email_gateway',
@@ -1983,7 +1982,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
         source: 'email_gateway',
         sourceEmail: message.fromAddress,
         buyerEmail: message.fromAddress,
-        sourceFileName: message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
+        sourceFileName: draft.title || message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
         raisedByEmail: message.fromAddress,
         budget: draft.estimatedBudget || 0,
         targetDeliveryDate: draft.targetDeliveryDate,
@@ -2003,7 +2002,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
         status: INGESTION_OUTCOME.RFQ_GROUP_CREATED,
         detail: `RFQ ${groupIndex + 1} of ${groups.length} raised from this email`,
         fromAddress: message.fromAddress,
-        subject: message.subject,
+        subject: draft.title || message.subject,
         rfqId: created.id,
         rfqNumber: created.rfqNumber,
       });

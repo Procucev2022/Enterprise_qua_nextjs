@@ -4634,3 +4634,96 @@ Error: Process completed with exit code 1.
 ```
 
 ---
+### 2026-10-28T16:31:54+05:30
+
+```text
+# Fix Production Issue: Email Subject Not Captured as RFQ Title
+
+## Problem Statement
+When a buyer raises an RFQ (Request for Quotation) by sending an email, the system should automatically use the incoming email's subject line as the RFQ title.
+
+Currently, the RFQ title is displayed as a generic value such as **"request for quotation"** instead of the original email subject. This functionality was previously working in the DEV environment but is now not working after migration to production.
+
+## Objective
+Identify and fix the root cause so that every email-generated RFQ displays the correct original email subject across the application.
+
+## Instructions
+
+### 1. Investigate the Existing Implementation
+- Inspect the complete email-to-RFQ workflow, from email ingestion to RFQ creation and database persistence.
+- Identify where the email subject is extracted, transformed, passed to the backend, and saved.
+- Check the relevant email reader, extraction service, RFQ service, backend APIs, database models, and frontend display logic.
+- Compare DEV and production configuration/code paths if available.
+- Do not assume the issue is frontend-only or introduce a workaround before identifying the root cause.
+
+### 2. Fix Subject Extraction and Mapping
+- Read the actual subject from the incoming email metadata.
+- Pass the subject through the entire email-to-RFQ pipeline without replacing it with a generic default.
+- Save the original subject in the appropriate RFQ title field in the database.
+- Ensure the RFQ creation API receives and persists the correct title.
+- Handle encoded email subjects, whitespace, and empty or missing subjects safely.
+- Use a generic fallback title only when the email genuinely has no usable subject.
+- Do not use the email body, extracted product name, or AI-generated summary as a replacement for the subject.
+
+### 3. Preserve Existing Functionality
+- Do not change manual RFQ creation behavior.
+- Do not break AI-based extraction of product descriptions, quant
+<truncated 1394 bytes>
+ as the RFQ title.
+7. Manual RFQ creation → existing title behavior must remain unchanged.
+8. Regression test → ensure the same email does not create duplicate RFQs.
+
+### 6. Deployment and Regression Checks
+- Identify why the issue occurs in production after migration while it previously worked in DEV.
+- Check environment-specific configuration, deployed code, API payloads, and database field mappings.
+- Do not deploy to production automatically.
+- Run relevant unit tests, integration tests, and end-to-end tests.
+- Report any migration or data correction needed separately. Do not bulk-update existing production RFQ titles without approval.
+
+## Acceptance Criteria
+- Email-generated RFQ titles match the original email subject.
+- Generic titles are used only when the incoming email has no usable subject.
+- Titles remain consistent across API responses, database records, and relevant UI pages.
+- Manual RFQ creation and existing RFQ functionality continue working.
+- No duplicate RFQs or unintended changes to existing data.
+- Tests pass, and the root cause and files changed are documented.
+
+## Final Report
+After implementation, provide:
+1. Root cause identified.
+2. Files and functions modified.
+3. Fix implemented.
+4. Tests executed and results.
+5. Evidence that the email subject is saved and displayed correctly.
+6. Any remaining risks or deployment steps.
+```
+
+---
+### 2026-10-28T17:48:54+05:30
+
+```text
+pull the latest code and raise the pr
+```
+
+---
+### 2026-10-28T17:57:40+05:30
+
+```text
+check once not take email subject as a rfq title it can anlasize and take the item data as a title
+```
+
+---
+### 2026-10-28T18:12:35+05:30
+
+```text
+B
+```
+
+---
+### 2026-10-28T18:58:09+05:30
+
+`	ext
+continue
+`
+
+---
