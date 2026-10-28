@@ -97,7 +97,7 @@ describe('Category Manager Screens Suite', () => {
       renderWithProvider(<KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={onSpend} />);
 
       await waitFor(() => {
-        expect(screen.getByText(/Operational Monitoring Kanban & Chasing Control/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Mode & Performance Analytics/i })).toBeInTheDocument();
       });
 
       // Portfolio metrics derive from the single bootstrap-seeded RFQ
@@ -591,7 +591,7 @@ describe('Category Manager Screens Suite', () => {
       const onBack = jest.fn();
       renderWithProvider(<SpendDashboard onBackToKanban={onBack} />);
 
-      expect(screen.getByText(/Mode Performance & RFQ Analytics Dashboard/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Back to Operational Monitoring Kanban/i })).toBeInTheDocument();
       expect(screen.getAllByText(/Private Client Roster/i)[0]).toBeInTheDocument();
       expect(screen.getAllByText(/Hybrid Base Network/i)[0]).toBeInTheDocument();
       expect(screen.getAllByText(/360° AI Evaluated Roster/i)[0]).toBeInTheDocument();
@@ -862,7 +862,7 @@ describe('Category Manager Screens Suite', () => {
       // AppProvider's async bootstrap fetch, mocked in jest.setup.ts) rather
       // than an instantly-available hardcoded list — wait for it to land.
       await waitFor(() => {
-        expect(screen.getByText(/Buyer Wise Command Console & Analytics/i)).toBeInTheDocument();
+        expect(screen.getByText(/Active Context Selection:/i)).toBeInTheDocument();
         expect(screen.getAllByText(/S\. N\. Subrahmanyan/i).length).toBeGreaterThan(0);
       });
 
@@ -1030,7 +1030,7 @@ describe('Category Manager Screens Suite', () => {
       // AppProvider's async bootstrap fetch, mocked in jest.setup.ts) rather
       // than an instantly-available hardcoded list — wait for it to land.
       await waitFor(() => {
-        expect(screen.getByText(/Vendor Summary & Performance Analytics/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Bulk Upload Vendors/i })).toBeInTheDocument();
         expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument();
       });
 
@@ -1098,7 +1098,7 @@ describe('Category Manager Screens Suite', () => {
     test('renders category governance table with timeframe switches, search, and expansion', async () => {
       renderWithProvider(<CategorySummaryDashboard />);
 
-      expect(screen.getByText(/Category Governance & Demand-Supply Analytics/i)).toBeInTheDocument();
+      expect(screen.getByText(/Active Categories/i)).toBeInTheDocument();
       await waitFor(() => expect(screen.getAllByText(/13 Major/i)[0]).toBeInTheDocument());
 
       // Timeframe switches
@@ -1157,7 +1157,7 @@ describe('Category Manager Screens Suite', () => {
       renderWithProvider(<KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />);
 
       await waitFor(() => {
-        expect(screen.getByText(/Operational Monitoring Kanban & Chasing Control/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Mode & Performance Analytics/i })).toBeInTheDocument();
       });
 
       const matrixBtn = screen.getByRole('button', { name: /View Comparative Quote Matrix/i });
@@ -1174,7 +1174,7 @@ describe('Category Manager Screens Suite', () => {
       renderWithProvider(<BuyerConsole onNavigateToMatrix={onMatrix} onNavigateToEvaluation={jest.fn()} />);
 
       await waitFor(() => {
-        expect(screen.getByText(/Buyer Wise Command Console & Analytics/i)).toBeInTheDocument();
+        expect(screen.getByText(/Active Context Selection:/i)).toBeInTheDocument();
         expect(screen.getAllByText(/S\. N\. Subrahmanyan/i).length).toBeGreaterThan(0);
       });
 
@@ -1214,7 +1214,7 @@ describe('Category Manager Screens Suite', () => {
       renderWithProvider(<VendorConsole onNavigateToMatrix={onMatrix} onNavigateToEvaluation={jest.fn()} />);
 
       await waitFor(() => {
-        expect(screen.getByText(/Vendor Summary & Performance Analytics/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Bulk Upload Vendors/i })).toBeInTheDocument();
         expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument();
       });
 

@@ -226,8 +226,25 @@ describe('API Route Endpoints', () => {
     });
 
     test('POST /api/vendors returns 403 for a role that cannot create a vendor profile', async () => {
-      const res = await request(app).post('/api/vendors').set(authHeader('category_manager')).send({ name: 'X', majorCategory: 'Y' });
+      const res = await request(app).post('/api/vendors').set(customAuthHeader({ id: 'u-auditor', role: 'auditor', email: 'auditor@test.com' })).send({ name: 'X', majorCategory: 'Y', email: 'x@test.com' });
       expect(res.statusCode).toBe(403);
+    });
+
+    test('POST /api/vendors: category_manager can create a new procucev_network vendor', async () => {
+      const res = await request(app)
+        .post('/api/vendors')
+        .set(authHeader('category_manager'))
+        .send({
+          name: 'CM Added Supplier Ltd',
+          email: 'cm-supplier@procucev.network',
+          contactPhone: '9876543299',
+          majorCategory: 'Mechanical',
+          minorCategories: ['Pumps & Accessories'],
+        });
+      expect(res.statusCode).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.name).toBe('CM Added Supplier Ltd');
+      expect(res.body.data.source).toBe('procucev_network');
     });
 
     test('POST /api/vendors returns 403 for a buyer with no linked buyer account', async () => {
@@ -361,6 +378,49 @@ describe('API Route Endpoints', () => {
       // created above under the 'vendor' test user's own session email.
       const res = await request(app).delete(`/api/vendors/${testVendorId}`).set(authHeader('vendor'));
       expect(res.statusCode).toBe(200);
+    });
+
+    test('POST /api/vendors/bulk-delete deletes multiple vendors and handles edge cases', async () => {
+      // 1. Missing vendorIds returns 400
+      const missingRes = await request(app).post('/api/vendors/bulk-delete').set(authHeader('buyer')).send({});
+      expect(missingRes.statusCode).toBe(400);
+
+      // 2. Unauthenticated returns 401
+      const unauthRes = await request(app).post('/api/vendors/bulk-delete').send({ vendorIds: ['v-1'] });
+      expect(unauthRes.statusCode).toBe(401);
+
+      // 3. Buyer creates a couple of vendors
+      const v1Res = await request(app).post('/api/vendors').set(authHeader('buyer')).send({
+        name: 'Bulk Delete Candidate 1',
+        majorCategory: 'Mechanical',
+        email: 'bulk1@buyer-test.com',
+      });
+      const v2Res = await request(app).post('/api/vendors').set(authHeader('buyer')).send({
+        name: 'Bulk Delete Candidate 2',
+        majorCategory: 'Electrical',
+        email: 'bulk2@buyer-test.com',
+      });
+      expect(v1Res.statusCode).toBe(201);
+      expect(v2Res.statusCode).toBe(201);
+
+      const id1 = v1Res.body.data.id;
+      const id2 = v2Res.body.data.id;
+
+      // 4. Bulk delete both as buyer
+      const bulkRes = await request(app)
+        .post('/api/vendors/bulk-delete')
+        .set(authHeader('buyer'))
+        .send({ vendorIds: [id1, id2, 'v-hist-nonexistent-999'] });
+
+      expect(bulkRes.statusCode).toBe(200);
+      expect(bulkRes.body.success).toBe(true);
+      expect(bulkRes.body.deletedCount).toBe(3);
+      expect(bulkRes.body.deletedIds).toContain(id1);
+      expect(bulkRes.body.deletedIds).toContain(id2);
+
+      // 5. Verify they no longer exist
+      const check1 = await request(app).get(`/api/vendors/${id1}`).set(authHeader('buyer'));
+      expect(check1.statusCode).toBe(404);
     });
   });
 
@@ -547,6 +607,20 @@ describe('API Route Endpoints', () => {
         expect(v0RfqWhenExhausted.statusCode).toBe(201);
         acc = await storeService.getBuyerAccountByEmail(email);
         expect(acc.remainingFreeRFQs).toBe(0);
+      });
+
+      test('spaced aliases such as mode 0 are canonicalized to mode_0 and do not consume credits', async () => {
+        const email = 'entitlement-spaced-mode@ex.com';
+        await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
+          organizationName: 'Entitlement Spaced Mode Buyer',
+          corporateEmail: email,
+        });
+
+        const rfq = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode 0' }));
+        expect(rfq.statusCode).toBe(201);
+        expect(rfq.body.data.sourcingMode).toBe('mode_0');
+        const acc = await storeService.getBuyerAccountByEmail(email);
+        expect(acc.remainingFreeRFQs).toBe(5);
       });
 
       test('a free_trial buyer can raise mode_1, mode_2, or mode_3 RFQs sharing the 5 free RFQs', async () => {
@@ -848,6 +922,72 @@ describe('API Route Endpoints', () => {
     test('POST /api/rfqs returns 400 when title missing', async () => {
       const res = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({});
       expect(res.statusCode).toBe(400);
+    });
+
+    test('POST /api/rfqs rejects invalid major category', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Invalid Category RFQ',
+          deliveryLocation: 'Mumbai Site',
+          deliveryPincode: '400701',
+          targetDeliveryDate: '2026-12-01',
+          category: 'Nonexistent Major Category 12345',
+        });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toMatch(/Invalid major category/i);
+    });
+
+    test('POST /api/rfqs rejects minor category not belonging to major category', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Mismatched Category RFQ',
+          deliveryLocation: 'Mumbai Site',
+          deliveryPincode: '400701',
+          targetDeliveryDate: '2026-12-01',
+          category: 'Engineering Spares - Electrical',
+          minorCategory: 'Food & Beverages',
+        });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toMatch(/Invalid category combination/i);
+    });
+
+    test('POST /api/rfqs rejects line item with invalid category combination', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Mismatched Line Item Category RFQ',
+          deliveryLocation: 'Mumbai Site',
+          deliveryPincode: '400701',
+          targetDeliveryDate: '2026-12-01',
+          category: 'Others – New Product',
+          extractedEntities: [
+            {
+              id: 'li-1',
+              itemName: 'Stethoscope',
+              majorCategory: 'Raw Material',
+              minorCategory: 'Health Equipments', // Health Equipments does NOT belong to Raw Material!
+            },
+          ],
+        });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toMatch(/invalid category combination/i);
+    });
+
+    test('PUT /api/rfqs/:id rejects invalid major-minor combination', async () => {
+      const res = await request(app)
+        .put(`/api/rfqs/${testRfqId}`)
+        .set(authHeader('buyer'))
+        .send({
+          majorCategory: 'Engineering Spares - Mechanical',
+          minorCategory: 'Food & Beverages',
+        });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toMatch(/Invalid category combination/i);
     });
 
     test('GET /api/rfqs/:id returns RFQ', async () => {
@@ -1379,6 +1519,19 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
 
       expect(res.statusCode).toBe(404);
       expect(storeService.getRFQById(rfq.id).title).toBe('Mechanical Spares Procurement');
+    });
+
+    test('rejects vendor requests to close or update an RFQ with 403', async () => {
+      const rfq = await createOwnRFQ();
+
+      const res = await request(app)
+        .put(`/api/rfqs/${rfq.id}`)
+        .set(authHeader('vendor'))
+        .send({ status: 'Closed' });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toMatch(/permission/i);
     });
 
     test('rejects a malformed pincode with a field error', async () => {

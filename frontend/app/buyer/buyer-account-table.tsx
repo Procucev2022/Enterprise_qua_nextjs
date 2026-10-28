@@ -78,7 +78,7 @@ export default function BuyerAccountTable() {
   const [industry, setIndustry] = useState('Heavy Engineering & Manufacturing');
   const [plantLocation, setPlantLocation] = useState('Navi Mumbai Hub, MH');
   const [sourcingMode, setSourcingMode] = useState<SourcingMode>('mode_2');
-  const [plan, setPlan] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3'>('version_2');
+  const [plan, setPlan] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'unlimited'>('version_2');
   const [freeRfqs, setFreeRfqs] = useState(5);
   const [accountSource, setAccountSource] = useState<'public_system' | 'web_registration' | 'enterprise_sso'>('public_system');
   const [selectedMajors, setSelectedMajors] = useState<string[]>([
@@ -911,9 +911,9 @@ export default function BuyerAccountTable() {
                     className="w-full text-xs"
                   >
                     <option value="free_trial">Free Trial (5 RFQs)</option>
-                    <option value="version_1">Version 1 (Mode 1)</option>
-                    <option value="version_2">Version 2 (Mode 2)</option>
-                    <option value="version_3">Version 3 (Mode 3)</option>
+                    <option value="version_1">Mode 1</option>
+                    <option value="version_2">Mode 2</option>
+                    <option value="version_3">Mode 3</option>
                   </select>
                 </div>
                 <div>

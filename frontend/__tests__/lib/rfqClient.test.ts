@@ -17,6 +17,9 @@ import {
   submitRFQInquiry,
   replyToRFQInquiry,
   requestVendorCategoryUpdateEmail,
+  extendRFQ,
+  fetchVendorRfqCredits,
+  downloadAndUnlockRFQ,
 } from '@/lib/rfqClient';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -962,6 +965,15 @@ describe('rfqClient RFQ persistence', () => {
       expect(lastPath()).toBe('/api/rfqs');
     });
 
+    test('passes options (summary and limit) query params when provided', async () => {
+      global.fetch = reply(200, { success: true, data: [RFQ] });
+
+      const res = await fetchRFQList({ summary: true, limit: 25 });
+
+      expect(res.success && res.rfqs).toEqual([RFQ]);
+      expect(lastPath()).toBe('/api/rfqs?summary=true&limit=25');
+    });
+
     // An empty list is a valid answer: a buyer who has raised nothing has none.
     test('accepts an empty list', async () => {
       global.fetch = reply(200, { success: true, data: [] });
@@ -1064,6 +1076,13 @@ describe('rfqClient RFQ persistence', () => {
       expect(lastPath()).toBe('/api/rfqs/all');
     });
 
+    test('accepts summary and limit options', async () => {
+      global.fetch = reply(200, { success: true, data: [RFQ] });
+
+      await fetchAllRFQs({ summary: true, limit: 10 });
+      expect(lastPath()).toBe('/api/rfqs/all?summary=true&limit=10');
+    });
+
     test('attaches the session token when one is held', async () => {
       signIn();
       global.fetch = reply(200, { success: true, data: [] });
@@ -1141,6 +1160,14 @@ describe('rfqClient RFQ persistence', () => {
 
       expect(res).toEqual({ success: true, candidates: [{ id: 'v-1', alreadyInvited: false }] });
       expect(lastPath()).toBe('/api/rfqs/rfq-1/vendor-candidates');
+    });
+
+    test('passes limit parameter when provided', async () => {
+      global.fetch = reply(200, { success: true, data: [] });
+
+      await fetchVendorCandidates('rfq-1', 25);
+
+      expect(lastPath()).toBe('/api/rfqs/rfq-1/vendor-candidates?limit=25');
     });
 
     test('attaches the session token when one is held', async () => {
@@ -1969,5 +1996,480 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
 
     const res = await requestVendorCategoryUpdateEmail({ vendorEmail: 'v@abc.com' });
     expect(res).toEqual({ success: false, error: 'Network offline' });
+  });
+
+  describe('extendRFQ', () => {
+    test('successfully extends RFQ deadline with 24 hours', async () => {
+      const mockUpdatedRfq = { id: 'rfq-1', rfqNumber: 'RFQ-001', isExtended: true, extensionHours: 24, closingDeadline: '2026-11-01T00:00:00Z' };
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: mockUpdatedRfq }),
+      });
+
+      const res = await extendRFQ('rfq-1', 24);
+      expect(res.success).toBe(true);
+      if (res.success) {
+        expect(res.rfq).toEqual(mockUpdatedRfq);
+      }
+      expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/rfq-1/extend', expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ hours: 24 }),
+      }));
+    });
+
+    test('returns network error when fetch rejects', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Connection lost'));
+      const res = await extendRFQ('rfq-1', 24);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('NETWORK');
+        expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+      }
+    });
+
+    test('returns network error when json parsing fails', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: async () => { throw new Error('Bad gateway'); },
+      });
+      const res = await extendRFQ('rfq-1', 48);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('NETWORK');
+      }
+    });
+
+    test('returns unauthorized when status is 401', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ success: false, error: 'Session expired' }),
+      });
+      const res = await extendRFQ('rfq-1', 24);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('UNAUTHORIZED');
+        expect(res.error).toBe('Session expired');
+      }
+    });
+
+    test('returns not found when status is 404', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: async () => ({ success: false, error: 'RFQ not found' }),
+      });
+      const res = await extendRFQ('rfq-999', 24);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('NOT_FOUND');
+      }
+    });
+
+    test('returns validation error on 400 rejection', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({ success: false, error: 'Already extended' }),
+      });
+      const res = await extendRFQ('rfq-1', 24);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('VALIDATION');
+        expect(res.error).toBe('Already extended');
+      }
+    });
+
+    test('returns server error on 500 rejection', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({ success: false, error: 'Internal failure' }),
+      });
+      const res = await extendRFQ('rfq-1', 24);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.reason).toBe('SERVER');
+        expect(res.error).toBe('Internal failure');
+      }
+    });
+  });
+
+  describe('rfqClient.classifyLineItems', () => {
+    test('returns empty draft on empty items array', async () => {
+      const res = await classifyLineItems([]);
+      expect(res.success).toBe(true);
+      expect(res.data?.extractedEntities).toEqual([]);
+    });
+
+    test('handles single-batch classification (<= 50 items) and calls onProgress', async () => {
+      const mockEntities = [
+        {
+          id: 'item-1',
+          itemName: 'Sugar Refined',
+          quantity: 10,
+          unit: 'kg',
+          targetDate: '2026-11-01',
+          technicalSpecs: 'Refined sugar 1kg pack',
+          category: 'Food & Beverages',
+          majorCategory: 'Others – New Product',
+          minorCategory: 'Food & Beverages',
+          confidence: 0.9,
+        },
+      ];
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            title: '',
+            category: 'Others – New Product',
+            extractedEntities: mockEntities,
+          },
+        }),
+      });
+
+      const onProgress = jest.fn();
+      const res = await classifyLineItems(
+        [
+          {
+            id: 'item-1',
+            itemName: 'Sugar Refined',
+            quantity: 10,
+            unit: 'kg',
+            targetDate: '2026-11-01',
+            technicalSpecs: 'Refined sugar 1kg pack',
+            category: '',
+            majorCategory: '',
+            minorCategory: '',
+            confidence: 0,
+          },
+        ],
+        onProgress
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.data?.extractedEntities).toHaveLength(1);
+      expect(res.data?.extractedEntities[0].majorCategory).toBe('Others – New Product');
+      expect(res.data?.extractedEntities[0].minorCategory).toBe('Food & Beverages');
+      expect(onProgress).toHaveBeenCalledWith({ processed: 1, total: 1, percent: 100 });
+    });
+
+    test('handles multi-batch classification for 100 and 279 items, reporting incremental progress', async () => {
+      const totalCount = 279;
+      const items = Array.from({ length: totalCount }, (_, i) => ({
+        id: `row-${i + 1}`,
+        itemName: `Grocery Item ${i + 1}`,
+        quantity: i + 1,
+        unit: 'kg',
+        targetDate: '2026-12-01',
+        technicalSpecs: `Spec for item ${i + 1}`,
+        category: '',
+        majorCategory: '',
+        minorCategory: '',
+        confidence: 0,
+      }));
+
+      global.fetch = jest.fn().mockImplementation((_, opts) => {
+        const body = JSON.parse(opts.body);
+        const batchEntities = body.lineItems.map((li: any) => ({
+          id: li.id,
+          itemName: li.itemName,
+          quantity: li.quantity,
+          unit: li.unit,
+          targetDate: li.targetDate,
+          technicalSpecs: li.technicalSpecs,
+          category: 'Food & Beverages',
+          majorCategory: 'Others – New Product',
+          minorCategory: 'Food & Beverages',
+          confidence: 0.95,
+        }));
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              extractedEntities: batchEntities,
+            },
+          }),
+        });
+      });
+
+      const progressUpdates: Array<{ processed: number; total: number; percent: number }> = [];
+      const res = await classifyLineItems(items, (prog) => {
+        progressUpdates.push(prog);
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.data?.extractedEntities).toHaveLength(279);
+      expect(res.data?.extractedEntities[0].id).toBe('row-1');
+      expect(res.data?.extractedEntities[278].id).toBe('row-279');
+      expect(res.data?.extractedEntities[0].majorCategory).toBe('Others – New Product');
+      expect(res.data?.extractedEntities[0].minorCategory).toBe('Food & Beverages');
+      expect(res.data?.extractedEntities[0].quantity).toBe(1);
+      expect(res.data?.extractedEntities[278].quantity).toBe(279);
+
+      // Verify batching took 6 chunks (50 * 5 + 29 = 279)
+      expect(global.fetch).toHaveBeenCalledTimes(6);
+      expect(progressUpdates.length).toBe(6);
+      expect(progressUpdates[progressUpdates.length - 1]).toEqual({
+        processed: 279,
+        total: 279,
+        percent: 100,
+      });
+    });
+
+    test('handles single-batch network failure', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+      const res = await classifyLineItems([
+        {
+          id: '1',
+          itemName: 'Item 1',
+          quantity: 1,
+          unit: 'nos',
+          targetDate: '',
+          technicalSpecs: '',
+          category: '',
+          majorCategory: '',
+          minorCategory: '',
+          confidence: 0,
+        },
+      ]);
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+    });
+
+    test('handles single-batch 500 error', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({ success: false, error: 'Server exploded' }),
+      });
+      const res = await classifyLineItems([
+        {
+          id: '1',
+          itemName: 'Item 1',
+          quantity: 1,
+          unit: 'nos',
+          targetDate: '',
+          technicalSpecs: '',
+          category: '',
+          majorCategory: '',
+          minorCategory: '',
+          confidence: 0,
+        },
+      ]);
+      expect(res.success).toBe(false);
+    });
+
+    test('handles partial batch failures in multi-batch without losing successful items', async () => {
+      const items = Array.from({ length: 60 }, (_, i) => ({
+        id: `item-${i + 1}`,
+        itemName: `Item ${i + 1}`,
+        quantity: 1,
+        unit: 'nos',
+        targetDate: '',
+        technicalSpecs: '',
+        category: '',
+        majorCategory: '',
+        minorCategory: '',
+        confidence: 0,
+      }));
+
+      let callCount = 0;
+      global.fetch = jest.fn().mockImplementation((_, opts) => {
+        callCount++;
+        if (callCount === 1) {
+          // First batch of 50 succeeds
+          const body = JSON.parse(opts.body);
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              success: true,
+              data: {
+                extractedEntities: body.lineItems.map((li: any) => ({
+                  id: li.id,
+                  itemName: li.itemName,
+                  majorCategory: 'Others – New Product',
+                  minorCategory: 'Food & Beverages',
+                })),
+              },
+            }),
+          });
+        }
+        // Second batch fails
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          json: async () => ({ success: false }),
+        });
+      });
+
+      const res = await classifyLineItems(items);
+      expect(res.success).toBe(true);
+      expect(res.data?.extractedEntities).toHaveLength(50);
+    });
+
+    test('handles total network failure in multi-batch mode', async () => {
+      const items = Array.from({ length: 60 }, (_, i) => ({
+        id: `item-${i + 1}`,
+        itemName: `Item ${i + 1}`,
+        quantity: 1,
+        unit: 'nos',
+        targetDate: '',
+        technicalSpecs: '',
+        category: '',
+        majorCategory: '',
+        minorCategory: '',
+        confidence: 0,
+      }));
+
+      global.fetch = jest.fn().mockRejectedValue(new Error('connection reset'));
+      const res = await classifyLineItems(items);
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+    });
+  });
+
+  describe('rfqClient.fetchVendorRfqCredits', () => {
+    test('fetches credits for authenticated vendor with default me', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: { vendorId: 'v1', freeCreditsUsed: 2, freeCreditsLimit: 5, freeCreditsRemaining: 3, hasUnlimitedAccess: false },
+        }),
+      });
+
+      const res = await fetchVendorRfqCredits();
+      expect(res.success).toBe(true);
+      expect(res.data?.freeCreditsRemaining).toBe(3);
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/vendors/rfq-credits',
+        expect.objectContaining({ method: 'GET' })
+      );
+    });
+
+    test('fetches credits for specific vendor id', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: { vendorId: 'vendor-123' },
+        }),
+      });
+
+      const res = await fetchVendorRfqCredits('vendor-123');
+      expect(res.success).toBe(true);
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/vendors/vendor-123/rfq-credits',
+        expect.objectContaining({ method: 'GET' })
+      );
+    });
+
+    test('handles API error response', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({ success: false, error: 'Unauthorized vendor' }),
+      });
+
+      const res = await fetchVendorRfqCredits();
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('Unauthorized vendor');
+    });
+
+    test('handles network failure', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('fetch failed'));
+      const res = await fetchVendorRfqCredits();
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('fetch failed');
+    });
+  });
+
+  describe('rfqClient.downloadAndUnlockRFQ', () => {
+    test('successfully unlocks and downloads RFQ', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: { id: 'RFQ-001', title: 'Test RFQ' },
+          unlocked: true,
+          alreadyUnlocked: false,
+          freeCreditsRemaining: 2,
+        }),
+      });
+
+      const res = await downloadAndUnlockRFQ('RFQ-001');
+      expect(res.success).toBe(true);
+      expect(res.unlocked).toBe(true);
+      expect(res.freeCreditsRemaining).toBe(2);
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/rfqs/RFQ-001/download',
+        expect.objectContaining({ method: 'POST' })
+      );
+    });
+
+    test('handles exhausted credits error', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({
+          success: false,
+          error: 'Free download limit reached.',
+          exhausted: true,
+          freeCreditsRemaining: 0,
+        }),
+      });
+
+      const res = await downloadAndUnlockRFQ('RFQ-001');
+      expect(res.success).toBe(false);
+      expect(res.exhausted).toBe(true);
+      expect(res.error).toBe('Free download limit reached.');
+    });
+
+    test('handles network failure', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('timeout'));
+      const res = await downloadAndUnlockRFQ('RFQ-001');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('timeout');
+    });
+
+    test('handles default fallbacks for credits and unlock when error properties are omitted', async () => {
+      // vendorId === 'me'
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: { vendorId: 'me' } }),
+      });
+      await fetchVendorRfqCredits('me');
+      expect(global.fetch).toHaveBeenCalledWith('/api/vendors/rfq-credits', expect.anything());
+
+      // fetchVendorRfqCredits error without message or body.error
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({ success: false }),
+      });
+      const credErr = await fetchVendorRfqCredits();
+      expect(credErr.error).toBe('Failed to fetch vendor RFQ credits.');
+
+      global.fetch = jest.fn().mockRejectedValue('unknown throw');
+      const credThrow = await fetchVendorRfqCredits();
+      expect(credThrow.error).toBe('Network error fetching RFQ credits.');
+
+      // downloadAndUnlockRFQ error without message or body.error
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({ success: false }),
+      });
+      const dlErr = await downloadAndUnlockRFQ('RFQ-1');
+      expect(dlErr.error).toBe('Failed to download RFQ.');
+      expect(dlErr.exhausted).toBe(false);
+
+      global.fetch = jest.fn().mockRejectedValue('unknown throw');
+      const dlThrow = await downloadAndUnlockRFQ('RFQ-1');
+      expect(dlThrow.error).toBe('Network error downloading RFQ.');
+    });
   });
 });

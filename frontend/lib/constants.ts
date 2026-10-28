@@ -10,120 +10,225 @@ import type {
 } from './types';
 import { UI_STRINGS } from './uiStrings';
 
+/**
+ * Centralized RFQ Modes Enum / Constants
+ * V1 → Mode 1
+ * V2 → Mode 2
+ * V3 → Mode 3
+ * V0 → Mode 0
+ */
+export const RFQ_MODES = {
+  MODE_0: 'mode_0',
+  MODE_1: 'mode_1',
+  MODE_2: 'mode_2',
+  MODE_3: 'mode_3',
+} as const;
+
+export type RfqModeKey = keyof typeof RFQ_MODES;
+export type RfqModeValue = (typeof RFQ_MODES)[RfqModeKey];
+
+export const RFQ_MODE_LABELS: Record<SourcingMode, string> = {
+  [RFQ_MODES.MODE_0]: 'Mode 0',
+  [RFQ_MODES.MODE_1]: 'Mode 1',
+  [RFQ_MODES.MODE_2]: 'Mode 2',
+  [RFQ_MODES.MODE_3]: 'Mode 3',
+};
+
+export const RFQ_MODE_MAP: Record<string, SourcingMode> = {
+  v0: RFQ_MODES.MODE_0,
+  v1: RFQ_MODES.MODE_1,
+  v2: RFQ_MODES.MODE_2,
+  v3: RFQ_MODES.MODE_3,
+  'mode 0': RFQ_MODES.MODE_0,
+  'mode 1': RFQ_MODES.MODE_1,
+  'mode 2': RFQ_MODES.MODE_2,
+  'mode 3': RFQ_MODES.MODE_3,
+  mode_0: RFQ_MODES.MODE_0,
+  mode_1: RFQ_MODES.MODE_1,
+  mode_2: RFQ_MODES.MODE_2,
+  mode_3: RFQ_MODES.MODE_3,
+  version_0: RFQ_MODES.MODE_0,
+  version_1: RFQ_MODES.MODE_1,
+  version_2: RFQ_MODES.MODE_2,
+  version_3: RFQ_MODES.MODE_3,
+};
+
 export const SOURCING_MODES: SourcingModeDetail[] = [
   {
-    id: 'mode_0',
-    code: 'Version 0',
-    name: 'Version 0: Free Starter Trial Plan',
-    shortLabel: 'Version 0',
+    id: RFQ_MODES.MODE_0,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_0],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_0]}: Free Starter Trial Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_0],
     description:
       'Free Starter Trial mode. RFQs are circulated only to verified Procucev network vendors (0 credits deducted).',
     featureSummary: 'Procucev Network Vendors Only (Free Starter Plan - 0 credits deducted)',
     badgeColor: 'border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10',
   },
   {
-    id: 'mode_1',
-    code: 'Version 1',
-    name: 'Version 1: Client Roster Sourcing Plan',
-    shortLabel: 'Version 1',
+    id: RFQ_MODES.MODE_1,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_1],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]}: Client Roster Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_1],
     description:
       'Private empanelled vendor network. RFQs are strictly circulated only to your pre-verified approved vendor list.',
-    featureSummary: 'Private buyer roster only (Features of Version 1)',
+    featureSummary: 'Private buyer roster only (Features of Mode 1)',
     badgeColor: 'border-blue-500/40 text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-500/10',
   },
   {
-    id: 'mode_2',
-    code: 'Version 2',
-    name: 'Version 2: Hybrid Sourcing Plan',
-    shortLabel: 'Version 2',
+    id: RFQ_MODES.MODE_2,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_2],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]}: Hybrid Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_2],
     description:
       'Circulate to your private empanelled list first. If quotes or responses are insufficient, AI expands to Procucev Base Network.',
-    featureSummary: 'Buyer roster + Procucev Hybrid pool (Features of Version 1 & 2)',
+    featureSummary: 'Buyer roster + Procucev Hybrid pool (Features of Mode 1 & 2)',
     badgeColor: 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10',
   },
   {
-    id: 'mode_3',
-    code: 'Version 3',
-    name: 'Version 3: AI Autonomous Sourcing Plan',
-    shortLabel: 'Version 3',
+    id: RFQ_MODES.MODE_3,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_3],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]}: AI Autonomous Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_3],
     description:
       'Autonomous Procucev Network Sourcing with double-blind supplier identity shielding, continuous AI evaluation, and best-fit routing.',
-    featureSummary: 'Autonomous AI + 360° Qualification (Features of Version 1, 2 & 3)',
+    featureSummary: 'Autonomous AI + 360° Qualification (Features of Mode 1, 2 & 3)',
     badgeColor: 'border-purple-500/40 text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-500/10',
   },
 ];
 
 /**
  * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
- * - version_0 / free_trial: mode_0 (Version 0: Free Starter Trial Plan)
- * - version_1: mode_1 (Version 1: Client Roster Sourcing Plan)
- * - version_2: mode_2 (Version 2: Hybrid Sourcing Plan)
- * - version_3: mode_3 (Version 3: AI Autonomous Sourcing Plan)
+ * - version_0 / free_trial: mode_0 (Mode 0: Free Starter Trial Plan)
+ * - version_1: mode_1 (Mode 1: Client Roster Sourcing Plan)
+ * - version_2: mode_2 (Mode 2: Hybrid Sourcing Plan)
+ * - version_3: mode_3 (Mode 3: AI Autonomous Sourcing Plan)
  */
 export const BUYER_SUBSCRIPTION_TO_SOURCING_MODE: Record<string, SourcingMode> = {
-  version_0: 'mode_0',
-  mode_0: 'mode_0',
-  v0: 'mode_0',
-  version_1: 'mode_1',
-  version_2: 'mode_2',
-  version_3: 'mode_3',
-  v1: 'mode_1',
-  v2: 'mode_2',
-  v3: 'mode_3',
-  mode_1: 'mode_1',
-  mode_2: 'mode_2',
-  mode_3: 'mode_3',
+  version_0: RFQ_MODES.MODE_0,
+  mode_0: RFQ_MODES.MODE_0,
+  v0: RFQ_MODES.MODE_0,
+  version_1: RFQ_MODES.MODE_1,
+  version_2: RFQ_MODES.MODE_2,
+  version_3: RFQ_MODES.MODE_3,
+  v1: RFQ_MODES.MODE_1,
+  v2: RFQ_MODES.MODE_2,
+  v3: RFQ_MODES.MODE_3,
+  mode_1: RFQ_MODES.MODE_1,
+  mode_2: RFQ_MODES.MODE_2,
+  mode_3: RFQ_MODES.MODE_3,
+  unlimited: RFQ_MODES.MODE_3,
 };
 
 /**
  * Resolves the RFQ version / sourcing mode based upon the subscription of the buyer.
- * Defaults to 'mode_2' for free starter trial / general ingestion.
+ * If any buyer raises an RFQ through the RFQ email ID, it should be assigned to V0 by default.
+ * However, if the buyer has an active subscription to V1, V2, or V3, the RFQ should be assigned
+ * to the respective subscribed version. Otherwise, it should automatically go to V0.
  *
  * @param buyerAccountOrPlan - Buyer account object or subscription plan string
+ * @param preferredMode - Optional requested mode
  * @returns Sourcing mode ('mode_0' | 'mode_1' | 'mode_2' | 'mode_3')
  */
 export function resolveBuyerSourcingMode(
-  buyerAccountOrPlan?: { subscriptionPlan?: string; remainingFreeRFQs?: number } | string | null
+  buyerAccountOrPlan?: any,
+  preferredMode?: string | null
 ): SourcingMode {
-  let plan: string | undefined;
-  let remainingFreeRFQs: number | undefined;
+  let plan: string | null = null;
+  let subscriptions: any[] = [];
+  let isExpired = false;
 
   if (typeof buyerAccountOrPlan === 'object' && buyerAccountOrPlan !== null) {
-    plan = buyerAccountOrPlan.subscriptionPlan;
-    remainingFreeRFQs = buyerAccountOrPlan.remainingFreeRFQs;
+    if (buyerAccountOrPlan.unlimitedRfqAccess || buyerAccountOrPlan.unlimitedAccess) {
+      const requested = (preferredMode || buyerAccountOrPlan.sourcingMode || buyerAccountOrPlan.sourcing_mode || '').trim().toLowerCase();
+      if (['mode_0', 'v0', 'version_0'].includes(requested)) return RFQ_MODES.MODE_0;
+      if (['mode_1', 'v1', 'version_1'].includes(requested)) return RFQ_MODES.MODE_1;
+      if (['mode_2', 'v2', 'version_2'].includes(requested)) return RFQ_MODES.MODE_2;
+      if (['mode_3', 'v3', 'version_3'].includes(requested)) return RFQ_MODES.MODE_3;
+      return RFQ_MODES.MODE_3;
+    }
+
+    plan = buyerAccountOrPlan.subscriptionPlan || buyerAccountOrPlan.activeSubscription || null;
+    if (Array.isArray(buyerAccountOrPlan.subscriptions)) {
+      subscriptions = buyerAccountOrPlan.subscriptions;
+    }
+    const status = String(buyerAccountOrPlan.subscriptionStatus || buyerAccountOrPlan.status || '').toLowerCase();
+    if (status === 'expired' || status === 'inactive') {
+      isExpired = true;
+    }
+    const expiry = buyerAccountOrPlan.subscriptionExpiry || buyerAccountOrPlan.expiresAt;
+    if (expiry && !isNaN(new Date(expiry).getTime()) && new Date(expiry).getTime() < Date.now()) {
+      isExpired = true;
+    }
   } else if (typeof buyerAccountOrPlan === 'string') {
     plan = buyerAccountOrPlan;
   }
 
-  // 1. Subscription-based version assignment takes priority:
-  // V1 for V1 subscribers, V2 for V2 subscribers, V3 for V3 subscribers, V0 for V0 subscribers.
-  if (typeof plan === 'string') {
-    const normalized = plan.trim().toLowerCase();
-    if (BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized]) {
-      return BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized];
+  // Handle multiple active subscriptions (V3 > V2 > V1 > V0)
+  if (Array.isArray(subscriptions) && subscriptions.length > 0) {
+    const activeSubs = subscriptions.filter((sub) => {
+      if (!sub) return false;
+      const subStatus = String(sub.status || '').toLowerCase();
+      if (subStatus === 'expired' || subStatus === 'inactive' || sub.active === false) return false;
+      const subExpiry = sub.expiresAt || sub.expiryDate || sub.validUntil;
+      if (subExpiry && !isNaN(new Date(subExpiry).getTime()) && new Date(subExpiry).getTime() < Date.now()) {
+        return false;
+      }
+      return true;
+    });
+
+    if (activeSubs.length > 0) {
+      const activePlans = activeSubs.map((s) => String(s.plan || s.subscriptionPlan || s.id || '').trim().toLowerCase());
+      if (activePlans.some((p) => p === 'unlimited' || p === 'version_3' || p === 'v3' || p === 'mode_3')) {
+        return RFQ_MODES.MODE_3;
+      }
+      if (activePlans.some((p) => p === 'version_2' || p === 'v2' || p === 'mode_2')) {
+        return RFQ_MODES.MODE_2;
+      }
+      if (activePlans.some((p) => p === 'version_1' || p === 'v1' || p === 'mode_1')) {
+        return RFQ_MODES.MODE_1;
+      }
+      if (activePlans.some((p) => p === 'version_0' || p === 'v0' || p === 'mode_0')) {
+        return RFQ_MODES.MODE_0;
+      }
     }
   }
 
-  // 2. For buyers without a subscription (free trial / no active plan):
-  // Assign V2 for the first 5 free RFQs and switch to V0 after free credits are exhausted.
-  if (remainingFreeRFQs !== undefined && Number(remainingFreeRFQs) <= 0) {
-    return 'mode_0';
+  // Expired or inactive subscriptions are not considered; default to mode_0
+  if (isExpired) {
+    return RFQ_MODES.MODE_0;
   }
 
-  return 'mode_2';
+  // Check single active subscription
+  if (typeof plan === 'string') {
+    const normalized = plan.trim().toLowerCase();
+    if (normalized === 'unlimited') {
+      return RFQ_MODES.MODE_3;
+    }
+    if (['version_1', 'v1', 'mode_1'].includes(normalized)) {
+      return RFQ_MODES.MODE_1;
+    }
+    if (['version_2', 'v2', 'mode_2'].includes(normalized)) {
+      return RFQ_MODES.MODE_2;
+    }
+    if (['version_3', 'v3', 'mode_3'].includes(normalized)) {
+      return RFQ_MODES.MODE_3;
+    }
+    if (['version_0', 'v0', 'mode_0'].includes(normalized)) {
+      return RFQ_MODES.MODE_0;
+    }
+  }
+
+  // If no active subscription to V1, V2, or V3, default automatically to Mode 0 (V0)
+  return RFQ_MODES.MODE_0;
 }
 
 /**
- * Short RFQ version tag for a sourcing mode: mode_0 → "V0" … mode_3 → "V3".
- *
- * The version and the sourcing mode are the same concept (see SOURCING_MODES,
- * whose codes read "Version 0".."Version 3"), so the tag is derived from the
- * mode's trailing digit rather than stored separately. Used as a compact
- * identifier beside the RFQ number on the operational kanban.
+ * Short RFQ version tag for a sourcing mode: mode_0 → "Mode 0" … mode_3 → "Mode 3".
+ * Centralized mapping ensuring consistency across Kanban, directories, and tables.
  */
 export function rfqVersionLabel(mode?: SourcingMode | null): string {
-  const digit = typeof mode === 'string' ? mode.replace('mode_', '') : '';
-  return /^[0-9]+$/.test(digit) ? `V${digit}` : 'V0';
+  if (!mode) return RFQ_MODE_LABELS[RFQ_MODES.MODE_0];
+  return RFQ_MODE_LABELS[mode] || RFQ_MODE_LABELS[RFQ_MODES.MODE_0];
 }
 
 /**
@@ -135,12 +240,13 @@ export function rfqVersionLabel(mode?: SourcingMode | null): string {
  * being the source of truth for access control.
  */
 export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
-  free_trial: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
-  version_0: ['mode_0'],
-  v0: ['mode_0'],
-  version_1: ['mode_0', 'mode_1'],
-  version_2: ['mode_0', 'mode_1', 'mode_2'],
-  version_3: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
+  free_trial: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3],
+  version_0: [RFQ_MODES.MODE_0],
+  v0: [RFQ_MODES.MODE_0],
+  version_1: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1],
+  version_2: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2],
+  version_3: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3],
+  unlimited: [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3],
 };
 
 /**
@@ -154,13 +260,21 @@ export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
  * - version_1: mode_0, mode_1
  * - version_2: mode_0, mode_1, mode_2
  * - version_3: mode_0, mode_1, mode_2, mode_3
+ * - unlimited: mode_0, mode_1, mode_2, mode_3
  */
 export function entitledSourcingModes(
   subscriptionPlan?: string | null,
-  remainingFreeRFQs?: number
+  remainingFreeRFQs?: number,
+  unlimitedRfqAccess?: boolean
 ): SourcingMode[] {
+  if (unlimitedRfqAccess) {
+    return [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3];
+  }
   if (!subscriptionPlan) return SUBSCRIPTION_MODE_ENTITLEMENTS.version_1;
   const plan = subscriptionPlan.trim().toLowerCase();
+  if (plan === 'unlimited') {
+    return [RFQ_MODES.MODE_0, RFQ_MODES.MODE_1, RFQ_MODES.MODE_2, RFQ_MODES.MODE_3];
+  }
   if (plan === 'free_trial' && remainingFreeRFQs !== undefined && remainingFreeRFQs <= 0) {
     return ['mode_0'];
   }
@@ -487,6 +601,36 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       group: NAV_GROUPS.categoryGovernance,
       route: '/category-manager/enterprise-inquiries',
     },
+    {
+      id: 'buyers_directory',
+      screenTag: 'Screen 2.9',
+      shortTag: '2.9',
+      label: NAV_ITEMS.buyersDirectory.label,
+      description: NAV_ITEMS.buyersDirectory.description,
+      icon: 'Building2',
+      group: NAV_GROUPS.categoryGovernance,
+      route: '/category-manager/buyers-directory',
+    },
+    {
+      id: 'sellers_directory',
+      screenTag: 'Screen 2.10',
+      shortTag: '2.10',
+      label: NAV_ITEMS.sellersDirectory.label,
+      description: NAV_ITEMS.sellersDirectory.description,
+      icon: 'Truck',
+      group: NAV_GROUPS.categoryGovernance,
+      route: '/category-manager/sellers-directory',
+    },
+    {
+      id: 'daily_reports',
+      screenTag: 'Screen 2.11',
+      shortTag: '2.11',
+      label: NAV_ITEMS.dailyReports.label,
+      description: NAV_ITEMS.dailyReports.description,
+      icon: 'FileSpreadsheet',
+      group: NAV_GROUPS.categoryGovernance,
+      route: '/category-manager/daily-reports',
+    },
   ],
   vendor: [
     {
@@ -786,6 +930,31 @@ export function formatIndianDate(value?: string): string {
   }).format(new Date(parsed));
 }
 
+export const ALLOWED_EXTENSION_HOURS = [24, 48] as const;
+export const DEFAULT_EXTENSION_HOURS = 24 as const;
+
+/**
+ * Calculates a revised RFQ deadline extended by 24 or 48 hours.
+ * If the current deadline is in the past, extensions are measured from now.
+ */
+export function calculateExtendedDeadline(
+  currentDeadline?: string,
+  hours: 24 | 48 = 24,
+  baseCreatedAt?: string
+): string {
+  let baseMs: number;
+  if (currentDeadline && !Number.isNaN(Date.parse(currentDeadline))) {
+    baseMs = Math.max(new Date(currentDeadline).getTime(), Date.now());
+  } else if (baseCreatedAt && !Number.isNaN(Date.parse(baseCreatedAt))) {
+    const createdMs = new Date(baseCreatedAt).getTime();
+    const default7Days = createdMs + 7 * 24 * 60 * 60 * 1000;
+    baseMs = Math.max(default7Days, Date.now());
+  } else {
+    baseMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  }
+  return new Date(baseMs + hours * 60 * 60 * 1000).toISOString();
+}
+
 /**
  * Normalizes any date value (Excel numeric serial, Date instance, ISO string, DD-MM-YYYY, etc.)
  * into a clean standard ISO date string (YYYY-MM-DD).
@@ -939,4 +1108,131 @@ export {
   PINCODE_PATTERN,
   PASSWORD_MIN_LENGTH,
 } from './validationSchemas';
+
+export const UNLIMITED_ACCESS_EMAILS = new Set([
+  'sudheer.kangala@procucev.com',
+  'procucevvendor@gmail.com',
+]);
+
+export function hasUnlimitedAccess(emailOrSession?: { email?: string } | string | null): boolean {
+  if (!emailOrSession) return false;
+  const email = (typeof emailOrSession === 'string' ? emailOrSession : emailOrSession.email || '').trim().toLowerCase();
+  return UNLIMITED_ACCESS_EMAILS.has(email);
+}
+
+export const QUA_AI_TRANSACTIONAL_EMAIL_TEMPLATES = {
+  EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED: {
+    id: 'EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED',
+    number: 1,
+    name: 'RFQ created from email, account auto-created',
+    who: 'Unregistered buyer',
+    trigger: 'An unknown email address writes to RFQ@procucev.com. Qua AI creates a profile with the email ID and dummy details, creates the RFQ, then sends this email.',
+    subject: 'Congratulations, your RFQ {rfq_id} is live on Qua AI',
+  },
+  EMAIL_2_RFQ_CREATED: {
+    id: 'EMAIL_2_RFQ_CREATED',
+    number: 2,
+    name: 'RFQ created',
+    who: 'Registered buyer',
+    trigger: "A logged-in buyer creates an RFQ on the platform, or a registered buyer's email to RFQ@procucev.com is converted into an RFQ.",
+    subject: 'Congratulations, RFQ {rfq_id} is live. Qua AI is on it',
+  },
+  EMAIL_3_NEW_RFQ_INTIMATION: {
+    id: 'EMAIL_3_NEW_RFQ_INTIMATION',
+    number: 3,
+    name: 'New RFQ intimation',
+    who: 'Unregistered vendor',
+    trigger: 'Qua AI matches an RFQ to a supplier in the Procucev network who has no account yet.',
+    subject: 'New buyer enquiry for {category}: quote by {quote_deadline}',
+  },
+  EMAIL_4_NEW_RFQ_TO_QUOTE: {
+    id: 'EMAIL_4_NEW_RFQ_TO_QUOTE',
+    number: 4,
+    name: 'New RFQ to quote',
+    who: 'Registered vendor',
+    trigger: "A new RFQ matches the categories on a registered vendor's profile.",
+    subject: 'New RFQ {rfq_id}: {rfq_title}, quotes close {quote_deadline}',
+  },
+  EMAIL_5_QUOTATIONS_READY_TO_COMPARE: {
+    id: 'EMAIL_5_QUOTATIONS_READY_TO_COMPARE',
+    number: 5,
+    name: 'Quotations ready to compare',
+    who: 'Buyer (registered or auto-created)',
+    trigger: 'First quotation received on an RFQ, then a final digest when the quote deadline passes.',
+    subject: '{quote_count} quotes in for RFQ {rfq_id}: compare now',
+  },
+  EMAIL_6_ACTIVATE_YOUR_ACCOUNT: {
+    id: 'EMAIL_6_ACTIVATE_YOUR_ACCOUNT',
+    number: 6,
+    name: 'Activate your account',
+    who: 'Unregistered buyer (account auto-created in Email 1)',
+    trigger: 'No login 24 hours after Email 1; repeat once at 72 hours.',
+    subject: 'Suppliers are waiting on RFQ {rfq_id}',
+  },
+  EMAIL_7_RFQ_NEEDS_MORE_INFORMATION: {
+    id: 'EMAIL_7_RFQ_NEEDS_MORE_INFORMATION',
+    number: 7,
+    name: 'RFQ needs more information',
+    who: 'Buyer (registered or unregistered)',
+    trigger: "Qua AI can't confirm a quantity, specification, delivery location or attachment from the buyer's email or upload.",
+    subject: 'One detail needed to send RFQ {rfq_id} to suppliers',
+  },
+  EMAIL_8_NO_QUOTES_YET: {
+    id: 'EMAIL_8_NO_QUOTES_YET',
+    number: 8,
+    name: 'No quotes yet',
+    who: 'Buyer',
+    trigger: 'Zero quotes received 48 hours before the quote deadline.',
+    subject: "RFQ {rfq_id}: let's get you more quotes",
+  },
+  EMAIL_9_QUOTE_DEADLINE_REMINDER: {
+    id: 'EMAIL_9_QUOTE_DEADLINE_REMINDER',
+    number: 9,
+    name: 'Quote deadline reminder',
+    who: 'Vendor (registered or unregistered)',
+    trigger: "24 hours before the quote deadline, to vendors who were notified or viewed the RFQ but haven't quoted.",
+    subject: '24 hours left to quote on {rfq_title}',
+  },
+  EMAIL_10_LOW_OR_ZERO_CREDITS: {
+    id: 'EMAIL_10_LOW_OR_ZERO_CREDITS',
+    number: 10,
+    name: 'Low or zero credits',
+    who: 'Registered vendor',
+    trigger: 'Credit balance falls below 2, or the vendor tries to open an RFQ with zero credits.',
+    subject: "You have {credit_balance} credits left: don't miss the next RFQ",
+  },
+  EMAIL_11_QUOTE_SUBMITTED: {
+    id: 'EMAIL_11_QUOTE_SUBMITTED',
+    number: 11,
+    name: 'Quote submitted',
+    who: 'Vendor',
+    trigger: 'Vendor submits a quotation on an RFQ.',
+    subject: 'Your quote for RFQ {rfq_id} has been received',
+  },
+  EMAIL_12_RFQ_REVISED_BUYER_QUESTION: {
+    id: 'EMAIL_12_RFQ_REVISED_BUYER_QUESTION',
+    number: 12,
+    name: 'RFQ revised / buyer question',
+    who: 'Vendor (notified on or quoted on the RFQ)',
+    trigger: 'Buyer edits the RFQ (quantity, spec, date) or posts a clarification question.',
+    subject: 'Update on RFQ {rfq_id}: please review',
+  },
+  EMAIL_13_COMPLETE_YOUR_PROFILE: {
+    id: 'EMAIL_13_COMPLETE_YOUR_PROFILE',
+    number: 13,
+    name: 'Complete your profile',
+    who: 'Unregistered vendor (received Email 3)',
+    trigger: 'Profile not completed 48 hours after Email 3.',
+    subject: 'Your RFQ for {category} closes {quote_deadline}',
+  },
+} as const;
+
+export const QUA_AI_EMAIL_SUPPORT = {
+  PHONE: '+91 8247722944',
+  EMAIL: 'info@procucev.com',
+  TEAM_SIGNATURE: 'Team Qua AI',
+  COMPANY_NAME: 'Procucev Enterprise Solutions',
+} as const;
+
+
 

@@ -4,7 +4,7 @@ const zohoPaymentService = require('../services/zohoPaymentService');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { generateReceiptPdf } = require('../services/invoiceService');
 const { logger } = require('../services/loggerService');
-const { ZOHO_CONFIG, computeZohoBuyerPlanAmount, BUYER_SUBSCRIPTION_PLANS } = require('../config/constants');
+const { ZOHO_CONFIG, computeZohoBuyerPlanAmount, BUYER_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig } = require('../config/constants');
 const identityQueries = require('../db/identityQueries');
 
 /**
@@ -38,7 +38,9 @@ function assertBuyerAccountRole(req, res) {
 function getBuyerAccounts(req, res, next) {
   try {
     logger.info('Fetching buyer accounts', {}, 'BUYER_ACCOUNT_CONTROLLER');
-    const accounts = storeService.getBuyerAccounts();
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
+    const accounts = storeService.getBuyerAccounts(limit);
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: accounts });
   } catch (err) {
     logger.error('Error fetching buyer accounts', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -467,6 +469,16 @@ function aiCrossMatch(req, res, next) {
   }
 }
 
+function getSubscriptionPricing(req, res) {
+  try {
+    const config = getSubscriptionPricingConfig();
+    res.json({ success: true, data: config });
+  } catch (err) {
+    logger.error('Failed to get subscription pricing', err, 'BUYER_ACCOUNT_CONTROLLER');
+    res.status(500).json({ success: false, error: 'Failed to retrieve subscription pricing' });
+  }
+}
+
 module.exports = {
   getBuyerAccounts,
   getActiveAccount,
@@ -479,4 +491,5 @@ module.exports = {
   downloadInvoice,
   ingestHistoricalData,
   aiCrossMatch,
+  getSubscriptionPricing,
 };

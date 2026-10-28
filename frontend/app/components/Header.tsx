@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useApp } from '@/lib/store';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useApp, clearSessionCache } from '@/lib/store';
 import { useRouter } from 'next/navigation';
-import { ROLE_SIDEBAR_NAV, LOGIN_ROUTE } from '@/lib/constants';
+import { ROLE_SIDEBAR_NAV, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS, hasUnlimitedAccess } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import NotificationBell from '@/app/components/NotificationBell';
@@ -17,6 +17,7 @@ import {
   Moon,
   LogOut,
   Key,
+  Clock,
 } from 'lucide-react';
 
 /**
@@ -74,6 +75,18 @@ function authMethodLabel(method?: string): string | null {
   return null;
 }
 
+/** Format remaining session duration as MM:SS (or HH:MM:SS if > 1hr). */
+export function formatSessionCountdown(seconds: number): string {
+  if (seconds <= 0) return '00:00';
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  if (hrs > 0) {
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
 export default function Header() {
   const {
     currentRole,
@@ -114,8 +127,16 @@ export default function Header() {
   // fallback.
   const currentOrgName = resolveSessionOrgName(currentUserSession, activeBuyerAccount);
 
-  const handleLogout = () => {
+  // Session timeout state (standard enterprise 30-minute session)
+  const SESSION_DURATION_SECONDS = 30 * 60; // 30 minutes (1800s)
+  const [sessionSecondsLeft, setSessionSecondsLeft] = useState<number>(SESSION_DURATION_SECONDS);
+
+  const handleLogout = useCallback(() => {
     setUserProfileDropdownOpen(false);
+    clearSessionCache();
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('procucev_session_expires_at');
+    }
     addAuditLog('User logged out of session', undefined, sessionEmail || undefined);
     setIsLoggedIn(false);
     setCurrentUserSession(null);
@@ -123,48 +144,100 @@ export default function Header() {
     authClient.logout(sessionEmail || undefined).catch(() => {});
     showToast(UI_STRINGS.auth.loggedOutTitle, UI_STRINGS.auth.loggedOutMessage, 'info');
     router.replace(LOGIN_ROUTE);
-  };
+  }, [addAuditLog, router, sessionEmail, setCurrentRole, setCurrentUserSession, setIsLoggedIn, showToast]);
+
+  const handleAutoLogout = useCallback(() => {
+    setUserProfileDropdownOpen(false);
+    clearSessionCache();
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('procucev_session_expires_at');
+    }
+    addAuditLog('Session expired - automatic logout', undefined, sessionEmail || undefined);
+    setIsLoggedIn(false);
+    setCurrentUserSession(null);
+    setCurrentRole('buyer');
+    authClient.logout(sessionEmail || undefined).catch(() => {});
+    showToast('Session Expired', 'Your session has expired. You have been logged out automatically for security.', 'warning');
+    router.replace(LOGIN_ROUTE);
+  }, [addAuditLog, router, sessionEmail, setCurrentRole, setCurrentUserSession, setIsLoggedIn, showToast]);
+
+  const handleExtendSession = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      const newExpiresAt = Date.now() + SESSION_DURATION_SECONDS * 1000;
+      localStorage.setItem('procucev_session_expires_at', String(newExpiresAt));
+    }
+    setSessionSecondsLeft(SESSION_DURATION_SECONDS);
+    showToast('Session Extended', 'Your session has been extended by 30 minutes.', 'info');
+  }, [SESSION_DURATION_SECONDS, showToast]);
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('procucev_session_expires_at');
+      const now = Date.now();
+      let expiresAt = stored ? Number(stored) : NaN;
+      if (!expiresAt || isNaN(expiresAt) || expiresAt <= now) {
+        expiresAt = now + SESSION_DURATION_SECONDS * 1000;
+        localStorage.setItem('procucev_session_expires_at', String(expiresAt));
+      }
+      setSessionSecondsLeft(Math.max(0, Math.floor((expiresAt - now) / 1000)));
+    }
+
+    const interval = setInterval(() => {
+      if (typeof window === 'undefined') return;
+      const stored = localStorage.getItem('procucev_session_expires_at');
+      const now = Date.now();
+      const expiresAt = stored ? Number(stored) : now + SESSION_DURATION_SECONDS * 1000;
+      const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
+      setSessionSecondsLeft(remaining);
+
+      if (remaining <= 0) {
+        clearInterval(interval);
+        handleAutoLogout();
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isLoggedIn, handleAutoLogout, SESSION_DURATION_SECONDS]);
 
   if (!isLoggedIn) {
     return (
-      <header className="sticky top-0 z-50 w-full border-b border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-[#0b0f19]/90 backdrop-blur-xl transition-colors">
-        <div className="max-w-[1600px] mx-auto px-4 lg:px-6 h-16 flex items-center justify-between gap-4">
-          {/* Brand & Logo */}
-          <div className="flex items-center gap-3 py-1">
-            <div className="bg-white dark:bg-white/95 px-3.5 py-1.5 rounded-xl border border-slate-200 dark:border-gray-700 shadow-sm flex items-center gap-3">
-              <img src="/procucev-logo.png" alt="Procucev Logo" className="h-10 sm:h-11 w-auto object-contain shrink-0" />
-              <div className="h-7 w-[1px] bg-slate-200 shrink-0" />
-              <img src="/qua-ai-logo.jpeg" alt="Qua AI Logo" className="h-10 sm:h-11 w-auto object-contain rounded shrink-0" />
-            </div>
-            <span className="px-2.5 py-1 text-[11px] font-bold rounded-full bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30 shrink-0 self-center">
+      <header className="sticky top-0 z-50 w-full border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-[#0b0f19] transition-colors">
+        <div className="max-w-[1280px] mx-auto px-5 sm:px-6 lg:px-10 xl:px-16 py-2 flex items-center justify-between gap-3">
+          {/* Brand & Logo: Procucev | QUA AI | version pill */}
+          <div className="flex items-center gap-2.5 sm:gap-5 min-w-0">
+            <img
+              src="/procucev-logo.png"
+              alt="Procucev Logo"
+              className="h-7 sm:h-10 lg:h-12 w-auto object-contain shrink-0"
+            />
+            <div className="h-7 sm:h-9 w-px bg-slate-200 dark:bg-slate-700 shrink-0" />
+            <img
+              src="/qua-ai-logo.jpeg"
+              alt="Qua AI Logo"
+              className="h-10 sm:h-14 lg:h-[68px] w-auto object-contain shrink-0"
+            />
+            <span className="hidden sm:inline-flex items-center px-3.5 py-1 text-[13px] font-semibold rounded-full bg-[#EEF2FA] dark:bg-slate-800 text-[#0B1B3D] dark:text-slate-200 border border-[#CBD5E8] dark:border-slate-700 shrink-0">
               QUA AI 2.0
             </span>
           </div>
-
-          {/* Minimal Login Header Controls */}
-          <div className="flex items-center gap-3">
+ 
+          {/* Controls */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <button
               onClick={toggleTheme}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700 transition-all text-xs font-semibold shadow-sm"
+              className="px-3 sm:px-4 py-1.5 rounded-xl bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-[#0B1B3D] dark:text-gray-200 hover:bg-slate-50 dark:hover:bg-gray-700 transition-all text-xs sm:text-sm font-semibold shadow-xs"
               title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
             >
-              {theme === 'light' ? (
-                <>
-                  <Sun size={15} className="text-amber-500 fill-amber-500" />
-                  <span className="hidden sm:inline">Light</span>
-                </>
-              ) : (
-                <>
-                  <Moon size={15} className="text-indigo-400 fill-indigo-400" />
-                  <span className="hidden sm:inline">Dark</span>
-                </>
-              )}
+              {theme === 'dark' ? 'Dark' : 'Light'}
             </button>
             <a
               href="mailto:support@procucev.com"
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 text-xs font-bold hover:bg-indigo-100 transition-all"
+              className="px-3 sm:px-4 py-1.5 rounded-xl bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-[#0B1B3D] dark:text-gray-200 hover:bg-slate-50 dark:hover:bg-gray-700 transition-all text-xs sm:text-sm font-semibold shadow-xs"
             >
-              Need Support?
+              <span className="sm:hidden">Support</span>
+              <span className="hidden sm:inline">Need Support?</span>
             </a>
           </div>
         </div>
@@ -173,7 +246,8 @@ export default function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#0b0f19]/95 backdrop-blur-xl transition-colors">
+    <>
+      <header className="sticky top-0 z-50 w-full border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#0b0f19]/95 backdrop-blur-xl transition-colors">
       <div className="max-w-[1600px] mx-auto px-4 lg:px-6 h-16 flex items-center justify-between gap-4">
         {/* Brand & Logo */}
         <div className="flex items-center gap-3 py-1">
@@ -221,11 +295,11 @@ export default function Header() {
               ) : (
                 <div
                   className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 shadow-xs"
-                  title={`Active Plan: ${activeSubscription === 'version_1' ? 'Version 1' : activeSubscription === 'version_2' ? 'Version 2' : activeSubscription === 'version_3' ? 'Version 3' : activeSubscription}`}
+                  title={`Active Plan: ${activeSubscription === 'version_1' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_1] : activeSubscription === 'version_2' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_2] : activeSubscription === 'version_3' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_3] : activeSubscription}`}
                 >
                   <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300">Active Plan:</span>
                   <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white shadow-xs">
-                    {activeSubscription === 'version_1' ? 'Version 1' : activeSubscription === 'version_2' ? 'Version 2' : activeSubscription === 'version_3' ? 'Version 3' : activeSubscription}
+                    {activeSubscription === 'version_1' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_1] : activeSubscription === 'version_2' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_2] : activeSubscription === 'version_3' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_3] : activeSubscription}
                   </span>
                 </div>
               )}
@@ -262,6 +336,45 @@ export default function Header() {
               </span>
             </div>
           )}
+
+          {/* Active Session Countdown & Auto Logout Indicator */}
+          <div
+            data-testid="header-session-timer"
+            onClick={handleExtendSession}
+            title={`Active Session: ${formatSessionCountdown(sessionSecondsLeft)} remaining. Click to extend by 30 mins.`}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleExtendSession();
+              }
+            }}
+            className={`cursor-pointer select-none flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold shadow-xs transition-all ${
+              sessionSecondsLeft <= 60
+                ? 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-700 animate-pulse'
+                : sessionSecondsLeft <= 300
+                ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700'
+                : 'bg-slate-100 dark:bg-gray-800 border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700'
+            }`}
+          >
+            <Clock
+              size={14}
+              className={`${
+                sessionSecondsLeft <= 60
+                  ? 'text-rose-600 dark:text-rose-400 animate-spin'
+                  : sessionSecondsLeft <= 300
+                  ? 'text-amber-500 fill-amber-500/20'
+                  : 'text-indigo-600 dark:text-indigo-400'
+              }`}
+            />
+            <span className="hidden sm:inline text-[11px] font-semibold text-slate-500 dark:text-gray-400">
+              Session:
+            </span>
+            <span className="font-mono text-xs font-bold">
+              {formatSessionCountdown(sessionSecondsLeft)}
+            </span>
+          </div>
 
           {/* Theme Toggle (Light / Dark) */}
           <button
@@ -407,53 +520,70 @@ export default function Header() {
           </div>
         </div>
       </div>
+    </header>
 
-      {/* Account Settings & Security Modal */}
-      {accountModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fade-in">
-          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden space-y-0">
-            {/* Modal Header */}
-            <div className="p-5 border-b border-slate-100 dark:border-gray-800 flex items-center justify-between bg-slate-50/50 dark:bg-gray-950/40">
-              <div className="flex items-center gap-3">
-                <div
-                  className={`w-10 h-10 rounded-2xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center font-black text-sm`}
-                >
-                  {initials}
-                </div>
-                <div>
-                  <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
-                    {UI_STRINGS.accountSecurity.panelTitle}
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-gray-400">
-                    {sessionEmail} • {currentOrgName}
-                  </p>
-                </div>
+    {/* Account Settings & Security Modal */}
+    {accountModalOpen && (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="account-security-modal-title"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setAccountModalOpen(false);
+          }
+        }}
+        className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto animate-fade-in"
+      >
+        <div className="relative bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden space-y-0 my-auto">
+          {/* Modal Header */}
+          <div className="p-5 border-b border-slate-100 dark:border-gray-800 flex items-center justify-between bg-slate-50/50 dark:bg-gray-950/40">
+            <div className="flex items-center gap-3">
+              <div
+                className={`w-10 h-10 rounded-2xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center font-black text-sm`}
+              >
+                {initials}
               </div>
-              <button
-                onClick={() => setAccountModalOpen(false)}
-                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-gray-200 hover:bg-slate-100 dark:hover:bg-gray-800"
-              >
-                ✕
-              </button>
+              <div>
+                <h3
+                  id="account-security-modal-title"
+                  className="text-base font-extrabold text-slate-900 dark:text-white"
+                >
+                  {UI_STRINGS.accountSecurity.panelTitle}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-gray-400">
+                  {sessionEmail} • {currentOrgName}
+                </p>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={() => setAccountModalOpen(false)}
+              className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-gray-200 hover:bg-slate-100 dark:hover:bg-gray-800 cursor-pointer"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
 
-            {/* Modal Body */}
-            <div className="p-6 max-h-[75vh] overflow-y-auto">
-              <AccountSecurityPanel />
-            </div>
+          {/* Modal Body */}
+          <div className="p-6 max-h-[75vh] overflow-y-auto">
+            <AccountSecurityPanel />
+          </div>
 
-            {/* Modal Footer */}
-            <div className="p-4 border-t border-slate-100 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-950/40 flex items-center justify-end">
-              <button
-                onClick={() => setAccountModalOpen(false)}
-                className="btn btn-secondary text-xs px-5 font-bold"
-              >
-                {UI_STRINGS.accountSecurity.closeAction}
-              </button>
-            </div>
+          {/* Modal Footer */}
+          <div className="p-4 border-t border-slate-100 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-950/40 flex items-center justify-end">
+            <button
+              type="button"
+              onClick={() => setAccountModalOpen(false)}
+              className="btn btn-secondary text-xs px-5 font-bold cursor-pointer"
+            >
+              {UI_STRINGS.accountSecurity.closeAction}
+            </button>
           </div>
         </div>
-      )}
-    </header>
+      </div>
+    )}
+  </>
   );
 }

@@ -525,3 +525,294 @@ describe('V0 Chaser Scheduling', () => {
   });
 });
 
+describe('recoverChasersOnBoot and dispatch error handling', () => {
+  const origEnv = process.env.NODE_ENV;
+
+  afterEach(() => {
+    process.env.NODE_ENV = origEnv;
+    jest.restoreAllMocks();
+  });
+
+  test('recoverChasersOnBoot handles empty pending list', async () => {
+    process.env.NODE_ENV = 'production';
+    jest.spyOn(domainQueries, 'getPendingChaserJobsFromDB').mockResolvedValue([]);
+
+    await scheduler.recoverChasersOnBoot();
+  });
+
+  test('recoverChasersOnBoot reschedules pending jobs across all channels', async () => {
+    process.env.NODE_ENV = 'production';
+    const fakeJobs = [
+      {
+        id: 'job-1',
+        channel: 'whatsapp',
+        rfq_number: 'RFQ-BOOT-1',
+        rfq_id: 'rfq-boot-1',
+        vendor_id: 'v-1',
+        vendor_name: 'Vendor 1',
+        vendor_phone: '9876543210',
+        fire_at: new Date(Date.now() + 1000).toISOString(),
+      },
+      {
+        id: 'job-2',
+        channel: 'sms',
+        rfq_number: 'RFQ-BOOT-1',
+        rfq_id: 'rfq-boot-1',
+        vendor_id: 'v-1',
+        vendor_name: 'Vendor 1',
+        vendor_phone: '9876543210',
+        fire_at: new Date(Date.now() - 1000).toISOString(), // past due
+      },
+      {
+        id: 'job-3',
+        channel: 'call',
+        rfq_number: 'RFQ-BOOT-1',
+        rfq_id: 'rfq-boot-1',
+        vendor_id: 'v-1',
+        vendor_name: 'Vendor 1',
+        vendor_phone: '9876543210',
+        fire_at: new Date(Date.now() + 2000).toISOString(),
+      },
+      {
+        id: 'job-4',
+        channel: 'email',
+        rfq_number: 'RFQ-BOOT-1',
+        rfq_id: 'rfq-boot-1',
+        vendor_id: 'v-1',
+        vendor_name: 'Vendor 1',
+        vendor_email: 'v1@test.com',
+        fire_at: new Date(Date.now() + 3000).toISOString(),
+      },
+    ];
+
+    jest.spyOn(domainQueries, 'getPendingChaserJobsFromDB').mockResolvedValue(fakeJobs);
+    jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue(true);
+    const waSpy = jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: true });
+    const smsSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true });
+    const mailSpy = jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+
+    await scheduler.recoverChasersOnBoot();
+
+    // Advance timers so scheduled callbacks run
+    jest.advanceTimersByTime(5000);
+    await Promise.resolve();
+
+    expect(waSpy).toHaveBeenCalled();
+    expect(smsSpy).toHaveBeenCalled();
+    expect(mailSpy).toHaveBeenCalled();
+  });
+
+  test('recoverChasersOnBoot catches database error without crashing', async () => {
+    process.env.NODE_ENV = 'production';
+    jest.spyOn(domainQueries, 'getPendingChaserJobsFromDB').mockRejectedValue(new Error('connection timeout'));
+
+    await expect(scheduler.recoverChasersOnBoot()).resolves.toBeUndefined();
+  });
+
+  test('dispatchDueChaserJobs handles missing RFQ and unsupported channel', async () => {
+    const jobs = [
+      { id: 'j-miss', rfq_number: 'RFQ-MISSING', channel: 'email', vendor_id: 'v-1' },
+      { id: 'j-bad', rfq_number: 'RFQ-OK', channel: 'telegram', vendor_id: 'v-1' },
+    ];
+    jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockResolvedValue(jobs);
+    jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockImplementation(async (rfqNum) => {
+      if (rfqNum === 'RFQ-MISSING') return null;
+      return { rfqNumber: 'RFQ-OK', title: 'Test RFQ' };
+    });
+    const failSpy = jest.spyOn(domainQueries, 'markChaserJobFailedInDB').mockResolvedValue(true);
+
+    const res = await scheduler.dispatchDueChaserJobs(10);
+    expect(res.failed).toBe(2);
+    expect(failSpy).toHaveBeenCalledWith('j-miss', expect.stringContaining('was not found'));
+    expect(failSpy).toHaveBeenCalledWith('j-bad', expect.stringContaining('Unsupported chaser channel'));
+  });
+
+  test('dispatchDueChaserJobs handles whatsapp, sms, call, and failure outcomes', async () => {
+    const jobs = [
+      { id: 'j-wa', rfq_number: 'RFQ-1', channel: 'whatsapp', vendor_id: 'v-1', vendor_phone: '9876543210' },
+      { id: 'j-sms', rfq_number: 'RFQ-1', channel: 'sms', vendor_id: 'v-1', vendor_phone: '9876543210' },
+      { id: 'j-call', rfq_number: 'RFQ-1', channel: 'call', vendor_id: 'v-1', vendor_phone: '9876543210' },
+    ];
+    jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockResolvedValue(jobs);
+    jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue({ rfqNumber: 'RFQ-1', title: 'Test RFQ' });
+    jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue(true);
+
+    process.env.NODE_ENV = 'production';
+    jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: false, error: 'invalid recipient' });
+    jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'm-1' });
+
+    const res = await scheduler.dispatchDueChaserJobs(10);
+    expect(res.claimed).toBe(3);
+    expect(res.failed).toBe(1); // whatsapp failed
+    expect(res.sent).toBe(1); // sms sent
+    expect(res.skipped).toBe(1); // call skipped in production
+  });
+
+  test('scheduleVendorChaser handles _persistChaserJob failure gracefully', async () => {
+    jest.spyOn(domainQueries, 'insertChaserJobInDB').mockRejectedValue(new Error('insert failed'));
+    scheduler.scheduleVendorChaser({ rfqNumber: 'RFQ-ERR', title: 'Test' }, { id: 'v-1', name: 'Vendor 1' });
+  });
+
+  test('covers vendor phone/mobile fallbacks and store lookup in _dispatchSms and _dispatchWhatsApp', async () => {
+    process.env.NODE_ENV = 'production';
+    const storeService = require('../src/services/storeService');
+    const getVendorSpy = jest.spyOn(storeService, 'getVendorById').mockReturnValue({ mobileNumber: '9123456789' });
+    const smsSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true });
+    const failSpy = jest.spyOn(domainQueries, 'markChaserJobFailedInDB').mockResolvedValue(true);
+
+    // Vendor with no phone, uses storeService fallback
+    const resSms = await scheduler._dispatchSms(RFQ, { id: 'v-fallback', name: 'Store Vendor' }, 'job-sms-fallback');
+    expect(resSms.success).toBe(true);
+    expect(getVendorSpy).toHaveBeenCalledWith('v-fallback', 'all');
+
+    // Vendor with mobile property
+    const resWa = await scheduler._dispatchWhatsApp(RFQ, { id: 'v-mob', name: 'Mobile Vendor', mobile: '9988776655' }, 'job-wa');
+    expect(resWa).toBeDefined();
+
+    // Vendor with mobileNumber property
+    const resWa2 = await scheduler._dispatchWhatsApp(RFQ, { id: 'v-mobnum', name: 'Mobile Vendor', mobileNumber: '9988776655' });
+    expect(resWa2).toBeDefined();
+
+    // SMS failure with jobId and custom error
+    jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: false, error: 'SMS gateway reject' });
+    await scheduler._dispatchSms(RFQ, { id: 'v-fail', name: 'Fail Vendor', phone: '9876543210' }, 'job-sms-fail');
+    expect(failSpy).toHaveBeenCalledWith('job-sms-fail', 'SMS gateway reject');
+
+    // SMS failure with jobId and default error message
+    jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: false });
+    await scheduler._dispatchSms(RFQ, { id: 'v-fail2', name: 'Fail Vendor', phone: '9876543210' }, 'job-sms-fail2');
+    expect(failSpy).toHaveBeenCalledWith('job-sms-fail2', 'gateway error');
+
+    // Email failure with jobId and custom reason
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: false, reason: 'quota exceeded' });
+    await scheduler._dispatchReminderEmail(RFQ, { id: 'v-em-fail', name: 'Email Fail', email: 'fail@v.com' }, {}, 'job-em-fail');
+    expect(failSpy).toHaveBeenCalledWith('job-em-fail', 'quota exceeded');
+
+    // Email failure with jobId and default reason
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: false });
+    await scheduler._dispatchReminderEmail(RFQ, { id: 'v-em-fail2', name: 'Email Fail', email: 'fail@v.com' }, {}, 'job-em-fail2');
+    expect(failSpy).toHaveBeenCalledWith('job-em-fail2', 'email delivery failed');
+
+    // WhatsApp failure with jobId and custom error
+    jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: false, error: 'invalid template' });
+    await scheduler._dispatchWhatsApp(RFQ, { id: 'v-wa-fail', name: 'Fail WA', phone: '9876543210' }, 'job-wa-fail');
+    expect(failSpy).toHaveBeenCalledWith('job-wa-fail', 'invalid template');
+
+    // WhatsApp failure with jobId and default error
+    jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: false });
+    await scheduler._dispatchWhatsApp(RFQ, { id: 'v-wa-fail2', name: 'Fail WA', phone: '9876543210' }, 'job-wa-fail2');
+    expect(failSpy).toHaveBeenCalledWith('job-wa-fail2', 'gateway error');
+
+    // WhatsApp success with jobId
+    const firedSpy = jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue(true);
+    jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: true, messageId: 'wa-ok' });
+    await scheduler._dispatchWhatsApp(RFQ, { id: 'v-wa-ok', name: 'Ok WA', phone: '9876543210' }, 'job-wa-ok');
+    expect(firedSpy).toHaveBeenCalledWith('job-wa-ok');
+
+    // Call reminder with jobId and without phone
+    await scheduler._dispatchCall(RFQ, { id: 'v-call-nophone', name: 'No Phone' }, 'job-call-nophone');
+    await scheduler._dispatchCall(RFQ, { id: 'v-call-ok', name: 'Call Ok', phone: '9876543210' }, 'job-call-ok');
+    expect(firedSpy).toHaveBeenCalledWith('job-call-ok');
+
+    // SMS storeService null or throws
+    getVendorSpy.mockReturnValueOnce(null);
+    await scheduler._dispatchSms(RFQ, { id: 'v-null-store', name: 'Null Store' });
+
+    getVendorSpy.mockImplementationOnce(() => { throw new Error('store error'); });
+    await scheduler._dispatchSms(RFQ, { id: 'v-err-store', name: 'Err Store' });
+  });
+
+  test('covers scheduleRFQChasers with non-function creditInfo and defaults', () => {
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const { CHASER_DELAYS } = require('../src/config/constants');
+    const origSmsMs = CHASER_DELAYS.SMS_MS;
+    const origWaMs = CHASER_DELAYS.WHATSAPP_MS;
+    const origEmailMs = CHASER_DELAYS.EMAIL_MS;
+
+    CHASER_DELAYS.SMS_MS = 'not-a-number';
+    CHASER_DELAYS.WHATSAPP_MS = 'not-a-number';
+    CHASER_DELAYS.EMAIL_MS = 'not-a-number';
+
+    // Sourcing mode version_0
+    scheduler.scheduleRFQChasers(
+      { rfqNumber: 'RFQ-V0-ALT', title: 'Alt V0', sourcingMode: 'version_0' },
+      [{ id: 'v-1', name: 'V1', phone: '9876543210' }],
+      { freeCreditsRemaining: 3, isSubscribed: true }
+    );
+
+    // Sourcing mode v0
+    scheduler.scheduleRFQChasers(
+      { rfqNumber: 'RFQ-V0-ALT2', title: 'Alt V0 2', sourcingMode: 'v0' },
+      [{ id: 'v-1', name: 'V1', phone: '9876543210' }]
+    );
+
+    // RFQ with no id (falls back to rfqNumber)
+    scheduler.scheduleVendorChaser(
+      { rfqNumber: 'RFQ-NO-ID', sourcingMode: 'mode_1' },
+      { id: 'v-1', name: 'V1', phone: '9876543210' }
+    );
+
+    CHASER_DELAYS.SMS_MS = origSmsMs;
+    CHASER_DELAYS.WHATSAPP_MS = origWaMs;
+    CHASER_DELAYS.EMAIL_MS = origEmailMs;
+    process.env.NODE_ENV = origEnv;
+  });
+});
+
+// ── Deduplication & Duplicate Prevention ──────────────────────────────────────
+
+describe('Deduplication & Duplicate Prevention', () => {
+  test('scheduleRFQChasers deduplicates identical vendor stubs in the array', () => {
+    // Array contains same vendor twice
+    scheduler.scheduleRFQChasers(RFQ, [VENDOR, VENDOR]);
+    // Exactly 4 timers registered (not 8)
+    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(4);
+  });
+
+  test('scheduleVendorChaser skips scheduling duplicate timers if invoked multiple times', () => {
+    scheduler.scheduleVendorChaser(RFQ, VENDOR);
+    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(4);
+
+    // Repeated call for same RFQ and vendor
+    scheduler.scheduleVendorChaser(RFQ, VENDOR);
+    // Still exactly 4 timers
+    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(4);
+  });
+
+  test('clearScheduledChasers clears activeScheduledTimers', () => {
+    scheduler.scheduleVendorChaser(RFQ, VENDOR);
+    expect(scheduler.activeScheduledTimers.size).toBe(4);
+
+    scheduler.clearScheduledChasers(RFQ.rfqNumber);
+    expect(scheduler.activeScheduledTimers.size).toBe(0);
+    expect(scheduler.pendingTimers.has(RFQ.rfqNumber)).toBe(false);
+  });
+
+  test('_chaserJobId generates deterministic, repeatable job IDs without timestamps', () => {
+    const id1 = scheduler._chaserJobId('RFQ-123', 'v-456', 'sms');
+    const id2 = scheduler._chaserJobId('RFQ-123', 'v-456', 'sms');
+    expect(id1).toBe('chaser-RFQ-123-v-456-sms');
+    expect(id2).toBe('chaser-RFQ-123-v-456-sms');
+  });
+
+  test('_dispatchSms does not wipe out recent throttle cache', async () => {
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    const sendSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({
+      success: true,
+      messageId: 'sms-1',
+    });
+
+    // First dispatch
+    await scheduler._dispatchSms(RFQ, VENDOR);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+
+    // Second dispatch directly following should NOT clear throttle before calling sendRFQChaserSms
+    await scheduler._dispatchSms(RFQ, VENDOR);
+    expect(sendSpy).toHaveBeenCalledTimes(2);
+
+    process.env.NODE_ENV = origEnv;
+  });
+});

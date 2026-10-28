@@ -18,7 +18,7 @@ function bufferToHex(buffer: Uint8Array): string {
 /**
  * Convert hex string to Uint8Array buffer
  */
-function hexToBuffer(hex: string): Uint8Array<ArrayBuffer> {
+function hexToBuffer(hex: string): Uint8Array {
   const cleanHex = hex.trim();
   const bytes = new Uint8Array(cleanHex.length / 2);
   for (let i = 0; i < cleanHex.length; i += 2) {
@@ -51,7 +51,7 @@ async function deriveAESKey(
   secretKey: string,
   // Pinned to ArrayBuffer (rather than the default ArrayBufferLike, which admits
   // SharedArrayBuffer) so the view satisfies the BufferSource contract.
-  saltBytes: Uint8Array<ArrayBuffer>
+  saltBytes: Uint8Array
 ): Promise<CryptoKey> {
   const cryptoObj = getWebCrypto();
   const encoder = new TextEncoder();
@@ -71,7 +71,7 @@ async function deriveAESKey(
   return await cryptoObj.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt: saltBytes,
+      salt: saltBytes as unknown as BufferSource,
       iterations: AES_CONFIG.PBKDF2_ITERATIONS,
       hash: 'SHA-256',
     },
@@ -109,7 +109,7 @@ export async function encryptClientData(
 
   const aesParams: AesGcmParams = {
     name: 'AES-GCM',
-    iv: ivBytes,
+    iv: ivBytes as unknown as BufferSource,
     tagLength: AES_CONFIG.TAG_LENGTH_BITS,
   };
 
@@ -209,7 +209,7 @@ export async function decryptClientData(
 
   const aesParams: AesGcmParams = {
     name: 'AES-GCM',
-    iv: ivBytes,
+    iv: ivBytes as unknown as BufferSource,
     tagLength: AES_CONFIG.TAG_LENGTH_BITS,
   };
 

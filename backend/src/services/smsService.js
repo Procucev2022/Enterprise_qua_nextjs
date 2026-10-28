@@ -85,15 +85,15 @@ const SMS_GATEWAY_CONFIG = {
   },
 
   get USER() {
-    return getEnv('SMS_GATEWAY_USER', 'Procucev_OTP');
+    return getEnv('SMS_GATEWAY_USER', '');
   },
 
   get RFQ_USER() {
-    return getEnv('SMS_GATEWAY_RFQ_USER', 'ProcucevWapp1');
+    return getEnv('SMS_GATEWAY_RFQ_USER', '');
   },
 
   get PASS() {
-    return getEnv('SMS_GATEWAY_PASS', 'TzlzyMcFEZRF');
+    return getEnv('SMS_GATEWAY_PASS', '');
   },
 
   get RFQ_PASS() {
@@ -357,21 +357,28 @@ async function sendRFQChaserSms({
   }
 
   const defaultFrontend =
-    process.env.PUBLIC_FRONTEND_URL ||
+    getEnv('PUBLIC_FRONTEND_URL') ||
     'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
 
-  // Build the quotation-form URL on the workers.dev frontend.
+  // Build the quotation-form URL on the DLT-approved frontend domain.
   // Note: We use the approved workers.dev domain directly as registered under TRAI DLT {#urg#}.
-  // Public shorteners (e.g. tinyurl.com) are rejected by Indian carrier DLT scrubbers.
-  const resolvedBidLink =
-    bidLink ||
-    `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(
-      rfqNumber
-    )}`;
+  // Clean URL to prevent WhatsApp-specific params (&source=wa_1click) from exceeding carrier limits.
+  let resolvedBidLink = bidLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber)}`;
+  if (resolvedBidLink.includes('&source=wa_1click')) {
+    resolvedBidLink = resolvedBidLink.replace(/[?&]source=wa_1click(&|$)/, '$1').replace(/[?&]$/, '');
+  }
+
+  // Sanitize {#alp#} placeholders: TRAI DLT requires strictly alphanumeric characters and spaces for {#alp#}
+  const sanitizedRfqNumber = String(rfqNumber || '').replace(/[^\w-]/g, '').trim();
+  const sanitizedTitle = String(rfqTitle || rfqNumber || '')
+    .replace(/[^\w\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40) || sanitizedRfqNumber;
 
   const message = SMS_DLT_TEMPLATES.RFQ_CHASER.TEMPLATE
-    .replace('{#alp#}', rfqNumber)
-    .replace('{#alp#}', rfqTitle || rfqNumber)
+    .replace('{#alp#}', sanitizedRfqNumber)
+    .replace('{#alp#}', sanitizedTitle)
     .replace('{#urg#}', resolvedBidLink);
 
   const messageChars = message.length;

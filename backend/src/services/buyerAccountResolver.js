@@ -81,6 +81,7 @@ async function mapProfileToBuyerAccount(profile, extras = {}) {
     totalSpend: extras.totalSpend || 0,
     subscriptionPlan: legacyAccount?.subscriptionPlan || 'free_trial',
     remainingFreeRFQs: legacyAccount?.remainingFreeRFQs !== undefined ? legacyAccount.remainingFreeRFQs : 5,
+    unlimitedRfqAccess: Boolean(profile?.unlimitedRfqAccess || legacyAccount?.unlimitedRfqAccess || legacyAccount?.unlimitedAccess),
   };
 }
 

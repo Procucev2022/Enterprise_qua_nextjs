@@ -12,18 +12,40 @@
 // ==============================================================================
 
 const pool = require('./pool');
-const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
+const d1Bridge = require('./d1Bridge');
+const { queryCache } = require('./queryCache');
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
-async function getVendorsFromDB() {
+async function getVendorsFromDB(limit = null) {
   if (!pool.hasStorage()) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? 'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC LIMIT $1'
+    : 'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
-    'SELECT raw FROM vendors ORDER BY created_at DESC',
-    [],
-    { d1: true }
+    sql,
+    params,
+    {
+      d1: true,
+      d1Text: hasLimit
+        ? 'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC LIMIT $1'
+        : 'SELECT id, created_at, updated_at, raw FROM vendors ORDER BY created_at DESC LIMIT 1000',
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
   );
-  return (result && result.rows) ? result.rows.map((row) => parseRaw(row.raw)) : [];
+  return (result && result.rows)
+    ? result.rows.map((row) => {
+        const v = parseRaw(row.raw);
+        if (row.created_at && !v.created_at) v.created_at = row.created_at;
+        if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+        if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+        return v;
+      })
+    : [];
 }
 
 /**
@@ -37,8 +59,15 @@ async function getVendorsFromDB() {
  * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
  * a page request only ever touches the rows it actually returns.
  */
-async function getVendorsPageFromDB({ limit, offset, search = '', category = '', publicOnly = false, scopedBuyerId = '' } = {}) {
+async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', publicOnly = false, scopedBuyerId = '', skipCount = false } = {}) {
   if (!pool.hasStorage()) return { rows: [], total: 0 };
+  const cacheKey = (!search && !email && !category)
+    ? `vendors_page_${limit}_${offset}_${publicOnly}_${scopedBuyerId}_${skipCount}`
+    : null;
+  if (cacheKey) {
+    const cached = queryCache.get(cacheKey, []);
+    if (cached) return cached;
+  }
   const params = [];
   // Two parallel condition lists, not one translated after the fact: ILIKE
   // has no SQLite equivalent (LIKE + lower() instead), raw->>'x' is Postgres
@@ -49,34 +78,112 @@ async function getVendorsPageFromDB({ limit, offset, search = '', category = '',
   const conditions = [];
   const d1Conditions = [];
   if (search) {
-    params.push(`%${search}%`);
-    // major_category/email/name/minorCategories are all backed by a trigram
-    // GIN index (idx_vendors_*_trgm in schema.sql) so this substring ILIKE
-    // doesn't force a sequential scan of the whole table at 600k+ rows.
-    conditions.push(`(major_category ILIKE $${params.length}
-      OR email ILIKE $${params.length}
-      OR raw->>'name' ILIKE $${params.length}
-      OR (raw->'minorCategories')::text ILIKE $${params.length})`);
-    d1Conditions.push(`(lower(major_category) LIKE lower($${params.length})
-      OR lower(email) LIKE lower($${params.length})
-      OR lower(json_extract(raw,'$.name')) LIKE lower($${params.length})
-      OR lower(json_extract(raw,'$.minorCategories')) LIKE lower($${params.length}))`);
+    const trimmed = search.trim();
+    params.push(`%${trimmed}%`);
+    const p = params.length;
+
+    // For short search tokens (<= 3 characters, e.g. "IT", "HR"), fields
+    // must match on discrete word boundaries or exact match, not substring '%it%', which erroneously
+    // matches "switches" (sw-IT-ches), "commoditiess" (commod-IT-iess), "limited", "solitaire", etc.
+    let catCondition = `major_category ILIKE $${p}`;
+    let d1CatCondition = `lower(major_category) LIKE lower($${p})`;
+    let nameCondition = `raw->>'name' ILIKE $${p}`;
+    let d1NameCondition = `lower(json_extract(raw,'$.name')) LIKE lower($${p})`;
+    let minorCatCondition = `(raw->'minorCategories')::text ILIKE $${p}`;
+    let d1MinorCatCondition = `lower(json_extract(raw,'$.minorCategories')) LIKE lower($${p})`;
+    let contactCondition = `raw->>'contactPerson' ILIKE $${p}`;
+    let d1ContactCondition = `lower(json_extract(raw,'$.contactPerson')) LIKE lower($${p})`;
+
+    if (trimmed.length <= 3) {
+      params.push(trimmed.toLowerCase());
+      const pExact = params.length;
+      catCondition = `(
+        lower(major_category) = $${pExact}
+        OR lower(major_category) LIKE ($${pExact} || ' %')
+        OR lower(major_category) LIKE ('% ' || $${pExact})
+        OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
+        OR lower(raw->>'majorCategory') = $${pExact}
+      )`;
+      d1CatCondition = `(
+        lower(major_category) = $${pExact}
+        OR lower(major_category) LIKE ($${pExact} || ' %')
+        OR lower(major_category) LIKE ('% ' || $${pExact})
+        OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
+        OR lower(json_extract(raw,'$.majorCategory')) = $${pExact}
+      )`;
+      nameCondition = `(
+        lower(raw->>'name') = $${pExact}
+        OR lower(raw->>'name') LIKE ($${pExact} || ' %')
+        OR lower(raw->>'name') LIKE ('% ' || $${pExact})
+        OR lower(raw->>'name') LIKE ('% ' || $${pExact} || ' %')
+      )`;
+      d1NameCondition = `(
+        lower(json_extract(raw,'$.name')) = $${pExact}
+        OR lower(json_extract(raw,'$.name')) LIKE ($${pExact} || ' %')
+        OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact})
+        OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact} || ' %')
+      )`;
+      minorCatCondition = `(
+        (raw->'minorCategories')::text ILIKE '%"' || $${pExact} || '"%'
+        OR (raw->'minorCategories')::text ILIKE '% ' || $${pExact} || ' %'
+        OR (raw->'minorCategories')::text ILIKE '%[' || $${pExact} || ']%'
+      )`;
+      d1MinorCatCondition = `(
+        lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || $${pExact} || '"%')
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE ('% ' || $${pExact} || ' %')
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%[' || $${pExact} || ']%')
+      )`;
+      contactCondition = `(
+        lower(raw->>'contactPerson') = $${pExact}
+        OR lower(raw->>'contactPerson') LIKE ($${pExact} || ' %')
+        OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact})
+        OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact} || ' %')
+      )`;
+      d1ContactCondition = `(
+        lower(json_extract(raw,'$.contactPerson')) = $${pExact}
+        OR lower(json_extract(raw,'$.contactPerson')) LIKE ($${pExact} || ' %')
+        OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact})
+        OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact} || ' %')
+      )`;
+    }
+
+    conditions.push(`(${catCondition}
+      OR email ILIKE $${p}
+      OR ${nameCondition}
+      OR ${minorCatCondition}
+      OR ${contactCondition}
+      OR raw->>'contact' ILIKE $${p}
+      OR raw->>'location' ILIKE $${p}
+      OR raw->>'city' ILIKE $${p}
+      OR raw->>'deliveryLocation' ILIKE $${p})`);
+    d1Conditions.push(`(${d1CatCondition}
+      OR lower(email) LIKE lower($${p})
+      OR ${d1NameCondition}
+      OR ${d1MinorCatCondition}
+      OR ${d1ContactCondition}
+      OR lower(json_extract(raw,'$.contact')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.location')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.city')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`);
+  }
+  if (email) {
+    params.push(`%${email.trim()}%`);
+    conditions.push(`(email ILIKE $${params.length} OR raw->>'email' ILIKE $${params.length})`);
+    d1Conditions.push(`(lower(email) LIKE lower($${params.length}) OR lower(json_extract(raw,'$.email')) LIKE lower($${params.length}))`);
   }
   if (category) {
-    // An exact-match category filter (the CM's category dropdown), separate
-    // from the free-text `search` above — combinable with it via AND. Uses
-    // the existing plain btree idx_vendors_major_category index (an equality
-    // match, unlike search's leading-wildcard ILIKE, so no trigram needed).
-    params.push(category);
-    conditions.push(`major_category = $${params.length}`);
-    d1Conditions.push(`major_category = $${params.length}`);
+    // Case-insensitive exact category filter matching both table column and raw JSON:
+    params.push(category.trim());
+    const p = params.length;
+    conditions.push(`(major_category = $${p} OR lower(major_category) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}))`);
+    d1Conditions.push(`(lower(major_category) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}))`);
   }
   if (publicOnly) {
     // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a
     // specific buyer (buyerId/buyerAccountId set inside `raw`) is only meant
     // to be visible to that buyer, never in an anonymous/public listing.
     conditions.push(`(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`);
-    d1Conditions.push(`json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL`);
+    d1Conditions.push(`source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump')`);
   }
   if (scopedBuyerId) {
     // A buyer's paginated listing must include every public vendor (no
@@ -111,23 +218,40 @@ async function getVendorsPageFromDB({ limit, offset, search = '', category = '',
   // mutating one array across both calls works with a driver that sends the
   // query immediately, but is a needless footgun (and confusing to inspect
   // in tests) for no benefit.
-  const countResult = await pool.query(
-    `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
-    [...params],
-    { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}` }
-  );
+  const countResult = skipCount
+    ? { rows: [{ total: 0 }] }
+    : await pool.query(
+        `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
+        [...params],
+        { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}` }
+      );
   const total = countResult.rows[0]?.total || 0;
 
-  const dataParams = [...params, limit, offset];
+  const effectiveLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 1000) : (limit !== undefined ? limit : 50);
+  const effectiveOffset = Number.isInteger(Number(offset)) && Number(offset) >= 0 ? Number(offset) : (offset !== undefined ? offset : 0);
+  const dataParams = [...params, effectiveLimit, effectiveOffset];
   const dataResult = await pool.query(
-    `SELECT raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+    `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
     dataParams,
     {
       d1: true,
-      d1Text: `SELECT raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
     }
   );
-  return { rows: dataResult.rows.map((row) => parseRaw(row.raw)), total };
+  const response = {
+    rows: dataResult.rows.map((row) => {
+      const v = parseRaw(row.raw);
+      if (row.created_at && !v.created_at) v.created_at = row.created_at;
+      if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+      if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+      return v;
+    }),
+    total,
+  };
+  if (cacheKey) {
+    queryCache.set(cacheKey, [], response, { tag: 'vendors', ttlMs: 120000 });
+  }
+  return response;
 }
 
 /**
@@ -169,20 +293,39 @@ async function countPublicVendorsMatchingCategories(signals) {
   const orGroups = [];
   const d1OrGroups = [];
   for (const sig of cleaned) {
-    params.push(`%${sig}%`);
-    const p = params.length;
-    orGroups.push(`(
-      lower(major_category) LIKE $${p}
-      OR lower((raw->'minorCategories')::text) LIKE $${p}
-      OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
-      OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
-    )`);
-    d1OrGroups.push(`(
-      lower(major_category) LIKE $${p}
-      OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
-      OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
-      OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
-    )`);
+    if (sig.length <= 3) {
+      params.push(sig);
+      const pExact = params.length;
+      params.push(`%"${sig}"%`);
+      const pJson = params.length;
+      orGroups.push(`(
+        lower(major_category) = $${pExact}
+        OR lower((raw->'minorCategories')::text) LIKE $${pJson}
+        OR lower((raw->'vendorSelectedCategories')::text) LIKE $${pJson}
+        OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
+      )`);
+      d1OrGroups.push(`(
+        lower(major_category) = $${pExact}
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
+        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
+        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
+      )`);
+    } else {
+      params.push(`%${sig}%`);
+      const p = params.length;
+      orGroups.push(`(
+        lower(major_category) LIKE $${p}
+        OR lower((raw->'minorCategories')::text) LIKE $${p}
+        OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
+        OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
+      )`);
+      d1OrGroups.push(`(
+        lower(major_category) LIKE $${p}
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
+        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
+        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
+      )`);
+    }
   }
 
   // Public-only: a vendor tagged to a specific buyer is never in the network pool.
@@ -195,7 +338,13 @@ async function countPublicVendorsMatchingCategories(signals) {
   const result = await pool.query(
     `SELECT COUNT(*)::int AS total FROM vendors ${wherePg}`,
     params,
-    { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${whereD1}` }
+    {
+      d1: true,
+      d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${whereD1}`,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
   );
   return result.rows[0]?.total || 0;
 }
@@ -225,20 +374,39 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
   const orGroups = [];
   const d1OrGroups = [];
   for (const sig of cleaned) {
-    params.push(`%${sig}%`);
-    const p = params.length;
-    orGroups.push(`(
-      lower(major_category) LIKE $${p}
-      OR lower((raw->'minorCategories')::text) LIKE $${p}
-      OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
-      OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
-    )`);
-    d1OrGroups.push(`(
-      lower(major_category) LIKE $${p}
-      OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
-      OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
-      OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
-    )`);
+    if (sig.length <= 3) {
+      params.push(sig);
+      const pExact = params.length;
+      params.push(`%"${sig}"%`);
+      const pJson = params.length;
+      orGroups.push(`(
+        lower(major_category) = $${pExact}
+        OR lower((raw->'minorCategories')::text) LIKE $${pJson}
+        OR lower((raw->'vendorSelectedCategories')::text) LIKE $${pJson}
+        OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
+      )`);
+      d1OrGroups.push(`(
+        lower(major_category) = $${pExact}
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
+        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
+        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
+      )`);
+    } else {
+      params.push(`%${sig}%`);
+      const p = params.length;
+      orGroups.push(`(
+        lower(major_category) LIKE $${p}
+        OR lower((raw->'minorCategories')::text) LIKE $${p}
+        OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
+        OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
+      )`);
+      d1OrGroups.push(`(
+        lower(major_category) LIKE $${p}
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
+        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
+        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
+      )`);
+    }
   }
 
   const publicPg = `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`;
@@ -248,12 +416,16 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
   const whereD1 = `WHERE (${d1OrGroups.join(' OR ')}) AND ${publicD1}`;
 
   const limitParam = params.length + 1;
+  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
   const result = await pool.query(
     `SELECT raw FROM vendors ${wherePg} ORDER BY created_at DESC LIMIT $${limitParam}`,
-    [...params, limit],
+    [...params, safeLimit],
     {
       d1: true,
       d1Text: `SELECT raw FROM vendors ${whereD1} ORDER BY created_at DESC LIMIT $${limitParam}`,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
     }
   );
   return (result && result.rows) ? result.rows.map((row) => parseRaw(row.raw)) : [];
@@ -304,6 +476,9 @@ async function getVendorByEmailFromDB(email) {
       d1Text: `SELECT raw FROM vendors
      WHERE lower(email) = lower($1) OR lower(json_extract(raw,'$.corporateEmail')) = lower($1)
      LIMIT 1`,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
     }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
@@ -314,33 +489,76 @@ async function getVendorByEmailFromDB(email) {
  * bounded, so it never reads more than `limit` rows regardless of table
  * size. Used by storeService.getBootstrapData's buyer-scoped branch, which
  * used to call storeService.getVendors() (a full unbounded re-sync of the
- * entire vendors table) on every single bootstrap request for every buyer
- * page load — the actual cause of D1's free-tier daily row-read cap being
  * exhausted (6.7M rows read in 24h against a 20k-row table: confirmed live
  * via `wrangler d1 info`). A buyer's own vendor count is realistically
  * small, but this stays bounded rather than trusting that assumption.
  */
-async function getVendorsByBuyerFromDB(buyerId, limit) {
-  if (!pool.hasStorage() || !buyerId) return [];
-  const result = await pool.query(
-    `SELECT raw FROM vendors
-     WHERE lower(raw->>'buyerId') = lower($1)
-        OR lower(raw->>'buyerAccountId') = lower($1)
-        OR lower(raw->>'buyerEmail') = lower($1)
+async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
+  if (!pool.hasStorage()) return [];
+
+  const candidateSet = new Set();
+  const addCandidate = (val) => {
+    if (!val) return;
+    const s = String(val).trim().toLowerCase();
+    if (s && s !== 'null' && s !== 'undefined') {
+      candidateSet.add(s);
+    }
+  };
+
+  if (Array.isArray(buyerId)) {
+    buyerId.forEach(addCandidate);
+  } else {
+    addCandidate(buyerId);
+  }
+  addCandidate(sessionEmail);
+
+  for (const candidate of Array.from(candidateSet)) {
+    if (candidate.includes('@')) {
+      try {
+        const acc = await getBuyerAccountByEmailFromDB(candidate);
+        if (acc && acc.id) {
+          addCandidate(acc.id);
+        }
+      } catch (_) {}
+    }
+  }
+
+  const ids = Array.from(candidateSet);
+  if (ids.length === 0) return [];
+
+  const maxLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 500) : 500;
+  const cacheKey = `buyer_vendors:${ids.sort().join(',')}:${maxLimit}`;
+  const cached = queryCache.get(cacheKey);
+  if (cached) return cached;
+
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+  const limitPlaceholder = `$${ids.length + 1}`;
+
+  const pgQuery = `SELECT raw FROM vendors
+     WHERE (lower(raw->>'buyerId') IN (${placeholders})
+        OR lower(raw->>'buyerAccountId') IN (${placeholders})
+        OR lower(raw->>'buyerEmail') IN (${placeholders}))
      ORDER BY created_at DESC
-     LIMIT $2`,
-    [buyerId, limit],
+     LIMIT ${limitPlaceholder}`;
+
+  const d1Query = `SELECT raw FROM vendors
+     WHERE (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
+        OR lower(json_extract(raw,'$.buyerAccountId')) IN (${placeholders})
+        OR lower(json_extract(raw,'$.buyerEmail')) IN (${placeholders}))
+     ORDER BY created_at DESC
+     LIMIT ${limitPlaceholder}`;
+
+  const result = await pool.query(
+    pgQuery,
+    [...ids, maxLimit],
     {
       d1: true,
-      d1Text: `SELECT raw FROM vendors
-     WHERE lower(json_extract(raw,'$.buyerId')) = lower($1)
-        OR lower(json_extract(raw,'$.buyerAccountId')) = lower($1)
-        OR lower(json_extract(raw,'$.buyerEmail')) = lower($1)
-     ORDER BY created_at DESC
-     LIMIT $2`,
+      d1Text: d1Query,
     }
   );
-  return result.rows.map((row) => parseRaw(row.raw));
+  const rows = result.rows.map((row) => parseRaw(row.raw));
+  queryCache.set(cacheKey, [], rows, { tag: 'vendors', ttlMs: 120000 });
+  return rows;
 }
 
 /** Single-row lookup by id — same reasoning as getVendorByEmailFromDB, keyed
@@ -355,7 +573,12 @@ async function getVendorByIdFromDB(id) {
   const result = await pool.query(
     'SELECT raw FROM vendors WHERE id = $1 LIMIT 1',
     [id],
-    { d1: true }
+    {
+      d1: true,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
@@ -392,6 +615,7 @@ async function upsertVendorInDB(vendor) {
      RETURNING raw`,
     }
   );
+  queryCache.invalidate('vendors');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
@@ -402,6 +626,7 @@ async function deleteVendorInDB(id) {
     [id],
     { d1: true }
   );
+  queryCache.invalidate('vendors');
   return result.rowCount > 0;
 }
 
@@ -431,7 +656,7 @@ async function deleteVendorInDB(id) {
 async function bulkInsertVendorsInDB(vendors) {
   if (!pool.hasStorage() || vendors.length === 0) return [];
 
-  const d1 = getD1Binding() || getD1HttpClient();
+  const d1 = d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient();
   if (d1) {
     const statements = vendors.map((vendor) => ({
       text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
@@ -447,7 +672,8 @@ async function bulkInsertVendorsInDB(vendors) {
         JSON.stringify(vendor),
       ],
     }));
-    const results = await batchD1(d1, statements);
+    const results = await d1Bridge.batchD1(d1, statements);
+    queryCache.invalidate('vendors');
     return results.flatMap((result) => result.rows.map((row) => row.email));
   }
 
@@ -472,6 +698,7 @@ async function bulkInsertVendorsInDB(vendors) {
      RETURNING email`,
     values
   );
+  queryCache.invalidate('vendors');
   return result.rows.map((row) => row.email);
 }
 
@@ -537,14 +764,37 @@ async function incrementBulkImportSessionInDB(id, delta) {
 
 // ── RFQs ─────────────────────────────────────────────────────────────────────
 
-async function getRFQsFromDB() {
+async function getRFQsFromDB(buyerAccountId = null, limit = null) {
   if (!pool.hasStorage()) return [];
+  const conditions = [];
+  const d1Conditions = [];
+  const params = [];
+  if (buyerAccountId) {
+    params.push(String(buyerAccountId));
+    const p = params.length;
+    conditions.push(`raw->>'buyerAccountId' = $${p}`);
+    d1Conditions.push(`json_extract(raw, '$.buyerAccountId') = $${p}`);
+  }
+  const wherePg = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const whereD1 = d1Conditions.length > 0 ? `WHERE ${d1Conditions.join(' AND ')}` : '';
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  let limitClause = 'LIMIT 1000';
+  if (hasLimit) {
+    params.push(Math.min(Number(limit), 1000));
+    limitClause = `LIMIT $${params.length}`;
+  }
+  const sql = `SELECT raw FROM rfqs ${wherePg} ORDER BY created_at DESC ${limitClause}`.trim();
+  const d1Sql = `SELECT raw FROM rfqs ${whereD1} ORDER BY created_at DESC ${limitClause}`.trim();
   const result = await pool.query(
-    'SELECT raw FROM rfqs ORDER BY created_at DESC',
-    [],
-    { d1: true }
+    sql,
+    params,
+    { d1: true, d1Text: d1Sql, useCache: true, tag: 'rfqs', ttlMs: 60000 }
   );
   return result.rows.map((row) => parseRaw(row.raw));
+}
+
+async function getRFQsByBuyerFromDB(buyerAccountId, limit = 50) {
+  return getRFQsFromDB(buyerAccountId, limit);
 }
 
 async function getRFQByNumberFromDB(rfqNumber) {
@@ -552,7 +802,23 @@ async function getRFQByNumberFromDB(rfqNumber) {
   const result = await pool.query(
     'SELECT raw FROM rfqs WHERE rfq_number = $1 LIMIT 1',
     [rfqNumber],
-    { d1: true }
+    { d1: true, useCache: true, tag: 'rfqs', ttlMs: 60000 }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
+async function getRFQByIdFromDB(idOrNumber) {
+  if (!pool.hasStorage()) return null;
+  const result = await pool.query(
+    'SELECT raw FROM rfqs WHERE id = $1 OR rfq_number = $1 LIMIT 1',
+    [idOrNumber],
+    {
+      d1: true,
+      d1Text: 'SELECT raw FROM rfqs WHERE id = $1 OR rfq_number = $1 LIMIT 1',
+      useCache: true,
+      tag: 'rfqs',
+      ttlMs: 60000,
+    }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
@@ -598,6 +864,7 @@ async function upsertRFQInDB(rfq) {
      RETURNING raw`,
     }
   );
+  queryCache.invalidate('rfqs');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
@@ -608,17 +875,29 @@ async function deleteRFQInDB(id) {
     [id],
     { d1: true }
   );
+  queryCache.invalidate('rfqs');
   return result.rowCount > 0;
 }
 
 // ── Evaluations (append-only — no update/delete method exists) ────────────────
 
-async function getEvaluationsFromDB() {
+async function getEvaluationsFromDB(limit = null) {
   if (!pool.hasStorage()) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT $1'
+    : 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
-    'SELECT raw FROM evaluations ORDER BY created_at DESC',
-    [],
-    { d1: true }
+    sql,
+    params,
+    {
+      d1: true,
+      d1Text: hasLimit ? 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT $1' : 'SELECT raw FROM evaluations ORDER BY created_at DESC LIMIT 1000',
+      useCache: true,
+      tag: 'evaluations',
+      ttlMs: 60000,
+    }
   );
   return result.rows.map((row) => parseRaw(row.raw));
 }
@@ -654,17 +933,29 @@ async function upsertEvaluationInDB(evaluation) {
      RETURNING raw`,
     }
   );
+  queryCache.invalidate('evaluations');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 // ── Vendor catalogue ────────────────────────────────────────────────────────
 
-async function getVendorCatalogueFromDB() {
+async function getVendorCatalogueFromDB(limit = null) {
   if (!pool.hasStorage()) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT $1'
+    : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
-    'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC',
-    [],
-    { d1: true }
+    sql,
+    params,
+    {
+      d1: true,
+      d1Text: hasLimit ? 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT $1' : 'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC LIMIT 1000',
+      useCache: true,
+      tag: 'catalogue',
+      ttlMs: 60000,
+    }
   );
   return result.rows.map((row) => parseRaw(row.raw));
 }
@@ -700,6 +991,7 @@ async function upsertCatalogueProductInDB(product) {
      RETURNING raw`,
     }
   );
+  queryCache.invalidate('catalogue');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
@@ -710,6 +1002,7 @@ async function deleteCatalogueProductInDB(id) {
     [id],
     { d1: true }
   );
+  queryCache.invalidate('catalogue');
   return result.rowCount > 0;
 }
 
@@ -720,12 +1013,23 @@ async function deleteCatalogueProductInDB(id) {
 // flagged active, so storeService can resolve the same object-reference
 // invariant it already has in memory.
 
-async function getBuyerAccountsFromDB() {
+async function getBuyerAccountsFromDB(limit = null) {
   if (!pool.hasStorage()) return { accounts: [], activeId: null };
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT $1'
+    : 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
-    'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC',
-    [],
-    { d1: true }
+    sql,
+    params,
+    {
+      d1: true,
+      d1Text: hasLimit ? 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT $1' : 'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC LIMIT 1000',
+      useCache: true,
+      tag: 'buyer_accounts',
+      ttlMs: 60000,
+    }
   );
   const accounts = result.rows.map((row) => parseRaw(row.raw));
   const activeRow = result.rows.find((row) => row.is_active);
@@ -740,7 +1044,7 @@ async function getBuyerAccountByEmailFromDB(email) {
   const result = await pool.query(
     'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
     [email],
-    { d1: true }
+    { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
@@ -774,6 +1078,7 @@ async function upsertBuyerAccountInDB(account) {
      RETURNING raw`,
     }
   );
+  queryCache.invalidate('buyer_accounts');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
@@ -784,6 +1089,7 @@ async function deleteBuyerAccountInDB(id) {
     [id],
     { d1: true }
   );
+  queryCache.invalidate('buyer_accounts');
   return result.rowCount > 0;
 }
 
@@ -800,21 +1106,24 @@ async function setActiveBuyerAccountInDB(id) {
     [id],
     { d1: true }
   );
+  queryCache.invalidate('buyer_accounts');
 }
 
 // ── AI feed (100-item cap, trimmed here so triggerBatchChaser's bulk-insert
 // path — which bypasses addAIFeedItem's in-memory pop() — gets the same
 // trim without needing its own bookkeeping of which item to evict) ──────────
 
-async function getAIFeedFromDB() {
+async function getAIFeedFromDB(limit = null) {
   if (!pool.hasStorage()) return [];
-  // sequence is a Postgres-side auto-generated identity column, same as
-  // notifications.sequence — see getNotificationsFromDB's comment. The D1
-  // path orders by SQLite's own implicit rowid instead.
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
+  const limitClause = hasLimit ? 'LIMIT $1' : 'LIMIT 1000';
+  const sql = `SELECT raw FROM ai_feed ORDER BY sequence DESC ${limitClause}`.trim();
+  const d1Sql = `SELECT raw FROM ai_feed ORDER BY rowid DESC ${limitClause}`.trim();
   const result = await pool.query(
-    'SELECT raw FROM ai_feed ORDER BY sequence DESC',
-    [],
-    { d1: true, d1Text: 'SELECT raw FROM ai_feed ORDER BY rowid DESC' }
+    sql,
+    params,
+    { d1: true, d1Text: d1Sql, useCache: true, tag: 'ai_feed', ttlMs: 30000 }
   );
   return result.rows.map((row) => parseRaw(row.raw));
 }
@@ -837,24 +1146,24 @@ async function upsertAIFeedItemInDB(item) {
       d1Text: `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY rowid DESC LIMIT 100)`,
     }
   );
+  queryCache.invalidate('ai_feed');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 // ── Audit logs (SHA-256 hash chain — sequence must reflect exact insertion
 // order, see schema.sql's comment on audit_logs.sequence) ───────────────────
 
-async function getAuditLogsFromDB() {
+async function getAuditLogsFromDB(limit = null) {
   if (!pool.hasStorage()) return [];
-  // Reconstructing exact insertion order is load-bearing here — auditService
-  // walks this newest-first list checking each entry's previousHash against
-  // the next (older) one's own hash, so a wrong order looks like a broken
-  // tamper chain. Same sequence -> rowid substitution as ai_feed/
-  // notifications; SQLite's rowid gives the identical "strictly increases in
-  // insertion order" guarantee Postgres's BIGSERIAL sequence does.
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
+  const limitClause = hasLimit ? 'LIMIT $1' : 'LIMIT 1000';
+  const sql = `SELECT raw FROM audit_logs ORDER BY sequence DESC ${limitClause}`.trim();
+  const d1Sql = `SELECT raw FROM audit_logs ORDER BY rowid DESC ${limitClause}`.trim();
   const result = await pool.query(
-    'SELECT raw FROM audit_logs ORDER BY sequence DESC',
-    [],
-    { d1: true, d1Text: 'SELECT raw FROM audit_logs ORDER BY rowid DESC' }
+    sql,
+    params,
+    { d1: true, d1Text: d1Sql, useCache: true, tag: 'audit_logs', ttlMs: 30000 }
   );
   return result.rows.map((row) => parseRaw(row.raw));
 }
@@ -869,23 +1178,33 @@ async function upsertAuditLogInDB(entry) {
     [id, JSON.stringify(entry)],
     { d1: true }
   );
+  queryCache.invalidate('audit_logs');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 // ── Notifications ────────────────────────────────────────────────────────────
 
-async function getNotificationsFromDB() {
+async function getNotificationsFromDB(recipientId = null, limit = null) {
   if (!pool.hasStorage()) return [];
-  // `sequence` is a Postgres-side auto-generated identity column — it's
-  // never in any INSERT's column list, so a D1 row would have it NULL. D1
-  // has no auto-increment-on-conflict-free-PK equivalent here (id is TEXT,
-  // and SQLite's autoincrement rowid needs an INTEGER PRIMARY KEY), so the
-  // D1 path orders by SQLite's own implicit rowid instead, which already
-  // increases in insertion order and serves the same "newest first" need.
+  const conditions = [];
+  const params = [];
+  if (recipientId) {
+    params.push(String(recipientId));
+    conditions.push(`recipient_id = $${params.length}`);
+  }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  let limitClause = 'LIMIT 1000';
+  if (hasLimit) {
+    params.push(Math.min(Number(limit), 1000));
+    limitClause = `LIMIT $${params.length}`;
+  }
+  const sql = `SELECT raw FROM notifications ${where} ORDER BY sequence DESC ${limitClause}`.trim();
+  const d1Sql = `SELECT raw FROM notifications ${where} ORDER BY rowid DESC ${limitClause}`.trim();
   const result = await pool.query(
-    'SELECT raw FROM notifications ORDER BY sequence DESC',
-    [],
-    { d1: true, d1Text: 'SELECT raw FROM notifications ORDER BY rowid DESC' }
+    sql,
+    params,
+    { d1: true, d1Text: d1Sql, useCache: true, tag: 'notifications', ttlMs: 15000 }
   );
   return result.rows.map((row) => parseRaw(row.raw));
 }
@@ -903,6 +1222,7 @@ async function insertNotificationInDB(notification) {
     [id, recipientType, recipientId, kind, rfqId || null, !!read, JSON.stringify(notification)],
     { d1: true }
   );
+  queryCache.invalidate('notifications');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
@@ -932,6 +1252,7 @@ async function bulkInsertNotificationsInDB(notifications) {
     values,
     { d1: true }
   );
+  queryCache.invalidate('notifications');
   return result.rows.map((row) => row.id);
 }
 
@@ -952,6 +1273,7 @@ async function markNotificationReadInDB(id) {
      WHERE id = $1`,
     }
   );
+  queryCache.invalidate('notifications');
   return result.rowCount > 0;
 }
 
@@ -969,6 +1291,7 @@ async function markAllNotificationsReadInDB(recipientType, recipientId) {
      WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = false`,
     }
   );
+  queryCache.invalidate('notifications');
   return result.rowCount;
 }
 
@@ -979,7 +1302,7 @@ async function getZohoOAuthTokenFromDB() {
   const result = await pool.query(
     "SELECT access_token, expiry_time FROM zoho_oauth_token WHERE id = 'default'",
     [],
-    { d1: true }
+    { d1: true, useCache: true, tag: 'zoho_token', ttlMs: 60000 }
   );
   return result.rows[0] || null;
 }
@@ -997,6 +1320,7 @@ async function upsertZohoOAuthTokenInDB({ accessToken, expiryTime }) {
     [accessToken || null, expiryTime || null],
     { d1: true }
   );
+  queryCache.invalidate('zoho_token');
   return result.rows[0] || null;
 }
 
@@ -1013,22 +1337,93 @@ function parseRaw(value) {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
-async function getPaymentLinksFromDB() {
+async function getPaymentLinksFromDB(limit = null) {
   if (!pool.hasStorage()) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT $1'
+    : 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
   const result = await pool.query(
-    'SELECT raw FROM payment_links ORDER BY created_at DESC',
-    [],
-    { d1: true }
+    sql,
+    params,
+    {
+      d1: true,
+      d1Text: hasLimit ? 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT $1' : 'SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT 1000',
+      useCache: true,
+      tag: 'payment_links',
+      ttlMs: 60000,
+    }
   );
   return result.rows.map((row) => parseRaw(row.raw));
+}
+
+async function getPaymentLinksByVendorFromDB(vendorId, limit = 50) {
+  if (!pool.hasStorage() || !vendorId) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2'
+    : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
+  const result = await pool.query(sql, params, {
+    d1: true,
+    d1Text: hasLimit
+      ? 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2'
+      : 'SELECT raw FROM payment_links WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000',
+    useCache: true,
+    tag: 'payment_links',
+    ttlMs: 60000,
+  });
+  return result.rows.map((row) => parseRaw(row.raw));
+}
+
+async function getPaymentLinksByBuyerFromDB(buyerAccountId, limit = 50) {
+  if (!pool.hasStorage() || !buyerAccountId) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT $2'
+    : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT 1000';
+  const params = hasLimit ? [buyerAccountId, Math.min(Number(limit), 1000)] : [buyerAccountId];
+  const result = await pool.query(sql, params, {
+    d1: true,
+    d1Text: hasLimit
+      ? 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT $2'
+      : 'SELECT raw FROM payment_links WHERE buyer_account_id = $1 ORDER BY created_at DESC LIMIT 1000',
+    useCache: true,
+    tag: 'payment_links',
+    ttlMs: 60000,
+  });
+  return result.rows.map((row) => parseRaw(row.raw));
+}
+
+async function getPaymentLinkByIdFromDB(id) {
+  if (!pool.hasStorage() || !id) return null;
+  const result = await pool.query(
+    'SELECT raw FROM payment_links WHERE id = $1 LIMIT 1',
+    [id],
+    {
+      d1: true,
+      d1Text: 'SELECT raw FROM payment_links WHERE id = $1 LIMIT 1',
+      useCache: true,
+      tag: 'payment_links',
+      ttlMs: 60000,
+    }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId) {
   if (!pool.hasStorage()) return null;
   const result = await pool.query(
-    'SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1',
+    'SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1 LIMIT 1',
     [zohoPaymentLinkId],
-    { d1: true }
+    {
+      d1: true,
+      d1Text: 'SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1 LIMIT 1',
+      useCache: true,
+      tag: 'payment_links',
+      ttlMs: 60000,
+    }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
@@ -1051,6 +1446,7 @@ async function upsertPaymentLinkInDB(link) {
     [id, zohoPaymentLinkId || null, vendorId || null, buyerAccountId || null, payerType || 'vendor', status || null, JSON.stringify(link)],
     { d1: true }
   );
+  queryCache.invalidate('payment_links');
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
@@ -1117,14 +1513,30 @@ async function cancelChaserJobsForRFQInDB(rfqNumber) {
  * Fetch all pending chaser jobs — called on server boot to re-schedule.
  * Returns rows with all fields needed to reconstruct a vendor/rfq stub.
  */
-async function getPendingChaserJobsFromDB() {
+async function getPendingChaserJobsFromDB(limit = 100) {
   if (!pool.hasStorage()) return [];
-  const result = await pool.query(
-    `SELECT id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? `SELECT id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
             vendor_email, vendor_contact_person, rfq_title, channel, fire_at
-     FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC`,
-    [],
-    { d1: true }
+     FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC LIMIT $1`
+    : `SELECT id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
+            vendor_email, vendor_contact_person, rfq_title, channel, fire_at
+     FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC LIMIT 1000`;
+  const params = hasLimit ? [Math.min(Number(limit), 1000)] : [];
+  const result = await pool.query(
+    sql,
+    params,
+    {
+      d1: true,
+      d1Text: hasLimit
+        ? `SELECT id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
+            vendor_email, vendor_contact_person, rfq_title, channel, fire_at
+     FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC LIMIT $1`
+        : `SELECT id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
+            vendor_email, vendor_contact_person, rfq_title, channel, fire_at
+     FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC LIMIT 1000`,
+    }
   );
   return result.rows || [];
 }
@@ -1136,6 +1548,7 @@ async function getPendingChaserJobsFromDB() {
  */
 async function claimDueChaserJobsFromDB(now, staleBefore, limit = 25) {
   if (!pool.hasStorage()) return [];
+  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
   const result = await pool.query(
     `UPDATE chaser_queue
      SET status='processing', updated_at=$1
@@ -1148,7 +1561,7 @@ async function claimDueChaserJobsFromDB(now, staleBefore, limit = 25) {
      )
      RETURNING id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
                vendor_email, vendor_contact_person, rfq_title, channel, fire_at`,
-    [now, staleBefore, limit],
+    [now, staleBefore, safeLimit],
     { d1: true }
   );
   return result.rows || [];
@@ -1174,6 +1587,7 @@ async function unlockRFQInDB({ id, vendorId, rfqId, creditCharged = 1, source = 
      RETURNING *`,
     }
   );
+  queryCache.invalidate('vendor_credits');
   return result && result.rows ? result.rows[0] : null;
 }
 
@@ -1182,18 +1596,33 @@ async function getRFQUnlockFromDB(vendorId, rfqId) {
   const result = await pool.query(
     `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 AND rfq_id = $2 LIMIT 1`,
     [vendorId, rfqId],
-    { d1: true }
+    {
+      d1: true,
+      d1Text: 'SELECT * FROM rfq_unlocks WHERE vendor_id = $1 AND rfq_id = $2 LIMIT 1',
+      useCache: true,
+      tag: 'vendor_credits',
+      ttlMs: 60000,
+    }
   );
   return result && result.rows ? result.rows[0] : null;
 }
 
-async function getVendorUnlocksFromDB(vendorId) {
-  if (!pool.hasStorage()) return [];
-  const result = await pool.query(
-    `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 ORDER BY unlocked_at DESC`,
-    [vendorId],
-    { d1: true }
-  );
+async function getVendorUnlocksFromDB(vendorId, limit = 50) {
+  if (!pool.hasStorage() || !vendorId) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 ORDER BY unlocked_at DESC LIMIT $2`
+    : `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 ORDER BY unlocked_at DESC LIMIT 1000`;
+  const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
+  const result = await pool.query(sql, params, {
+    d1: true,
+    d1Text: hasLimit
+      ? `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 ORDER BY unlocked_at DESC LIMIT $2`
+      : `SELECT * FROM rfq_unlocks WHERE vendor_id = $1 ORDER BY unlocked_at DESC LIMIT 1000`,
+    useCache: true,
+    tag: 'vendor_credits',
+    ttlMs: 60000,
+  });
   return result && result.rows ? result.rows : [];
 }
 
@@ -1213,16 +1642,26 @@ async function recordCreditTransactionInDB({ id, vendorId, rfqId, transactionTyp
      RETURNING *`,
     }
   );
+  queryCache.invalidate('vendor_credits');
   return result && result.rows ? result.rows[0] : null;
 }
 
-async function getVendorCreditTransactionsFromDB(vendorId) {
-  if (!pool.hasStorage()) return [];
-  const result = await pool.query(
-    `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC`,
-    [vendorId],
-    { d1: true }
-  );
+async function getVendorCreditTransactionsFromDB(vendorId, limit = 50) {
+  if (!pool.hasStorage() || !vendorId) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
+    : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`;
+  const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
+  const result = await pool.query(sql, params, {
+    d1: true,
+    d1Text: hasLimit
+      ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
+      : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`,
+    useCache: true,
+    tag: 'vendor_credits',
+    ttlMs: 60000,
+  });
   return result && result.rows ? result.rows : [];
 }
 
@@ -1326,9 +1765,38 @@ async function getPublicVendorsPageFromDB({
   };
 }
 
+/**
+ * Fast DB aggregate counting vendors registered between two timestamps without
+ * hydrating 600k+ vendor profiles into application memory.
+ */
+async function countVendorsCreatedBetween(fromDate, toDate) {
+  if (!pool.hasStorage()) return 0;
+  const f = fromDate instanceof Date ? fromDate : new Date(fromDate);
+  const t = toDate instanceof Date ? toDate : new Date(toDate);
+  if (isNaN(f.getTime()) || isNaN(t.getTime())) return 0;
+
+  try {
+    const res = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM vendors WHERE created_at >= $1 AND created_at <= $2`,
+      [f.toISOString(), t.toISOString()],
+      {
+        d1: true,
+        d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS count FROM vendors WHERE created_at >= $1 AND created_at <= $2`,
+        useCache: true,
+        tag: 'vendors',
+        ttlMs: 60000,
+      }
+    );
+    return res && res.rows && res.rows[0] ? Number(res.rows[0].count) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
 module.exports = {
   getVendorsFromDB,
   getVendorsPageFromDB,
+  countVendorsCreatedBetween,
   countPublicVendorsMatchingCategories,
   getPublicVendorsMatchingCategories,
   getPublicVendorsPerCategoryFromDB,
@@ -1342,7 +1810,9 @@ module.exports = {
   deleteVendorInDB,
   bulkInsertVendorsInDB,
   getRFQsFromDB,
+  getRFQsByBuyerFromDB,
   getRFQByNumberFromDB,
+  getRFQByIdFromDB,
   upsertRFQInDB,
   deleteRFQInDB,
   getEvaluationsFromDB,
@@ -1367,6 +1837,9 @@ module.exports = {
   getZohoOAuthTokenFromDB,
   upsertZohoOAuthTokenInDB,
   getPaymentLinksFromDB,
+  getPaymentLinksByVendorFromDB,
+  getPaymentLinksByBuyerFromDB,
+  getPaymentLinkByIdFromDB,
   getPaymentLinkByZohoIdFromDB,
   upsertPaymentLinkInDB,
   insertChaserJobInDB,

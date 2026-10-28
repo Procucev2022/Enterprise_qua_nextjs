@@ -1,5 +1,9 @@
 import {
   SOURCING_MODES,
+  RFQ_MODES,
+  RFQ_MODE_LABELS,
+  RFQ_MODE_MAP,
+  rfqVersionLabel,
   CURRENCY,
   formatCurrency,
   formatFileSize,
@@ -22,30 +26,57 @@ import {
   resolveBuyerSourcingMode,
   entitledSourcingModes,
   normalizePoDate,
+  ALLOWED_EXTENSION_HOURS,
+  DEFAULT_EXTENSION_HOURS,
+  calculateExtendedDeadline,
+  hasUnlimitedAccess,
+  UNLIMITED_ACCESS_EMAILS,
 } from '@/lib/constants';
 
 
 describe('lib/constants', () => {
+  it('should export valid RFQ_MODES and RFQ_MODE_LABELS', () => {
+    expect(RFQ_MODES.MODE_0).toBe('mode_0');
+    expect(RFQ_MODES.MODE_1).toBe('mode_1');
+    expect(RFQ_MODES.MODE_2).toBe('mode_2');
+    expect(RFQ_MODES.MODE_3).toBe('mode_3');
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_1]).toBe('Mode 1');
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_2]).toBe('Mode 2');
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_3]).toBe('Mode 3');
+    expect(RFQ_MODE_LABELS[RFQ_MODES.MODE_0]).toBe('Mode 0');
+
+    expect(RFQ_MODE_MAP['v1']).toBe('mode_1');
+    expect(RFQ_MODE_MAP['v2']).toBe('mode_2');
+    expect(RFQ_MODE_MAP['v3']).toBe('mode_3');
+    expect(RFQ_MODE_MAP['mode 1']).toBe('mode_1');
+
+    expect(rfqVersionLabel('mode_1')).toBe('Mode 1');
+    expect(rfqVersionLabel('mode_2')).toBe('Mode 2');
+    expect(rfqVersionLabel('mode_3')).toBe('Mode 3');
+    expect(rfqVersionLabel('mode_0')).toBe('Mode 0');
+    expect(rfqVersionLabel(null)).toBe('Mode 0');
+  });
+
   it('should export valid SOURCING_MODES', () => {
     expect(Array.isArray(SOURCING_MODES)).toBe(true);
     expect(SOURCING_MODES.length).toBe(4);
 
     const mode0 = SOURCING_MODES.find(m => m.id === 'mode_0');
     expect(mode0).toBeDefined();
-    expect(mode0?.code).toBe('Version 0');
+    expect(mode0?.code).toBe('Mode 0');
 
     const mode1 = SOURCING_MODES.find(m => m.id === 'mode_1');
     expect(mode1).toBeDefined();
-    expect(mode1?.code).toBe('Version 1');
+    expect(mode1?.code).toBe('Mode 1');
     expect(mode1?.name).toContain('Client Roster');
 
     const mode2 = SOURCING_MODES.find(m => m.id === 'mode_2');
     expect(mode2).toBeDefined();
-    expect(mode2?.code).toBe('Version 2');
+    expect(mode2?.code).toBe('Mode 2');
 
     const mode3 = SOURCING_MODES.find(m => m.id === 'mode_3');
     expect(mode3).toBeDefined();
-    expect(mode3?.code).toBe('Version 3');
+    expect(mode3?.code).toBe('Mode 3');
   });
 
   it('should export valid subscription plans', () => {
@@ -272,25 +303,55 @@ describe('resolveBuyerSourcingMode & BUYER_SUBSCRIPTION_TO_SOURCING_MODE', () =>
     expect(resolveBuyerSourcingMode('mode_3')).toBe('mode_3');
   });
 
-  it('defaults to mode_2 for free_trial, unknown plan, empty object or null', () => {
-    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial' })).toBe('mode_2');
-    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'starter_plan' })).toBe('mode_2');
-    expect(resolveBuyerSourcingMode({})).toBe('mode_2');
-    expect(resolveBuyerSourcingMode(null)).toBe('mode_2');
-    expect(resolveBuyerSourcingMode(undefined)).toBe('mode_2');
+  it('defaults to mode_0 for free_trial, unknown plan, empty object or null', () => {
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial' })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'starter_plan' })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({})).toBe('mode_0');
+    expect(resolveBuyerSourcingMode(null)).toBe('mode_0');
+    expect(resolveBuyerSourcingMode(undefined)).toBe('mode_0');
   });
 
   it('prioritizes active subscription over remaining free RFQ credits', () => {
     expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_1', remainingFreeRFQs: 0 })).toBe('mode_1');
     expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_2', remainingFreeRFQs: 0 })).toBe('mode_2');
     expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_3', remainingFreeRFQs: 0 })).toBe('mode_3');
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'unlimited' })).toBe('mode_3');
   });
 
-  it('for buyers without a subscription, assigns mode_2 for free credits and switches to mode_0 when exhausted', () => {
-    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 })).toBe('mode_2');
-    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 1 })).toBe('mode_2');
+  it('for buyers without active V1/V2/V3 subscription, automatically assigns mode_0 by default regardless of free credits', () => {
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 1 })).toBe('mode_0');
     expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 0 })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({ remainingFreeRFQs: 5 })).toBe('mode_0');
     expect(resolveBuyerSourcingMode({ remainingFreeRFQs: 0 })).toBe('mode_0');
+  });
+
+  it('handles multiple active subscriptions by selecting the highest active tier (V3 > V2 > V1)', () => {
+    expect(resolveBuyerSourcingMode({
+      subscriptions: [
+        { plan: 'version_1', status: 'active' },
+        { plan: 'version_2', status: 'active' },
+      ],
+    })).toBe('mode_2');
+
+    expect(resolveBuyerSourcingMode({
+      subscriptions: [
+        { plan: 'version_1', status: 'active' },
+        { plan: 'version_3', status: 'active' },
+      ],
+    })).toBe('mode_3');
+  });
+
+  it('disregards expired or inactive subscriptions and falls back to mode_0', () => {
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_2', subscriptionStatus: 'expired' })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_3', subscriptionStatus: 'inactive' })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({
+      subscriptionPlan: 'version_1',
+      subscriptionExpiry: new Date(Date.now() - 100000).toISOString(),
+    })).toBe('mode_0');
+    expect(resolveBuyerSourcingMode({
+      subscriptions: [{ plan: 'version_3', status: 'expired' }],
+    })).toBe('mode_0');
   });
 });
 
@@ -300,6 +361,13 @@ describe('entitledSourcingModes', () => {
     expect(entitledSourcingModes('version_1')).toEqual(['mode_0', 'mode_1']);
     expect(entitledSourcingModes('version_2')).toEqual(['mode_0', 'mode_1', 'mode_2']);
     expect(entitledSourcingModes('version_3')).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes('unlimited')).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+  });
+
+  it('entitles all sourcing modes when unlimitedRfqAccess is true regardless of credits or plan', () => {
+    expect(entitledSourcingModes('free_trial', 0, true)).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes(null, 0, true)).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes('version_1', 0, true)).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
   });
 
   it('falls back to the most restrictive tier for an unrecognised plan string, not to allowing everything', () => {
@@ -308,6 +376,7 @@ describe('entitledSourcingModes', () => {
 
   it('is case-insensitive and trims whitespace', () => {
     expect(entitledSourcingModes(' Version_2 ')).toEqual(['mode_0', 'mode_1', 'mode_2']);
+    expect(entitledSourcingModes(' Unlimited ')).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
   });
 
   it('defaults to the most restrictive tier when the plan is unresolved (null/undefined), not to allowing everything', () => {
@@ -358,4 +427,107 @@ describe('normalizePoDate', () => {
   it('falls back to raw string when not parseable', () => {
     expect(normalizePoDate('not-a-valid-date')).toBe('not-a-valid-date');
   });
+
+  describe('RFQ Extension Constants & Helper', () => {
+    it('exports allowed extension hours and defaults', () => {
+      expect(ALLOWED_EXTENSION_HOURS).toEqual([24, 48]);
+      expect(DEFAULT_EXTENSION_HOURS).toBe(24);
+    });
+
+    it('calculates deadline extension with valid existing deadline', () => {
+      const futureDeadline = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+      const extended24 = calculateExtendedDeadline(futureDeadline, 24);
+      expect(new Date(extended24).getTime()).toBe(new Date(futureDeadline).getTime() + 24 * 60 * 60 * 1000);
+
+      const extended48 = calculateExtendedDeadline(futureDeadline, 48);
+      expect(new Date(extended48).getTime()).toBe(new Date(futureDeadline).getTime() + 48 * 60 * 60 * 1000);
+    });
+
+    it('calculates deadline extension from baseCreatedAt when deadline is not provided', () => {
+      const createdAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+      const extended = calculateExtendedDeadline(undefined, 24, createdAt);
+      expect(new Date(extended).getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('calculates deadline extension from current time when neither deadline nor createdAt is provided', () => {
+      const before = Date.now();
+      const extended = calculateExtendedDeadline(undefined, 24);
+      const extendedMs = new Date(extended).getTime();
+      expect(extendedMs).toBeGreaterThanOrEqual(before + 7 * 24 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000 - 1000);
+    });
+  });
+
+  describe('hasUnlimitedAccess', () => {
+    it('returns true for known unlimited email accounts', () => {
+      expect(hasUnlimitedAccess('procucevvendor@gmail.com')).toBe(true);
+      expect(hasUnlimitedAccess('sudheer.kangala@procucev.com')).toBe(true);
+      expect(hasUnlimitedAccess('  PROCUCEVVENDOR@GMAIL.COM  ')).toBe(true);
+      expect(hasUnlimitedAccess({ email: 'procucevvendor@gmail.com' })).toBe(true);
+    });
+
+    it('returns false for regular emails or null/undefined', () => {
+      expect(hasUnlimitedAccess('vendor@regular.com')).toBe(false);
+      expect(hasUnlimitedAccess(null)).toBe(false);
+      expect(hasUnlimitedAccess(undefined)).toBe(false);
+      expect(hasUnlimitedAccess({ email: '' })).toBe(false);
+    });
+
+    it('contains expected emails in UNLIMITED_ACCESS_EMAILS', () => {
+      expect(UNLIMITED_ACCESS_EMAILS.has('procucevvendor@gmail.com')).toBe(true);
+      expect(UNLIMITED_ACCESS_EMAILS.has('sudheer.kangala@procucev.com')).toBe(true);
+    });
+  });
+
+  describe('VENDOR_ASSIGNMENT_LIMITS & resolveBuyerSourcingMode branch boosts', () => {
+    it('evaluates VENDOR_ASSIGNMENT_LIMITS getters with and without environment overrides', () => {
+      const { VENDOR_ASSIGNMENT_LIMITS } = require('@/lib/constants');
+      // Defaults
+      delete process.env.NEXT_PUBLIC_MAX_CLIENT_VENDORS_PER_CATEGORY;
+      delete process.env.NEXT_PUBLIC_MAX_PROCUCEV_VENDORS_PER_CATEGORY;
+      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(5);
+      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(5);
+
+      // With overrides
+      process.env.NEXT_PUBLIC_MAX_CLIENT_VENDORS_PER_CATEGORY = '12';
+      process.env.NEXT_PUBLIC_MAX_PROCUCEV_VENDORS_PER_CATEGORY = '8';
+      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(12);
+      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(8);
+
+      delete process.env.NEXT_PUBLIC_MAX_CLIENT_VENDORS_PER_CATEGORY;
+      delete process.env.NEXT_PUBLIC_MAX_PROCUCEV_VENDORS_PER_CATEGORY;
+    });
+
+    it('resolves unlimitedRfqAccess and unlimitedAccess with various requested modes', () => {
+      const { resolveBuyerSourcingMode, RFQ_MODES } = require('@/lib/constants');
+      expect(resolveBuyerSourcingMode({ unlimitedRfqAccess: true, sourcingMode: 'mode_0' })).toBe(RFQ_MODES.MODE_0);
+      expect(resolveBuyerSourcingMode({ unlimitedAccess: true, sourcing_mode: 'mode_1' })).toBe(RFQ_MODES.MODE_1);
+      expect(resolveBuyerSourcingMode({ unlimitedRfqAccess: true, sourcingMode: 'v2' })).toBe(RFQ_MODES.MODE_2);
+      expect(resolveBuyerSourcingMode({ unlimitedRfqAccess: true }, 'v3')).toBe(RFQ_MODES.MODE_3);
+      expect(resolveBuyerSourcingMode({ unlimitedRfqAccess: true }, 'unknown_mode')).toBe(RFQ_MODES.MODE_3);
+    });
+
+    it('resolves subscriptions array and single plan variations', () => {
+      const { resolveBuyerSourcingMode, RFQ_MODES } = require('@/lib/constants');
+      // Subscriptions array with version_1 and version_0
+      expect(resolveBuyerSourcingMode({ subscriptions: [{ plan: 'version_1', status: 'active' }] })).toBe(RFQ_MODES.MODE_1);
+      expect(resolveBuyerSourcingMode({ subscriptions: [{ plan: 'version_0', status: 'active' }] })).toBe(RFQ_MODES.MODE_0);
+
+      // Subscriptions with active === false or past expiry
+      const expiredSub = { plan: 'version_3', status: 'active', expiresAt: new Date(Date.now() - 100000).toISOString() };
+      const inactiveSub = { plan: 'version_3', status: 'active', active: false };
+      expect(resolveBuyerSourcingMode({ subscriptions: [expiredSub, inactiveSub] })).toBe(RFQ_MODES.MODE_0);
+
+      // Single plan version_0
+      expect(resolveBuyerSourcingMode('version_0')).toBe(RFQ_MODES.MODE_0);
+    });
+
+    it('normalizePoDate handles number out of range and templates constants exist', () => {
+      const { normalizePoDate, QUA_AI_TRANSACTIONAL_EMAIL_TEMPLATES, QUA_AI_EMAIL_SUPPORT, PRESENCE_ONLINE_THRESHOLD_MS } = require('@/lib/constants');
+      expect(normalizePoDate('200000')).toBe('');
+      expect(QUA_AI_TRANSACTIONAL_EMAIL_TEMPLATES.EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED).toBeDefined();
+      expect(QUA_AI_EMAIL_SUPPORT.PHONE).toBe('+91 8247722944');
+      expect(PRESENCE_ONLINE_THRESHOLD_MS).toBe(600000);
+    });
+  });
 });
+

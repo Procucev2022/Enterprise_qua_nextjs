@@ -627,4 +627,346 @@ describe('app/buyer/command-center.tsx', () => {
     fireEvent.click(screen.getByTitle('Click to view Active Pipeline details'));
     expect(screen.getAllByText('RFQ-QR').length).toBeGreaterThan(0);
   });
+
+  it('covers search by line item entity and assigned vendor', () => {
+    const rfqsWithEntities: RFQItem[] = [
+      {
+        ...mockRfqs[0],
+        id: 'rfq-entities',
+        rfqNumber: 'RFQ-ENT-1',
+        title: 'Pumping Station',
+        extractedEntities: [
+          {
+            id: 'ent-1',
+            itemName: 'Submersible Pump 20HP',
+            technicalSpecs: 'Stainless Steel Impeller',
+            category: 'Pumps & Motors',
+            majorCategory: 'Pumps & Motors',
+            minorCategory: 'Pumps',
+            quantity: 5,
+            unit: 'Nos',
+            confidence: 0.95,
+            targetDate: '2026-11-30',
+          },
+        ],
+        assignedVendors: [
+          {
+            id: 'v-1',
+            name: 'Kirloskar Brothers',
+            contactPerson: 'Suresh Patil',
+            email: 'suresh@kirloskar.com',
+          },
+        ],
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: rfqsWithEntities,
+      aiFeed: mockAiFeed,
+      currentMode: 'mode_1',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: null,
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 5,
+      activeSubscription: 'free_trial',
+      activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+    });
+
+    render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    const searchInput = screen.getByPlaceholderText(/Search pipeline by RFQ#/i);
+
+    // 1. Search matching line item entity (Stainless Steel)
+    fireEvent.change(searchInput, { target: { value: 'Stainless Steel' } });
+    expect(screen.getByText('RFQ-ENT-1')).toBeInTheDocument();
+
+    // 2. Search matching assigned vendor (Kirloskar)
+    fireEvent.change(searchInput, { target: { value: 'Kirloskar' } });
+    expect(screen.getByText('RFQ-ENT-1')).toBeInTheDocument();
+  });
+
+  it('covers live outreach when no RFQs exist and modal deep dive triggers', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [],
+      aiFeed: [],
+      currentMode: 'mode_1',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: null,
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 5,
+      activeSubscription: 'free_trial',
+      activeBuyerAccount: null,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+    });
+
+    const { rerender } = render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    // Click Live Outreach when rfqs is empty (line 337)
+    fireEvent.click(screen.getByTitle('Click to open vendor follow-up details'));
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'No Active RFQs',
+      expect.stringContaining('multi-channel follow-up telemetry'),
+      'info'
+    );
+
+    // Rerender with rfqs and test deep dive triggers
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: mockRfqs,
+      aiFeed: mockAiFeed,
+      currentMode: 'mode_1',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: mockRfqs[0],
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: true, // covers lines 679-682
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 5,
+      activeSubscription: 'free_trial',
+      activeBuyerAccount: null,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+    });
+
+    rerender(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    // Click Live Outreach when rfqs is present (lines 334-335)
+    fireEvent.click(screen.getByTitle('Click to open vendor follow-up details'));
+    expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(mockRfqs[0]);
+
+    // Click on RFQ link in AI feed (line 654)
+    const feedRfqLink = screen.getByText('RFQ-2026-001 ↗');
+    fireEvent.click(feedRfqLink);
+    expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(mockRfqs[0]);
+  });
+
+  it('covers syncing/empty states, whitespace search, missing entity/vendor fields, and feed types', () => {
+    // 1. Loading RFQs with 0 RFQs covers Syncing...
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [],
+      aiFeed: undefined, // covers line 189: feed = aiFeed || []
+      currentMode: 'mode_1',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: null,
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 5,
+      activeSubscription: 'free_trial',
+      activeBuyerAccount: null,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+      isLoadingRFQs: true, // line 259: 'Syncing...'
+    });
+
+    const { rerender } = render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+    expect(screen.getByText('Syncing...')).toBeInTheDocument();
+
+    // 2. Loading complete with 0 RFQs covers No Active RFQs
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [],
+      aiFeed: [],
+      currentMode: 'mode_1',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: null,
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 5,
+      activeSubscription: 'free_trial',
+      activeBuyerAccount: null,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+      isLoadingRFQs: false, // line 259: 'No Active RFQs'
+    });
+
+    rerender(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+    expect(screen.getByText('No Active RFQs')).toBeInTheDocument();
+
+    // 3. Test edge case RFQs and feeds
+    const edgeRfqs: RFQItem[] = [
+      {
+        id: 'rfq-edge-1',
+        rfqNumber: 'RFQ-EDGE-001',
+        title: 'Edge Requisition 1',
+        category: 'Electrical',
+        createdAt: '2026-08-29',
+        targetDeliveryDate: '2026-09-20',
+        status: 'AI Recommended',
+        sourcingMode: 'mode_1',
+        quotesCount: 0,
+        quotes: [],
+        budget: 0,
+        chasingActive: false,
+        source: 'email_upload', // line 514-517: sourceFileName is undefined -> 'Requisition_Email.eml'
+        extractedEntities: [
+          {
+            id: 'ent-blank',
+            itemName: '',
+            technicalSpecs: undefined as any,
+            category: undefined as any,
+          } as any,
+        ],
+        assignedVendors: [
+          {
+            id: 'v-blank',
+            name: 'Vendor X',
+            contactPerson: undefined as any,
+            email: undefined as any,
+          } as any,
+        ],
+      },
+      {
+        id: 'rfq-edge-2',
+        rfqNumber: 'RFQ-EDGE-002',
+        title: 'Edge Requisition 2',
+        category: 'Civil',
+        createdAt: '2026-08-29',
+        targetDeliveryDate: '2026-09-20',
+        status: 'Closed',
+        sourcingMode: 'mode_2',
+        quotesCount: 0,
+        quotes: [],
+        budget: 0,
+        chasingActive: false,
+        extractedEntities: [],
+        source: 'email_gateway', // line 512: sourceEmail undefined, activeBuyerAccount null -> 'via Email Upload'
+      },
+    ];
+
+    const systemFeeds: AIBotFeedItem[] = [
+      {
+        id: 'feed-sys-1',
+        title: 'Ingestion event',
+        message: 'Requisition ingested',
+        timestamp: '12:00 PM',
+        timeAgo: '1m ago',
+        status: 'completed',
+        type: 'ingestion',
+        channel: 'system',
+        rfqNumber: 'NON_EXISTENT_RFQ', // line 654: targetRfq not found
+      },
+      {
+        id: 'feed-sys-2',
+        title: 'Escalation event',
+        message: 'Escalation raised',
+        timestamp: '12:05 PM',
+        timeAgo: '2m ago',
+        status: 'completed',
+        type: 'escalation',
+        channel: 'system',
+      },
+      {
+        id: 'feed-sys-3',
+        title: 'Approval event',
+        message: 'Approval completed',
+        timestamp: '12:10 PM',
+        timeAgo: '3m ago',
+        status: 'completed',
+        type: 'approval',
+        channel: 'system',
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: edgeRfqs,
+      aiFeed: systemFeeds,
+      currentMode: 'mode_1',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: null,
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 5,
+      activeSubscription: 'free_trial',
+      activeBuyerAccount: null,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+      isLoadingRFQs: false,
+    });
+
+    rerender(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    // Verify fallback file name and fallback origin
+    expect(screen.getByText(/File: Requisition_Email\.eml/i)).toBeInTheDocument();
+    expect(screen.getByText(/Origin: via Email Upload/i)).toBeInTheDocument();
+
+    // Switch to system channel filter (covers ingestion, escalation, approval in line 204)
+    fireEvent.click(screen.getByRole('button', { name: /System/i }));
+    expect(screen.getByText('Ingestion event')).toBeInTheDocument();
+    expect(screen.getByText('Escalation event')).toBeInTheDocument();
+    expect(screen.getByText('Approval event')).toBeInTheDocument();
+
+    // Click non-existent RFQ link in feed (line 654: targetRfq is undefined)
+    const nonExistentLink = screen.getByText('NON_EXISTENT_RFQ ↗');
+    mockOpenRFQDeepDive.mockClear();
+    fireEvent.click(nonExistentLink);
+    expect(mockOpenRFQDeepDive).not.toHaveBeenCalled();
+
+    // Test search with whitespace only (line 129: term.trim() is empty)
+    const searchInput = screen.getByPlaceholderText(/Search pipeline by RFQ#/i);
+    fireEvent.change(searchInput, { target: { value: '   ' } });
+    expect(screen.getByText('RFQ-EDGE-001')).toBeInTheDocument();
+    expect(screen.getByText('RFQ-EDGE-002')).toBeInTheDocument();
+  });
 });
+

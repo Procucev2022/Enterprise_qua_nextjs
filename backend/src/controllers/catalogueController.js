@@ -16,7 +16,9 @@ function getProducts(req, res, next) {
   try {
     const { vendorId } = req.query;
     logger.info('Fetching vendor items catalogue', { query: req.query }, 'CATALOGUE_CONTROLLER');
-    const products = storeService.getVendorCatalogue(vendorId);
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
+    const products = storeService.getVendorCatalogue(vendorId, limit);
     res.json({ success: true, data: products });
   } catch (err) {
     logger.error('Error fetching catalogue items', err, 'CATALOGUE_CONTROLLER');

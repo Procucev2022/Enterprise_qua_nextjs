@@ -6,6 +6,7 @@ const { authenticate, optionalAuthenticate } = require('../middleware/auth');
 router.get('/', optionalAuthenticate, vendorController.getVendors);
 router.post('/', authenticate, vendorController.createVendor);
 router.post('/bulk-import', authenticate, vendorController.bulkImportVendors);
+router.post('/bulk-delete', authenticate, vendorController.bulkDeleteVendors);
 router.get('/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/presence', optionalAuthenticate, vendorController.getVendorsPresence);
 router.post('/heartbeat', optionalAuthenticate, vendorController.recordVendorHeartbeat);
@@ -13,6 +14,7 @@ router.get('/bulk-import/:sessionId', authenticate, vendorController.getBulkImpo
 // Public directory — no auth required, must be before /:id to avoid swallowing the literal path segment.
 router.get('/public', vendorController.getPublicVendors);
 router.get('/public/:id', vendorController.getPublicVendorById);
+router.get('/subscription-pricing', vendorController.getSubscriptionPricing);
 router.get('/:id/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/:id', optionalAuthenticate, vendorController.getVendorById);
 router.put('/:id', authenticate, vendorController.updateVendor);

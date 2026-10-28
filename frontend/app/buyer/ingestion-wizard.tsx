@@ -5,10 +5,13 @@ import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import {
   SOURCING_MODES,
+  RFQ_MODES,
+  RFQ_MODE_LABELS,
   CURRENCY,
   formatFileSize,
   RFQ_DOCUMENT_LIMITS,
   VENDOR_ASSIGNMENT_LIMITS,
+  entitledSourcingModes,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString, extractionReasonMessage } from '@/lib/uiStrings';
 import {
@@ -30,7 +33,7 @@ import {
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
 import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, resolveLocationFromPostalResult } from '@/lib/validationSchemas';
-import { getMajorCategories, getMinorCategories, dominantMajorCategory } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories, dominantMajorCategory, hasMajorCategory, hasMinorCategory } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import {
   extractRfqCategorySignals,
@@ -39,6 +42,7 @@ import {
   selectVendorsForCategories,
   type RankedProcucevVendor,
 } from '@/lib/vendorMatching';
+import RfqUpgradePlanModal from './RfqUpgradePlanModal';
 import type {
   ManualRFQForm,
   ManualRFQLineItem,
@@ -257,10 +261,10 @@ export function resolveOwnVendorCount(rfq: ConfirmationRFQ | null | undefined): 
  * of truth for both the exported helper and the inline modal check.
  */
 export const V2_V3_SOURCING_MODES: readonly string[] = [
-  'mode_2',
+  RFQ_MODES.MODE_2,
   'v2',
   'version_2',
-  'mode_3',
+  RFQ_MODES.MODE_3,
   'v3',
   'version_3',
 ];
@@ -311,6 +315,17 @@ export default function IngestionWizard({
       ? forceRemainingFreeRFQs
       : (activeBuyerAccount?.remainingFreeRFQs ?? storeRemaining ?? 5);
   const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(effectivePlan);
+
+  let entitledModes: ReturnType<typeof entitledSourcingModes> = entitledSourcingModes(null);
+  try {
+    entitledModes = entitledSourcingModes(effectivePlan, effectiveRemaining);
+  } catch {
+    entitledModes = ['mode_0', 'mode_1'];
+  }
+
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [upgradeModalTargetMode, setUpgradeModalTargetMode] = useState<SourcingMode | string>('mode_1');
+
   const [form, setForm] = useState<ManualRFQForm>(() => ({
     ...createEmptyManualRFQForm(),
     sourcingMode: currentMode || 'mode_2',
@@ -402,9 +417,9 @@ export default function IngestionWizard({
   const [isSubmittingVendor, setIsSubmittingVendor] = useState(false);
   const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
   const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
-  const [vendorCategoryFilterTab, setVendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('all');
+  const [vendorCategoryFilterTab, setVendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('matched');
   const [mode2VendorSearch, setMode2VendorSearch] = useState('');
-  const [mode2VendorCategoryFilterTab, setMode2VendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('all');
+  const [mode2VendorCategoryFilterTab, setMode2VendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('matched');
 
   const handleSendCategoryUpdateEmail = async (vendor: any, rfqCategorySignals: string[]) => {
     const vendorKey = vendor?.id || vendor?.email;
@@ -714,6 +729,7 @@ export default function IngestionWizard({
   const [isDraggingDoc, setIsDraggingDoc] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
+  const [categorizingProgress, setCategorizingProgress] = useState<string | null>(null);
   const [extractionError, setExtractionError] = useState<string | null>(null);
   // The raw underlying failure cause from the server, shown beneath the friendly
   // message in the failure banner so a failed extraction is easy to debug.
@@ -862,6 +878,8 @@ export default function IngestionWizard({
       const next = prev.filter((_, i) => i !== index);
       if (next.length === 0) {
         setExtractionSummary(null);
+        setExtractionError(null);
+        setExtractionDetail(null);
       }
       return next;
     });
@@ -869,6 +887,9 @@ export default function IngestionWizard({
 
   /** AI Extraction: processes uploaded document (.eml, .msg, .xlsx, .pdf, .docx, .csv) into form */
   const handleExtractFromFiles = async () => {
+    if (uploadedFiles.length === 0) {
+      return;
+    }
     setIsExtracting(true);
     setExtractionError(null);
     setExtractionDetail(null);
@@ -890,12 +911,18 @@ export default function IngestionWizard({
         const derivedLocation = result.data.deliveryLocation || '';
         const derivedPincode = result.data.deliveryPincode || '';
         const derivedDate = result.data.targetDeliveryDate || '';
+        const extractedCategory = result.data.category || '';
 
         setForm((prev) => ({
           ...prev,
           title: prev.title || derivedTitle,
           estimatedBudget: prev.estimatedBudget ?? derivedBudget,
-          majorCategory: prev.majorCategory || derivedMajor,
+          majorCategory:
+            prev.majorCategory ||
+            (hasMajorCategory(extractedCategory) ? extractedCategory : '') ||
+            (hasMajorCategory(derivedMajor) ? derivedMajor : '') ||
+            dominantMajorCategory(extracted) ||
+            '',
           deliveryLocation: prev.deliveryLocation || derivedLocation,
           deliveryPincode: prev.deliveryPincode || derivedPincode,
           targetDeliveryDate: prev.targetDeliveryDate || derivedDate,
@@ -960,6 +987,7 @@ export default function IngestionWizard({
    */
   const handleAutoCategorizeAll = async () => {
     setIsCategorizing(true);
+    setCategorizingProgress(null);
     try {
       // Only the rows still missing a category are classified. Keep the rest.
       const toClassify = form.lineItems.filter(
@@ -987,7 +1015,10 @@ export default function IngestionWizard({
           majorCategory: '',
           minorCategory: '',
           confidence: 0,
-        }))
+        })),
+        (prog) => {
+          setCategorizingProgress(`${prog.processed}/${prog.total}`);
+        }
       );
 
       if (!result.success || !result.data || !Array.isArray(result.data.extractedEntities)) {
@@ -1006,17 +1037,21 @@ export default function IngestionWizard({
         const matched = classified.get(item.id);
         // Not asked about, or the server could not place it -> leave blank.
         if (!matched || !matched.majorCategory) return item;
-        if (!detectedMajor) detectedMajor = matched.majorCategory;
+        const validMajor = hasMajorCategory(matched.majorCategory) ? matched.majorCategory : '';
+        const validMinor = validMajor && hasMinorCategory(validMajor, matched.minorCategory) ? matched.minorCategory : '';
+        if (!validMajor) return item;
+        if (!detectedMajor) detectedMajor = validMajor;
         return {
           ...item,
-          majorCategory: matched.majorCategory,
-          minorCategory: matched.minorCategory || '',
+          majorCategory: validMajor,
+          minorCategory: validMinor,
         };
       });
 
+      const dominant = dominantMajorCategory(updatedLineItems);
       setForm((prev) => ({
         ...prev,
-        majorCategory: prev.majorCategory || detectedMajor,
+        majorCategory: prev.majorCategory || dominant || detectedMajor,
         lineItems: updatedLineItems,
       }));
 
@@ -1033,6 +1068,7 @@ export default function IngestionWizard({
       showToast(EXTRACTION.fallbackTitle, EXTRACTION.classifyFailed, 'warning');
     } finally {
       setIsCategorizing(false);
+      setCategorizingProgress(null);
     }
   };
 
@@ -1169,7 +1205,12 @@ export default function IngestionWizard({
         }
 
         const finalMatching = dispatchSignals.length > 0
-          ? selectVendorsForCategories(matchingVendors, dispatchSignals, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).map((r) => r.vendor)
+          ? selectVendorsForCategories(
+              matchingVendors,
+              dispatchSignals,
+              VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
+              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode }
+            ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
         if (finalMatching.length > 0) {
@@ -1191,9 +1232,9 @@ export default function IngestionWizard({
         }
       }
 
-      if (form.sourcingMode === 'mode_1' && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
-        setSubmitError('Version 1 (Client Sourcing) requires at least one private vendor to be added/selected before creating the RFQ.');
-        showToast('Private Vendor Required', 'Version 1 requires at least one private vendor in your roster before dispatching.', 'warning');
+      if (form.sourcingMode === RFQ_MODES.MODE_1 && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
+        setSubmitError(`${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} (Client Sourcing) requires at least one private vendor to be added/selected before creating the RFQ.`);
+        showToast('Private Vendor Required', `${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} requires at least one private vendor in your roster before dispatching.`, 'warning');
         return;
       }
 
@@ -1314,6 +1355,11 @@ export default function IngestionWizard({
             </button>
             <a
               href="/buyer/subscription-center"
+              onClick={(e) => {
+                e.preventDefault();
+                setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                setIsUpgradeModalOpen(true);
+              }}
               className="btn btn-primary font-bold shrink-0 inline-flex items-center gap-2 px-3 py-1.5 text-xs shadow-md hover:shadow-lg"
             >
               <Sparkles size={13} />
@@ -1465,14 +1511,25 @@ export default function IngestionWizard({
                 </pre>
               </div>
             )}
-            <button
-              type="button"
-              onClick={handleEnterManually}
-              className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
-            >
-              <Plus size={13} />
-              <span>{EXTRACTION.manualEntryAction}</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExtractFromFiles}
+                disabled={isExtracting}
+                className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
+              >
+                {isExtracting ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+                <span>{isExtracting ? EXTRACTION.extractingLabel : EXTRACTION.retryAction}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleEnterManually}
+                className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
+              >
+                <Plus size={13} />
+                <span>{EXTRACTION.manualEntryAction}</span>
+              </button>
+            </div>
           </div>
         )}
       </section>
@@ -1624,7 +1681,7 @@ export default function IngestionWizard({
               className="btn btn-secondary btn-sm text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50"
             >
               {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-              {isCategorizing ? 'Classifying...' : 'Auto-Categorize All (AI)'}
+              {isCategorizing ? (categorizingProgress ? `Classifying (${categorizingProgress})...` : 'Classifying...') : 'Auto-Categorize All (AI)'}
             </button>
             {form.lineItems.length < 5 && (
               <button
@@ -1729,7 +1786,11 @@ export default function IngestionWizard({
                         <select
                           aria-label={MODAL.colMajor}
                           value={item.majorCategory}
-                          onChange={(e) => patchItem(item.id, { majorCategory: e.target.value })}
+                          onChange={(e) => {
+                            const newMajor = e.target.value;
+                            const keepMinor = newMajor && hasMinorCategory(newMajor, item.minorCategory) ? item.minorCategory : '';
+                            patchItem(item.id, { majorCategory: newMajor, minorCategory: keepMinor });
+                          }}
                           className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
                         >
                           <option value="">{MODAL.selectPlaceholder}</option>
@@ -1748,11 +1809,8 @@ export default function IngestionWizard({
                         <select
                           aria-label={MODAL.colMinor}
                           value={item.minorCategory}
-                          // Enabled when a major is chosen, or when the document
-                          // supplied a minor of its own (kept even without a
-                          // master major) so the buyer can see and keep it.
                           disabled={
-                            (!item.majorCategory && !item.minorCategory) ||
+                            !item.majorCategory ||
                             item.majorCategory === ALL_CATEGORIES_OPTION
                           }
                           onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
@@ -1761,7 +1819,7 @@ export default function IngestionWizard({
                           <option value="">
                             {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
                           </option>
-                          {withStoredValue(minorsFor(item.majorCategory), item.minorCategory).map((minor) => (
+                          {minorsFor(item.majorCategory).map((minor) => (
                             <option key={minor} value={minor}>
                               {minor}
                             </option>
@@ -1821,7 +1879,15 @@ export default function IngestionWizard({
               data-testid="sourcing-mode-select"
               aria-label="Sourcing Mode"
               value={form.sourcingMode}
-              onChange={(e) => patchForm('sourcingMode', e.target.value as SourcingMode)}
+              onChange={(e) => {
+                const target = e.target.value as SourcingMode;
+                if (!entitledModes.includes(target)) {
+                  setUpgradeModalTargetMode(target);
+                  setIsUpgradeModalOpen(true);
+                  return;
+                }
+                patchForm('sourcingMode', target);
+              }}
               className="sr-only"
               tabIndex={-1}
             >
@@ -1844,6 +1910,7 @@ export default function IngestionWizard({
             >
               {SOURCING_MODES.map((mode) => {
                 const isSelected = form.sourcingMode === mode.id;
+                const isEntitled = entitledModes.includes(mode.id as SourcingMode);
                 const label = SOURCING_VERSION_LABELS[mode.id] || mode.shortLabel;
 
                 return (
@@ -1853,16 +1920,31 @@ export default function IngestionWizard({
                     role="radio"
                     aria-checked={isSelected}
                     data-testid={`sourcing-mode-btn-${mode.id}`}
-                    onClick={() => patchForm('sourcingMode', mode.id as SourcingMode)}
+                    onClick={() => {
+                      if (!isEntitled) {
+                        setUpgradeModalTargetMode(mode.id as SourcingMode);
+                        setIsUpgradeModalOpen(true);
+                        return;
+                      }
+                      patchForm('sourcingMode', mode.id as SourcingMode);
+                    }}
                     className={`h-9 px-3.5 py-1.5 rounded-xl text-xs font-semibold tracking-tight transition-all duration-150 shrink-0 flex items-center justify-center gap-1.5 border cursor-pointer select-none ${
                       isSelected
                         ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs shadow-indigo-600/20'
+                        : !isEntitled
+                        ? 'bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 border-dashed border-slate-300 dark:border-gray-700 hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400'
                         : 'bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 border-slate-200 dark:border-gray-700 hover:bg-slate-50 dark:hover:bg-gray-700/60 hover:border-slate-300 dark:hover:border-gray-600'
                     }`}
                   >
                     <span data-testid={`mode-${mode.id}`} aria-hidden="true" className="contents">
                       {isSelected && <Check size={13} className="shrink-0 stroke-[2.5]" />}
                       <span>{label}</span>
+                      {!isEntitled && (
+                        <span className="badge badge-amber text-[9px] font-bold px-1.5 py-0.5 rounded-full inline-flex items-center gap-0.5">
+                          <Sparkles size={9} />
+                          Upgrade
+                        </span>
+                      )}
                     </span>
                   </button>
                 );
@@ -2033,8 +2115,32 @@ export default function IngestionWizard({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
-                    {myVendors.map((vendor, idx) => {
+                  {myVendors.length === 0 ? (
+                    <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900 border border-dashed border-slate-300 dark:border-gray-700 space-y-2">
+                      <Users size={24} className="mx-auto text-slate-400 opacity-60" />
+                      <p className="text-xs font-bold text-slate-700 dark:text-gray-300">
+                        {vendorCategoryFilterTab === 'matched'
+                          ? 'No Category-Matched Vendors in Roster'
+                          : 'No Vendors Found'}
+                      </p>
+                      <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
+                        {vendorCategoryFilterTab === 'matched'
+                          ? `No vendors in your approved roster match the RFQ category (${mode1Signals.join(', ') || 'selected'}). Switch to "All" or add a new vendor.`
+                          : 'No vendors match your search or filter criteria.'}
+                      </p>
+                      {vendorCategoryFilterTab === 'matched' && allMyVendors.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setVendorCategoryFilterTab('all')}
+                          className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-block mt-1"
+                        >
+                          View all {allMyVendors.length} private vendors →
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
+                      {myVendors.map((vendor, idx) => {
                       const rawMinor = vendor.minorCategories as string | string[] | undefined;
                       const minorList: string[] = Array.isArray(rawMinor)
                         ? rawMinor
@@ -2200,6 +2306,7 @@ export default function IngestionWizard({
                       );
                     })}
                   </div>
+                  )}
                 </div>
               );
             })()}
@@ -2887,6 +2994,11 @@ export default function IngestionWizard({
             </button>
             <a
               href="/buyer/subscription-center"
+              onClick={(e) => {
+                e.preventDefault();
+                setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                setIsUpgradeModalOpen(true);
+              }}
               className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg cursor-pointer"
             >
               <Sparkles size={16} />
@@ -3285,6 +3397,17 @@ export default function IngestionWizard({
           </div>
         </div>
       )}
+      {/* ── Upgrade Plan Modal for Exhausted Credits / Unentitled Sourcing Modes ── */}
+      <RfqUpgradePlanModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        targetMode={upgradeModalTargetMode}
+        remainingCredits={effectiveRemaining}
+        onSwitchToMode0={() => {
+          patchForm('sourcingMode', 'mode_0');
+          setIsUpgradeModalOpen(false);
+        }}
+      />
     </div>
   );
 }

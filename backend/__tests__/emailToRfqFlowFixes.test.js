@@ -275,12 +275,27 @@ describe('free trial credits are enforced the same way as on the portal', () => 
     storeService.getBuyerAccountByEmail.mockReturnValue(buyerAccount({ remainingFreeRFQs: 1 }));
     mockExtraction();
     jest.spyOn(emailGatewayService, 'processLineItemsAndGroups').mockReturnValue(twoGroups());
+    jest.spyOn(emailGatewayService, 'resolveBuyerSourcingMode').mockReturnValue('mode_2');
     const create = jest.spyOn(storeService, 'createRFQ');
 
     const result = await emailGatewayService.processMessage(raw(), config());
 
     expect(result.status).toBe(INGESTION_OUTCOME.RFQ_CREDITS_EXHAUSTED);
     expect(create).not.toHaveBeenCalled();
+  });
+
+  test('Govardhan 17 Oct rule: buyer raising RFQ via email defaults to V0 even with remaining free trial credits', async () => {
+    storeService.getBuyerAccountByEmail.mockReturnValue(buyerAccount({ remainingFreeRFQs: 5 }));
+    mockExtraction();
+    const create = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-v0-trial', rfqNumber: 'RFQ-V0-TRIAL' });
+
+    const result = await emailGatewayService.processMessage(raw(), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ sourcingMode: 'mode_0' }),
+      expect.anything()
+    );
   });
 
   test('a paid plan is never limited by free credits', async () => {

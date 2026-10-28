@@ -189,9 +189,24 @@ const VALIDATION_SCHEMAS = {
       custom: (val) => (isDummyPincode(val) ? 'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed.' : null),
     },
     targetDeliveryDate: { type: 'string', required: false },
+    deadline: { type: 'string', required: false },
+    closingDeadline: { type: 'string', required: false },
+    isExtended: { type: 'boolean', required: false },
+    extensionHours: { type: 'number', required: false },
+    extendedAt: { type: 'string', required: false },
     extractedEntities: { type: 'array', required: false },
     attachments: { type: 'array', required: false },
     assignedVendors: { type: 'array', required: false },
+  },
+
+  // Schema for extending an RFQ closing deadline (strictly one-time, 24h or 48h)
+  extendRFQ: {
+    hours: {
+      type: 'number',
+      required: true,
+      custom: (val) => ([24, 48].includes(Number(val)) ? null : 'Extension duration must be either 24 or 48 hours.'),
+      message: 'Extension hours must be 24 or 48.',
+    },
   },
 
   // Document handed to POST /api/rfqs/extract for Gemini line-item extraction.
@@ -371,16 +386,28 @@ const VALIDATION_SCHEMAS = {
   // it matches PASSWORD_MIN_LENGTH on the frontend so the browser hint and the
   // server boundary agree.
   changePassword: {
-    currentPassword: {
-      type: 'string',
-      required: true,
-      message: 'Enter your current password to authorise the change.',
-    },
     newPassword: {
       type: 'string',
       required: true,
       minLength: PASSWORD_MIN_LENGTH,
       message: 'Choose a new password of at least 8 characters.',
+    },
+    currentPassword: {
+      type: 'string',
+      required: false,
+      message: 'Enter your current password to authorise the change.',
+    },
+    code: {
+      type: 'string',
+      required: false,
+    },
+    verificationCode: {
+      type: 'string',
+      required: false,
+    },
+    resetToken: {
+      type: 'string',
+      required: false,
     },
   },
 
@@ -404,6 +431,38 @@ const VALIDATION_SCHEMAS = {
     emailOtp: { type: 'string', required: false },
     mobileOtp: { type: 'string', required: false },
     code: { type: 'string', required: false },
+  },
+
+  // Mandatory first-login profile completion for automatically created buyers
+  completeBuyerOnboarding: {
+    emailOtp: { type: 'string', required: true, pattern: OTP_CODE_REGEX, message: 'Valid 6-digit email OTP is required.' },
+    mobile: {
+      type: 'string',
+      required: true,
+      pattern: INDIAN_MOBILE_REGEX,
+      message: INDIAN_MOBILE_MESSAGE,
+      custom: (val) => {
+        const cleaned = String(val || '').replace(/\D/g, '');
+        if (cleaned.endsWith('9999999999') || cleaned === '9999999999') {
+          return 'Placeholder phone number 9999999999 must be replaced with your actual phone number.';
+        }
+        return null;
+      },
+    },
+    mobileOtp: { type: 'string', required: true, pattern: OTP_CODE_REGEX, message: 'Valid 6-digit SMS OTP is required.' },
+    currentPassword: { type: 'string', required: true, minLength: 1, message: 'Current temporary password is required.' },
+    newPassword: { type: 'string', required: true, minLength: PASSWORD_MIN_LENGTH, message: 'New password of at least 8 characters is required.' },
+    companyName: { type: 'string', required: true, minLength: 2, maxLength: 255, message: 'Company or organisation name is required.' },
+    contactName: { type: 'string', required: false, maxLength: 255 },
+    city: { type: 'string', required: false, maxLength: 255 },
+    state: { type: 'string', required: false, maxLength: 255 },
+    pincode: { type: 'string', required: false, pattern: INDIAN_PINCODE_REGEX, message: INDIAN_PINCODE_MESSAGE },
+    address: { type: 'string', required: false, maxLength: 500 },
+    street: { type: 'string', required: false, maxLength: 500 },
+    gstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
+    gstNumber: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
+    pan: { type: 'string', required: false, pattern: PAN_REGEX, message: PAN_MESSAGE },
+    panNumber: { type: 'string', required: false, pattern: PAN_REGEX, message: PAN_MESSAGE },
   },
 
   // Buyer organisation profile submitted by PUT /api/buyer-profile/me.
@@ -560,7 +619,17 @@ const VALIDATION_SCHEMAS = {
     state: { type: 'string', required: false, maxLength: 100 },
     minRating: { type: 'number', required: false, min: 0, max: 5 },
   },
+
+  transactionalEmailPreview: {
+    templateId: { type: 'string', required: true, minLength: 1, maxLength: 100, message: 'Template ID or number is required.' },
+  },
+
+  transactionalEmailSend: {
+    templateId: { type: 'string', required: true, minLength: 1, maxLength: 100, message: 'Template ID or number is required.' },
+    recipientEmail: { type: 'string', required: true, pattern: EMAIL_REGEX, message: 'A valid recipient email is required.' },
+  },
 };
+
 
 
 /**

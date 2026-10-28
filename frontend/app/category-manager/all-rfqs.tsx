@@ -111,7 +111,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
   const load = async () => {
     setLoading(true);
     setError(null);
-    const result = await fetchAllRFQs();
+    const result = await fetchAllRFQs({ summary: true, limit: 100 });
     if (result.success) {
       setRfqs(result.rfqs);
     } else {
@@ -158,26 +158,19 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
 
   return (
     <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 sm:p-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-3">
-          <div className="rounded-xl bg-indigo-50 p-2.5 text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-400">
-            <ClipboardList size={22} />
-          </div>
-          <div>
-            <h1 className="text-xl font-black text-slate-900 dark:text-white">{S.title}</h1>
-            <p className="mt-0.5 text-xs text-slate-500 dark:text-gray-450">{S.subtitle}</p>
-            {!loading && !error && (
-              <p className="mt-1.5 text-xs font-bold text-slate-500 dark:text-gray-450" data-testid="all-rfqs-count">
-                {formatString(S.countSummary, { count: rfqs.length, buyers: buyerNames.length })}
-              </p>
-            )}
-          </div>
-        </div>
+      <div className="flex items-center justify-between gap-4 flex-wrap pb-1">
+        {!loading && !error ? (
+          <p className="text-xs font-bold text-slate-500 dark:text-gray-450" data-testid="all-rfqs-count">
+            {formatString(S.countSummary, { count: rfqs.length, buyers: buyerNames.length })}
+          </p>
+        ) : (
+          <div />
+        )}
         <button
           type="button"
           onClick={() => void load()}
           disabled={loading}
-          className="btn-ghost flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 disabled:cursor-wait disabled:opacity-60 dark:border-slate-800 dark:text-gray-250"
+          className="btn-ghost flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 disabled:cursor-wait disabled:opacity-60 dark:border-slate-800 dark:text-gray-250 ml-auto"
         >
           <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> {S.retryAction}
         </button>
@@ -434,7 +427,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                         </span>
                         <div className="flex flex-wrap items-center gap-1.5">
                           {rfq.assignedVendors.slice(0, 2).map((av, idx) => {
-                            const vName = av.name || (av as any).vendorName || 'Vendor';
+                            const vName = av.name || (av as any).vendorName || (av as any).companyName || (typeof av === 'string' ? av : '') || 'Vendor';
                             const vId = av.id || (av as any).vendorId || null;
                             return (
                               <button
@@ -633,7 +626,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     </div>
                   ))
                 : (vendorListModalData.rfq.assignedVendors || []).map((av, idx) => {
-                    const vName = av.name || (av as any).vendorName || 'Vendor';
+                    const vName = av.name || (av as any).vendorName || (av as any).companyName || (typeof av === 'string' ? av : '') || 'Vendor';
                     const vId = av.id || (av as any).vendorId || null;
                     return (
                       <div

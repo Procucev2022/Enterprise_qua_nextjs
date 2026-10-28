@@ -95,7 +95,7 @@ export default function EnterpriseInquiriesConsole() {
     setLoading(true);
     let serverInquiries: EnterpriseInquiry[] = [];
     try {
-      const res = await fetch('/api/enterprise-inquiries');
+      const res = await fetch('/api/enterprise-inquiries?limit=100');
       const json = await res.json();
       if (json && json.success && Array.isArray(json.data)) {
         serverInquiries = json.data;
@@ -234,34 +234,13 @@ export default function EnterpriseInquiriesConsole() {
 
   return (
     <div className="space-y-4 animate-fade-in pb-10">
-      {/* ── Top Header ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-gray-800 pb-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60">
-              <Building2 size={20} />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white tracking-tight">
-                  Enterprise Contracts Inquiries
-                </h1>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                  Screen 2.8
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-gray-400">
-                Incoming leads for bulk volume contracts, custom ERP integrations, and custom buyer SLAs.
-              </p>
-            </div>
-          </div>
-        </div>
-
+      {/* ── Top Actions ── */}
+      <div className="flex items-center justify-end pb-1">
         <button
           type="button"
           onClick={() => void fetchInquiries()}
           disabled={loading}
-          className="btn btn-secondary text-xs px-3.5 py-2 self-start sm:self-auto flex items-center gap-2 rounded-xl"
+          className="btn btn-secondary text-xs px-3.5 py-2 flex items-center gap-2 rounded-xl"
         >
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           <span>{loading ? 'Refreshing...' : 'Refresh Leads'}</span>

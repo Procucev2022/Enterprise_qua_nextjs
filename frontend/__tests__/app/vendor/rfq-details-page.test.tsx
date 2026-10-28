@@ -114,6 +114,7 @@ describe('Vendor RFQ Details page', () => {
     );
     expect(screen.queryByText(/Assigned & Invited Suppliers/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Invite Suppliers/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Close RFQ/i })).not.toBeInTheDocument();
   });
 
   test('shows zero quotes when this vendor has no record resolved', async () => {

@@ -31,6 +31,7 @@ const domainQueries = require('../db/domainQueries');
 const mailerService = require('./mailerService');
 const emailGatewayQueries = require('../db/emailGatewayQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
+const identityQueries = require('../db/identityQueries');
 const pool = require('../db/pool');
 const { logger } = require('./loggerService');
 const {
@@ -40,8 +41,11 @@ const {
   EMAIL_GATEWAY_STATE,
   EMAIL_INGESTION_STATUS,
   resolveBuyerSourcingMode,
+  hasUnlimitedRfqAccess,
   SYSTEM_ACTOR_EMAIL,
   VENDOR_QUOTE_SUPPORT_CC,
+  RFQ_MODES,
+  RFQ_MODE_MAP,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -49,20 +53,11 @@ const { INGESTION_OUTCOME } = emailGatewayQueries;
 // A poll that never clears its flag (a Gmail or Gemini call that hangs) must not
 // block every later run on a warm Worker isolate. The flag only counts as held
 // for this long; each external call is also bounded so a hang ends the poll.
-//
-// Live cron tails show the lock being SET and then nothing further logging for
-// that cycle at all -- not even this timeout's own rejection -- which points at
-// the platform's own cron invocation duration limit killing the isolate before
-// a 60s timer ever fires, leaving withTimeout's setTimeout (and the `finally`
-// that clears the lock) orphaned. Lowered well under that ceiling so our own
-// timeout wins the race and actually logs the real Gmail error instead of
-// going silent.
-const POLL_STALE_AFTER_MS = 2 * 60 * 1000;
+// Coordinated with Gemini's 5-minute operation budget (plus headroom) so the lock
+// is not abandoned mid-extraction.
+const POLL_STALE_AFTER_MS = 6 * 60 * 1000;
 const POLL_CALL_TIMEOUT_MS = 20 * 1000;
-// Gemini gets longer than the other calls: it retries across models inside its
-// own budget, and a 20s cap cut off ordinary extractions mid-answer (live:
-// "Gemini line-item extraction timed out after 20000ms" on a plain requisition).
-const EXTRACTION_TIMEOUT_MS = 45 * 1000;
+const EXTRACTION_TIMEOUT_MS = 5 * 60 * 1000;
 // No new message is started once a poll has run this long, so a poll that hits
 // slow extractions still ends well inside POLL_STALE_AFTER_MS (worst case ≈
 // this + one message fetch + one extraction + creation) and never overlaps the
@@ -163,6 +158,7 @@ function resolveConfig(env = process.env) {
     // Optional extra restriction on top of the buyer-account requirement.
     allowedDomains: splitList(env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
     allowedSenders: splitList(env.EMAIL_GATEWAY_ALLOWED_SENDERS),
+    autoRegisterUnregisteredBuyers: String(env.EMAIL_GATEWAY_AUTO_REGISTER || 'true').toLowerCase() !== 'false',
   };
 }
 
@@ -185,11 +181,16 @@ function resolveVendorConfig(env = process.env) {
     // IMAP support was removed — see resolveConfig()'s comment. The vendor
     // mailbox is read exclusively via the vendor Gmail REST API identity
     // (VENDOR_GMAIL_* in mailerService).
-    user: (env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').trim(),
+    user: (
+      env.VENDOR_EMAIL_GATEWAY_USER ||
+      VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS ||
+      ''
+    ).trim(),
     address: (
       env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
       env.VENDOR_EMAIL_GATEWAY_USER ||
-      'srinu20252026@gmail.com'
+      VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS ||
+      ''
     ).trim(),
     mailbox: (env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
     pollIntervalMs: Math.max(
@@ -244,8 +245,8 @@ function describeConfigurationFault() {
  * told the gateway is not going to work.
  */
 function resolveConnectionState(config, { lastError, watching } = {}) {
-  if (!isConfigured(config)) return EMAIL_GATEWAY_STATE.NOT_CONFIGURED;
-  if (describeConfigurationFault(config)) return EMAIL_GATEWAY_STATE.CONNECTION_ERROR;
+  if (!emailGateway.isConfigured(config)) return EMAIL_GATEWAY_STATE.NOT_CONFIGURED;
+  if (emailGateway.describeConfigurationFault(config)) return EMAIL_GATEWAY_STATE.CONNECTION_ERROR;
   if (!config.enabled) return EMAIL_GATEWAY_STATE.SWITCHED_OFF;
   if (lastError) return EMAIL_GATEWAY_STATE.CONNECTION_ERROR;
   if (watching) return EMAIL_GATEWAY_STATE.ACTIVE_LISTENING;
@@ -263,15 +264,45 @@ function resolveConnectionState(config, { lastError, watching } = {}) {
  * Returns `{ allowed, reason, buyerAccount }`. `buyerAccount` is needed by the
  * caller regardless, to scope the RFQ.
  */
-async function resolveSenderAuthorisation(fromAddress, config = resolveConfig()) {
+async function resolveSenderAuthorisation(fromAddress, config = resolveConfig(), preloadedBuyerAccount = undefined) {
   const address = String(fromAddress || '').trim().toLowerCase();
   if (!address) {
     return { allowed: false, reason: EMAIL_GATEWAY_MESSAGES.SENDER_MISSING, buyerAccount: null };
   }
 
-  const buyerAccount = (await storeService.getBuyerAccountByEmail(address)) || null;
+  const buyerAccount = preloadedBuyerAccount !== undefined
+    ? preloadedBuyerAccount
+    : ((await storeService.getBuyerAccountByEmail(address)) || null);
   const allowedSenders = Array.isArray(config && config.allowedSenders) ? config.allowedSenders : [];
   const allowedDomains = Array.isArray(config && config.allowedDomains) ? config.allowedDomains : [];
+
+  const isOnboardingPending = Boolean(
+    buyerAccount &&
+    (buyerAccount.status === 'PENDING_ONBOARDING' ||
+     buyerAccount.onboardingRequired === true ||
+     buyerAccount.tempPasswordRequired === true ||
+     buyerAccount.isAutoRegistered === true)
+  );
+
+  let tempPassword = null;
+  if (isOnboardingPending) {
+    try {
+      const idUser = await identityQueries.findUserByEmail(address);
+      if (idUser && (idUser.verificationStatus === 'PENDING_ONBOARDING' || idUser.resetPasswordRequired)) {
+        tempPassword = idUser.password || null;
+      }
+    } catch (err) {
+      logger.warn('Failed to query identity user password in resolveSenderAuthorisation', { address, error: err.message }, 'EMAIL_GATEWAY');
+    }
+    if (!tempPassword) {
+      tempPassword = storeService._generateTempPassword();
+      try {
+        await identityQueries.updateUserPassword(address, tempPassword);
+      } catch (pwErr) {
+        logger.warn('Failed to persist fresh temp password in resolveSenderAuthorisation', { address, error: pwErr.message }, 'EMAIL_GATEWAY');
+      }
+    }
+  }
 
   if (allowedSenders.length > 0) {
     if (!allowedSenders.includes(address)) {
@@ -279,6 +310,8 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig())
         allowed: false,
         reason: EMAIL_GATEWAY_MESSAGES.SENDER_NOT_LISTED.replace('{address}', address),
         buyerAccount,
+        isOnboardingPending,
+        tempPassword,
       };
     }
     // Still needs an owning account: an RFQ with no buyerAccountId is invisible.
@@ -289,7 +322,7 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig())
         buyerAccount: null,
       };
     }
-    return { allowed: true, reason: null, buyerAccount };
+    return { allowed: true, reason: null, buyerAccount, isOnboardingPending, tempPassword };
   }
 
   if (allowedDomains.length > 0) {
@@ -299,6 +332,8 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig())
         allowed: false,
         reason: EMAIL_GATEWAY_MESSAGES.DOMAIN_NOT_LISTED.replace('{domain}', domain || address),
         buyerAccount,
+        isOnboardingPending,
+        tempPassword,
       };
     }
   }
@@ -311,7 +346,138 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig())
     };
   }
 
-  return { allowed: true, reason: null, buyerAccount };
+  return { allowed: true, reason: null, buyerAccount, isOnboardingPending, tempPassword };
+}
+
+const inFlightBuyerRegistrations = new Map();
+
+/**
+ * Concurrency-safe retrieval or autonomous creation of a buyer account for an unregistered sender.
+ */
+async function getOrCreateBuyerAccount(email) {
+  const normEmail = String(email || '').trim().toLowerCase();
+  if (!normEmail) {
+    throw new Error('Email address is required for buyer onboarding.');
+  }
+
+  const resolvePendingTempPassword = async (account) => {
+    const isPending = Boolean(
+      account &&
+      (account.status === 'PENDING_ONBOARDING' ||
+       account.onboardingRequired === true ||
+       account.tempPasswordRequired === true ||
+       account.isAutoRegistered === true)
+    );
+    let tempPassword = null;
+    if (isPending) {
+      try {
+        const idUser = await identityQueries.findUserByEmail(normEmail);
+        if (idUser && (idUser.verificationStatus === 'PENDING_ONBOARDING' || idUser.resetPasswordRequired)) {
+          tempPassword = idUser.password || null;
+        }
+      } catch (err) {
+        logger.warn('Failed to resolve identity user temp password in getOrCreateBuyerAccount', { email: normEmail, error: err.message }, 'EMAIL_GATEWAY');
+      }
+      if (!tempPassword) {
+        tempPassword = storeService._generateTempPassword();
+        try {
+          await identityQueries.updateUserPassword(normEmail, tempPassword);
+        } catch (pwErr) {
+          logger.warn('Failed to persist fresh temp password in getOrCreateBuyerAccount', { email: normEmail, error: pwErr.message }, 'EMAIL_GATEWAY');
+        }
+      }
+    }
+    return { isPending, tempPassword };
+  };
+
+  // 1. Check if already exists in storeService
+  let existing = await storeService.getBuyerAccountByEmail(normEmail);
+  if (existing) {
+    const { isPending, tempPassword } = await resolvePendingTempPassword(existing);
+    return { buyerAccount: existing, isNew: false, isOnboardingPending: isPending, tempPassword };
+  }
+
+  // 2. Concurrency lock per email
+  if (inFlightBuyerRegistrations.has(normEmail)) {
+    return await inFlightBuyerRegistrations.get(normEmail);
+  }
+
+  const creationPromise = (async () => {
+    // Re-check after acquiring promise
+    existing = await storeService.getBuyerAccountByEmail(normEmail);
+    if (existing) {
+      const { isPending, tempPassword } = await resolvePendingTempPassword(existing);
+      return { buyerAccount: existing, isNew: false, isOnboardingPending: isPending, tempPassword };
+    }
+
+    const tempPassword = storeService._generateTempPassword();
+    const displayName = normEmail.split('@')[0];
+    const orgName = `${displayName} Enterprises`;
+
+    // Create in identity database
+    let userResult = null;
+    try {
+      userResult = await identityQueries.insertBuyerAccount({
+        email: normEmail,
+        password: tempPassword,
+        phone: '9999999999',
+        fullName: displayName,
+        organizationName: orgName,
+        resetPasswordRequired: true,
+        verificationStatus: 'PENDING_ONBOARDING',
+        createdBy: 'email-gateway-autonomous',
+      });
+    } catch (dbErr) {
+      logger.error('Failed to create identity user for unregistered buyer', dbErr, 'EMAIL_GATEWAY');
+    }
+
+    const userId = userResult?.user?.id || `buyer-user-${Date.now()}`;
+    const orgId = userResult?.user?.orgId || `org-${Date.now()}`;
+
+    // Create in storeService (buyer_accounts)
+    const newBuyerAccount = storeService.addBuyerAccount({
+      id: userId,
+      organizationName: orgName,
+      brandName: displayName,
+      organizationType: 'Private Limited',
+      corporateEmail: normEmail,
+      contactPerson: displayName,
+      contactDesignation: 'Procurement Specialist',
+      mobileNumber: '+919999999999',
+      organizationId: orgId,
+      sourcingMode: 'mode_0',
+      subscriptionPlan: 'free_trial',
+      remainingFreeRFQs: 5,
+      status: 'PENDING_ONBOARDING',
+      onboardingRequired: true,
+      profileVerified: false,
+      emailVerified: false,
+      phoneVerified: false,
+      tempPasswordRequired: true,
+      isAutoRegistered: true,
+    });
+
+    logger.info(
+      `Autonomous buyer account created for unregistered sender ${normEmail}`,
+      { buyerAccountId: newBuyerAccount.id, sourcingMode: newBuyerAccount.sourcingMode },
+      'EMAIL_GATEWAY'
+    );
+
+    return {
+      buyerAccount: newBuyerAccount,
+      isNew: true,
+      isOnboardingPending: true,
+      tempPassword,
+      user: userResult?.user || null,
+    };
+  })();
+
+  inFlightBuyerRegistrations.set(normEmail, creationPromise);
+  try {
+    return await creationPromise;
+  } finally {
+    inFlightBuyerRegistrations.delete(normEmail);
+  }
 }
 
 /**
@@ -386,7 +552,7 @@ function processLineItemsAndGroups(lineItems, extraction = {}, buyerLocation = {
       extraction.deliveryDate ||
       extraction.targetDeliveryDate;
 
-    const targetDate = String(rawTargetDate || defaultDate).trim();
+    const targetDate = rfqIngestionService.ensureFutureDeliveryDate(rawTargetDate, 5);
 
     // 2. Location Handling:
     const explicitCity = String(item.deliveryCity || item.delivery_city || extraction.deliveryCity || '').trim();
@@ -505,6 +671,10 @@ async function extractRfqReferenceFromEmail(message) {
   const candidates = [];
   for (const raw of rawMatches) {
     const trimmed = raw.trim();
+    // Ignore generic English words like "RFQ", "RFQs", "RFQ's" that do not contain numbers or sub-identifiers
+    if (/^RFQs?['’]?s?$/i.test(trimmed)) {
+      continue;
+    }
     const standardMatch = trimmed.match(/RFQ-?\d{4}-\d{4,6}/i) || trimmed.match(/RFQ\d{10,14}/i);
     if (standardMatch) {
       candidates.push(standardMatch[0].toUpperCase());
@@ -513,6 +683,8 @@ async function extractRfqReferenceFromEmail(message) {
     candidates.push(stripped.toUpperCase());
     candidates.push(trimmed.toUpperCase());
   }
+
+  if (candidates.length === 0) return { targetRfq: null, referencedNumber: null };
 
   // getRFQByIdAsync, not the plain in-memory getRFQById — the same Workers
   // isolate-cache-staleness bug fixed in rfqController.addQuote applies here
@@ -762,10 +934,13 @@ const ACK_RETRIES_PER_POLL = 5;
  */
 async function queueAcknowledgement(rfqKey, ack) {
   if (!rfqKey) return;
+  const detailObj = { buyerName: ack.buyerName, rfqTitle: ack.rfqTitle };
+  if (ack.tempPassword) detailObj.tempPassword = ack.tempPassword;
+  if (ack.deliveryDate) detailObj.deliveryDate = ack.deliveryDate;
   await emailGatewayQueries.recordProcessed({
     messageId: `${rfqKey}#ack`,
     status: INGESTION_OUTCOME.ACK_PENDING,
-    detail: JSON.stringify({ buyerName: ack.buyerName, rfqTitle: ack.rfqTitle }),
+    detail: JSON.stringify(detailObj),
     fromAddress: ack.to,
     subject: ack.rfqTitle,
     rfqNumber: ack.rfqNumber,
@@ -810,12 +985,37 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
       saved = {};
     }
     try {
-      await mailerService.sendRfqAcknowledgementEmail({
-        to: row.from_address,
-        buyerName: saved.buyerName,
-        rfqNumber: row.rfq_number,
-        rfqTitle: saved.rfqTitle || row.subject,
-      });
+      if (saved.tempPassword) {
+        await mailerService.sendBuyerOnboardingWithRfqEmail({
+          to: row.from_address,
+          buyerName: saved.buyerName,
+          tempPassword: saved.tempPassword,
+          rfqNumber: row.rfq_number,
+          rfqTitle: saved.rfqTitle || row.subject,
+          deliveryDate: saved.deliveryDate,
+          mobileNumber: saved.mobileNumber || '9999999999',
+          category: saved.category,
+          deliveryLocation: saved.deliveryLocation,
+          requiredBy: saved.requiredBy || saved.deliveryDate,
+          quoteDeadline: saved.quoteDeadline || saved.deadline,
+          suppliersInvited: saved.suppliersInvited,
+          items: saved.items,
+        });
+      } else {
+        await mailerService.sendRfqAcknowledgementEmail({
+          to: row.from_address,
+          buyerName: saved.buyerName,
+          rfqNumber: row.rfq_number,
+          rfqTitle: saved.rfqTitle || row.subject,
+          category: saved.category,
+          deliveryLocation: saved.deliveryLocation,
+          deliveryDate: saved.deliveryDate,
+          requiredBy: saved.requiredBy || saved.deliveryDate,
+          quoteDeadline: saved.quoteDeadline || saved.deadline,
+          suppliersInvited: saved.suppliersInvited,
+          items: saved.items,
+        });
+      }
       await record(INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry');
       outcome.sent += 1;
     } catch (err) {
@@ -860,7 +1060,23 @@ function buyerDisplayName(buyerAccount, message) {
 }
 
 /** Tell a registered buyer their email did not become an RFQ, within the auto-reply guards. */
-function notifyRfqNotCreated(message, reason, { buyerAccount = null, config = {}, count, max } = {}) {
+function notifyRfqNotCreated(message, reason, { buyerAccount = null, config = {}, count, max, authorisation = null } = {}) {
+  // If the buyer is unverified / pending onboarding and has a temporary password, dispatch their credentials too!
+  if (
+    authorisation &&
+    (authorisation.isAutoRegistered || authorisation.isOnboardingPending) &&
+    authorisation.tempPassword
+  ) {
+    mailerService.sendBuyerCredentialsEmail({
+      to: message.fromAddress,
+      recipientName: buyerDisplayName(buyerAccount, message),
+      tempPassword: authorisation.tempPassword,
+      contactPhone: buyerAccount?.mobileNumber || '',
+    }).catch((err) => {
+      logger.error('Failed to dispatch buyer credentials on failed RFQ creation', err, 'EMAIL_GATEWAY');
+    });
+  }
+
   return sendAutoReply(
     message,
     AUTO_REPLY_KIND.RFQ_NOT_CREATED,
@@ -884,6 +1100,7 @@ function notifyRfqNotCreated(message, reason, { buyerAccount = null, config = {}
  */
 function checkRfqCredits(buyerAccount, sourcingMode, needed) {
   if (!buyerAccount || !buyerAccount.id) return { ok: true, applies: false };
+  if (hasUnlimitedRfqAccess(buyerAccount)) return { ok: true, applies: false };
   const plan = buyerAccount.subscriptionPlan || 'free_trial';
   const isPaidPlan = plan === 'version_1' || plan === 'version_2' || plan === 'version_3';
   const isV0 = sourcingMode === 'mode_0' || sourcingMode === 'v0' || sourcingMode === 'version_0';
@@ -1014,6 +1231,27 @@ function isVendorIssueOrQueryMessage(message) {
 }
 
 /**
+ * Determines whether an RFQ operates under Version 1 (Mode 1 - Client Roster)
+ * or Version 3 (Mode 3 - Hybrid Sourcing).
+ * For V1 and V3, vendor quotation failures CC the buyer; for V0 and V2, they do not.
+ */
+function isV1OrV3Rfq(rfq) {
+  if (!rfq) return false;
+  const rawMode = String(rfq.sourcingMode || rfq.sourcing_mode || rfq.mode || 'mode_1').trim().toLowerCase();
+  const normalized = (RFQ_MODE_MAP && RFQ_MODE_MAP[rawMode]) || rawMode;
+  if (normalized === RFQ_MODES.MODE_1 || normalized === RFQ_MODES.MODE_3) {
+    return true;
+  }
+  if (normalized === RFQ_MODES.MODE_0 || normalized === RFQ_MODES.MODE_2) {
+    return false;
+  }
+  if (normalized.includes('1') || normalized.includes('3') || normalized.includes('roster')) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Ingests a vendor quotation received via email into the referenced RFQ.
  */
 async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
@@ -1024,8 +1262,30 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   );
 
   const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
+  const isV1OrV3 = isV1OrV3Rfq(targetRfq);
   const incomingCc = Array.isArray(message.cc) ? message.cc : (message.cc ? [message.cc] : []);
-  const ccList = Array.from(new Set([buyerEmail, ...incomingCc, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean)));
+  const buyerNormalized = buyerEmail ? String(buyerEmail).toLowerCase().trim() : null;
+
+  // Sanitize incoming CC: If not V1 or V3, exclude buyer from CC on failure notifications
+  const sanitizedIncomingCc = incomingCc.filter((c) => {
+    if (!c) return false;
+    if (!isV1OrV3 && buyerNormalized && String(c).toLowerCase().trim() === buyerNormalized) {
+      return false;
+    }
+    return true;
+  });
+
+  // For failure notifications:
+  // For V1 and V3, if a vendor submits a quotation via email and the submission fails, send failure notification with buyer in CC.
+  // For V0 and V2, do NOT add buyer in CC.
+  const failureCcList = Array.from(
+    new Set([
+      isV1OrV3 ? buyerEmail : null,
+      ...sanitizedIncomingCc,
+      VENDOR_QUOTE_SUPPORT_CC,
+    ].filter(Boolean))
+  );
+  const failureCc = failureCcList.length > 0 ? failureCcList.join(', ') : undefined;
 
   // Validate vendor quotation eligibility: buyer-mapped vendors get unlimited quotations on their buyer's RFQs;
   // otherwise 5 free quotation credits, then active subscription required
@@ -1053,7 +1313,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           rfqTitle: targetRfq.title,
           vendorName: vendorRecord.name,
           upgradeUrl: typeof mailerService.vendorUpgradeUrl === 'function' ? mailerService.vendorUpgradeUrl() : undefined,
-          cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+          cc: failureCc,
         }),
       { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor credits exhausted email' }
     );
@@ -1108,7 +1368,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           vendorName: vendorRecord.name,
           reason: 'Quotation parsing failed due to AI extraction errors. Please ensure all quotation parameters are clearly stated.',
           missingFields: ['Quotation Details / AI Extraction'],
-          cc: ccList.length > 0 ? ccList.join(', ') : (buyerEmail || undefined),
+          cc: failureCc,
         }),
       { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote failure email' }
     );
@@ -1166,7 +1426,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           vendorName: vendorRecord.name,
           issueMessage: emailText.slice(0, 500),
           reason: 'Quotation creation has failed and no bid was generated because your email contains an issue or clarification query regarding the RFQ.',
-          cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+          cc: failureCc,
         }),
       { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor issue acknowledgment email' }
     );
@@ -1196,6 +1456,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           rfq: targetRfq,
           vendorName: vendorRecord.name,
           itemCount,
+          cc: failureCc,
         }),
       { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send complex RFQ portal redirect email' }
     );
@@ -1248,7 +1509,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           vendorName: vendorRecord.name,
           reason: 'Unit Price (₹) is mandatory and must be greater than 0.',
           missingFields: ['Unit Price (₹)'],
-          cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+          cc: failureCc,
         }),
       { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote failure email' }
     );
@@ -1318,17 +1579,45 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
         rfqTitle: targetRfq.title,
         vendorName: vendorRecord.name,
         quote,
+        buyerEmail,
+        cc: undefined,
       }),
     { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote acknowledgement email' }
   );
 
   if (buyerEmail) {
     try {
-      await mailerService.sendQuoteReceivedEmail(buyerEmail, {
-        rfq: updatedRFQ || targetRfq,
-        quote,
-        recipientName: targetRfq.buyerAccountName || 'Buyer',
-      });
+      const buyerAcc = await storeService.getBuyerAccountByEmail(buyerEmail);
+      const isPendingVerification = storeService.isBuyerProfileUpdateRequired(buyerAcc, targetRfq);
+
+      if (isPendingVerification) {
+        logger.info(
+          `Quotation received for RFQ ${targetRfq.rfqNumber} but buyer ${buyerEmail} has pending verification. Dispatching completion reminder.`,
+          { rfqNumber: targetRfq.rfqNumber, buyerEmail },
+          'EMAIL_GATEWAY'
+        );
+        storeService.queuePendingQuoteNotification(buyerEmail, { rfq: updatedRFQ || targetRfq, quote });
+        if (!storeService.hasQuoteAckBeenSent(targetRfq)) {
+          storeService.markQuoteAckSent(targetRfq);
+          await mailerService.sendBuyerProfileCompletionReminderEmail({
+            to: buyerEmail,
+            recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            quotesCount: 1,
+          });
+          storeService.addAuditLog({
+            userEmail: buyerEmail,
+            action: `Notification outcome: Sent quotation acknowledgment and profile update reminder to ${buyerEmail} for RFQ ${targetRfq.rfqNumber}`,
+          });
+        }
+      } else {
+        await mailerService.sendQuoteReceivedEmail(buyerEmail, {
+          rfq: updatedRFQ || targetRfq,
+          quote,
+          recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+        });
+      }
     } catch (mailErr) {
       logger.error('Failed to send buyer quote received email', mailErr, 'EMAIL_GATEWAY');
     }
@@ -1432,15 +1721,35 @@ async function processMessage(rawSource, config = resolveConfig()) {
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
   const { targetRfq, referencedNumber } = await extractRfqReferenceFromEmail(message);
   const vendorRecord = await resolveVendorFromEmail(message.fromAddress, targetRfq);
+  const buyerAccount = await storeService.getBuyerAccountByEmail(message.fromAddress);
+  const isRegisteredBuyer = Boolean(buyerAccount);
 
-  if (targetRfq && vendorRecord) {
+  // If sender is both buyer and vendor, but is the owner/creator of the target RFQ,
+  // they are managing their RFQ as a buyer, not quoting on their own requirement.
+  const isOwnerOfTargetRfq = Boolean(
+    targetRfq && buyerAccount && (
+      (targetRfq.buyerAccountId && targetRfq.buyerAccountId === buyerAccount.id) ||
+      (targetRfq.buyerEmail && String(targetRfq.buyerEmail).toLowerCase() === String(message.fromAddress).toLowerCase())
+    )
+  );
+
+  if (targetRfq && vendorRecord && !isOwnerOfTargetRfq) {
     return await processVendorQuoteMessage(message, targetRfq, vendorRecord);
   }
 
-  if (!targetRfq && referencedNumber && vendorRecord) {
+  // If RFQ is not found, but a vendor (who is not a registered buyer) referenced an RFQ number:
+  if (!targetRfq && referencedNumber && vendorRecord && !isRegisteredBuyer) {
     return {
       status: INGESTION_OUTCOME.INVALID_RFQ,
       detail: EMAIL_GATEWAY_MESSAGES.INVALID_RFQ_REFERENCED.replace('{rfqNumber}', referencedNumber),
+      message,
+    };
+  }
+
+  if (referencedNumber && !vendorRecord && (config?.isVendorMailbox || !isOwnNoticeSubject(message.subject))) {
+    return {
+      status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED,
+      detail: EMAIL_GATEWAY_MESSAGES.SENDER_NOT_LISTED.replace('{address}', message.fromAddress || 'unknown'),
       message,
     };
   }
@@ -1449,10 +1758,27 @@ async function processMessage(rawSource, config = resolveConfig()) {
   // When an email represents a new RFQ/request (from a registered buyer or an RFQ enquiry),
   // it is processed through the RFQ creation pipeline as per dual-inbox requirements.
   if (config && config.isVendorMailbox) {
-    const isRegisteredBuyer = Boolean(await storeService.getBuyerAccountByEmail(message.fromAddress));
     const isRfqSubjectOrContent = /rfq|requisition|purchase|material|indent|tender|quot|boq|requirement/i.test(
       `${message.subject || ''} ${message.bodyText || ''}`
     );
+
+    if (!isRegisteredBuyer && isRfqSubjectOrContent) {
+      await sendAutoReply(
+        message,
+        AUTO_REPLY_KIND.UNAUTHORIZED_SENDER,
+        () =>
+          mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
+            subject: message.subject,
+            gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+          }),
+        { config, failureLog: 'Failed to dispatch registration notification to unregistered buyer emailing vendor inbox' }
+      );
+      return {
+        status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED,
+        detail: EMAIL_GATEWAY_MESSAGES.UNREGISTERED_BUYER_ON_VENDOR_MAILBOX,
+        message,
+      };
+    }
 
     // Non-RFQ vendor correspondence or general enquiries sent to vendor mailbox without an RFQ are rejected
     if (!isRegisteredBuyer && !isRfqSubjectOrContent) {
@@ -1465,32 +1791,58 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
-  const authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
+  let authorisation = await resolveSenderAuthorisation(message.fromAddress, config, buyerAccount);
   if (!authorisation.allowed) {
-    await sendAutoReply(
-      message,
-      AUTO_REPLY_KIND.UNAUTHORIZED_SENDER,
-      () =>
-        mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
-          subject: message.subject,
-          gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
-        }),
-      { config, failureLog: 'Failed to dispatch registration notification to unauthorized sender' }
-    );
-    return { status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED, detail: authorisation.reason, message };
+    const isDomainOrSenderRestricted =
+      (Array.isArray(config?.allowedSenders) && config.allowedSenders.length > 0 && !config.allowedSenders.includes(String(message.fromAddress || '').toLowerCase())) ||
+      (Array.isArray(config?.allowedDomains) && config.allowedDomains.length > 0 && !config.allowedDomains.includes((String(message.fromAddress || '').split('@')[1] || '').toLowerCase())) ||
+      !message.fromAddress;
+
+    const isUnregisteredSender =
+      !isDomainOrSenderRestricted &&
+      !message.automatedReason &&
+      !isSystemOrAutomatedSender(message.fromAddress) &&
+      !authorisation.buyerAccount &&
+      !config?.isVendorMailbox &&
+      config?.autoRegisterUnregisteredBuyers !== false;
+
+    if (isUnregisteredSender) {
+      const onboardResult = await emailGateway.getOrCreateBuyerAccount(message.fromAddress);
+      authorisation = {
+        allowed: true,
+        reason: null,
+        buyerAccount: onboardResult.buyerAccount,
+        isAutoRegistered: Boolean(onboardResult.isNew || onboardResult.isAutoRegistered),
+        isOnboardingPending: Boolean(onboardResult.isNew || onboardResult.isOnboardingPending),
+        tempPassword: onboardResult.tempPassword,
+      };
+    } else {
+      await sendAutoReply(
+        message,
+        AUTO_REPLY_KIND.UNAUTHORIZED_SENDER,
+        () =>
+          mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
+            subject: message.subject,
+            gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+          }),
+        { config, failureLog: 'Failed to dispatch registration notification to unauthorized sender' }
+      );
+      return { status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED, detail: authorisation.reason, message };
+    }
   }
 
   // A transient Gemini failure (timeout, rate limit, outage, missing key) says
   // nothing about the email. It is thrown so the poller retries it; once the
   // retries run out the buyer is told, instead of the requirement being
   // recorded as "no line items" and dropped after one try.
-  const notifyContext = { buyerAccount: authorisation.buyerAccount, config };
+  const notifyContext = { buyerAccount: authorisation.buyerAccount, config, authorisation };
   const giveUpNotice = () => notifyRfqNotCreated(message, 'PROCESSING_FAILED', notifyContext);
+  const extractionTimeoutMs = Number(config?.extractionTimeoutMs || EXTRACTION_TIMEOUT_MS);
   let extraction;
   try {
     extraction = await withTimeout(
       geminiService.extractLineItems(prepared.extractionInput),
-      EXTRACTION_TIMEOUT_MS,
+      extractionTimeoutMs,
       'Gemini line-item extraction'
     );
   } catch (err) {
@@ -1547,10 +1899,19 @@ async function processMessage(rawSource, config = resolveConfig()) {
     }
   }
 
-  // The portal refuses a V1/V2/V3 RFQ once a free trial's credits are gone;
-  // email used to create it anyway. Checked for every RFQ this email would raise
-  // before any is created, so the buyer never gets half a requirement.
-  const sourcingMode = resolveBuyerSourcingMode(authorisation.buyerAccount);
+  // Version Logic: RFQs raised through the RFQ email ID default to V0 (mode_0),
+  // or the buyer's active subscribed version (V1/V2/V3). Otherwise, V0.
+  const sourcingMode = emailGateway.resolveBuyerSourcingMode(authorisation.buyerAccount);
+  logger.info(
+    `[EMAIL_GATEWAY] Determining RFQ version for buyer ${authorisation.buyerAccount?.corporateEmail || message.fromAddress}: resolved sourcingMode=${sourcingMode} (subscription: ${authorisation.buyerAccount?.subscriptionPlan || 'none'}, activeSubscriptions: ${JSON.stringify(authorisation.buyerAccount?.subscriptions || [])})`,
+    {
+      buyerId: authorisation.buyerAccount?.id,
+      buyerEmail: authorisation.buyerAccount?.corporateEmail || message.fromAddress,
+      subscriptionPlan: authorisation.buyerAccount?.subscriptionPlan,
+      resolvedSourcingMode: sourcingMode,
+    },
+    'EMAIL_GATEWAY'
+  );
   const credits = checkRfqCredits(authorisation.buyerAccount, sourcingMode, groups.length);
   if (!credits.ok) {
     logger.warn(
@@ -1592,7 +1953,6 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
     const { draft, classification } = await rfqIngestionService.buildRFQDraft({
       lineItems: group.items,
-      title: extraction.documentTitle || message.subject,
       category: extraction.category,
       estimatedBudget: extraction.estimatedBudget,
       source: 'email_gateway',
@@ -1602,6 +1962,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
       deliveryState: group.deliveryState,
       deliveryPincode: group.deliveryPincode,
       targetDeliveryDate: group.targetDate,
+      ensureFutureDate: true,
     });
 
     if (classification.accepted === 0) {
@@ -1620,7 +1981,8 @@ async function processMessage(rawSource, config = resolveConfig()) {
         status: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
         source: 'email_gateway',
         sourceEmail: message.fromAddress,
-        sourceFileName: message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
+        buyerEmail: message.fromAddress,
+        sourceFileName: draft.title || message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
         raisedByEmail: message.fromAddress,
         budget: draft.estimatedBudget || 0,
         targetDeliveryDate: draft.targetDeliveryDate,
@@ -1640,7 +2002,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
         status: INGESTION_OUTCOME.RFQ_GROUP_CREATED,
         detail: `RFQ ${groupIndex + 1} of ${groups.length} raised from this email`,
         fromAddress: message.fromAddress,
-        subject: message.subject,
+        subject: draft.title || message.subject,
         rfqId: created.id,
         rfqNumber: created.rfqNumber,
       });
@@ -1663,17 +2025,68 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
     // Dispatch RFQ creation acknowledgement email to the buyer
     if (message.fromAddress) {
+      const shouldSendOnboardingCredentials = Boolean(
+        groupIndex === 0 &&
+        (authorisation.isAutoRegistered || authorisation.isOnboardingPending) &&
+        authorisation.tempPassword
+      );
+
+      const rawMobile =
+        authorisation?.buyerAccount?.mobileNumber ||
+        authorisation?.buyerAccount?.phone ||
+        authorisation?.user?.phone ||
+        '9999999999';
+      const resolvedMobile = String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || '9999999999';
+
+      const rawEntities = Array.isArray(created.extractedEntities) && created.extractedEntities.length > 0
+        ? created.extractedEntities
+        : Array.isArray(created.items)
+          ? created.items
+          : [];
+
+      const normalizedLineItems = rawEntities.map((it) => ({
+        item_name: it.itemName || it.name || it.item_name || 'Line Item',
+        item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || 'Standard Specification',
+        qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : 1),
+        uom: it.unit || it.uom || 'Nos',
+      }));
+
+      const resolvedSuppliersCount = created.assignedVendors && created.assignedVendors.length > 0
+        ? created.assignedVendors.length
+        : (created.procucevVendorCount || 5);
+
       const ack = {
         to: message.fromAddress,
         buyerName: buyerDisplayName(authorisation.buyerAccount, message),
         rfqNumber: created.rfqNumber,
         rfqTitle: created.title,
+        deliveryDate: created.targetDeliveryDate,
+        tempPassword: shouldSendOnboardingCredentials ? authorisation.tempPassword : null,
+        mobileNumber: resolvedMobile,
+        category: created.category,
+        itemCount: normalizedLineItems.length || 1,
+        deliveryLocation: created.deliveryLocation,
+        requiredBy: created.targetDeliveryDate,
+        quoteDeadline: created.deadline,
+        deadline: created.deadline,
+        suppliersInvited: resolvedSuppliersCount,
+        items: normalizedLineItems,
       };
-      try {
-        await mailerService.sendRfqAcknowledgementEmail(ack);
-      } catch (ackErr) {
-        logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
-        await queueAcknowledgement(groupKey || created.id, ack);
+
+      if (shouldSendOnboardingCredentials) {
+        try {
+          await mailerService.sendBuyerOnboardingWithRfqEmail(ack);
+        } catch (onboardErr) {
+          logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');
+          await queueAcknowledgement(groupKey || created.id, ack);
+        }
+      } else {
+        try {
+          await mailerService.sendRfqAcknowledgementEmail(ack);
+        } catch (ackErr) {
+          logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
+          await queueAcknowledgement(groupKey || created.id, ack);
+        }
       }
     }
 
@@ -1737,12 +2150,32 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
   }
 
+  // Per-deployment kill switch for the CRON poll path. Mirrors the
+  // startBuyerPolling()/startVendorPolling() config.enabled guard so a
+  // disabled deployment never lists/fetches/modifies the mailbox — this is
+  // what lets dev and prod run as separate Cloudflare workers against their
+  // OWN Gmail mailboxes without racing for the shared UNREAD flag. Ordered
+  // AFTER the NOT_CONFIGURED check so an unconfigured deployment still reports
+  // NOT_CONFIGURED first (see pollViaGmailApi tests). A skipped-because-disabled
+  // run is observable as { skipped: true, reason: DISABLED } in the poll
+  // summary and via the INFO log below.
+  if (!config.enabled) {
+    logger.info(
+      'Email gateway poll skipped: gateway disabled for this deployment',
+      { isVendorMailbox: !!config.isVendorMailbox },
+      'EMAIL_GATEWAY'
+    );
+    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
+  }
+
   const { google } = require('googleapis');
   const gmail = google.gmail({ version: 'v1', auth });
 
+  const pollId = (state.currentPollId || 0) + 1;
+  state.currentPollId = pollId;
   state.isPolling = true;
   state.pollStartedAt = Date.now();
-  logger.info('Buyer poll lock SET', { site: 'pollViaGmailApi', startedAt: state.pollStartedAt }, 'EMAIL_GATEWAY');
+  logger.info('Buyer poll lock SET', { site: 'pollViaGmailApi', pollId, startedAt: state.pollStartedAt }, 'EMAIL_GATEWAY');
   state.consideredThisRun = 0;
   state.ingestedThisRun = 0;
   const startedAt = Date.now();
@@ -1868,6 +2301,9 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             continue;
           }
 
+          if (state.currentPollId === pollId) {
+            state.pollStartedAt = Date.now();
+          }
           const result = await emailGateway.processMessage(rawSource, config);
           const resolvedMessageId = (result.message && result.message.messageId) || dedupeKey;
 
@@ -1960,9 +2396,11 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
     logger.error(`Email gateway poll failed (Gmail API): ${err.message}`, err, 'EMAIL_GATEWAY');
     return { skipped: false, error: err.message, considered: state.consideredThisRun, outcomes };
   } finally {
-    state.isPolling = false;
-    state.lastPollAt = new Date().toISOString();
-    state.lastPollDurationMs = Date.now() - startedAt;
+    if (state.currentPollId === pollId) {
+      state.isPolling = false;
+      state.lastPollAt = new Date().toISOString();
+      state.lastPollDurationMs = Date.now() - startedAt;
+    }
   }
 }
 
@@ -2001,9 +2439,9 @@ async function pollVendorOnce(config = resolveVendorConfig()) {
 function startBuyerPolling(config = resolveConfig()) {
   if (runtime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
-  if (!isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  if (!emailGateway.isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
 
-  const configurationFault = describeConfigurationFault(config);
+  const configurationFault = emailGateway.describeConfigurationFault(config);
   if (configurationFault) {
     runtime.lastError = configurationFault;
     return { started: false, reason: configurationFault };
@@ -2031,9 +2469,9 @@ function startBuyerPolling(config = resolveConfig()) {
 function startVendorPolling(config = resolveVendorConfig()) {
   if (vendorRuntime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
-  if (!isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  if (!emailGateway.isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
 
-  const configurationFault = describeConfigurationFault(config);
+  const configurationFault = emailGateway.describeConfigurationFault(config);
   if (configurationFault) {
     vendorRuntime.lastError = configurationFault;
     return { started: false, reason: configurationFault };
@@ -2229,12 +2667,14 @@ const emailGateway = {
   resolveVendorFromEmail,
   processVendorQuoteMessage,
   processMessage,
+  isBounceOrAutoReplyMessage,
   isSystemOrAutomatedSender,
   isOwnNoticeSubject,
   shouldSendAutoReply,
   sendAutoReply,
   extractHeaderMessageId,
   checkRfqCredits,
+  resolveBuyerSourcingMode,
   storeEmailAttachments,
   queueAcknowledgement,
   retryPendingAcknowledgements,
@@ -2254,6 +2694,7 @@ const emailGateway = {
   startVendorPolling,
   stopPolling,
   getStatus,
+  getOrCreateBuyerAccount,
 };
 
 module.exports = emailGateway;

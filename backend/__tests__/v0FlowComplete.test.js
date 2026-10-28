@@ -20,13 +20,15 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
     smsService.clearSmsThrottleCache();
     whatsAppService.clearWhatsAppThrottleCache();
 
-    // 1. Create a buyer account with 0 free credits and free trial plan
+    // 1. Create an unverified buyer account with 0 free credits and free trial plan
     buyerAccount = storeService.addBuyerAccount({
       organizationName: 'Acme Test Corp',
       corporateEmail: BUYER_EMAIL,
       contactPhone: '+919876543210',
       subscriptionPlan: 'free_trial',
       remainingFreeRFQs: 0, // 0 credits remaining
+      onboardingRequired: true,
+      profileVerified: false,
     });
 
     const token = authService.generateSessionToken({
@@ -128,9 +130,12 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
     jest.useRealTimers();
   });
 
-  test('Step 4, 5, 6, 7: Vendor quote updates V0 status to Quotes Received, does NOT auto-close to Closed, emails buyer quote', async () => {
+  test('Step 4, 5, 6, 7: Vendor quote updates V0 status to Quotes Received, does NOT auto-close to Closed, asks buyer to update profile', async () => {
     const quoteEmailSpy = jest
       .spyOn(mailerService, 'sendQuoteReceivedEmail')
+      .mockResolvedValue({ sent: true });
+    const profileReminderSpy = jest
+      .spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail')
       .mockResolvedValue({ sent: true });
 
     const rfq = storeService.createRFQ({
@@ -162,8 +167,29 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
     expect(updatedRfq.status).not.toBe('Closed');
     expect(updatedRfq.autoClosedReason).toBeUndefined();
 
-    // Verify buyer receives quote email immediately with RFQ and quote payload
-    expect(quoteEmailSpy).toHaveBeenCalledTimes(1);
+    // Verify buyer does NOT receive direct quote email in V0 before profile update
+    expect(quoteEmailSpy).not.toHaveBeenCalled();
+
+    // Verify quotation acknowledgment and profile update reminder email dispatched
+    expect(profileReminderSpy).toHaveBeenCalledTimes(1);
+    expect(profileReminderSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: buyerAccount.corporateEmail,
+        rfqNumber: rfq.rfqNumber,
+      })
+    );
+
+    // Once buyer updates profile, pending quotes are released
+    storeService.updateBuyerAccount(buyerAccount.corporateEmail, {
+      profileVerified: true,
+      onboardingRequired: false,
+      status: 'ACTIVE_VERIFIED',
+      phoneVerified: true,
+      gstin: '24AAAAA0000A1Z5',
+      address: 'Ahmedabad Industrial Zone',
+    });
+    const dispatched = await storeService.dispatchPendingQuoteNotifications(buyerAccount.corporateEmail);
+    expect(dispatched.length).toBe(1);
     expect(quoteEmailSpy).toHaveBeenCalledWith(
       buyerAccount.corporateEmail,
       expect.objectContaining({
@@ -172,6 +198,7 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
       })
     );
     quoteEmailSpy.mockRestore();
+    profileReminderSpy.mockRestore();
 
     // Step 6 & 7: Buyer portal view verification via API
     const buyerViewRes = await request(app)

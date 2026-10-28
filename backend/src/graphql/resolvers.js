@@ -71,7 +71,24 @@ async function requireRfqReadScope(context) {
 /** Whether one RFQ is in a resolved read scope. */
 function rfqInScope(scope, rfq) {
   if (!scope.restricted) return true;
-  if (scope.role === 'vendor') return storeService.vendorCoversRFQ(scope.vendor, rfq);
+  if (scope.role === 'vendor') {
+    if (storeService.vendorCoversRFQ(scope.vendor, rfq)) return true;
+    const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
+    const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
+    if (isV0 || isV2 || isV3) {
+      const signals = storeService._rfqCategorySignals(rfq);
+      if (
+        signals.length === 0 ||
+        !scope.vendor?.majorCategory ||
+        signals.some((c) => storeService.vendorCoversCategory(scope.vendor, c))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
   return rfq.buyerAccountId === scope.buyerAccountId;
 }
 
@@ -82,8 +99,13 @@ const rootResolvers = {
 
   rfqs: async (args = {}, context) => {
     const scope = await requireRfqReadScope(context);
-    const { category, sourcingMode, status, limit = 50, offset = 0 } = args;
-    let result = storeService.getRFQs().filter((rfq) => rfqInScope(scope, rfq));
+    if (scope.restricted && scope.role === 'buyer' && !scope.buyerAccountId) {
+      return [];
+    }
+    const scopedBuyerId = scope.restricted && scope.role === 'buyer' ? scope.buyerAccountId : null;
+    const { category, sourcingMode, status, offset = 0 } = args;
+    const limit = Math.min(args.limit || 50, 500);
+    let result = storeService.getRFQs(scopedBuyerId).filter((rfq) => rfqInScope(scope, rfq));
     if (category) {
       result = result.filter((r) => r.category && r.category.toLowerCase().includes(category.toLowerCase()));
     }
@@ -107,7 +129,8 @@ const rootResolvers = {
   },
 
   vendors: async (args = {}, context = {}) => {
-    const { majorCategory, source, search, limit = 50, offset = 0 } = args;
+    const { majorCategory, source, search, offset = 0 } = args;
+    const limit = Math.min(args.limit || 50, 500);
     const user = context && context.req ? context.req.user : null;
     let buyerId = null;
     if (user && user.role === 'buyer') {
@@ -132,21 +155,24 @@ const rootResolvers = {
         publicOnly: !buyerId,
         scopedBuyerId: buyerId || '',
       });
-      result = page.rows;
+      result = (page && Array.isArray(page.rows)) ? page.rows : [];
     } else {
       // No DB configured: nothing to bound against, fall back to the
       // in-memory collection and filter/paginate in JS as before.
-      result = await storeService.getVendors(buyerId);
+      const hasJsFilters = Boolean(majorCategory || search);
+      const fetched = await storeService.getVendors(buyerId, hasJsFilters ? null : offset + limit);
+      result = Array.isArray(fetched) ? fetched : [];
       if (majorCategory) {
-        result = result.filter((v) => v.majorCategory && v.majorCategory.toLowerCase().includes(majorCategory.toLowerCase()));
+        result = result.filter((v) => v && v.majorCategory && v.majorCategory.toLowerCase().includes(majorCategory.toLowerCase()));
       }
       if (search) {
         const q = search.toLowerCase();
-        result = result.filter((v) => (v.name && v.name.toLowerCase().includes(q)) || (v.email && v.email.toLowerCase().includes(q)));
+        result = result.filter((v) => v && ((v.name && v.name.toLowerCase().includes(q)) || (v.email && v.email.toLowerCase().includes(q))));
       }
       result = result.slice(offset, offset + limit);
     }
-    return source ? result.filter((v) => v.source === source) : result;
+    result = Array.isArray(result) ? result : [];
+    return source ? result.filter((v) => v && v.source === source) : result;
   },
 
   vendor: async (args = {}, context = {}) => {
@@ -159,7 +185,7 @@ const rootResolvers = {
       buyerId = args.buyerId;
     }
     if (args.id) {
-      return storeService.getVendorById(args.id, buyerId) || null;
+      return (await storeService.getVendorByIdWithDBFallback(args.id, buyerId)) || null;
     }
     if (args.email) {
       if (!pool.hasStorage()) {
@@ -184,8 +210,8 @@ const rootResolvers = {
   },
 
   buyerAccounts: (args = {}) => {
-    const limit = args.limit || 20;
-    return storeService.getBuyerAccounts().slice(0, limit);
+    const limit = Math.min(args.limit || 20, 500);
+    return storeService.getBuyerAccounts(limit);
   },
 
   activeBuyerAccount: () => {
@@ -193,16 +219,18 @@ const rootResolvers = {
   },
 
   evaluations: (args = {}) => {
-    let evals = storeService.getEvaluations();
+    const limit = Math.min(args.limit || 50, 500);
+    let evals = storeService.getEvaluations(args.vendorName ? null : limit);
     if (args.vendorName) {
       evals = evals.filter((e) => e.vendorName && e.vendorName.toLowerCase().includes(args.vendorName.toLowerCase()));
     }
-    return evals;
+    return evals.slice(0, limit);
   },
 
   auditLogs: (args = {}) => {
-    const { limit = 50, search } = args;
-    let logs = storeService.getAuditLogs();
+    const { search } = args;
+    const limit = Math.min(args.limit || 50, 500);
+    let logs = storeService.getAuditLogs(search ? null : limit);
     if (search) {
       const q = search.toLowerCase();
       logs = logs.filter((l) => (l.action && l.action.toLowerCase().includes(q)) || (l.userEmail && l.userEmail.toLowerCase().includes(q)));
@@ -212,7 +240,8 @@ const rootResolvers = {
 
   catalogue: (args = {}) => {
     const { category, search } = args;
-    let items = storeService.getVendorCatalogue();
+    const limit = Math.min(args.limit || 50, 500);
+    let items = storeService.getVendorCatalogue(null, (category || search) ? null : limit);
     if (category) {
       items = items.filter((i) => i.category && i.category.toLowerCase().includes(category.toLowerCase()));
     }
@@ -220,17 +249,18 @@ const rootResolvers = {
       const q = search.toLowerCase();
       items = items.filter((i) => (i.name && i.name.toLowerCase().includes(q)) || (i.sku && i.sku.toLowerCase().includes(q)));
     }
-    return items;
+    return items.slice(0, limit);
   },
 
   aiFeed: async (args = {}, context) => {
-    const limit = args.limit || 20;
-    const all = storeService.getAIFeed();
-    if (context && context.req && context.req.user && context.req.user.role === 'buyer') {
+    const limit = Math.min(args.limit || 20, 500);
+    const isBuyer = Boolean(context && context.req && context.req.user && context.req.user.role === 'buyer');
+    const all = storeService.getAIFeed(isBuyer ? null : limit);
+    if (isBuyer) {
       const account = await storeService.getBuyerAccountByEmail(context.req.user.email);
       const buyerAccountId = account ? account.id : null;
       if (!buyerAccountId) return [];
-      const buyerRfqs = storeService.getRFQs().filter((r) => r.buyerAccountId === buyerAccountId);
+      const buyerRfqs = storeService.getRFQs(buyerAccountId).filter((r) => r.buyerAccountId === buyerAccountId);
       const buyerRfqNumbers = new Set(buyerRfqs.map((r) => r.rfqNumber).filter(Boolean));
       return all
         .filter((item) => item.buyerAccountId === buyerAccountId || (item.rfqNumber && buyerRfqNumbers.has(item.rfqNumber)))
@@ -296,6 +326,9 @@ const rootResolvers = {
 
   updateRFQ: async ({ id, input }, context) => {
     const scope = await requireRfqReadScope(context);
+    if (scope.role === 'vendor') {
+      return null;
+    }
     const existing = storeService.getRFQById(id);
     if (!existing || !rfqInScope(scope, existing)) {
       return null;

@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { useApp } from '@/lib/store';
+import { useRouter, usePathname } from 'next/navigation';
+import { useApp, clearSessionCache } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { LOGIN_ROUTE, ROLE_LANDING_ROUTE } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -27,6 +27,7 @@ interface WorkspaceShellProps {
  */
 export default function WorkspaceShell({ role, children }: WorkspaceShellProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const {
     isLoggedIn,
     currentRole,
@@ -35,28 +36,54 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
     setIsLoggedIn,
     setCurrentUserSession,
     showToast,
+    ensureRouteData,
   } = useApp();
 
   const mustChangeVendorPassword =
     role === 'vendor' && currentUserSession?.passwordChangeRequired === true;
+  const mustCompleteBuyerOnboarding =
+    role === 'buyer' &&
+    (currentUserSession?.onboardingRequired === true || currentUserSession?.passwordChangeRequired === true);
   const sessionRole = currentRole;
+
+  // Lazy-load data needed specifically by the active route.
+  useEffect(() => {
+    if (isLoggedIn && sessionRole === role && !mustChangeVendorPassword && typeof ensureRouteData === 'function') {
+      void ensureRouteData(pathname, role);
+    }
+  }, [isLoggedIn, sessionRole, role, pathname, mustChangeVendorPassword, ensureRouteData]);
 
   useEffect(() => {
     if (!isLoggedIn) {
-      router.replace(LOGIN_ROUTE);
+      let redirectUrl = LOGIN_ROUTE;
+      if (typeof window !== 'undefined') {
+        const fullPath = `${window.location.pathname || ''}${window.location.search || ''}`;
+        if (fullPath && fullPath !== '/' && fullPath !== LOGIN_ROUTE && !fullPath.startsWith(`${LOGIN_ROUTE}?`)) {
+          const params = new URLSearchParams(window.location.search);
+          const email = params.get('email');
+          const emailQuery = email ? `&email=${encodeURIComponent(email)}` : '';
+          redirectUrl = `${LOGIN_ROUTE}?redirect=${encodeURIComponent(fullPath)}${emailQuery}`;
+        }
+      }
+      router.replace(redirectUrl);
       return;
     }
     if (mustChangeVendorPassword) {
       router.replace('/vendor-first-login');
       return;
     }
+    if (mustCompleteBuyerOnboarding) {
+      router.replace('/buyer-first-login');
+      return;
+    }
     // Keep the sidebar aligned with the section actually being viewed.
     if (sessionRole !== role) {
       router.replace(ROLE_LANDING_ROUTE[sessionRole] || ROLE_LANDING_ROUTE.buyer);
     }
-  }, [isLoggedIn, sessionRole, role, router, mustChangeVendorPassword]);
+  }, [isLoggedIn, sessionRole, role, router, mustChangeVendorPassword, mustCompleteBuyerOnboarding]);
 
   const handleLogout = () => {
+    clearSessionCache();
     const email = undefined;
     setIsLoggedIn(false);
     setCurrentUserSession(null);
@@ -67,7 +94,7 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
   };
 
   // Avoid rendering another role's screens for the frame before the redirect.
-  if (!isLoggedIn || sessionRole !== role || mustChangeVendorPassword) {
+  if (!isLoggedIn || sessionRole !== role || mustChangeVendorPassword || mustCompleteBuyerOnboarding) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
         <p className="text-xs text-slate-500 dark:text-gray-400">{UI_STRINGS.auth.redirecting}</p>

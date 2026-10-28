@@ -219,15 +219,26 @@ async function logout(req, res, next) {
  */
 async function changePassword(req, res, next) {
   try {
-    const { currentPassword, newPassword } = req.body || {};
+    const { currentPassword, newPassword, code, verificationCode, resetToken } = req.body || {};
+    const effectiveCode = code || verificationCode;
     const ipAddress = getClientIp(req);
 
     const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.changePassword, {
       currentPassword,
       newPassword,
+      code: effectiveCode,
+      verificationCode: effectiveCode,
+      resetToken,
     });
     if (!isValid) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
+    }
+
+    if (!currentPassword && !effectiveCode && !resetToken) {
+      return res.status(400).json({
+        success: false,
+        error: AUTH_MESSAGES.CHANGE_PASSWORD_FIELDS_REQUIRED,
+      });
     }
 
     const result = await authService.changePassword({
@@ -235,6 +246,8 @@ async function changePassword(req, res, next) {
       email: req.user?.email,
       currentPassword,
       newPassword,
+      code: effectiveCode,
+      resetToken,
       ipAddress,
     });
     return res.json(result);
@@ -251,9 +264,34 @@ async function changePassword(req, res, next) {
   }
 }
 
+async function completeBuyerOnboarding(req, res, next) {
+  try {
+    const ipAddress = getClientIp(req);
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.completeBuyerOnboarding, req.body);
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: Object.values(errors)[0] });
+    }
+
+    const result = await authService.completeBuyerOnboarding(req.user, req.body, ipAddress);
+    return res.json(result);
+  } catch (err) {
+    logger.warn(
+      'Buyer onboarding failed in authController',
+      { error: err.message, email: req.user?.email },
+      'AUTH_CONTROLLER'
+    );
+    return res.status(400).json({
+      success: false,
+      error: err.message || 'Failed to complete buyer onboarding profile.',
+    });
+  }
+}
+
 async function listUsers(req, res, next) {
   try {
-    const users = await authService.getAllUsers();
+    const rawLimit = req && req.query && req.query.limit;
+    const limit = rawLimit ? Math.min(Math.max(parseInt(rawLimit, 10) || 200, 1), 500) : 200;
+    const users = await authService.getAllUsers(limit);
     res.json({ success: true, count: users.length, data: users });
   } catch (err) {
     logger.error('Error listing users', err, 'AUTH_CONTROLLER');
@@ -271,5 +309,6 @@ module.exports = {
   getSession,
   logout,
   changePassword,
+  completeBuyerOnboarding,
   listUsers,
 };

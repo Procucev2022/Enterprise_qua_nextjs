@@ -10,6 +10,17 @@ jest.mock('@/lib/store', () => ({
   getLastHistoricalDataError: jest.fn(() => null),
 }));
 
+jest.mock('@/lib/buyerProfileClient', () => ({
+  fetchDispatchTemplates: jest.fn().mockResolvedValue({
+    success: true,
+    data: {
+      category_mapped: { subject: 'Saved Mapped Subject', message: 'Saved Mapped Message' },
+      self_map_required: { subject: 'Saved Self Subject', message: 'Saved Self Message' },
+    },
+  }),
+  saveDispatchTemplate: jest.fn().mockResolvedValue({ success: true }),
+}));
+
 
 // Mock FileReader for synchronous, reliable Excel file parsing
 class MockFileReader {
@@ -1562,6 +1573,24 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     );
     expect(screen.getAllByText('Failed').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/Corrupt file header/i)).toBeInTheDocument();
+
+    rerender(
+      <IngestionProgressCard
+        job={{
+          id: 'job-pending-1',
+          jobType: 'VENDOR_MASTER',
+          fileName: 'pending.xlsx',
+          status: 'PENDING',
+          totalRecords: 10,
+          processedRecords: 0,
+          importedRecords: 0,
+          skippedRecords: 0,
+          failedRecords: 0,
+        }}
+        title="Vendor Master"
+      />
+    );
+    expect(screen.getByText('Pending')).toBeInTheDocument();
   });
 
   it('converts 1-5 scale vendor ratings to 0-100 scale correctly in vendor master upload', async () => {
@@ -1817,4 +1846,1335 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       'warning'
     );
   });
+
+  it('handles dismissal of vendor and PO upload error banners, and edit incomplete vendors button', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Trigger vendor upload error banner by trying to go to step 3 with 0 vendors
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const vendorErrorBanner = screen.getByTestId('vendor-upload-error-banner');
+    expect(vendorErrorBanner).toBeInTheDocument();
+
+    // Click X button on vendor upload error banner (line 1761)
+    const dismissVendorErrorBtn = vendorErrorBanner.querySelector('button');
+    if (dismissVendorErrorBtn) {
+      fireEvent.click(dismissVendorErrorBtn);
+    }
+    expect(screen.queryByTestId('vendor-upload-error-banner')).not.toBeInTheDocument();
+
+    // Upload an invalid vendor to trigger vendor-validation-warning-banner
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const invalidWb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-999',
+        'Company Name': '', // missing company name
+        Email: 'bad@',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(invalidWb, ws, 'Vendors');
+    const buf = XLSX.write(invalidWb, { type: 'array', bookType: 'xlsx' });
+    const invFile: any = new File([buf], 'incomplete_v.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    invFile.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [invFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Click "Edit and Fix Incomplete Records" button (line 1787)
+    const editBtn = screen.getByRole('button', { name: /Edit and Fix Incomplete Records/i });
+    fireEvent.click(editBtn);
+
+    // Upload a valid vendor master file to allow proceeding to Step 3
+    const validVFile = createValidVendorMasterFile();
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [validVFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Trigger PO upload error banner by uploading invalid PO file
+    const corruptPoFile: any = new File(['corrupt'], 'corrupt_po.xlsx');
+    corruptPoFile.__corrupt = true;
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poInput = container.querySelector('input[type="file"]');
+    if (poInput) {
+      await act(async () => {
+        fireEvent.change(poInput, { target: { files: [corruptPoFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // PO upload error banner should be displayed
+    const poErrorBanner = screen.getByTestId('po-upload-error-banner');
+    expect(poErrorBanner).toBeInTheDocument();
+
+    // Click X button on po-upload-error-banner (line 2311)
+    const dismissPoErrorBtn = poErrorBanner.querySelector('button');
+    if (dismissPoErrorBtn) {
+      fireEvent.click(dismissPoErrorBtn);
+    }
+    expect(screen.queryByTestId('po-upload-error-banner')).not.toBeInTheDocument();
+  });
+
+  it('blocks step 4 navigation without PO dump and handles files with zero recognizable rows', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Step 2: Upload valid vendor master
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      await act(async () => {
+        fireEvent.change(vInput, { target: { files: [vFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Navigate to step 3, then try to jump to step 4 without PO Dump (lines 391-397)
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    fireEvent.click(screen.getByText('4. AI Category Join'));
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'PO Dump Required',
+      expect.stringContaining('Historical PO Dump is required'),
+      'warning'
+    );
+
+    // Upload Vendor Master with headers but empty/unrecognizable rows (lines 708-716)
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const blankVendorWb = XLSX.utils.book_new();
+    const blankWs = XLSX.utils.json_to_sheet([
+      { 'Vendor Code': '   ', 'Company Name': '   ', Email: '   ', Phone: '   ', GSTIN: '   ' },
+    ]);
+    XLSX.utils.book_append_sheet(blankVendorWb, blankWs, 'Vendors');
+    const blankBuf = XLSX.write(blankVendorWb, { type: 'array', bookType: 'xlsx' });
+    const blankVFile: any = new File([blankBuf], 'blank_v.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    blankVFile.__buffer = blankBuf;
+
+    const fileInput2 = container.querySelector('input[type="file"]');
+    if (fileInput2) {
+      await act(async () => {
+        fireEvent.change(fileInput2, { target: { files: [blankVFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Invalid Vendor File',
+      expect.stringContaining('no recognizable supplier rows'),
+      'warning'
+    );
+
+    // Upload PO Dump with empty/unrecognizable rows (lines 1034-1042)
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const blankPoWb = XLSX.utils.book_new();
+    const blankPoWs = XLSX.utils.json_to_sheet([
+      { 'PO Number': '   ', 'Vendor Name': '   ', 'Item Name': '   ', Department: '   ' },
+    ]);
+    XLSX.utils.book_append_sheet(blankPoWb, blankPoWs, 'PO');
+    const blankPoBuf = XLSX.write(blankPoWb, { type: 'array', bookType: 'xlsx' });
+    const blankPoFile: any = new File([blankPoBuf], 'blank_po.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    blankPoFile.__buffer = blankPoBuf;
+
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poFileInput = fileInputs[fileInputs.length - 1];
+    if (poFileInput) {
+      await act(async () => {
+        fireEvent.change(poFileInput, { target: { files: [blankPoFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+  });
+
+  it('handles template customization modal (A and B), editing subject/body, saving success/errors, and closing', async () => {
+    jest.useFakeTimers();
+    const { saveDispatchTemplate } = jest.requireMock('@/lib/buyerProfileClient');
+    const { container } = render(<InitialSetupModal />);
+
+    // Step 2: Valid Vendor Master
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      fireEvent.change(vInput, { target: { files: [vFile] } });
+    }
+
+    // Step 3: Valid PO Dump
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poFile = createValidPoDumpFile();
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) {
+      fireEvent.change(poInput, { target: { files: [poFile] } });
+    }
+
+    // Run AI Category Cross-Match simulation from Step 3 to enter Step 4
+    const runJoinBtn = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
+    fireEvent.click(runJoinBtn);
+    act(() => {
+      jest.advanceTimersByTime(1200);
+    });
+
+    // Step 5: Review Email Dispatch & Finalize with custom saved templates (lines 250-251, 268, 271)
+    const { fetchDispatchTemplates } = jest.requireMock('@/lib/buyerProfileClient');
+    fetchDispatchTemplates.mockResolvedValueOnce({
+      success: true,
+      data: {
+        category_mapped: { subject: 'Saved Custom A Subject', message: 'Saved Custom A Message' },
+        self_map_required: { subject: 'Saved Custom B Subject', message: 'Saved Custom B Message' },
+      },
+    });
+    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    jest.useRealTimers();
+
+    // Open Template A modal (line 2715)
+    const customizeBtnA = screen.getByRole('button', { name: /View & Edit Template A/i });
+    fireEvent.click(customizeBtnA);
+    expect(screen.getByText('Template A: Suppliers With Pre-PO History')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Saved Custom A Subject')).toBeInTheDocument();
+
+    // Edit Template A Subject and Message (lines 2855, 2865)
+    const subjectInput = screen.getByPlaceholderText('Subject line...');
+    const messageInput = screen.getByPlaceholderText('Custom email message...');
+    fireEvent.change(subjectInput, { target: { value: 'Updated Template A Subject' } });
+    fireEvent.change(messageInput, { target: { value: 'Updated Template A Body Message' } });
+
+    // Save Template A successfully (lines 277-293)
+    saveDispatchTemplate.mockResolvedValueOnce({ success: true });
+    const saveBtn = screen.getByRole('button', { name: /Save Template/i });
+    await act(async () => {
+      fireEvent.click(saveBtn);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(saveDispatchTemplate).toHaveBeenCalledWith('category_mapped', {
+      subject: 'Updated Template A Subject',
+      message: 'Updated Template A Body Message',
+    });
+    expect(mockShowToast).toHaveBeenCalledWith('Template Updated', expect.stringContaining('Template A has been saved'), 'success');
+
+    // Open Template B modal (line 2742)
+    const customizeBtnB = screen.getByRole('button', { name: /View & Edit Template B/i });
+    fireEvent.click(customizeBtnB);
+    expect(screen.getByText('Template B: Suppliers With NO Pre-PO History')).toBeInTheDocument();
+
+    // Test Save failure (line 295)
+    saveDispatchTemplate.mockResolvedValueOnce({ success: false, error: 'Custom Save Error' });
+    const saveBtnB = screen.getByRole('button', { name: /Save Template/i });
+    await act(async () => {
+      fireEvent.click(saveBtnB);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(mockShowToast).toHaveBeenCalledWith('Save Failed', 'Custom Save Error', 'warning');
+
+    // Test Save exception (line 298)
+    saveDispatchTemplate.mockRejectedValueOnce(new Error('Network Save Crash'));
+    await act(async () => {
+      fireEvent.click(saveBtnB);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(mockShowToast).toHaveBeenCalledWith('Save Error', 'Network Save Crash', 'warning');
+
+    // Test Save Template B successfully (lines 287-293 else branch)
+    saveDispatchTemplate.mockResolvedValueOnce({ success: true });
+    await act(async () => {
+      fireEvent.click(saveBtnB);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(mockShowToast).toHaveBeenCalledWith('Template Updated', expect.stringContaining('Template B has been saved'), 'success');
+
+    // Reopen Template B and test Cancel button (line 2890)
+    fireEvent.click(customizeBtnB);
+    const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
+    fireEvent.click(cancelBtn);
+    expect(screen.queryByText('Template B: Suppliers With NO Pre-PO History')).not.toBeInTheDocument();
+
+    // Reopen and test backdrop / X button close (lines 2823, 2842)
+    fireEvent.click(customizeBtnA);
+    const closeXBtn = screen.getByText('Template A: Suppliers With Pre-PO History')
+      .closest('div[class*="animate-scale-in"]')
+      ?.querySelector('button[class*="text-slate-400"]');
+    if (closeXBtn) {
+      fireEvent.click(closeXBtn);
+    }
+  });
+
+  it('covers empty template preview fallbacks, sessionStorage auth headers, and period ingestion options', async () => {
+    // Test auth headers reading token from sessionStorage (lines 407-412)
+    sessionStorage.setItem('procucev_auth_token', 'test-session-jwt-token');
+    jest.useFakeTimers();
+
+    const { container } = render(<InitialSetupModal />);
+
+    // Step 1: Choose 1_year
+    fireEvent.click(screen.getByText(/Last 1 Year \(12 Months\)/i));
+
+    // Step 2: Upload valid vendor master
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      fireEvent.change(vInput, { target: { files: [vFile] } });
+    }
+
+    // Step 3: Try running cross-match when poLineItems is empty (lines 1458-1463)
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const runJoinBtn = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
+    fireEvent.click(runJoinBtn);
+    expect(mockShowToast).toHaveBeenCalledWith('PO Dump Required', expect.stringContaining('Historical PO Dump is required'), 'warning');
+
+    // Upload PO dump
+    const poFile = createValidPoDumpFile();
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) {
+      fireEvent.change(poInput, { target: { files: [poFile] } });
+    }
+
+    // Run simulation to Step 4
+    fireEvent.click(runJoinBtn);
+    act(() => {
+      jest.advanceTimersByTime(1200);
+    });
+
+    // Step 5: Review Email Dispatch & Finalize
+    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    jest.useRealTimers();
+
+    // Open Template A and clear subject and message (covers lines 2876-2877: Default Subject/Message)
+    const customizeBtnA = screen.getByRole('button', { name: /View & Edit Template A/i });
+    fireEvent.click(customizeBtnA);
+    const subjectInput = screen.getByPlaceholderText('Subject line...');
+    const messageInput = screen.getByPlaceholderText('Custom email message...');
+    fireEvent.change(subjectInput, { target: { value: '' } });
+    fireEvent.change(messageInput, { target: { value: '' } });
+
+    expect(screen.getByText(/\(Default Subject\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/\(Default Message\)/i)).toBeInTheDocument();
+
+    // Click outside modal backdrop (lines 2823, 2826)
+    const backdrop = screen.getByText('Template A: Suppliers With Pre-PO History')
+      .closest('div[class*="fixed inset-0"]');
+    if (backdrop) {
+      fireEvent.click(backdrop);
+    }
+
+    // Complete setup with 1_year selected (line 1523: '1 Year')
+    const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
+    await act(async () => {
+      fireEvent.click(completeBtn);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(mockShowToast).toHaveBeenCalledWith('Setup Complete', expect.stringContaining('for 1 Year'), 'success');
+
+    sessionStorage.removeItem('procucev_auth_token');
+  });
+
+  it('covers getLastHistoricalDataError and error without message on Step 5 completion', async () => {
+    const { getLastHistoricalDataError } = jest.requireMock('@/lib/store');
+    getLastHistoricalDataError.mockReturnValueOnce('External DB Sync Verification Failed');
+    jest.useFakeTimers();
+
+    const { container } = render(<InitialSetupModal />);
+
+    // Step 2
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      fireEvent.change(vInput, { target: { files: [vFile] } });
+    }
+
+    // Step 3
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poFile = createValidPoDumpFile();
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) {
+      fireEvent.change(poInput, { target: { files: [poFile] } });
+    }
+
+    // Step 4
+    fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+    act(() => {
+      jest.advanceTimersByTime(1200);
+    });
+
+    // Step 5
+    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    jest.useRealTimers();
+
+    // Attempt final ingestion when getLastHistoricalDataError returns error (lines 1514-1518)
+    const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
+    await act(async () => {
+      fireEvent.click(completeBtn);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(screen.getByTestId('step5-submission-error-banner')).toBeInTheDocument();
+    expect(screen.getByText('External DB Sync Verification Failed')).toBeInTheDocument();
+
+    // Attempt final ingestion when processHistoricalPurchaseData throws an error without message (lines 1526-1530)
+    mockProcessHistoricalPurchaseData.mockRejectedValueOnce({});
+    await act(async () => {
+      fireEvent.click(completeBtn);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(screen.getByText('An unexpected error occurred during ingestion. Please try again.')).toBeInTheDocument();
+  });
+
+  it('covers editing fields in vendor table and table fallback values', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Step 2: Upload Vendor with sparse/empty optional fields
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const sparseWb = XLSX.utils.book_new();
+    const sparseWs = XLSX.utils.json_to_sheet([
+      {
+        'Company Name': 'Minimalist Vendor Pvt Ltd',
+        // Vendor Code, Contact Person, Email, Phone, GSTIN, Address, Rating are omitted
+      },
+    ]);
+    XLSX.utils.book_append_sheet(sparseWb, sparseWs, 'Vendors');
+    const sparseBuf = XLSX.write(sparseWb, { type: 'array', bookType: 'xlsx' });
+    const sparseFile: any = new File([sparseBuf], 'sparse_v.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    sparseFile.__buffer = sparseBuf;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [sparseFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Verify read-only table fallbacks (lines 2132, 2142, 2149, 2153, 2155, 2156)
+    expect(screen.getByText('VND-1001')).toBeInTheDocument();
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+
+    // Toggle Edit Data mode (lines 2032, 2048, 2057, 2069-2076)
+    fireEvent.click(screen.getByText('Edit Data'));
+    const phoneInput = screen.getByPlaceholderText('+91 Phone');
+    const gstinInput = screen.getByPlaceholderText('GSTIN');
+    const addressInput = screen.getByPlaceholderText('City, State / Address');
+    const ratingInput = screen.getByPlaceholderText('0-100');
+
+    fireEvent.change(phoneInput, { target: { value: '+91 91234 56789' } });
+    fireEvent.change(gstinInput, { target: { value: '27aaacg1234a1z1' } });
+    fireEvent.change(addressInput, { target: { value: 'Sector 5, Navi Mumbai' } });
+    fireEvent.change(ratingInput, { target: { value: '88' } });
+    fireEvent.change(ratingInput, { target: { value: '150' } });
+    fireEvent.change(ratingInput, { target: { value: '-10' } });
+    // Clear rating input to test raw === '' branch (line 2074)
+    fireEvent.change(ratingInput, { target: { value: '' } });
+
+    // Step 3: Upload PO with zero unit price and omitted specs/department (lines 2446, 2449, 2452, 2456)
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const sparsePoWb = XLSX.utils.book_new();
+    const sparsePoWs = XLSX.utils.json_to_sheet([
+      {
+        'PO Number': 'PO-SPARSE-1',
+        'PO Date': '2025-04-10',
+        'Vendor Name': 'Minimalist Vendor Pvt Ltd',
+        'Item Name': 'Electrical switchgear panel and breaker mccb', // lines 1222-1223
+        Quantity: 2,
+        'Total Spend': 2000,
+        // Specs, Unit Price, Department omitted
+      },
+      {
+        'PO Number': 'PO-SPARSE-2',
+        'PO Date': '2025-04-11',
+        'Vendor Name': 'Minimalist Vendor Pvt Ltd',
+        'Item Name': 'Civil works peb tmt steel structure', // lines 1226-1227
+        Quantity: 1,
+        'Total Spend': 5000,
+      },
+    ]);
+    XLSX.utils.book_append_sheet(sparsePoWb, sparsePoWs, 'PO');
+    const sparsePoBuf = XLSX.write(sparsePoWb, { type: 'array', bookType: 'xlsx' });
+    const sparsePoFile: any = new File([sparsePoBuf], 'sparse_po.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    sparsePoFile.__buffer = sparsePoBuf;
+
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = fileInputs[fileInputs.length - 1];
+    if (poInput) {
+      await act(async () => {
+        fireEvent.change(poInput, { target: { files: [sparsePoFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Verify PO table displays default Department 'General' and fallback '—'
+    expect(screen.getAllByText('General').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+
+  it('covers getUniqueEmails duplicates, vendorCode email discard, ratings, review tabs, job polling, and error fallbacks', async () => {
+    jest.useFakeTimers();
+    const origFetch = global.fetch;
+
+    const mockFetch = jest.fn().mockImplementation((url: string, init?: any) => {
+      if (typeof url === 'string') {
+        if (url.includes('/api/buyer-accounts/ai-cross-match')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              success: true,
+              data: [
+                {
+                  id: 'j-1',
+                  companyName: 'Duplicate Email Vendor Ltd',
+                  vendorCode: 'VND-1001',
+                  email: 'sales@dup.com; SALES@DUP.COM, info@dup.com',
+                  phone: '+91 98111 22222',
+                  categoriesMappedByBuyer: true,
+                  poCount: 1,
+                  firstSetMajorCategory: 'Engineering Spares',
+                  secondSetMinorCategories: ['Valves'],
+                },
+                {
+                  id: 'j-2',
+                  companyName: 'Silent Supplier',
+                  vendorCode: 'VND-1002',
+                  email: '',
+                  phone: '',
+                  categoriesMappedByBuyer: false,
+                  poCount: 0,
+                },
+                {
+                  id: 'j-3',
+                  companyName: 'Email Only Supplier',
+                  vendorCode: 'VND-1003',
+                  email: 'emailonly@supplier.com',
+                  phone: '',
+                  categoriesMappedByBuyer: true,
+                  poCount: 1,
+                  firstSetMajorCategory: 'Electrical',
+                  secondSetMinorCategories: ['Cables'],
+                },
+                {
+                  id: 'j-4',
+                  companyName: 'Phone Only Supplier',
+                  vendorCode: 'VND-1004',
+                  email: '',
+                  phone: '+91 98333 44444',
+                  categoriesMappedByBuyer: false,
+                  poCount: 0,
+                },
+              ],
+            }),
+          });
+        }
+      }
+      return origFetch(url, init);
+    });
+    global.fetch = mockFetch;
+
+    try {
+      const { container } = render(<InitialSetupModal />);
+
+      // Step 2: Upload Vendor Master
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+
+      const richVendorWb = XLSX.utils.book_new();
+      const richVendorWs = XLSX.utils.json_to_sheet([
+        {
+          'Vendor Code': 'vendor@emailaddress.com', // Should be discarded because it has '@'
+          'Company Name': 'Duplicate Email Vendor Ltd',
+          'Contact Person': 'Rohan Shah',
+          Email: 'sales@dup.com',
+          Phone: '+91 98111 22222',
+          GSTIN: '27AABCT1234A1Z5',
+          Rating: '4.8', // <= 5 -> 96
+        },
+        {
+          'Vendor Code': 'V-200',
+          'Company Name': 'Phone Only Supplier',
+          'Contact Person': 'Pooja Verma',
+          Email: 'pooja@phoneonly.com',
+          Phone: '+91 98333 44444',
+          GSTIN: '27AABCT1234A1Z6',
+          Rating: '92', // > 5 -> 92
+        },
+        {
+          'Vendor Code': 'V-300',
+          'Company Name': 'Silent Supplier',
+          'Contact Person': 'No Contact',
+          Email: 'silent@supplier.com',
+          Phone: '+91 98777 66666',
+          GSTIN: '27AABCT1234A1Z7',
+          Rating: '150', // clamped to 100
+        },
+        {
+          'Vendor Code': 'V-400',
+          'Company Name': 'Negative Rating Supplier',
+          'Contact Person': 'Vikram Patel',
+          Email: 'vikram@negative.com',
+          Phone: '+91 98444 55555',
+          GSTIN: '27AABCT1234A1Z8',
+          Rating: '-5', // clamped to 0
+        },
+        {
+          'Vendor Code': 'V-500',
+          'Company Name': 'Bad Rating Supplier',
+          'Contact Person': 'Kunal Sen',
+          Email: 'kunal@bad.com',
+          Phone: '+91 98555 66666',
+          GSTIN: '27AABCT1234A1Z9',
+          Rating: 'Not A Number', // NaN branch
+        },
+      ]);
+      XLSX.utils.book_append_sheet(richVendorWb, richVendorWs, 'Vendors');
+      const richBuf = XLSX.write(richVendorWb, { type: 'array', bookType: 'xlsx' });
+      const richFile: any = new File([richBuf], 'rich_vendors.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      richFile.__buffer = richBuf;
+
+      const vInput = container.querySelector('input[type="file"]');
+      if (vInput) {
+        fireEvent.change(vInput, { target: { files: [richFile] } });
+      }
+
+      // Check that vendorCode fallback was used for first row (line 677: VND-1001)
+      expect(screen.getByText('VND-1001')).toBeInTheDocument();
+
+      // Step 3: Upload PO Dump that matches Duplicate Email Vendor Ltd
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      const poWb = XLSX.utils.book_new();
+      const poWs = XLSX.utils.json_to_sheet([
+        {
+          'PO Number': 'PO-DUP-1',
+          'PO Date': '2025-05-15',
+          'Vendor Name': 'Duplicate Email Vendor Ltd',
+          'Item Name': 'Industrial stainless steel valve',
+          Quantity: 10,
+          'Total Spend': 25000,
+          Department: 'Mechanical Engineering',
+        },
+      ]);
+      XLSX.utils.book_append_sheet(poWb, poWs, 'PO');
+      const poBuf = XLSX.write(poWb, { type: 'array', bookType: 'xlsx' });
+      const poFile: any = new File([poBuf], 'po_aliases.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      poFile.__buffer = poBuf;
+
+      const fileInputs = container.querySelectorAll('input[type="file"]');
+      const poInput = fileInputs[fileInputs.length - 1];
+      if (poInput) {
+        fireEvent.change(poInput, { target: { files: [poFile] } });
+      }
+
+      // Run AI Category Cross-Match
+      const runJoinBtn = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
+      await act(async () => {
+        fireEvent.click(runJoinBtn);
+        await Promise.resolve();
+        await Promise.resolve();
+        jest.advanceTimersByTime(1200);
+      });
+
+      // In Step 4: Click the Filter Tabs
+      // 1. Click ✓ Mapped tab (line 2544)
+      const mappedTabBtn = screen.getByRole('button', { name: /✓ Mapped/i });
+      fireEvent.click(mappedTabBtn);
+      expect(screen.getByText('Duplicate Email Vendor Ltd')).toBeInTheDocument();
+
+      // 2. Click ⚠️ Unmapped tab (line 2552)
+      const unmappedTabBtn = screen.getByRole('button', { name: /⚠️ Unmapped/i });
+      fireEvent.click(unmappedTabBtn);
+      expect(screen.getAllByText('Silent Supplier').length).toBeGreaterThan(0);
+
+      // 3. Click All tab (line 2534)
+      const allTabBtn = screen.getByRole('button', { name: /All \(/i });
+      fireEvent.click(allTabBtn);
+      expect(screen.getByText('Duplicate Email Vendor Ltd')).toBeInTheDocument();
+
+      // Step 5: Proceed to Step 5
+      fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+
+      // Open Template B modal and verify preview shows Template B action link
+      const customizeBtnB = screen.getByRole('button', { name: /View & Edit Template B/i });
+      fireEvent.click(customizeBtnB);
+      expect(screen.getByText(/Complete category self-mapping/i)).toBeInTheDocument();
+
+      // Test stopPropagation on inner modal dialog (line 2826)
+      const innerModal = screen.getByText('Template B: Suppliers With NO Pre-PO History')
+        .closest('div[class*="animate-scale-in"]');
+      if (innerModal) {
+        fireEvent.click(innerModal);
+        expect(screen.getByText('Template B: Suppliers With NO Pre-PO History')).toBeInTheDocument();
+      }
+
+      // Close Template B modal
+      const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
+      fireEvent.click(cancelBtn);
+
+      // Trigger submission error and dismiss error banner (line 2772, 2790)
+      mockProcessHistoricalPurchaseData.mockRejectedValueOnce(new Error('Ingestion pipeline failed'));
+      const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
+      await act(async () => {
+        fireEvent.click(completeBtn);
+        await Promise.resolve();
+      });
+
+      const errorBanner = screen.getByTestId('step5-submission-error-banner');
+      expect(errorBanner).toBeInTheDocument();
+      const dismissBtn = errorBanner.querySelector('button');
+      if (dismissBtn) {
+        fireEvent.click(dismissBtn);
+      }
+      expect(screen.queryByTestId('step5-submission-error-banner')).not.toBeInTheDocument();
+    } finally {
+      global.fetch = origFetch;
+      jest.useRealTimers();
+    }
+  });
+
+  it('covers streaming upload error fallback branches when server returns message or statusText', async () => {
+    const origFetch = global.fetch;
+
+    try {
+      const csvWb = XLSX.utils.book_new();
+      const csvWs = XLSX.utils.json_to_sheet([
+        { 'Vendor Code': 'V-STREAM-1', 'Company Name': 'Acme Streams', Email: 'acme@test.com', Phone: '+91 99999 88888' },
+      ]);
+      XLSX.utils.book_append_sheet(csvWb, csvWs, 'Vendors');
+      const csvBuf = XLSX.write(csvWb, { type: 'array', bookType: 'csv' });
+      const csvFile: any = new File([csvBuf], 'vendors.csv', { type: 'text/csv' });
+      csvFile.__buffer = csvBuf;
+
+      // Test 1: stream-upload returns message instead of error (line 575)
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (typeof url === 'string') {
+          if (url.includes('/api/vendor-ingestion/session')) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                success: true,
+                data: { session: { id: 'test-session-stream' } },
+              }),
+            });
+          }
+          if (url.includes('stream-upload')) {
+            return Promise.resolve({
+              ok: false,
+              status: 422,
+              statusText: 'Unprocessable Entity',
+              json: async () => ({ message: 'Unprocessable stream entity' }),
+            });
+          }
+        }
+        return origFetch(url);
+      });
+
+      const { container } = render(<InitialSetupModal />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const vInput = container.querySelector('input[type="file"]');
+      if (vInput) {
+        await act(async () => {
+          fireEvent.change(vInput, { target: { files: [csvFile] } });
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      }
+      expect(mockShowToast).toHaveBeenCalledWith('Upload Error', 'Unprocessable stream entity', 'warning');
+
+      // Test 2: stream-upload returns empty JSON (statusText fallback: line 575)
+      (global.fetch as jest.Mock).mockImplementation((url: string) => {
+        if (typeof url === 'string') {
+          if (url.includes('/api/vendor-ingestion/session')) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                success: true,
+                data: { session: { id: 'test-session-stream' } },
+              }),
+            });
+          }
+          if (url.includes('stream-upload')) {
+            return Promise.resolve({
+              ok: false,
+              status: 503,
+              statusText: 'Service Unavailable',
+              json: async () => ({}),
+            });
+          }
+        }
+        return origFetch(url);
+      });
+
+      if (vInput) {
+        await act(async () => {
+          fireEvent.change(vInput, { target: { files: [csvFile] } });
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      }
+      expect(mockShowToast).toHaveBeenCalledWith('Upload Error', 'Server returned 503: Service Unavailable', 'warning');
+
+      // Test 3: PO stream-upload returns message (line 889)
+      const poWb = XLSX.utils.book_new();
+      const poWs = XLSX.utils.json_to_sheet([
+        { 'PO Number': 'PO-STREAM-1', 'Vendor Name': 'Acme Streams', 'Item Name': 'Part A', Department: 'Mechanical' },
+      ]);
+      XLSX.utils.book_append_sheet(poWb, poWs, 'PO');
+      const poBuf = XLSX.write(poWb, { type: 'array', bookType: 'csv' });
+      const poCsvFile: any = new File([poBuf], 'po.csv', { type: 'text/csv' });
+      poCsvFile.__buffer = poBuf;
+
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      (global.fetch as jest.Mock).mockImplementation((url: string) => {
+        if (typeof url === 'string') {
+          if (url.includes('/api/vendor-ingestion/session')) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                success: true,
+                data: { session: { id: 'test-session-stream' } },
+              }),
+            });
+          }
+          if (url.includes('stream-upload')) {
+            return Promise.resolve({
+              ok: false,
+              status: 400,
+              statusText: 'Bad Request',
+              json: async () => ({ message: 'PO Stream Failed' }),
+            });
+          }
+        }
+        return origFetch(url);
+      });
+
+      const fileInputs = container.querySelectorAll('input[type="file"]');
+      const poInput = fileInputs[fileInputs.length - 1];
+      if (poInput) {
+        await act(async () => {
+          fireEvent.change(poInput, { target: { files: [poCsvFile] } });
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      }
+      expect(mockShowToast).toHaveBeenCalledWith('PO Upload Error', 'PO Stream Failed', 'warning');
+
+      // Test 4: PO stream-upload returns empty JSON (line 889 fallback)
+      (global.fetch as jest.Mock).mockImplementation((url: string) => {
+        if (typeof url === 'string') {
+          if (url.includes('/api/vendor-ingestion/session')) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                success: true,
+                data: { session: { id: 'test-session-stream' } },
+              }),
+            });
+          }
+          if (url.includes('stream-upload')) {
+            return Promise.resolve({
+              ok: false,
+              status: 500,
+              statusText: 'Gateway Timeout',
+              json: async () => ({}),
+            });
+          }
+        }
+        return origFetch(url);
+      });
+
+      if (poInput) {
+        await act(async () => {
+          fireEvent.change(poInput, { target: { files: [poCsvFile] } });
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      }
+      expect(mockShowToast).toHaveBeenCalledWith('PO Upload Error', 'PO upload stream error: Gateway Timeout', 'warning');
+    } finally {
+      global.fetch = origFetch;
+    }
+  });
+
+  it('polls PO job and vendor job in the background interval', async () => {
+    jest.useFakeTimers();
+    sessionStorage.setItem('procucev_ingestion_session', JSON.stringify({ id: 'sess-poll-test' }));
+    const origFetch = global.fetch;
+
+    try {
+      let pollCount = 0;
+      global.fetch = jest.fn().mockImplementation((url: string, init?: any) => {
+        if (typeof url === 'string' && url.includes('stream-upload')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              success: true,
+              data: {
+                job: { id: 'job-p1', status: 'PROCESSING', jobType: 'PO_DUMP', progressPercent: 20 },
+              },
+            }),
+          });
+        }
+        if (typeof url === 'string' && url.includes('/jobs/job-p1')) {
+          pollCount += 1;
+          if (pollCount === 1) {
+            // res.ok is false branch (line 443)
+            return Promise.resolve({ ok: false, status: 500 });
+          }
+          if (pollCount === 2) {
+            // freshJob undefined branch (line 446)
+            return Promise.resolve({ ok: true, json: async () => ({ data: {} }) });
+          }
+          // Successful PO job refresh (line 448)
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              success: true,
+              data: {
+                job: { id: 'job-p1', status: 'COMPLETED', jobType: 'PO_DUMP', progressPercent: 100 },
+              },
+            }),
+          });
+        }
+        return origFetch(url, init);
+      });
+
+      const { container } = render(<InitialSetupModal />);
+
+      // Step 2: Upload valid vendor first so step 3 is accessible
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const vFile = createValidVendorMasterFile();
+      const vInput = container.querySelector('input[type="file"]');
+      if (vInput) {
+        fireEvent.change(vInput, { target: { files: [vFile] } });
+      }
+
+      // Step 3: Now navigate to Step 3
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      const poCsvFile = new File(['PO Number,Item Name\nPO1,Part A'], 'po.csv', { type: 'text/csv' });
+      const fileInputs = container.querySelectorAll('input[type="file"]');
+      const poInput = fileInputs[fileInputs.length - 1];
+      if (poInput) {
+        fireEvent.change(poInput, { target: { files: [poCsvFile] } });
+      }
+
+      // Advance 2s to trigger poll 1
+      act(() => {
+        jest.advanceTimersByTime(2100);
+      });
+      // Advance 2s to trigger poll 2
+      act(() => {
+        jest.advanceTimersByTime(2100);
+      });
+      // Advance 2s to trigger poll 3
+      act(() => {
+        jest.advanceTimersByTime(2100);
+      });
+    } finally {
+      global.fetch = origFetch;
+      sessionStorage.removeItem('procucev_ingestion_session');
+      jest.useRealTimers();
+    }
+  });
+
+  it('covers unsupported file types, drag-and-drop, add/delete vendor rows, reset PO, and AI category parsing variations', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Step 2: Upload unsupported file type (lines 524, 525)
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const pdfFile = new File(['%PDF-1.4'], 'vendors.pdf', { type: 'application/pdf' });
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      fireEvent.change(vInput, { target: { files: [pdfFile] } });
+    }
+    expect(mockShowToast).toHaveBeenCalledWith('Unsupported File Type', expect.stringContaining('.xlsx'), 'warning');
+
+    // Drag-over, drag-leave, drop on Vendor Master dropzone (lines 1855-1865)
+    const vDropzone = screen.getByText(/drag & drop Vendor Master/i).closest('div[class*="border-dashed"]');
+    if (vDropzone) {
+      fireEvent.dragOver(vDropzone);
+      fireEvent.dragLeave(vDropzone);
+      // Drop with empty files (line 1864 if (file) false branch)
+      fireEvent.drop(vDropzone, { dataTransfer: { files: [] } });
+      const vValidFile = createValidVendorMasterFile();
+      fireEvent.drop(vDropzone, { dataTransfer: { files: [vValidFile] } });
+    }
+
+    // Enter Edit Data mode (lines 1915, 1921)
+    fireEvent.click(screen.getByText('Edit Data'));
+    // Add a new vendor row (line 1915, 1279)
+    fireEvent.click(screen.getByRole('button', { name: /Add Vendor Row/i }));
+    // Done editing (line 1921)
+    fireEvent.click(screen.getByRole('button', { name: /Done Editing/i }));
+
+    // Re-enter Edit mode and delete rows until empty (lines 1269-1275)
+    fireEvent.click(screen.getByText('Edit Data'));
+    const deleteButtons = screen.getAllByTitle(/Delete/i);
+    deleteButtons.forEach((btn) => fireEvent.click(btn));
+
+    // Re-upload valid vendor master file
+    if (vInput) {
+      const vValidFile = createValidVendorMasterFile();
+      fireEvent.change(vInput, { target: { files: [vValidFile] } });
+    }
+
+    // Step 3: PO Dump unsupported file (lines 838, 839)
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = poInputs[poInputs.length - 1];
+    if (poInput) {
+      fireEvent.change(poInput, { target: { files: [pdfFile] } });
+    }
+    expect(mockShowToast).toHaveBeenCalledWith('Unsupported File Type', expect.stringContaining('.xlsx'), 'warning');
+
+    // Drag-over, drag-leave, drop on PO dropzone (lines 2374-2384)
+    const poDropzone = screen.getByText(/drag & drop PO Purchase Dump/i).closest('div[class*="border-dashed"]');
+    if (poDropzone) {
+      fireEvent.dragOver(poDropzone);
+      fireEvent.dragLeave(poDropzone);
+      // Drop with empty files (line 2383 if (file) false branch)
+      fireEvent.drop(poDropzone, { dataTransfer: { files: [] } });
+    }
+
+    // Upload PO Dump with diverse items to exercise AI category classification (lines 1215-1228)
+    const diversePoWb = XLSX.utils.book_new();
+    const diversePoWs = XLSX.utils.json_to_sheet([
+      {
+        'PO Number': 'PO-DIV-1',
+        'PO Date': '', // empty date -> line 2446 '—'
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Name': 'Globe gate valve with hydraulic hose', // lines 1216, 1217
+        Quantity: 2,
+        'Unit Price': 0, // 0 unitPrice -> line 2452 '—'
+        'Total Spend': 10000,
+        Department: 'Hydraulics',
+      },
+      {
+        'PO Number': 'PO-DIV-2',
+        'PO Date': '2025-06-01',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Name': 'Rotary air compressor and induction electric motor', // lines 1218, 1219
+        Quantity: 1,
+        'Unit Price': 45000,
+        'Total Spend': 45000,
+        Department: 'Machinery',
+      },
+      {
+        'PO Number': 'PO-DIV-3',
+        'PO Date': '2025-06-02',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Name': 'Substation switchgear control panel with power cable and mccb breaker', // lines 1222, 1223
+        Quantity: 3,
+        'Unit Price': 15000,
+        'Total Spend': 45000,
+        Department: 'Electrical',
+      },
+      {
+        'PO Number': 'PO-DIV-4',
+        'PO Date': '2025-06-03',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Name': 'Civil industrial steel works with peb structure and tmt bars', // lines 1226, 1227
+        Quantity: 10,
+        'Unit Price': 5000,
+        'Total Spend': 50000,
+        Department: 'Civil Works',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(diversePoWb, diversePoWs, 'PO');
+    const diverseBuf = XLSX.write(diversePoWb, { type: 'array', bookType: 'xlsx' });
+    const diversePoFile: any = new File([diverseBuf], 'diverse_po.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    diversePoFile.__buffer = diverseBuf;
+
+    if (poInput) {
+      fireEvent.change(poInput, { target: { files: [diversePoFile] } });
+    }
+
+    // Verify fallback '—' rendered for empty date and zero price
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+
+    // Test Reset PO data button (lines 1150-1160, 2363)
+    const resetPoBtn = screen.getByTitle('Reset PO data to default sample');
+    fireEvent.click(resetPoBtn);
+    expect(mockShowToast).toHaveBeenCalledWith('Reset Complete', expect.stringContaining('cleared'), 'info');
+  });
+
+  it('covers all AI category cross-match classification keyword branches and empty joined vendors validation', async () => {
+    jest.useFakeTimers();
+    const origFetch = global.fetch;
+
+    try {
+      const { container, unmount } = render(<InitialSetupModal />);
+
+      // Step 2: Upload 6 distinct vendors to hit all AI classification branches
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const vendorWb = XLSX.utils.book_new();
+      const vendorWs = XLSX.utils.json_to_sheet([
+        { 'Vendor Code': 'V-MECH', 'Company Name': 'Mechanical Spares Ltd', Email: 'mech@test.com', Phone: '+91 91111 22222' },
+        { 'Vendor Code': 'V-ELEC', 'Company Name': 'Volt Panels Electricals', Email: 'elec@test.com', Phone: '+91 92222 33333' },
+        { 'Vendor Code': 'V-SW-ONLY', 'Company Name': 'Switchgear Only Ltd', Email: 'sw@test.com', Phone: '+91 92222 44444' },
+        { 'Vendor Code': 'V-CIVIL', 'Company Name': 'Infra Civil Structures', Email: 'civil@test.com', Phone: '+91 93333 44444' },
+        { 'Vendor Code': 'V-CIVIL-PLAIN', 'Company Name': 'Plain Civil Works Ltd', Email: 'plain@test.com', Phone: '+91 93333 55555' },
+        { 'Vendor Code': 'V-GEN', 'Company Name': 'General Hardware Works', Email: 'gen@test.com', Phone: '+91 94444 55555' },
+        { 'Vendor Code': 'V-CLOUD', 'Company Name': 'Cloud Tech Corp', Email: 'cloud@test.com', Phone: '+91 95555 66666' },
+        { 'Vendor Code': 'V-MIN-IT', 'Company Name': 'Minimal Software Corp', Email: 'minit@test.com', Phone: '+91 96666 77777' },
+      ]);
+      XLSX.utils.book_append_sheet(vendorWb, vendorWs, 'Vendors');
+      const vBuf = XLSX.write(vendorWb, { type: 'array', bookType: 'xlsx' });
+      const vFile: any = new File([vBuf], 'all_categories_vendors.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      vFile.__buffer = vBuf;
+
+      const vInput = container.querySelector('input[type="file"]');
+      if (vInput) {
+        fireEvent.change(vInput, { target: { files: [vFile] } });
+      }
+
+      // Step 3: Upload PO Dump targeting each vendor with specific keywords
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      const poWb = XLSX.utils.book_new();
+      const poWs = XLSX.utils.json_to_sheet([
+        // Mech: pump, globe, gate, valve, hose, compressor, motor (lines 1213-1219)
+        {
+          'PO Number': 'PO-M1',
+          'Vendor Name': 'Mechanical Spares Ltd',
+          'Item Name': 'Centrifugal pump and valve with hydraulic hose',
+          Quantity: 2,
+          'Total Spend': 12000,
+          Department: 'Mechanical',
+        },
+        {
+          'PO Number': 'PO-M2',
+          'Vendor Name': 'Mechanical Spares Ltd',
+          'Item Name': 'Rotary compressor and electric motor',
+          Quantity: 1,
+          'Total Spend': 25000,
+          Department: 'Mechanical',
+        },
+        {
+          'PO Number': 'PO-M3',
+          'Vendor Name': 'Mechanical Spares Ltd',
+          'Item Name': 'Gate unit with hydraulic hose',
+          Quantity: 1,
+          'Total Spend': 8000,
+          Department: 'Mechanical',
+        },
+        {
+          'PO Number': 'PO-M4',
+          'Vendor Name': 'Mechanical Spares Ltd',
+          'Item Name': 'Globe component with compressor',
+          Quantity: 1,
+          'Total Spend': 6000,
+          Department: 'Mechanical',
+        },
+        // Elec: panel + breaker, and switchgear + mccb without panel/breaker (lines 1220-1223)
+        {
+          'PO Number': 'PO-E1',
+          'Vendor Name': 'Volt Panels Electricals',
+          'Item Name': 'Electrical panel and circuit breaker with armored cable',
+          Quantity: 3,
+          'Total Spend': 35000,
+          Department: 'Electrical',
+        },
+        {
+          'PO Number': 'PO-E2',
+          'Vendor Name': 'Switchgear Only Ltd',
+          'Item Name': 'Switchgear and mccb unit with armored cable',
+          Quantity: 2,
+          'Total Spend': 20000,
+          Department: 'Electrical',
+        },
+        // Civil: peb + tmt, and plain civil steel without peb/tmt (lines 1224-1228)
+        {
+          'PO Number': 'PO-C1',
+          'Vendor Name': 'Infra Civil Structures',
+          'Item Name': 'Civil works peb structure and tmt steel reinforcement bars',
+          Quantity: 10,
+          'Total Spend': 45000,
+          Department: 'Civil',
+        },
+        {
+          'PO Number': 'PO-C2',
+          'Vendor Name': 'Plain Civil Works Ltd',
+          'Item Name': 'Civil industrial steel structure',
+          Quantity: 5,
+          'Total Spend': 30000,
+          Department: 'Civil',
+        },
+        // Gen: no special keywords -> lines 1230-1232
+        {
+          'PO Number': 'PO-G1',
+          'Vendor Name': 'General Hardware Works',
+          'Item Name': 'Standard fasteners and office hardware supplies',
+          Quantity: 50,
+          'Total Spend': 5000,
+          Department: 'General',
+        },
+        // Cloud: cloud, azure, gcp, compute, storage, license, subscription, renewal, 365, bigquery, power bi, datacenter (lines 1184-1208)
+        {
+          'PO Number': 'PO-CL1',
+          'Vendor Name': 'Cloud Tech Corp',
+          'Item Name': 'Azure cloud storage compute credits and office 365 subscription renewal with power bi data analytics in datacenter',
+          Quantity: 1,
+          'Total Spend': 90000,
+          Department: 'IT',
+        },
+        // Min IT: matches microsoft/software but none of cloud/license/analytics/datacenter -> lines 1210-1211 (secondSetMinors.length === 0)
+        {
+          'PO Number': 'PO-MIT1',
+          'Vendor Name': 'Minimal Software Corp',
+          'Item Name': 'Microsoft custom software utility',
+          Quantity: 1,
+          'Total Spend': 8000,
+          Department: 'IT',
+        },
+      ]);
+      XLSX.utils.book_append_sheet(poWb, poWs, 'PO');
+      const poBuf = XLSX.write(poWb, { type: 'array', bookType: 'xlsx' });
+      const poFile: any = new File([poBuf], 'all_categories_po.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      poFile.__buffer = poBuf;
+
+      const fileInputs = container.querySelectorAll('input[type="file"]');
+      const poInput = fileInputs[fileInputs.length - 1];
+      if (poInput) {
+        fireEvent.change(poInput, { target: { files: [poFile] } });
+      }
+
+      // Run AI Category Cross-Match without mock so fallback computeJoinedRecords executes all classification branches!
+      const runJoinBtn = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
+      fireEvent.click(runJoinBtn);
+      act(() => {
+        jest.advanceTimersByTime(1200);
+      });
+
+      // Verify Step 4 rendered
+      expect(screen.getByText('Mechanical Spares Ltd')).toBeInTheDocument();
+      expect(screen.getByText('Volt Panels Electricals')).toBeInTheDocument();
+
+      // Proceed to Step 5 and complete setup with 2_years or 3_years
+      fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+      jest.useRealTimers();
+
+      const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
+      await act(async () => {
+        fireEvent.click(completeBtn);
+        // Double click immediately while isConfirmingIngestion is true (line 1503)
+        fireEvent.click(completeBtn);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(mockShowToast).toHaveBeenCalledWith('Setup Complete', expect.stringContaining('for 2 Years'), 'success');
+
+      // Unmount first render so DOM queries in container2 don't collide
+      unmount();
+
+      // Now test empty joinedVendors branch (line 1507)
+      // Open modal fresh, mock ai-cross-match to return empty array []
+      const { container: container2, unmount: unmount2 } = render(<InitialSetupModal />);
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (typeof url === 'string' && url.includes('/api/buyer-accounts/ai-cross-match')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ success: true, data: [] }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+      });
+
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const vInput2 = container2.querySelector('input[type="file"]');
+      if (vInput2) {
+        // Change with empty files (line 1729: if (file) false branch)
+        fireEvent.change(vInput2, { target: { files: [] } });
+        await act(async () => {
+          fireEvent.change(vInput2, { target: { files: [vFile] } });
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        });
+      }
+
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      const poInputs2 = container2.querySelectorAll('input[type="file"]');
+      const poInput2 = poInputs2[poInputs2.length - 1];
+      if (poInput2) {
+        // Change with empty files (line 2257: if (file) false branch)
+        fireEvent.change(poInput2, { target: { files: [] } });
+        await act(async () => {
+          fireEvent.change(poInput2, { target: { files: [poFile] } });
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        });
+      }
+
+      const runJoinBtn2 = screen.getByRole('button', { name: /Run AI Category Cross-Match/i });
+      fireEvent.click(runJoinBtn2);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      });
+
+      // Navigate to Step 5
+      fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+      const completeBtn2 = screen.getByText(/COMPLETE SETUP & INGEST/i);
+      await act(async () => {
+        fireEvent.click(completeBtn2);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(mockShowToast).toHaveBeenCalledWith('Ingestion Error', 'No vendor records found to ingest. Please upload a valid Vendor Master file first.', 'warning');
+      unmount2();
+    } finally {
+      global.fetch = origFetch;
+      jest.useRealTimers();
+    }
+  });
+
+  it('covers plural validation error warning when multiple vendors are missing company name', async () => {
+    const { container } = render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    const invalidWb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      { 'Vendor Code': 'V-INV-1', 'Company Name': '', Email: 'inv1@test.com' },
+      { 'Vendor Code': 'V-INV-2', 'Company Name': '', Email: 'inv2@test.com' },
+    ]);
+    XLSX.utils.book_append_sheet(invalidWb, ws, 'Vendors');
+    const buf = XLSX.write(invalidWb, { type: 'array', bookType: 'xlsx' });
+    const invFile: any = new File([buf], 'two_invalids.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    invFile.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [invFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Line 1778: Plural 'Records'
+    expect(screen.getByText(/2 Supplier Records Missing Required Fields/i)).toBeInTheDocument();
+  });
 });
+

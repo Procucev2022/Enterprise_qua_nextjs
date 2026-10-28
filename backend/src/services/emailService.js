@@ -14,7 +14,19 @@ function getPublicFrontendUrl() {
     process.env.FRONTEND_URL ||
     (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.PUBLIC_FRONTEND_URL);
   if (envVal && typeof envVal === 'string' && envVal.trim()) {
-    return envVal.trim().replace(/\/+$/, '');
+    const trimmed = envVal.trim().replace(/\/+$/, '');
+    if (trimmed.includes('srinivas-mukku.workers.dev')) {
+      const isProd =
+        process.env.NODE_ENV === 'production' ||
+        (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && (globalThis.__CF_ENV__.NODE_ENV === 'production' || globalThis.__CF_ENV__.ENVIRONMENT === 'prod' || globalThis.__CF_ENV__.ENVIRONMENT === 'production'));
+      if (isProd) {
+        return 'https://equa.procucev.com';
+      }
+    }
+    return trimmed;
+  }
+  if (process.env.NODE_ENV === 'production' || (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.NODE_ENV === 'production')) {
+    return 'https://equa.procucev.com';
   }
   return 'http://localhost:3000';
 }
@@ -68,88 +80,131 @@ function generateStandardRFQEmail(rfq, vendor) {
 
   const subject = `[OFFICIAL RFQ] ${rfqNumber} - Request for Quotation: ${rfq.title}`;
 
+  const isBuyerVendor = Boolean(
+    vendor && (
+      vendor.isBuyerUploaded === true ||
+      vendor.addedByBuyerCompany ||
+      vendor.buyerAccountId ||
+      vendor.buyerId ||
+      (vendor.source && String(vendor.source).toLowerCase().includes('buyer')) ||
+      (vendor.id && (
+        String(vendor.id).startsWith('v-hist-') ||
+        String(vendor.id).startsWith('v-navin-') ||
+        String(vendor.id).startsWith('vm-') ||
+        String(vendor.id).startsWith('v-ingest-') ||
+        String(vendor.id).startsWith('v-buyer-')
+      ))
+    )
+  );
+
   const htmlBody = `
-    <div style="font-family: Arial, sans-serif; max-width: 680px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
-      <div style="background: linear-gradient(135deg, #1e3a8a, #0284c7); padding: 24px; border-radius: 8px 8px 0 0; color: white;">
-        <div style="margin-bottom: 12px;">
-          <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
-            <img src="${logoUrl}" alt="Procucev Enterprise" height="38" style="height: 38px; max-height: 42px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />
-          </a>
-        </div>
-        <h2 style="margin: 0 0 8px 0;">PROCUCEV ENTERPRISE PROCUREMENT</h2>
-        <p style="margin: 0; opacity: 0.9; font-size: 14px;">Autonomous Sourcing & SCM Intelligence (Powered by QUA AI 2.0)</p>
-      </div>
-      
-      <div style="padding: 24px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px;">
-        <p>Dear <strong>${contactPerson}</strong> (${vendorName}),</p>
-        <p>You have been formally invited to submit a commercial and technical bid for the following RFQ:</p>
-        
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; background: #f8fafc;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
+      <tr>
+        <td align="left" class="email-wrapper-cell" style="padding: 16px 20px; background-color: #ffffff;">
+          <!--[if (gte mso 9)|(IE)]>
+          <table align="left" border="0" cellspacing="0" cellpadding="0" width="100%" style="width:100%;">
           <tr>
-            <td style="padding: 8px 12px; font-weight: bold; width: 30%;">RFQ Number:</td>
-            <td style="padding: 8px 12px;">${rfqNumber}</td>
+          <td align="left" valign="top" width="100%" style="width:100%;">
+          <![endif]-->
+          <div class="email-container" style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; width: 100%; max-width: 100%; margin: 0; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
+            <div class="email-header" style="background: linear-gradient(135deg, #1e3a8a, #0284c7); padding: 20px 24px; border-radius: 8px 8px 0 0; color: white; box-sizing: border-box; width: 100%;">
+              <div style="margin-bottom: 12px;">
+                <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
+                  <img src="${logoUrl}" alt="Procucev Enterprise" height="38" style="height: 38px; max-height: 42px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />
+                </a>
+              </div>
+              <h2 style="margin: 0 0 8px 0;">PROCUCEV ENTERPRISE PROCUREMENT</h2>
+              <p style="margin: 0; opacity: 0.9; font-size: 14px;">Autonomous Sourcing & SCM Intelligence (Powered by QUA AI 2.0)</p>
+            </div>
+            
+            <div class="email-content" style="padding: 24px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px; box-sizing: border-box; word-break: break-word;">
+              <p>Dear <strong>${contactPerson}</strong> (${vendorName}),</p>
+              <p>You have been formally invited to submit a commercial and technical bid for the following RFQ:</p>
+              
+              <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; background: #f8fafc; word-break: break-word;">
+                <tr>
+                  <td style="padding: 8px 12px; font-weight: bold; width: 30%;">RFQ Number:</td>
+                  <td style="padding: 8px 12px;">${rfqNumber}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 12px; font-weight: bold;">Title / Requirement:</td>
+                  <td style="padding: 8px 12px;">${rfq.title}</td>
+                </tr>
+                ${
+                  isBuyerVendor && rfq.buyerAccountName
+                    ? `<tr>
+                  <td style="padding: 8px 12px; font-weight: bold;">Buyer:</td>
+                  <td style="padding: 8px 12px;">${rfq.buyerAccountName}</td>
+                </tr>`
+                    : ''
+                }
+                <tr>
+                  <td style="padding: 8px 12px; font-weight: bold;">Category:</td>
+                  <td style="padding: 8px 12px;">${category}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 12px; font-weight: bold;">Submission Deadline:</td>
+                  <td style="padding: 8px 12px; color: #dc2626; font-weight: bold;">${deadline} (23:59 IST)</td>
+                </tr>
+                ${
+                  budget > 0
+                    ? `<tr>
+                  <td style="padding: 8px 12px; font-weight: bold;">Indicative Budget:</td>
+                  <td style="padding: 8px 12px;">₹${budget.toLocaleString('en-IN')}</td>
+                </tr>`
+                    : ''
+                }
+              </table>
+
+              <h4 style="margin: 16px 0 8px 0; color: #0f172a;">Requested Bill of Quantities (BOQ):</h4>
+              <div style="overflow-x: auto; width: 100%; margin-bottom: 20px;">
+                <table style="width: 100%; border-collapse: collapse; word-break: break-word;">
+                  <thead>
+                    <tr style="background: #f1f5f9; text-align: left;">
+                      <th style="padding: 8px 12px; border: 1px solid #cbd5e1;">Item Description</th>
+                      <th style="padding: 8px 12px; border: 1px solid #cbd5e1; text-align: center;">Quantity</th>
+                      <th style="padding: 8px 12px; border: 1px solid #cbd5e1;">Specifications</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${lineItemsList || '<tr><td colspan="3" style="padding: 8px 12px; border: 1px solid #e2e8f0;">See attached procurement specifications document.</td></tr>'}
+                  </tbody>
+                </table>
+              </div>
+
+              ${
+                attachmentsList
+                  ? `<h4 style="margin: 16px 0 8px 0; color: #0f172a;">Supporting Documents:</h4>
+              <ul style="margin: 0 0 20px 0; padding-left: 20px; font-size: 13px;">${attachmentsList}</ul>`
+                  : ''
+              }
+
+              <div style="background: #eff6ff; border-left: 4px solid #3b82f6; padding: 12px 16px; margin: 20px 0; border-radius: 0 4px 4px 0; box-sizing: border-box;">
+                <p style="margin: 0; font-size: 13px; color: #1e40af;">
+                  <strong>Autonomous AI Multi-Channel Follow-up:</strong> Our automated AI sourcing agent will monitor response milestones across WhatsApp and Voice calls.
+                </p>
+              </div>
+
+              <p style="text-align: center; margin: 30px 0 10px 0;">
+                <a href="${bidLink}" style="background: #0284c7; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; max-width: 100%; box-sizing: border-box;">
+                  Submit Quotation in 1-Click
+                </a>
+              </p>
+
+              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+              <p style="font-size: 12px; color: #64748b; margin: 0;">
+                Procucev Enterprise Solutions | Secure 256-Bit SHA Encrypted Transmission | DLT Registered
+              </p>
+            </div>
+          </div>
+          <!--[if (gte mso 9)|(IE)]>
+          </td>
           </tr>
-          <tr>
-            <td style="padding: 8px 12px; font-weight: bold;">Title / Requirement:</td>
-            <td style="padding: 8px 12px;">${rfq.title}</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px 12px; font-weight: bold;">Category:</td>
-            <td style="padding: 8px 12px;">${category}</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px 12px; font-weight: bold;">Submission Deadline:</td>
-            <td style="padding: 8px 12px; color: #dc2626; font-weight: bold;">${deadline} (23:59 IST)</td>
-          </tr>
-          ${
-            budget > 0
-              ? `<tr>
-            <td style="padding: 8px 12px; font-weight: bold;">Indicative Budget:</td>
-            <td style="padding: 8px 12px;">₹${budget.toLocaleString('en-IN')}</td>
-          </tr>`
-              : ''
-          }
-        </table>
-
-        <h4 style="margin: 16px 0 8px 0; color: #0f172a;">Requested Bill of Quantities (BOQ):</h4>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
-          <thead>
-            <tr style="background: #f1f5f9; text-align: left;">
-              <th style="padding: 8px 12px; border: 1px solid #cbd5e1;">Item Description</th>
-              <th style="padding: 8px 12px; border: 1px solid #cbd5e1; text-align: center;">Quantity</th>
-              <th style="padding: 8px 12px; border: 1px solid #cbd5e1;">Specifications</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${lineItemsList || '<tr><td colspan="3" style="padding: 8px 12px; border: 1px solid #e2e8f0;">See attached procurement specifications document.</td></tr>'}
-          </tbody>
-        </table>
-
-        ${
-          attachmentsList
-            ? `<h4 style="margin: 16px 0 8px 0; color: #0f172a;">Supporting Documents:</h4>
-        <ul style="margin: 0 0 20px 0; padding-left: 20px; font-size: 13px;">${attachmentsList}</ul>`
-            : ''
-        }
-
-        <div style="background: #eff6ff; border-left: 4px solid #3b82f6; padding: 12px 16px; margin: 20px 0; border-radius: 0 4px 4px 0;">
-          <p style="margin: 0; font-size: 13px; color: #1e40af;">
-            <strong>Autonomous AI Multi-Channel Follow-up:</strong> Our automated AI sourcing agent will monitor response milestones across WhatsApp and Voice calls.
-          </p>
-        </div>
-
-        <p style="text-align: center; margin: 30px 0 10px 0;">
-          <a href="${bidLink}" style="background: #0284c7; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
-            Submit Quotation in 1-Click
-          </a>
-        </p>
-
-        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-        <p style="font-size: 12px; color: #64748b; margin: 0;">
-          Procucev Enterprise Solutions | Secure 256-Bit SHA Encrypted Transmission | DLT Registered
-        </p>
-      </div>
-    </div>
+          </table>
+          <![endif]-->
+        </td>
+      </tr>
+    </table>
   `;
 
   return {
@@ -170,34 +225,50 @@ function generateVendorOnboardingEmail(vendor, isExisting = false, tempPassword 
   const portalUrl = `${frontendUrl}/login`;
 
   const htmlBody = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
-      <div style="background: #0f172a; padding: 24px; border-radius: 8px 8px 0 0; color: white;">
-        <div style="margin-bottom: 12px;">
-          <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
-            <img src="${logoUrl}" alt="Procucev Enterprise" height="38" style="height: 38px; max-height: 42px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />
-          </a>
-        </div>
-        <h2 style="margin: 0;">PROCUCEV ENTERPRISE SUPPLIER PORTAL</h2>
-        <p style="margin: 4px 0 0 0; opacity: 0.8; font-size: 14px;">Direct Empanelled Sourcing & RFQ Access</p>
-      </div>
-      <div style="padding: 24px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px;">
-        <p>Dear <strong>${vendor.contactPerson || 'Partner'}</strong>,</p>
-        <p>Your enterprise profile for <strong>${vendor.name}</strong> has been registered on the Procucev platform.</p>
-        
-        <div style="background: #f8fafc; padding: 16px; border-radius: 6px; border: 1px solid #cbd5e1; margin: 20px 0;">
-          <h4 style="margin: 0 0 10px 0; color: #0f172a;">Your Access Credentials:</h4>
-          <p style="margin: 4px 0;"><strong>Portal URL:</strong> <a href="${portalUrl}">${portalUrl}</a></p>
-          <p style="margin: 4px 0;"><strong>Login Email:</strong> ${vendor.email}</p>
-          <p style="margin: 4px 0;"><strong>Temporary Password:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${tempPassword}</code></p>
-        </div>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
+      <tr>
+        <td align="left" class="email-wrapper-cell" style="padding: 16px 20px; background-color: #ffffff;">
+          <!--[if (gte mso 9)|(IE)]>
+          <table align="left" border="0" cellspacing="0" cellpadding="0" width="100%" style="width:100%;">
+          <tr>
+          <td align="left" valign="top" width="100%" style="width:100%;">
+          <![endif]-->
+          <div class="email-container" style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; width: 100%; max-width: 100%; margin: 0; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
+            <div class="email-header" style="background: #0f172a; padding: 20px 24px; border-radius: 8px 8px 0 0; color: white; box-sizing: border-box; width: 100%;">
+              <div style="margin-bottom: 12px;">
+                <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
+                  <img src="${logoUrl}" alt="Procucev Enterprise" height="38" style="height: 38px; max-height: 42px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />
+                </a>
+              </div>
+              <h2 style="margin: 0;">PROCUCEV ENTERPRISE SUPPLIER PORTAL</h2>
+              <p style="margin: 4px 0 0 0; opacity: 0.8; font-size: 14px;">Direct Empanelled Sourcing & RFQ Access</p>
+            </div>
+            <div class="email-content" style="padding: 24px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px; box-sizing: border-box; word-break: break-word;">
+              <p>Dear <strong>${vendor.contactPerson || 'Partner'}</strong>,</p>
+              <p>Your enterprise profile for <strong>${vendor.name}</strong> has been registered on the Procucev platform.</p>
+              
+              <div style="background: #f8fafc; padding: 16px; border-radius: 6px; border: 1px solid #cbd5e1; margin: 20px 0; box-sizing: border-box;">
+                <h4 style="margin: 0 0 10px 0; color: #0f172a;">Your Access Credentials:</h4>
+                <p style="margin: 4px 0;"><strong>Portal URL:</strong> <a href="${portalUrl}">${portalUrl}</a></p>
+                <p style="margin: 4px 0;"><strong>Login Email:</strong> ${vendor.email}</p>
+                <p style="margin: 4px 0;"><strong>Temporary Password:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${tempPassword}</code></p>
+              </div>
 
-        <div style="text-align: center; margin: 24px 0;">
-          <a href="${portalUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Sign in to Supplier Portal</a>
-        </div>
+              <div style="text-align: center; margin: 24px 0;">
+                <a href="${portalUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; max-width: 100%; box-sizing: border-box;">Sign in to Supplier Portal</a>
+              </div>
 
-        <p>Please log in to complete your 10-category reconciliation and submit your Mode 3 360° qualification survey to unlock direct pre-purchase orders.</p>
-      </div>
-    </div>
+              <p>Please log in to complete your 10-category reconciliation and submit your Mode 3 360° qualification survey to unlock direct pre-purchase orders.</p>
+            </div>
+          </div>
+          <!--[if (gte mso 9)|(IE)]>
+          </td>
+          </tr>
+          </table>
+          <![endif]-->
+        </td>
+      </tr>
+    </table>
   `;
 
   return {
@@ -211,9 +282,15 @@ function generateVendorOnboardingEmail(vendor, isExisting = false, tempPassword 
   };
 }
 
+const transactionalEmailTemplates = require('./transactionalEmailTemplates');
+
 module.exports = {
   getPublicFrontendUrl,
   getLogoUrl,
   generateStandardRFQEmail,
   generateVendorOnboardingEmail,
+  transactionalEmailTemplates,
+  renderTransactionalEmail: transactionalEmailTemplates.renderTransactionalEmail,
+  sendTransactionalEmail: transactionalEmailTemplates.sendTransactionalEmail,
 };
+

@@ -21,9 +21,14 @@ const authRoutes = require('./auth');
 const zohoRoutes = require('./zoho');
 const vendorIngestionRoutes = require('./vendorIngestion');
 const pincodeRoutes = require('./pincode');
+const botBridgeRoutes = require('./botBridge');
 const enterpriseInquiriesRoutes = require('./enterpriseInquiries');
+const reportsRoutes = require('./reports');
+const subscriptionRoutes = require('./subscriptions');
+const transactionalEmailRoutes = require('./transactionalEmails');
 
 // Mount sub-routers
+router.use('/subscriptions', subscriptionRoutes);
 router.use('/auth', authRoutes);
 router.use('/bootstrap', bootstrapRoutes);
 router.use('/rfqs', rfqRoutes);
@@ -44,7 +49,12 @@ router.use('/graphql', graphqlRoutes);
 router.use('/crypto', cryptoRoutes);
 router.use('/zoho', zohoRoutes);
 router.use('/pincode', pincodeRoutes);
+// QUA-compatible endpoints for the WhatsApp agent bot; closed unless BOT_API_KEY is set.
+router.use('/bot', botBridgeRoutes);
 router.use('/enterprise-inquiries', enterpriseInquiriesRoutes);
+router.use('/reports', reportsRoutes);
+router.use('/transactional-emails', transactionalEmailRoutes);
 
 module.exports = router;
+
 

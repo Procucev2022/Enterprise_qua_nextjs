@@ -124,9 +124,71 @@ describe('VendorEmailTemplatesPage', () => {
     expect(screen.queryByText('Customized')).not.toBeInTheDocument();
   });
 
+  test('saves template B and shows a success toast', async () => {
+    (fetchDispatchTemplates as jest.Mock).mockResolvedValue({ success: true, data: {} });
+    (saveDispatchTemplate as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { subject: 'Subject B', message: 'Message B' },
+    });
+
+    render(<VendorEmailTemplatesPage />);
+    await waitFor(() => screen.getByText(/Template B/i));
+
+    const subjectB = screen.getByPlaceholderText(/Complete Your Category Mapping to Receive Enquiries/i);
+    fireEvent.change(subjectB, { target: { value: 'Subject B' } });
+
+    const messageB = screen.getByPlaceholderText(/No historical pre-purchase order data was available/i);
+    fireEvent.change(messageB, { target: { value: 'Message B' } });
+
+    const [, saveBtnB] = screen.getAllByRole('button', { name: /^Save$/i });
+    fireEvent.click(saveBtnB);
+
+    await waitFor(() => {
+      expect(saveDispatchTemplate).toHaveBeenCalledWith('self_map_required', {
+        subject: 'Subject B',
+        message: 'Message B',
+      });
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Template Saved',
+      expect.stringContaining('every future vendor upload'),
+      'success'
+    );
+  });
+
+  test('covers fallback error strings when API error is undefined', async () => {
+    (fetchDispatchTemplates as jest.Mock).mockResolvedValue({ success: false });
+    render(<VendorEmailTemplatesPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Could not load your saved email templates.')).toBeInTheDocument();
+    });
+
+    (fetchDispatchTemplates as jest.Mock).mockResolvedValue({ success: true, data: {} });
+    (saveDispatchTemplate as jest.Mock).mockResolvedValue({ success: false });
+
+    render(<VendorEmailTemplatesPage />);
+    await waitFor(() => screen.getByText(/Template A/i));
+
+    const [saveBtnA] = screen.getAllByRole('button', { name: /^Save$/i });
+    fireEvent.click(saveBtnA);
+
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith('Save Failed', 'Could not save this template.', 'warning');
+    });
+  });
+
+  test('cancels async state update on unmount during fetch', async () => {
+    let resolveFetch: any;
+    (fetchDispatchTemplates as jest.Mock).mockImplementation(() => new Promise((res) => { resolveFetch = res; }));
+
+    const { unmount } = render(<VendorEmailTemplatesPage />);
+    unmount();
+    resolveFetch({ success: true, data: {} });
+  });
+
   test('renders VendorEmailTemplatesRoute page component correctly', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const VendorEmailTemplatesRoute = require('@/app/buyer/vendor-email-templates/page').default;
+    const { default: VendorEmailTemplatesRoute } = await import('@/app/buyer/vendor-email-templates/page');
     (fetchDispatchTemplates as jest.Mock).mockResolvedValue({ success: true, data: {} });
 
     render(<VendorEmailTemplatesRoute />);

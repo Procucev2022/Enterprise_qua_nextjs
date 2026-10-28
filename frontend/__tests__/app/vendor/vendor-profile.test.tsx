@@ -506,4 +506,86 @@ describe('VendorProfilePage Comprehensive Suite', () => {
     // Org type falls back to the component's own default since v.orgType is absent
     expect(screen.getByDisplayValue('Private Limited Company')).toBeInTheDocument();
   });
+
+  test('allows vendor to add custom category, remove category via chip, and rejects duplicates/empty', async () => {
+    global.fetch = jest.fn(mockFetchImpl) as any;
+
+    render(
+      <AppProvider>
+        <VendorProfileWithSession />
+      </AppProvider>
+    );
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/Type custom category name/i)).toBeInTheDocument());
+
+    const input = screen.getByPlaceholderText(/Type custom category name/i);
+    const addBtn = screen.getByRole('button', { name: /\+ Add Category/i });
+
+    // Empty addition is disabled
+    expect(addBtn).toBeDisabled();
+
+    // Type an existing category from standard taxonomy (e.g. 'Motors') - should auto-search & mark tick
+    fireEvent.change(input, { target: { value: 'Motors' } });
+    expect(addBtn).not.toBeDisabled();
+    fireEvent.click(addBtn);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Motors').length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Type a new custom category not in taxonomy - should add under 'Other' and mark tick
+    fireEvent.change(input, { target: { value: 'Custom CNC Precision Machining' } });
+    fireEvent.click(addBtn);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Custom CNC Precision Machining').length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Duplicate addition
+    fireEvent.change(input, { target: { value: 'Custom CNC Precision Machining' } });
+    fireEvent.click(addBtn);
+    expect(screen.getAllByText('Custom CNC Precision Machining').length).toBeGreaterThanOrEqual(1);
+
+    // Press Enter to add another category under 'Other'
+    fireEvent.change(input, { target: { value: 'Advanced Laser Cutting' } });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    await waitFor(() => expect(screen.getAllByText('Advanced Laser Cutting').length).toBeGreaterThanOrEqual(1));
+
+    // Remove a category using the chip remove button
+    const removeLaserBtn = screen.getByTitle(/Remove Category: Advanced Laser Cutting/i);
+    fireEvent.click(removeLaserBtn);
+    expect(screen.queryByTitle(/Remove Category: Advanced Laser Cutting/i)).not.toBeInTheDocument();
+  });
+
+  it('renders clearly visible Update Password option and Account & Security section', async () => {
+    await renderWithProvider();
+
+    // Check top bar button
+    const updatePasswordTopBtn = screen.getByRole('link', { name: /Update Password/i });
+    expect(updatePasswordTopBtn).toBeInTheDocument();
+    expect(updatePasswordTopBtn).toHaveAttribute('href', '#account-security');
+
+    // Check Account & Security section with password input
+    const securitySection = document.getElementById('account-security');
+    expect(securitySection).toBeInTheDocument();
+    expect(screen.getByText(/Section 4: Security/i)).toBeInTheDocument();
+    expect(screen.getByText(/Change Sign-In Password/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Min 8 characters/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Re-enter new password/i)).toBeInTheDocument();
+  });
+
+  it('renders VendorProfileUnderscoreRoute cleanly', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const VendorProfileUnderscoreRoute = require('@/app/vendor/vendor_profile/page').default;
+    render(
+      <AppProvider>
+        <VendorProfileUnderscoreRoute />
+      </AppProvider>
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Section 4: Security/i)).toBeInTheDocument();
+    });
+  });
 });
+
+

@@ -1,40 +1,86 @@
+const path = require('path');
+
 // ==============================================================================
 // PROCUCEV ENTERPRISE (QUA AI 2.0) - CONSTANTS, TAXONOMIES & SYSTEM DEFAULTS
 // ==============================================================================
 
+const INQUIRIES_PERSISTENCE_FILE = typeof __dirname !== 'undefined'
+  ? path.join(__dirname, '../../data/enterprise_inquiries.json')
+  : './data/enterprise_inquiries.json';
+
+/**
+ * Centralized RFQ Modes Enum / Constants
+ * V1 → Mode 1
+ * V2 → Mode 2
+ * V3 → Mode 3
+ * V0 → Mode 0
+ */
+const RFQ_MODES = Object.freeze({
+  MODE_0: 'mode_0',
+  MODE_1: 'mode_1',
+  MODE_2: 'mode_2',
+  MODE_3: 'mode_3',
+});
+
+const RFQ_MODE_LABELS = Object.freeze({
+  [RFQ_MODES.MODE_0]: 'Mode 0',
+  [RFQ_MODES.MODE_1]: 'Mode 1',
+  [RFQ_MODES.MODE_2]: 'Mode 2',
+  [RFQ_MODES.MODE_3]: 'Mode 3',
+});
+
+const RFQ_MODE_MAP = Object.freeze({
+  v0: RFQ_MODES.MODE_0,
+  v1: RFQ_MODES.MODE_1,
+  v2: RFQ_MODES.MODE_2,
+  v3: RFQ_MODES.MODE_3,
+  'mode 0': RFQ_MODES.MODE_0,
+  'mode 1': RFQ_MODES.MODE_1,
+  'mode 2': RFQ_MODES.MODE_2,
+  'mode 3': RFQ_MODES.MODE_3,
+  mode_0: RFQ_MODES.MODE_0,
+  mode_1: RFQ_MODES.MODE_1,
+  mode_2: RFQ_MODES.MODE_2,
+  mode_3: RFQ_MODES.MODE_3,
+  version_0: RFQ_MODES.MODE_0,
+  version_1: RFQ_MODES.MODE_1,
+  version_2: RFQ_MODES.MODE_2,
+  version_3: RFQ_MODES.MODE_3,
+});
+
 const SOURCING_MODES = [
   {
-    id: 'mode_0',
-    code: 'Version 0',
-    name: 'Version 0: Free Starter Trial Plan (Procucev Network Only)',
-    shortLabel: 'Version 0',
+    id: RFQ_MODES.MODE_0,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_0],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_0]}: Free Starter Trial Plan (Procucev Network Only)`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_0],
     description:
       'Free Starter Trial mode. RFQs are strictly circulated only to verified Procucev network vendors without consuming free credits.',
     badgeColor: 'border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10',
   },
   {
-    id: 'mode_1',
-    code: 'Version 1',
-    name: 'Version 1: Client Roster Sourcing Plan',
-    shortLabel: 'Version 1',
+    id: RFQ_MODES.MODE_1,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_1],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]}: Client Roster Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_1],
     description:
       'Private empanelled vendor network. RFQs are strictly circulated only to your pre-verified approved vendor list.',
     badgeColor: 'border-blue-500/40 text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-500/10',
   },
   {
-    id: 'mode_2',
-    code: 'Version 2',
-    name: 'Version 2: Hybrid Sourcing Plan',
-    shortLabel: 'Version 2',
+    id: RFQ_MODES.MODE_2,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_2],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]}: Hybrid Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_2],
     description:
       'Circulate to your private empanelled list first. If quotes or responses are insufficient, AI expands to Procucev Base Network.',
     badgeColor: 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10',
   },
   {
-    id: 'mode_3',
-    code: 'Version 3',
-    name: 'Version 3: AI Autonomous Sourcing Plan',
-    shortLabel: 'Version 3',
+    id: RFQ_MODES.MODE_3,
+    code: RFQ_MODE_LABELS[RFQ_MODES.MODE_3],
+    name: `${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]}: AI Autonomous Sourcing Plan`,
+    shortLabel: RFQ_MODE_LABELS[RFQ_MODES.MODE_3],
     description:
       'Autonomous Procucev Network Sourcing with double-blind supplier identity shielding, continuous AI evaluation, and best-fit routing.',
     badgeColor: 'border-purple-500/40 text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-500/10',
@@ -45,7 +91,7 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'free_trial',
     name: 'Free Trial Starter (V0)',
-    price: '$0',
+    price: '₹0',
     billing: '5 Free RFQ Credits included for V1/V2/V3 + Unlimited V0',
     description: 'Create unlimited V0 RFQs sent to Procucev verified vendors (0 credits deducted), plus 5 free RFQ credits for V1, V2, or V3.',
     features: [
@@ -59,7 +105,10 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_1',
     name: 'Version 1 Plan: Client Roster Only',
-    price: '$199',
+    get price() {
+      const p = process.env.BUYER_V1_12M_PRICE || process.env.BUYER_VERSION_1_12M_PRICE || 4999;
+      return `₹${Number(p).toLocaleString('en-IN')}`;
+    },
     billing: 'per user / month',
     description: 'Streamline procurement across your private pre-approved vendor roster with automated working-hour follow-ups.',
     features: [
@@ -72,7 +121,10 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_2',
     name: 'Version 2 Plan: Hybrid Sourcing',
-    price: '$499',
+    get price() {
+      const p = process.env.BUYER_V2_12M_PRICE || process.env.BUYER_VERSION_2_12M_PRICE || 7499;
+      return `₹${Number(p).toLocaleString('en-IN')}`;
+    },
     billing: 'per user / month',
     description: 'Cumulative plan giving full access to BOTH Mode 1 and Mode 2 with hybrid platform network discovery.',
     features: [
@@ -85,7 +137,10 @@ const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'version_3',
     name: 'Version 3 Plan: Autonomous AI Enterprise',
-    price: '$999',
+    get price() {
+      const p = process.env.BUYER_V3_12M_PRICE || process.env.BUYER_VERSION_3_12M_PRICE || 9999;
+      return `₹${Number(p).toLocaleString('en-IN')}`;
+    },
     billing: 'per user / month',
     description: 'Ultimate all-inclusive tier giving full access to Mode 1, Mode 2, AND Mode 3 with autonomous AI governance.',
     features: [
@@ -114,13 +169,16 @@ const VENDOR_SUBSCRIPTION_PLANS = [
   {
     id: 'connect',
     name: 'Connect Model (Marketplace Expansion)',
-    price: '$149',
-    billing: 'per 3 months (90 days)',
+    get price() {
+      const p = process.env.SELLER_V1_12M_PRICE || process.env.SELLER_CONNECT_12M_PRICE || process.env.SELLER_CONNECT_PRICE || 7499;
+      return `₹${Number(p).toLocaleString('en-IN')}`;
+    },
+    billing: 'per 12 months',
     description: 'Expand your market reach. Access & download open RFQs across the entire Procucev Network Marketplace.',
     features: [
       'All Premium Client-Uploaded features included',
       'Download up to 50 RFQs within 3 months (90-day period)',
-      '🎁 360° AI Self-Evaluation Fee: $0 FREE (Waived from $5)',
+      '🎁 360° AI Self-Evaluation Fee: ₹0 FREE (Waived from ₹5)',
       'Access to full Open Network Marketplace RFQs',
       'Instant email dispatch of technical BOQ spreadsheets & specifications',
     ],
@@ -128,13 +186,16 @@ const VENDOR_SUBSCRIPTION_PLANS = [
   {
     id: 'select',
     name: 'Select Model (Catalogue & High Volume)',
-    price: '$349',
-    billing: 'per 3 months (90 days)',
+    get price() {
+      const p = process.env.SELLER_V2_12M_PRICE || process.env.SELLER_SELECT_12M_PRICE || process.env.SELLER_SELECT_PRICE || 14999;
+      return `₹${Number(p).toLocaleString('en-IN')}`;
+    },
+    billing: 'per 12 months',
     description: 'Complete tier for high-volume suppliers. Build your Item Catalogue and capture maximum marketplace demand.',
     features: [
       'Download up to 100 RFQs within 3 months',
       'Published Item SKU Catalogue with direct buyer visibility',
-      '🎁 360° AI Self-Evaluation Fee: $0 FREE (Waived from $5)',
+      '🎁 360° AI Self-Evaluation Fee: ₹0 FREE (Waived from ₹5)',
       'Priority AI routing in Mode 2 & Mode 3 matching algorithms',
     ],
   },
@@ -163,7 +224,11 @@ const SYSTEM_ACTOR_EMAIL = 'system@procucev.ai';
 const RFQ_DEFAULTS = {
   ALLOCATED_TIME: '24 hrs',
   ELAPSED_TIME: '0 hrs',
+  ALLOWED_EXTENSION_HOURS: Object.freeze([24, 48]),
+  DEFAULT_EXTENSION_HOURS: 24,
 };
+const ALLOWED_EXTENSION_HOURS = Object.freeze([24, 48]);
+const DEFAULT_EXTENSION_HOURS = 24;
 // Infrastructure rows the admin screen renders. The database row is replaced at
 // runtime with the live result of pool.checkDatabaseHealth() (see
 // storeService.refreshInfrastructureHealth), so the entry below is only the
@@ -271,7 +336,11 @@ const AUTH_MESSAGES = {
   // the stored row on every attempt, because the session token proves who the
   // caller is but not that they still know the credential.
   CHANGE_PASSWORD_FIELDS_REQUIRED:
-    'Both your current password and the new password are required to change it.',
+    'A new password and verification code (or current password) are required to change your password.',
+  CHANGE_PASSWORD_VERIFICATION_REQUIRED:
+    'A valid verification code or reset token is required to change your password.',
+  CHANGE_PASSWORD_VERIFICATION_INVALID:
+    'Invalid or expired verification code. Please request a new code and try again.',
   CHANGE_PASSWORD_CURRENT_INCORRECT:
     'Your current password is not correct, so the password was not changed. Re-enter it and try again.',
   CHANGE_PASSWORD_TOO_SHORT: 'Choose a new password of at least 8 characters.',
@@ -473,11 +542,18 @@ const RFQ_CATEGORY_CLASSIFICATION = {
   //
   // Keys are compared lowercased and trimmed (see resolveStatedCategoryAlias).
   STATED_CATEGORY_ALIASES: {
-    // IT (taxonomy major "IT"; "Hardware" is its generic hardware minor).
+    // IT aliases (taxonomy major "IT")
+    'it': 'Hardware',
     'it equipment': 'Hardware',
     'it hardware': 'Hardware',
     'computer hardware': 'Hardware',
     'it software': 'Software',
+    'computers': 'Computer',
+    'laptops': 'Laptop',
+    'monitors': 'Hardware',
+    'printers': 'Printers',
+    'servers': 'Servers',
+    'networking': 'Networking Equipment',
     // Electrical goods -> Engineering Spares - Electrical » Lights.
     'electrical equipment': 'Lights',
     'electrical material': 'Lights',
@@ -489,92 +565,400 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     'plumbing goods': 'Plumbing',
     // Piping -> Engineering Spares - Mechanical » Pipes & Pipe Fittings.
     'piping material': 'Pipes & Pipe Fittings',
+    // Safety & PPE aliases -> Occuptional Health and Safety
+    'helmet': 'Helmets',
+    'helmets': 'Helmets',
+    'hard hat': 'Helmets',
+    'hard hats': 'Helmets',
+    'safety helmet': 'Helmets',
+    'safety helmets': 'Helmets',
+    'hemlet': 'Hemlets',
+    'hemlets': 'Hemlets',
+    'safety shoe': 'Safety Shoes',
+    'safety shoes': 'Safety Shoes',
+    'safety boot': 'Safety Shoes',
+    'safety boots': 'Safety Shoes',
+    'safety goggles': 'Eye Protection',
+    'safety glasses': 'Eye Protection',
+    'first aid box': 'First Aid Kits',
+    'first aid kit': 'First Aid Kits',
+    'fire safety': 'Fire Extinguishers',
+    'groceries': 'Food & Beverages',
+    'grocery': 'Food & Beverages',
+    'food': 'Food & Beverages',
+    'food & beverage': 'Food & Beverages',
+    'food and beverage': 'Food & Beverages',
+    'food & beverages': 'Food & Beverages',
+    'food and beverages': 'Food & Beverages',
+    'disposable gloves': 'Gloves',
+    'surgical gloves': 'Gloves',
+    'examination gloves': 'Gloves',
+    'surgical instruments': 'Surgical Instruments',
+    'surgical instrument': 'Surgical Instruments',
+    'health equipment': 'Health Equipments',
+    'health equipments': 'Health Equipments',
   },
+
+  // Aliases for major category abbreviations/legacy names to canonical taxonomy names
+  MAJOR_CATEGORY_ALIASES: {
+    mechanical: 'Engineering Spares - Mechanical',
+    electrical: 'Engineering Spares - Electrical',
+    civil: 'Civil Works',
+    safety: 'Occuptional Health and Safety',
+    'occupational health and safety': 'Occuptional Health and Safety',
+    packaging: 'Packing Material',
+    packing: 'Packing Material',
+    stationery: 'Printing & Stationery',
+    retail: 'Retail Repair & Maintenance',
+    it: 'IT',
+    logistics: 'Logistics',
+    'pumps & motors': 'Engineering Spares - Mechanical',
+    'pumps and motors': 'Engineering Spares - Mechanical',
+    electronics: 'Engineering Spares - Electrical',
+    electronic: 'Engineering Spares - Electrical',
+    piping: 'Engineering Spares - Mechanical',
+    pipes: 'Engineering Spares - Mechanical',
+    valves: 'Engineering Spares - Mechanical',
+    pumps: 'Engineering Spares - Mechanical',
+    motors: 'Engineering Spares - Electrical',
+    'general procurement': 'Others – New Product',
+  },
+
+  // Keywords that describe raw/component materials rather than product purpose.
+  // When classifying by technical specifications alone, these must be ignored so
+  // finished goods (e.g. Stethoscopes with stainless steel parts) are not misclassified.
+  MATERIAL_ONLY_KEYWORDS: [
+    'steel',
+    'steels',
+    'structural steel',
+    'rebar',
+    'tmt',
+    'lubricant',
+    'lubricants',
+    'rubber',
+    'plastic',
+    'copper',
+    'brass',
+    'aluminium',
+    'aluminum',
+    'metal',
+    'metals',
+    'iron',
+    'cast iron',
+    'sheet metal',
+    'electrical',
+  ],
 
   // Longest keyword is evaluated first so "circuit breaker" beats "breaker".
   DOMAIN_KEYWORD_MAP: {
+    // Grocery & Food items -> Others – New Product » Food & Beverages
+    'sugar packing': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'sugar refined': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'sugar loose': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'madhur sugar': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'toor dal loose': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'toor dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'gram dal loose': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'gram dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'chana dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'moong dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'urad dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'masoor dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'dal loose': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'dal': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'pulses': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'sugar': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'groceries': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'grocery': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'food & beverages': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'food and beverages': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'beverages': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'beverage': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'rice': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'wheat': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'atta': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'maida': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'sooji': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'tea': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'coffee': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'spices': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'salt': { major: 'Others – New Product', minor: 'Food & Beverages' },
+    'edible oil': { major: 'Raw Material', minor: 'Edible Oil' },
+
+    // Medical & Healthcare items -> Others – New Product » Health Equipments
+    'stethoscope': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'pulse oximeter': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'oximeter': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'thermometer': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'sphygmomanometer': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'bp monitor': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'blood pressure monitor': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'glucometer': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'nebulizer': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'ventilator': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'ecg machine': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'ecg monitor': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'health equipment': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'health equipments': { major: 'Others – New Product', minor: 'Health Equipments' },
+    'surgical instrument': { major: 'CAPEX - Equipment & Machinery', minor: 'Surgical Instruments' },
+    'surgical instruments': { major: 'CAPEX - Equipment & Machinery', minor: 'Surgical Instruments' },
+    'ambulance': { major: 'CAPEX - Equipment & Machinery', minor: 'Ambulances' },
+    'ambulances': { major: 'CAPEX - Equipment & Machinery', minor: 'Ambulances' },
+    'disposable gloves': { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    'surgical gloves': { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    'examination gloves': { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    'latex gloves': { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    'nitrile gloves': { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    'medicine': { major: 'Occuptional Health and Safety', minor: 'Medicines' },
+    'medicines': { major: 'Occuptional Health and Safety', minor: 'Medicines' },
+
+    // Existing Engineering & Industrial mappings
+    // ── IT & Computing ──
+    'laserjet printer': { major: 'IT', minor: 'Printers' },
+    'inkjet printer': { major: 'IT', minor: 'Printers' },
+    'multifunction printer': { major: 'IT', minor: 'Printers' },
+    'barcode scanner': { major: 'IT', minor: 'BARCODE SCANNERS' },
+    'barcode reader': { major: 'IT', minor: 'BARCODE SCANNERS' },
+    'wireless keyboard': { major: 'IT', minor: 'Hardware' },
+    'keyboard and mouse': { major: 'IT', minor: 'Hardware' },
+    'keyboard & mouse': { major: 'IT', minor: 'Hardware' },
+    'external ssd': { major: 'IT', minor: 'Hardware' },
+    'external hdd': { major: 'IT', minor: 'Hardware' },
+    'hard drive': { major: 'IT', minor: 'Hardware' },
+    'hard disk': { major: 'IT', minor: 'Hardware' },
+    'solid state drive': { major: 'IT', minor: 'Hardware' },
+    'network switch': { major: 'IT', minor: 'Networking Equipment' },
+    'networking equipment': { major: 'IT', minor: 'Networking Equipment' },
+    'access point': { major: 'IT', minor: 'Networking Equipment' },
+    'ethernet cable': { major: 'IT', minor: 'Networking Equipment' },
+    'patch cord': { major: 'IT', minor: 'Networking Equipment' },
+    'lan cable': { major: 'IT', minor: 'Networking Equipment' },
+    'cctv camera': { major: 'IT', minor: 'CCTV' },
+    'dome camera': { major: 'IT', minor: 'CCTV' },
+    'bullet camera': { major: 'IT', minor: 'CCTV' },
+    'ip camera': { major: 'IT', minor: 'CCTV' },
+    'toner cartridge': { major: 'IT', minor: 'IT Consumables' },
+    'audio visual': { major: 'IT', minor: 'Audio Visual Equipment' },
+    'all-in-one pc': { major: 'IT', minor: 'Computer' },
+    'desktop pc': { major: 'IT', minor: 'Computer' },
+    'desktop computer': { major: 'IT', minor: 'Computer' },
+    'rack server': { major: 'IT', minor: 'Servers' },
+    'blade server': { major: 'IT', minor: 'Servers' },
+    'led monitor': { major: 'IT', minor: 'Hardware' },
+    'lcd monitor': { major: 'IT', minor: 'Hardware' },
+    'computer monitor': { major: 'IT', minor: 'Hardware' },
+    'pc monitor': { major: 'IT', minor: 'Hardware' },
+    keyboard: { major: 'IT', minor: 'Hardware' },
+    mouse: { major: 'IT', minor: 'Hardware' },
+    printer: { major: 'IT', minor: 'Printers' },
+    printers: { major: 'IT', minor: 'Printers' },
+    laptop: { major: 'IT', minor: 'Laptop' },
+    laptops: { major: 'IT', minor: 'Laptop' },
+    notebook: { major: 'IT', minor: 'Laptop' },
+    desktop: { major: 'IT', minor: 'Computer' },
+    computer: { major: 'IT', minor: 'Computer' },
+    workstation: { major: 'IT', minor: 'Computer' },
+    server: { major: 'IT', minor: 'Servers' },
+    servers: { major: 'IT', minor: 'Servers' },
+    scanner: { major: 'IT', minor: 'BARCODE SCANNERS' },
+    cctv: { major: 'IT', minor: 'CCTV' },
+    dvr: { major: 'IT', minor: 'CCTV' },
+    nvr: { major: 'IT', minor: 'CCTV' },
+    router: { major: 'IT', minor: 'Networking Equipment' },
+    firewall: { major: 'IT', minor: 'Networking Equipment' },
+    ssd: { major: 'IT', minor: 'Hardware' },
+    hdd: { major: 'IT', minor: 'Hardware' },
+    nvme: { major: 'IT', minor: 'Hardware' },
+    ram: { major: 'IT', minor: 'Hardware' },
+    toner: { major: 'IT', minor: 'IT Consumables' },
+    cartridge: { major: 'IT', minor: 'IT Consumables' },
+    projector: { major: 'IT', minor: 'Audio Visual Equipment' },
+    software: { major: 'IT', minor: 'Software' },
+    antivirus: { major: 'IT', minor: 'Software' },
+    intercom: { major: 'IT', minor: 'Telecom & Security Products' },
+    epabx: { major: 'IT', minor: 'Telecom & Security Products' },
+
+    // ── Engineering Spares - Mechanical ──
     'centrifugal pump': { major: 'Engineering Spares - Mechanical', minor: 'Pumps & Accessories' },
-    'circuit breaker': { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
-    'structural steel': { major: 'Civil Works', minor: 'PEB Structure' },
-    'roofing sheet': { major: 'Civil Works', minor: 'Roofing Sheets' },
+    'submersible pump': { major: 'Engineering Spares - Mechanical', minor: 'Pumps & Accessories' },
     'gate valve': { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
-    switchgear: { major: 'Engineering Spares - Electrical', minor: 'Electrical-Lv Switch Gears' },
-    transformer: { major: 'Engineering Spares - Electrical', minor: 'Transformers' },
-    compressor: { major: 'Engineering Spares - Mechanical', minor: 'Compressors & Accessories' },
+    'ball valve': { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
+    'butterfly valve': { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
+    'check valve': { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
+    'globe valve': { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
+    'solenoid valve': { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
+    'hydraulic hose': { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
+    'pipe fittings': { major: 'Engineering Spares - Mechanical', minor: 'Pipes & Pipe Fittings' },
+    'flange': { major: 'Engineering Spares - Mechanical', minor: 'Pipes & Pipe Fittings' },
+    'elbow': { major: 'Engineering Spares - Mechanical', minor: 'Pipes & Pipe Fittings' },
+    'compressor': { major: 'Engineering Spares - Mechanical', minor: 'Compressors & Accessories' },
+    'air compressor': { major: 'Engineering Spares - Mechanical', minor: 'Compressors & Accessories' },
     gearbox: { major: 'Engineering Spares - Mechanical', minor: 'Gearboxes & Spares' },
     bearing: { major: 'Engineering Spares - Mechanical', minor: 'Bearings & Accessories' },
+    'ball bearing': { major: 'Engineering Spares - Mechanical', minor: 'Bearings & Accessories' },
+    'roller bearing': { major: 'Engineering Spares - Mechanical', minor: 'Bearings & Accessories' },
     fastener: { major: 'Engineering Spares - Mechanical', minor: 'Fasteners' },
-    lubricant: { major: 'Raw Material', minor: 'Lubricants' },
+    'hex bolt': { major: 'Engineering Spares - Mechanical', minor: 'Fasteners' },
+    'anchor bolt': { major: 'Engineering Spares - Mechanical', minor: 'Fasteners' },
     impeller: { major: 'Engineering Spares - Mechanical', minor: 'Pumps & Accessories' },
-    rebar: { major: 'Civil Works', minor: 'TMT BARS' },
-    mccb: { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
-    laptop: { major: 'IT', minor: 'Laptop' },
-    software: { major: 'IT', minor: 'Software' },
-    freight: { major: 'Logistics', minor: 'Road transport' },
     pump: { major: 'Engineering Spares - Mechanical', minor: 'Pumps & Accessories' },
+    pumps: { major: 'Engineering Spares - Mechanical', minor: 'Pumps & Accessories' },
     valve: { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
+    valves: { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
     hose: { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
     pipe: { major: 'Engineering Spares - Mechanical', minor: 'Pipes & Pipe Fittings' },
     panel: { major: 'Engineering Spares - Electrical', minor: 'Panels' },
     cable: { major: 'Engineering Spares - Electrical', minor: 'Cables' },
     sensor: { major: 'Engineering Spares - Electrical', minor: 'Sensors' },
     motor: { major: 'Engineering Spares - Electrical', minor: 'Motors' },
-    // Lighting fixtures -> Engineering Spares - Electrical » Lights. "flood
-    // light" / "street light" / "led light" are listed as whole phrases so they
-    // win over the shorter electrical entries (KEYWORDS_BY_LENGTH sorts
-    // longest-first).
+    pipes: { major: 'Engineering Spares - Mechanical', minor: 'Pipes & Pipe Fittings' },
+    gasket: { major: 'Engineering Spares - Mechanical', minor: 'O-Rings / Gasket / Seals' },
+    'o-ring': { major: 'Engineering Spares - Mechanical', minor: 'O-Rings / Gasket / Seals' },
+    'oil seal': { major: 'Engineering Spares - Mechanical', minor: 'O-Rings / Gasket / Seals' },
+    filter: { major: 'Engineering Spares - Mechanical', minor: 'Filters' },
+    filters: { major: 'Engineering Spares - Mechanical', minor: 'Filters' },
+    tool: { major: 'Engineering Spares - Mechanical', minor: 'Tools & Tackles' },
+    tools: { major: 'Engineering Spares - Mechanical', minor: 'Tools & Tackles' },
+    'welding machine': { major: 'Engineering Spares - Mechanical', minor: 'Welding Equipment & Cutting Machines' },
+    'welding electrode': { major: 'Engineering Spares - Mechanical', minor: 'Welding Materials' },
+
+    // ── Engineering Spares - Electrical ──
+    'circuit breaker': { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
+    'air circuit breaker': { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
     'flood light': { major: 'Engineering Spares - Electrical', minor: 'Lights' },
     'street light': { major: 'Engineering Spares - Electrical', minor: 'Lights' },
     'led light': { major: 'Engineering Spares - Electrical', minor: 'Lights' },
+    'high bay light': { major: 'Engineering Spares - Electrical', minor: 'Lights' },
     luminaire: { major: 'Engineering Spares - Electrical', minor: 'Lights' },
-    // Plumbing -> Civil Works » Plumbing. "water pipe" and "hdpe" are
-    // plumbing-specific, so they must beat the generic 'pipe' -> Pipes & Pipe
-    // Fittings entry below; longest-first ordering handles the water-pipe case,
-    // and 'hdpe' is only ever a plumbing pipe here.
+    switchgear: { major: 'Engineering Spares - Electrical', minor: 'Electrical-Lv Switch Gears' },
+    transformer: { major: 'Engineering Spares - Electrical', minor: 'Transformers' },
+    mccb: { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
+    mcb: { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
+    rccb: { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
+    panel: { major: 'Engineering Spares - Electrical', minor: 'Panels' },
+    panels: { major: 'Engineering Spares - Electrical', minor: 'Panels' },
+    cable: { major: 'Engineering Spares - Electrical', minor: 'Cables' },
+    cables: { major: 'Engineering Spares - Electrical', minor: 'Cables' },
+    wire: { major: 'Engineering Spares - Electrical', minor: 'Wires' },
+    wires: { major: 'Engineering Spares - Electrical', minor: 'Wires' },
+    sensor: { major: 'Engineering Spares - Electrical', minor: 'Sensors' },
+    sensors: { major: 'Engineering Spares - Electrical', minor: 'Sensors' },
+    motor: { major: 'Engineering Spares - Electrical', minor: 'Motors' },
+    motors: { major: 'Engineering Spares - Electrical', minor: 'Motors' },
+    battery: { major: 'Engineering Spares - Electrical', minor: 'Batteries' },
+    batteries: { major: 'Engineering Spares - Electrical', minor: 'Batteries' },
+    earthing: { major: 'Engineering Spares - Electrical', minor: 'Earthing Items' },
+    capacitor: { major: 'Engineering Spares - Electrical', minor: 'Electrical Capacitors' },
+
+    // ── Civil Works ──
+    'structural steel': { major: 'Civil Works', minor: 'PEB Structure' },
+    'roofing sheet': { major: 'Civil Works', minor: 'Roofing Sheets' },
     'water pipe': { major: 'Civil Works', minor: 'Plumbing' },
+    rebar: { major: 'Civil Works', minor: 'TMT BARS' },
     hdpe: { major: 'Civil Works', minor: 'Plumbing' },
     cpvc: { major: 'Civil Works', minor: 'Plumbing' },
+    upvc: { major: 'Civil Works', minor: 'Plumbing' },
     plumbing: { major: 'Civil Works', minor: 'Plumbing' },
     peb: { major: 'Civil Works', minor: 'PEB Structure' },
     tmt: { major: 'Civil Works', minor: 'TMT BARS' },
     steel: { major: 'Raw Material', minor: 'Steels' },
     tool: { major: 'Engineering Spares - Mechanical', minor: 'Tools & Tackles' },
-    // Personal protective equipment. The model tends to label these with an
-    // umbrella term ('PPE', 'Hand Protection') that is not a taxonomy minor, so
-    // the item text is what routes them.
+    'tmt bar': { major: 'Civil Works', minor: 'TMT BARS' },
+    'tmt bars': { major: 'Civil Works', minor: 'TMT BARS' },
+    bricks: { major: 'Civil Works', minor: 'Bricks' },
+    brick: { major: 'Civil Works', minor: 'Bricks' },
+    paint: { major: 'Civil Works', minor: 'Paints' },
+    paints: { major: 'Civil Works', minor: 'Paints' },
+    waterproofing: { major: 'Civil Works', minor: 'Waterproofing' },
+    scaffolding: { major: 'Civil Works', minor: 'Ladders & Scaffolding' },
+    flooring: { major: 'Civil Works', minor: 'Flooring Material' },
+    tiles: { major: 'Civil Works', minor: 'Flooring Material' },
+
+    // ── Safety & Health ──
     'fire extinguisher': { major: 'Occuptional Health and Safety', minor: 'Fire Extinguishers' },
     'safety jacket': { major: 'Occuptional Health and Safety', minor: 'Safety jackets' },
+    'safety shoe': { major: 'Occuptional Health and Safety', minor: 'Safety Shoes' },
+    'safety shoes': { major: 'Occuptional Health and Safety', minor: 'Safety Shoes' },
+    'safety boots': { major: 'Occuptional Health and Safety', minor: 'Safety Shoes' },
+    'safety helmet': { major: 'Occuptional Health and Safety', minor: 'Helmets' },
+    'hard hat': { major: 'Occuptional Health and Safety', minor: 'Helmets' },
+    helmets: { major: 'Occuptional Health and Safety', minor: 'Helmets' },
+    helmet: { major: 'Occuptional Health and Safety', minor: 'Helmets' },
+    hemlet: { major: 'Occuptional Health and Safety', minor: 'Hemlets' },
+    harness: { major: 'Occuptional Health and Safety', minor: 'Harness' },
+    glove: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    gloves: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    filter: { major: 'Engineering Spares - Mechanical', minor: 'Filters' },
+
+    // ── Packaging & Materials ──
+    'corrugated box': { major: 'Packing Material', minor: 'Corrugated Boxes' },
+    'corrugated roll': { major: 'Packing Material', minor: 'Corrugated Rolls' },
+    'bubble roll': { major: 'Packing Material', minor: 'Bubble Rolls' },
+    'bubble wrap': { major: 'Packing Material', minor: 'Bubble Rolls' },
+    'shrink film': { major: 'Packing Material', minor: 'Shrink Flims' },
+    'stretch film': { major: 'Packing Material', minor: 'Shrink Flims' },
+    pallet: { major: 'Packing Material', minor: 'Pallets' },
+    pallets: { major: 'Packing Material', minor: 'Pallets' },
+    'packaging tape': { major: 'Packing Material', minor: 'Tapes' },
+
+    // ── Raw Materials & Logistics ──
+    steel: { major: 'Raw Material', minor: 'Steels' },
+    lubricant: { major: 'Raw Material', minor: 'Lubricants' },
+    freight: { major: 'Logistics', minor: 'Road transport' },
+    transport: { major: 'Logistics', minor: 'Road transport' },
+
+    // ── Services & Others ──
     'storage rack': { major: 'Others – New Product', minor: 'Storage Racks' },
     consulting: { major: 'Others – New Service', minor: 'Consulting' },
     calibration: { major: 'Others – New Service', minor: 'Calibration Services' },
-    helmet: { major: 'Occuptional Health and Safety', minor: 'Hemlets' },
-    harness: { major: 'Occuptional Health and Safety', minor: 'Harness' },
-    glove: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
-    filter: { major: 'Engineering Spares - Mechanical', minor: 'Filters' },
   },
 };
+
+const DEFAULT_CATEGORY_TAXONOMY = require('./categoryTaxonomyMaster.json');
 
 // ==============================================================================
 // GEMINI AI DOCUMENT EXTRACTION
 // ==============================================================================
 // Mirrors app.gemini.* in the Java p2pservices app, which is the service that
-// currently extracts RFQ line items in production. The API key is read from the
-// environment only and never leaves the server.
+// currently extracts RFQ line items in production. The API keys are read from the
+// environment only and never leave the server. Supports a comma-separated list
+// of multiple keys in GEMINI_API_KEY with round-robin sequential rotation per request
+// to expand rate limits on free tier accounts.
+// Gemini extraction policy is intentionally code-owned rather than environment
+// configurable: one operation may run for up to fifteen minutes, with fixed input
+// limits that protect memory and provider payload size.
+const GEMINI_TOTAL_BUDGET_MS = Number(process.env.GEMINI_TOTAL_BUDGET_MS || 15 * 60 * 1000);
+const GEMINI_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+const GEMINI_MAX_DOCUMENT_TEXT_CHARS = 300000;
+
 const GEMINI_CONFIG = {
-  API_KEY: process.env.GEMINI_API_KEY || '',
-  BACKUP_KEYS: process.env.GEMINI_BACKUP_KEYS || '',
+  API_KEYS: (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEYS) ||
+    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_API_KEYS) ||
+    '',
+  API_KEY: (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) ||
+    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_API_KEY) ||
+    '',
+  BACKUP_KEYS: (typeof process !== 'undefined' && process.env && process.env.GEMINI_BACKUP_KEYS) ||
+    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.GEMINI_BACKUP_KEYS) ||
+    '',
+  DISABLE_TIMEOUT: process.env.GEMINI_DISABLE_TIMEOUT === 'true',
+  KEY_COOLDOWN_MS: Number(
+    process.env.GEMINI_KEY_COOLDOWN_MS !== undefined
+      ? process.env.GEMINI_KEY_COOLDOWN_MS
+      : (process.env.NODE_ENV === 'test' ? 0 : 60000)
+  ),
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
-  // Ordered models attempted in sequence: gemini-3.8-flash down to gemini-3.1-flash-lite.
+  // Ordered models attempted in sequence: gemini-3.5-flash-lite down to reasoning fallback models.
   // Extraction automatically advances through the backup models upon error or 503 overload.
   MODELS: (
     process.env.GEMINI_MODELS ||
-    'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite'
+    'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash'
   )
     .split(',')
     .map((m) => m.trim().replace(/\s+/g, '-'))
     .filter(Boolean),
   get PRIMARY_MODEL() {
-    return this.MODELS[0] || 'gemini-3.8-flash';
+    return this.MODELS[0] || 'gemini-3.5-flash-lite';
   },
   set PRIMARY_MODEL(val) {
     if (val) {
@@ -588,17 +972,14 @@ const GEMINI_CONFIG = {
     const list = Array.isArray(arr) ? arr : (typeof arr === 'string' ? arr.split(',').map((m) => m.trim()) : []);
     this.MODELS = Array.from(new Set([this.PRIMARY_MODEL, ...list].filter(Boolean)));
   },
-  // The primary model measured 12.5s on a small PDF and timed out at 15s on a
-  // real one, so it needs more than the Java service's 15s read timeout to have a
-  // fair chance before the chain moves on.
-  REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 30000),
-  TOTAL_BUDGET_MS: Number(process.env.GEMINI_TOTAL_BUDGET_MS || 60000),
-  // Below this much remaining budget a further attempt cannot finish, so the
-  // chain stops rather than starting a request it will have to abandon.
-  MIN_ATTEMPT_MS: Number(process.env.GEMINI_MIN_ATTEMPT_MS || 3000),
-  // Documents larger than this are rejected before a request is billed.
-  MAX_DOCUMENT_BYTES: Number(process.env.GEMINI_MAX_DOCUMENT_BYTES || 25 * 1024 * 1024),
-  MAX_DOCUMENT_TEXT_CHARS: Number(process.env.GEMINI_MAX_DOCUMENT_TEXT_CHARS || 300000),
+  // Kept as a mutable compatibility field for tests and old callers, but zero
+  // means there is no per-model timeout. Production uses only TOTAL_BUDGET_MS.
+  REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 0),
+  PER_MODEL_TIMEOUT_MS: Number(process.env.GEMINI_PER_MODEL_TIMEOUT_MS || 0),
+  TOTAL_BUDGET_MS: GEMINI_TOTAL_BUDGET_MS,
+  MIN_ATTEMPT_MS: 0,
+  MAX_DOCUMENT_BYTES: GEMINI_MAX_DOCUMENT_BYTES,
+  MAX_DOCUMENT_TEXT_CHARS: GEMINI_MAX_DOCUMENT_TEXT_CHARS,
   // Maximum number of API keys attempted per individual model before advancing
   // to the next fallback model in the chain (prevents long key-retry loops on rate limits).
   MAX_KEY_ATTEMPTS_PER_MODEL: Number(process.env.GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL || 3),
@@ -798,8 +1179,21 @@ function buildZohoConfig() {
     // Refresh the cached access token this many ms before it actually expires, so
     // a request never races a token that's about to go stale mid-flight.
     TOKEN_REFRESH_BUFFER_MS: 60 * 1000,
-    GST_RATE: 0.18,
+    GST_RATE: getSubscriptionGstRate(),
   };
+}
+
+function getSubscriptionGstPercent() {
+  const envVal = process.env.SUBSCRIPTION_GST_PERCENT;
+  if (envVal !== undefined && envVal !== '') {
+    const parsed = Number(envVal);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return 18;
+}
+
+function getSubscriptionGstRate() {
+  return getSubscriptionGstPercent() / 100;
 }
 
 // Same name and shape as before, so every call site is unchanged. Values assigned
@@ -825,49 +1219,118 @@ const ZOHO_CONFIG = new Proxy({}, {
   },
 });
 
-// The app's three vendor subscription plans (VENDOR_SUBSCRIPTION_PLANS above)
-// only carry a display price ('$149' etc.) — no numeric, currency-specific
-// amount a payment request can actually charge. 'premium' is free/auto-granted
-// and never reaches this table. INR chosen to match Zoho's `currency=INR`
-// paymentlinks contract the reference app uses.
-//
-// Base (pre-GST) amount, chosen so computeZohoPlanAmount's 18% GST add-on
-// lands on the real annual offer price shown on the card (Connect ₹7,499,
-// Select ₹14,999) — e.g. 6355.08 * 1.18 = 7498.99, a one-paisa rounding
-// artifact of back-calculating a GST-inclusive sticker price.
-const ZOHO_SUBSCRIPTION_PRICING = {
-  connect: 6355.08,
-  select: 12711.02,
-};
+function getSellerSubscriptionPricing() {
+  const gstRate = (zohoConfigOverrides.GST_RATE !== undefined)
+    ? zohoConfigOverrides.GST_RATE
+    : getSubscriptionGstRate();
+
+  const connect12Inclusive = Number(process.env.SELLER_V1_12M_PRICE || 7499);
+  const connect6Inclusive = Number(process.env.SELLER_V1_6M_PRICE || 4125);
+  const connect12Base = Math.round((connect12Inclusive / (1 + gstRate)) * 100) / 100;
+  const connect6Base = Math.round((connect6Inclusive / (1 + gstRate)) * 100) / 100;
+
+  const select12Inclusive = Number(process.env.SELLER_V2_12M_PRICE || 14999);
+  const select6Inclusive = Number(process.env.SELLER_V2_6M_PRICE || 8250);
+  const select12Base = Math.round((select12Inclusive / (1 + gstRate)) * 100) / 100;
+  const select6Base = Math.round((select6Inclusive / (1 + gstRate)) * 100) / 100;
+
+  const v312Inclusive = Number(process.env.SELLER_V3_12M_PRICE || 19999);
+  const v36Inclusive = Number(process.env.SELLER_V3_6M_PRICE || 11000);
+  const v312Base = Math.round((v312Inclusive / (1 + gstRate)) * 100) / 100;
+  const v36Base = Math.round((v36Inclusive / (1 + gstRate)) * 100) / 100;
+
+  return {
+    connect: { '12_months': connect12Base, '6_months': connect6Base },
+    select: { '12_months': select12Base, '6_months': select6Base },
+    version_3: { '12_months': v312Base, '6_months': v36Base },
+  };
+}
+
+const zohoSubscriptionPricingOverrides = {};
+const ZOHO_SUBSCRIPTION_PRICING = new Proxy({}, {
+  get: (_target, key) => {
+    if (key in zohoSubscriptionPricingOverrides) return zohoSubscriptionPricingOverrides[key];
+    const pricing = getSellerSubscriptionPricing();
+    if (key in pricing) {
+      return pricing[key]['12_months'];
+    }
+    return undefined;
+  },
+  set: (_target, key, val) => {
+    zohoSubscriptionPricingOverrides[key] = val;
+    return true;
+  },
+  deleteProperty: (_target, key) => {
+    delete zohoSubscriptionPricingOverrides[key];
+    return true;
+  },
+  has: (_target, key) => key in zohoSubscriptionPricingOverrides || key in getSellerSubscriptionPricing(),
+  ownKeys: () => [...new Set([...Object.keys(getSellerSubscriptionPricing()), ...Object.keys(zohoSubscriptionPricingOverrides)])],
+  getOwnPropertyDescriptor: (_target, key) => {
+    const val = key in zohoSubscriptionPricingOverrides
+      ? zohoSubscriptionPricingOverrides[key]
+      : (getSellerSubscriptionPricing()[key] ? getSellerSubscriptionPricing()[key]['12_months'] : undefined);
+    if (val === undefined) return undefined;
+    return { enumerable: true, configurable: true, value: val, writable: true };
+  },
+});
 
 /** GST-inclusive amount Zoho actually charges for a plan, 2dp, or null if the plan isn't payable. */
-function computeZohoPlanAmount(planId) {
-  const base = ZOHO_SUBSCRIPTION_PRICING[planId];
-  if (!Number.isFinite(base)) return null;
+function computeZohoPlanAmount(planId, billingDuration = '12_months') {
+  const duration = billingDuration === '6_months' ? '6_months' : '12_months';
+  if (planId in zohoSubscriptionPricingOverrides && duration === '12_months') {
+    const base = zohoSubscriptionPricingOverrides[planId];
+    if (!Number.isFinite(base) || base <= 0) return null;
+    return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
+  }
+  const pricing = getSellerSubscriptionPricing();
+  const planPricing = pricing[planId];
+  if (!planPricing) return null;
+  const base = typeof planPricing === 'number' ? planPricing : planPricing[duration];
+  if (!Number.isFinite(base) || base <= 0) return null;
   return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
 }
 
-// Buyer subscription pricing supporting 12-month and 6-month durations.
-// Base monthly rates:
-// Version 1: 12-Month ₹4,999/mo | 6-Month ₹5,499/mo
-// Version 2: 12-Month ₹7,499/mo | 6-Month ₹7,999/mo
-// Version 3: 12-Month ₹9,999/mo | 6-Month ₹10,499/mo
-//
-// Total charged = (monthlyRate * months) + 18% GST.
-const ZOHO_BUYER_SUBSCRIPTION_PRICING = {
-  version_1: {
-    '12_months': 4999,
-    '6_months': 5499,
+function getBuyerSubscriptionPricing() {
+  return {
+    version_1: {
+      '12_months': Number(process.env.BUYER_V1_12M_PRICE || 4999),
+      '6_months': Number(process.env.BUYER_V1_6M_PRICE || 5499),
+    },
+    version_2: {
+      '12_months': Number(process.env.BUYER_V2_12M_PRICE || 7499),
+      '6_months': Number(process.env.BUYER_V2_6M_PRICE || 7999),
+    },
+    version_3: {
+      '12_months': Number(process.env.BUYER_V3_12M_PRICE || 9999),
+      '6_months': Number(process.env.BUYER_V3_6M_PRICE || 10499),
+    },
+  };
+}
+
+const zohoBuyerPricingOverrides = {};
+const ZOHO_BUYER_SUBSCRIPTION_PRICING = new Proxy({}, {
+  get: (_target, key) => {
+    if (key in zohoBuyerPricingOverrides) return zohoBuyerPricingOverrides[key];
+    const pricing = getBuyerSubscriptionPricing();
+    return pricing[key];
   },
-  version_2: {
-    '12_months': 7499,
-    '6_months': 7999,
+  set: (_target, key, val) => {
+    zohoBuyerPricingOverrides[key] = val;
+    return true;
   },
-  version_3: {
-    '12_months': 9999,
-    '6_months': 10499,
+  deleteProperty: (_target, key) => {
+    delete zohoBuyerPricingOverrides[key];
+    return true;
   },
-};
+  has: (_target, key) => key in zohoBuyerPricingOverrides || key in getBuyerSubscriptionPricing(),
+  ownKeys: () => [...new Set([...Object.keys(getBuyerSubscriptionPricing()), ...Object.keys(zohoBuyerPricingOverrides)])],
+  getOwnPropertyDescriptor: (_target, key) => {
+    const val = key in zohoBuyerPricingOverrides ? zohoBuyerPricingOverrides[key] : getBuyerSubscriptionPricing()[key];
+    if (val === undefined) return undefined;
+    return { enumerable: true, configurable: true, value: val, writable: true };
+  },
+});
 
 /** GST-inclusive amount Zoho actually charges for a buyer plan (monthlyRate * durationMonths * 1.18), or null if the plan isn't payable. */
 function computeZohoBuyerPlanAmount(planId, billingDuration = '12_months') {
@@ -876,9 +1339,109 @@ function computeZohoBuyerPlanAmount(planId, billingDuration = '12_months') {
   const duration = billingDuration === '6_months' ? '6_months' : '12_months';
   const months = duration === '6_months' ? 6 : 12;
   const monthlyRate = typeof planPricing === 'number' ? planPricing : planPricing[duration];
-  if (!Number.isFinite(monthlyRate)) return null;
+  if (!Number.isFinite(monthlyRate) || monthlyRate <= 0) return null;
   const base = monthlyRate * months;
   return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
+}
+
+function getSubscriptionPricingConfig() {
+  const gstPercent = getSubscriptionGstPercent();
+  const gstRate = ZOHO_CONFIG.GST_RATE ?? getSubscriptionGstRate();
+  const buyerPricing = getBuyerSubscriptionPricing();
+  const sellerPricing = getSellerSubscriptionPricing();
+
+  const makeBuyerDuration = (planId, dur, months) => {
+    const monthlyRate = buyerPricing[planId][dur];
+    const baseTotal = monthlyRate * months;
+    const gstAmount = Math.round(baseTotal * gstRate * 100) / 100;
+    const totalAmount = computeZohoBuyerPlanAmount(planId, dur);
+    return {
+      monthlyRate,
+      price: monthlyRate,
+      months,
+      baseTotal,
+      baseDurationPrice: baseTotal,
+      gstAmount,
+      totalAmountWithGst: totalAmount,
+      totalWithGst: totalAmount,
+    };
+  };
+
+  const makeSellerDuration = (planId, dur) => {
+    const baseAmount = sellerPricing[planId][dur];
+    const gstAmount = Math.round(baseAmount * gstRate * 100) / 100;
+    const totalAmount = computeZohoPlanAmount(planId, dur);
+    return {
+      baseAmount,
+      price: totalAmount,
+      baseDurationPrice: baseAmount,
+      gstAmount,
+      totalAmountWithGst: totalAmount,
+      totalWithGst: totalAmount,
+    };
+  };
+
+  const v1_12 = makeBuyerDuration('version_1', '12_months', 12);
+  const v1_6 = makeBuyerDuration('version_1', '6_months', 6);
+  const v2_12 = makeBuyerDuration('version_2', '12_months', 12);
+  const v2_6 = makeBuyerDuration('version_2', '6_months', 6);
+  const v3_12 = makeBuyerDuration('version_3', '12_months', 12);
+  const v3_6 = makeBuyerDuration('version_3', '6_months', 6);
+
+  const conn_12 = makeSellerDuration('connect', '12_months');
+  const conn_6 = makeSellerDuration('connect', '6_months');
+  const sel_12 = makeSellerDuration('select', '12_months');
+  const sel_6 = makeSellerDuration('select', '6_months');
+
+  return {
+    gstPercent,
+    gstRate,
+    buyer: {
+      version_1: {
+        id: 'version_1',
+        name: 'Silver Plan (Mode 1)',
+        '12_months': v1_12,
+        '6_months': v1_6,
+        pricing: { '12_months': v1_12, '6_months': v1_6 },
+      },
+      version_2: {
+        id: 'version_2',
+        name: 'Gold Plan (Mode 2)',
+        '12_months': v2_12,
+        '6_months': v2_6,
+        pricing: { '12_months': v2_12, '6_months': v2_6 },
+      },
+      version_3: {
+        id: 'version_3',
+        name: 'Diamond Plan (Mode 3)',
+        '12_months': v3_12,
+        '6_months': v3_6,
+        pricing: { '12_months': v3_12, '6_months': v3_6 },
+      },
+    },
+    seller: {
+      premium: {
+        id: 'premium',
+        name: 'Premium Model',
+        free: true,
+        price: 'Free',
+      },
+      connect: {
+        id: 'connect',
+        name: 'Connect Model',
+        '12_months': conn_12,
+        '6_months': conn_6,
+        pricing: { '12_months': conn_12, '6_months': conn_6 },
+      },
+      select: {
+        id: 'select',
+        name: 'Select Model',
+        '12_months': sel_12,
+        '6_months': sel_6,
+        pricing: { '12_months': sel_12, '6_months': sel_6 },
+      },
+    },
+  };
 }
 
 // ==============================================================================
@@ -894,14 +1457,14 @@ const EMAIL_GATEWAY_CONFIG = {
   MIN_POLL_MS: 30000,
   // Cap per pass so a backlog cannot spend unbounded time and quota in one run.
   DEFAULT_MAX_PER_POLL: 10,
-  // Inbound requisitions are held for a category manager to check. The kanban
-  // already renders this column and nothing else writes to it.
-  INGESTED_STATUS: 'Parsing',
+  // Inbound requisitions circulate to category-matched vendors upon creation, transitioning to Quotes Pending.
+  INGESTED_STATUS: 'Quotes Pending',
   // Default sourcing mode for email-ingested RFQs: Version 2 (Hybrid Sourcing).
   INGESTED_SOURCING_MODE: 'mode_2',
   // Emails have no file name; this stands in wherever one is recorded.
   SYNTHETIC_FILE_NAME: 'inbound-email.eml',
   DEFAULT_GATEWAY_ADDRESS: 'rfq@procucev.com',
+  DEFAULT_FALLBACK_RFQ_TITLE: 'Request for Quotation',
   MAX_LINE_ITEMS_PER_RFQ: 49,
 };
 
@@ -1027,39 +1590,181 @@ const BUYER_SUBSCRIPTION_TO_SOURCING_MODE = {
 };
 
 /**
+ * Helper to unwrap raw JSON payload from D1/Postgres database rows if present.
+ */
+function unwrapAccountData(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  if (obj.raw) {
+    if (typeof obj.raw === 'string') {
+      try {
+        const parsed = JSON.parse(obj.raw);
+        return { ...parsed, ...obj };
+      } catch (_) {}
+    } else if (typeof obj.raw === 'object') {
+      return { ...obj.raw, ...obj };
+    }
+  }
+  return obj;
+}
+
+/**
+ * Check if a buyer account has database-configured unlimited RFQ creation access.
+ * Reads database-level flags without hardcoding any identity credentials.
+ */
+function hasUnlimitedRfqAccess(account) {
+  const data = unwrapAccountData(account);
+  if (!data || typeof data !== 'object') return false;
+  return Boolean(
+    data.unlimitedRfqAccess === true ||
+    data.unlimitedAccess === true ||
+    data.isUnlimited === true ||
+    String(data.subscriptionPlan || '').trim().toLowerCase() === 'unlimited'
+  );
+}
+
+/**
+ * Check if a vendor account has database-configured unlimited quote submission access.
+ * Reads database-level flags without hardcoding any identity credentials.
+ */
+function hasUnlimitedQuoteAccess(vendor) {
+  const data = unwrapAccountData(vendor);
+  if (!data || typeof data !== 'object') return false;
+  return Boolean(
+    data.unlimitedQuoteSubmissions === true ||
+    data.unlimitedQuotes === true ||
+    data.unlimitedAccess === true ||
+    data.isUnlimited === true
+  );
+}
+
+/**
+ * Check if a vendor account has database-configured unlimited RFQ download access.
+ * Reads database-level flags without hardcoding any identity credentials.
+ */
+function hasUnlimitedDownloadAccess(vendor) {
+  const data = unwrapAccountData(vendor);
+  if (!data || typeof data !== 'object') return false;
+  return Boolean(
+    data.unlimitedRfqDownloads === true ||
+    data.unlimitedDownloads === true ||
+    data.unlimitedAccess === true ||
+    data.isUnlimited === true
+  );
+}
+
+/**
+ * Entitled sourcing modes per subscription plan tier.
+ */
+const SUBSCRIPTION_MODE_ENTITLEMENTS = {
+  free_trial: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
+  version_0: ['mode_0'],
+  v0: ['mode_0'],
+  version_1: ['mode_0', 'mode_1'],
+  version_2: ['mode_0', 'mode_1', 'mode_2'],
+  version_3: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
+  unlimited: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
+};
+
+/**
  * Resolves the RFQ version / sourcing mode based upon the subscription of the buyer.
  * Defaults to INGESTED_SOURCING_MODE ('mode_2') for free starter trial / unselected plan.
  *
  * @param {Object|string|null|undefined} buyerAccountOrPlan - Buyer account object or subscription plan string
+ * @param {string} [preferredMode] - Optional requested mode
  * @returns {string} Sourcing mode ('mode_0' | 'mode_1' | 'mode_2' | 'mode_3')
  */
-function resolveBuyerSourcingMode(buyerAccountOrPlan) {
+function resolveBuyerSourcingMode(buyerAccountOrPlan, preferredMode = null) {
   let plan = null;
+  let subscriptions = [];
+  let isExpired = false;
+  let isInactive = false;
   let remainingFreeRFQs = undefined;
 
   if (typeof buyerAccountOrPlan === 'object' && buyerAccountOrPlan !== null) {
-    plan = buyerAccountOrPlan.subscriptionPlan;
+    // Database-level unlimited access bypasses subscription restrictions
+    if (hasUnlimitedRfqAccess(buyerAccountOrPlan)) {
+      const requestedMode = (preferredMode || buyerAccountOrPlan.sourcingMode || buyerAccountOrPlan.sourcing_mode || '').trim().toLowerCase();
+      if (['mode_0', 'v0', 'version_0'].includes(requestedMode)) return 'mode_0';
+      if (['mode_1', 'v1', 'version_1'].includes(requestedMode)) return 'mode_1';
+      if (['mode_2', 'v2', 'version_2'].includes(requestedMode)) return 'mode_2';
+      if (['mode_3', 'v3', 'version_3'].includes(requestedMode)) return 'mode_3';
+      return 'mode_3';
+    }
+
+    plan = buyerAccountOrPlan.subscriptionPlan || buyerAccountOrPlan.activeSubscription || null;
     remainingFreeRFQs = buyerAccountOrPlan.remainingFreeRFQs;
+    if (Array.isArray(buyerAccountOrPlan.subscriptions)) {
+      subscriptions = buyerAccountOrPlan.subscriptions;
+    }
+    const status = String(buyerAccountOrPlan.subscriptionStatus || buyerAccountOrPlan.status || '').toLowerCase();
+    if (status === 'expired' || status === 'inactive') {
+      isExpired = true;
+    }
+    const expiry = buyerAccountOrPlan.subscriptionExpiry || buyerAccountOrPlan.expiresAt;
+    if (expiry && !isNaN(new Date(expiry).getTime()) && new Date(expiry).getTime() < Date.now()) {
+      isExpired = true;
+    }
   } else if (typeof buyerAccountOrPlan === 'string') {
     plan = buyerAccountOrPlan;
   }
 
-  // 1. Subscription-based version assignment takes priority:
-  // V1 for V1 subscribers, V2 for V2 subscribers, V3 for V3 subscribers, V0 for V0 subscribers.
-  if (typeof plan === 'string') {
-    const normalized = plan.trim().toLowerCase();
-    if (BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized]) {
-      return BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized];
+  // Handle multiple active subscriptions (V3 > V2 > V1 > V0)
+  if (Array.isArray(subscriptions) && subscriptions.length > 0) {
+    const activeSubs = subscriptions.filter((sub) => {
+      if (!sub) return false;
+      const subStatus = String(sub.status || '').toLowerCase();
+      if (subStatus === 'expired' || subStatus === 'inactive' || sub.active === false) return false;
+      const subExpiry = sub.expiresAt || sub.expiryDate || sub.validUntil;
+      if (subExpiry && !isNaN(new Date(subExpiry).getTime()) && new Date(subExpiry).getTime() < Date.now()) {
+        return false;
+      }
+      return true;
+    });
+
+    if (activeSubs.length > 0) {
+      const activePlans = activeSubs.map((s) => String(s.plan || s.subscriptionPlan || s.id || '').trim().toLowerCase());
+      if (activePlans.some((p) => p === 'unlimited' || p === 'version_3' || p === 'v3' || p === 'mode_3')) {
+        return 'mode_3';
+      }
+      if (activePlans.some((p) => p === 'version_2' || p === 'v2' || p === 'mode_2')) {
+        return 'mode_2';
+      }
+      if (activePlans.some((p) => p === 'version_1' || p === 'v1' || p === 'mode_1')) {
+        return 'mode_1';
+      }
+      if (activePlans.some((p) => p === 'version_0' || p === 'v0' || p === 'mode_0')) {
+        return 'mode_0';
+      }
     }
   }
 
-  // 2. For buyers without a subscription (free trial / no active plan):
-  // Assign V2 for the first 5 free RFQs and switch to V0 after free credits are exhausted.
-  if (remainingFreeRFQs !== undefined && Number(remainingFreeRFQs) <= 0) {
+  // Expired or inactive subscriptions are not considered; default to mode_0
+  if (isExpired || isInactive) {
     return 'mode_0';
   }
 
-  return EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE || 'mode_2';
+  // Check single active subscription
+  if (typeof plan === 'string') {
+    const normalized = plan.trim().toLowerCase();
+    if (normalized === 'unlimited') {
+      return 'mode_3';
+    }
+    if (['version_1', 'v1', 'mode_1'].includes(normalized)) {
+      return 'mode_1';
+    }
+    if (['version_2', 'v2', 'mode_2'].includes(normalized)) {
+      return 'mode_2';
+    }
+    if (['version_3', 'v3', 'mode_3'].includes(normalized)) {
+      return 'mode_3';
+    }
+    if (['version_0', 'v0', 'mode_0'].includes(normalized)) {
+      return 'mode_0';
+    }
+  }
+
+  // No active V1/V2/V3 subscription -> default automatically to mode_0 (V0)
+  return 'mode_0';
 }
 
 /** Connection state reported to the gateway panel. */
@@ -1180,19 +1885,140 @@ const UNAUTHORIZED_BUYER_NOTIFICATION = {
   DEFAULT_GATEWAY_EMAIL: 'RFQ@procucev.com',
 };
 
-/** RFQ creation acknowledgement notification sent to the buyer. */
+/** RFQ creation acknowledgement notification sent to the buyer (Qua AI Email 2 Standard). */
 const RFQ_ACKNOWLEDGEMENT_NOTIFICATION = {
-  SUBJECT: 'Great news! Your requirement has been converted into RFQ #{rfqNumber}',
-  HEADLINE: 'PROCUCEV ENTERPRISE',
+  SUBJECT: 'Congratulations, RFQ {rfq_id} is live. Qua AI is on it',
+  LEGACY_SUBJECT: 'Great news! Your requirement has been converted into RFQ #{rfqNumber}',
+  HEADLINE: 'QUA AI AUTONOMOUS PROCUREMENT',
   SUBLINE: 'RFQ Creation Acknowledgement',
-  SUPPORT_PHONE: '+91-7996170801',
-  SUPPORT_EMAIL: 'RFQ@procucev.com / support@procucev.com',
+  SUPPORT_PHONE: '+91 8247722944',
+  SUPPORT_EMAIL: 'info@procucev.com',
   DEFAULT_GATEWAY_EMAIL: 'RFQ@procucev.com',
-  TEAM_SIGNATURE: 'Team Procucev',
-  QUOTES_TIMELINE: 'Quotes typically start coming in within 24–48 hours.',
-  NEED_IT_FASTER: 'Need it faster or have a follow-up requirement?',
-  CLOSING: "Just drop us your requirement anytime — we'll take it from there!",
+  TEAM_SIGNATURE: 'Team Qua AI\nProcucev Enterprise Solutions',
+  QUOTES_TIMELINE: 'Suppliers start quoting within about 24 hours. Qua AI follows up with them and sends you the quotations side by side.',
+  NEED_IT_FASTER: 'For any further questions or clarifications, please reach out to +91 8247722944/email to info@procucev.com',
+  CLOSING: 'Next time, just email your requirement to RFQ@procucev.com again.',
 };
+
+/**
+ * Qua AI 13 Transactional Email Templates Configuration
+ */
+const QUA_AI_EMAIL_TEMPLATES = {
+  EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED: {
+    id: 'EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED',
+    number: 1,
+    name: 'RFQ created from email, account auto-created',
+    who: 'Unregistered buyer',
+    trigger: 'An unknown email address writes to RFQ@procucev.com. Qua AI creates a profile with the email ID and dummy details, creates the RFQ, then sends this email.',
+    subject: 'Congratulations, your RFQ {rfq_id} is live on Qua AI',
+  },
+  EMAIL_2_RFQ_CREATED: {
+    id: 'EMAIL_2_RFQ_CREATED',
+    number: 2,
+    name: 'RFQ created',
+    who: 'Registered buyer',
+    trigger: "A logged-in buyer creates an RFQ on the platform, or a registered buyer's email to RFQ@procucev.com is converted into an RFQ.",
+    subject: 'Congratulations, RFQ {rfq_id} is live. Qua AI is on it',
+  },
+  EMAIL_3_NEW_RFQ_INTIMATION: {
+    id: 'EMAIL_3_NEW_RFQ_INTIMATION',
+    number: 3,
+    name: 'New RFQ intimation',
+    who: 'Unregistered vendor',
+    trigger: 'Qua AI matches an RFQ to a supplier in the Procucev network who has no account yet.',
+    subject: 'New buyer enquiry for {category}: quote by {quote_deadline}',
+  },
+  EMAIL_4_NEW_RFQ_TO_QUOTE: {
+    id: 'EMAIL_4_NEW_RFQ_TO_QUOTE',
+    number: 4,
+    name: 'New RFQ to quote',
+    who: 'Registered vendor',
+    trigger: "A new RFQ matches the categories on a registered vendor's profile.",
+    subject: 'New RFQ {rfq_id}: {rfq_title}, quotes close {quote_deadline}',
+  },
+  EMAIL_5_QUOTATIONS_READY_TO_COMPARE: {
+    id: 'EMAIL_5_QUOTATIONS_READY_TO_COMPARE',
+    number: 5,
+    name: 'Quotations ready to compare',
+    who: 'Buyer (registered or auto-created)',
+    trigger: 'First quotation received on an RFQ, then a final digest when the quote deadline passes.',
+    subject: '{quote_count} quotes in for RFQ {rfq_id}: compare now',
+  },
+  EMAIL_6_ACTIVATE_YOUR_ACCOUNT: {
+    id: 'EMAIL_6_ACTIVATE_YOUR_ACCOUNT',
+    number: 6,
+    name: 'Activate your account',
+    who: 'Unregistered buyer (account auto-created in Email 1)',
+    trigger: 'No login 24 hours after Email 1; repeat once at 72 hours.',
+    subject: 'Suppliers are waiting on RFQ {rfq_id}',
+  },
+  EMAIL_7_RFQ_NEEDS_MORE_INFORMATION: {
+    id: 'EMAIL_7_RFQ_NEEDS_MORE_INFORMATION',
+    number: 7,
+    name: 'RFQ needs more information',
+    who: 'Buyer (registered or unregistered)',
+    trigger: "Qua AI can't confirm a quantity, specification, delivery location or attachment from the buyer's email or upload.",
+    subject: 'One detail needed to send RFQ {rfq_id} to suppliers',
+  },
+  EMAIL_8_NO_QUOTES_YET: {
+    id: 'EMAIL_8_NO_QUOTES_YET',
+    number: 8,
+    name: 'No quotes yet',
+    who: 'Buyer',
+    trigger: 'Zero quotes received 48 hours before the quote deadline.',
+    subject: "RFQ {rfq_id}: let's get you more quotes",
+  },
+  EMAIL_9_QUOTE_DEADLINE_REMINDER: {
+    id: 'EMAIL_9_QUOTE_DEADLINE_REMINDER',
+    number: 9,
+    name: 'Quote deadline reminder',
+    who: 'Vendor (registered or unregistered)',
+    trigger: "24 hours before the quote deadline, to vendors who were notified or viewed the RFQ but haven't quoted.",
+    subject: '24 hours left to quote on {rfq_title}',
+  },
+  EMAIL_10_LOW_OR_ZERO_CREDITS: {
+    id: 'EMAIL_10_LOW_OR_ZERO_CREDITS',
+    number: 10,
+    name: 'Low or zero credits',
+    who: 'Registered vendor',
+    trigger: 'Credit balance falls below 2, or the vendor tries to open an RFQ with zero credits.',
+    subject: "You have {credit_balance} credits left: don't miss the next RFQ",
+  },
+  EMAIL_11_QUOTE_SUBMITTED: {
+    id: 'EMAIL_11_QUOTE_SUBMITTED',
+    number: 11,
+    name: 'Quote submitted',
+    who: 'Vendor',
+    trigger: 'Vendor submits a quotation on an RFQ.',
+    subject: 'Your quote for RFQ {rfq_id} has been received',
+  },
+  EMAIL_12_RFQ_REVISED_BUYER_QUESTION: {
+    id: 'EMAIL_12_RFQ_REVISED_BUYER_QUESTION',
+    number: 12,
+    name: 'RFQ revised / buyer question',
+    who: 'Vendor (notified on or quoted on the RFQ)',
+    trigger: 'Buyer edits the RFQ (quantity, spec, date) or posts a clarification question.',
+    subject: 'Update on RFQ {rfq_id}: please review',
+  },
+  EMAIL_13_COMPLETE_YOUR_PROFILE: {
+    id: 'EMAIL_13_COMPLETE_YOUR_PROFILE',
+    number: 13,
+    name: 'Complete your profile',
+    who: 'Unregistered vendor (received Email 3)',
+    trigger: 'Profile not completed 48 hours after Email 3.',
+    subject: 'Your RFQ for {category} closes {quote_deadline}',
+  },
+};
+
+const QUA_AI_EMAIL_SUPPORT = {
+  PHONE: '+91 8247722944',
+  EMAIL: 'info@procucev.com',
+  TEAM_SIGNATURE: 'Team Qua AI',
+  COMPANY_NAME: 'Procucev Enterprise Solutions',
+};
+
+const VENDOR_QUOTE_SUPPORT_CC = process.env.VENDOR_QUOTE_SUPPORT_CC || '';
+
 
 /** Outcome of preparing an email for extraction. */
 const EMAIL_INGESTION_STATUS = {
@@ -1810,6 +2636,11 @@ module.exports = {
   computeZohoPlanAmount,
   ZOHO_BUYER_SUBSCRIPTION_PRICING,
   computeZohoBuyerPlanAmount,
+  getSubscriptionPricingConfig,
+  getSubscriptionGstPercent,
+  getSubscriptionGstRate,
+  getBuyerSubscriptionPricing,
+  getSellerSubscriptionPricing,
   EMAIL_REGEX,
   GSTIN_REGEX,
   GSTIN_MESSAGE,
@@ -1834,8 +2665,24 @@ module.exports = {
   validatePayload,
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
+  SUBSCRIPTION_MODE_ENTITLEMENTS,
+  hasUnlimitedRfqAccess,
+  hasUnlimitedQuoteAccess,
+  hasUnlimitedDownloadAccess,
   CHASER_DELAYS,
   SMS_DLT_TEMPLATES,
   PRESENCE_ONLINE_THRESHOLD_MS,
   VENDOR_ASSIGNMENT_LIMITS,
+  RFQ_MODES,
+  RFQ_MODE_LABELS,
+  RFQ_MODE_MAP,
+  ALLOWED_EXTENSION_HOURS,
+  DEFAULT_EXTENSION_HOURS,
+  DEFAULT_CATEGORY_TAXONOMY,
+  MAJOR_CATEGORY_ALIASES: RFQ_CATEGORY_CLASSIFICATION.MAJOR_CATEGORY_ALIASES,
+  QUA_AI_EMAIL_TEMPLATES,
+  QUA_AI_EMAIL_SUPPORT,
+  VENDOR_QUOTE_SUPPORT_CC,
+  INQUIRIES_PERSISTENCE_FILE,
 };
+

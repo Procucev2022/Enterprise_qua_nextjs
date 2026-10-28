@@ -1,10 +1,11 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, cleanup } from '@testing-library/react';
 import { RFQDeleteDialog, RFQEditModal, changedFields, toFormState, validateRFQEdit } from '@/app/buyer/RFQEditModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { formatIndianDateTime } from '@/lib/constants';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
 import type { ExtractedEntity, RFQAttachment, RFQEditFormState, RFQItem } from '@/lib/types';
+import * as validationSchemas from '@/lib/validationSchemas';
 
 jest.mock('@/lib/rfqClient', () => ({
   uploadRFQAttachment: jest.fn(),
@@ -1111,6 +1112,394 @@ describe('RFQDeleteDialog', () => {
     await waitFor(() => {
       const locInput = document.getElementById('rfq-edit-location') as HTMLInputElement;
       expect(locInput.value).toBe('Thane, Maharashtra');
+    });
+  });
+
+  describe('RFQEditModal branch boosters', () => {
+    it('rejects past targetDeliveryDate in validateRFQEdit', () => {
+      const state = toFormState(buildRFQ());
+      state.targetDeliveryDate = '2020-01-01';
+      const errors = validateRFQEdit(state);
+      expect(errors.targetDeliveryDate).toBe(EDIT.targetDateCannotBePast);
+    });
+
+    it('applies apiPincodeError to deliveryPincode in validateRFQEdit', () => {
+      const state = toFormState(buildRFQ());
+      const errors = validateRFQEdit(state, 'Pincode not serviceable');
+      expect(errors.deliveryPincode).toBe('Pincode not serviceable');
+    });
+
+    it('transitions status from Parsing to Quotes Pending when line items are categorized', () => {
+      const rfq = buildRFQ({ status: 'Parsing' });
+      const state = toFormState(rfq);
+      state.lineItems[0].majorCategory = MAJOR;
+      state.lineItems[0].minorCategory = MINOR;
+      const changes = changedFields(rfq, state);
+      expect(changes.status).toBe('Quotes Pending');
+    });
+
+    it('edits row technical specs, unit, and target date', () => {
+      renderEdit(buildRFQ());
+      const specsInput = screen.getByLabelText(EDIT.colSpecs);
+      fireEvent.change(specsInput, { target: { value: 'Inconel 625 Impeller' } });
+      expect(specsInput).toHaveValue('Inconel 625 Impeller');
+
+      const unitInput = screen.getByLabelText(EDIT.colUnit);
+      fireEvent.change(unitInput, { target: { value: 'Sets' } });
+      expect(unitInput).toHaveValue('Sets');
+
+      const targetDateInput = screen.getByLabelText(EDIT.colTargetDate);
+      fireEvent.change(targetDateInput, { target: { value: A_DIFFERENT_FUTURE_DATE } });
+      expect(targetDateInput).toHaveValue(A_DIFFERENT_FUTURE_DATE);
+    });
+
+    it('handles auto-categorize failure and API rejection', async () => {
+      rfqClient.classifyLineItems.mockResolvedValueOnce({ success: false, error: 'Taxonomy server timeout' });
+      const rfq = buildRFQ();
+      rfq.extractedEntities = [{ ...entity(), majorCategory: '', minorCategory: '' }];
+      renderEdit(rfq);
+
+      const autoBtn = screen.getByText(/Auto-Categorize All/i);
+      fireEvent.click(autoBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText('Taxonomy server timeout')).toBeInTheDocument();
+      });
+
+      // API throws exception
+      rfqClient.classifyLineItems.mockRejectedValueOnce(new Error('Network Crash'));
+      fireEvent.click(autoBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText(EDIT.classifyFailed)).toBeInTheDocument();
+      });
+    });
+
+    it('handles PIN code validation branches for dummy, invalid, whitespace, and empty values', () => {
+      renderEdit(buildRFQ({ deliveryPincode: '' }));
+      const pinInput = document.getElementById('rfq-edit-pincode') as HTMLInputElement;
+      const saveBtn = screen.getByRole('button', { name: /Save Changes/i });
+
+      // Dummy pincode
+      fireEvent.change(pinInput, { target: { value: '000000' } });
+      fireEvent.click(saveBtn);
+      expect(screen.getByText(EDIT.deliveryPincodeDummy)).toBeInTheDocument();
+
+      // Invalid format with length >= 3
+      fireEvent.change(pinInput, { target: { value: '$$$$' } });
+      fireEvent.click(saveBtn);
+      expect(screen.getByText(EDIT.deliveryPincodeInvalid)).toBeInTheDocument();
+
+      // Whitespace raw
+      fireEvent.change(pinInput, { target: { value: '   ' } });
+
+      // Empty pincode
+      fireEvent.change(pinInput, { target: { value: '' } });
+      fireEvent.click(saveBtn);
+      expect(screen.getByText(EDIT.deliveryPincodeRequired)).toBeInTheDocument();
+    });
+
+    it('covers auto-categorize with pre-existing detectedMajor', async () => {
+      rfqClient.classifyLineItems.mockResolvedValueOnce({
+        success: true,
+        data: {
+          extractedEntities: [
+            {
+              id: 'ent-2',
+              itemName: 'Ball Bearings',
+              majorCategory: MAJOR,
+              minorCategory: MINOR,
+            },
+          ],
+        },
+      });
+
+      const rfq = buildRFQ();
+      rfq.category = '';
+      rfq.extractedEntities = [
+        { ...entity({ id: 'ent-1', majorCategory: MAJOR, minorCategory: MINOR }) },
+        { ...entity({ id: 'ent-2', majorCategory: '', minorCategory: '' }) },
+      ];
+      renderEdit(rfq);
+
+      const autoBtn = screen.getByText(/Auto-Categorize All/i);
+      fireEvent.click(autoBtn);
+
+      await waitFor(() => {
+        expect(rfqClient.classifyLineItems).toHaveBeenCalled();
+      });
+    });
+
+    it('debounces and handles pincode debounce with API failure and success', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          {
+            Status: 'Error',
+            Message: 'No records found',
+          },
+        ],
+      } as unknown as Response);
+
+      renderEdit(buildRFQ({ deliveryPincode: '' }));
+      const pinInput = document.getElementById('rfq-edit-pincode') as HTMLInputElement;
+
+      fireEvent.change(pinInput, { target: { value: '560001' } });
+
+      await waitFor(
+        () => {
+          expect(screen.getByText('Invalid')).toBeInTheDocument();
+        },
+        { timeout: 3000 }
+      );
+
+      // Now test successful debounce resolution
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          {
+            Status: 'Success',
+            PostOffice: [
+              {
+                Name: 'Vashi',
+                District: 'Thane',
+                State: 'Maharashtra',
+              },
+            ],
+          },
+        ],
+      } as unknown as Response);
+
+      fireEvent.change(pinInput, { target: { value: '400703' } });
+
+      await waitFor(
+        () => {
+          expect(screen.getByText('Valid')).toBeInTheDocument();
+        },
+        { timeout: 3000 }
+      );
+    });
+
+    it('covers toFormState fallback branches for raw entities, budget spellings and deadline', () => {
+      const state1 = toFormState({
+        rfqNumber: 'RFQ-001',
+        extractedEntities: 'invalid-non-array' as any,
+        estimated_budget: '75000',
+        deadline: '2026-12-31',
+      });
+      expect(state1.lineItems).toEqual([]);
+      expect(state1.budget).toBe(75000);
+      expect(state1.targetDeliveryDate).toBe('2026-12-31');
+
+      const state2 = toFormState({
+        rfqNumber: 'RFQ-002',
+        budget: 'invalid-budget-string',
+      });
+      expect(state2.budget).toBeNull();
+
+      const state3 = toFormState({
+        rfqNumber: 'RFQ-003',
+        budget: -500,
+      });
+      expect(state3.budget).toBeNull();
+    });
+
+    it('covers line item targetDate past date validation in validateRFQEdit', () => {
+      const state = toFormState(buildRFQ());
+      state.lineItems[0].targetDate = '2020-01-01';
+      const errors = validateRFQEdit(state);
+      expect(errors.lineItems).toContain('Row 1: Target date cannot be earlier than today.');
+    });
+
+    it('covers sameLineItems fallback when entity optional fields are undefined', () => {
+      const rfq = buildRFQ({
+        extractedEntities: [
+          {
+            id: 'ent-1',
+            itemName: 'Item 1',
+            quantity: 10,
+            technicalSpecs: undefined,
+            unit: undefined,
+            targetDate: undefined,
+            majorCategory: MAJOR,
+            minorCategory: MINOR,
+          } as any,
+        ],
+      });
+      const form = toFormState(rfq);
+      const changes = changedFields(rfq, form);
+      expect(changes.extractedEntities).toBeUndefined();
+    });
+
+    it('covers changedFields parsing status branch when categories are incomplete', () => {
+      const rfq = buildRFQ({
+        status: 'Parsing',
+        extractedEntities: [
+          entity({ majorCategory: MAJOR, minorCategory: MAJOR }), // minor same as major
+        ],
+      });
+      const form = toFormState(rfq);
+      const changes = changedFields(rfq, form);
+      expect(changes.status).toBeUndefined();
+    });
+
+    it('covers handlePincodeBlur edge cases: empty, dummy, invalid and empty offices', async () => {
+      const { rerender } = renderEdit(buildRFQ({ deliveryPincode: '' }));
+      const pinInput = document.getElementById('rfq-edit-pincode') as HTMLInputElement;
+
+      // Empty pincode blur
+      fireEvent.change(pinInput, { target: { value: '' } });
+      fireEvent.blur(pinInput);
+
+      // Dummy pincode blur
+      fireEvent.change(pinInput, { target: { value: '111111' } });
+      fireEvent.blur(pinInput);
+
+      // API returns failure
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [{ Status: 'Error', Message: 'Postal code not recognized' }],
+      } as unknown as Response);
+      fireEvent.change(pinInput, { target: { value: '560001' } });
+      fireEvent.blur(pinInput);
+
+      // API returns success with empty post offices (resolvedLoc is null)
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [{ Status: 'Success', PostOffice: [] }],
+      } as unknown as Response);
+      fireEvent.change(pinInput, { target: { value: '560002' } });
+      fireEvent.blur(pinInput);
+
+      // API throws network error (caught silently in blur)
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+      fireEvent.change(pinInput, { target: { value: '560003' } });
+      fireEvent.blur(pinInput);
+    });
+
+    it('covers handleAutoCategorizeAll with no blank items, invalid taxonomy and missing match', async () => {
+      // No blank items
+      const rfq = buildRFQ({
+        category: 'Existing Category',
+        extractedEntities: [entity({ id: 'ent-1', majorCategory: MAJOR, minorCategory: MINOR })],
+      });
+      renderEdit(rfq);
+      const autoBtn = screen.getByText(/Auto-Categorize All/i);
+      fireEvent.click(autoBtn);
+      expect(rfqClient.classifyLineItems).not.toHaveBeenCalled();
+
+      cleanup();
+
+      // Classified result with invalid major, invalid minor, and un-matched item id
+      const rfq2 = buildRFQ({
+        category: 'Existing Category',
+        extractedEntities: [
+          entity({ id: 'blank-1', itemName: 'Widget A', majorCategory: '', minorCategory: '' }),
+          entity({ id: 'blank-2', itemName: 'Widget B', majorCategory: '', minorCategory: '' }),
+        ],
+      });
+      (rfqClient.classifyLineItems as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        data: {
+          extractedEntities: [
+            { id: 'blank-1', majorCategory: 'NonExistentMajor', minorCategory: 'NonExistentMinor' },
+            { id: 'unknown-id', majorCategory: MAJOR, minorCategory: MINOR },
+          ],
+        },
+      });
+
+      renderEdit(rfq2);
+      const autoBtn2 = screen.getByText(/Auto-Categorize All/i);
+      fireEvent.click(autoBtn2);
+
+      await waitFor(() => {
+        expect(rfqClient.classifyLineItems).toHaveBeenCalled();
+      });
+
+      // API failure with no error message fallback
+      (rfqClient.classifyLineItems as jest.Mock).mockResolvedValueOnce({
+        success: false,
+        error: undefined,
+      });
+      fireEvent.click(autoBtn2);
+      await waitFor(() => {
+        expect(screen.getByText(EDIT.classifyFailed)).toBeInTheDocument();
+      });
+    });
+
+    it('covers all attachments upload failure branch and empty error fallback', async () => {
+      (rfqClient.uploadRFQAttachment as jest.Mock).mockResolvedValueOnce({
+        success: false,
+        error: undefined,
+      });
+
+      renderEdit(buildRFQ());
+      const attachInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const file = new File(['content'], 'test-fail.pdf', { type: 'application/pdf' });
+
+      fireEvent.change(attachInput, { target: { files: [file] } });
+
+      await waitFor(() => {
+        expect(screen.getByText('test-fail.pdf:')).toBeInTheDocument();
+      });
+    });
+
+    it('prevents close when modal is saving or deleting', async () => {
+      let resolveSave: (value: any) => void = () => {};
+      const customSave = jest.fn().mockImplementation(
+        () => new Promise((resolve) => { resolveSave = resolve; })
+      );
+      const customClose = jest.fn();
+
+      render(<RFQEditModal rfq={buildRFQ()} onClose={customClose} onSave={customSave} />);
+      const titleInput = document.getElementById('rfq-edit-title-field') as HTMLInputElement;
+      fireEvent.change(titleInput, { target: { value: 'New title saving' } });
+
+      const saveBtn = screen.getByRole('button', { name: /Save Changes/i });
+      fireEvent.click(saveBtn);
+
+      // Now isSaving is true, try to close via cancel button
+      const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
+      fireEvent.click(cancelBtn);
+      expect(customClose).not.toHaveBeenCalled();
+
+      // Resolve save
+      resolveSave({ rfqNumber: 'RFQ-001' });
+    });
+
+    it('prevents delete dialog close when deleting', async () => {
+      let resolveDelete: (value: any) => void = () => {};
+      const customConfirm = jest.fn().mockImplementation(
+        () => new Promise((resolve) => { resolveDelete = resolve; })
+      );
+      const customClose = jest.fn();
+
+      render(
+        <RFQDeleteDialog
+          rfq={buildRFQ()}
+          onClose={customClose}
+          onConfirm={customConfirm}
+        />
+      );
+
+      const delBtn = screen.getByRole('button', { name: /Delete RFQ/i });
+      fireEvent.click(delBtn);
+
+      // Try closing via cancel while deleting
+      const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
+      fireEvent.click(cancelBtn);
+      expect(customClose).not.toHaveBeenCalled();
+
+      resolveDelete(true);
+    });
+
+    it('renders provenance AI Extraction when source is absent and aiSummary is present', () => {
+      const rfq = buildRFQ({
+        source: undefined as any,
+        aiSummary: { headline: 'Generated headline' } as any,
+      });
+      renderEdit(rfq);
+      expect(screen.getByText('AI Extraction')).toBeInTheDocument();
     });
   });
 });

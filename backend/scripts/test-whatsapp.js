@@ -10,6 +10,8 @@ async function testWhatsApp() {
     vendorName: 'Navin Enterprise',
     rfqNumber: 'RFQ260910168889',
     rfqTitle: 'Enterprise Server & Cloud Infrastructure Procurement',
+    deliveryDate: '2026-11-15',
+    deliveryLocation: 'Ahmedabad, Gujarat',
   });
   console.log('WhatsApp Result:', JSON.stringify(res, null, 2));
 }

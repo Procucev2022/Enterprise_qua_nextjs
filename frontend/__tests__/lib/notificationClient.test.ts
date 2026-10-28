@@ -61,6 +61,13 @@ describe('fetchNotifications', () => {
     expect(lastInit().headers).toEqual({ Authorization: 'Bearer jwt-token' });
   });
 
+  it('passes limit option when provided', async () => {
+    signIn();
+    global.fetch = reply(200, { success: true, data: [], unreadCount: 0 });
+    await fetchNotifications({ limit: 25 });
+    expect(lastPath()).toBe('/api/notifications?limit=25');
+  });
+
   it('derives the unread count when the server omits it', async () => {
     signIn();
     global.fetch = reply(200, { success: true, data: [{ id: 'n1', read: false }, { id: 'n2', read: false }] });

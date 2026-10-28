@@ -4,6 +4,7 @@ import BuyerProfilePage from '@/app/buyer/buyer-profile';
 import CommandCenter from '@/app/buyer/command-center';
 import RFQDetails from '@/app/buyer/rfq-details';
 import BuyerRFQDetailsPage from '@/app/buyer/rfq-details/page';
+import BuyerRFQDetailsUnderscorePage from '@/app/buyer/rfq_details/page';
 import BuyerQuoteMatrixPage from '@/app/buyer/quote-matrix/page';
 import CategoryManagerQuoteMatrixPage from '@/app/category-manager/quote-matrix/page';
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
@@ -33,6 +34,7 @@ jest.mock('@/lib/authClient', () => ({
     updateVendorProfile: jest.fn(),
     getProfile: jest.fn(),
     changePassword: jest.fn().mockResolvedValue({ success: true }),
+    getSessionUser: jest.fn().mockReturnValue(null),
   },
 }));
 jest.mock('@/lib/documentExtraction', () => ({
@@ -961,5 +963,12 @@ describe('Frontend Master Coverage Booster Suite', () => {
     fireEvent.change(pincode, { target: { value: '123' } });
     expect(pincode).toHaveValue('123');
     expect(screen.queryByText('Invalid or dummy PIN code')).not.toBeInTheDocument();
+  });
+
+  test('asserts BuyerRFQDetailsUnderscorePage and related page components', () => {
+    expect(BuyerRFQDetailsUnderscorePage).toBeDefined();
+    expect(BuyerRFQDetailsPage).toBeDefined();
+    expect(BuyerQuoteMatrixPage).toBeDefined();
+    expect(CategoryManagerQuoteMatrixPage).toBeDefined();
   });
 });

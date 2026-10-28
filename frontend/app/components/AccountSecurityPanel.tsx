@@ -29,40 +29,63 @@ import { ShieldCheck } from 'lucide-react';
 export default function AccountSecurityPanel() {
   const { showToast } = useApp();
 
-  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [showOtpInput, setShowOtpInput] = useState(false);
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   const strings = UI_STRINGS.accountSecurity;
+
+  const handleRequestVerificationCode = async () => {
+    const user = authClient.getSessionUser();
+    if (!user?.email) {
+      showToast(strings.validationErrorTitle, 'No active account session found. Please sign in again.', 'warning');
+      return;
+    }
+
+    setIsSendingOtp(true);
+    try {
+      const result = await authClient.requestOtp(user.email, user.mobile || '');
+      if (result.success) {
+        setShowOtpInput(true);
+        showToast(
+          strings.codeSentTitle,
+          strings.codeSentMessage,
+          'success'
+        );
+      } else {
+        showToast(
+          strings.changeFailedTitle,
+          result.error || 'Failed to dispatch verification code. Please try again.',
+          'warning'
+        );
+      }
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
 
-    const { isValid, fieldErrors } = validateFormData(FORM_SCHEMAS.changePasswordForm, {
-      currentPassword: currentPassword.trim(),
-      newPassword,
-    });
-    if (!isValid) {
-      const firstError = Object.values(fieldErrors)[0];
-      const isPasswordLength = 'newPassword' in fieldErrors;
-      showToast(
-        isPasswordLength ? strings.weakPasswordTitle : strings.validationErrorTitle,
-        firstError,
-        'warning'
-      );
+    const trimmedNew = newPassword.trim();
+    const trimmedConfirm = confirmPassword.trim();
+
+    if (!trimmedNew) {
+      showToast(strings.validationErrorTitle, strings.weakPasswordMessage, 'warning');
       return;
     }
 
-    if (newPassword !== confirmPassword) {
+    if (trimmedNew.length < PASSWORD_MIN_LENGTH) {
+      showToast(strings.weakPasswordTitle, strings.weakPasswordMessage, 'warning');
+      return;
+    }
+
+    if (trimmedNew !== trimmedConfirm) {
       showToast(strings.passwordMismatchTitle, strings.passwordMismatchMessage, 'warning');
-      return;
-    }
-
-    // Caught here as well as server-side so the round trip is skipped entirely.
-    if (newPassword === currentPassword) {
-      showToast(strings.validationErrorTitle, strings.passwordSameAsCurrent, 'warning');
       return;
     }
 
@@ -70,12 +93,23 @@ export default function AccountSecurityPanel() {
     logger.info('Submitting account password change', undefined, 'ACCOUNT_SECURITY');
 
     try {
-      const result = await authClient.changePassword(currentPassword, newPassword);
+      const result = await authClient.changePassword(
+        verificationCode.trim(),
+        trimmedNew,
+        verificationCode.trim() ? { code: verificationCode.trim() } : undefined
+      );
 
       if (!result.success) {
-        // The API explains precisely which rule failed (wrong current password,
-        // inactive account, unreachable database), so its message is shown rather
-        // than a generic one.
+        // If the server requires verification code and it wasn't entered yet, prompt for OTP:
+        if (
+          !verificationCode.trim() &&
+          (result.error?.includes('verification code') || result.error?.includes('reset token'))
+        ) {
+          setShowOtpInput(true);
+          await handleRequestVerificationCode();
+          return;
+        }
+
         logger.warn(
           'Account password change rejected',
           { reason: result.error },
@@ -89,11 +123,10 @@ export default function AccountSecurityPanel() {
         return;
       }
 
-      // Only cleared on success: a rejected attempt keeps what was typed so the
-      // buyer can correct one field instead of re-entering all three.
-      setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
+      setVerificationCode('');
+      setShowOtpInput(false);
       logger.info('Account password changed', undefined, 'ACCOUNT_SECURITY');
       showToast(
         strings.passwordChangedTitle,
@@ -112,20 +145,46 @@ export default function AccountSecurityPanel() {
           <ShieldCheck size={14} className="text-emerald-600 dark:text-emerald-400" />{' '}
           {strings.passwordSectionLabel}
         </span>
+        <button
+          type="button"
+          onClick={handleRequestVerificationCode}
+          disabled={isSendingOtp}
+          className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+        >
+          {isSendingOtp ? strings.sendingCodeAction : 'Forgot Password? Reset via Code'}
+        </button>
       </div>
 
       <div className="space-y-3">
-        <PasswordInput
-          id="current-password"
-          label={strings.currentPasswordLabel}
-          placeholder={strings.currentPasswordPlaceholder}
-          value={currentPassword}
-          onChange={setCurrentPassword}
-          autoComplete="current-password"
-          showLeadingIcon={false}
-          labelClassName="text-[10px] font-bold uppercase tracking-wider text-slate-400"
-          inputClassName="rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-        />
+        {showOtpInput && (
+          <div className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <label htmlFor="verification-code" className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
+                {strings.verificationCodeLabel}
+              </label>
+              <button
+                type="button"
+                onClick={handleRequestVerificationCode}
+                disabled={isSendingOtp}
+                className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+              >
+                {isSendingOtp ? strings.sendingCodeAction : strings.resendCodeAction}
+              </button>
+            </div>
+            <input
+              id="verification-code"
+              type="text"
+              maxLength={6}
+              value={verificationCode}
+              onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ''))}
+              placeholder={strings.verificationCodePlaceholder}
+              className="w-full px-3 py-1.5 rounded-lg border border-indigo-300 dark:border-indigo-700 text-xs font-mono font-bold tracking-widest bg-white dark:bg-gray-950 text-slate-900 dark:text-white"
+            />
+            <p className="text-[10px] text-indigo-600 dark:text-indigo-400">
+              Enter the 6-digit verification code sent to your registered email and mobile.
+            </p>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <PasswordInput
@@ -157,17 +216,16 @@ export default function AccountSecurityPanel() {
           <p className="font-bold text-slate-700 dark:text-gray-300">{strings.policyTitle}</p>
           <ul className="list-disc list-inside text-[10px] space-y-0.5 text-slate-500 dark:text-gray-400">
             <li>{strings.policyMinLength}</li>
-            <li>{strings.policyReuse}</li>
             <li>{strings.policyComplexity}</li>
           </ul>
         </div>
 
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2.5 items-center">
           <button
             type="submit"
             disabled={isSaving}
             aria-busy={isSaving}
-            className="btn btn-secondary text-xs px-5 py-2 font-bold"
+            className="btn btn-secondary text-xs px-5 py-2 font-bold cursor-pointer"
           >
             {isSaving ? strings.updatingPasswordAction : strings.updatePasswordAction}
           </button>

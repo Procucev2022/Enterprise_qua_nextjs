@@ -1,5 +1,4 @@
 const nodemailer = require('nodemailer');
-const { google } = require('googleapis');
 const dns = require('dns');
 const crypto = require('crypto');
 const mailTransport = require('./mailTransport');
@@ -10,6 +9,22 @@ const {
   RFQ_NOT_CREATED_NOTIFICATION,
   VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
 } = require('../config/constants');
+const {
+  buildEmail1_RfqCreatedAccountAutoCreated,
+  buildEmail2_RfqCreated,
+  buildEmail3_NewRfqIntimation,
+  buildEmail4_NewRfqToQuote,
+  buildEmail5_QuotationsReadyToCompare,
+  buildEmail6_ActivateYourAccount,
+  buildEmail7_RfqNeedsMoreInformation,
+  buildEmail8_NoQuotesYet,
+  buildEmail9_QuoteDeadlineReminder,
+  buildEmail10_LowOrZeroCredits,
+  buildEmail11_QuoteSubmitted,
+  buildEmail12_RfqRevisedBuyerQuestion,
+  buildEmail13_CompleteYourProfile,
+  renderTransactionalEmail,
+} = require('./transactionalEmailTemplates');
 
 // Force Node.js DNS resolver to prefer IPv4 over IPv6.
 // Cloud environments like Render lack IPv6 egress routing; without this,
@@ -109,7 +124,20 @@ function getPublicFrontendUrl() {
     getEnv('APP_PUBLIC_URL') ||
     getEnv('FRONTEND_URL');
   if (envVal && typeof envVal === 'string' && envVal.trim()) {
-    return envVal.trim().replace(/\/+$/, '');
+    const trimmed = envVal.trim().replace(/\/+$/, '');
+    if (trimmed.includes('srinivas-mukku.workers.dev')) {
+      const isProd =
+        getEnv('NODE_ENV') === 'production' ||
+        getEnv('ENVIRONMENT') === 'production' ||
+        getEnv('ENVIRONMENT') === 'prod';
+      if (isProd) {
+        return 'https://equa.procucev.com';
+      }
+    }
+    return trimmed;
+  }
+  if (getEnv('NODE_ENV') === 'production') {
+    return 'https://equa.procucev.com';
   }
   return 'http://localhost:3000';
 }
@@ -229,55 +257,83 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
 
   const frontendUrl = getPublicFrontendUrl();
   const logoUrl = getLogoUrl();
-  const reviewUrl = `${frontendUrl}/buyer/rfqs?rfq=${encodeURIComponent(safeRfq.rfqNumber || '')}`;
+  const reviewUrl = `${frontendUrl}/buyer/rfq-summary`;
 
   return {
     from: fromAddress(),
-    to: to || 'navinchaudhary.dev@gmail.com',
+    to: to || process.env.ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL || process.env.ADMIN_NOTIFICATION_EMAIL || 'navinchaudhary.dev@gmail.com',
     replyTo: fromEmail || safeRfq.sourceEmail || undefined,
     subject: `[Procucev Requisition] ${safeRfq.title || 'New Inbound Requisition'} (${safeRfq.rfqNumber || 'Draft'})`,
     html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
-        <div style="background: #0f172a; padding: 20px; border-radius: 8px 8px 0 0; color: white;">
-          <div style="margin-bottom: 12px;">
-            <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
-              <img src="${logoUrl}" alt="Procucev Enterprise" height="36" style="height: 36px; max-height: 40px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />
-            </a>
-          </div>
-          <h2 style="margin: 0; font-size: 18px; letter-spacing: 0.5px;">PROCUCEV ENTERPRISE</h2>
-          <p style="margin: 4px 0 0 0; opacity: 0.8; font-size: 13px;">Autonomous Requisition Ingestion Notification</p>
-        </div>
-        <div style="padding: 20px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px;">
-          <div style="background: #f8fafc; padding: 14px; border-radius: 6px; margin-bottom: 18px; border-left: 4px solid #0284c7;">
-            <p style="margin: 0; font-size: 13px;"><strong>From (Buyer / Plant Engineer):</strong> ${fromEmail || rfq.sourceEmail || 'Buyer'}</p>
-            <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>RFQ Number:</strong> <span style="font-family: monospace; color: #0284c7; font-weight: bold;">${rfq.rfqNumber}</span></p>
-            <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>Category:</strong> ${rfq.category || 'General Procurement'}</p>
-            <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>Target Delivery Date:</strong> ${rfq.targetDeliveryDate || 'Immediate'}</p>
-          </div>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
+        <tr>
+          <td align="left" class="email-wrapper-cell" style="padding: 16px 20px; background-color: #ffffff;">
+            <!--[if (gte mso 9)|(IE)]>
+            <table align="left" border="0" cellspacing="0" cellpadding="0" width="100%" style="width:100%;">
+            <tr>
+            <td align="left" valign="top" width="100%" style="width:100%;">
+            <![endif]-->
+            <div class="email-container" style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; width: 100%; max-width: 100%; margin: 0; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
+              <div class="email-header" style="background: #0f172a; padding: 22px 24px; border-radius: 8px 8px 0 0; color: white; box-sizing: border-box; width: 100%;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #f8fafc; border-collapse: collapse;">
+        <tr>
+          <td align="center" class="email-wrapper-cell" style="padding: 20px 10px;">
+            <!--[if (gte mso 9)|(IE)]>
+            <table align="center" border="0" cellspacing="0" cellpadding="0" width="750" style="width:750px;">
+            <tr>
+            <td align="center" valign="top" width="750" style="width:750px;">
+            <![endif]-->
+            <div class="email-container" style="font-family: Arial, sans-serif; max-width: 750px; width: 100%; margin: 0 auto; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
+              <div class="email-header" style="background: #0f172a; padding: 22px 24px; border-radius: 8px 8px 0 0; color: white; box-sizing: border-box;">
+                <div style="margin-bottom: 12px;">
+                  <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
+                    <img src="${logoUrl}" alt="Procucev Enterprise" height="36" style="height: 36px; max-height: 40px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />
+                  </a>
+                </div>
+                <h2 style="margin: 0; font-size: 18px; letter-spacing: 0.5px;">PROCUCEV ENTERPRISE</h2>
+                <p style="margin: 4px 0 0 0; opacity: 0.8; font-size: 13px;">Autonomous Requisition Ingestion Notification</p>
+              </div>
+              <div class="email-content" style="padding: 24px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px; box-sizing: border-box; word-break: break-word;">
+                <div style="background: #f8fafc; padding: 14px; border-radius: 6px; margin-bottom: 18px; border-left: 4px solid #0284c7; box-sizing: border-box;">
+                  <p style="margin: 0; font-size: 13px;"><strong>From (Buyer / Plant Engineer):</strong> ${fromEmail || rfq.sourceEmail || 'Buyer'}</p>
+                  <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>RFQ Number:</strong> <span style="font-family: monospace; color: #0284c7; font-weight: bold;">${rfq.rfqNumber}</span></p>
+                  <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>Category:</strong> ${rfq.category || 'General Procurement'}</p>
+                  <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>Target Delivery Date:</strong> ${rfq.targetDeliveryDate || 'Immediate'}</p>
+                </div>
 
-          <h3 style="font-size: 14px; margin: 0 0 10px 0; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px;">Extracted Line Items</h3>
-          <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
-            <thead>
-              <tr style="background: #f1f5f9; text-align: left; font-size: 11px; text-transform: uppercase; color: #64748b;">
-                <th style="padding: 8px 10px;">Item Description</th>
-                <th style="padding: 8px 10px; text-align: center;">Qty</th>
-                <th style="padding: 8px 10px;">Technical Specs</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${lineItemsHtml}
-            </tbody>
-          </table>
+                <h3 style="font-size: 14px; margin: 0 0 10px 0; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px;">Extracted Line Items</h3>
+                <div style="overflow-x: auto; width: 100%; margin-bottom: 20px;">
+                  <table style="width: 100%; border-collapse: collapse; font-size: 13px; word-break: break-word;">
+                    <thead>
+                      <tr style="background: #f1f5f9; text-align: left; font-size: 11px; text-transform: uppercase; color: #64748b;">
+                        <th style="padding: 8px 10px;">Item Description</th>
+                        <th style="padding: 8px 10px; text-align: center;">Qty</th>
+                        <th style="padding: 8px 10px;">Technical Specs</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${lineItemsHtml}
+                    </tbody>
+                  </table>
+                </div>
 
-          <div style="padding: 12px; background: #eff6ff; border-radius: 6px; font-size: 12px; color: #1e40af;">
-            ⚡ <strong>Status: Parsing.</strong> Matching vendors have been notified.
-          </div>
+                <div style="padding: 12px; background: #eff6ff; border-radius: 6px; font-size: 12px; color: #1e40af; box-sizing: border-box;">
+                  ⚡ <strong>Status: Quotes Pending.</strong> Matching vendors have been notified.
+                </div>
 
-          <div style="text-align: center; margin: 20px 0 8px 0;">
-            <a href="${reviewUrl}" style="background: #0284c7; color: #ffffff; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 13px;">Review Requisition in Buyer Portal</a>
-          </div>
-        </div>
-      </div>
+                <div style="text-align: center; margin: 20px 0 8px 0;">
+                  <a href="${reviewUrl}" style="background: #0284c7; color: #ffffff; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 13px; max-width: 100%; box-sizing: border-box;">Review Requisition in Buyer Portal</a>
+                </div>
+              </div>
+            </div>
+            <!--[if (gte mso 9)|(IE)]>
+            </td>
+            </tr>
+            </table>
+            <![endif]-->
+          </td>
+        </tr>
+      </table>
     `,
   };
 }
@@ -353,12 +409,19 @@ function findGmailIdentity(id) {
 
 const gmailOAuthClients = new Map();
 
+// googleapis bundles every Google API, and loading it at module scope cost the
+// Worker ~0.8s of startup CPU (over Cloudflare's startup limit). Required on
+// first Gmail use instead; Node caches it after that.
+function googleApi() {
+  return require('googleapis').google;
+}
+
 /** One cached OAuth client per identity, rebuilt when its refresh token changes. */
 function oauthClientFor(identity) {
   if (!identity) return undefined;
   const cached = gmailOAuthClients.get(identity.id);
   if (cached && cached.refreshToken === identity.refreshToken) return cached.client;
-  const client = new google.auth.OAuth2(getEnv('GMAIL_CLIENT_ID'), getEnv('GMAIL_CLIENT_SECRET'));
+  const client = new (googleApi().auth.OAuth2)(getEnv('GMAIL_CLIENT_ID'), getEnv('GMAIL_CLIENT_SECRET'));
   client.setCredentials({ refresh_token: identity.refreshToken });
   gmailOAuthClients.set(identity.id, { refreshToken: identity.refreshToken, client });
   return client;
@@ -408,7 +471,7 @@ function gmailFromAddress(identity) {
 }
 
 async function sendViaGmailIdentity(identity, message) {
-  const gmail = google.gmail({ version: 'v1', auth: oauthClientFor(identity) });
+  const gmail = googleApi().gmail({ version: 'v1', auth: oauthClientFor(identity) });
   const raw = mailTransport.buildRawMimeMessage({
     from: gmailFromAddress(identity),
     to: message.to,
@@ -421,6 +484,7 @@ async function sendViaGmailIdentity(identity, message) {
     inReplyTo: message.inReplyTo,
     references: message.references,
     headers: message.headers,
+    attachments: message.attachments,
   });
   const res = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
   return { messageId: res.data.id };
@@ -513,6 +577,10 @@ function deliveryPlan(channel, critical) {
   if (!mailTransport.isWorkersRuntime()) {
     const step = smtpStep('smtp:buyer', 'SMTP', Boolean(process.env.SMTP_USER && process.env.SMTP_PASSWORD), getTransporter);
     if (step) steps.push(step);
+    if (channel === DELIVERY_CHANNEL.BUYER && !step && Boolean(getEnv('VENDOR_SMTP_USER') && getEnv('VENDOR_SMTP_PASSWORD'))) {
+      const fallback = smtpStep('smtp:vendor:fallback', 'vendor SMTP (buyer fallback)', true, getVendorTransporter);
+      if (fallback) steps.push(fallback);
+    }
   }
   return steps;
 }
@@ -621,36 +689,52 @@ function wrapEmail(headline, subline, innerHtml) {
   const frontendUrl = getPublicFrontendUrl();
   const logoUrl = getLogoUrl();
   return `
-    <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
-      <div style="background: #ffffff; padding: 24px; border-radius: 8px 8px 0 0; border-bottom: 3px solid #0284c7;">
-        <table style="width: 100%; border-collapse: collapse;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
+      <tr>
+        <td align="left" class="email-wrapper-cell" style="padding: 16px 20px; background-color: #ffffff;">
+          <!--[if (gte mso 9)|(IE)]>
+          <table align="left" border="0" cellspacing="0" cellpadding="0" width="100%" style="width:100%;">
           <tr>
-            <td style="vertical-align: middle;">
-              <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
-                <img src="${logoUrl}" alt="Procucev Enterprise" height="38" style="height: 38px; max-height: 42px; width: auto; display: block; border: 0;" />
-              </a>
-              <div style="font-size: 11px; font-weight: 600; color: #64748b; letter-spacing: 0.5px; margin-top: 4px;">ENTERPRISE PROCUREMENT</div>
-            </td>
-            <td style="text-align: right; vertical-align: middle;">
-              <div style="font-size: 14px; font-weight: 600; color: #0f172a;">${headline}</div>
-              <div style="font-size: 12px; color: #64748b; margin-top: 4px;">${subline}</div>
-            </td>
+          <td align="left" valign="top" width="100%" style="width:100%;">
+          <![endif]-->
+          <div class="email-container" style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; width: 100%; max-width: 100%; margin: 0; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left;">
+            <div class="email-header" style="background: #ffffff; padding: 20px 24px; border-radius: 8px 8px 0 0; border: 1px solid #e2e8f0; border-bottom: 3px solid #0284c7; box-sizing: border-box; width: 100%;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td class="logo-cell" style="vertical-align: middle; padding-right: 12px;">
+                    <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
+                      <img src="${logoUrl}" alt="Procucev Enterprise" height="38" style="height: 38px; max-height: 42px; width: auto; display: block; border: 0;" />
+                    </a>
+                    <div style="font-size: 11px; font-weight: 600; color: #64748b; letter-spacing: 0.5px; margin-top: 4px;">ENTERPRISE PROCUREMENT</div>
+                  </td>
+                  <td class="headline-cell" style="text-align: right; vertical-align: middle;">
+                    <div style="font-size: 14px; font-weight: 600; color: #0f172a; word-break: break-word;">${headline}</div>
+                    <div style="font-size: 12px; color: #64748b; margin-top: 4px; word-break: break-word;">${subline}</div>
+                  </td>
+                </tr>
+              </table>
+            </div>
+            <div class="email-content" style="padding: 24px 24px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px; box-sizing: border-box; word-break: break-word; width: 100%;">
+              ${innerHtml}
+              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+              <p style="font-size: 12px; color: #64748b; margin: 0;">Procucev Enterprise · You are receiving this because your organisation is registered on the platform.</p>
+            </div>
+          </div>
+          <!--[if (gte mso 9)|(IE)]>
+          </td>
           </tr>
-        </table>
-      </div>
-      <div style="padding: 24px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px;">
-        ${innerHtml}
-        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-        <p style="font-size: 12px; color: #64748b; margin: 0;">Procucev Enterprise · You are receiving this because your organisation is registered on the platform.</p>
-      </div>
-    </div>
+          </table>
+          <![endif]-->
+        </td>
+      </tr>
+    </table>
   `;
 }
 
 /** One "field: value" row, only when the value is real. */
 function row(label, value) {
   if (value === undefined || value === null || value === '') return '';
-  return `<tr><td style="padding: 6px 10px; font-weight: bold; width: 40%;">${label}</td><td style="padding: 6px 10px;">${value}</td></tr>`;
+  return `<tr><td style="padding: 8px 12px; font-weight: 600; width: 38%; min-width: 120px; vertical-align: top; word-break: break-word; color: #475569;">${label}</td><td style="padding: 8px 12px; vertical-align: top; word-break: break-word; color: #0f172a;">${value}</td></tr>`;
 }
 
 function escapeHtml(value) {
@@ -679,13 +763,19 @@ function buildOtpEmail(to, code, expiresInSeconds, context = {}) {
     // heavily, since it is widely abused for phishing) was landing in spam.
     // No images, no links — only the code.
     html: `
-    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
-      <p style="font-size: 13px; font-weight: 600; color: #64748b; letter-spacing: 0.5px; margin: 0 0 4px;">PROCUCEV ENTERPRISE</p>
-      <p style="font-size: 16px; font-weight: 600; margin: 0 0 16px;">${headline}</p>
-      <p style="margin: 0;">Your one-time verification code is:</p>
-      <p style="font-size: 32px; font-weight: bold; letter-spacing: 8px; margin: 16px 0; color: #0284c7;">${code}</p>
-      <p style="font-size: 13px; color: #64748b; margin: 0;">This code expires in ${minutes} minute${minutes === 1 ? '' : 's'}. If you did not request this, you can safely ignore this email. Procucev staff will never ask you for this code.</p>
-    </div>`,
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
+      <tr>
+        <td align="left" style="padding: 16px 20px; background-color: #ffffff;">
+          <div style="font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; width: 100%; max-width: 100%; margin: 0; color: #1e293b; line-height: 1.6; box-sizing: border-box; text-align: left; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 24px;">
+            <p style="font-size: 13px; font-weight: 600; color: #64748b; letter-spacing: 0.5px; margin: 0 0 4px;">PROCUCEV ENTERPRISE</p>
+            <p style="font-size: 16px; font-weight: 600; margin: 0 0 16px;">${headline}</p>
+            <p style="margin: 0;">Your one-time verification code is:</p>
+            <p style="font-size: 32px; font-weight: bold; letter-spacing: 8px; margin: 16px 0; color: #0284c7;">${code}</p>
+            <p style="font-size: 13px; color: #64748b; margin: 0;">This code expires in ${minutes} minute${minutes === 1 ? '' : 's'}. If you did not request this, you can safely ignore this email. Procucev staff will never ask you for this code.</p>
+          </div>
+        </td>
+      </tr>
+    </table>`,
   };
 }
 
@@ -709,8 +799,101 @@ function emailGatewayAddress() {
   return process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com';
 }
 
+/**
+ * Determines whether a vendor is a buyer-uploaded vendor based on vendor entity attributes,
+ * vendor source taxonomy, or explicit flags. Procucev platform vendors return false.
+ * Does not rely on email addresses or hardcoded company names.
+ *
+ * @param {Object} [vendor]
+ * @param {Object} [context]
+ * @param {Object} [rfq]
+ * @returns {boolean}
+ */
+function isBuyerUploadedVendor(vendor, context = {}, rfq = {}) {
+  const ctx = context || {};
+  if (typeof ctx.isBuyerUploaded === 'boolean') {
+    return ctx.isBuyerUploaded;
+  }
+  if (typeof ctx.isProcucevVendor === 'boolean') {
+    return !ctx.isProcucevVendor;
+  }
+  const v = vendor || ctx.vendor;
+  if (v && typeof v.isBuyerUploaded === 'boolean') {
+    return v.isBuyerUploaded;
+  }
+  if (v && typeof v.isProcucevVendor === 'boolean') {
+    return !v.isProcucevVendor;
+  }
+  if (!v && !ctx.vendorSource && !ctx.source) {
+    return false;
+  }
+  if (v && (v.addedByBuyerCompany || v.buyerAccountId || v.buyerId)) {
+    return true;
+  }
+  const rawSource = (v && v.source) || ctx.vendorSource || ctx.source || '';
+  const s = String(rawSource).toLowerCase().trim();
+  if (
+    s === 'buyer_uploaded' ||
+    s === 'vendor_master_ingestion' ||
+    s === 'historical_purchase_dump' ||
+    s === 'buyer_manual' ||
+    s === 'buyer_excel' ||
+    s === 'excel_upload' ||
+    s === 'po_ingestion' ||
+    s === 'client_uploaded' ||
+    s === 'buyer' ||
+    s.includes('buyer') ||
+    s.includes('ingestion') ||
+    s.includes('purchase_dump')
+  ) {
+    return true;
+  }
+  if (
+    s === 'procucev' ||
+    s === 'procucev_network' ||
+    s === 'platform' ||
+    s === 'marketplace' ||
+    s === 'self_registration' ||
+    s.includes('procucev') ||
+    s.includes('platform')
+  ) {
+    return false;
+  }
+  if (v && v.id) {
+    const id = String(v.id).toLowerCase().trim();
+    if (
+      id.startsWith('v-hist-') ||
+      id.startsWith('v-navin-') ||
+      id.startsWith('vm-') ||
+      id.startsWith('v-ingest-') ||
+      id.startsWith('v-buyer-')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildRfqInviteEmail(to, context = {}) {
-  const { rfq = {}, recipientName, buyerEmail, cc, freeCreditsRemaining, isSubscribed, isReminder = false } = context;
+  const {
+    rfq = {},
+    recipientName,
+    buyerEmail,
+    cc,
+    freeCreditsRemaining,
+    isSubscribed,
+    isReminder = false,
+    vendor,
+  } = context;
+  const isBuyerVendor = isBuyerUploadedVendor(vendor, context, rfq);
+  const buyerName = rfq.buyerAccountName ? String(rfq.buyerAccountName).trim() : null;
+  const introMessage = isReminder
+    ? (isBuyerVendor && buyerName
+        ? `This is a reminder to submit your quotation for the verified business enquiry from <strong>${buyerName}</strong> matching your category.`
+        : 'This is a reminder to submit your quotation for the following verified business enquiry matching your category.')
+    : (isBuyerVendor
+        ? `We have a new verified business enquiry from ${buyerName ? `<strong>${buyerName}</strong>` : 'a corporate buyer'} that matches your category. Please review the details below:`
+        : 'We have a new verified business enquiry that matches your category. Please review the details below:');
   const items = Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.length > 0
     ? rfq.extractedEntities
     : Array.isArray(rfq.items) && rfq.items.length > 0
@@ -746,14 +929,19 @@ function buildRfqInviteEmail(to, context = {}) {
       : `Unit Price: ₹[Enter Unit Price]\nTotal Price: ₹[Enter Total Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`;
 
   const gatewayEmail = vendorGatewayAddress();
-  const buyerCc = cc || buyerEmail || undefined;
+  const buyerNormalized = (buyerEmail || (rfq && (rfq.buyerEmail || rfq.raisedByEmail)) || '').toLowerCase().trim();
+  let inviteCc = undefined;
+  if (cc) {
+    const list = String(cc).split(',').map((s) => s.trim()).filter((s) => s.toLowerCase() !== buyerNormalized);
+    inviteCc = list.length > 0 ? list.join(', ') : undefined;
+  }
   const requiresPortal = items.length > 10;
 
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
     <p>Greetings from <strong>Procucev!</strong></p>
     <p>QUA by <strong>Procucev</strong> is a trusted AI B2B marketplace connecting genuine buyers and quality sellers across India.</p>
-    <p>${isReminder ? 'This is a reminder to submit your quotation for the following verified business enquiry matching your category.' : `We have a new verified business enquiry from ${rfq.buyerAccountName ? `<strong>${rfq.buyerAccountName}</strong>` : 'a corporate buyer'} that matches your category. Please review the details below:`}</p>
+    <p>${introMessage}</p>
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('RFQ Number', rfq.rfqNumber)}
       ${row('Requirement', rfq.title)}
@@ -787,7 +975,7 @@ function buildRfqInviteEmail(to, context = {}) {
         ${
           requiresPortal
             ? `This RFQ has ${items.length} line items. <strong>Email bids are not accepted for RFQs with more than 10 items.</strong> Submit your bid through the <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="color: #0284c7; font-weight: bold;">Procucev Vendor Portal</a>: download the RFQ Excel file, enter a unit price for each item, then upload the completed workbook and supporting documents.`
-            : `You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>${buyerCc ? ` and keep buyer CC'd: <strong>${buyerCc}</strong>` : ''}), or online via the <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="color: #0284c7; font-weight: bold;">Procucev Quotation Portal</a>. Attach your quotation and any supporting documents when submitting by email.`
+            : `You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>), or online via the <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="color: #0284c7; font-weight: bold;">Procucev Quotation Portal</a>. Attach your quotation and any supporting documents when submitting by email.`
         }
       </p>
 
@@ -837,7 +1025,7 @@ function buildRfqInviteEmail(to, context = {}) {
     from: vendorFromAddress(),
     to,
     replyTo: gatewayEmail,
-    cc: buyerCc,
+    cc: inviteCc,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', isReminder ? 'RFQ Reminder' : 'New Sourcing Enquiry', inner),
   };
@@ -847,11 +1035,17 @@ async function sendRfqInviteEmail(to, context) {
   return deliverVendor(buildRfqInviteEmail(to, context), 'RFQ invite email');
 }
 
-// ── Vendor quote acknowledgement → vendor (with buyer & support CC) ─────────
+// ── Vendor quote acknowledgement → vendor ────────────────────────────────────
 
 function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
   const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
-  const { rfqNumber, rfqTitle, vendorName, quote = {}, cc } = context;
+  const { rfqNumber, rfqTitle, vendorName, quote = {}, cc, buyerEmail } = context;
+  const buyerNormalized = buyerEmail ? String(buyerEmail).toLowerCase().trim() : null;
+  let resolvedCc = cc;
+  if (resolvedCc && buyerNormalized) {
+    const list = String(resolvedCc).split(',').map((s) => s.trim()).filter((s) => s.toLowerCase() !== buyerNormalized);
+    resolvedCc = list.length > 0 ? list.join(', ') : undefined;
+  }
   const subject = `Quotation Received – RFQ ${rfqNumber}`;
   const inner = `
     <p>${vendorName ? `Dear <strong>${vendorName}</strong>,` : 'Hello,'}</p>
@@ -872,7 +1066,7 @@ function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
     from: vendorFromAddress(),
     to,
     replyTo: vendorGatewayAddress(),
-    cc: cc || undefined,
+    cc: resolvedCc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Confirmation', inner),
   };
@@ -1197,7 +1391,7 @@ function buildQuoteReceivedEmail(to, { rfq = {}, quote = {}, recipientName }) {
 
   const frontendUrl = getPublicFrontendUrl();
   const matrixUrl = `${frontendUrl}/buyer/quote-matrix?rfq=${encodeURIComponent(rfq.rfqNumber || rfq.id || '')}`;
-  const rfqDetailsUrl = `${frontendUrl}/buyer/rfqs?rfq=${encodeURIComponent(rfq.rfqNumber || rfq.id || '')}`;
+  const rfqDetailsUrl = `${frontendUrl}/buyer/rfq-details?rfq=${encodeURIComponent(rfq.rfqNumber || rfq.id || '')}`;
 
   let attachmentsHtml = '';
   if (Array.isArray(quote.attachments) && quote.attachments.length > 0) {
@@ -1442,7 +1636,7 @@ async function sendRfqAutoClosureAcknowledgementEmail(toOrParams, maybeContext) 
 
 function buildComplexRfqPortalRedirectEmail(toOrParams, maybeContext) {
   const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
-  const { rfq = {}, vendorName, itemCount = 0 } = context;
+  const { rfq = {}, vendorName, itemCount = 0, cc } = context;
   const rfqNumber = rfq.rfqNumber || 'RFQ';
   const rfqTitle = rfq.title || 'Procurement Requisition';
   const base = getPublicFrontendUrl();
@@ -1477,6 +1671,7 @@ function buildComplexRfqPortalRedirectEmail(toOrParams, maybeContext) {
   return {
     from: fromAddress(),
     to,
+    cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Portal Bidding Required', inner),
   };
@@ -1549,7 +1744,11 @@ function buildVendorCategoryMismatchEmail(toOrParams, maybeContext) {
     buyerAccountName,
     buyerEmail,
     cc,
+    vendor,
   } = context;
+
+  const isBuyerVendor = isBuyerUploadedVendor(vendor, context, rfq);
+  const displayBuyer = isBuyerVendor && buyerAccountName;
 
   const targetRfqNumber = rfqNumber || rfq.rfqNumber || 'RFQ';
   const targetTitle = rfqTitle || rfq.title || 'Procurement Requisition';
@@ -1561,7 +1760,7 @@ function buildVendorCategoryMismatchEmail(toOrParams, maybeContext) {
 
   const inner = `
     <p>${vendorName ? `Dear <strong>${vendorName}</strong>,` : 'Hello,'}</p>
-    <p>You were identified as a potential supplier for RFQ <strong>#${targetRfqNumber}</strong> (${targetTitle})${buyerAccountName ? ` released by <strong>${buyerAccountName}</strong>` : ''}.</p>
+    <p>You were identified as a potential supplier for RFQ <strong>#${targetRfqNumber}</strong> (${targetTitle})${displayBuyer ? ` released by <strong>${buyerAccountName}</strong>` : ''}.</p>
     
     <div style="background: #fffbeb; border: 1px solid #f59e0b; color: #92400e; padding: 14px; border-radius: 6px; margin: 16px 0;">
       <strong>⚠️ Category Mismatch Identified – Business Profile Update Required</strong><br/>
@@ -1810,7 +2009,7 @@ function buildVendorOnboardingEmail({ to, recipientName, buyerOrganizationName, 
   const signInUrl = escapeHtml(vendorSignInUrl());
 
   const inner = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+    <div style="font-family: Arial, sans-serif; width: 100%; box-sizing: border-box;">
       <p style="font-size: 16px; color: #1e293b; margin-bottom: 20px;">
         ${recipientName ? `Dear <strong>${escapeHtml(recipientName)}</strong>,` : 'Hello,'}
       </p>
@@ -1875,10 +2074,164 @@ function buildVendorOnboardingEmail({ to, recipientName, buyerOrganizationName, 
   };
 }
 
+/**
+ * Login credentials for a buyer whose account was created outside the web sign-up
+ * (the WhatsApp agent bot). The supplier counterpart is buildVendorOnboardingEmail;
+ * web buyers choose their own password, so nothing else sends a buyer one.
+ */
+function buildBuyerCredentialsEmail({ to, recipientName, tempPassword, contactPhone, mobileNumber }) {
+  const signInUrl = escapeHtml(buyerPortalUrl());
+  const phone = escapeHtml(mobileNumber || contactPhone || '9999999999');
+  const inner = `
+    <p>${recipientName ? `Dear <strong>${escapeHtml(recipientName)}</strong>,` : 'Hello,'}</p>
+    <p>Your buyer account on <strong>Procucev Enterprise</strong> is ready. Use the credentials below to sign in and raise RFQs.</p>
+    <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
+      ${row('Email Address', escapeHtml(to))}
+      ${row('Mobile Number', phone)}
+      ${row('Temporary Password', tempPassword ? escapeHtml(tempPassword) : '')}
+      ${row('Login URL', signInUrl)}
+    </table>
+    <p style="margin: 24px 0;">
+      <a href="${signInUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Sign in to Procucev Portal</a>
+    </p>
+    <p style="font-size: 13px; color: #92400e; background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px;">
+      <strong>Security Notice:</strong> This temporary password is for first-time access only. Please change it after signing in. You can also sign in at any time with a one-time code sent to this email.
+    </p>
+  `;
+  return {
+    from: fromAddress(),
+    to,
+    subject: 'Welcome to Procucev - Your Account Credentials',
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Buyer Account Login Credentials', inner),
+  };
+}
+
+async function sendBuyerCredentialsEmail(params) {
+  return deliver(buildBuyerCredentialsEmail(params), 'Buyer credentials email');
+}
+
+/**
+ * Qua AI Email 1 — Unregistered Buyer RFQ Creation & Account Auto-Created.
+ * Sent when an unknown email address writes to RFQ@procucev.com.
+ */
+function buildBuyerOnboardingWithRfqEmail({
+  to,
+  buyerName,
+  tempPassword,
+  rfqNumber,
+  rfqTitle,
+  deliveryDate,
+  rfqs = [],
+  mobileNumber,
+  contactPhone,
+  loginUrl,
+  reviewUrl,
+}) {
+  const rawNumber = String(rfqNumber || (rfqs.length > 0 ? rfqs.map((r) => r.rfqNumber).join(', ') : '')).trim();
+  const cleanNumber = rawNumber.replace(/^#+/, '');
+  const formattedRfq = cleanNumber ? cleanNumber : 'RFQ';
+
+  const portalSignInUrl = loginUrl || buyerPortalUrl();
+  const rfqReviewUrl = reviewUrl || `${getPublicFrontendUrl()}/login?redirect=/buyer/rfq-summary`;
+
+  const rendered = buildEmail1_RfqCreatedAccountAutoCreated({
+    first_name: buyerName,
+    rfq_id: formattedRfq,
+    rfq_title: rfqTitle || 'Procurement Requirement',
+    email: to,
+    mobile_number: mobileNumber || '9999999999',
+    temp_password: tempPassword || 'QuaAI#2026Auto',
+    login_url: portalSignInUrl,
+    review_url: rfqReviewUrl,
+  });
+
+  return {
+    from: fromAddress(),
+    to,
+    replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
+    subject: rendered.subject,
+    text: rendered.text,
+    html: rendered.html,
+  };
+}
+
+async function sendBuyerOnboardingWithRfqEmail(params) {
+  const message = buildBuyerOnboardingWithRfqEmail(params);
+  return deliver(message, 'Buyer onboarding credentials and RFQ confirmation');
+}
+
+/**
+ * Reminder email sent to an unverified automatically registered buyer when the first quotation lands.
+ * Does not expose full quotation prices or vendor sensitive data until verification is complete.
+ */
+function buildBuyerProfileCompletionReminderEmail({
+  to,
+  recipientName,
+  rfqNumber,
+  rfqTitle,
+  quotesCount = 1,
+}) {
+  const signInUrl = escapeHtml(buyerPortalUrl());
+  const name = escapeHtml(recipientName || 'Valued Buyer');
+  const formattedRfq = escapeHtml(rfqNumber || '');
+
+  const inner = `
+    <div style="font-family: Arial, sans-serif; width: 100%; box-sizing: border-box; color: #1e293b; line-height: 1.6;">
+      <p style="font-size: 16px; margin: 0 0 16px 0;">Hi <strong>${name}</strong>,</p>
+
+      <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #86efac; border-radius: 8px; padding: 14px 18px; margin: 16px 0;">
+        <p style="margin: 0; font-size: 15px; color: #166534; font-weight: 600;">
+          ${quotesCount > 1 ? `${quotesCount} quotations have been submitted` : 'A quotation has been submitted'} for your RFQ <span style="font-family: monospace;">${formattedRfq}</span>!
+        </p>
+      </div>
+
+      ${rfqTitle ? `<p style="font-size: 14px; color: #475569; margin: 0 0 16px 0;"><strong>Requisition:</strong> ${escapeHtml(rfqTitle)}</p>` : ''}
+
+      <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 14px 18px; margin: 18px 0; border-radius: 4px;">
+        <h4 style="margin: 0 0 8px 0; color: #92400e; font-size: 14px;">Update Your Profile to Access Quotations</h4>
+        <p style="font-size: 13px; color: #78350f; margin: 0; line-height: 1.5;">
+          Suppliers have submitted quotations for your requisition. To unlock full item-level quotes, unit prices, tax breakdown, and delivery commitments by email and in your portal, please sign in and complete mandatory profile details:
+        </p>
+        <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px; color: #78350f;">
+          <li>Verify your corporate email via OTP</li>
+          <li>Replace temporary placeholder mobile (9999999999) with your verified phone number via SMS OTP</li>
+          <li>Update your temporary password to a permanent secure password</li>
+          <li>Provide your registered company name, GSTIN (Goods and Services Tax Identification Number), and business address</li>
+        </ul>
+      </div>
+
+      <p style="margin: 24px 0;">
+        <a href="${signInUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Update Profile & View Quotations</a>
+      </p>
+
+      <p style="font-size: 14px; margin: 20px 0 24px 0; color: #334155;">
+        As soon as your profile is updated, all received quotations and competitive pricing will be unlocked and delivered to your inbox.
+      </p>
+
+      <p style="font-size: 15px; font-weight: bold; color: #0f172a; margin: 0;">
+        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}
+      </p>
+    </div>
+  `;
+
+  return {
+    from: fromAddress(),
+    to,
+    replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
+    subject: `[Action Required] Quotation Received for RFQ ${formattedRfq} - Update Profile to Access Quotes`,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Alert - Profile Update Required', inner),
+  };
+}
+
+async function sendBuyerProfileCompletionReminderEmail(params) {
+  const message = buildBuyerProfileCompletionReminderEmail(params);
+  return deliver(message, 'Buyer profile completion reminder email');
+}
+
 /** Template D — Rating revision notification to vendor */
 function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany, buyerName, previousRating, newRating, previousScore, newScore, remarks, qualityScore, costScore, deliveryScore }) {
   const inner = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+    <div style="font-family: Arial, sans-serif; width: 100%; box-sizing: border-box;">
       <p style="font-size: 16px; color: #1e293b; margin-bottom: 20px;">
         ${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}
       </p>
@@ -1964,80 +2317,68 @@ async function sendVendorIngestionEmail(message, template) {
 }
 
 /**
- * Template E — Buyer RFQ Creation Acknowledgement.
- * Sent to the buyer once their requirement has been converted into an RFQ.
+ * Qua AI Email 2 — Registered Buyer RFQ Creation Acknowledgement.
+ * Sent to the buyer once their requirement has been converted into an RFQ or created on the platform.
  */
-function buildRfqAcknowledgementEmail({ to, buyerName, rfqNumber, rfqTitle }) {
+function buildRfqAcknowledgementEmail(params = {}) {
+  const {
+    to,
+    buyerName,
+    rfqNumber,
+    rfqTitle,
+    category,
+    itemCount,
+    deliveryLocation,
+    deliveryDate,
+    requiredBy,
+    quoteDeadline,
+    deadline,
+    suppliersInvited,
+    items = [],
+    rfqSummaryUrl,
+  } = params;
+
   const rawNumber = String(rfqNumber || '').trim();
   const cleanNumber = rawNumber.replace(/^#+/, '');
-  const formattedRfqNumber = cleanNumber ? `#${cleanNumber}` : '#RFQ';
-  const name = buyerName || 'Valued Buyer';
-  const subject = RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUBJECT.replace('{rfqNumber}', cleanNumber || 'RFQ');
+  const formattedRfqNumber = cleanNumber ? cleanNumber : 'RFQ';
 
-  const text = `Hi ${name},
+  const normalizedItems = Array.isArray(items) && items.length > 0
+    ? items.map((it) => ({
+        item_name: it.item_name || it.itemName || it.name || 'Item',
+        item_spec: it.item_spec || it.technicalSpecs || it.specifications || it.specs || it.description || 'Standard Specification',
+        qty: it.qty != null ? it.qty : (it.quantity != null ? it.quantity : 1),
+        uom: it.uom || it.unit || 'Nos',
+      }))
+    : [{
+        item_name: rfqTitle || 'Procurement Requirement',
+        item_spec: 'Standard Specification',
+        qty: 1,
+        uom: 'Lot',
+      }];
 
-Great news! Your requirement has been converted into RFQ ${formattedRfqNumber} and sent to verified suppliers on Procucev right now.
+  const count = itemCount !== undefined ? itemCount : normalizedItems.length;
 
-📩 ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.QUOTES_TIMELINE}
-
-${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.NEED_IT_FASTER}
-
-📞 Call: ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUPPORT_PHONE}
-✉️ Email: ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUPPORT_EMAIL}
-
-${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.CLOSING}
-
-${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}`;
-
-  const inner = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
-      <p style="font-size: 16px; margin: 0 0 16px 0;">Hi <strong>${name}</strong>,</p>
-
-      <p style="font-size: 15px; margin: 0 0 18px 0; line-height: 1.6;">
-        Great news! Your requirement has been converted into <strong>RFQ <span style="color: #0284c7; font-family: monospace; font-size: 16px;">${formattedRfqNumber}</span></strong> and sent to verified suppliers on Procucev right now.
-      </p>
-
-      ${rfqTitle ? `<p style="font-size: 13px; color: #64748b; margin: 0 0 16px 0;"><strong>Requisition:</strong> ${rfqTitle}</p>` : ''}
-
-      <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #86efac; border-radius: 8px; padding: 14px 18px; margin: 20px 0;">
-        <p style="margin: 0; font-size: 14px; color: #166534; font-weight: 600;">
-          📩 ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.QUOTES_TIMELINE}
-        </p>
-      </div>
-
-      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px 18px; margin: 20px 0;">
-        <p style="margin: 0 0 10px 0; font-size: 14px; font-weight: bold; color: #0f172a;">
-          ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.NEED_IT_FASTER}
-        </p>
-        <p style="margin: 0 0 8px 0; font-size: 13px;">
-          📞 <strong>Call:</strong> <a href="tel:+917996170801" style="color: #0284c7; text-decoration: none; font-weight: 600;">${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUPPORT_PHONE}</a>
-        </p>
-        <p style="margin: 0; font-size: 13px;">
-          ✉️ <strong>Email:</strong> <a href="mailto:RFQ@procucev.com" style="color: #0284c7; text-decoration: none;">RFQ@procucev.com</a> / <a href="mailto:support@procucev.com" style="color: #0284c7; text-decoration: none;">support@procucev.com</a>
-        </p>
-      </div>
-
-      <p style="font-size: 14px; margin: 20px 0 24px 0; color: #334155;">
-        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.CLOSING}
-      </p>
-
-      <p style="font-size: 15px; font-weight: bold; color: #0f172a; margin: 0;">
-        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}
-      </p>
-    </div>
-  `;
+  const rendered = buildEmail2_RfqCreated({
+    first_name: buyerName,
+    rfq_id: formattedRfqNumber,
+    rfq_title: rfqTitle || 'Procurement Requirement',
+    category: category || 'Industrial Supplies',
+    item_count: count,
+    delivery_location: deliveryLocation || 'As per RFQ Specification',
+    required_by: requiredBy || deliveryDate || 'To be scheduled',
+    quote_deadline: quoteDeadline || deadline || 'Within 72 hours',
+    suppliers_invited: suppliersInvited !== undefined ? suppliersInvited : 5,
+    items: normalizedItems,
+    rfq_summary_url: rfqSummaryUrl || `${getPublicFrontendUrl()}/buyer/rfq-summary`,
+  });
 
   return {
     from: fromAddress(),
     to,
     replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
-    subject,
-    text,
-    html: wrapEmail(
-      RFQ_ACKNOWLEDGEMENT_NOTIFICATION.HEADLINE,
-      RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUBLINE,
-      inner
-    ),
+    subject: rendered.subject,
+    text: rendered.text,
+    html: rendered.html,
   };
 }
 
@@ -2251,6 +2592,11 @@ async function sendEnterpriseInquiryBuyerConfirmationEmail(inquiry, options = {}
   return deliver(asAutoReply(message), 'enterprise inquiry buyer confirmation', options);
 }
 
+async function sendTransactionalEmail(templateKey, recipientEmail, params = {}, options = {}) {
+  const transactionalEmailTemplates = require('./transactionalEmailTemplates');
+  return transactionalEmailTemplates.sendTransactionalEmail(templateKey, recipientEmail, params, options);
+}
+
 function isConfigured() {
   return (
     gmailIdentities().length > 0 ||
@@ -2273,6 +2619,7 @@ module.exports = {
   sendRfqInviteEmail,
   sendQuoteReceivedEmail,
   buildRfqInviteEmail,
+  isBuyerUploadedVendor,
   buildQuoteReceivedEmail,
   sendRequisitionNotificationEmail,
   buildRequisitionEmail,
@@ -2286,6 +2633,12 @@ module.exports = {
   buildVendorCategoryMappingEmail,
   buildVendorSelfMappingEmail,
   buildVendorOnboardingEmail,
+  buildBuyerCredentialsEmail,
+  sendBuyerCredentialsEmail,
+  buildBuyerOnboardingWithRfqEmail,
+  sendBuyerOnboardingWithRfqEmail,
+  buildBuyerProfileCompletionReminderEmail,
+  sendBuyerProfileCompletionReminderEmail,
   buildRatingRevisionEmail,
   sendVendorIngestionEmail,
   buildRfqAcknowledgementEmail,
@@ -2326,4 +2679,20 @@ module.exports = {
   sendEnterpriseInquiryNotificationEmail,
   buildEnterpriseInquiryBuyerConfirmationEmail,
   sendEnterpriseInquiryBuyerConfirmationEmail,
+  sendTransactionalEmail,
+  buildEmail1_RfqCreatedAccountAutoCreated,
+  buildEmail2_RfqCreated,
+  buildEmail3_NewRfqIntimation,
+  buildEmail4_NewRfqToQuote,
+  buildEmail5_QuotationsReadyToCompare,
+  buildEmail6_ActivateYourAccount,
+  buildEmail7_RfqNeedsMoreInformation,
+  buildEmail8_NoQuotesYet,
+  buildEmail9_QuoteDeadlineReminder,
+  buildEmail10_LowOrZeroCredits,
+  buildEmail11_QuoteSubmitted,
+  buildEmail12_RfqRevisedBuyerQuestion,
+  buildEmail13_CompleteYourProfile,
+  renderTransactionalEmail,
 };
+

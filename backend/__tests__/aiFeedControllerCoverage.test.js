@@ -135,6 +135,17 @@ describe('aiFeedController & resolvers coverage', () => {
       expect(data.length).toBeGreaterThan(0);
     });
 
+    test('applies limit parameter to slice results', async () => {
+      const req = { query: { limit: '2' } };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await aiFeedController.getAIFeed(req, res, next);
+      expect(res.json).toHaveBeenCalled();
+      const data = res.json.mock.calls[0][0].data;
+      expect(data.length).toBeLessThanOrEqual(2);
+    });
+
     test('calls next on error', async () => {
       const res = mockRes();
       const next = jest.fn();

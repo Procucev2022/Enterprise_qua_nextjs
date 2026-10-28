@@ -7,6 +7,7 @@ const { AUTH_MESSAGES, IDENTITY_OTP_CONFIG, PASSWORD_MIN_LENGTH } = require('../
 const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
 const authSessionQueries = require('../db/authSessionQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
 const vendorPresenceService = require('./vendorPresenceService');
 
@@ -209,6 +210,9 @@ function generateSessionToken(user) {
       orgId: user.orgId,
       orgName: user.orgName,
       passwordChangeRequired: user.resetPasswordRequired === true,
+      onboardingRequired:
+        user.onboardingRequired === true ||
+        (user.role === 'buyer' && (user.verificationStatus === 'pending_onboarding' || (user.resetPasswordRequired === true && user.mobile === '+919999999999'))),
       iat: issuedAt,
       exp: expiresAt,
     })
@@ -325,7 +329,7 @@ async function revokeSessionToken(token) {
 }
 
 function toPublicUser(user) {
-  return {
+  const result = {
     id: user.id,
     email: user.email,
     name: user.name,
@@ -335,6 +339,20 @@ function toPublicUser(user) {
     mobile: user.mobile || '',
     passwordChangeRequired: user.resetPasswordRequired === true,
   };
+  const normStatus = String(user.verificationStatus || '').toLowerCase();
+  const cleanMobile = String(user.mobile || '').replace(/\D/g, '');
+  const isPlaceholderMobile = cleanMobile.endsWith('9999999999') || cleanMobile === '9999999999';
+
+  const onboardingReq =
+    user.onboardingRequired === true ||
+    (user.role === 'buyer' && (
+      normStatus === 'pending_onboarding' ||
+      (user.resetPasswordRequired === true && isPlaceholderMobile)
+    ));
+  if (onboardingReq) {
+    result.onboardingRequired = true;
+  }
+  return result;
 }
 
 /**
@@ -417,15 +435,15 @@ async function authenticateWithPassword(email, password, ipAddress, mobile) {
  * sign-in. Introducing hashing needs a migration that makes login hash-aware
  * first; see the note in identityQueries.
  */
-async function changePassword({ userUuid, email, currentPassword, newPassword, ipAddress }) {
-  if (!currentPassword || !newPassword) {
+async function changePassword({ userUuid, email, currentPassword, newPassword, code, resetToken, ipAddress }) {
+  if (!newPassword) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_FIELDS_REQUIRED);
+  }
+  if (!currentPassword && !code && !resetToken) {
     throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_FIELDS_REQUIRED);
   }
   if (String(newPassword).length < PASSWORD_MIN_LENGTH) {
     throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_TOO_SHORT);
-  }
-  if (currentPassword === newPassword) {
-    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_UNCHANGED);
   }
 
   const normalizedEmail = String(email || '').trim().toLowerCase();
@@ -444,13 +462,85 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, i
 
   assertUserCanSignIn(user, normalizedEmail, ipAddress);
 
-  if (!identityQueries.verifyStoredPassword(currentPassword, user.password)) {
-    logger.warn(
-      `Password change rejected, current password incorrect for ${normalizedEmail}`,
-      { ipAddress },
-      'AUTH_SERVICE'
-    );
-    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_CURRENT_INCORRECT);
+  // Authenticate the change request via one of three authorized paths:
+  let verified = false;
+
+  // 1. Verification code (OTP dispatched to registered email/mobile)
+  if (code) {
+    const submittedCode = String(code).trim();
+    const submittedMobile = String(user.mobile || '').trim();
+    const otpKey = buildOtpKey(normalizedEmail, submittedMobile);
+
+    let storedOtp = await authSessionQueries.findOtp(otpKey);
+    if (!storedOtp && submittedMobile) {
+      storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`));
+    }
+    if (!storedOtp && submittedMobile) {
+      const cleanDigits = submittedMobile.replace(/\D/g, '');
+      if (cleanDigits && cleanDigits !== submittedMobile) {
+        storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, cleanDigits));
+      }
+    }
+    if (!storedOtp) {
+      storedOtp = await authSessionQueries.findOtp(`otp:${normalizedEmail}`);
+    }
+
+    if (!storedOtp) {
+      logger.warn(`Password change verification failed, no active OTP found for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
+    }
+
+    if (storedOtp.expiresAt && Date.now() > storedOtp.expiresAt) {
+      await authSessionQueries.deleteOtp(otpKey);
+      logger.warn(`Password change verification failed, expired OTP for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
+    }
+
+    const isValidCode =
+      storedOtp.code.length === submittedCode.length &&
+      crypto.timingSafeEqual(Buffer.from(storedOtp.code), Buffer.from(submittedCode));
+
+    if (!isValidCode) {
+      await authSessionQueries.incrementOtpAttempts(otpKey);
+      logger.warn(`Password change verification failed, invalid OTP for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
+    }
+
+    // Single-use: delete immediately upon successful verification so it cannot be reused!
+    await authSessionQueries.deleteOtp(otpKey);
+    verified = true;
+  } else if (resetToken) {
+    // 2. Verified password reset token
+    const verification = verifySessionToken(resetToken);
+    if (!verification.valid || (verification.user?.sub && verification.user.sub !== user.id)) {
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
+    }
+    const revoked = await authSessionQueries.isTokenRevoked(verification.signature);
+    if (revoked) {
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
+    }
+    // Single-use: revoke token immediately so it cannot be reused!
+    await authSessionQueries.revokeToken(verification.signature, (verification.user?.exp || Math.floor(Date.now() / 1000) + 900) * 1000);
+    verified = true;
+  } else if (currentPassword) {
+    // 3. Current password fallback
+    if (!identityQueries.verifyStoredPassword(currentPassword, user.password)) {
+      logger.warn(
+        `Password change rejected, current password incorrect for ${normalizedEmail}`,
+        { ipAddress },
+        'AUTH_SERVICE'
+      );
+      throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_CURRENT_INCORRECT);
+    }
+    verified = true;
+  }
+
+  if (!verified) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_REQUIRED);
+  }
+
+  if (currentPassword === newPassword || identityQueries.verifyStoredPassword(newPassword, user.password)) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_UNCHANGED);
   }
 
   const written = await identityQueries.updateUserPasswordByUuid(user.id, newPassword, user.email);
@@ -697,9 +787,20 @@ async function verifyOtp(email, code, ipAddress, mobile) {
   const otpKey = buildOtpKey(normalizedEmail, submittedMobile);
 
   const user = await loadIdentityUser(normalizedEmail, submittedMobile);
-  const storedOtp = await authSessionQueries.findOtp(otpKey);
+  let storedOtp = await authSessionQueries.findOtp(otpKey);
+  if (!storedOtp) {
+    // Fallback: Check channel-specific email key if registration/dual OTP was dispatched
+    storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`));
+  }
+  if (!storedOtp) {
+    // Fallback: Check clean national digits in case phone formatting varied
+    const cleanDigits = submittedMobile.replace(/\D/g, '');
+    if (cleanDigits && cleanDigits !== submittedMobile) {
+      storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, cleanDigits));
+    }
+  }
 
-  if (storedOtp && Date.now() > storedOtp.expiresAt) {
+  if (storedOtp && storedOtp.expiresAt && Date.now() > storedOtp.expiresAt) {
     await authSessionQueries.deleteOtp(otpKey);
     logger.warn(`Expired OTP submitted for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.INVALID_OTP);
@@ -904,6 +1005,12 @@ async function registerUser(payload, ipAddress) {
         remainingFreeRFQs: 5,
         accountSource: 'web_registration',
         status: 'ACTIVE_VERIFIED',
+        onboardingRequired: false,
+        profileVerified: true,
+        emailVerified: true,
+        phoneVerified: true,
+        tempPasswordRequired: false,
+        isAutoRegistered: false,
         organizationId: result.user?.orgId || null,
         id: result.user?.id || undefined,
       };
@@ -992,13 +1099,229 @@ async function registerUser(payload, ipAddress) {
 }
 
 /**
+ * Mandatory first-login profile completion for automatically created buyers.
+ * Validates email OTP, phone OTP against new phone (rejecting placeholder),
+ * validates and updates password, updates buyer profile in storeService,
+ * updates user onboarding status, and dispatches any queued quotes.
+ */
+async function completeBuyerOnboarding(user, payload, ipAddress) {
+  if (!user || user.role !== 'buyer') {
+    throw new Error('Only buyer accounts can complete buyer onboarding.');
+  }
+
+  const {
+    emailOtp,
+    mobile,
+    mobileOtp,
+    currentPassword,
+    newPassword,
+    companyName,
+    contactName,
+    city,
+    state,
+    pincode,
+    address,
+    street,
+    gstin,
+    gstNumber,
+    pan,
+    panNumber,
+  } = payload || {};
+
+  const effectiveGstin = (gstin || gstNumber || '').trim().toUpperCase();
+  const effectivePan = (pan || panNumber || (effectiveGstin.length === 15 ? effectiveGstin.slice(2, 12) : '')).trim().toUpperCase();
+  const effectiveAddress = (address || street || '').trim();
+
+  const normalizedEmail = (user.email || '').trim().toLowerCase();
+  const cleanedMobile = String(mobile || '').replace(/\D/g, '');
+  if (!cleanedMobile || cleanedMobile.endsWith('9999999999') || cleanedMobile === '9999999999') {
+    throw new Error('Placeholder phone number 9999999999 must be replaced with your actual phone number.');
+  }
+
+  // Load identity user from database to verify current credentials
+  const dbUser = await loadIdentityUser(normalizedEmail);
+  if (!dbUser) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_ACCOUNT_MISSING);
+  }
+
+  // 1. Verify current password
+  if (!identityQueries.verifyStoredPassword(currentPassword, dbUser.password)) {
+    logger.warn(`Buyer onboarding failed: current password incorrect for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_CURRENT_INCORRECT);
+  }
+
+  // 2. Validate new password
+  if (!newPassword || String(newPassword).length < PASSWORD_MIN_LENGTH) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_TOO_SHORT);
+  }
+  if (currentPassword === newPassword || identityQueries.verifyStoredPassword(newPassword, dbUser.password)) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_UNCHANGED);
+  }
+
+  // 3. Verify Email OTP
+  const emailOtpKey = buildOtpKey(normalizedEmail, `${cleanedMobile}_email`);
+  const emailCombinedKey = buildOtpKey(normalizedEmail, cleanedMobile);
+  const emailDirectKey = buildOtpKey(normalizedEmail, 'email');
+  let storedEmailOtp = (await authSessionQueries.findOtp(emailOtpKey)) ||
+    (await authSessionQueries.findOtp(emailCombinedKey)) ||
+    (await authSessionQueries.findOtp(emailDirectKey));
+
+  if (!storedEmailOtp) {
+    // Check demo OTP fallback in test environments or if OTP was sent to account
+    const fallbackOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, dbUser.mobile));
+    if (fallbackOtp) storedEmailOtp = fallbackOtp;
+  }
+
+  if (storedEmailOtp && storedEmailOtp.expiresAt && Date.now() > storedEmailOtp.expiresAt) {
+    throw new Error('Email verification OTP has expired. Please request a new code.');
+  }
+
+  const isEmailOtpValid =
+    !!storedEmailOtp &&
+    storedEmailOtp.code.length === String(emailOtp).length &&
+    crypto.timingSafeEqual(Buffer.from(storedEmailOtp.code), Buffer.from(String(emailOtp)));
+
+  if (!isEmailOtpValid) {
+    throw new Error('Invalid email verification OTP.');
+  }
+
+  // 4. Verify Mobile OTP
+  const mobileOtpKey = buildOtpKey(normalizedEmail, `${cleanedMobile}_mobile`);
+  let storedMobileOtp = (await authSessionQueries.findOtp(mobileOtpKey)) ||
+    (await authSessionQueries.findOtp(emailCombinedKey));
+
+  if (storedMobileOtp && storedMobileOtp.expiresAt && Date.now() > storedMobileOtp.expiresAt) {
+    throw new Error('Mobile verification OTP has expired. Please request a new code.');
+  }
+
+  const isMobileOtpValid =
+    !!storedMobileOtp &&
+    storedMobileOtp.code.length === String(mobileOtp).length &&
+    crypto.timingSafeEqual(Buffer.from(storedMobileOtp.code), Buffer.from(String(mobileOtp)));
+
+  if (!isMobileOtpValid) {
+    throw new Error('Invalid mobile SMS verification OTP.');
+  }
+
+  // Consume used OTPs
+  await Promise.all([
+    authSessionQueries.deleteOtp(emailOtpKey).catch(() => { }),
+    authSessionQueries.deleteOtp(mobileOtpKey).catch(() => { }),
+    authSessionQueries.deleteOtp(emailCombinedKey).catch(() => { }),
+  ]);
+
+  // 5. Update user identity record
+  const updateSuccess = await identityQueries.updateBuyerOnboardingStatus({
+    userUuid: dbUser.id,
+    newPhone: cleanedMobile,
+    newPassword,
+    verificationStatus: 'verified',
+    actorEmail: normalizedEmail,
+  });
+
+  if (!updateSuccess) {
+    throw new Error('Failed to update buyer onboarding credentials in identity database.');
+  }
+
+  // 6. Update buyer account in storeService
+  const updatedBuyer = storeService.updateBuyerAccount(normalizedEmail, {
+    companyName: companyName || dbUser.orgName,
+    organizationName: companyName || dbUser.orgName,
+    contactName: contactName || dbUser.name,
+    contactPerson: contactName || dbUser.name,
+    phone: cleanedMobile,
+    mobileNumber: cleanedMobile,
+    city: city || '',
+    state: state || '',
+    pincode: pincode || '',
+    address: effectiveAddress,
+    gstin: effectiveGstin,
+    pan: effectivePan,
+    profileVerified: true,
+    status: 'ACTIVE_VERIFIED',
+    verificationStatus: 'verified',
+    onboardingRequired: false,
+    emailVerified: true,
+    phoneVerified: true,
+    isApproved: true,
+    isAutoRegistered: false,
+    tempPasswordRequired: false,
+  });
+
+  // Also update organization profile in database if available
+  if (dbUser.orgId) {
+    try {
+      await buyerProfileQueries.updateProfile(
+        dbUser.orgId,
+        {
+          companyName: companyName || dbUser.orgName,
+          contactName: contactName || dbUser.name,
+          city: city || undefined,
+          state: state || undefined,
+          pincode: pincode || undefined,
+          street: effectiveAddress || undefined,
+          gstNumber: effectiveGstin || undefined,
+          panNumber: effectivePan || undefined,
+        },
+        normalizedEmail,
+        dbUser.id
+      );
+    } catch (profileErr) {
+      logger.warn('Failed to update DB organization profile during onboarding', { error: profileErr.message }, 'AUTH_SERVICE');
+    }
+  }
+
+  // 7. Dispatch pending quotation notifications if any were queued
+  let dispatchedQuotes = [];
+  try {
+    dispatchedQuotes = await storeService.dispatchPendingQuoteNotifications(normalizedEmail);
+  } catch (quoteErr) {
+    logger.warn('Failed to dispatch pending quotes after onboarding', { error: quoteErr.message, email: normalizedEmail }, 'AUTH_SERVICE');
+  }
+
+  // 8. Generate fresh session token
+  const updatedUserRecord = {
+    ...dbUser,
+    mobile: cleanedMobile,
+    resetPasswordRequired: false,
+    onboardingRequired: false,
+    verificationStatus: 'verified',
+    orgName: companyName || dbUser.orgName,
+  };
+  const token = generateSessionToken(updatedUserRecord);
+
+  logger.audit(`Buyer completed mandatory first-login onboarding: ${normalizedEmail}`, normalizedEmail, {
+    phone: cleanedMobile,
+    dispatchedQuotesCount: dispatchedQuotes ? dispatchedQuotes.length : 0,
+    ipAddress,
+  });
+  storeService.addAuditLog({
+    userEmail: normalizedEmail,
+    action: `Mandatory buyer profile onboarding completed. Phone replaced & verified: ${cleanedMobile}.`,
+    ipAddress,
+  });
+
+  return {
+    success: true,
+    message: 'Profile verification and onboarding successfully completed.',
+    token,
+    user: {
+      ...toPublicUser(updatedUserRecord),
+      onboardingRequired: false,
+      passwordChangeRequired: false,
+    },
+    dispatchedQuotesCount: dispatchedQuotes ? dispatchedQuotes.length : 0,
+  };
+}
+
+/**
  * Get all registered users (for admin inspection).
  */
-async function getAllUsers() {
+async function getAllUsers(limit = 200) {
   if (!pool.hasStorage()) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
-  const users = await identityQueries.listUsers();
+  const users = await identityQueries.listUsers(limit);
   return users.map((u) => ({
     id: u.id,
     email: u.email,
@@ -1024,6 +1347,7 @@ module.exports = {
   revokeSessionToken,
   authenticateWithPassword,
   changePassword,
+  completeBuyerOnboarding,
   requestOtp,
   dispatchOtpCodes,
   OTP_DELIVERY_STATUS,

@@ -588,6 +588,80 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(resDelOk.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
 
+    test('bulkDeleteVendors validation, authorization, and execution branches', async () => {
+      const next = jest.fn();
+
+      // 1. Missing targetIds -> 400
+      const res400 = mockRes();
+      await vendorController.bulkDeleteVendors({ user: { role: 'admin' }, body: {} }, res400, next);
+      expect(res400.status).toHaveBeenCalledWith(400);
+
+      // 2. Missing user -> 401
+      const res401 = mockRes();
+      await vendorController.bulkDeleteVendors({ user: null, body: { vendorIds: ['v1'] } }, res401, next);
+      expect(res401.status).toHaveBeenCalledWith(401);
+
+      // 3. User is buyer without account -> fallback to sub/email
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+      const resBuyerNoAccount = mockRes();
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+      await vendorController.bulkDeleteVendors(
+        { user: { role: 'buyer', email: 'b@b.com', sub: 'buyer-sub' }, body: { ids: ['v-hist-1', 'unmatched-id', ''] } },
+        resBuyerNoAccount,
+        next
+      );
+      expect(resBuyerNoAccount.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, deletedCount: 1, skippedIds: ['unmatched-id'] })
+      );
+
+      // 4. Buyer with account, existing vendor with buyerId, buyerAccountId, buyerEmail, or forbidden
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ id: 'buyer-org-123' });
+      const vBuyerId = { id: 'v-b1', buyerId: 'buyer-org-123' };
+      const vBuyerAccountId = { id: 'v-b2', buyerAccountId: 'buyer-org-123' };
+      const vBuyerEmail = { id: 'v-b3', buyerEmail: 'buyer-org-123' };
+      const vForbidden = { id: 'v-other', buyerId: 'other-buyer-org' };
+
+      jest.spyOn(storeService, 'getVendorById').mockImplementation((id) => {
+        if (id === 'v-b1') return vBuyerId;
+        if (id === 'v-b2') return vBuyerAccountId;
+        if (id === 'v-b3') return vBuyerEmail;
+        if (id === 'v-other') return vForbidden;
+        return null;
+      });
+
+      const resBuyerBulk = mockRes();
+      await vendorController.bulkDeleteVendors(
+        { user: { role: 'buyer', email: 'b@b.com' }, body: { vendorIds: ['v-b1', 'v-b2', 'v-b3', 'v-other'] } },
+        resBuyerBulk,
+        next
+      );
+      expect(resBuyerBulk.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, deletedCount: 3, skippedIds: ['v-other'] })
+      );
+
+      // 5. Vendor deleting own profile
+      const vOwn = { id: 'v-self', email: 'vendor@test.com' };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(vOwn);
+      const resVendorBulk = mockRes();
+      await vendorController.bulkDeleteVendors(
+        { user: { role: 'vendor', email: 'vendor@test.com' }, body: { vendorIds: ['v-self'] } },
+        resVendorBulk,
+        next
+      );
+      expect(resVendorBulk.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, deletedCount: 1 }));
+
+      // 6. Error handling -> next(err)
+      jest.spyOn(storeService, 'getVendorById').mockImplementation(() => {
+        throw new Error('Simulated database crash');
+      });
+      await vendorController.bulkDeleteVendors(
+        { user: { role: 'admin' }, body: { vendorIds: ['v-err'] } },
+        mockRes(),
+        next
+      );
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+    });
+
     test('reviseRating validation and success flows', async () => {
       const res = mockRes();
       const next = jest.fn();
@@ -808,7 +882,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
           next
         );
 
-        expect(pageSpy).toHaveBeenCalledWith({ limit: 25, offset: 50, search: 'sql', category: '', scopedBuyerId: '' });
+        expect(pageSpy).toHaveBeenCalledWith({ limit: 25, offset: 50, search: 'sql', email: '', category: '', scopedBuyerId: '' });
         // The expensive full-table resync path must not run at all for this case.
         expect(getVendorsSpy).not.toHaveBeenCalled();
         expect(res.json).toHaveBeenCalledWith({
@@ -896,6 +970,30 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
         expect(pageSpy).toHaveBeenCalledWith(
           expect.objectContaining({ category: 'Fasteners' })
+        );
+      } finally {
+        pool.pool = originalPool;
+        pageSpy.mockRestore();
+      }
+    });
+
+    test('getVendors: an email query param is passed through to the SQL fast path', async () => {
+      const next = jest.fn();
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { query: jest.fn() };
+      const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({ rows: [], total: 0 });
+
+      try {
+        const res = mockRes();
+        await vendorController.getVendors(
+          { query: { buyerId: 'all', page: '1', pageSize: '10', email: 'test@vendor.com' } },
+          res,
+          next
+        );
+
+        expect(pageSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ email: 'test@vendor.com' })
         );
       } finally {
         pool.pool = originalPool;

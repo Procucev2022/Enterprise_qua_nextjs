@@ -1,5 +1,6 @@
 import type {
   AuthResponse,
+  BuyerOnboardingPayload,
   LoginCredentials,
   OtpRequestPayload,
   OtpVerifyPayload,
@@ -191,9 +192,30 @@ class AuthClient {
    * token is reported as an expired session rather than posted and refused, since
    * the endpoint requires authentication.
    */
-  public async changePassword(currentPassword: string, newPassword: string): Promise<AuthResponse> {
+  public async changePassword(
+    currentPasswordOrCode: string,
+    newPassword: string,
+    codeOrOptions?: string | { code?: string; resetToken?: string }
+  ): Promise<AuthResponse> {
     if (!this.token) {
       return { success: false, error: UI_STRINGS.auth.sessionExpired };
+    }
+
+    const payload: { newPassword: string; currentPassword?: string; code?: string; resetToken?: string } = {
+      newPassword,
+    };
+    if (typeof codeOrOptions === 'string') {
+      payload.code = codeOrOptions;
+    } else if (codeOrOptions && typeof codeOrOptions === 'object') {
+      if (codeOrOptions.code) payload.code = codeOrOptions.code;
+      if (codeOrOptions.resetToken) payload.resetToken = codeOrOptions.resetToken;
+    }
+    if (currentPasswordOrCode) {
+      if (/^\d{6}$/.test(currentPasswordOrCode.trim())) {
+        payload.code = currentPasswordOrCode.trim();
+      } else {
+        payload.currentPassword = currentPasswordOrCode;
+      }
     }
 
     let res: Response;
@@ -204,7 +226,7 @@ class AuthClient {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${this.token}`,
         },
-        body: JSON.stringify({ currentPassword, newPassword }),
+        body: JSON.stringify(payload),
       });
     } catch {
       // Fail closed: the password state on the server is unknown, so the caller
@@ -224,6 +246,42 @@ class AuthClient {
     }
     if (res.status === 401) {
       // The token was rejected outright, so the local session is stale.
+      this.setSession(null, null);
+      return { ...data, success: false, error: data.error || UI_STRINGS.auth.sessionExpired };
+    }
+    if (!res.ok && !data.error) {
+      return { ...data, success: false, error: UI_STRINGS.auth.serverErrorFallback };
+    }
+    if (data.success && data.token && data.user) {
+      this.setSession(data.user, data.token);
+    }
+    return data;
+  }
+
+  /**
+   * Complete mandatory first-login profile verification and password change for automatically created buyers.
+   */
+  public async completeBuyerOnboarding(payload: BuyerOnboardingPayload): Promise<AuthResponse> {
+    const res = await fetch('/api/auth/complete-buyer-onboarding', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    let data: AuthResponse | null = null;
+    try {
+      data = (await res.json()) as AuthResponse;
+    } catch {
+      data = null;
+    }
+
+    if (!data) {
+      return { success: false, error: UI_STRINGS.auth.serverErrorFallback };
+    }
+    if (res.status === 401) {
       this.setSession(null, null);
       return { ...data, success: false, error: data.error || UI_STRINGS.auth.sessionExpired };
     }

@@ -144,6 +144,21 @@ describe('d1Bridge', () => {
 
       expect(result).toEqual({ rows: [], rowCount: 1 });
     });
+
+    it('binds params directly when query already uses ? placeholders', async () => {
+      const all = jest.fn().mockResolvedValue({ results: [{ id: 1 }] });
+      const bind = jest.fn().mockReturnValue({ all });
+      const prepare = jest.fn().mockReturnValue({ bind });
+      const db = { prepare };
+
+      const { queryD1, expandD1Params } = require('../src/db/d1Bridge');
+      expect(expandD1Params('select * from t where id = ?', ['abc'])).toEqual(['abc']);
+
+      const result = await queryD1(db, 'select * from t where id = ?', ['abc']);
+      expect(prepare).toHaveBeenCalledWith('select * from t where id = ?');
+      expect(bind).toHaveBeenCalledWith('abc');
+      expect(result).toEqual({ rows: [{ id: 1 }] });
+    });
   });
 
   describe('getD1HttpClient', () => {
@@ -213,6 +228,188 @@ describe('d1Bridge', () => {
       const result = await client._execHttp('select id from rfqs where rfq_number = ?', ['RFQ-1']);
 
       expect(result).toEqual({ rows: [{ id: 'rfq-1' }], rowCount: 0 });
+    });
+
+    it('handles non-JSON error response from D1 HTTP API', async () => {
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-1';
+      process.env.CLOUDFLARE_API_TOKEN = 'token-1';
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        text: () => Promise.resolve('Bad Gateway Error HTML'),
+      });
+
+      const { getD1HttpClient } = require('../src/db/d1Bridge');
+      const client = getD1HttpClient();
+      await expect(client._execHttp('select 1')).rejects.toThrow('D1 HTTP API returned non-JSON (502): Bad Gateway Error HTML');
+    });
+
+    it('handles D1 HTTP API error messages from json.errors or raw body', async () => {
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-1';
+      process.env.CLOUDFLARE_API_TOKEN = 'token-1';
+      global.fetch = jest.fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          text: () => Promise.resolve(JSON.stringify({ success: false, errors: [{ message: 'Syntax error' }] })),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 403,
+          text: () => Promise.resolve(JSON.stringify({ success: false })),
+        });
+
+      const { getD1HttpClient, resetD1HttpClientCache } = require('../src/db/d1Bridge');
+      resetD1HttpClientCache();
+      const client = getD1HttpClient();
+      await expect(client._execHttp('select bad')).rejects.toThrow('D1 HTTP query failed (400): Syntax error');
+      await expect(client._execHttp('select bad2')).rejects.toThrow('D1 HTTP query failed (403):');
+    });
+
+    it('supports prepare().all() without bind and batchHttp on the HTTP client', async () => {
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-1';
+      process.env.CLOUDFLARE_API_TOKEN = 'token-1';
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              success: true,
+              result: [{ results: [{ ok: 1 }], meta: { changes: 1 } }],
+            })
+          ),
+      });
+
+      const { getD1HttpClient, resetD1HttpClientCache } = require('../src/db/d1Bridge');
+      resetD1HttpClientCache();
+      const client = getD1HttpClient();
+      const direct = await client.prepare('select 1').all();
+      expect(direct).toEqual({ results: [{ ok: 1 }], success: true, meta: { changes: 1 } });
+
+      const batchRes = await client.batch([client.prepare('update t set a = 1')]);
+      expect(batchRes).toHaveLength(1);
+      expect(batchRes[0]).toEqual({ rows: [{ ok: 1 }], rowCount: 1 });
+    });
+  });
+
+  describe('batchD1', () => {
+    it('executes statements as a batch against workers binding and maps results', async () => {
+      const batchMock = jest.fn().mockResolvedValue([
+        { results: [{ id: 1 }], meta: { changes: 1 } },
+        { results: [], meta: { changes: 0 } },
+      ]);
+      const bindMock = jest.fn().mockReturnValue({});
+      const prepareMock = jest.fn().mockImplementation((sql) => ({
+        bind: bindMock,
+      }));
+      const db = { prepare: prepareMock, batch: batchMock };
+
+      const { batchD1 } = require('../src/db/d1Bridge');
+      const results = await batchD1(db, [
+        { text: 'insert into t (id) values ($1)', params: [1] },
+        { text: 'delete from t where id = $1', params: [2] },
+      ]);
+
+      expect(batchMock).toHaveBeenCalled();
+      expect(results).toEqual([
+        { rows: [{ id: 1 }], rowCount: 1 },
+        { rows: [], rowCount: 0 },
+      ]);
+    });
+
+    it('handles batch results that already have rows/rowCount (HTTP client)', async () => {
+      const batchMock = jest.fn().mockResolvedValue([
+        { rows: [{ id: 10 }], rowCount: 1 },
+      ]);
+      const db = {
+        prepare: jest.fn().mockReturnValue({}),
+        batch: batchMock,
+      };
+
+      const { batchD1 } = require('../src/db/d1Bridge');
+      const results = await batchD1(db, [{ text: 'select 1' }]);
+      expect(results).toEqual([{ rows: [{ id: 10 }], rowCount: 1 }]);
+    });
+  });
+
+  describe('edge cases', () => {
+    it('returns cached _d1HttpClient on subsequent calls', () => {
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-1';
+      process.env.CLOUDFLARE_API_TOKEN = 'token-1';
+      const { getD1HttpClient, resetD1HttpClientCache } = require('../src/db/d1Bridge');
+      resetD1HttpClientCache();
+      const client1 = getD1HttpClient();
+      const client2 = getD1HttpClient();
+      expect(client1).toBe(client2);
+    });
+
+    it('handles non-array json.result and empty result in execHttp', async () => {
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-1';
+      process.env.CLOUDFLARE_API_TOKEN = 'token-1';
+      global.fetch = jest.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(JSON.stringify({ success: true, result: { results: [{ x: 1 }], meta: { changes: 1 } } })),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(JSON.stringify({ success: true, result: null })),
+        });
+
+      const { getD1HttpClient, resetD1HttpClientCache } = require('../src/db/d1Bridge');
+      resetD1HttpClientCache();
+      const client = getD1HttpClient();
+      const res1 = await client._execHttp('select 1');
+      expect(res1).toEqual({ rows: [{ x: 1 }], rowCount: 1 });
+
+      const res2 = await client._execHttp('select 2');
+      expect(res2).toEqual({ rows: [], rowCount: undefined });
+    });
+
+    it('handles batch results with missing results/meta', async () => {
+      const batchMock = jest.fn().mockResolvedValue([{}]);
+      const db = { prepare: jest.fn().mockReturnValue({}), batch: batchMock };
+      const { batchD1 } = require('../src/db/d1Bridge');
+      const results = await batchD1(db, [{ text: 'select 1' }]);
+      expect(results).toEqual([{ rows: [], rowCount: undefined }]);
+    });
+
+    it('expandD1Params handles default params and non-array params', () => {
+      const { expandD1Params } = require('../src/db/d1Bridge');
+      expect(expandD1Params('select 1')).toEqual([]);
+      expect(expandD1Params('select 1', null)).toEqual([]);
+    });
+
+    it('catches and returns null when globalThis access throws', () => {
+      const { getD1Binding, getWaitUntil } = require('../src/db/d1Bridge');
+      const origEnv = Object.getOwnPropertyDescriptor(globalThis, '__CF_ENV__');
+      Object.defineProperty(globalThis, '__CF_ENV__', {
+        get() { throw new Error('Simulated access error'); },
+        configurable: true,
+      });
+      expect(getD1Binding()).toBeNull();
+      if (origEnv) {
+        Object.defineProperty(globalThis, '__CF_ENV__', origEnv);
+      } else {
+        delete globalThis.__CF_ENV__;
+      }
+
+      const origWait = Object.getOwnPropertyDescriptor(globalThis, '__CF_WAIT_UNTIL__');
+      Object.defineProperty(globalThis, '__CF_WAIT_UNTIL__', {
+        get() { throw new Error('Simulated access error'); },
+        configurable: true,
+      });
+      expect(getWaitUntil()).toBeNull();
+      if (origWait) {
+        Object.defineProperty(globalThis, '__CF_WAIT_UNTIL__', origWait);
+      } else {
+        delete globalThis.__CF_WAIT_UNTIL__;
+      }
     });
   });
 });

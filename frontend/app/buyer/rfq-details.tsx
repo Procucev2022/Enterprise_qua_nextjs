@@ -6,13 +6,16 @@ import { authClient } from '@/lib/authClient';
 import {
   SOURCING_MODES,
   PRESENCE_POLL_INTERVAL_MS,
+  ALLOWED_EXTENSION_HOURS,
+  DEFAULT_EXTENSION_HOURS,
+  calculateExtendedDeadline,
   formatCurrency,
   formatFileSize,
   formatIndianDate,
   formatIndianDateTime,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { rfqAttachmentUrl, updateRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
+import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
 import { getVendorPresence } from '@/lib/vendorPresenceClient';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
 import InviteVendorsModal from '@/app/category-manager/InviteVendorsModal';
@@ -373,13 +376,16 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     router = null;
   }
   const { currentRole, showToast, refreshFromDB, buyerVendors, currentUserSession } = useApp();
-  const isVendor = Boolean(isVendorView || currentUserSession?.role === 'vendor');
+  const isVendor = Boolean(isVendorView || currentUserSession?.role === 'vendor' || currentRole === 'vendor');
   // The category manager is an internal oversight role: it sees full vendor
   // contact details (no double-blind) and a tabbed Procucev / Buyer's-own split
   // in the assigned-suppliers panel. The buyer keeps the confidential view.
   const isCategoryManager = currentRole === 'category_manager' && !isVendor;
   const [localRfq, setLocalRfq] = useState<RFQItem | null>(rfq);
   const [isClosing, setIsClosing] = useState(false);
+  const [extendModalOpen, setExtendModalOpen] = useState(false);
+  const [extensionHours, setExtensionHours] = useState<24 | 48>(DEFAULT_EXTENSION_HOURS);
+  const [isExtending, setIsExtending] = useState(false);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   // Category-manager assigned-suppliers tab: 'procucev' | 'own'.
   const [supplierTab, setSupplierTab] = useState<'procucev' | 'own'>('procucev');
@@ -420,7 +426,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     (activeRfq?.sourcingMode as any) === 'version_2';
 
   const handleCloseRFQ = async () => {
-    if (!activeRfq || isClosing) return;
+    if (!activeRfq || isClosing || isVendor) return;
     setIsClosing(true);
     try {
       const result = await updateRFQ(activeRfq.id, { status: 'Closed' });
@@ -435,6 +441,36 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       showToast('Action Failed', err?.message || 'Failed to close RFQ.', 'warning');
     } finally {
       setIsClosing(false);
+    }
+  };
+
+  const handleExtendRFQ = async () => {
+    if (!activeRfq || isExtending) return;
+    setIsExtending(true);
+    try {
+      const result = await extendRFQ(activeRfq.id, extensionHours);
+      if (result.success) {
+        setLocalRfq(result.rfq);
+        const deadlineStr = result.rfq.closingDeadline || result.rfq.deadline || '';
+        const formattedDeadline = deadlineStr ? formatIndianDateTime(deadlineStr) : '';
+        showToast(
+          DETAILS.extensionSuccessTitle,
+          formatString(DETAILS.extensionSuccessMessage, {
+            rfqNumber: activeRfq.rfqNumber,
+            hours: extensionHours,
+            newDeadline: formattedDeadline,
+          }),
+          'success'
+        );
+        setExtendModalOpen(false);
+        await refreshFromDB();
+      } else {
+        throw new Error(result.error || DETAILS.extensionFailedTitle);
+      }
+    } catch (err: any) {
+      showToast(DETAILS.extensionFailedTitle, err?.message || DETAILS.extensionFailedTitle, 'warning');
+    } finally {
+      setIsExtending(false);
     }
   };
 
@@ -1231,8 +1267,39 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <span className="text-xs text-slate-600 dark:text-gray-300 font-medium">{activeRfq.title}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
-            {activeRfq.status !== 'Closed' && (
+            {activeRfq.status !== 'Closed' &&
+              activeRfq.status !== 'Expired' &&
+              activeRfq.status !== 'PO Generated' &&
+              !Boolean((activeRfq as any).poFinalised) &&
+              !isVendor && (
+              <>
+                {activeRfq.isExtended ? (
+                  <span
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700/60"
+                    title={formatString(DETAILS.alreadyExtendedTooltip, { hours: activeRfq.extensionHours || 24 })}
+                  >
+                    <Clock size={12} className="text-amber-600 dark:text-amber-400" />
+                    {formatString(DETAILS.extendedBadge, { hours: activeRfq.extensionHours || 24 })}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setExtendModalOpen(true)}
+                    className="btn btn-xs font-bold inline-flex items-center gap-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-xs"
+                    title={formatString(DETAILS.extendRfqAria, { rfqNumber: activeRfq.rfqNumber })}
+                  >
+                    <Clock size={12} /> {DETAILS.extendRfqAction}
+                  </button>
+                )}
+              </>
+            )}
+            {activeRfq.status !== 'Closed' &&
+              activeRfq.status !== 'Expired' &&
+              activeRfq.status !== 'PO Generated' &&
+              !Boolean((activeRfq as any).poFinalised) &&
+              !isVendor && (
               <button
+                type="button"
                 onClick={handleCloseRFQ}
                 disabled={isClosing}
                 className="btn btn-xs font-bold inline-flex items-center gap-1.5 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-50"
@@ -1262,6 +1329,39 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </div>
         </div>
       </header>
+
+      {/* Finalised PO Banner */}
+      {(activeRfq.status === 'PO Generated' || Boolean((activeRfq as any).poFinalised)) && (
+        <div className="p-3.5 sm:p-4 rounded-xl bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/40 dark:to-teal-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+              <CheckCircle2 size={18} />
+            </span>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-extrabold text-sm text-emerald-900 dark:text-emerald-100">
+                  Pre-Purchase Order Finalised
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-200/80 dark:bg-emerald-800/60 text-emerald-800 dark:text-emerald-200 mono">
+                  {(activeRfq as any).poNumber || 'PO Generated'}
+                </span>
+              </div>
+              <p className="text-emerald-800/90 dark:text-emerald-300/90 text-xs mt-0.5">
+                Awarded to <span className="font-bold">{activeRfq.awardedVendor || 'Awarded Vendor'}</span>
+                {activeRfq.awardedAmount ? ` for ₹${Number(activeRfq.awardedAmount).toLocaleString()}` : ''}
+                {(activeRfq as any).poIssueDate ? ` on ${(activeRfq as any).poIssueDate}` : ''}.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`)}
+            className="btn btn-emerald btn-xs px-3.5 py-1.5 font-bold shrink-0 inline-flex items-center gap-1.5"
+          >
+            <Sparkles size={12} /> View Finalised Matrix &amp; PO ↗
+          </button>
+        </div>
+      )}
 
       {/* Overview cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1317,6 +1417,21 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             ) : (
               <span className="text-slate-400 dark:text-gray-500 font-normal">{DETAILS.unsetValue}</span>
             )}
+          </Row>
+          <Row label={DETAILS.closingDeadlineLabel}>
+            <span>
+              <span className="inline-flex items-center gap-1.5 mono">
+                <Clock size={12} className="text-slate-400 shrink-0" />
+                {activeRfq.closingDeadline || activeRfq.deadline
+                  ? formatIndianDateTime(activeRfq.closingDeadline || activeRfq.deadline)
+                  : DETAILS.unsetValue}
+              </span>
+              {activeRfq.isExtended && (
+                <span className="block text-[10px] font-semibold text-amber-700 dark:text-amber-400 mt-0.5">
+                  {formatString(DETAILS.extendedBadge, { hours: activeRfq.extensionHours || 24 })} — {DETAILS.revisedDeadlineNote}
+                </span>
+              )}
+            </span>
           </Row>
           <Row label={DETAILS.targetDateLabel}>
             <span>
@@ -1662,11 +1777,23 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           an oversight role — always sees the invited suppliers with full
           details, including on V0 RFQs. */}
       {!isVendor && (!isV0 || isCategoryManager) && (() => {
-        const rawAssigned = (activeRfq?.assignedVendors && activeRfq.assignedVendors.length > 0)
-          ? activeRfq.assignedVendors
-          : (activeRfq?.followUpData?.vendors && activeRfq.followUpData.vendors.length > 0)
-          ? activeRfq.followUpData.vendors
-          : [];
+        // Deduplicate assigned and invited vendors across assignedVendors and followUpData.vendors
+        const sourceList: any[] = [
+          ...(Array.isArray(activeRfq?.assignedVendors) ? activeRfq.assignedVendors : []),
+          ...(Array.isArray(activeRfq?.followUpData?.vendors) ? activeRfq.followUpData.vendors : []),
+        ];
+        const seenVendorKeys = new Set<string>();
+        const rawAssigned: any[] = [];
+        for (const item of sourceList) {
+          if (!item) continue;
+          const key = typeof item === 'string'
+            ? (item as string).trim().toLowerCase()
+            : String(item.id || item.vendorId || item.email || item.vendorEmail || item.name || item.vendorName || '').trim().toLowerCase();
+          if (key && !seenVendorKeys.has(key)) {
+            seenVendorKeys.add(key);
+            rawAssigned.push(item);
+          }
+        }
 
         const normalizedAssigned = rawAssigned.map((v: any, idx: number) => {
           if (typeof v === 'string') {
@@ -1698,9 +1825,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
           );
           const resolvedCategory =
-            v.majorCategory || found?.majorCategory || (isProc ? activeRfq?.category || null : null);
+            v.majorCategory || found?.majorCategory || (v as any).category || (found as any)?.category || (isProc ? activeRfq?.category || null : null);
           const resolvedLocation =
-            v.location || found?.location || found?.city || found?.state || null;
+            v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null) || found?.location || found?.city || found?.state || null;
           let resolvedScore: number | null =
             typeof v.matchScore === 'number' ? v.matchScore : null;
           if (resolvedScore === null && typeof (quoteForVendor as any)?.aiMatchScore === 'number') {
@@ -1817,8 +1944,26 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               ) : isCategoryManager ? (
                 isV0 ? (
                   // ── Category Manager: V0 RFQ flow renders vendor cards directly without tabs ──
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5" data-testid="v0-cm-vendor-cards">
-                    {visibleAssigned.map((v: any) => renderFullCard(v))}
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/70 dark:border-indigo-800/60 text-xs font-semibold text-indigo-950 dark:text-indigo-200">
+                      <span className="font-bold">V0 Starter Sourcing Breakdown:</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-600 text-white shadow-2xs">
+                        {visibleAssigned.length} Distinct Assigned / Invited
+                      </span>
+                      {typeof activeRfq?.followUpData?.totalInvited === 'number' && activeRfq.followUpData.totalInvited > 0 && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white shadow-2xs">
+                          {activeRfq.followUpData.totalInvited} Outreach Dispatches
+                        </span>
+                      )}
+                      {typeof activeRfq?.followUpData?.respondedCount === 'number' && activeRfq.followUpData.respondedCount > 0 && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-600 text-white shadow-2xs">
+                          {activeRfq.followUpData.respondedCount} Responded
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5" data-testid="v0-cm-vendor-cards">
+                      {visibleAssigned.map((v: any) => renderFullCard(v))}
+                    </div>
                   </div>
                 ) : (
                   // ── Category Manager: two tabs, full details for every vendor ──
@@ -1901,7 +2046,10 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 onClick={() => router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`)}
                 className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1.5"
               >
-                <Sparkles size={12} /> Compare Quotations in Matrix ↗
+                <Sparkles size={12} />{' '}
+                {activeRfq.status === 'PO Generated' || Boolean((activeRfq as any).poFinalised)
+                  ? 'View Finalised Matrix & PO ↗'
+                  : 'Compare Quotations in Matrix ↗'}
               </button>
             </div>
           ) : undefined
@@ -2565,6 +2713,16 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                               All Answered
                             </span>
                           )}
+                          {activeChannel.inquiry && (
+                            <button
+                              type="button"
+                              onClick={() => setReplyModalInquiry(activeChannel.inquiry || null)}
+                              className="px-2 py-0.5 rounded text-[9px] font-bold bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 inline-flex items-center gap-1"
+                            >
+                              <Reply size={10} />
+                              <span>Reply</span>
+                            </button>
+                          )}
                         </div>
                         <div className="text-[10px] text-slate-400 flex items-center gap-2 truncate">
                           {activeChannel.contactPerson && (
@@ -2799,6 +2957,124 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             showToast('Suppliers Added', `Invited suppliers have been assigned to RFQ ${updatedRfq.rfqNumber}.`, 'success');
           }}
         />
+      )}
+
+      {/* Extend RFQ Modal */}
+      {extendModalOpen && activeRfq && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="extend-rfq-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
+        >
+          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden p-6 space-y-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+                  <Clock size={20} />
+                </div>
+                <div>
+                  <h3 id="extend-rfq-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
+                    {DETAILS.extendModalTitle}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                    {formatString(DETAILS.extendModalSubtitle, { rfqNumber: activeRfq.rfqNumber })}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExtendModalOpen(false)}
+                disabled={isExtending}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-gray-200 hover:bg-slate-100 dark:hover:bg-gray-800"
+                aria-label={UI_STRINGS.actions.cancel}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Current & Revised Deadline Summary */}
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200/80 dark:border-gray-700/60 space-y-2 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 dark:text-gray-400 font-medium">{DETAILS.currentDeadlineLabel}</span>
+                <span className="mono font-semibold text-slate-700 dark:text-gray-300">
+                  {formatIndianDateTime(activeRfq.closingDeadline || activeRfq.deadline || activeRfq.createdAt)}
+                </span>
+              </div>
+              <div className="flex justify-between items-center pt-2 border-t border-slate-200 dark:border-gray-700">
+                <span className="text-amber-600 dark:text-amber-400 font-semibold">{DETAILS.revisedDeadlineLabel}</span>
+                <span className="mono font-bold text-amber-600 dark:text-amber-400">
+                  {formatIndianDateTime(
+                    calculateExtendedDeadline(activeRfq.closingDeadline || activeRfq.deadline, extensionHours)
+                  )}
+                </span>
+              </div>
+            </div>
+
+            {/* Duration Selector */}
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-gray-300">
+                {DETAILS.selectExtensionDurationLabel}
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                {ALLOWED_EXTENSION_HOURS.map((hours) => {
+                  const isSelected = extensionHours === hours;
+                  const label = hours === 24 ? DETAILS.oneDayLabel : DETAILS.twoDaysLabel;
+                  return (
+                    <button
+                      key={hours}
+                      type="button"
+                      onClick={() => setExtensionHours(hours)}
+                      disabled={isExtending}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        isSelected
+                          ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 ring-2 ring-amber-500/30'
+                          : 'border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-sm">+{hours}h</span>
+                        {isSelected && <Check size={14} className="text-amber-600 dark:text-amber-400" />}
+                      </div>
+                      <span className="text-[11px] text-slate-500 dark:text-gray-400 block mt-1">{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* One-time Warning Alert */}
+            <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60 text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+              <AlertCircle size={14} className="shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <span>{DETAILS.oneTimeNotice}</span>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setExtendModalOpen(false)}
+                disabled={isExtending}
+                className="btn btn-ghost btn-sm text-xs font-semibold"
+              >
+                {UI_STRINGS.actions.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={handleExtendRFQ}
+                disabled={isExtending}
+                className="btn btn-sm text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-xs inline-flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Clock size={12} />
+                <span>
+                  {isExtending
+                    ? DETAILS.extendingAction
+                    : formatString(DETAILS.confirmExtensionAction, { hours: extensionHours })}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

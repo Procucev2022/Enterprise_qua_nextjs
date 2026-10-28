@@ -1330,11 +1330,11 @@ describe("QuotationForm Comprehensive Suite", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search RFQ number, title, or buyer/i)).toBeInTheDocument();
+      expect(screen.getByText(/Centrifugal Water Pump/i)).toBeInTheDocument();
     });
 
     const searchInput = screen.getByPlaceholderText(/Search RFQ number, title, or buyer/i);
-    const statusSelect = screen.getByRole("combobox");
+    const statusSelect = screen.getByRole("combobox", { name: /Filter enquiries by status/i });
 
     // Search for pump
     fireEvent.change(searchInput, { target: { value: "Pump" } });

@@ -2,7 +2,7 @@ export type UserRole = 'buyer' | 'category_manager' | 'vendor' | 'admin';
 
 export type SourcingMode = 'mode_0' | 'mode_1' | 'mode_2' | 'mode_3';
 
-export type VendorSubscriptionPlan = 'premium' | 'connect' | 'select' | 'premium_network';
+export type VendorSubscriptionPlan = 'premium' | 'connect' | 'select' | 'premium_network' | 'unlimited';
 
 export interface SourcingModeDetail {
   id: SourcingMode;
@@ -88,6 +88,8 @@ export interface QuoteComparison {
   deliveryDate?: string;
   lineItemQuotes?: LineItemQuote[];
   attachments?: RFQQuoteAttachment[];
+  status?: string;
+  awarded?: boolean;
   scoreBreakdown?: {
     price: { score: number; weighted: number; maxWeight: number };
     leadTime: { score: number; weighted: number; maxWeight: number };
@@ -538,7 +540,30 @@ export interface RFQItem {
   quotesHidden?: boolean;
   quotesHiddenUntil?: string;
   quotesHiddenReason?: string;
+  deadline?: string;
+  closingDeadline?: string;
+  isExtended?: boolean;
+  extensionHours?: 24 | 48;
+  extendedAt?: string;
+  extendedByEmail?: string | null;
+  buyerDetailsHidden?: boolean;
+  buyerDetailsHiddenUntil?: string;
+  buyerName?: string;
+  buyerCompany?: string;
+  buyerEmail?: string;
+  buyerContact?: string;
+  poFinalised?: boolean;
+  poNumber?: string;
+  poIssueDate?: string;
 }
+
+export interface RFQExtensionPayload {
+  hours: 24 | 48;
+}
+
+export type RFQExtensionResult =
+  | { success: true; rfq: RFQItem }
+  | { success: false; reason: RFQTransportFailure; error: string };
 
 export interface RFQChatMessage {
   id: string;
@@ -691,6 +716,10 @@ export interface VendorOpportunity {
   minorCategory: string;
   /** The buyer account ID that owns this RFQ, used for buyer-specific vendor access verification. */
   buyerAccountId?: string | null;
+  buyerDetailsHidden?: boolean;
+  buyerDetailsHiddenUntil?: string;
+  sourcingMode?: string;
+  category?: string;
 }
 
 export interface AuditLogEntry {
@@ -981,6 +1010,9 @@ export interface VendorEntry {
   rfqDownloadsUsed?: number;
   freeQuotationCredits?: number;
   quotedRfqIds?: string[];
+  unlimitedQuoteSubmissions?: boolean;
+  unlimitedRfqDownloads?: boolean;
+  unlimitedAccess?: boolean;
 
   // Statutory/location fields a category manager's bulk vendor upload
   // collects (mirrors the real p2pservices Vendor Master sheet — see
@@ -1761,8 +1793,10 @@ export interface BuyerAccount {
   cinNumber?: string;
   industrySector: string;
   sourcingMode: SourcingMode;
-  subscriptionPlan: 'free_trial' | 'version_1' | 'version_2' | 'version_3';
+  subscriptionPlan: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'unlimited';
   remainingFreeRFQs: number;
+  unlimitedRfqAccess?: boolean;
+  unlimitedAccess?: boolean;
   accountSource: 'public_system' | 'web_registration' | 'enterprise_sso';
   status: 'ACTIVE_VERIFIED' | 'PENDING_ALIGNMENT' | 'SYNCED_LEGACY';
   primaryPlantLocation: string;
@@ -1851,7 +1885,27 @@ export interface UserSession {
   orgName: string;
   mobile?: string;
   passwordChangeRequired?: boolean;
+  onboardingRequired?: boolean;
   authMethod?: 'PASSWORD' | 'EMAIL_OTP' | 'TEMP_PASSWORD' | 'INSTANT_DEMO';
+}
+
+export interface BuyerOnboardingPayload {
+  emailOtp: string;
+  mobile: string;
+  mobileOtp: string;
+  currentPassword: string;
+  newPassword: string;
+  companyName: string;
+  contactName?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  address?: string;
+  street?: string;
+  gstin?: string;
+  gstNumber?: string;
+  pan?: string;
+  panNumber?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════

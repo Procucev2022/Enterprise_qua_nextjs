@@ -47,6 +47,25 @@ export default function VendorDetailsModal({
 }: VendorDetailsModalProps) {
   const { buyerVendors = [] } = useApp() || {};
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [remoteVendor, setRemoteVendor] = useState<VendorEntry | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setRemoteVendor(null);
+      return;
+    }
+    const resolvedId = vendorId || directQuote?.vendorId || assignedVendor?.id || (assignedVendor as any)?.vendorId;
+    if (resolvedId) {
+      fetch(`/api/vendors/${encodeURIComponent(resolvedId)}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data && data.success && data.data) {
+            setRemoteVendor(data.data);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isOpen, vendorId, directQuote, assignedVendor]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -60,15 +79,17 @@ export default function VendorDetailsModal({
 
   if (!isOpen) return null;
 
-  // Resolve matching vendor record from store
-  const matchedVendor: VendorEntry | undefined = (buyerVendors || []).find((v) => {
-    if (vendorId && v.id === vendorId) return true;
-    if (directQuote?.vendorId && v.id === directQuote.vendorId) return true;
-    if (vendorName && v.name?.trim().toLowerCase() === vendorName.trim().toLowerCase()) return true;
-    if (directQuote?.vendorName && v.name?.trim().toLowerCase() === directQuote.vendorName.trim().toLowerCase()) return true;
-    if (assignedVendor?.name && v.name?.trim().toLowerCase() === assignedVendor.name.trim().toLowerCase()) return true;
-    return false;
-  });
+  // Resolve matching vendor record from store or remote fetch
+  const matchedVendor: VendorEntry | undefined =
+    remoteVendor ||
+    (buyerVendors || []).find((v) => {
+      if (vendorId && v.id === vendorId) return true;
+      if (directQuote?.vendorId && v.id === directQuote.vendorId) return true;
+      if (vendorName && v.name?.trim().toLowerCase() === vendorName.trim().toLowerCase()) return true;
+      if (directQuote?.vendorName && v.name?.trim().toLowerCase() === directQuote.vendorName.trim().toLowerCase()) return true;
+      if (assignedVendor?.name && v.name?.trim().toLowerCase() === assignedVendor.name.trim().toLowerCase()) return true;
+      return false;
+    });
 
   // Resolve matching assigned vendor from RFQ invite list
   const matchedAssignedVendor: RFQAssignedVendor | undefined =
@@ -102,59 +123,71 @@ export default function VendorDetailsModal({
     vendorName ||
     'Vendor Organization';
 
-  // MANDATORY: Key Contact Details (Person & Role)
+  // Key Contact Details
   const displayContact =
     matchedVendor?.contactPerson ||
     matchedAssignedVendor?.contactPerson ||
-    `${displayVendorName} Representative`;
+    null;
 
-  const displayDesignation = 'Key Account Manager';
+  const displayDesignation =
+    matchedVendor?.contactDesignation ||
+    (matchedAssignedVendor as any)?.contactDesignation ||
+    (displayContact ? 'Representative' : null);
 
-  // MANDATORY: Official Email
+  // Official Email
   const displayEmail =
     matchedVendor?.email ||
     matchedAssignedVendor?.email ||
-    `contact@${displayVendorName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'vendor'}.com`;
+    null;
 
-  // MANDATORY: Contact Phone / Mobile Number
+  // Contact Phone / Mobile Number
   const displayPhone =
     matchedVendor?.phone ||
     matchedAssignedVendor?.phone ||
-    '+91 9157154504';
+    (matchedVendor as any)?.mobile ||
+    null;
 
-  // MANDATORY: Registered Location & Operating Facility
+  // Registered Location
   const displayLocation =
     matchedVendor?.location ||
+    (matchedVendor?.city ? `${matchedVendor.city}${matchedVendor.state ? ', ' + matchedVendor.state : ''}` : null) ||
     matchedAssignedVendor?.location ||
     matchedAssignedVendor?.city ||
     (rfq?.deliveryLocation ? rfq.deliveryLocation.split(',')[0]?.trim() : null) ||
-    'Mumbai, Maharashtra, India';
+    null;
 
   const displayMajorCategory =
     matchedVendor?.majorCategory ||
     assignedVendor?.majorCategory ||
-    rfq?.category ||
-    'Industrial & SCM Supplies';
+    (matchedAssignedVendor as any)?.majorCategory ||
+    (matchedVendor as any)?.category ||
+    'General Supplies';
 
   const displayMinorCategories =
     matchedVendor?.minorCategories && matchedVendor.minorCategories.length > 0
       ? matchedVendor.minorCategories
       : [];
 
-  const displayRating = matchedVendor?.rating ?? 4.8;
-  const displayScore = matchedVendor?.score ?? resolvedQuote?.aiMatchScore ?? 92;
+  const displayRating = matchedVendor?.rating !== undefined && matchedVendor?.rating !== null ? Number(matchedVendor.rating) : null;
+  const displayScore = matchedVendor?.score ?? resolvedQuote?.aiMatchScore ?? null;
   const displayStatus = matchedVendor?.status || 'PREFERRED ENTERPRISE SUPPLIER';
 
   const displayGstin =
     matchedVendor?.gstin ||
     matchedVendor?.gst ||
-    '27AAAAA0000A1Z5';
+    null;
 
   const displayPan =
     (matchedVendor as any)?.panNumber ||
     (matchedVendor as any)?.pan ||
-    (displayGstin && displayGstin.length === 15 ? displayGstin.slice(2, 12) : 'AAAAA0000A');
+    (displayGstin && displayGstin.length === 15 ? displayGstin.slice(2, 12) : null);
 
+  const isEmpanelled = Boolean(
+    matchedVendor?.status === 'PREFERRED ENTERPRISE SUPPLIER' ||
+    matchedVendor?.source === 'procucev_network' ||
+    matchedVendor?.isExistingInDatabase ||
+    displayGstin
+  );
   const copyToClipboard = (text: string, fieldKey: string) => {
     if (!navigator?.clipboard) return;
     navigator.clipboard.writeText(text);
@@ -184,9 +217,15 @@ export default function VendorDetailsModal({
                 <h2 id="vendor-details-title" className="text-base sm:text-lg font-black text-slate-900 dark:text-white truncate">
                   {displayVendorName}
                 </h2>
-                <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 dark:bg-teal-950/60 px-2.5 py-0.5 text-[10px] font-bold text-teal-700 dark:text-teal-300 border border-teal-200/60 dark:border-teal-800/60">
-                  <CheckCircle2 size={11} /> Empanelled Vendor
-                </span>
+                {isEmpanelled ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 dark:bg-teal-950/60 px-2.5 py-0.5 text-[10px] font-bold text-teal-700 dark:text-teal-300 border border-teal-200/60 dark:border-teal-800/60">
+                    <CheckCircle2 size={11} /> Empanelled Vendor
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-amber-950/60 px-2.5 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/60">
+                    <AlertCircle size={11} /> Registered Supplier
+                  </span>
+                )}
                 {resolvedQuote?.isBestPrice && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-amber-950/60 px-2 py-0.5 text-[10px] font-extrabold text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
                     <Award size={11} /> L1 Best Price
@@ -215,8 +254,14 @@ export default function VendorDetailsModal({
             <div>
               <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">Vendor Rating</span>
               <div className="flex items-center gap-1 mt-0.5">
-                <Star size={13} className="text-amber-500 fill-amber-500" />
-                <span className="font-extrabold text-slate-800 dark:text-gray-200">{displayRating.toFixed(1)} / 5.0</span>
+                {displayRating !== null ? (
+                  <>
+                    <Star size={13} className="text-amber-500 fill-amber-500" />
+                    <span className="font-extrabold text-slate-800 dark:text-gray-200">{displayRating.toFixed(1)} / 5.0</span>
+                  </>
+                ) : (
+                  <span className="font-bold text-slate-400 dark:text-gray-500">Unrated</span>
+                )}
               </div>
             </div>
             <div>
@@ -332,17 +377,31 @@ export default function VendorDetailsModal({
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                     Key Contact (Mandatory)
                   </span>
-                  <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60">
-                    Verified
+                  <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.2 rounded ${
+                    displayContact
+                      ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60'
+                      : 'bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-slate-700'
+                  }`}>
+                    {displayContact ? 'Verified' : 'Unavailable'}
                   </span>
                 </div>
                 <div className="mt-1">
-                  <span className="font-extrabold text-slate-900 dark:text-white text-sm block">
-                    {displayContact}
-                  </span>
-                  <span className="text-[11px] text-slate-500 dark:text-gray-400 font-medium">
-                    {displayDesignation}
-                  </span>
+                  {displayContact ? (
+                    <>
+                      <span className="font-extrabold text-slate-900 dark:text-white text-sm block">
+                        {displayContact}
+                      </span>
+                      {displayDesignation && (
+                        <span className="text-[11px] text-slate-500 dark:text-gray-400 font-medium">
+                          {displayDesignation}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-slate-400 dark:text-gray-500 italic text-xs block">
+                      Not Provided
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -354,7 +413,7 @@ export default function VendorDetailsModal({
                   </span>
                   <button
                     type="button"
-                    onClick={() => copyToClipboard(displayEmail, 'v-email')}
+                    disabled={!displayEmail} onClick={() => displayEmail && copyToClipboard(displayEmail, 'v-email')}
                     title="Copy Email"
                     className="p-1 text-slate-400 hover:text-teal-600 dark:hover:text-teal-400 transition-colors cursor-pointer"
                   >
@@ -363,13 +422,17 @@ export default function VendorDetailsModal({
                 </div>
                 <div className="flex items-center gap-2 mt-1 truncate">
                   <Mail size={14} className="text-teal-500 shrink-0" />
-                  <a
-                    href={`mailto:${displayEmail}`}
-                    className="hover:underline font-bold text-teal-600 dark:text-teal-400 truncate text-xs"
-                    title={`Email: ${displayEmail}`}
-                  >
-                    {displayEmail}
-                  </a>
+                  {displayEmail ? (
+                    <a
+                      href={`mailto:${displayEmail}`}
+                      className="hover:underline font-bold text-teal-600 dark:text-teal-400 truncate text-xs"
+                      title={`Email: ${displayEmail}`}
+                    >
+                      {displayEmail}
+                    </a>
+                  ) : (
+                    <span className="text-slate-400 dark:text-gray-500 italic text-xs">Not Provided</span>
+                  )}
                 </div>
               </div>
 
@@ -381,7 +444,7 @@ export default function VendorDetailsModal({
                   </span>
                   <button
                     type="button"
-                    onClick={() => copyToClipboard(displayPhone, 'v-phone')}
+                    disabled={!displayPhone} onClick={() => displayPhone && copyToClipboard(displayPhone, 'v-phone')}
                     title="Copy Phone Number"
                     className="p-1 text-slate-400 hover:text-teal-600 dark:hover:text-teal-400 transition-colors cursor-pointer"
                   >
@@ -390,13 +453,17 @@ export default function VendorDetailsModal({
                 </div>
                 <div className="flex items-center gap-2 mt-1">
                   <Phone size={14} className="text-emerald-500 shrink-0" />
-                  <a
-                    href={`tel:${displayPhone}`}
-                    className="hover:underline font-bold text-slate-900 dark:text-white text-xs"
-                    title={`Call: ${displayPhone}`}
-                  >
-                    {displayPhone}
-                  </a>
+                  {displayPhone ? (
+                    <a
+                      href={`tel:${displayPhone}`}
+                      className="hover:underline font-bold text-slate-900 dark:text-white text-xs"
+                      title={`Call: ${displayPhone}`}
+                    >
+                      {displayPhone}
+                    </a>
+                  ) : (
+                    <span className="text-slate-400 dark:text-gray-500 italic text-xs">Not Provided</span>
+                  )}
                 </div>
               </div>
 
@@ -408,7 +475,7 @@ export default function VendorDetailsModal({
                   </span>
                   <button
                     type="button"
-                    onClick={() => copyToClipboard(displayLocation, 'v-location')}
+                    disabled={!displayLocation} onClick={() => displayLocation && copyToClipboard(displayLocation, 'v-location')}
                     title="Copy Vendor Location"
                     className="p-1 text-slate-400 hover:text-teal-600 dark:hover:text-teal-400 transition-colors cursor-pointer"
                   >
@@ -418,12 +485,18 @@ export default function VendorDetailsModal({
                 <div className="flex items-start gap-2 mt-1 min-w-0">
                   <MapPin size={14} className="text-rose-500 shrink-0 mt-0.5" />
                   <div className="min-w-0">
-                    <p className="font-bold text-slate-900 dark:text-white text-xs truncate">
-                      {displayLocation}
-                    </p>
-                    <p className="text-[11px] text-slate-500 dark:text-gray-450 truncate">
-                      Empanelled delivery radius & certified facility
-                    </p>
+                    {displayLocation ? (
+                      <>
+                        <p className="font-bold text-slate-900 dark:text-white text-xs truncate">
+                          {displayLocation}
+                        </p>
+                        <p className="text-[11px] text-slate-500 dark:text-gray-450 truncate">
+                          Operating facility & delivery coverage
+                        </p>
+                      </>
+                    ) : (
+                      <span className="text-slate-400 dark:text-gray-500 italic text-xs">Location Not Provided</span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -439,17 +512,21 @@ export default function VendorDetailsModal({
               {/* GSTIN */}
               <div className="space-y-1">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">GSTIN</span>
-                <div className="flex items-center justify-between gap-1 p-1.5 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-slate-800">
-                  <span className="font-mono font-bold text-slate-800 dark:text-slate-200 text-[11px] truncate">{displayGstin}</span>
-                  <button
-                    type="button"
-                    onClick={() => copyToClipboard(displayGstin, 'gstin')}
-                    title="Copy GSTIN"
-                    className="p-1 text-slate-400 hover:text-indigo-600 transition-colors shrink-0"
-                  >
-                    {copiedField === 'gstin' ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
-                  </button>
-                </div>
+                {displayGstin ? (
+                  <div className="flex items-center justify-between gap-1 p-1.5 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-slate-800">
+                    <span className="font-mono font-bold text-slate-800 dark:text-slate-200 text-[11px] truncate">{displayGstin}</span>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(displayGstin, 'gstin')}
+                      title="Copy GSTIN"
+                      className="p-1 text-slate-400 hover:text-indigo-600 transition-colors shrink-0"
+                    >
+                      {copiedField === 'gstin' ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                    </button>
+                  </div>
+                ) : (
+                  <span className="italic text-slate-400 text-xs">Not Provided</span>
+                )}
               </div>
 
               {/* PAN */}

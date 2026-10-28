@@ -356,9 +356,9 @@ const schema = buildSchema(`
     vendor(id: String, email: String): Vendor
     buyerAccounts(limit: Int): [BuyerAccount]
     activeBuyerAccount: BuyerAccount
-    evaluations(vendorName: String): [VendorEvaluation]
+    evaluations(vendorName: String, limit: Int): [VendorEvaluation]
     auditLogs(limit: Int, search: String): [AuditLogEntry]
-    catalogue(category: String, search: String): [CatalogueProduct]
+    catalogue(category: String, search: String, limit: Int): [CatalogueProduct]
     aiFeed(limit: Int): [AIBotFeedItem]
     systemConfig: SystemConfig
     dbHealth: DBHealthStatus

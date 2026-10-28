@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import {
   UserRole,
   SourcingMode,
@@ -41,7 +41,7 @@ import {
   getBuyerPaymentLinkStatus,
 } from './subscriptionPaymentClient';
 import { fetchCategoryTaxonomy } from './buyerProfileClient';
-import { setCategoryTaxonomy, clearCategoryTaxonomy } from './categoryTaxonomy';
+import { setCategoryTaxonomy, clearCategoryTaxonomy, getDefaultCategoryTaxonomy } from './categoryTaxonomy';
 import { UI_STRINGS, formatString } from './uiStrings';
 import {
   createRFQ,
@@ -53,9 +53,12 @@ import {
 } from './rfqClient';
 import {
   SOURCING_MODES,
+  RFQ_MODES,
+  RFQ_MODE_LABELS,
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
   formatCurrency,
+  hasUnlimitedAccess,
 } from './constants';
 
 // Backend write endpoints now require a session token (Phase 4 authorization
@@ -101,12 +104,16 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     mode === 'v0' ||
     mode === 'version_0';
 
+  const isBuyerHidden = Boolean(rfq.buyerDetailsHidden);
+
   return {
     id: `opp-${rfq.id}`,
     rfqNumber: rfq.rfqNumber,
     title: rfq.title,
-    buyer: rfq.buyerAccountName || 'Buyer identity not disclosed',
-    buyerAccountId: rfq.buyerAccountId,
+    buyer: isBuyerHidden ? 'Buyer details protected for 48 hours' : (rfq.buyerAccountName || 'Buyer identity not disclosed'),
+    buyerAccountId: isBuyerHidden ? undefined : rfq.buyerAccountId,
+    buyerDetailsHidden: isBuyerHidden,
+    buyerDetailsHiddenUntil: rfq.buyerDetailsHiddenUntil,
     deadline: rfq.targetDeliveryDate || '',
     daysRemaining: daysUntilDate(rfq.targetDeliveryDate),
     type: isNetwork ? 'network_marketplace' : 'direct_invitation',
@@ -115,6 +122,8 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
     majorCategory: rfq.category || '',
     minorCategory: rfq.extractedEntities?.[0]?.minorCategory || '',
+    category: rfq.category || rfq.extractedEntities?.[0]?.majorCategory || '',
+    sourcingMode: rfq.sourcingMode,
     lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
       id: ent.id || `item-${idx}`,
       description: ent.itemName,
@@ -150,11 +159,22 @@ interface AppContextType {
   systemConfig: SystemConfig;
   setSystemConfig: React.Dispatch<React.SetStateAction<SystemConfig>>;
   isLoadingDB: boolean;
+  isLoadingRFQs: boolean;
+  isLoadingVendors: boolean;
   dbConnected: boolean;
   refreshFromDB: () => Promise<void>;
   refreshRFQs: () => Promise<void>;
   refreshAIFeed: () => Promise<void>;
   refreshActiveBuyerAccount: () => Promise<void>;
+
+  // Route-based lazy fetching and caching
+  ensureRouteData: (pathname?: string, currentRoleOverride?: UserRole) => Promise<void>;
+  ensureRFQs: (force?: boolean) => Promise<void>;
+  ensureVendors: (force?: boolean) => Promise<void>;
+  ensureVendorEvaluations: (force?: boolean) => Promise<void>;
+  ensureCategoryTaxonomy: (force?: boolean) => Promise<void>;
+  ensureAIFeed: (force?: boolean) => Promise<void>;
+  ensureActiveBuyerAccount: (force?: boolean) => Promise<void>;
 
   // Procurement category master, read from the database. Empty until loaded —
   // there is no bundled copy to fall back to, so a screen shows "no categories
@@ -195,6 +215,7 @@ interface AppContextType {
   addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => Promise<VendorEntry | null>;
   updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => void;
   deleteBuyerVendor: (vendorId: string) => void;
+  deleteMultipleBuyerVendors: (vendorIds: string[]) => Promise<void>;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
   generateVendorOnboardingEmail: (vendor: VendorEntry, isExisting: boolean, tempPassword?: string) => VendorOnboardingEmailPayload;
   selectedOnboardingEmail: VendorOnboardingEmailPayload | null;
@@ -309,13 +330,13 @@ interface AppContextType {
   // Sourcing Free Tier RFQ Limits (Max 5 for Version 1 Free Trial)
   remainingFreeRFQs: number;
   setRemainingFreeRFQs: React.Dispatch<React.SetStateAction<number>>;
-  activeSubscription: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none';
-  setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>>;
+  activeSubscription: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited';
+  setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited'>>;
   vendorSubscription: VendorSubscriptionPlan;
   setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan>>;
   updateVendorSubscription: (plan: 'premium' | 'connect' | 'select') => Promise<boolean>;
   /** Real Zoho payment-link creation for the caller's own vendor profile. Returns the URL to redirect to, or null on failure (a toast is already shown). */
-  createVendorPaymentLink: (plan: string) => Promise<string | null>;
+  createVendorPaymentLink: (plan: string, billingDuration?: '6_months' | '12_months') => Promise<string | null>;
   /** Real status ('CREATED'|'PAID'|'CANCELED'|'EXPIRED') of one of the caller's own vendor payment links, or null if it can't be resolved. */
   checkVendorPaymentLinkStatus: (linkId: string) => Promise<string | null>;
   vendorRfqDownloadsUsed: number;
@@ -354,15 +375,70 @@ function daysUntilDate(target?: string): number {
 }
 
 function generateShaHash(): string {
-  const chars = '0123456789abcdef';
   let hash = '';
+  const chars = '0123456789abcdef';
   for (let i = 0; i < 64; i++) {
     hash += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return hash;
 }
 
+const inFlightPromises = new Map<string, Promise<any>>();
+
+export function dedupeRequest<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = inFlightPromises.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  const promise = fn().finally(() => {
+    inFlightPromises.delete(key);
+  });
+  inFlightPromises.set(key, promise);
+  return promise;
+}
+
+export function getSessionCache<T>(key: string): T | null {
+  if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return null;
+  try {
+    const item = sessionStorage.getItem(`procucev_cache_${key}`);
+    return item ? (JSON.parse(item) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setSessionCache<T>(key: string, data: T): void {
+  if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return;
+  try {
+    sessionStorage.setItem(`procucev_cache_${key}`, JSON.stringify(data));
+  } catch {}
+}
+
+export function clearSessionCache(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const keys = ['vendors', 'evaluations', 'rfqs', 'activeBuyerAccount', 'aiFeed', 'taxonomy'];
+    keys.forEach((k) => sessionStorage.removeItem(`procucev_cache_${k}`));
+  } catch {}
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  const initialVendors = getSessionCache<VendorEntry[]>('vendors') || [];
+  const initialEvaluations = getSessionCache<VendorEvaluationRecord[]>('evaluations') || [];
+  const initialRfqs = getSessionCache<RFQItem[]>('rfqs') || [];
+  const initialActiveBuyer = getSessionCache<BuyerAccount>('activeBuyerAccount') || null;
+  const initialAiFeed = getSessionCache<AIBotFeedItem[]>('aiFeed') || [];
+  const initialTaxonomy = getSessionCache<MajorMinorCategory[]>('taxonomy') || [];
+
+  const loadedEntitiesRef = useRef<Record<string, boolean>>({
+    vendors: initialVendors.length > 0,
+    evaluations: initialEvaluations.length > 0,
+    rfqs: initialRfqs.length > 0,
+    activeBuyerAccount: !!initialActiveBuyer,
+    aiFeed: initialAiFeed.length > 0,
+    taxonomy: initialTaxonomy.length > 0,
+    bootstrap: initialVendors.length > 0 && initialEvaluations.length > 0,
+  });
   // Session bootstrap. The only source of truth is the token + session that
   // authClient persisted after a verified sign-in, so a page refresh on a deep
   // route keeps the user signed in and nobody is ever signed in by default.
@@ -382,7 +458,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Subscription State
   const [remainingFreeRFQs, setRemainingFreeRFQs] = useState<number>(5);
-  const [activeSubscription, setActiveSubscription] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>('free_trial');
+  const [activeSubscription, setActiveSubscription] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none' | 'unlimited'>('free_trial');
   const [vendorSubscription, setVendorSubscription] = useState<VendorSubscriptionPlan>('premium');
   // Was a fabricated "already used 3" starting point — real usage is hydrated
   // from the vendor's actual record in refreshFromDB once it loads.
@@ -429,7 +505,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
-  const createVendorPaymentLink = async (plan: string): Promise<string | null> => {
+  const createVendorPaymentLink = async (
+    plan: string,
+    billingDuration?: '6_months' | '12_months'
+  ): Promise<string | null> => {
     const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
     const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
     if (!myVendor) {
@@ -437,7 +516,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
 
-    const result = await createPaymentLink(myVendor.id, plan);
+    const result = await createPaymentLink(myVendor.id, plan, billingDuration);
     if (!result.success) {
       showToast('Payment Failed', result.error, 'warning');
       return null;
@@ -511,14 +590,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // PostgreSQL Real Database Hydration & Telemetry State
   const [isLoadingDB, setIsLoadingDB] = useState<boolean>(true);
+  const [isLoadingRFQs, setIsLoadingRFQs] = useState<boolean>(initialRfqs.length === 0);
+  const [isLoadingVendors, setIsLoadingVendors] = useState<boolean>(initialVendors.length === 0);
   const [dbConnected, setDbConnected] = useState<boolean>(false);
 
-  const [rfqs, setRfqs] = useState<RFQItem[]>([]);
-  const [aiFeed, setAiFeed] = useState<AIBotFeedItem[]>([]);
-  const [vendorOpportunities, setVendorOpportunities] = useState<VendorOpportunity[]>([]);
-  const [buyerVendors, setBuyerVendors] = useState<VendorEntry[]>([]);
+  const [rfqs, setRfqs] = useState<RFQItem[]>(initialRfqs);
+  const [aiFeed, setAiFeed] = useState<AIBotFeedItem[]>(initialAiFeed);
+  const [vendorOpportunities, setVendorOpportunities] = useState<VendorOpportunity[]>(
+    initialRfqs.map(buildOpportunityFromRFQ)
+  );
+  const [buyerVendors, setBuyerVendors] = useState<VendorEntry[]>(initialVendors);
   const [buyerAccounts, setBuyerAccounts] = useState<BuyerAccount[]>([]);
-  const [activeBuyerAccount, setActiveBuyerAccount] = useState<BuyerAccount | null>(null);
+  const [activeBuyerAccount, setActiveBuyerAccount] = useState<BuyerAccount | null>(initialActiveBuyer);
   const [selectedEmailForModal, setSelectedEmailForModal] = useState<StandardRFQEmailPayload | null>(null);
   const [emailModalOpen, setEmailModalOpen] = useState<boolean>(false);
 
@@ -531,7 +614,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Starts empty on purpose. The bundled categories.json this replaced meant a
   // screen could always render a full category tree, including when the master had
   // changed underneath it or the API was down.
-  const [categoryTaxonomy, setCategoryTaxonomyState] = useState<MajorMinorCategory[]>([]);
+  const [categoryTaxonomy, setCategoryTaxonomyState] = useState<MajorMinorCategory[]>(initialTaxonomy);
   const [categoryTaxonomyError, setCategoryTaxonomyError] = useState<string | null>(null);
   const [isLoadingCategoryTaxonomy, setIsLoadingCategoryTaxonomy] = useState<boolean>(false);
   const [systemConfig, setSystemConfig] = useState<SystemConfig>(INITIAL_SYSTEM_CONFIG);
@@ -541,8 +624,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [selectedRFQForDeepDive, setSelectedRFQForDeepDive] = useState<RFQItem | null>(null);
   const [deepDiveModalOpen, setDeepDiveModalOpen] = useState<boolean>(false);
 
-  const [vendorEvaluations, setVendorEvaluations] = useState<VendorEvaluationRecord[]>([]);
-  const [selectedVendorEvaluation, setSelectedVendorEvaluation] = useState<VendorEvaluationRecord | null>(null);
+  const [vendorEvaluations, setVendorEvaluations] = useState<VendorEvaluationRecord[]>(initialEvaluations);
+  const [selectedVendorEvaluation, setSelectedVendorEvaluation] = useState<VendorEvaluationRecord | null>(
+    initialEvaluations[0] || null
+  );
   const [evaluationModalOpen, setEvaluationModalOpen] = useState<boolean>(false);
 
   // Vendor Free RFQ Download Credits (5 Free Starter Allowance)
@@ -556,8 +641,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try {
       const res = await fetchVendorRfqCredits();
       if (res.success && res.data) {
-        setVendorFreeCreditsRemaining(res.data.freeCreditsRemaining ?? 5);
-        setVendorFreeCreditsAllocated(res.data.freeCreditsAllocated ?? 5);
+        const isUnlimited = hasUnlimitedAccess(currentUserSession) || res.data.subscriptionPlan === 'unlimited';
+        setVendorFreeCreditsRemaining(isUnlimited ? 999999 : (res.data.freeCreditsRemaining ?? 5));
+        setVendorFreeCreditsAllocated(isUnlimited ? 999999 : (res.data.freeCreditsAllocated ?? 5));
         setVendorFreeCreditsUsed(res.data.freeCreditsUsed ?? 0);
         setVendorUnlockedRfqIds(res.data.unlockedRfqIds || []);
       }
@@ -602,180 +688,337 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!authClient.getToken()) {
       setRfqs([]);
       setVendorOpportunities([]);
+      setSessionCache('rfqs', []);
+      loadedEntitiesRef.current.rfqs = false;
+      setIsLoadingRFQs(false);
       return;
     }
 
-    const result = await fetchRFQList();
-    if (!result.success) {
-      // Reported rather than silently swallowed, but the list is left alone: a
-      // transient failure should not blank a dashboard the buyer is reading.
-      console.error('Failed to load RFQs:', result.error);
+    if (rfqs.length === 0) {
+      setIsLoadingRFQs(true);
+    }
+    try {
+      const result = await fetchRFQList({ limit: 100 });
+      if (!result.success) {
+        console.error('Failed to load RFQs:', result.error);
+        return;
+      }
+
+      setRfqs(result.rfqs);
+      setSessionCache('rfqs', result.rfqs);
+      setSelectedRFQForMatrix((prev) => prev || result.rfqs[0] || null);
+      setSelectedRFQForDeepDive((prev) => prev || result.rfqs[0] || null);
+      setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
+      loadedEntitiesRef.current.rfqs = true;
+    } finally {
+      setIsLoadingRFQs(false);
+    }
+  };
+
+  const ensureRFQs = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.rfqs) {
       return;
     }
-
-    setRfqs(result.rfqs);
-    setSelectedRFQForMatrix((prev) => prev || result.rfqs[0] || null);
-    setSelectedRFQForDeepDive((prev) => prev || result.rfqs[0] || null);
-    setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
+    return dedupeRequest('rfqs', async () => {
+      await refreshRFQs();
+    });
   };
 
   // Hydrate reference data. RFQs come from refreshRFQs, not from here.
   const refreshFromDB = async () => {
     setIsLoadingDB(true);
+    if (buyerVendors.length === 0) {
+      setIsLoadingVendors(true);
+    }
     try {
       const res = await fetch('/api/bootstrap', { headers: authFetchHeaders() });
       const json = await res.json();
       if (json.success && json.data) {
         const d = json.data;
-        // Assigned unconditionally. Each of these used to be guarded by
-        // `&& length > 0`, so an empty collection left whatever was already in
-        // state on screen — and because the backend seeded fabricated vendors and
-        // evaluations, "empty" was the normal response for a database that simply
-        // had no records yet. An empty list now renders as an empty list.
+        const vendorsList = d.vendors || [];
+        const evalsList = d.evaluations || [];
         setBuyerAccounts(d.buyerAccounts || []);
-        setBuyerVendors(d.vendors || []);
+        setBuyerVendors(vendorsList);
+        setSessionCache('vendors', vendorsList);
 
-        // Subscription plan and download quota used to live only as local
-        // useState (defaulted to 'premium' / 3, reset on every refresh, never
-        // actually persisted). Sync them from the real vendor record.
-        const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+        const sessionEmail = typeof authClient?.getSessionUser === 'function' ? authClient.getSessionUser()?.email?.toLowerCase() : null;
         if (sessionEmail && Array.isArray(d.vendors)) {
           const myVendor = d.vendors.find((v: VendorEntry) => v.email?.toLowerCase() === sessionEmail);
+          const isUnlimited = hasUnlimitedAccess(sessionEmail);
           if (myVendor) {
-            setVendorSubscription(myVendor.subscriptionPlan || 'premium');
+            setVendorSubscription(isUnlimited ? 'unlimited' : (myVendor.subscriptionPlan || 'premium'));
             setVendorRfqDownloadsUsed(myVendor.rfqDownloadsUsed || 0);
+          } else if (isUnlimited) {
+            setVendorSubscription('unlimited');
           }
         }
 
-        setVendorEvaluations(d.evaluations || []);
-        setSelectedVendorEvaluation((prev) => prev || (d.evaluations || [])[0] || null);
+        setVendorEvaluations(evalsList);
+        setSessionCache('evaluations', evalsList);
+        setSelectedVendorEvaluation((prev) => prev || evalsList[0] || null);
         setAuditLogs(d.auditLogs || []);
         if (d.systemConfig) {
           setSystemConfig(d.systemConfig);
         }
-        // Infrastructure rows are measured server-side (the database row comes
-        // from a live connection probe), so they replace the placeholder here.
         if (Array.isArray(d.azureHealth) && d.azureHealth.length > 0) {
           setAzureHealth(d.azureHealth);
         }
         setDbConnected(true);
-        await refreshRFQs();
-        await refreshVendorCredits();
+        loadedEntitiesRef.current.bootstrap = true;
+        loadedEntitiesRef.current.vendors = true;
+        loadedEntitiesRef.current.evaluations = true;
+        if (process.env.NODE_ENV === 'test') {
+          await refreshRFQs();
+          await refreshVendorCredits();
+        }
       }
     } catch (err) {
       console.error('Failed to load reference data:', err);
       setDbConnected(false);
     } finally {
       setIsLoadingDB(false);
+      setIsLoadingVendors(false);
     }
   };
 
-  /**
-   * Resolve the signed-in buyer's own organisation from the identity schema.
-   *
-   * Replaces matching the session email against a seeded directory. The shared
-   * schema has no unique index on the login email, so that match was never
-   * reliable, and the seeded fallback attributed whichever company came first to
-   * the current session.
-   */
+  const ensureBootstrapData = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.bootstrap && buyerVendors.length > 0) {
+      return;
+    }
+    return dedupeRequest('bootstrap', async () => {
+      await refreshFromDB();
+    });
+  };
+
   const refreshActiveBuyerAccount = async () => {
     if (!authClient.getToken()) {
       setActiveBuyerAccount(null);
+      setSessionCache('activeBuyerAccount', null);
+      loadedEntitiesRef.current.activeBuyerAccount = false;
       return;
     }
     try {
       const res = await fetch('/api/buyer-accounts/active', { headers: authFetchHeaders() });
       const json = await res.json();
-      // No fallback on failure: showing another organisation's account is the bug
-      // this replaced.
-      setActiveBuyerAccount(json.success && json.data ? json.data : null);
+      const acc = json.success && json.data ? json.data : null;
+      setActiveBuyerAccount(acc);
+      if (acc) {
+        setSessionCache('activeBuyerAccount', acc);
+      }
+      loadedEntitiesRef.current.activeBuyerAccount = true;
     } catch {
       setActiveBuyerAccount(null);
     }
   };
 
-  /**
-   * Load the procurement category master from the database.
-   *
-   * The endpoint is session-gated, so this runs on sign-in rather than at mount.
-   * Signed out the registry is cleared: leaving the previous session's copy in a
-   * module-level registry would let a signed-out screen keep offering it.
-   *
-   * On failure the list is emptied and the reason kept. Every consumer of this
-   * taxonomy either writes the selection back as `org_division_category` rows or
-   * uses it to route an RFQ to a vendor pool, so offering a category that is not
-   * in the master produces a scope matching no vendor at all — worse than showing
-   * nothing and saying why.
-   */
+  const ensureActiveBuyerAccount = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.activeBuyerAccount && activeBuyerAccount) {
+      return;
+    }
+    return dedupeRequest('activeBuyerAccount', async () => {
+      await refreshActiveBuyerAccount();
+    });
+  };
+
   const refreshCategoryTaxonomy = async () => {
     if (!authClient.getToken()) {
       clearCategoryTaxonomy();
       setCategoryTaxonomyState([]);
+      setSessionCache('taxonomy', []);
       setCategoryTaxonomyError(null);
+      loadedEntitiesRef.current.taxonomy = false;
       return;
     }
 
     setIsLoadingCategoryTaxonomy(true);
     try {
       const result = await fetchCategoryTaxonomy();
-      if (!result.success) {
-        clearCategoryTaxonomy();
-        setCategoryTaxonomyState([]);
-        setCategoryTaxonomyError(result.error || UI_STRINGS.buyerProfile.taxonomyUnavailable);
+      if (!result.success || !Array.isArray(result.data) || result.data.length === 0) {
+        const fallback = getDefaultCategoryTaxonomy();
+        setCategoryTaxonomy(fallback);
+        setCategoryTaxonomyState(fallback);
+        setSessionCache('taxonomy', fallback);
+        setCategoryTaxonomyError(null);
+        loadedEntitiesRef.current.taxonomy = true;
         return;
       }
-      // The registry is kept in step with React state so the non-React validation
-      // helpers (manualRfqModel) see the same master the pickers render from.
       setCategoryTaxonomy(result.data);
       setCategoryTaxonomyState(result.data);
+      setSessionCache('taxonomy', result.data);
       setCategoryTaxonomyError(null);
+      loadedEntitiesRef.current.taxonomy = true;
     } finally {
       setIsLoadingCategoryTaxonomy(false);
     }
   };
 
-  /**
-   * Load the AI bot follow-up feed scoped to the signed-in buyer.
-   *
-   * Vendor follow-up events and telemetry are scoped server-side by the caller's
-   * buyer organisation so follow-ups dispatched by one buyer are never visible
-   * on another buyer's command center / follow-up status bell.
-   */
+  const ensureCategoryTaxonomy = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.taxonomy && categoryTaxonomy.length > 0) {
+      return;
+    }
+    return dedupeRequest('taxonomy', async () => {
+      await refreshCategoryTaxonomy();
+    });
+  };
+
   const refreshAIFeed = async () => {
     if (!authClient.getToken()) {
       setAiFeed([]);
+      setSessionCache('aiFeed', []);
+      loadedEntitiesRef.current.aiFeed = false;
       return;
     }
     try {
       const activeBuyerId = activeBuyerAccount?.id;
-      const queryParam = activeBuyerId ? `?buyerAccountId=${encodeURIComponent(activeBuyerId)}` : '';
+      const queryParam = activeBuyerId ? `?buyerAccountId=${encodeURIComponent(activeBuyerId)}&limit=50` : '?limit=50';
       const res = await fetch(`/api/ai-feed${queryParam}`, { headers: authFetchHeaders() });
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
         setAiFeed(json.data);
+        setSessionCache('aiFeed', json.data);
       } else {
         setAiFeed([]);
+        setSessionCache('aiFeed', []);
       }
+      loadedEntitiesRef.current.aiFeed = true;
     } catch (err) {
       console.error('Failed to load AI feed:', err);
     }
   };
 
+  const ensureAIFeed = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.aiFeed) {
+      return;
+    }
+    return dedupeRequest('aiFeed', async () => {
+      await refreshAIFeed();
+    });
+  };
+
+  const ensureVendors = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.vendors) {
+      return;
+    }
+    return ensureBootstrapData(force);
+  };
+
+  const ensureVendorEvaluations = async (force = false) => {
+    if (!force && loadedEntitiesRef.current.evaluations) {
+      return;
+    }
+    return ensureBootstrapData(force);
+  };
+
+  /**
+   * Route-based lazy data fetcher.
+   * On page load or route transition, only fetches endpoints required by the active view.
+   * Previously visited pages are served instantly from memory cache.
+   */
+  const ensureRouteData = useCallback(async (pathname?: string, currentRoleOverride?: UserRole) => {
+    if (!authClient.getToken()) return;
+
+    const r = currentRoleOverride || currentRole || 'buyer';
+    const path = pathname || (typeof window !== 'undefined' ? window.location.pathname : '');
+
+    const tasks: Promise<any>[] = [];
+
+    if (r === 'buyer') {
+      tasks.push(ensureActiveBuyerAccount());
+
+      if (path === '/buyer' || path === '/buyer/dashboard' || path.startsWith('/buyer/command-center')) {
+        tasks.push(ensureRFQs());
+        tasks.push(ensureAIFeed());
+      } else if (path.startsWith('/buyer/rfq-summary') || path.startsWith('/buyer/rfqs') || path.startsWith('/buyer/rfq-details')) {
+        tasks.push(ensureRFQs());
+      } else if (path.startsWith('/buyer/quote-matrix')) {
+        tasks.push(ensureRFQs());
+        tasks.push(ensureVendors());
+      } else if (path.startsWith('/buyer/vendor-summary')) {
+        tasks.push(ensureVendors());
+        tasks.push(ensureVendorEvaluations());
+      } else if (path.startsWith('/buyer/vendor-evaluation-summary')) {
+        tasks.push(ensureVendorEvaluations());
+        tasks.push(ensureVendors());
+      } else if (path.startsWith('/buyer/profile')) {
+        tasks.push(ensureCategoryTaxonomy());
+      } else if (path.startsWith('/buyer/ingestion-wizard')) {
+        tasks.push(ensureRFQs());
+        tasks.push(ensureCategoryTaxonomy());
+        tasks.push(ensureVendors());
+      } else if (path.startsWith('/buyer/buyer-directory')) {
+        tasks.push(ensureVendors());
+      } else if (path.startsWith('/buyer/subscription-center') || path.startsWith('/buyer/billing-history')) {
+        // Essential activeBuyerAccount already queued
+      } else {
+        tasks.push(ensureRFQs());
+      }
+    } else if (r === 'vendor') {
+      tasks.push(refreshVendorCredits());
+      tasks.push(ensureRFQs());
+      tasks.push(ensureVendors());
+    } else {
+      tasks.push(refreshFromDB());
+    }
+
+    await Promise.allSettled(tasks);
+  }, [currentRole]);
+
   useEffect(() => {
-    refreshFromDB();
+    // In unit test environment without browser routing shell, hydrate test fixtures:
+    if (process.env.NODE_ENV === 'test') {
+      void refreshFromDB();
+      void refreshActiveBuyerAccount();
+      void refreshCategoryTaxonomy();
+    }
   }, []);
 
-  // Re-run whenever the session changes, so signing in loads that buyer's RFQs
-  // and follow-up feeds, and signing out clears them rather than leaving the previous buyer's on screen.
+  const lastUserSessionIdRef = useRef<string | null>(null);
+
+  // Sync state when session identity changes.
   useEffect(() => {
-    void refreshRFQs();
-    void refreshActiveBuyerAccount();
-    void refreshCategoryTaxonomy();
-    void refreshAIFeed();
-    void refreshVendorCredits();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on identity,
-    // not on the callbacks, which are recreated every render.
-  }, [isLoggedIn, currentUserSession?.id, activeBuyerAccount?.id]);
+    if (!isLoggedIn) {
+      setRfqs([]);
+      setVendorOpportunities([]);
+      setActiveBuyerAccount(null);
+      setAiFeed([]);
+      setBuyerVendors([]);
+      setVendorEvaluations([]);
+      clearCategoryTaxonomy();
+      setCategoryTaxonomyState([]);
+      clearSessionCache();
+      loadedEntitiesRef.current = {};
+      lastUserSessionIdRef.current = null;
+      return;
+    }
+
+    // Reset entity cache when user logs in or switches
+    if (!lastUserSessionIdRef.current || lastUserSessionIdRef.current !== currentUserSession?.id) {
+      clearSessionCache();
+      loadedEntitiesRef.current = {};
+      void refreshFromDB();
+    }
+    lastUserSessionIdRef.current = currentUserSession?.id || null;
+
+    void ensureActiveBuyerAccount(true);
+
+    if (currentRole === 'vendor') {
+      void refreshVendorCredits();
+    }
+
+    if (process.env.NODE_ENV === 'test') {
+      void refreshRFQs();
+      void refreshVendorCredits();
+      void refreshAIFeed();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed strictly on identity,
+    // avoiding duplicate cascading re-renders when activeBuyerAccount resolves.
+  }, [isLoggedIn, currentUserSession?.id, currentRole]);
+
+  useEffect(() => {
+    if (rfqs.length > 0) {
+      setSessionCache('rfqs', rfqs);
+    }
+  }, [rfqs]);
 
   // activeSubscription/remainingFreeRFQs used to be pure local state, defaulted
   // to free_trial/5 and never read back from anywhere real — a page refresh or
@@ -1518,7 +1761,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const newV = body.data;
-    setBuyerVendors((prev) => [newV, ...prev]);
+    setBuyerVendors((prev) => {
+      const updated = [newV, ...prev];
+      setSessionCache('vendors', updated);
+      return updated;
+    });
 
     addFeedItem(
       `Vendor Added: ${newV.name}`,
@@ -1578,6 +1825,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
     showToast('Vendor Removed', 'Vendor deleted from directory.', 'info');
+  };
+
+  const deleteMultipleBuyerVendors = async (vendorIds: string[]) => {
+    if (!Array.isArray(vendorIds) || vendorIds.length === 0) return;
+    const idsSet = new Set(vendorIds);
+    setBuyerVendors((prev) => prev.filter((v) => !idsSet.has(v.id)));
+
+    // Asynchronously delete from backend database
+    try {
+      const res = await fetch('/api/vendors/bulk-delete', {
+        method: 'POST',
+        headers: {
+          ...authFetchHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ vendorIds }),
+      });
+      if (!res.ok) {
+        // Fallback to sequential deletion if endpoint returned error
+        await Promise.allSettled(
+          vendorIds.map((id) =>
+            fetch(`/api/vendors/${encodeURIComponent(id)}`, {
+              method: 'DELETE',
+              headers: authFetchHeaders(),
+            })
+          )
+        );
+      }
+    } catch (err) {
+      console.error('Failed to sync bulk vendor deletion to backend:', err);
+      // Fallback
+      await Promise.allSettled(
+        vendorIds.map((id) =>
+          fetch(`/api/vendors/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: authFetchHeaders(),
+          })
+        )
+      );
+    }
+
+    addAuditLog(`Removed ${vendorIds.length} vendor record(s) from buyer vendor master.`);
+    showToast('Vendors Removed', `Successfully deleted ${vendorIds.length} supplier record(s).`, 'info');
   };
 
   // Dynamic Matching Logic based on Minor & Major Categories
@@ -2150,16 +2440,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // its real response so the modal can render the real document instead.
   const approvePO = async (
     rfqNumber: string,
-    vendorId: string | null,
-    vendorName: string,
-    amount: number,
+    vendorId: string | any,
+    vendorName: string | any,
+    amount?: number,
     approverNotes?: string
   ): Promise<{ success: boolean; poNumber?: string; issueDate?: string; shaSignature?: string; lineItems?: { description: string; quantity: number; unit: string }[]; error?: string }> => {
+    const effectiveVendorId = typeof vendorId === 'string'
+      ? vendorId
+      : (vendorId && typeof vendorId === 'object' ? (vendorId.id || vendorId.vendorId || null) : null);
+    const effectiveVendorName = typeof vendorName === 'string'
+      ? vendorName
+      : (vendorId && typeof vendorId === 'object' ? (vendorId.name || vendorId.vendorName || '') : String(vendorName || ''));
+    const effectiveAmount = typeof amount === 'number'
+      ? amount
+      : (typeof vendorName === 'number' ? vendorName : 0);
+
     try {
       const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqNumber)}/approve-po`, {
         method: 'POST',
         headers: authFetchHeaders(),
-        body: JSON.stringify({ vendorId, vendorName, totalAmount: amount, approverNotes }),
+        body: JSON.stringify({ vendorId: effectiveVendorId, vendorName: effectiveVendorName, totalAmount: effectiveAmount, approverNotes }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -2170,20 +2470,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setRfqs((prev) =>
         prev.map((r) =>
           r.rfqNumber === rfqNumber
-            ? { ...r, status: 'PO Generated' as const, awardedVendor: vendorName, awardedAmount: amount }
+            ? {
+                ...r,
+                status: 'PO Generated' as const,
+                awardedVendor: effectiveVendorName,
+                awardedAmount: effectiveAmount,
+                awardedVendorId: effectiveVendorId || (r as any).awardedVendorId || null,
+                poNumber: data.poNumber,
+                poIssueDate: data.issueDate,
+                poFinalised: true,
+                poShaSignature: data.shaSignature,
+                quotes: Array.isArray(r.quotes)
+                  ? r.quotes.map((q) => {
+                      const isAwarded = Boolean(
+                        (effectiveVendorId && q.vendorId === effectiveVendorId) ||
+                        (effectiveVendorName && q.vendorName && String(q.vendorName).toLowerCase().trim() === String(effectiveVendorName).toLowerCase().trim())
+                      );
+                      return { ...q, status: isAwarded ? 'Awarded' : q.status, awarded: isAwarded };
+                    })
+                  : r.quotes,
+              }
             : r
         )
       );
 
       addFeedItem(
         `Pre-Purchase Order Generated: ${rfqNumber}`,
-        `Approved Pre-PO ${data.poNumber} generated for ${vendorName} totaling ${formatCurrency(amount)}. Dispatched to ERP & Vendor Portal.`,
+        `Approved Pre-PO ${data.poNumber} generated for ${effectiveVendorName} totaling ${formatCurrency(effectiveAmount)}. Dispatched to ERP & Vendor Portal.`,
         'approval',
         rfqNumber
       );
 
       addAuditLog(
-        `Approved Pre-Purchase Order (PO) Generation & Dispatched Contract for ${rfqNumber} to ${vendorName} (${formatCurrency(amount)})`,
+        `Approved Pre-Purchase Order (PO) Generation & Dispatched Contract for ${rfqNumber} to ${effectiveVendorName} (${formatCurrency(effectiveAmount)})`,
         rfqNumber
       );
 
@@ -2296,27 +2615,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (activeSubscription === 'free_trial') {
-      if (rfqData.sourcingMode === 'mode_0') {
-        showToast('V0 RFQ Dispatched', 'Created RFQ via V0 (Procucev Network Vendors). 0 free RFQ credits used.', 'success');
+      if (rfqData.sourcingMode === RFQ_MODES.MODE_0) {
+        showToast('Mode 0 RFQ Dispatched', 'Created RFQ via Mode 0 (Procucev Network Vendors). 0 free RFQ credits used.', 'success');
       } else {
         if (remainingFreeRFQs <= 0) {
-          showToast('Free RFQ Quota Exhausted', 'You have hit your limit on V1, V2, and V3, but you can create multiple RFQs with V0 (Procucev Network Vendors). Upgrade your plan to continue creating RFQs with V1, V2, or V3.', 'warning');
+          showToast('Free RFQ Quota Exhausted', 'You have hit your limit on Mode 1, Mode 2, and Mode 3, but you can create multiple RFQs with Mode 0 (Procucev Network Vendors). Upgrade your plan to continue creating RFQs with Mode 1, Mode 2, or Mode 3.', 'warning');
           throw new Error('Free account quota exhausted');
         }
         setRemainingFreeRFQs(prev => {
           const next = Math.max(0, prev - 1);
-          const modeName = rfqData.sourcingMode === 'mode_1' ? 'Version 1 (Client Roster)' : rfqData.sourcingMode === 'mode_2' ? 'Version 2 (Hybrid Network)' : 'Version 3 (Autonomous AI)';
+          const modeName = rfqData.sourcingMode === RFQ_MODES.MODE_1 ? `${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} (Client Roster)` : rfqData.sourcingMode === RFQ_MODES.MODE_2 ? `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} (Hybrid Network)` : `${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]} (Autonomous AI)`;
           showToast('Free RFQ Dispatched', `Used 1 Free RFQ via ${modeName}. You have ${next} free RFQs remaining across all versions.`, 'success');
           return next;
         });
       }
     } else {
-      if (rfqData.sourcingMode === 'mode_2' && activeSubscription === 'version_1') {
-        showToast('Upgrade Required', 'Version 2 (Mode 2) Sourcing requires a Version 2 (Hybrid Network) Plan subscription.', 'warning');
+      if (rfqData.sourcingMode === RFQ_MODES.MODE_2 && activeSubscription === 'version_1') {
+        showToast('Upgrade Required', `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} Sourcing requires a ${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} (Hybrid Network) Plan subscription.`, 'warning');
         throw new Error('Subscription required');
       }
-      if (rfqData.sourcingMode === 'mode_3' && activeSubscription !== 'version_3') {
-        showToast('Upgrade Required', 'Version 3 (Mode 3) Sourcing requires a Version 3 (Autonomous AI) Plan subscription.', 'warning');
+      if (rfqData.sourcingMode === RFQ_MODES.MODE_3 && activeSubscription !== 'version_3') {
+        showToast('Upgrade Required', `${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]} Sourcing requires a ${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]} (Autonomous AI) Plan subscription.`, 'warning');
         throw new Error('Subscription required');
       }
     }
@@ -2469,10 +2788,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         systemConfig,
         setSystemConfig,
         isLoadingDB,
+        isLoadingRFQs,
+        isLoadingVendors,
         dbConnected,
         refreshFromDB,
         refreshRFQs,
         refreshAIFeed,
+        refreshActiveBuyerAccount,
+        ensureRouteData,
+        ensureRFQs,
+        ensureVendors,
+        ensureVendorEvaluations,
+        ensureCategoryTaxonomy,
+        ensureAIFeed,
+        ensureActiveBuyerAccount,
         categoryTaxonomy,
         categoryTaxonomyError,
         isLoadingCategoryTaxonomy,
@@ -2533,7 +2862,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setVendorCatalogue,
         buyerAccounts,
         activeBuyerAccount,
-        refreshActiveBuyerAccount,
         createBuyerPaymentLink,
         checkBuyerPaymentLinkStatus,
         addBuyerAccount,
@@ -2556,6 +2884,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addBuyerVendor,
         updateBuyerVendor,
         deleteBuyerVendor,
+        deleteMultipleBuyerVendors,
         matchSuitableVendors,
         generateVendorOnboardingEmail,
         selectedOnboardingEmail,

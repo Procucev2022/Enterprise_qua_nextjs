@@ -3,8 +3,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { findMajorForMinor, getMinorCategories } from '@/lib/categoryTaxonomy';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { findMajorForMinor, getMinorCategories, getDefaultCategoryTaxonomy } from '@/lib/categoryTaxonomy';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   ShieldCheck,
   CheckCircle2,
@@ -24,7 +24,12 @@ import {
   CreditCard,
   AlertCircle,
   Loader2,
+  Plus,
+  X,
+  KeyRound,
+  Lock,
 } from 'lucide-react';
+import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 
 export default function VendorProfilePage() {
@@ -141,19 +146,26 @@ export default function VendorProfilePage() {
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
+  const CUSTOM_CATEGORY_GROUP = UI_STRINGS.vendorProfile.customCategoryGroup;
+  const [customCategoryInput, setCustomCategoryInput] = useState('');
+
   // Groups a flat list of minor category names (as persisted by the backend)
   // back into the major->minor shape this screen's selector state uses.
+  // Preserves unknown or custom categories under the custom categories group.
   const groupMinorCategories = (flat: string[]) => {
     const majors: string[] = [];
     const minorMap: Record<string, string[]> = {};
     flat.forEach((minorName) => {
-      const major = findMajorForMinor(minorName);
-      if (!major) return;
+      const trimmed = (minorName || '').trim();
+      if (!trimmed) return;
+      const major = findMajorForMinor(trimmed) || CUSTOM_CATEGORY_GROUP;
       if (!minorMap[major]) {
         minorMap[major] = [];
         majors.push(major);
       }
-      minorMap[major].push(minorName);
+      if (!minorMap[major].includes(trimmed)) {
+        minorMap[major].push(trimmed);
+      }
     });
     return { majors, minorMap };
   };
@@ -252,39 +264,215 @@ export default function VendorProfilePage() {
 
   // Toggle Minor Category (Strict Max 10 Check)
   const toggleMinorCategory = (majorName: string, minorName: string) => {
-    setSelectedMinor((prev) => {
-      const currentList = prev[majorName] || [];
-      const isCurrentlyChecked = currentList.includes(minorName);
+    const currentList = selectedMinor[majorName] || [];
+    const isCurrentlyChecked = currentList.includes(minorName);
 
-      if (!isCurrentlyChecked) {
-        if (totalSelectedMinorCount >= MAX_CATEGORIES) {
-          showToast(
-            'Maximum 10 Categories Reached',
-            `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to add "${minorName}".`,
-            'warning'
-          );
-          return prev;
-        }
+    if (!isCurrentlyChecked) {
+      if (totalSelectedMinorCount >= MAX_CATEGORIES) {
+        showToast(
+          'Maximum 10 Categories Reached',
+          `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to add "${minorName}".`,
+          'warning'
+        );
+        return;
+      }
 
-        setSelectedMajor((majors) => (majors.includes(majorName) ? majors : [...majors, majorName]));
-        return {
-          ...prev,
-          [majorName]: [...currentList, minorName],
-        };
-      } else {
-        const updated = currentList.filter((m) => m !== minorName);
+      setSelectedMajor((majors) => (majors.includes(majorName) ? majors : [...majors, majorName]));
+      setSelectedMinor((prev) => ({
+        ...prev,
+        [majorName]: [...(prev[majorName] || []), minorName],
+      }));
+    } else {
+      setSelectedMinor((prev) => {
+        const updated = (prev[majorName] || []).filter((m) => m !== minorName);
         const next = { ...prev, [majorName]: updated };
         if (updated.length === 0) {
           delete next[majorName];
           setSelectedMajor((majors) => majors.filter((m) => m !== majorName));
         }
         return next;
+      });
+    }
+  };
+
+  // Handle adding custom category or auto-selecting existing category
+  const handleAddCustomCategory = () => {
+    const trimmed = customCategoryInput.trim();
+    if (!trimmed) {
+      showToast('Validation Error', UI_STRINGS.vendorProfile.categoryEmptyMessage, 'warning');
+      return;
+    }
+
+    const normalized = trimmed.toLowerCase();
+
+    // 1. Search existing categories across displayTaxonomy
+    let matchedMajor = '';
+    let matchedMinor = '';
+
+    // Check exact match in minor categories
+    for (const group of displayTaxonomy) {
+      const found = (group.minorCategories || []).find(
+        (m) => m.trim().toLowerCase() === normalized
+      );
+      if (found) {
+        matchedMajor = group.majorCategory;
+        matchedMinor = found;
+        break;
       }
+    }
+
+    // Check match in major categories
+    if (!matchedMinor) {
+      for (const group of displayTaxonomy) {
+        if (group.majorCategory.trim().toLowerCase() === normalized) {
+          matchedMajor = group.majorCategory;
+          matchedMinor = (group.minorCategories && group.minorCategories[0]) || group.majorCategory;
+          break;
+        }
+      }
+    }
+
+    // Check substring / partial match in minor categories
+    if (!matchedMinor) {
+      for (const group of displayTaxonomy) {
+        const found = (group.minorCategories || []).find(
+          (m) =>
+            m.trim().toLowerCase().includes(normalized) ||
+            normalized.includes(m.trim().toLowerCase())
+        );
+        if (found) {
+          matchedMajor = group.majorCategory;
+          matchedMinor = found;
+          break;
+        }
+      }
+    }
+
+    // Check registry lookup fallback
+    if (!matchedMinor) {
+      const regMajor = findMajorForMinor(trimmed);
+      if (regMajor) {
+        matchedMajor = regMajor;
+        matchedMinor = trimmed;
+      }
+    }
+
+    if (matchedMajor && matchedMinor) {
+      // Found in existing taxonomy: automatically mark tick or alert
+      const currentList = selectedMinor[matchedMajor] || [];
+      if (currentList.includes(matchedMinor)) {
+        showToast(
+          'Category Already Selected',
+          `"${matchedMinor}" under "${matchedMajor}" is already selected.`,
+          'info'
+        );
+        setExpandedMajor((prev) => ({ ...prev, [matchedMajor]: true }));
+        setCustomCategoryInput('');
+        return;
+      }
+
+      if (totalSelectedMinorCount >= MAX_CATEGORIES) {
+        showToast(
+          'Maximum 10 Categories Reached',
+          `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to select "${matchedMinor}".`,
+          'warning'
+        );
+        return;
+      }
+
+      setSelectedMajor((majors) => (majors.includes(matchedMajor) ? majors : [...majors, matchedMajor]));
+      setSelectedMinor((prev) => ({
+        ...prev,
+        [matchedMajor]: [...(prev[matchedMajor] || []), matchedMinor],
+      }));
+      setExpandedMajor((prev) => ({ ...prev, [matchedMajor]: true }));
+      setCustomCategoryInput('');
+      showToast(
+        'Category Selected',
+        `Found and automatically selected "${matchedMinor}" under "${matchedMajor}".`,
+        'success'
+      );
+      return;
+    }
+
+    // 2. Otherwise: add under 'Other' for this vendor only and mark that tick / selected
+    const otherGroup = CUSTOM_CATEGORY_GROUP;
+    const otherList = selectedMinor[otherGroup] || [];
+    if (otherList.some((m) => m.trim().toLowerCase() === normalized)) {
+      showToast('Category Exists', `"${trimmed}" is already added under ${otherGroup}.`, 'info');
+      setExpandedMajor((prev) => ({ ...prev, [otherGroup]: true }));
+      setCustomCategoryInput('');
+      return;
+    }
+
+    if (totalSelectedMinorCount >= MAX_CATEGORIES) {
+      showToast(
+        'Maximum 10 Categories Reached',
+        `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to add "${trimmed}".`,
+        'warning'
+      );
+      return;
+    }
+
+    setSelectedMajor((majors) => (majors.includes(otherGroup) ? majors : [...majors, otherGroup]));
+    setSelectedMinor((prev) => ({
+      ...prev,
+      [otherGroup]: [...(prev[otherGroup] || []), trimmed],
+    }));
+    setExpandedMajor((prev) => ({ ...prev, [otherGroup]: true }));
+    setCustomCategoryInput('');
+    showToast(
+      'Added to Other',
+      `"${trimmed}" has been added under ${otherGroup} and selected for your profile.`,
+      'success'
+    );
+  };
+
+  // Handle removing a selected category directly
+  const handleRemoveCategory = (categoryName: string) => {
+    setSelectedMinor((prev) => {
+      const next: Record<string, string[]> = {};
+      let removedMajor = '';
+      for (const [major, minors] of Object.entries(prev)) {
+        const filtered = minors.filter((m) => m !== categoryName);
+        if (filtered.length > 0) {
+          next[major] = filtered;
+        } else {
+          removedMajor = major;
+        }
+      }
+      if (removedMajor) {
+        setSelectedMajor((majors) => majors.filter((m) => m !== removedMajor));
+      }
+      return next;
     });
   };
 
+  // Base taxonomy from backend, or standard default fixture if backend table has 0 rows
+  const displayTaxonomy = categoryTaxonomy.length > 0 ? categoryTaxonomy : getDefaultCategoryTaxonomy();
+
+  // Include custom categories in the active taxonomy list under 'Other'
+  const customMinors = selectedMinor[CUSTOM_CATEGORY_GROUP] || [];
+  const activeTaxonomy = [...displayTaxonomy];
+  const otherIdx = activeTaxonomy.findIndex(
+    (c) => c.majorCategory.trim().toLowerCase() === CUSTOM_CATEGORY_GROUP.toLowerCase()
+  );
+  if (otherIdx >= 0) {
+    const existing = activeTaxonomy[otherIdx].minorCategories || [];
+    const merged = Array.from(new Set([...existing, ...customMinors]));
+    activeTaxonomy[otherIdx] = {
+      ...activeTaxonomy[otherIdx],
+      minorCategories: merged,
+    };
+  } else if (customMinors.length > 0) {
+    activeTaxonomy.push({
+      majorCategory: CUSTOM_CATEGORY_GROUP,
+      minorCategories: customMinors,
+    });
+  }
+
   // Filtered Categories based on search
-  const filteredCategories = categoryTaxonomy.filter((cat) => {
+  const filteredCategories = activeTaxonomy.filter((cat) => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
     const matchesMajor = cat.majorCategory.toLowerCase().includes(term);
@@ -432,13 +620,22 @@ export default function VendorProfilePage() {
             Manage company registration, PAN/GSTIN compliance, and define your manufacturing / supply categories for direct buyer RFQs.
           </p>
         </div>
-        <button
-          onClick={handleSaveProfile}
-          disabled={isLoadingProfile || isSaving}
-          className="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-        >
-          <Save size={16} /> {isSaving ? 'Saving...' : 'Save Supplier Profile'}
-        </button>
+        <div className="flex items-center gap-2.5">
+          <a
+            href="#account-security"
+            className="btn btn-secondary btn-md font-bold flex items-center gap-1.5 shadow-xs"
+          >
+            <KeyRound size={16} className="text-emerald-600 dark:text-emerald-400" />
+            <span>Update Password</span>
+          </a>
+          <button
+            onClick={handleSaveProfile}
+            disabled={isLoadingProfile || isSaving}
+            className="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <Save size={16} /> {isSaving ? 'Saving...' : 'Save Supplier Profile'}
+          </button>
+        </div>
       </div>
 
       {isLoadingProfile && (
@@ -816,23 +1013,34 @@ export default function VendorProfilePage() {
                       return (
                         <span
                           key={c}
-                          className={`px-2 py-0.5 rounded-md text-[10px] font-semibold flex items-center gap-1 ${
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-semibold flex items-center gap-1.5 ${
                             isCommon
                               ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200'
                               : 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200'
                           }`}
                         >
                           {isCommon && <span className="text-[9px]">✓</span>}
-                          {c}
+                          <span>{c}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCategory(c)}
+                            className="text-slate-400 hover:text-rose-500 font-bold leading-none cursor-pointer p-0.5 rounded hover:bg-slate-200/50 dark:hover:bg-gray-800"
+                            title={`${UI_STRINGS.vendorProfile.removeCategoryTitle}: ${c}`}
+                            aria-label={`${UI_STRINGS.vendorProfile.removeCategoryTitle}: ${c}`}
+                          >
+                            <X size={11} />
+                          </button>
                         </span>
                       );
                     })
                   ) : (
-                    <span className="text-[10px] text-slate-400 italic">No categories selected. Pick up to 10 below.</span>
+                    <span className="text-[10px] text-slate-400 italic">
+                      {UI_STRINGS.vendorProfile.noCategoriesSelected}
+                    </span>
                   )}
                 </div>
                 <p className="text-[9.5px] text-slate-400">
-                  Selected directly by vendor. Chips with ✓ indicate common match with buyer roster.
+                  Selected directly by vendor. Chips with ✓ indicate common match with buyer roster. Click × on any chip to remove it.
                 </p>
               </div>
             </div>
@@ -866,6 +1074,48 @@ export default function VendorProfilePage() {
             </div>
           </div>
 
+          {/* Dedicated Vendor Custom Category Creation Card */}
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-emerald-200/70 dark:border-emerald-900/40 space-y-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+              <div className="flex items-center gap-2">
+                <Plus size={16} className="text-emerald-600 dark:text-emerald-400 font-bold" />
+                <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+                  {UI_STRINGS.vendorProfile.customCategoriesTitle}
+                </h3>
+              </div>
+              <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                {UI_STRINGS.vendorProfile.customCategoriesSubtitle}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-600 dark:text-gray-300 leading-relaxed">
+              {UI_STRINGS.vendorProfile.customCategoriesDesc}
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2 pt-1">
+              <input
+                type="text"
+                value={customCategoryInput}
+                onChange={(e) => setCustomCategoryInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddCustomCategory();
+                  }
+                }}
+                placeholder={UI_STRINGS.vendorProfile.customCategoryPlaceholder}
+                className="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-white dark:bg-gray-900 text-slate-900 dark:text-white placeholder:text-slate-400"
+              />
+              <button
+                type="button"
+                onClick={handleAddCustomCategory}
+                disabled={!customCategoryInput.trim()}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer shadow-xs whitespace-nowrap"
+              >
+                <Plus size={14} />
+                <span>{UI_STRINGS.vendorProfile.addCategoryButton}</span>
+              </button>
+            </div>
+          </div>
+
           {/* Search Bar */}
           <div className="relative">
             <Search size={16} className="absolute left-3.5 top-3 text-slate-400" />
@@ -880,7 +1130,7 @@ export default function VendorProfilePage() {
 
           {/* Categories Selector Grid */}
           <div className="space-y-3 pt-1">
-            {categoryTaxonomy.length === 0 && (
+            {filteredCategories.length === 0 && (
               <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
                 {categoryTaxonomyError || UI_STRINGS.buyerProfile.taxonomyEmpty}
               </p>
@@ -994,6 +1244,30 @@ export default function VendorProfilePage() {
           </button>
         </div>
       </form>
+
+      {/* Section 4: Account & Security (Update Password) */}
+      {/* Sits outside the profile form above on purpose. The panel has its */}
+      {/* own submit handlers, and nesting a <form> inside another is invalid */}
+      {/* HTML — the inner one is dropped during parsing, which would wire the */}
+      {/* password button up to the profile save instead. */}
+      <div id="account-security" className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-gray-800 pb-3">
+          <div>
+            <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+              <KeyRound className="text-emerald-600 dark:text-emerald-400" size={18} />{' '}
+              {UI_STRINGS.accountSecurity.sectionTitle}
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+              {UI_STRINGS.accountSecurity.sectionDescription}
+            </p>
+          </div>
+          <span className="badge badge-emerald text-[11px] font-bold px-2.5 py-1 rounded-full self-start sm:self-auto flex items-center gap-1">
+            <ShieldCheck size={12} /> Password Security
+          </span>
+        </div>
+
+        <AccountSecurityPanel />
+      </div>
     </div>
   );
 }

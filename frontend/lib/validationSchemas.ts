@@ -87,6 +87,7 @@ export interface FieldRule {
   pattern?: RegExp;
   enum?: string[];
   message?: string;
+  custom?: (val: unknown) => string | null;
 }
 
 export type FormSchema = Record<string, FieldRule>;
@@ -110,14 +111,18 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
    * backend's `changePassword` schema, so all three agree on the boundary.
    */
   changePasswordForm: {
-    currentPassword: {
-      required: true,
-      message: UI_STRINGS.accountSecurity.currentPasswordRequired,
-    },
     newPassword: {
       required: true,
       minLength: PASSWORD_MIN_LENGTH,
       message: UI_STRINGS.accountSecurity.weakPasswordMessage,
+    },
+    verificationCode: {
+      required: false,
+      message: UI_STRINGS.accountSecurity.verificationCodeRequired,
+    },
+    currentPassword: {
+      required: false,
+      message: UI_STRINGS.accountSecurity.currentPasswordRequired,
     },
   },
 
@@ -200,6 +205,15 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     iv: { required: true, minLength: 12, message: 'Initialization vector is required' },
     authTag: { required: true, minLength: 16, message: 'Authentication tag is required' },
   },
+
+  extendRFQ: {
+    hours: {
+      required: true,
+      type: 'number',
+      custom: (val: unknown) => ([24, 48].includes(Number(val)) ? null : 'Extension duration must be either 24 or 48 hours.'),
+      message: 'Extension hours must be 24 or 48.',
+    },
+  },
 };
 
 
@@ -207,7 +221,7 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
  * Universal Form Data Validator
  * Validates form state against centralized schemas and returns field-level error messages.
  */
-export function validateFormData(schema: FormSchema, data: Record<string, any>): {
+export function validateFormData(schema: FormSchema, data: Record<string, unknown>): {
   isValid: boolean;
   fieldErrors: Record<string, string>;
 } {
@@ -227,6 +241,15 @@ export function validateFormData(schema: FormSchema, data: Record<string, any>):
     }
 
     if (value !== undefined && value !== null && value !== '') {
+      // Custom validation check
+      if (rule.custom) {
+        const customErr = rule.custom(value);
+        if (customErr) {
+          fieldErrors[field] = customErr;
+          continue;
+        }
+      }
+
       // Numeric check
       if (rule.type === 'number') {
         const num = Number(value);

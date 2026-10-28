@@ -4,9 +4,11 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { formatFileSize } from '@/lib/constants';
+import { formatFileSize, hasUnlimitedAccess } from '@/lib/constants';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
 import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
+import { SubscriptionPaymentModal } from '@/app/components/Modals';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
 import * as XLSX from 'xlsx';
 import {
@@ -91,11 +93,35 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     vendorUnlockedRfqIds,
     refreshVendorCredits,
     unlockRFQForVendor,
+    createVendorPaymentLink,
+    updateVendorSubscription,
   } = useApp();
   const [selectedBuyerModal, setSelectedBuyerModal] = useState<(BuyerContactInfo & { rfqNumber: string }) | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [opportunitySearch, setOpportunitySearch] = useState('');
   const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | 'open' | 'submitted' | 'closed'>('all');
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [pendingPayment, setPendingPayment] = useState<{
+    planId: 'connect' | 'select';
+    planName: string;
+    price: string;
+  } | null>(null);
+
+  const handleUpgradeClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const plan = e.currentTarget.getAttribute('data-plan') as 'premium' | 'connect' | 'select';
+    if (!plan) return;
+    if (plan === 'premium') {
+      if (updateVendorSubscription) updateVendorSubscription('premium');
+      showToast('Switched Plan', 'Switched to Premium tier.', 'success');
+      setShowUpgradeModal(false);
+      return;
+    }
+    const planName = plan === 'connect' ? 'Connect Model (Marketplace Access)' : 'Select Model (Catalogue + Scale)';
+    const price = plan === 'connect' ? '₹2 / 3 months' : '₹5 / 3 months';
+    setPendingPayment({ planId: plan, planName, price });
+    setShowUpgradeModal(false);
+  };
 
   // This vendor's own backend record id — needed to tell "my submitted quote"
   // apart from any other vendor's quote on the same RFQ, and to submit/download
@@ -218,6 +244,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     return false;
   };
 
+  // Extract distinct categories available across opportunities
+  const availableCategories = useMemo(() => {
+    const set = new Set<string>();
+    vendorOpportunities.forEach((opp) => {
+      const cat = (opp.majorCategory || opp.category || '').trim();
+      if (cat) set.add(cat);
+    });
+    rfqs.forEach((rfq) => {
+      if (rfq.category && rfq.category.trim()) set.add(rfq.category.trim());
+      (rfq.extractedEntities || []).forEach((e) => {
+        if (e.majorCategory && e.majorCategory.trim()) set.add(e.majorCategory.trim());
+      });
+    });
+    return Array.from(set).sort();
+  }, [vendorOpportunities, rfqs]);
+
   // Compile RFQ Bidding summaries
   const totalReceivedCount = vendorOpportunities.length;
   const totalSubmittedCount = submittedQuotes.length;
@@ -229,8 +271,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       if (opportunityStatusFilter === 'submitted' && !quote && opp.status !== 'submitted' && opp.status !== 'under_review') return false;
       if (opportunityStatusFilter === 'closed' && !isClosed) return false;
       if (opportunityStatusFilter === 'open' && (isClosed || quote || opp.status === 'submitted')) return false;
-      if (!query) return true;
+
       const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
+      const oppCat = (opp.majorCategory || opp.category || rfqRecord?.category || rfqRecord?.extractedEntities?.[0]?.majorCategory || '').trim();
+
+      // Category filter check (multi-category support)
+      if (selectedCategories.length > 0) {
+        const matchesCategory = selectedCategories.some((cat) =>
+          cat.toLowerCase() === oppCat.toLowerCase() ||
+          (rfqRecord?.extractedEntities || []).some(
+            (ent) => (ent.majorCategory || ent.category || '').toLowerCase() === cat.toLowerCase()
+          )
+        );
+        if (!matchesCategory) return false;
+      }
+
+      if (!query) return true;
       const itemNames = (rfqRecord?.extractedEntities || []).map((item) => item.itemName);
       return [
         opp.rfqNumber,
@@ -245,7 +301,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       ]
         .some((value) => value.toLocaleLowerCase().includes(query));
     });
-  }, [vendorOpportunities, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter]);
+  }, [vendorOpportunities, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories]);
 
   const handleCopyText = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -327,6 +383,21 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   };
 
   const openBidForm = (opp: VendorOpportunity) => {
+    const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
+    const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
+      (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
+      vendorSubscription === 'unlimited';
+    const freeCredits = isUnlimited ? 999999 : effectiveFreeCredits;
+    const locked = !isUnlimited && !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
+    if (locked) {
+      setShowUpgradeModal(true);
+      showToast(
+        UI_STRINGS.vendorSubscriptionModal?.subscriptionRequiredToastTitle || 'Subscription Required',
+        UI_STRINGS.vendorSubscriptionModal?.subscriptionRequiredToastDesc || 'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
+        'warning'
+      );
+      return;
+    }
     setBiddingOn(opp);
     setBidUnitPrice('');
     setBidLineItemPrices({});
@@ -524,10 +595,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        const errorMsg = data.error || (data.upgradeRequired ? 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.' : 'Failed to submit quotation.');
+        const errorMsg = data.error || (data.upgradeRequired ? (UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedToastDesc || 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.') : 'Failed to submit quotation.');
         setSubmitModalError(errorMsg);
         if (data.upgradeRequired || res.status === 403) {
-          showToast('Quotation Credits Exhausted', errorMsg, 'warning');
+          showToast(UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedToastTitle || 'Quotation Credits Exhausted', errorMsg, 'warning');
+          setShowUpgradeModal(true);
         } else {
           showToast('Submission Failed', errorMsg, 'warning');
         }
@@ -539,24 +611,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         biddingOn.rfqNumber,
         currentUserSession?.email
       );
-      showToast('Quote Submitted', `Your quotation for ${biddingOn.rfqNumber} was submitted successfully.`, 'success');
+      showToast('Quote Submitted', `Your quotation for ${biddingOn.rfqNumber} was submitted successfully. Buyer details remain confidential for 48 hours in accordance with procurement privacy rules.`, 'success');
       
-      const isDirect = isOwnBuyerRfq(biddingOn.rfqNumber);
-      const targetRfqNum = biddingOn.rfqNumber;
-      const baseBuyer = BUYER_CONTACTS_MAP[biddingOn.rfqNumber] || {
-        companyName: biddingOn.buyer,
-        contactPerson: isDirect ? 'Rajesh Sharma (Lead Procurement)' : 'Strategic Procurement Lead',
-        email: isDirect ? 'client@procucev.com' : `procurement@${(biddingOn.buyer || 'buyer').toLowerCase().replace(/[^a-z]/g, '')}.com`,
-        phone: '+91 98201 44520',
-      };
-      const buyerDetails: BuyerContactInfo = {
-        ...baseBuyer,
-        source: isDirect ? 'buyer_uploaded' : 'quote_submitted',
-      };
       setBiddingOn(null);
       setBidDocuments([]);
       setUploadedBidDocuments([]);
-      setSelectedBuyerModal({ ...buyerDetails, rfqNumber: targetRfqNum });
       await refreshFromDB();
       if (onSubmitSuccess) onSubmitSuccess();
     } catch (err: any) {
@@ -699,7 +758,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               <Info size={13} className="shrink-0 text-blue-600 dark:text-blue-400" /> Buyer information becomes available for eligible enquiries
             </span>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_220px]">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,220px)_200px]">
             <label className="relative block min-w-0">
               <span className="sr-only">Search enquiries</span>
               <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -710,6 +769,28 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 placeholder="Search RFQ number, title, or buyer..."
                 className="has-leading-icon h-11 w-full rounded-xl border-slate-200 bg-slate-50 pr-3 text-sm focus:border-blue-400 focus:bg-white dark:border-slate-700 dark:bg-gray-950 dark:focus:bg-gray-900"
               />
+            </label>
+            <label className="block min-w-0">
+              <span className="sr-only">Filter enquiries by category</span>
+              <select
+                value={selectedCategories.length === 0 ? 'all' : selectedCategories.length === 1 ? selectedCategories[0] : 'multiple'}
+                onChange={(event) => {
+                  const val = event.target.value;
+                  if (val === 'all') {
+                    setSelectedCategories([]);
+                  } else {
+                    setSelectedCategories([val]);
+                  }
+                }}
+                className="h-11 w-full rounded-xl border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-gray-950 dark:text-gray-200"
+              >
+                <option value="all">All Categories ({availableCategories.length})</option>
+                {availableCategories.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="block min-w-0">
               <span className="sr-only">Filter enquiries by status</span>
@@ -725,8 +806,62 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               </select>
             </label>
           </div>
+
+          {/* Quick Category Chips for Multi-Category Selection */}
+          {availableCategories.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap pt-1 text-[11px]">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mr-1">
+                Categories:
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedCategories([])}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                  selectedCategories.length === 0
+                    ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                    : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'
+                }`}
+              >
+                All Categories ({totalReceivedCount})
+              </button>
+              {availableCategories.map((cat) => {
+                const isSelected = selectedCategories.includes(cat);
+                const count = vendorOpportunities.filter((opp) => {
+                  const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
+                  return (opp.majorCategory || opp.category || rfqRecord?.category || '').trim() === cat;
+                }).length;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCategories((prev) =>
+                        prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
+                      );
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                        : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    <span>{cat}</span>
+                    <span className={`text-[10px] px-1 py-0.2 rounded-full ${isSelected ? 'bg-blue-700 text-white' : 'bg-slate-200 dark:bg-gray-700 text-slate-500'}`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <p aria-live="polite" className="text-xs font-medium text-slate-500 dark:text-gray-400">
             Showing <span className="font-bold text-slate-700 dark:text-gray-200">{filteredOpportunities.length}</span> of {totalReceivedCount} enquiries
+            {selectedCategories.length > 0 && (
+              <span className="ml-1 text-blue-600 dark:text-blue-400 font-semibold">
+                (Filtered by {selectedCategories.length} categor{selectedCategories.length === 1 ? 'y' : 'ies'})
+              </span>
+            )}
           </p>
         </div>
 
@@ -739,12 +874,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             <p className="max-w-sm text-xs leading-relaxed text-slate-500 dark:text-gray-400">
               {vendorOpportunities.length === 0
                 ? 'New sourcing requests from buyers will appear here.'
+                : selectedCategories.length > 0
+                ? 'No RFQs match the selected category filter. Try clearing or selecting different categories.'
                 : 'Try another search term or choose a different status filter.'}
             </p>
-            {vendorOpportunities.length > 0 && (opportunitySearch || opportunityStatusFilter !== 'all') && (
+            {vendorOpportunities.length > 0 && (opportunitySearch || opportunityStatusFilter !== 'all' || selectedCategories.length > 0) && (
               <button
                 type="button"
-                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); }}
+                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); setSelectedCategories([]); }}
                 className="mt-1 text-xs font-bold text-blue-700 hover:underline dark:text-cyan-300"
               >
                 Clear search and filters
@@ -790,21 +927,27 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                   null
                 );
                 const parentCompany = getParentCompany(opp.buyer);
+                const isUnlimited = hasUnlimitedAccess(currentUserSession) ||
+                  (typeof authClient?.getSessionUser === 'function' && hasUnlimitedAccess(authClient.getSessionUser()?.email)) ||
+                  vendorSubscription === 'unlimited';
                 const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
-                const freeCredits = effectiveFreeCredits;
-                const isLocked = !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
+                const freeCredits = isUnlimited ? 999999 : effectiveFreeCredits;
+                const isLocked = !isUnlimited && !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
                 
-                // Condition: If buyer uploaded this vendor (isOwnBuyerRfq), show even before quote is submitted.
-                // Otherwise, show only after quote is submitted and updated in the system (quote !== undefined || opp.status === 'submitted').
+                // Condition: Buyer details remain hidden for 48 hours after bid submission.
+                // After 48 hours, buyer details automatically become visible.
                 const isUploadedByBuyer = isOwnBuyerRfq(opp.rfqNumber);
                 const isQuoteSubmitted = !!quote || opp.status === 'submitted';
-                const canViewBuyerDetails = isUploadedByBuyer || isQuoteSubmitted;
+                const quoteSubmittedAt = (quote as any)?.submittedAt || (quote as any)?.createdAt;
+                const isWithin48h = isQuoteSubmitted && quoteSubmittedAt && (Date.now() - new Date(quoteSubmittedAt).getTime() < 48 * 60 * 60 * 1000);
+                const isBuyerProtected48h = isWithin48h || Boolean((opp as any).buyerDetailsHidden) || Boolean((rfqRecord as any)?.buyerDetailsHidden);
+                const canViewBuyerDetails = !isBuyerProtected48h && (isUploadedByBuyer || (isQuoteSubmitted && !isWithin48h));
 
-                const baseBuyerData = BUYER_CONTACTS_MAP[opp.rfqNumber] || {
-                  companyName: parentCompany,
-                  contactPerson: isUploadedByBuyer ? 'Rajesh Sharma (Lead Procurement)' : 'Strategic Procurement Lead',
-                  email: isUploadedByBuyer ? 'client@procucev.com' : `procurement@${parentCompany.toLowerCase().replace(/[^a-z]/g, '')}.com`,
-                  phone: '+91 98201 44520',
+                const baseBuyerData = {
+                  companyName: (rfqRecord as any)?.buyerCompany || (rfqRecord as any)?.buyerAccountName || opp.buyer || parentCompany,
+                  contactPerson: (rfqRecord as any)?.buyerContactPerson || (rfqRecord as any)?.buyerName || (isUploadedByBuyer ? 'Rajesh Sharma (Lead Procurement)' : 'Strategic Procurement Lead'),
+                  email: (rfqRecord as any)?.buyerEmail || (rfqRecord as any)?.sourceEmail || BUYER_CONTACTS_MAP[opp.rfqNumber]?.email || (isUploadedByBuyer ? 'client@procucev.com' : `procurement@${parentCompany.toLowerCase().replace(/[^a-z]/g, '')}.com`),
+                  phone: (rfqRecord as any)?.buyerContact || (rfqRecord as any)?.buyerPhone || BUYER_CONTACTS_MAP[opp.rfqNumber]?.phone || '+91 98201 44520',
                 };
 
                 const buyerInfo: BuyerContactInfo = {
@@ -812,22 +955,48 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                   source: isUploadedByBuyer ? 'buyer_uploaded' : 'quote_submitted',
                 };
 
+                const modeStr = String(opp.sourcingMode || (rfqRecord as any)?.sourcingMode || '').toLowerCase();
+                const versionBadge = (() => {
+                  if (modeStr.includes('0') || modeStr === 'v0' || modeStr === 'version_0' || modeStr === 'mode_0') {
+                    return { label: 'V0 · Starter', color: 'bg-slate-100 text-slate-700 dark:bg-gray-800 dark:text-gray-300 border border-slate-200 dark:border-gray-700' };
+                  }
+                  if (modeStr.includes('1') || modeStr === 'v1' || modeStr === 'version_1' || modeStr === 'mode_1') {
+                    return { label: 'V1 · Private', color: 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800' };
+                  }
+                  if (modeStr.includes('2') || modeStr === 'v2' || modeStr === 'version_2' || modeStr === 'mode_2') {
+                    return { label: 'V2 · Hybrid', color: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800' };
+                  }
+                  if (modeStr.includes('3') || modeStr === 'v3' || modeStr === 'version_3' || modeStr === 'mode_3') {
+                    return { label: 'V3 · Autonomous', color: 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800' };
+                  }
+                  return null;
+                })();
+
                 return (
                   <tr key={opp.rfqNumber} className="transition-colors hover:bg-slate-50/80 dark:hover:bg-gray-850/40">
                     {/* RFQ Number */}
                     <td data-label="RFQ Number" className="py-3 font-mono font-bold text-slate-900 dark:text-white">
-                      {opp.rfqNumber}
+                      <div>{opp.rfqNumber}</div>
+                      {versionBadge && (
+                        <div className="mt-1">
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${versionBadge.color}`}>
+                            {versionBadge.label}
+                          </span>
+                        </div>
+                      )}
                     </td>
                     
                     {/* Title */}
                     <td data-label="RFQ Details" className="py-3">
                       <div className="font-semibold text-slate-800 dark:text-gray-200">{opp.title}</div>
-                      <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-slate-500 dark:text-gray-400">
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 dark:text-gray-400">
                         {(opp.majorCategory || rfqRecord?.category) && (
-                          <span>{opp.majorCategory || rfqRecord?.category}</span>
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
+                            {opp.majorCategory || rfqRecord?.category}
+                          </span>
                         )}
                         {(opp.deliveryLocation || rfqRecord?.deliveryLocation) && (
-                          <span>· {opp.deliveryLocation || rfqRecord?.deliveryLocation}</span>
+                          <span>· 📍 {opp.deliveryLocation || rfqRecord?.deliveryLocation}</span>
                         )}
                       </div>
                       {itemDetails.length > 0 && (
@@ -862,12 +1031,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                             <Info size={12} className="text-indigo-600 dark:text-indigo-400" />
                           </button>
                         </div>
+                      ) : isBuyerProtected48h ? (
+                        <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                          <span className="font-semibold text-xs text-slate-500 dark:text-gray-400 italic">Protected (48h privacy)</span>
+                          <span
+                            className="p-1 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 cursor-help inline-flex items-center"
+                            title="Buyer details remain confidential for 48 hours following quotation submission in accordance with procurement privacy rules."
+                          >
+                            <Lock size={11} />
+                          </span>
+                        </div>
                       ) : (
                         <div className="flex items-center gap-1.5 text-slate-400 dark:text-gray-500">
                           <span className="italic text-[10px]">Procucev Network Sourced</span>
                           <span
                             className="p-1 rounded-md bg-slate-100 dark:bg-gray-800 text-slate-400 cursor-help inline-flex items-center"
-                            title="Buyer details will be revealed after quote is submitted and updated in the system."
+                            title="Buyer details will be revealed 48 hours after quotation submission."
                           >
                             <Lock size={11} />
                           </span>
@@ -893,6 +1072,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                           onClick={() => {
                             if (isLocked) {
                               showToast('Premium Locked', 'Please upgrade your subscription to download specifications for this external buyer.', 'warning');
+                              setShowUpgradeModal(true);
                             } else {
                               handleDownloadRfq(opp);
                             }
@@ -965,7 +1145,16 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                           🔒 RFQ Closed
                         </span>
                       ) : isLocked ? (
-                        <span className="text-amber-500 font-bold text-[10px]">🔒 Premium Locked</span>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span className="text-amber-500 font-bold text-[10px]">🔒 Premium Locked</span>
+                          <button
+                            onClick={() => setShowUpgradeModal(true)}
+                            className="btn btn-amber btn-xs min-h-8 py-1 px-2 inline-flex items-center gap-1 text-[10px] font-bold"
+                            title="Upgrade subscription to quote"
+                          >
+                            {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
+                          </button>
+                        </div>
                       ) : (
                         <div className="flex items-center justify-end gap-1.5">
                           <button
@@ -1546,6 +1735,103 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               </div>
             </div>
         )}
+
+        {/* Upgrade Subscription Modal */}
+        {showUpgradeModal && (
+          <div className="modal-backdrop">
+            <div className="glass-panel p-6 rounded-3xl max-w-lg w-full space-y-4 border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-2xl">
+              <div className="flex justify-between items-center border-b border-slate-100 dark:border-gray-800 pb-3">
+                <h3 className="font-black text-sm uppercase tracking-wider text-slate-800 dark:text-gray-100 flex items-center gap-2">
+                  {UI_STRINGS.vendorSubscriptionModal?.upgradeTitle || '🔒 Upgrade Plan to Submit Quotations'}
+                </h3>
+                <button
+                  onClick={() => setShowUpgradeModal(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white font-extrabold text-sm border-none bg-transparent cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/40 text-xs leading-relaxed">
+                {UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedWarning || '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.'}
+              </div>
+
+              <div className="space-y-3">
+                {/* Option: Connect */}
+                <div className={`p-3 rounded-2xl border-2 flex justify-between items-center relative ${
+                  vendorSubscription === 'connect' ? 'border-indigo-500 bg-indigo-50/10' : 'border-indigo-200 dark:border-indigo-900/60'
+                }`}>
+                  <div>
+                    <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
+                      {UI_STRINGS.vendorSubscriptionModal?.connectTitle || 'Connect Model (₹2 / 3 mo)'}
+                    </h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {UI_STRINGS.vendorSubscriptionModal?.connectDesc || 'Quote and download up to 50 RFQs in 3 months from Marketplace.'}
+                    </p>
+                  </div>
+                  {vendorSubscription === 'connect' ? (
+                    <span className="text-[10px] font-bold text-indigo-600 bg-indigo-100 dark:bg-indigo-950 px-2 py-0.5 rounded">
+                      {UI_STRINGS.vendorSubscriptionModal?.activeBadge || 'Active'}
+                    </span>
+                  ) : (
+                    <button
+                      data-plan="connect"
+                      onClick={handleUpgradeClick}
+                      className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700"
+                    >
+                      {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
+                    </button>
+                  )}
+                </div>
+
+                {/* Option: Select */}
+                <div className={`p-3 rounded-2xl border-2 flex justify-between items-center relative ${
+                  vendorSubscription === 'select' ? 'border-purple-500 bg-purple-50/10' : 'border-purple-200 dark:border-purple-900/60'
+                }`}>
+                  <div>
+                    <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
+                      {UI_STRINGS.vendorSubscriptionModal?.selectTitle || 'Select Model (₹5 / 3 mo)'}
+                    </h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {UI_STRINGS.vendorSubscriptionModal?.selectDesc || 'Item Catalogue (100 products) + 100 RFQs / 3 months.'}
+                    </p>
+                  </div>
+                  {vendorSubscription === 'select' ? (
+                    <span className="text-[10px] font-bold text-purple-600 bg-purple-100 dark:bg-purple-950 px-2 py-0.5 rounded">
+                      {UI_STRINGS.vendorSubscriptionModal?.activeBadge || 'Active'}
+                    </span>
+                  ) : (
+                    <button
+                      data-plan="select"
+                      onClick={handleUpgradeClick}
+                      className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-purple-600 hover:bg-purple-700"
+                    >
+                      {UI_STRINGS.vendorSubscriptionModal?.upgradeAction || 'Upgrade'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
+                <button
+                  onClick={() => setShowUpgradeModal(false)}
+                  className="btn btn-secondary btn-sm"
+                >
+                  {UI_STRINGS.vendorSubscriptionModal?.closeAction || 'Close'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <SubscriptionPaymentModal
+          isOpen={!!pendingPayment}
+          onClose={() => setPendingPayment(null)}
+          planId={pendingPayment?.planId || 'connect'}
+          planName={pendingPayment?.planName || ''}
+          price={pendingPayment?.price || ''}
+          createPaymentLink={createVendorPaymentLink}
+        />
       </div>
     );
   }

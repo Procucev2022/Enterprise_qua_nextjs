@@ -98,6 +98,37 @@ export class GraphQLClient {
     return this.request<T>(mutation, variables, { useCache: false, operationName });
   }
 
+  public async batchQuery<T = any>(
+    operations: Array<{ query: string; variables?: Record<string, any>; operationName?: string }>
+  ): Promise<Array<GraphQLResponse<T>>> {
+    if (!operations || operations.length === 0) {
+      return [];
+    }
+
+    try {
+      const response = await fetch(this.endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(operations),
+      });
+
+      if (!response.ok) {
+        throw new Error(`GraphQL batch HTTP error! status: ${response.status}`);
+      }
+
+      const results: Array<GraphQLResponse<T>> = await response.json();
+      return results;
+    } catch (err: any) {
+      logger.error('GraphQL Batch Client Request Failed', { error: err }, 'GRAPHQL_CLIENT');
+      return operations.map(() => ({
+        errors: [{ message: err instanceof Error ? err.message : 'Network request failed' }],
+      }));
+    }
+  }
+
   public clearCache(): void {
     this.cache.clear();
   }

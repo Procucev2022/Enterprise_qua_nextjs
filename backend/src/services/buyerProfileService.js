@@ -404,7 +404,8 @@ async function saveProfile(sessionUser, body = {}, ipAddress) {
     throw new BuyerProfileError(BUYER_PROFILE_MESSAGES.PROFILE_LOAD_FAILED, 503);
   }
 
-  logger.audit(`Buyer organization profile updated: ${patch.companyName || organizationId}`, email, {
+  const targetCompanyName = patch.companyName || lookup.profile?.companyName || organizationId;
+  logger.audit(`Buyer organization profile updated: ${targetCompanyName}`, email, {
     organizationId,
     userId,
     ipAddress,
@@ -412,11 +413,40 @@ async function saveProfile(sessionUser, body = {}, ipAddress) {
   });
   storeService.addAuditLog({
     userEmail: email,
-    action: `Updated buyer organization profile and procurement categories for ${
-      patch.companyName || organizationId
-    }`,
+    action: `Updated buyer organization profile and procurement categories for ${targetCompanyName}`,
     ipAddress,
   });
+
+  if (email) {
+    try {
+      const phoneToSync = body.contactPhone || patch.contactPhone;
+      const isRealPhone = Boolean(
+        phoneToSync &&
+        !String(phoneToSync).includes('9999999999') &&
+        !String(phoneToSync).includes('0000000000')
+      );
+      storeService.updateBuyerAccount(email, {
+        organizationName: patch.companyName,
+        contactPerson: patch.contactName,
+        ...(phoneToSync ? { phone: phoneToSync, mobileNumber: phoneToSync } : {}),
+        city: patch.city,
+        state: patch.state,
+        pincode: patch.pincode,
+        gstin: patch.gstNumber,
+        pan: patch.panNumber,
+        profileVerified: true,
+        ...(isRealPhone ? { phoneVerified: true } : {}),
+        status: 'ACTIVE_VERIFIED',
+        verificationStatus: 'verified',
+        onboardingRequired: false,
+        isAutoRegistered: false,
+        tempPasswordRequired: false,
+      });
+      await storeService.dispatchPendingQuoteNotifications(email);
+    } catch (syncErr) {
+      logger.warn('Failed to sync storeService buyerAccount in saveProfile', { error: syncErr.message, email }, LOG_CATEGORY);
+    }
+  }
 
   return {
     profile: saved.found ? saved.profile : null,

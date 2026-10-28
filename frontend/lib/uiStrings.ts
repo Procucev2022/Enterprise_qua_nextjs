@@ -51,7 +51,17 @@ export const UI_STRINGS = {
       screenTag: 'Screen 4.2',
       subtitle: 'Immutable record of system changes, procurement actions, and user activities.',
     },
+    transactionalEmails: {
+      title: 'Qua AI Transactional Email Templates',
+      screenTag: 'Screen 5.1',
+      subtitle: 'Standardized transactional communication templates across buyer and vendor lifecycles.',
+      supportPhone: '+91 8247722944',
+      supportEmail: 'info@procucev.com',
+      teamSignature: 'Team Qua AI',
+      companyName: 'Procucev Enterprise Solutions',
+    },
   },
+
 
   actions: {
     backToDashboard: 'Back to Command Center',
@@ -187,6 +197,18 @@ export const UI_STRINGS = {
         label: 'Enterprise Inquiries',
         description: 'Buyer enterprise customization & bulk contracts leads',
       },
+      buyersDirectory: {
+        label: 'Buyers Directory',
+        description: 'Complete profiles, RFQ history, credits & transaction governance',
+      },
+      sellersDirectory: {
+        label: 'Sellers Directory',
+        description: 'Verified supplier profiles, quotes, catalog & communication logs',
+      },
+      dailyReports: {
+        label: 'Daily Reports',
+        description: 'Downloadable operational, buyer, seller & RFQ Excel/CSV reports',
+      },
       opportunityFeed: {
         label: 'Dashboard',
         description: 'Your enquiries, quotes, and sourcing activity',
@@ -314,12 +336,12 @@ export const UI_STRINGS = {
     extractingAction: 'Reading…',
     removeAttachmentAria: 'Remove {fileName}',
 
-    quotaExhaustedTitle: 'Free RFQ Limit Reached for V1, V2 & V3 (0 of 5 Remaining)',
+    quotaExhaustedTitle: 'Free RFQ Limit Reached for Mode 1, Mode 2 & Mode 3 (0 of 5 Remaining)',
     quotaExhaustedMessage:
-      'You have consumed all 5 free credits for V1, V2, and V3. You can still create multiple free RFQs using V0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
+      'You have consumed all 5 free credits for Mode 1, Mode 2, and Mode 3. You can still create multiple free RFQs using Mode 0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
     upgradePlanAction: 'Upgrade Plan',
-    useV0Action: 'Switch to V0 (Free)',
-    v0FreeBadge: '⚡ Unlimited Free RFQs with V0',
+    useV0Action: 'Switch to Mode 0 (Free)',
+    v0FreeBadge: '⚡ Unlimited Free RFQs with Mode 0',
 
     serverAllocatesNumber: 'The RFQ number is allocated when you save.',
     cancelAction: 'Cancel',
@@ -328,12 +350,12 @@ export const UI_STRINGS = {
   },
 
   rfqExtraction: {
-    quotaExhaustedTitle: 'Free RFQ Quota Exhausted for V1, V2 & V3 (0 of 5 Remaining)',
+    quotaExhaustedTitle: 'Free RFQ Quota Exhausted for Mode 1, Mode 2 & Mode 3 (0 of 5 Remaining)',
     quotaExhaustedMessage:
-      'You have consumed all 5 free credits for V1, V2, and V3. You can still create multiple free RFQs using V0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
+      'You have consumed all 5 free credits for Mode 1, Mode 2, and Mode 3. You can still create multiple free RFQs using Mode 0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
     upgradePlanAction: 'Upgrade Plan',
-    useV0Action: 'Switch to V0 (Free)',
-    v0FreeBadge: '⚡ Unlimited Free RFQs with V0',
+    useV0Action: 'Switch to Mode 0 (Free)',
+    v0FreeBadge: '⚡ Unlimited Free RFQs with Mode 0',
 
     // Step 1
     noFileTitle: 'No Document Selected',
@@ -355,6 +377,7 @@ export const UI_STRINGS = {
 
     // Explicit recovery action shown on the failure banner so the buyer is not
     // left to guess that the table below is the fallback.
+    retryAction: 'Retry extraction',
     manualEntryAction: 'Enter line items manually',
     manualEntryStarted: 'Add your line items in the table below.',
 
@@ -648,6 +671,29 @@ export const UI_STRINGS = {
     // Vendor Inquiries & Live Availability
     vendorOnline: 'Online',
     vendorOffline: 'Offline',
+
+    // Extend RFQ (one-time 24h or 48h deadline extension for open RFQs)
+    extendRfqAction: 'Extend RFQ',
+    extendRfqAria: 'Extend deadline for RFQ {rfqNumber} by 24 or 48 hours',
+    extendModalTitle: 'Extend RFQ Closing Deadline',
+    extendModalSubtitle: 'Grant suppliers a one-time extension of 24 or 48 hours for {rfqNumber}.',
+    currentDeadlineLabel: 'Current Closing Deadline',
+    revisedDeadlineLabel: 'Revised Closing Deadline',
+    closingDeadlineLabel: 'Closing Deadline',
+    selectExtensionDurationLabel: 'Select Extension Duration',
+    hoursUnit: 'Hours',
+    oneDayLabel: '24 Hours (+1 Day)',
+    twoDaysLabel: '48 Hours (+2 Days)',
+    oneTimeNotice: 'This is a strictly one-time extension. Once confirmed, this RFQ deadline cannot be extended again.',
+    confirmExtensionAction: 'Confirm Extension (+{hours}h)',
+    extendingAction: 'Extending Deadline…',
+    extensionSuccessTitle: 'RFQ Deadline Extended',
+    extensionSuccessMessage: 'Closing deadline for {rfqNumber} has been extended by {hours} hours to {newDeadline}.',
+    extensionFailedTitle: 'Extension Failed',
+    extendedBadge: 'Extended (+{hours}h)',
+    alreadyExtendedTooltip: 'A one-time extension of {hours} hours has already been applied to this RFQ.',
+    revisedDeadlineNote: 'One-time extension applied',
+    oneTimeExtensionAvailable: 'One-time extension (+24h / +48h) available',
   },
 
   rfqSummary: {
@@ -859,6 +905,57 @@ export const UI_STRINGS = {
     hidePassword: 'Hide password',
     registrationSuccessMessage:
       'Account created for {email}. You are signed in and can start configuring your workspace.',
+
+    // Buyer First-Login Onboarding
+    buyerOnboarding: {
+      title: 'Complete Profile & Verify Account',
+      subtitle: 'Your RFQ has been created and sent to eligible vendors. Complete verification to access your portal.',
+      step1Title: 'Email Verification',
+      step1Desc: 'Enter the 6-digit OTP sent to your registered email address.',
+      step2Title: 'Phone Verification',
+      step2Desc: 'Replace the placeholder 9999999999 with your active mobile number and verify via SMS OTP.',
+      step3Title: 'Change Temporary Password',
+      step3Desc: 'Replace your temporary password with a secure new permanent password.',
+      step4Title: 'Organisation & Statutory Profile',
+      step4Desc: 'Provide your company, tax credentials, and registered address to finalize your account.',
+      emailOtpLabel: 'Email OTP Code',
+      sendEmailOtpBtn: 'Send Email OTP',
+      mobileLabel: 'Mobile Phone Number',
+      mobileOtpLabel: 'SMS OTP Code',
+      sendSmsOtpBtn: 'Send SMS OTP',
+      currentPasswordLabel: 'Temporary Password',
+      newPasswordLabel: 'New Password',
+      confirmPasswordLabel: 'Confirm New Password',
+      companyNameLabel: 'Company Name / Legal Name',
+      contactNameLabel: 'Full Name / Procurement Lead',
+      cityLabel: 'City',
+      stateLabel: 'State',
+      pincodeLabel: 'Pincode',
+      addressLabel: 'Address / Street Location',
+      gstinLabel: 'GSTIN / GST Number',
+      panLabel: 'PAN Number',
+      companyNamePlaceholder: 'e.g. Larsen & Toubro Procurement',
+      contactNamePlaceholder: 'e.g. Navin Chaudhary',
+      gstinPlaceholder: 'e.g. 27AAAAA0000A1Z5',
+      pincodePlaceholder: 'e.g. 411001',
+      cityPlaceholder: 'e.g. Pune',
+      statePlaceholder: 'e.g. Maharashtra',
+      addressPlaceholder: 'e.g. MIDC Industrial Area, Phase II',
+      companyNameRequired: 'Company Name / Legal Name is required.',
+      gstinRequired: 'GSTIN / GST Number is required.',
+      gstinInvalid: 'GSTIN must be 15 characters in the format 99AAAAA9999A9Z9, for example 27AAAAA0000A1Z5.',
+      pincodeRequired: 'Pincode is required.',
+      pincodeInvalid: 'PIN Code must be 6 digits and cannot start with 0.',
+      cityRequired: 'City is required.',
+      stateRequired: 'State is required.',
+      submitBtn: 'Complete Verification & Enter Portal',
+      submittingBtn: 'Verifying & Setting Up Account…',
+      successTitle: 'Profile Verification Complete',
+      successMessage: 'Your buyer profile is active and verified. Any pending quotes have been delivered.',
+      placeholderPhoneWarning: 'Placeholder phone 9999999999 must be replaced with your real mobile number.',
+      passwordMismatch: 'New password and confirmation do not match.',
+      otpSentMessage: 'Verification code has been dispatched.',
+    },
   },
 
   // Editing and withdrawing an RFQ.
@@ -970,6 +1067,24 @@ export const UI_STRINGS = {
     buyerFilterAll: '🌐 All Inviting Buyers',
   },
 
+  vendorProfile: {
+    customCategoriesTitle: 'Add & Update Your Supply Categories',
+    customCategoriesSubtitle: 'Self-service category addition',
+    customCategoriesDesc:
+      "Can't find your exact product or service in the pre-configured categories below? Add your own specialized procurement categories here. They will be saved to your profile and matched to relevant RFQs.",
+    customCategoryPlaceholder:
+      'Type custom category name (e.g., CNC Precision Machining, Industrial Valves, Fire Protection)...',
+    addCategoryButton: '+ Add Category',
+    categoryAddedTitle: 'Category Added',
+    categoryAddedMessage: 'Added "{category}" to your procurement categories.',
+    categoryExistsMessage: 'Category already exists in your selections.',
+    categoryEmptyMessage: 'Please enter a valid category name.',
+    maxCategoriesReached: 'Maximum {max} categories allowed. Please remove a category before adding a new one.',
+    customCategoryGroup: 'Other',
+    removeCategoryTitle: 'Remove Category',
+    noCategoriesSelected: 'No categories selected. Pick up to 10 below or add your own above.',
+  },
+
   buyerProfile: {
     // Toast titles
     loadFailedTitle: 'Profile Could Not Be Loaded',
@@ -1050,6 +1165,11 @@ export const UI_STRINGS = {
     newPasswordPlaceholder: 'Min 8 characters',
     confirmPasswordLabel: 'Confirm New Password',
     confirmPasswordPlaceholder: 'Re-enter new password',
+    verificationCodeLabel: 'Verification Code',
+    verificationCodePlaceholder: 'Enter 6-digit code',
+    sendVerificationCodeAction: 'Send Verification Code',
+    sendingCodeAction: 'Sending code…',
+    resendCodeAction: 'Resend Code',
     updatePasswordAction: 'Update Password',
     updatingPasswordAction: 'Updating…',
 
@@ -1069,10 +1189,14 @@ export const UI_STRINGS = {
     passwordMismatchTitle: 'Password Mismatch',
     passwordChangedTitle: 'Password Changed',
     changeFailedTitle: 'Password Not Changed',
+    codeSentTitle: 'Verification Code Sent',
 
     // Toast messages. Failure text is supplied by the API so the reason is
     // specific; these cover the client-side checks and the fallbacks.
     currentPasswordRequired: 'Enter your current password to authorise the change.',
+    verificationCodeRequired: 'Enter the 6-digit verification code sent to your registered contact.',
+    codeSentMessage: 'A 6-digit verification code has been dispatched to your registered contact.',
+    requestOtpFirst: 'Please request and enter a verification code first.',
     weakPasswordMessage: 'Choose a new password of at least 8 characters.',
     passwordMismatchMessage: 'The new password and its confirmation do not match.',
     passwordSameAsCurrent:
@@ -1549,10 +1673,27 @@ export const UI_STRINGS = {
   },
 
   sourcingModeVersions: {
-    mode_0: 'V0 – Procucev Network Vendors',
-    mode_1: 'V1 – Internal Vendors',
-    mode_2: 'V2 – Internal + Procucev Vetted Vendors',
-    mode_3: 'V3 – Autonomous AI + 360 Qualification',
+    mode_0: 'Mode 0 – Procucev Network Vendors',
+    mode_1: 'Mode 1 – Internal Vendors',
+    mode_2: 'Mode 2 – Internal + Procucev Vetted Vendors',
+    mode_3: 'Mode 3 – Autonomous AI + 360 Qualification',
+  },
+
+  vendorSubscriptionModal: {
+    upgradeTitle: '🔒 Upgrade Plan to Submit Quotations',
+    creditsExhaustedWarning: '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.',
+    connectTitle: 'Connect Model (₹2 / 3 mo)',
+    connectDesc: 'Quote and download up to 50 RFQs in 3 months from Marketplace.',
+    selectTitle: 'Select Model (₹5 / 3 mo)',
+    selectDesc: 'Item Catalogue (100 products) + 100 RFQs / 3 months.',
+    activeBadge: 'Active',
+    upgradeAction: 'Upgrade',
+    closeAction: 'Close',
+    upgradeToBidAction: '🔒 Upgrade to Bid',
+    subscriptionRequiredToastTitle: 'Subscription Required',
+    subscriptionRequiredToastDesc: 'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
+    creditsExhaustedToastTitle: 'Quotation Credits Exhausted',
+    creditsExhaustedToastDesc: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
   },
 
   publicVendorDirectory: {

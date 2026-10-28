@@ -502,4 +502,106 @@ Lead Time: 25 days
       );
     });
   });
+
+  describe('V0, V2, and V3 RFQ visibility & quoting for buyer-invited vendors', () => {
+    let rfqV0;
+    let rfqV2;
+    let rfqV3;
+
+    beforeEach(() => {
+      rfqV0 = {
+        id: 'rfq-v0-test',
+        rfqNumber: 'RFQ-V0-001',
+        title: 'Network Pumps V0',
+        category: 'Industrial Machinery',
+        sourcingMode: 'mode_0',
+        status: 'Quotes Pending',
+        buyerAccountId: 'other-buyer-v0',
+        buyerAccountName: 'Other Buyer V0',
+        assignedVendors: [],
+        quotes: [],
+        extractedEntities: [{ itemName: 'Pumps V0', quantity: 1 }],
+      };
+      rfqV2 = {
+        id: 'rfq-v2-test',
+        rfqNumber: 'RFQ-V2-001',
+        title: 'Network Pumps V2',
+        category: 'Industrial Machinery',
+        sourcingMode: 'mode_2',
+        status: 'Quotes Pending',
+        buyerAccountId: 'other-buyer-v2',
+        buyerAccountName: 'Other Buyer V2',
+        assignedVendors: [],
+        quotes: [],
+        extractedEntities: [{ itemName: 'Pumps V2', quantity: 1 }],
+      };
+      rfqV3 = {
+        id: 'rfq-v3-test',
+        rfqNumber: 'RFQ-V3-001',
+        title: 'Network Pumps V3',
+        category: 'Industrial Machinery',
+        sourcingMode: 'mode_3',
+        status: 'Quotes Pending',
+        buyerAccountId: 'other-buyer-v3',
+        buyerAccountName: 'Other Buyer V3',
+        assignedVendors: [],
+        quotes: [],
+        extractedEntities: [{ itemName: 'Pumps V3', quantity: 1 }],
+      };
+      storeService.rfqs = [rfqA1, rfqA2, rfqB1, rfqV0, rfqV2, rfqV3];
+    });
+
+    test('vendor invited by buyer A can view V0, V2, and V3 RFQs in GET /api/rfqs', async () => {
+      const res = await request(app)
+        .get('/api/rfqs')
+        .set(vendorAuthHeader(vendorX));
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      const rfqNumbers = res.body.data.map((r) => r.rfqNumber);
+      // Own buyer RFQs
+      expect(rfqNumbers).toContain(rfqA1.rfqNumber);
+      expect(rfqNumbers).toContain(rfqA2.rfqNumber);
+      // V0, V2, V3 RFQs from other buyers
+      expect(rfqNumbers).toContain('RFQ-V0-001');
+      expect(rfqNumbers).toContain('RFQ-V2-001');
+      expect(rfqNumbers).toContain('RFQ-V3-001');
+    });
+
+    test('vendor can view individual V0, V2, V3 RFQ details via GET /api/rfqs/:id', async () => {
+      for (const target of [rfqV0, rfqV2, rfqV3]) {
+        const res = await request(app)
+          .get(`/api/rfqs/${target.id}`)
+          .set(vendorAuthHeader(vendorX));
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.data.id).toBe(target.id);
+      }
+    });
+
+    test('vendor uses 1 credit quoting V0/V2/V3 RFQ, and gets 403 upgradeRequired when credits are 0', async () => {
+      vendorX.freeQuotationCredits = 1;
+      vendorX.unlockedRfqIds = [rfqV0.id];
+
+      const quoteRes1 = await request(app)
+        .post(`/api/rfqs/${rfqV0.id}/quotes`)
+        .set(vendorAuthHeader(vendorX))
+        .send({ unitPrice: 50000 });
+
+      expect(quoteRes1.status).toBe(200);
+      expect(quoteRes1.body.success).toBe(true);
+      const vAfter = storeService.getVendorById(vendorX.id, 'all');
+      expect(vAfter.freeQuotationCredits).toBe(0);
+
+      // Quoting another V2 RFQ with 0 credits fails with upgradeRequired
+      const quoteRes2 = await request(app)
+        .post(`/api/rfqs/${rfqV2.id}/quotes`)
+        .set(vendorAuthHeader(vendorX))
+        .send({ unitPrice: 60000 });
+
+      expect(quoteRes2.status).toBe(403);
+      expect(quoteRes2.body.upgradeRequired).toBe(true);
+    });
+  });
 });
+

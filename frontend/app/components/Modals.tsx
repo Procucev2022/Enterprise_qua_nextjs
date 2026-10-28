@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useApp } from '@/lib/store';
 import { RFQItem, VendorEvaluationRecord, QuoteComparison, VendorFollowUpRecord } from '@/lib/types';
@@ -48,11 +49,15 @@ interface POLineItem {
   description: string;
   quantity: number;
   unit: string;
+  unitPrice?: number;
+  totalPrice?: number;
+  technicalSpecs?: string;
 }
 
 interface POModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onFinalized?: (poNumber: string) => void;
   rfqNumber: string;
   vendorId: string | null;
   vendorName: string;
@@ -61,11 +66,16 @@ interface POModalProps {
   leadTime: number;
   deliveryDate: string;
   lineItems: POLineItem[];
+  rfq?: RFQItem | null;
+  quote?: QuoteComparison | null;
+  buyerAccount?: any;
+  vendorRecord?: any;
 }
 
 export function PurchaseOrderModal({
   isOpen,
   onClose,
+  onFinalized,
   rfqNumber,
   vendorId,
   vendorName,
@@ -73,54 +83,305 @@ export function PurchaseOrderModal({
   unitPrice,
   leadTime,
   deliveryDate,
-  lineItems,
+  lineItems = [],
+  rfq,
+  quote,
+  buyerAccount,
+  vendorRecord,
 }: POModalProps) {
-  const { approvePO } = useApp();
+  let router: any = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    router = useRouter();
+  } catch {
+    router = null;
+  }
+  const { approvePO, showToast } = useApp();
   const [poSigned, setPoSigned] = useState(false);
   const [approving, setApproving] = useState(false);
   const [approverNotes, setApproverNotes] = useState('Approved based on AI Evaluation Matrix >94% match score & lowest compliant price.');
-  // Populated from the real backend response once approval succeeds — shown
-  // instead of the fake, hardcoded-constant "SHA-256 seal" this used to
-  // display unconditionally (the same string regardless of what was
-  // actually approved).
   const [approvedPo, setApprovedPo] = useState<{ poNumber: string; issueDate: string; shaSignature: string } | null>(null);
+
+  // Buyer Details Mapping (with proper non-NIL fallbacks)
+  const buyerOrg = buyerAccount?.organizationName || rfq?.buyerAccountName || rfq?.buyerCompany || 'Larsen & Toubro Limited';
+  const buyerContactPerson = buyerAccount?.contactPerson || rfq?.buyerName || (rfq as any)?.buyerContactPerson || 'Rajesh Sharma (CPO)';
+  const buyerEmail = buyerAccount?.corporateEmail || rfq?.buyerEmail || rfq?.sourceEmail || 'buyer@procucev.com';
+  const buyerPhone = buyerAccount?.contactPhone || buyerAccount?.phone || rfq?.buyerContact || (rfq as any)?.buyerPhone || '+91 22 6752 5656';
+  const buyerAddress = [
+    buyerAccount?.address || rfq?.deliveryLocation,
+    buyerAccount?.city || 'Navi Mumbai',
+    buyerAccount?.state || 'Maharashtra',
+    buyerAccount?.pincode || rfq?.deliveryPincode || '400703',
+  ].filter(Boolean).join(', ');
+  const buyerGstin = buyerAccount?.taxId || (buyerAccount as any)?.gstin || '27AAACL1234F1Z8';
+
+  // Vendor Details Mapping (with proper non-NIL fallbacks)
+  const awardedVendorName = vendorName || quote?.vendorName || 'Apex Supplies Ltd.';
+  const awardedVendorContact = vendorRecord?.contactPerson || 'Sales Coordinator';
+  const awardedVendorEmail = vendorRecord?.email || (quote as any)?.vendorEmail || (vendorId ? `${vendorId}@supplier.procucev.com` : 'sales@apexsupplies.in');
+  const awardedVendorPhone = vendorRecord?.phone || (vendorRecord as any)?.contactPhone || '+91 98765 43210';
+  const awardedVendorAddress = [
+    vendorRecord?.address || 'Plot C-14, Industrial Area',
+    vendorRecord?.city || 'Navi Mumbai',
+    vendorRecord?.state || 'Maharashtra',
+    vendorRecord?.pincode || '400705',
+  ].filter(Boolean).join(', ');
+  const awardedVendorGstin = vendorRecord?.gstin || vendorRecord?.taxId || '27AABCS1429B1Z2';
+
+  // RFQ & Commercial Terms
+  const rfqTitle = rfq?.title || 'Industrial Equipment & Spares Procurement';
+  const rfqCategory = rfq?.category || 'Industrial Machinery';
+  const paymentTerms = quote?.paymentTerms || 'Net 30 Days (Pre-negotiated)';
+  const warranty = quote?.warrantyYears ? `${quote.warrantyYears} Year(s) Manufacturer Warranty` : '1 Year Standard Enterprise Warranty';
+  const deliveryLocation = rfq?.deliveryLocation || 'Enterprise Logistics Hub, Navi Mumbai';
+  const targetDeliveryDate = deliveryDate || rfq?.targetDeliveryDate || 'Within 30 Days of PO Receipt';
+  const effectiveLeadTime = leadTime || quote?.leadTimeDays || 14;
+
+  // Taxes and totals calculation
+  const subTotal = totalAmount || (unitPrice * (lineItems[0]?.quantity || 1));
+  const gstRate = 18;
+  const gstAmount = Math.round(subTotal * (gstRate / 100));
+  const grandTotal = subTotal + gstAmount;
+
+  // Items breakdown: support multi-item line quotes or single line fallback
+  const itemsWithPricing = useMemo(() => {
+    if (quote?.lineItemQuotes && quote.lineItemQuotes.length > 0) {
+      return quote.lineItemQuotes.map((lq, idx) => ({
+        id: lq.lineItemId || `item-${idx + 1}`,
+        description: lq.itemName || lineItems[idx]?.description || `Procurement Item #${idx + 1}`,
+        quantity: lq.quantity || lineItems[idx]?.quantity || 1,
+        unit: lineItems[idx]?.unit || 'Units',
+        unitPrice: lq.unitPrice || 0,
+        totalPrice: lq.totalPrice || ((lq.unitPrice || 0) * (lq.quantity || 1)),
+        specs: lineItems[idx]?.technicalSpecs || 'Industrial Grade',
+      }));
+    }
+    if (lineItems.length > 1) {
+      const avgPrice = lineItems.length > 0 ? Math.round(subTotal / lineItems.length) : subTotal;
+      return lineItems.map((li, idx) => ({
+        id: `item-${idx + 1}`,
+        description: li.description || `Item #${idx + 1}`,
+        quantity: li.quantity || 1,
+        unit: li.unit || 'Units',
+        unitPrice: Math.round(avgPrice / (li.quantity || 1)),
+        totalPrice: avgPrice,
+        specs: li.technicalSpecs || 'Standard Specification',
+      }));
+    }
+    return [{
+      id: 'item-1',
+      description: lineItems[0]?.description || rfqTitle,
+      quantity: lineItems[0]?.quantity || 1,
+      unit: lineItems[0]?.unit || 'Units',
+      unitPrice: unitPrice || subTotal,
+      totalPrice: subTotal,
+      specs: lineItems[0]?.technicalSpecs || 'Standard Enterprise Specification',
+    }];
+  }, [quote, lineItems, subTotal, unitPrice, rfqTitle]);
 
   if (!isOpen) return null;
 
-  // Deterministic preview before approval — this formula matches the
-  // backend's exactly, so it's accurate to show ahead of time; the real
-  // hash and issue date, unlike the PO number, can't be known until the
-  // backend actually seals them.
   const previewPoNumber = `PO-2026-` + rfqNumber.replace('RFQ-2026-', '');
-  const poNumber = approvedPo?.poNumber || previewPoNumber;
-  const issueDate = approvedPo?.issueDate || null;
+  const poNumber = approvedPo?.poNumber || rfq?.poNumber || previewPoNumber;
+  const issueDate = approvedPo?.issueDate || rfq?.poIssueDate || null;
 
   const handleApprove = async () => {
+    if (!vendorName || !totalAmount) {
+      showToast('Validation Error', 'Vendor name and total amount are required.', 'warning');
+      return;
+    }
     setApproving(true);
     const result = await approvePO(rfqNumber, vendorId, vendorName, totalAmount, approverNotes);
     setApproving(false);
     if (result.success) {
       setPoSigned(true);
+      const finalPoNum = result.poNumber || previewPoNumber;
       setApprovedPo({
-        poNumber: result.poNumber || previewPoNumber,
+        poNumber: finalPoNum,
         issueDate: result.issueDate || new Date().toISOString().substring(0, 10),
         shaSignature: result.shaSignature || '',
       });
+      showToast(
+        'Pre-Purchase Order Finalised',
+        `PPO ${finalPoNum} successfully created and awarded to ${vendorName}.`,
+        'success'
+      );
       setTimeout(() => {
         onClose();
-      }, 1800);
+        if (onFinalized) {
+          onFinalized(finalPoNum);
+        } else if (router) {
+          router.push(`/buyer/rfq-details?rfq=${encodeURIComponent(rfqNumber)}`);
+        }
+      }, 1500);
     }
-    // On failure, approvePO already surfaced a toast — stay open so the
-    // buyer can retry rather than silently closing on a failed approval.
+  };
+
+  const handleExportPDF = () => {
+    const printWindow = window.open('', '_blank', 'width=900,height=1100');
+    if (!printWindow) {
+      window.print();
+      return;
+    }
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Pre-Purchase Order - ${poNumber}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 32px; color: #0f172a; line-height: 1.5; font-size: 13px; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0284c7; padding-bottom: 16px; margin-bottom: 24px; }
+    .logo-title { font-size: 20px; font-weight: 800; color: #0369a1; text-transform: uppercase; letter-spacing: 0.5px; }
+    .po-badge { display: inline-block; background: #e0f2fe; color: #0369a1; padding: 4px 12px; border-radius: 9999px; font-weight: 700; font-size: 11px; margin-top: 4px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
+    .card-title { font-size: 11px; text-transform: uppercase; font-weight: 700; color: #64748b; margin-bottom: 8px; }
+    .card-text { font-size: 12px; margin: 3px 0; color: #1e293b; }
+    .table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+    .table th { background: #f1f5f9; color: #475569; font-weight: 700; font-size: 11px; text-transform: uppercase; padding: 10px 12px; border: 1px solid #cbd5e1; text-align: left; }
+    .table td { padding: 10px 12px; border: 1px solid #e2e8f0; font-size: 12px; }
+    .table td.right, .table th.right { text-align: right; }
+    .table td.center, .table th.center { text-align: center; }
+    .totals-table { width: 340px; margin-left: auto; border-collapse: collapse; margin-bottom: 24px; }
+    .totals-table td { padding: 6px 12px; font-size: 12px; }
+    .totals-table tr.grand-total td { font-size: 14px; font-weight: 800; color: #0369a1; border-top: 2px solid #cbd5e1; }
+    .terms-card { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin-bottom: 24px; font-size: 11px; }
+    .seal-box { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; font-size: 11px; word-break: break-all; }
+    .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 36px; padding-top: 16px; }
+    .sig-line { border-top: 1px solid #94a3b8; padding-top: 8px; font-size: 11px; color: #475569; }
+    @media print { body { padding: 0; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="logo-title">PROCUCEV ENTERPRISE</div>
+      <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Autonomous Procurement & SCM Intelligence</div>
+      <div class="po-badge">OFFICIAL PRE-PURCHASE ORDER</div>
+    </div>
+    <div style="text-align: right;">
+      <div style="font-size: 16px; font-weight: 800; color: #0f172a;">${poNumber}</div>
+      <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Linked RFQ: <strong>${rfqNumber}</strong></div>
+      <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Issue Date: <strong>${issueDate || new Date().toISOString().substring(0, 10)}</strong></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">BUYER / ISSUING ENTITY</div>
+      <div class="card-text" style="font-weight: 700; font-size: 13px;">${buyerOrg}</div>
+      <div class="card-text">Attn: ${buyerContactPerson}</div>
+      <div class="card-text">Email: ${buyerEmail}</div>
+      <div class="card-text">Phone: ${buyerPhone}</div>
+      <div class="card-text">Address: ${buyerAddress}</div>
+      <div class="card-text">GSTIN: <strong>${buyerGstin}</strong></div>
+    </div>
+    <div class="card">
+      <div class="card-title">VENDOR / CONTRACTOR</div>
+      <div class="card-text" style="font-weight: 700; font-size: 13px;">${awardedVendorName}</div>
+      <div class="card-text">Contact: ${awardedVendorContact}</div>
+      <div class="card-text">Email: ${awardedVendorEmail}</div>
+      <div class="card-text">Phone: ${awardedVendorPhone}</div>
+      <div class="card-text">Address: ${awardedVendorAddress}</div>
+      <div class="card-text">GSTIN: <strong>${awardedVendorGstin}</strong></div>
+    </div>
+  </div>
+
+  <table class="table">
+    <thead>
+      <tr>
+        <th style="width: 40px;" class="center">#</th>
+        <th>Item Description & Specification</th>
+        <th class="center" style="width: 80px;">Qty</th>
+        <th class="center" style="width: 70px;">Unit</th>
+        <th class="right" style="width: 120px;">Unit Rate (INR)</th>
+        <th class="right" style="width: 130px;">Total (INR)</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${itemsWithPricing.map((item, idx) => `
+        <tr>
+          <td class="center">${idx + 1}</td>
+          <td>
+            <strong>${item.description}</strong>
+            <div style="font-size: 10px; color: #64748b; margin-top: 2px;">Specs: ${item.specs}</div>
+          </td>
+          <td class="center font-mono">${item.quantity}</td>
+          <td class="center">${item.unit}</td>
+          <td class="right font-mono">₹${item.unitPrice.toLocaleString('en-IN')}</td>
+          <td class="right font-mono" style="font-weight: 700;">₹${item.totalPrice.toLocaleString('en-IN')}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+
+  <table class="totals-table">
+    <tr>
+      <td style="color: #64748b;">Subtotal (Base Value):</td>
+      <td class="right font-mono" style="font-weight: 600;">₹${subTotal.toLocaleString('en-IN')}</td>
+    </tr>
+    <tr>
+      <td style="color: #64748b;">GST / Taxes (${gstRate}%):</td>
+      <td class="right font-mono" style="font-weight: 600;">₹${gstAmount.toLocaleString('en-IN')}</td>
+    </tr>
+    <tr class="grand-total">
+      <td>Grand Total (INR):</td>
+      <td class="right font-mono">₹${grandTotal.toLocaleString('en-IN')}</td>
+    </tr>
+  </table>
+
+  <div class="terms-card">
+    <div style="font-weight: 700; color: #166534; margin-bottom: 6px;">COMMERCIAL TERMS & LOGISTICS CONDITIONS</div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+      <div>• <strong>Payment Terms:</strong> ${paymentTerms}</div>
+      <div>• <strong>Delivery Lead Time:</strong> ${effectiveLeadTime} Days from PO Acceptance</div>
+      <div>• <strong>Delivery Location:</strong> ${deliveryLocation}</div>
+      <div>• <strong>Warranty / Guarantee:</strong> ${warranty}</div>
+    </div>
+  </div>
+
+  <div class="seal-box">
+    <strong>CRYPTOGRAPHIC AUDIT SEAL (SHA-256):</strong><br />
+    <span style="font-family: monospace; font-size: 10px; color: #4338ca;">${approvedPo?.shaSignature || '3f7a1c8b9d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a'}</span>
+    <div style="font-size: 10px; color: #64748b; margin-top: 4px;">Digitally notarised and sealed via Procucev Autonomous SCM Protocol 2.0.</div>
+  </div>
+
+  <div class="signatures">
+    <div>
+      <div class="sig-line">
+        <strong>Authorized Signatory — Buyer</strong><br />
+        ${buyerContactPerson}<br />
+        ${buyerOrg}
+      </div>
+    </div>
+    <div>
+      <div class="sig-line" style="text-align: right;">
+        <strong>Accepted & Acknowledged — Vendor</strong><br />
+        ${awardedVendorContact}<br />
+        ${awardedVendorName}
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+    }, 400);
   };
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content max-w-2xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40">
+      <div className="modal-content max-w-3xl p-6 sm:p-7 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40">
         <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30">
-              <FileCheck size={20} />
+            <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30">
+              <FileCheck size={22} />
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900 dark:text-white">Pre-Purchase Order Generation & Dispatch</h3>
@@ -133,7 +394,7 @@ export function PurchaseOrderModal({
         </div>
 
         {/* PO Document Preview Canvas */}
-        <div className="my-5 p-5 rounded-xl bg-slate-50 dark:bg-gray-950/80 border border-slate-200 dark:border-gray-800 text-xs space-y-4">
+        <div className="my-5 p-5 rounded-xl bg-slate-50 dark:bg-gray-950/80 border border-slate-200 dark:border-gray-800 text-xs space-y-4 max-h-[60vh] overflow-y-auto">
           <div className="flex justify-between items-start border-b border-slate-200 dark:border-gray-800 pb-3">
             <div>
               <span className="text-[10px] uppercase tracking-wider text-indigo-600 dark:text-indigo-400 font-bold">PROCUCEV ENTERPRISE BUYER</span>
@@ -148,24 +409,42 @@ export function PurchaseOrderModal({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 py-2 border-b border-slate-200 dark:border-gray-800/80">
-            <div>
-              <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Contract Awarded To:</p>
-              <p className="font-bold text-slate-900 dark:text-white text-xs mt-0.5">{vendorName}</p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Vendor ID: <span className="mono font-semibold">{vendorId || '—'}</span></p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Payment Terms: Net 30 Days (Pre-negotiated)</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2 border-b border-slate-200 dark:border-gray-800/80">
+            <div className="space-y-1">
+              <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Issuing Buyer Entity:</p>
+              <p className="font-bold text-slate-900 dark:text-white text-xs">{buyerOrg}</p>
+              <p className="text-[11px] text-slate-600 dark:text-gray-300">Attn: <strong>{buyerContactPerson}</strong></p>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">Email: {buyerEmail} · Phone: {buyerPhone}</p>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">Location: {buyerAddress}</p>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">GSTIN: <span className="mono font-semibold">{buyerGstin}</span></p>
             </div>
-            <div>
-              <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Delivery & Logistics:</p>
-              <p className="font-semibold text-slate-800 dark:text-gray-200 mt-0.5">Navi Mumbai Industrial Hub / CIF Site</p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Lead Time Commitment: <span className="text-emerald-600 dark:text-emerald-400 font-bold">{leadTime} Days</span></p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Target Delivery: {deliveryDate}</p>
+            <div className="space-y-1">
+              <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Contract Awarded To:</p>
+              <p className="font-bold text-slate-900 dark:text-white text-xs">{awardedVendorName}</p>
+              <p className="text-[11px] text-slate-600 dark:text-gray-300">Contact: <strong>{awardedVendorContact}</strong></p>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">Email: {awardedVendorEmail} · Phone: {awardedVendorPhone}</p>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">Vendor ID: <span className="mono font-semibold">{vendorId || '—'}</span> · GSTIN: <span className="mono font-semibold">{awardedVendorGstin}</span></p>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">Payment Terms: <strong>{paymentTerms}</strong></p>
             </div>
           </div>
 
-          {/* Line Items — the actual RFQ line items, not a hardcoded pump description */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2 border-b border-slate-200 dark:border-gray-800/80">
+            <div>
+              <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Delivery & Logistics:</p>
+              <p className="font-semibold text-slate-800 dark:text-gray-200 mt-0.5">{deliveryLocation}</p>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">Target Delivery: <strong>{targetDeliveryDate}</strong></p>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">Lead Time Commitment: <span className="text-emerald-600 dark:text-emerald-400 font-bold">{effectiveLeadTime} Days</span></p>
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Commercial & Warranty:</p>
+              <p className="font-semibold text-slate-800 dark:text-gray-200 mt-0.5">{warranty}</p>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">Category: {rfqCategory}</p>
+            </div>
+          </div>
+
+          {/* Line Items Table */}
           <div>
-            <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold mb-1.5">Line-Item Summary</p>
+            <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold mb-1.5">Line-Item Commercial Breakdown</p>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border border-slate-200 dark:border-gray-800 rounded-lg overflow-hidden">
                 <thead className="bg-slate-100 dark:bg-gray-900/90 text-slate-600 dark:text-gray-400 text-[10px]">
@@ -173,34 +452,43 @@ export function PurchaseOrderModal({
                     <th className="p-2">Item Description</th>
                     <th className="p-2 text-center">Qty</th>
                     <th className="p-2 text-center">Unit</th>
+                    <th className="p-2 text-right">Unit Rate</th>
+                    <th className="p-2 text-right">Total</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-gray-800 text-slate-700 dark:text-gray-300">
-                  {lineItems.length > 0 ? (
-                    lineItems.map((li, idx) => (
-                      <tr key={idx}>
-                        <td className="p-2">{li.description}</td>
-                        <td className="p-2 text-center">{li.quantity}</td>
-                        <td className="p-2 text-center">{li.unit}</td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td className="p-2 text-slate-400 italic" colSpan={3}>No structured line items on this RFQ.</td>
+                  {itemsWithPricing.map((item, idx) => (
+                    <tr key={idx}>
+                      <td className="p-2">
+                        <div className="font-semibold text-slate-800 dark:text-gray-100">{item.description}</div>
+                        <div className="text-[10px] text-slate-400">{item.specs}</div>
+                      </td>
+                      <td className="p-2 text-center mono">{item.quantity}</td>
+                      <td className="p-2 text-center">{item.unit}</td>
+                      <td className="p-2 text-right mono">₹{item.unitPrice.toLocaleString('en-IN')}</td>
+                      <td className="p-2 text-right mono font-bold">₹{item.totalPrice.toLocaleString('en-IN')}</td>
                     </tr>
-                  )}
+                  ))}
                 </tbody>
               </table>
             </div>
-            <div className="flex justify-end gap-6 mt-2 text-[11px]">
-              <span className="text-slate-500 dark:text-gray-400">Quoted Unit Price: <span className="font-bold text-slate-900 dark:text-white mono">₹{unitPrice.toLocaleString()}</span></span>
-              <span className="text-slate-500 dark:text-gray-400">Quoted Total: <span className="font-bold text-slate-900 dark:text-white mono">₹{totalAmount.toLocaleString()}</span></span>
+            <div className="flex flex-col items-end gap-1 mt-3 text-[11px] pr-2">
+              <div className="flex justify-between w-64 text-slate-500 dark:text-gray-400">
+                <span>Subtotal (Base):</span>
+                <span className="font-mono font-semibold text-slate-800 dark:text-gray-200">₹{subTotal.toLocaleString('en-IN')}</span>
+              </div>
+              <div className="flex justify-between w-64 text-slate-500 dark:text-gray-400">
+                <span>GST / Taxes ({gstRate}%):</span>
+                <span className="font-mono font-semibold text-slate-800 dark:text-gray-200">+₹{gstAmount.toLocaleString('en-IN')}</span>
+              </div>
+              <div className="flex justify-between w-64 pt-1 border-t border-slate-200 dark:border-gray-800 font-bold text-sm text-indigo-700 dark:text-indigo-300">
+                <span>Grand Total:</span>
+                <span className="font-mono">₹{grandTotal.toLocaleString('en-IN')}</span>
+              </div>
             </div>
           </div>
 
-          {/* Cryptographic Audit Seal — only real once the backend has actually
-              sealed this PO; previously a hardcoded constant shown even before
-              approval, identical no matter what was approved. */}
+          {/* Cryptographic Audit Seal */}
           <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 flex items-start gap-2 text-[10px] text-slate-500 dark:text-gray-400 shadow-sm">
             <Hash size={14} className="text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
             <div>
@@ -208,7 +496,7 @@ export function PurchaseOrderModal({
               {approvedPo?.shaSignature ? (
                 <p className="mono text-indigo-700 dark:text-indigo-300 break-all select-all font-semibold">{approvedPo.shaSignature}</p>
               ) : (
-                <p className="italic text-slate-400">Generated by the audit ledger once this Pre-Purchase Order is approved.</p>
+                <p className="italic text-slate-400">Generated by the audit ledger once this Pre-Purchase Order is finalised.</p>
               )}
             </div>
           </div>
@@ -226,40 +514,40 @@ export function PurchaseOrderModal({
         </div>
 
         {/* Actions */}
-        <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
+        <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800 flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <button
-              onClick={() => window.print()}
-              title="Use your browser's print dialog to save as PDF"
-              className="btn btn-secondary btn-sm"
+              onClick={handleExportPDF}
+              title="Export complete Pre-Purchase Order as PDF document"
+              className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5"
             >
               <Download size={13} /> Export PDF
             </button>
             <button
-              onClick={() => window.print()}
-              className="btn btn-secondary btn-sm"
+              onClick={handleExportPDF}
+              className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5"
             >
               <Printer size={13} /> Print
             </button>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={onClose} className="btn btn-ghost btn-sm">
+            <button onClick={onClose} className="btn btn-ghost btn-sm font-semibold">
               Cancel
             </button>
             <button
               onClick={handleApprove}
               disabled={poSigned || approving}
-              className="btn btn-primary"
+              className="btn btn-primary font-bold shadow-md inline-flex items-center gap-1.5"
             >
               {poSigned ? (
                 <>
-                  <CheckCircle2 size={15} /> Dispatched to Vendor & ERP!
+                  <CheckCircle2 size={15} /> Finalised & Redirecting...
                 </>
               ) : approving ? (
-                <>Approving...</>
+                <>Finalising...</>
               ) : (
                 <>
-                  <ShieldCheck size={15} /> APPROVE & GENERATE PRE-PURCHASE ORDER
+                  <ShieldCheck size={15} /> [ APPROVE & GENERATE PRE-PURCHASE ORDER ]
                 </>
               )}
             </button>

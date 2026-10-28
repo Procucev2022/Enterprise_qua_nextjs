@@ -8,6 +8,12 @@ dotenv.config();
 try {
   // eslint-disable-next-line no-undef
   if (typeof __dirname !== 'undefined') {
+    const fs = require('fs');
+    const targetEnv = process.env.APP_ENV || (process.env.NODE_ENV === 'production' ? 'prod' : 'dev');
+    const envSpecificPath = path.resolve(__dirname, `../.env.${targetEnv}`);
+    if (fs.existsSync(envSpecificPath)) {
+      dotenv.config({ path: envSpecificPath });
+    }
     dotenv.config({ path: path.resolve(__dirname, '../.env') });
   }
 } catch {
@@ -39,9 +45,14 @@ const app = express();
 // suite, where jest.setup.js blanks DATABASE_URL and there's no D1 binding)
 // there's nothing to hydrate from, so this stays a no-op rather than calling
 // into hydrateFromDB()'s own logging on every single request/test.
+// The WhatsApp bot bridge (/api/bot) reads accounts straight from the database
+// and loads any vendor it touches on demand, so it skips this: a cold isolate
+// would otherwise hold the bot's reply until every table above had loaded.
+const BOT_BRIDGE_PATH = '/api/bot';
 let hydrationPromise = null;
 app.use((req, res, next) => {
   if (storeService.isHydratedFromDB || !pool.hasStorage()) return next();
+  if (req.path === BOT_BRIDGE_PATH || req.path.startsWith(`${BOT_BRIDGE_PATH}/`)) return next();
   if (!hydrationPromise) {
     hydrationPromise = storeService
       .hydrateFromDB()

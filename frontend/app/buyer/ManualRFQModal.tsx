@@ -43,10 +43,11 @@ import {
   ExternalLink,
   Zap,
 } from 'lucide-react';
-import { getMajorCategories, getMinorCategories, dominantMajorCategory } from '@/lib/categoryTaxonomy';
-import { CURRENCY, SOURCING_MODES, entitledSourcingModes, RFQ_DOCUMENT_LIMITS, VENDOR_ASSIGNMENT_LIMITS } from '@/lib/constants';
+import { getMajorCategories, getMinorCategories, dominantMajorCategory, hasMajorCategory, hasMinorCategory } from '@/lib/categoryTaxonomy';
+import { CURRENCY, SOURCING_MODES, RFQ_MODES, RFQ_MODE_LABELS, entitledSourcingModes, RFQ_DOCUMENT_LIMITS, VENDOR_ASSIGNMENT_LIMITS } from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, classifyLineItems, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
+import RfqUpgradePlanModal from './RfqUpgradePlanModal';
 import {
   addManualRFQLineItem,
   createEmptyManualRFQForm,
@@ -114,9 +115,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     // eslint-disable-next-line react-hooks/rules-of-hooks
     store = useApp();
     buyerVendors = store?.buyerVendors || [];
+    const hasUnlimited = Boolean(store?.activeBuyerAccount?.unlimitedRfqAccess || store?.activeBuyerAccount?.unlimitedAccess);
     entitledModes = entitledSourcingModes(
       store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription,
-      store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs
+      store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs,
+      hasUnlimited
     );
     remainingFreeRFQs = store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs ?? 5;
     activeSubscription = store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription ?? 'free_trial';
@@ -125,7 +128,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     buyerVendors = [];
   }
   const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
-  const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(activeSubscription);
+  const hasUnlimited = Boolean(activeBuyerAccount?.unlimitedRfqAccess || activeBuyerAccount?.unlimitedAccess);
+  const isPaidPlan = hasUnlimited || ['version_1', 'version_2', 'version_3', 'unlimited'].includes(activeSubscription);
   const isQuotaExhausted = !isPaidPlan && remainingFreeRFQs <= 0 && form.sourcingMode !== 'mode_0';
 
   useEffect(() => {
@@ -158,9 +162,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
   const [vendorSearchQuery, setVendorSearchQuery] = useState<string>('');
+  const [modalVendorCategoryTab, setModalVendorCategoryTab] = useState<'matched' | 'all' | 'mismatched'>('matched');
   const [confirmationRfq, setConfirmationRfq] = useState<RFQItem | null>(null);
   const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
   const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [upgradeModalTargetMode, setUpgradeModalTargetMode] = useState<SourcingMode>('mode_1');
 
   const handleSendCategoryUpdateEmail = async (vendor: any, signals: string[]) => {
     const vendorKey = vendor?.id || vendor?.email;
@@ -267,6 +274,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   }, []);
 
   const [isCategorizing, setIsCategorizing] = useState(false);
+  const [categorizingProgress, setCategorizingProgress] = useState<string | null>(null);
 
   /**
    * Auto-categorize blank line items against the shared taxonomy via the server
@@ -277,6 +285,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
    */
   const handleAutoCategorizeAll = async () => {
     setIsCategorizing(true);
+    setCategorizingProgress(null);
     try {
       const toClassify = form.lineItems.filter(
         (item) => !item.majorCategory && item.itemName.trim() !== ''
@@ -299,7 +308,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           majorCategory: '',
           minorCategory: '',
           confidence: 0,
-        }))
+        })),
+        (prog) => {
+          setCategorizingProgress(`${prog.processed}/${prog.total}`);
+        }
       );
 
       if (!result.success || !result.data || !Array.isArray(result.data.extractedEntities)) {
@@ -316,23 +328,28 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         }
         const matched = classified.get(item.id);
         if (!matched || !matched.majorCategory) return item;
-        if (!detectedMajor) detectedMajor = matched.majorCategory;
+        const validMajor = hasMajorCategory(matched.majorCategory) ? matched.majorCategory : '';
+        const validMinor = validMajor && hasMinorCategory(validMajor, matched.minorCategory) ? matched.minorCategory : '';
+        if (!validMajor) return item;
+        if (!detectedMajor) detectedMajor = validMajor;
         return {
           ...item,
-          majorCategory: matched.majorCategory,
-          minorCategory: matched.minorCategory || '',
+          majorCategory: validMajor,
+          minorCategory: validMinor,
         };
       });
 
+      const dominant = dominantMajorCategory(updatedLineItems);
       setForm((prev) => ({
         ...prev,
-        majorCategory: prev.majorCategory || detectedMajor,
+        majorCategory: prev.majorCategory || dominant || detectedMajor,
         lineItems: updatedLineItems,
       }));
     } catch {
       store?.showToast?.(EXTRACTION.fallbackTitle, EXTRACTION.classifyFailed, 'warning');
     } finally {
       setIsCategorizing(false);
+      setCategorizingProgress(null);
     }
   };
 
@@ -525,8 +542,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     if (extracted.length === 0) return;
 
     // Header major = dominant category across the extracted line items (not
-    // just the first), and only when the document actually supplied one.
-    const headerMajor = dominantMajorCategory(extracted);
+    // just the first), left unselected if no category was extracted.
+    const headerMajor = dominantMajorCategory(extracted) || '';
 
     setHasExtracted(true);
     setForm((prev) => ({
@@ -554,6 +571,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
     if (isQuotaExhausted) {
       setSubmitError(MODAL.quotaExhaustedMessage);
+      setUpgradeModalTargetMode(form.sourcingMode);
+      setIsUpgradeModalOpen(true);
       return;
     }
 
@@ -598,7 +617,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         }
 
         const finalMatching = signals.length > 0
-          ? selectVendorsForCategories(matchingVendors, signals, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).map((r) => r.vendor)
+          ? selectVendorsForCategories(
+              matchingVendors,
+              signals,
+              VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
+              { location: form.deliveryLocation, pincode: form.deliveryPincode }
+            ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
         if (finalMatching.length > 0) {
@@ -611,9 +635,9 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           }));
         }
       }
-      if (form.sourcingMode === 'mode_1' && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
+      if (form.sourcingMode === RFQ_MODES.MODE_1 && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
         setIsSaving(false);
-        setSubmitError('Version 1 (Client Sourcing) requires at least one private vendor to be selected before creating the RFQ.');
+        setSubmitError(`${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} (Client Sourcing) requires at least one private vendor to be selected before creating the RFQ.`);
         return;
       }
     }
@@ -827,6 +851,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 </button>
                 <a
                   href="/buyer/subscription-center"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                    setIsUpgradeModalOpen(true);
+                  }}
                   className="btn btn-primary btn-sm font-bold shrink-0 inline-flex items-center gap-1.5 shadow-xs"
                 >
                   <Sparkles size={13} />
@@ -1083,7 +1112,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   title="Auto-identify and assign major/minor categories for all items"
                 >
                   {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                  {isCategorizing ? 'Classifying...' : 'Auto-Categorize All (AI)'}
+                  {isCategorizing ? (categorizingProgress ? `Classifying (${categorizingProgress})...` : 'Classifying...') : 'Auto-Categorize All (AI)'}
                 </button>
                 <button
                   onClick={() => setForm(addManualRFQLineItem(form))}
@@ -1156,7 +1185,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               aria-label={MODAL.colMajor}
                               aria-invalid={!!errors.majorCategory}
                               value={item.majorCategory}
-                              onChange={(e) => patchItem(item.id, { majorCategory: e.target.value })}
+                              onChange={(e) => {
+                                const newMajor = e.target.value;
+                                const keepMinor = newMajor && hasMinorCategory(newMajor, item.minorCategory) ? item.minorCategory : '';
+                                patchItem(item.id, { majorCategory: newMajor, minorCategory: keepMinor });
+                              }}
                               className="w-44"
                             >
                               <option value="">{MODAL.selectPlaceholder}</option>
@@ -1173,14 +1206,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               aria-label={MODAL.colMinor}
                               aria-invalid={!!errors.minorCategory}
                               value={item.minorCategory}
-                              // Enabled with a chosen major, or when the document
-                              // supplied a minor of its own (kept without a major).
-                              disabled={item.majorCategory === '' && item.minorCategory === ''}
+                              disabled={!item.majorCategory}
                               onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
                               className="w-44 disabled:opacity-50"
                             >
                               <option value="">{MODAL.selectPlaceholder}</option>
-                              {withStoredValue(minorsFor(item.majorCategory), item.minorCategory).map((minor) => (
+                              {minorsFor(item.majorCategory).map((minor) => (
                                 <option key={minor} value={minor}>
                                   {minor}
                                 </option>
@@ -1299,14 +1330,18 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                     key={mode.id}
                     data-testid={`manual-mode-${mode.id}`}
                     onClick={() => {
-                      if (!isEntitled) return;
+                      if (!isEntitled) {
+                        setUpgradeModalTargetMode(mode.id as SourcingMode);
+                        setIsUpgradeModalOpen(true);
+                        return;
+                      }
                       patchForm("sourcingMode", mode.id as SourcingMode);
                     }}
                     className={`
             group relative text-left rounded-2xl border p-4 cursor-pointer
             transition-all duration-200
             ${!isEntitled
-                        ? "border-slate-200 bg-slate-50/70 opacity-60 cursor-not-allowed dark:border-gray-800 dark:bg-gray-900/40"
+                        ? "border-slate-200 bg-slate-50/70 hover:border-amber-400 dark:border-gray-800 dark:bg-gray-900/40"
                         : isSelected
                         ? "border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/30 shadow-sm ring-2 ring-indigo-500/15"
                         : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50/70 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700"
@@ -1331,7 +1366,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
                       <div className="flex items-center gap-2">
                         {!isEntitled && (
-                          <span className="rounded-full px-2 py-0.5 text-[8px] font-extrabold tracking-wider bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
+                          <span
+                            title="Click to upgrade your plan and unlock this mode"
+                            className="rounded-full px-2 py-0.5 text-[8px] font-extrabold tracking-wider bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
+                          >
                             LOCKED
                           </span>
                         )}
@@ -1356,7 +1394,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                           disabled={!isEntitled}
                           aria-label={mode.shortLabel}
                           onChange={() => {
-                            if (!isEntitled) return;
+                            if (!isEntitled) {
+                              setUpgradeModalTargetMode(mode.id as SourcingMode);
+                              setIsUpgradeModalOpen(true);
+                              return;
+                            }
                             patchForm("sourcingMode", mode.id as SourcingMode);
                           }}
                           className="h-4 w-4 rounded text-indigo-600 border-slate-300 dark:border-gray-600 focus:ring-indigo-500 cursor-pointer"
@@ -1471,8 +1513,22 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                     );
                   }
 
+                  const matchingVendors = categoryFetchSignals.length > 0
+                    ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                    : allMyVendors;
+                  const mismatchedVendors = categoryFetchSignals.length > 0
+                    ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                    : [];
+
+                  let pool = allMyVendors;
+                  if (modalVendorCategoryTab === 'matched') {
+                    pool = matchingVendors;
+                  } else if (modalVendorCategoryTab === 'mismatched') {
+                    pool = mismatchedVendors;
+                  }
+
                   const term = vendorSearchQuery.trim().toLowerCase();
-                  const myVendors = allMyVendors.filter((v) => {
+                  const myVendors = pool.filter((v) => {
                     if (!term) return true;
                     return (
                       (v.name || '').toLowerCase().includes(term) ||
@@ -1482,12 +1538,52 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                     );
                   });
 
-                  const isAllSelected = myVendors.every((v) => selectedVendorIds.includes(v.id));
+                  const isAllSelected = myVendors.length > 0 && myVendors.every((v) => selectedVendorIds.includes(v.id));
 
                   return (
                     <div className="space-y-2.5">
-                      {/* Search & Bulk Select Toolbar */}
+                      {/* Search & Category Tabs Toolbar */}
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+                        {categoryFetchSignals.length > 0 && (
+                          <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-800 p-0.5 rounded-lg text-[10px] font-semibold">
+                            <button
+                              type="button"
+                              onClick={() => setModalVendorCategoryTab('all')}
+                              className={`px-2 py-0.5 rounded-md transition-all ${
+                                modalVendorCategoryTab === 'all'
+                                  ? 'bg-white dark:bg-gray-900 text-blue-700 dark:text-blue-300 shadow-2xs font-bold'
+                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                              }`}
+                            >
+                              All ({allMyVendors.length})
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setModalVendorCategoryTab('matched')}
+                              className={`px-2 py-0.5 rounded-md transition-all ${
+                                modalVendorCategoryTab === 'matched'
+                                  ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                              }`}
+                            >
+                              Matched ({matchingVendors.length})
+                            </button>
+                            {mismatchedVendors.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setModalVendorCategoryTab('mismatched')}
+                                className={`px-2 py-0.5 rounded-md transition-all flex items-center gap-1 ${
+                                  modalVendorCategoryTab === 'mismatched'
+                                    ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
+                                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                }`}
+                              >
+                                <span>⚠️ Mismatch ({mismatchedVendors.length})</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+
                         <div className="relative flex-1">
                           <Search size={12} className="absolute left-2.5 top-2 text-slate-400" />
                           <input
@@ -1515,11 +1611,33 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <span>{isAllSelected ? 'Deselect All' : 'Select All'}</span>
                           </button>
                           <span className="text-[10px] text-slate-500 font-semibold mono">
-                            {selectedVendorIds.length > 0 ? selectedVendorIds.length : allMyVendors.length} / {allMyVendors.length} selected
+                            {selectedVendorIds.length > 0 ? selectedVendorIds.length : matchingVendors.length} / {allMyVendors.length} selected
                           </span>
                         </div>
                       </div>
 
+                      {myVendors.length === 0 ? (
+                        <div className="p-4 text-center rounded-lg bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-1">
+                          <Users size={20} className="mx-auto text-slate-400 opacity-60" />
+                          <p className="text-xs font-bold text-slate-700 dark:text-gray-300">
+                            {modalVendorCategoryTab === 'matched' ? 'No Category-Matched Vendors' : 'No Vendors Found'}
+                          </p>
+                          <p className="text-[10px] text-slate-500 dark:text-gray-400">
+                            {modalVendorCategoryTab === 'matched'
+                              ? `No vendors in your directory match the selected RFQ category (${categoryFetchSignals.join(', ') || 'selected'}).`
+                              : 'No vendors match your search term.'}
+                          </p>
+                          {modalVendorCategoryTab === 'matched' && allMyVendors.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setModalVendorCategoryTab('all')}
+                              className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-block mt-1"
+                            >
+                              View all {allMyVendors.length} private vendors →
+                            </button>
+                          )}
+                        </div>
+                      ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-56 overflow-y-auto pr-1">
                         {myVendors.map((vendor, idx) => {
                           const isSelected = selectedVendorIds.length === 0 || selectedVendorIds.includes(vendor.id);
@@ -1671,6 +1789,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                           );
                         })}
                       </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -1758,8 +1877,22 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                           <p className="text-[9px] text-slate-400">Please ingest your approved vendor directory or explore Procucev network vendors.</p>
                         </div>
                       ) : (() => {
+                        const matchingVendors = categoryFetchSignals.length > 0
+                          ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                          : allMyVendors;
+                        const mismatchedVendors = categoryFetchSignals.length > 0
+                          ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categoryFetchSignals).isMatch)
+                          : [];
+
+                        let pool = allMyVendors;
+                        if (modalVendorCategoryTab === 'matched') {
+                          pool = matchingVendors;
+                        } else if (modalVendorCategoryTab === 'mismatched') {
+                          pool = mismatchedVendors;
+                        }
+
                         const term = vendorSearchQuery.trim().toLowerCase();
-                        const myVendors = allMyVendors.filter((v) => {
+                        const myVendors = pool.filter((v) => {
                           if (!term) return true;
                           return (
                             (v.name || '').toLowerCase().includes(term) ||
@@ -1775,6 +1908,46 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                           <div className="space-y-2.5">
                             {/* Search & Bulk Select Toolbar */}
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+                              {categoryFetchSignals.length > 0 && (
+                                <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-800 p-0.5 rounded-lg text-[10px] font-semibold">
+                                  <button
+                                    type="button"
+                                    onClick={() => setModalVendorCategoryTab('all')}
+                                    className={`px-2 py-0.5 rounded-md transition-all ${
+                                      modalVendorCategoryTab === 'all'
+                                        ? 'bg-white dark:bg-gray-900 text-blue-700 dark:text-blue-300 shadow-2xs font-bold'
+                                        : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                    }`}
+                                  >
+                                    All ({allMyVendors.length})
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setModalVendorCategoryTab('matched')}
+                                    className={`px-2 py-0.5 rounded-md transition-all ${
+                                      modalVendorCategoryTab === 'matched'
+                                        ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                                        : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                    }`}
+                                  >
+                                    Matched ({matchingVendors.length})
+                                  </button>
+                                  {mismatchedVendors.length > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setModalVendorCategoryTab('mismatched')}
+                                      className={`px-2 py-0.5 rounded-md transition-all flex items-center gap-1 ${
+                                        modalVendorCategoryTab === 'mismatched'
+                                          ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
+                                          : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                      }`}
+                                    >
+                                      <span>⚠️ Mismatch ({mismatchedVendors.length})</span>
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+
                               <div className="relative flex-1">
                                 <Search size={12} className="absolute left-2.5 top-2 text-slate-400" />
                                 <input
@@ -1802,10 +1975,33 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                   <span>{isAllSelected ? 'Deselect All' : 'Select All'}</span>
                                 </button>
                                 <span className="text-[10px] text-slate-500 font-semibold mono">
-                                  {selectedVendorIds.length > 0 ? selectedVendorIds.length : allMyVendors.length} / {allMyVendors.length} selected
+                                  {selectedVendorIds.length > 0 ? selectedVendorIds.length : matchingVendors.length} / {allMyVendors.length} selected
                                 </span>
                               </div>
                             </div>
+
+                            {myVendors.length === 0 ? (
+                              <div className="p-4 text-center rounded-lg bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-1">
+                                <Users size={20} className="mx-auto text-slate-400 opacity-60" />
+                                <p className="text-xs font-bold text-slate-700 dark:text-gray-300">
+                                  {modalVendorCategoryTab === 'matched' ? 'No Category-Matched Vendors' : 'No Vendors Found'}
+                                </p>
+                                <p className="text-[10px] text-slate-500 dark:text-gray-400">
+                                  {modalVendorCategoryTab === 'matched'
+                                    ? `No vendors in your directory match the selected RFQ category (${categoryFetchSignals.join(', ') || 'selected'}).`
+                                    : 'No vendors match your search term.'}
+                                </p>
+                                {modalVendorCategoryTab === 'matched' && allMyVendors.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setModalVendorCategoryTab('all')}
+                                    className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-block mt-1"
+                                  >
+                                    View all {allMyVendors.length} private vendors →
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-56 overflow-y-auto pr-1">
                               {myVendors.map((vendor, idx) => {
@@ -1970,6 +2166,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                 );
                               })}
                             </div>
+                            )}
                           </div>
                         );
                       })()}
@@ -2122,6 +2319,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 </button>
                 <a
                   href="/buyer/subscription-center"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setUpgradeModalTargetMode(form.sourcingMode === 'mode_0' ? 'mode_1' : form.sourcingMode);
+                    setIsUpgradeModalOpen(true);
+                  }}
                   className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
                 >
                   <Sparkles size={14} />
@@ -2143,6 +2345,17 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           </>
         )}
       </div>
+
+      <RfqUpgradePlanModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        targetMode={upgradeModalTargetMode}
+        remainingCredits={remainingFreeRFQs}
+        onSwitchToMode0={() => {
+          patchForm('sourcingMode', 'mode_0');
+          setIsUpgradeModalOpen(false);
+        }}
+      />
     </div>
   );
 }

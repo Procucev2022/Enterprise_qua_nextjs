@@ -3,6 +3,10 @@ const mailerService = require('../src/services/mailerService');
 describe('mailerService', () => {
   beforeEach(() => {
     process.env.NODE_ENV = 'test';
+    // mailerService requires googleapis on first Gmail use, outside the
+    // isolateModules block that registered this test's mock, so drop any mock
+    // instance an earlier test left cached.
+    jest.resetModules();
   });
 
   afterEach(() => {
@@ -244,14 +248,29 @@ describe('mailerService', () => {
     };
 
     test('renders only real fields and names the RFQ in the subject', () => {
-      const msg = mailerService.buildRfqInviteEmail('v@x.com', { rfq: RFQ, recipientName: 'Priya' });
-      expect(msg.to).toBe('v@x.com');
-      expect(msg.subject).toBe('New RFQ RFQ-2026-00500 in Pumps & Accessories');
-      expect(msg.html).toContain('Dear <strong>Priya</strong>');
-      expect(msg.html).toContain('Acme Buyer Co');
-      expect(msg.html).toContain('Centrifugal Pumps');
-      expect(msg.html).toContain('Pump 500 GPM');
-      expect(msg.html).toContain('Navi Mumbai Plant');
+      // Scenario 1: Buyer-uploaded vendor receives buyer company name
+      const buyerUploadedMsg = mailerService.buildRfqInviteEmail('v@x.com', {
+        rfq: RFQ,
+        recipientName: 'Priya',
+        isBuyerUploaded: true,
+      });
+      expect(buyerUploadedMsg.to).toBe('v@x.com');
+      expect(buyerUploadedMsg.subject).toBe('New RFQ RFQ-2026-00500 in Pumps & Accessories');
+      expect(buyerUploadedMsg.html).toContain('Dear <strong>Priya</strong>');
+      expect(buyerUploadedMsg.html).toContain('Acme Buyer Co');
+      expect(buyerUploadedMsg.html).toContain('Centrifugal Pumps');
+      expect(buyerUploadedMsg.html).toContain('Pump 500 GPM');
+      expect(buyerUploadedMsg.html).toContain('Navi Mumbai Plant');
+
+      // Scenario 2: Procucev platform vendor does NOT receive buyer company name
+      const platformVendorMsg = mailerService.buildRfqInviteEmail('v@x.com', {
+        rfq: RFQ,
+        recipientName: 'Priya',
+        isBuyerUploaded: false,
+      });
+      expect(platformVendorMsg.html).not.toContain('Acme Buyer Co');
+      expect(platformVendorMsg.html).toContain('We have a new verified business enquiry that matches your category.');
+      expect(platformVendorMsg.html).toContain('Centrifugal Pumps');
     });
 
     test('labels follow-up mail as an RFQ reminder', () => {
@@ -277,6 +296,16 @@ describe('mailerService', () => {
       // No fabricated fallback address / date / category anywhere.
       expect(msg.html).not.toContain('partner@enterprise.com');
       expect(msg.html).not.toContain('2026-09-15');
+    });
+
+    test('does not add the buyer in CC when sending RFQ invitations to vendors', () => {
+      const msg = mailerService.buildRfqInviteEmail('vendor@example.com', {
+        rfq: RFQ,
+        buyerEmail: 'buyer@corp.com',
+        cc: 'buyer@corp.com',
+      });
+      expect(msg.cc).toBeUndefined();
+      expect(msg.html).not.toContain('keep buyer CC');
     });
   });
 
@@ -497,6 +526,16 @@ describe('mailerService', () => {
         rfqNumber: 'RFQ-2026-00100',
       });
       expect(res).toEqual({ sent: false, reason: 'test environment' });
+    });
+
+    test('does not add buyer in CC for quotation submissions when buyerEmail is specified', () => {
+      const msg = mailerService.buildQuoteAcknowledgementEmail('vendor@example.com', {
+        rfqNumber: 'RFQ-2026-00100',
+        quote: { unitPrice: 5000 },
+        buyerEmail: 'buyer@example.com',
+        cc: 'buyer@example.com',
+      });
+      expect(msg.cc).toBeUndefined();
     });
   });
 
@@ -1170,6 +1209,17 @@ describe('mailerService', () => {
       expect(mailerService.getLogoUrl()).toBe('https://enterprise.procucev.com/procucev-logo.png');
       delete process.env.PUBLIC_FRONTEND_URL;
 
+      // Production fallback and dev link safeguard
+      process.env.NODE_ENV = 'production';
+      expect(mailerService.getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+      expect(mailerService.vendorSignInUrl()).toBe('https://equa.procucev.com/login');
+
+      process.env.PUBLIC_FRONTEND_URL = 'https://procucev-enterprise-frontend.srinivas-mukku.workers.dev';
+      expect(mailerService.getPublicFrontendUrl()).toBe('https://equa.procucev.com');
+      expect(mailerService.vendorSignInUrl()).toBe('https://equa.procucev.com/login');
+      delete process.env.PUBLIC_FRONTEND_URL;
+      process.env.NODE_ENV = 'test';
+
       // Cloudflare worker global context
       globalThis.__CF_ENV__ = { PUBLIC_FRONTEND_URL: 'https://cf-worker-frontend.dev' };
       expect(mailerService.getPublicFrontendUrl()).toBe('https://cf-worker-frontend.dev');
@@ -1206,32 +1256,46 @@ describe('mailerService', () => {
       expect(res.reason).toBe('test environment');
     });
 
-    test('buildRfqAcknowledgementEmail formats email with exact buyer template and numbers', () => {
+    test('buildRfqAcknowledgementEmail formats email with Qua AI Email 2 template and numbers', () => {
       const email = mailerService.buildRfqAcknowledgementEmail({
         to: 'veerababu.v@procucev.com',
         buyerName: 'Veerababu',
         rfqNumber: 'RFQ260909223278',
         rfqTitle: '100 MT Structural Steel Beams',
+        category: 'Structural Steel',
+        itemCount: 2,
+        deliveryLocation: 'Hyderabad Site',
+        requiredBy: '2026-11-20',
+        quoteDeadline: '2026-11-15',
+        suppliersInvited: 6,
+        items: [
+          { item_name: 'ISMB 300', item_spec: 'Grade E250', qty: 50, uom: 'MT' },
+          { item_name: 'ISMC 200', item_spec: 'Grade E250', qty: 50, uom: 'MT' },
+        ],
       });
 
       expect(email.to).toBe('veerababu.v@procucev.com');
-      expect(email.subject).toContain('RFQ260909223278');
+      expect(email.subject).toBe('Congratulations, RFQ RFQ260909223278 is live. Qua AI is on it');
       expect(email.text).toContain('Hi Veerababu,');
-      expect(email.text).toContain('Great news! Your requirement has been converted into RFQ #RFQ260909223278 and sent to verified suppliers on Procucev right now.');
-      expect(email.text).toContain('📩 Quotes typically start coming in within 24–48 hours.');
-      expect(email.text).toContain('Need it faster or have a follow-up requirement?');
-      expect(email.text).toContain('📞 Call: +91-7996170801');
-      expect(email.text).toContain('✉️ Email: RFQ@procucev.com / support@procucev.com');
-      expect(email.text).toContain("Just drop us your requirement anytime — we'll take it from there!");
-      expect(email.text).toContain('Team Procucev');
+      expect(email.text).toContain('Congratulations! Your RFQ is live and has gone out to 6 matched suppliers.');
+      expect(email.text).toContain('RFQ Summary');
+      expect(email.text).toContain('RFQ ID: RFQ260909223278');
+      expect(email.text).toContain('100 MT Structural Steel Beams');
+      expect(email.text).toContain('Category: Structural Steel');
+      expect(email.text).toContain('ISMB 300 | Grade E250 | Qty: 50 MT');
+      expect(email.text).toContain('+91 8247722944');
+      expect(email.text).toContain('info@procucev.com');
+      expect(email.text).toContain('Team Qua AI');
+      expect(email.text).toContain('Procucev Enterprise Solutions');
 
       expect(email.html).toContain('Hi <strong>Veerababu</strong>,');
-      expect(email.html).toContain('#RFQ260909223278');
+      expect(email.html).toContain('RFQ260909223278');
       expect(email.html).toContain('100 MT Structural Steel Beams');
-      expect(email.html).toContain('+91-7996170801');
-      expect(email.html).toContain('RFQ@procucev.com');
-      expect(email.html).toContain('support@procucev.com');
-      expect(email.html).toContain('Team Procucev');
+      expect(email.html).toContain('+91 8247722944');
+      expect(email.html).toContain('info@procucev.com');
+      expect(email.html).toContain('Team Qua AI');
+      expect(email.html).toContain('Procucev Enterprise Solutions');
+      expect(email.html).toContain('View RFQ Summary');
     });
 
     test('buildRfqAcknowledgementEmail handles default fallbacks when fields are omitted', () => {
@@ -1240,9 +1304,38 @@ describe('mailerService', () => {
       });
 
       expect(email.to).toBe('buyer@example.com');
-      expect(email.text).toContain('Hi Valued Buyer,');
-      expect(email.text).toContain('#RFQ');
-      expect(email.html).not.toContain('Requisition:');
+      expect(email.text).toContain('Hi there,');
+      expect(email.subject).toBe('Congratulations, RFQ RFQ is live. Qua AI is on it');
+      expect(email.text).toContain('RFQ ID: RFQ');
+    });
+
+    test('buildBuyerOnboardingWithRfqEmail formats Email 1 with Qua AI template, credentials and steps', () => {
+      const email = mailerService.buildBuyerOnboardingWithRfqEmail({
+        to: 'newbuyer@example.com',
+        buyerName: 'Ramesh',
+        tempPassword: 'TempPassword123',
+        rfqNumber: 'RFQ262410215084',
+        rfqTitle: 'Centrifugal Pumps',
+      });
+
+      expect(email.to).toBe('newbuyer@example.com');
+      expect(email.subject).toBe('Congratulations, your RFQ RFQ262410215084 is live on Qua AI');
+      expect(email.text).toContain('Hi Ramesh,');
+      expect(email.text).toContain('RFQ: RFQ262410215084 : Centrifugal Pumps');
+      expect(email.text).toContain('Login ID: newbuyer@example.com');
+      expect(email.text).toContain('Registered Mobile: 9999999999');
+      expect(email.text).toContain('Temporary password: TempPassword123 (valid for 48 hours)');
+      expect(email.text).toContain('Three quick steps to finish');
+      expect(email.text).toContain('Log in & review my RFQ');
+      expect(email.text).toContain('+91 8247722944');
+      expect(email.text).toContain('info@procucev.com');
+      expect(email.text).toContain('Team Qua AI');
+      expect(email.text).toContain('Procucev Enterprise Solutions');
+      expect(email.html).toContain('Hi <strong>Ramesh</strong>,');
+      expect(email.html).toContain('TempPassword123');
+      expect(email.html).toContain('Registered Mobile:');
+      expect(email.html).toContain('9999999999');
+      expect(email.html).toContain('/login?redirect=/buyer/rfq-summary');
     });
 
     test('sendRfqAcknowledgementEmail delivers in test environment and dev with mocked transport', async () => {
@@ -1800,7 +1893,7 @@ describe('mailerService', () => {
       expect(viaLineItems.html).toBeDefined();
 
       // Multi-item + buyerAccountName => the items.length > 1 sample-format and
-      // the named-buyer greeting branches.
+      // the named-buyer greeting branches when vendor is buyer-uploaded.
       const multiItem = mailerService.buildRfqInviteEmail('vendor@x.com', {
         rfq: {
           rfqNumber: 'RFQ-INV-4',
@@ -1810,9 +1903,26 @@ describe('mailerService', () => {
             { name: 'Valve', quantity: 5 },
           ],
         },
+        isBuyerUploaded: true,
         isReminder: false,
       });
       expect(multiItem.html).toContain('Named Buyer Co');
+
+      // Procucev platform vendor: buyer company name must be hidden
+      const multiItemPlatform = mailerService.buildRfqInviteEmail('vendor@x.com', {
+        rfq: {
+          rfqNumber: 'RFQ-INV-4',
+          buyerAccountName: 'Named Buyer Co',
+          extractedEntities: [
+            { itemName: 'Pump', quantity: 2, unit: 'Nos' },
+            { name: 'Valve', quantity: 5 },
+          ],
+        },
+        isBuyerUploaded: false,
+        isReminder: false,
+      });
+      expect(multiItemPlatform.html).not.toContain('Named Buyer Co');
+      expect(multiItemPlatform.html).toContain('We have a new verified business enquiry that matches your category.');
 
       const bare = mailerService.buildRfqInviteEmail('vendor@x.com', { rfq: {} });
       expect(bare.html).toBeDefined();
@@ -1990,6 +2100,29 @@ describe('mailerService', () => {
       // exercised on the live module instance even though nothing is sent.
       const res = await mailerService.sendOtpEmail('newuser@example.com', '4321', 60, { isRegistration: true });
       expect(res).toEqual({ sent: false, reason: 'test environment' });
+    });
+
+    test('wrapEmail and mailerService templates produce responsive full-width presentation table layouts', () => {
+      const invite = mailerService.buildRfqInviteEmail('vendor@example.com', {
+        recipientName: 'Vendor Lead',
+        rfq: { rfqNumber: 'RFQ-RESP-01', title: 'Motors' },
+      });
+      expect(invite.html).toContain('max-width: 100%');
+      expect(invite.html).toContain('width: 100%');
+      expect(invite.html).toContain('background-color: #ffffff');
+      expect(invite.html).toContain('box-sizing: border-box');
+      expect(invite.html).toContain('role="presentation"');
+      expect(invite.html).toContain('class="email-wrapper"');
+
+      const req = mailerService.buildRequisitionEmail('buyer@example.com', {
+        rfqNumber: 'REQ-RESP-01',
+        title: 'Sensors',
+      });
+      expect(req.html).toContain('max-width: 100%');
+      expect(req.html).toContain('width: 100%');
+      expect(req.html).toContain('background-color: #ffffff');
+      expect(req.html).toContain('box-sizing: border-box');
+      expect(req.html).toContain('role="presentation"');
     });
   });
 });

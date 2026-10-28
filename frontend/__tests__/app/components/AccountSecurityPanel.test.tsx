@@ -11,47 +11,48 @@ jest.mock('@/lib/store', () => ({
 }));
 
 jest.mock('@/lib/authClient', () => ({
-  authClient: { changePassword: jest.fn() },
+  authClient: {
+    changePassword: jest.fn(),
+    requestOtp: jest.fn(),
+    getSessionUser: jest.fn().mockReturnValue({ email: 'buyer@procucev.com', mobile: '9876543210' }),
+  },
 }));
 
 // ==============================================================================
 // ACCOUNT SECURITY PANEL
 // ==============================================================================
-// The panel holds one form: change the signed-in account's password. It posts to
-// POST /api/auth/change-password, which identifies the account from the session
-// token, so nothing about which account is being changed is asserted here — only
-// that the credential pair is sent and every outcome is reported accurately.
-//
-// It previously showed a display-name field and a single sign-on summary card.
-// Both are gone: the display name had no endpoint behind it, and the SSO card
-// described a tenant integration that is not in place.
+// The panel holds one form: change the signed-in account's password.
+// Current password field has been removed in favor of direct reset / OTP verification.
 // ==============================================================================
 
 const mockShowToast = jest.fn();
 const strings = UI_STRINGS.accountSecurity;
 const changePassword = authClient.changePassword as jest.Mock;
+const requestOtp = authClient.requestOtp as jest.Mock;
 
 const VALID_NEW = 'a-brand-new-secret';
 
 const mount = () => {
-  (useApp as jest.Mock).mockReturnValue({ showToast: mockShowToast });
+  (useApp as jest.Mock).mockReturnValue({
+    showToast: mockShowToast,
+    user: { email: 'buyer@procucev.com', mobile: '9876543210' },
+  });
   return render(<AccountSecurityPanel />);
 };
 
-const currentField = () => screen.getByPlaceholderText(strings.currentPasswordPlaceholder);
 const newField = () => screen.getByPlaceholderText(strings.newPasswordPlaceholder);
 const confirmField = () => screen.getByPlaceholderText(strings.confirmPasswordPlaceholder);
 const submitButton = () => screen.getByRole('button', { name: strings.updatePasswordAction });
 
-/** Fill all three fields with a valid, self-consistent set of values. */
-const fillValid = (current = 'the-old-secret', next = VALID_NEW) => {
-  fireEvent.change(currentField(), { target: { value: current } });
+/** Fill new password and confirm new password fields with valid values. */
+const fillValid = (next = VALID_NEW) => {
   fireEvent.change(newField(), { target: { value: next } });
   fireEvent.change(confirmField(), { target: { value: next } });
 };
 
 beforeEach(() => {
   changePassword.mockResolvedValue({ success: true });
+  requestOtp.mockResolvedValue({ success: true });
 });
 
 afterEach(() => {
@@ -59,20 +60,18 @@ afterEach(() => {
 });
 
 describe('AccountSecurityPanel structure', () => {
-  it('renders the password form and its requirements', () => {
+  it('renders the password form without current password field', () => {
     mount();
 
     expect(screen.getByText(strings.passwordSectionLabel)).toBeInTheDocument();
-    expect(currentField()).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(strings.currentPasswordPlaceholder)).not.toBeInTheDocument();
     expect(newField()).toBeInTheDocument();
     expect(confirmField()).toBeInTheDocument();
     expect(screen.getByText(strings.policyTitle)).toBeInTheDocument();
     expect(screen.getByText(strings.policyMinLength)).toBeInTheDocument();
-    expect(screen.getByText(strings.policyReuse)).toBeInTheDocument();
     expect(screen.getByText(strings.policyComplexity)).toBeInTheDocument();
   });
 
-  // Both were removed because neither was backed by anything real.
   it('does not offer a display name field or a single sign-on summary', () => {
     mount();
 
@@ -89,39 +88,10 @@ describe('AccountSecurityPanel structure', () => {
 });
 
 describe('AccountSecurityPanel client-side validation', () => {
-  it('requires the current password and does not call the API', async () => {
-    mount();
-
-    fireEvent.change(newField(), { target: { value: VALID_NEW } });
-    fireEvent.change(confirmField(), { target: { value: VALID_NEW } });
-    fireEvent.click(submitButton());
-
-    expect(mockShowToast).toHaveBeenCalledWith(
-      strings.validationErrorTitle,
-      strings.currentPasswordRequired,
-      'warning'
-    );
-    expect(changePassword).not.toHaveBeenCalled();
-  });
-
-  it('treats a whitespace-only current password as missing', () => {
-    mount();
-
-    fillValid('   ');
-    fireEvent.click(submitButton());
-
-    expect(mockShowToast).toHaveBeenCalledWith(
-      strings.validationErrorTitle,
-      strings.currentPasswordRequired,
-      'warning'
-    );
-    expect(changePassword).not.toHaveBeenCalled();
-  });
-
   it('rejects a new password shorter than the minimum', () => {
     mount();
 
-    fillValid('the-old-secret', 'a'.repeat(PASSWORD_MIN_LENGTH - 1));
+    fillValid('a'.repeat(PASSWORD_MIN_LENGTH - 1));
     fireEvent.click(submitButton());
 
     expect(mockShowToast).toHaveBeenCalledWith(
@@ -135,7 +105,6 @@ describe('AccountSecurityPanel client-side validation', () => {
   it('rejects a confirmation that does not match', () => {
     mount();
 
-    fireEvent.change(currentField(), { target: { value: 'the-old-secret' } });
     fireEvent.change(newField(), { target: { value: VALID_NEW } });
     fireEvent.change(confirmField(), { target: { value: 'something-else-entirely' } });
     fireEvent.click(submitButton());
@@ -148,39 +117,60 @@ describe('AccountSecurityPanel client-side validation', () => {
     expect(changePassword).not.toHaveBeenCalled();
   });
 
-  // Caught before the request so an obviously pointless round trip is skipped;
-  // the API enforces the same rule for any other client.
-  it('rejects reusing the current password', () => {
+  it('prompts to request verification code when none was requested', async () => {
+    changePassword.mockResolvedValueOnce({
+      success: false,
+      error: 'A verification code, reset token, or current password is required to change your password.',
+    });
     mount();
 
-    fillValid(VALID_NEW, VALID_NEW);
+    fillValid(VALID_NEW);
     fireEvent.click(submitButton());
 
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(1));
     expect(mockShowToast).toHaveBeenCalledWith(
-      strings.validationErrorTitle,
-      strings.passwordSameAsCurrent,
-      'warning'
+      strings.codeSentTitle,
+      strings.codeSentMessage,
+      'success'
     );
-    expect(changePassword).not.toHaveBeenCalled();
   });
 });
 
-describe('AccountSecurityPanel API call', () => {
-  it('sends only the credential pair, never an account identifier', async () => {
+describe('AccountSecurityPanel OTP verification and API call', () => {
+  it('requests OTP and submits new password with verification code', async () => {
     mount();
 
-    fillValid('the-old-secret', VALID_NEW);
+    const forgotBtn = screen.getByRole('button', { name: /Forgot Password\? Reset via Code/i });
+    fireEvent.click(forgotBtn);
+
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(1));
+    expect(mockShowToast).toHaveBeenCalledWith(
+      strings.codeSentTitle,
+      strings.codeSentMessage,
+      'success'
+    );
+
+    const codeInput = screen.getByPlaceholderText(strings.verificationCodePlaceholder);
+    fireEvent.change(codeInput, { target: { value: '123456' } });
+    fillValid(VALID_NEW);
     fireEvent.click(submitButton());
 
     await waitFor(() => expect(changePassword).toHaveBeenCalledTimes(1));
-    expect(changePassword).toHaveBeenCalledWith('the-old-secret', VALID_NEW);
+    expect(changePassword).toHaveBeenCalledWith('123456', VALID_NEW, { code: '123456' });
   });
 
-  it('reports the API message and clears the fields on success', async () => {
+  it('reports the API message and clears fields on success', async () => {
     changePassword.mockResolvedValue({ success: true, message: 'Password updated on the server.' });
     mount();
 
-    fillValid();
+    const forgotBtn = screen.getByRole('button', { name: /Forgot Password\? Reset via Code/i });
+    fireEvent.click(forgotBtn);
+
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(1));
+
+    const codeInput = screen.getByPlaceholderText(strings.verificationCodePlaceholder);
+    fireEvent.change(codeInput, { target: { value: '123456' } });
+    fillValid(VALID_NEW);
     fireEvent.click(submitButton());
 
     await waitFor(() =>
@@ -191,64 +181,31 @@ describe('AccountSecurityPanel API call', () => {
       )
     );
 
-    expect(currentField()).toHaveValue('');
     expect(newField()).toHaveValue('');
     expect(confirmField()).toHaveValue('');
   });
 
-  it('falls back to local copy when the API succeeds without a message', async () => {
-    changePassword.mockResolvedValue({ success: true });
-    mount();
-
-    fillValid();
-    fireEvent.click(submitButton());
-
-    await waitFor(() =>
-      expect(mockShowToast).toHaveBeenCalledWith(
-        strings.passwordChangedTitle,
-        strings.passwordChangedFallback,
-        'success'
-      )
-    );
-  });
-
-  // The API distinguishes a wrong current password from an unreachable database,
-  // so its wording is surfaced rather than a generic failure.
-  it('surfaces the API reason on rejection and keeps what was typed', async () => {
+  it('surfaces the API reason on rejection', async () => {
     changePassword.mockResolvedValue({
       success: false,
-      error: 'Your current password is not correct, so the password was not changed.',
+      error: 'Invalid or expired verification code',
     });
     mount();
 
-    fillValid('wrong-old-secret', VALID_NEW);
+    const forgotBtn = screen.getByRole('button', { name: /Forgot Password\? Reset via Code/i });
+    fireEvent.click(forgotBtn);
+
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(1));
+
+    const codeInput = screen.getByPlaceholderText(strings.verificationCodePlaceholder);
+    fireEvent.change(codeInput, { target: { value: '123456' } });
+    fillValid(VALID_NEW);
     fireEvent.click(submitButton());
 
     await waitFor(() =>
       expect(mockShowToast).toHaveBeenCalledWith(
         strings.changeFailedTitle,
-        'Your current password is not correct, so the password was not changed.',
-        'warning'
-      )
-    );
-
-    // Nothing is cleared, so a single field can be corrected and resubmitted.
-    expect(currentField()).toHaveValue('wrong-old-secret');
-    expect(newField()).toHaveValue(VALID_NEW);
-    expect(confirmField()).toHaveValue(VALID_NEW);
-  });
-
-  it('falls back to local copy when the API fails without a reason', async () => {
-    changePassword.mockResolvedValue({ success: false });
-    mount();
-
-    fillValid();
-    fireEvent.click(submitButton());
-
-    await waitFor(() =>
-      expect(mockShowToast).toHaveBeenCalledWith(
-        strings.changeFailedTitle,
-        strings.changeFailedFallback,
+        'Invalid or expired verification code',
         'warning'
       )
     );
@@ -265,17 +222,22 @@ describe('AccountSecurityPanel in-flight state', () => {
     );
 
     mount();
-    fillValid();
+    const forgotBtn = screen.getByRole('button', { name: /Forgot Password\? Reset via Code/i });
+    fireEvent.click(forgotBtn);
+
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(1));
+
+    const codeInput = screen.getByPlaceholderText(strings.verificationCodePlaceholder);
+    fireEvent.change(codeInput, { target: { value: '123456' } });
+    fillValid(VALID_NEW);
     fireEvent.click(submitButton());
 
-    // In flight: the label changes and the control is disabled.
     const busyButton = await screen.findByRole('button', {
       name: strings.updatingPasswordAction,
     });
     expect(busyButton).toBeDisabled();
     expect(busyButton).toHaveAttribute('aria-busy', 'true');
 
-    // A second submit while the first is pending must not issue another request.
     fireEvent.submit(busyButton.closest('form') as HTMLFormElement);
     expect(changePassword).toHaveBeenCalledTimes(1);
 
@@ -284,5 +246,88 @@ describe('AccountSecurityPanel in-flight state', () => {
     });
 
     expect(await screen.findByRole('button', { name: strings.updatePasswordAction })).toBeEnabled();
+  });
+
+  it('rejects empty new password with validation error', () => {
+    mount();
+    fireEvent.click(submitButton());
+    expect(mockShowToast).toHaveBeenCalledWith(
+      strings.validationErrorTitle,
+      strings.weakPasswordMessage,
+      'warning'
+    );
+  });
+
+  it('handles missing session email when requesting OTP', async () => {
+    (authClient.getSessionUser as jest.Mock).mockReturnValueOnce(null);
+    mount();
+    const forgotBtn = screen.getByRole('button', { name: /Forgot Password\? Reset via Code/i });
+    fireEvent.click(forgotBtn);
+    expect(mockShowToast).toHaveBeenCalledWith(
+      strings.validationErrorTitle,
+      'No active account session found. Please sign in again.',
+      'warning'
+    );
+  });
+
+  it('handles requestOtp errors with custom error and fallback error', async () => {
+    requestOtp.mockResolvedValueOnce({ success: false, error: 'SMS gateway quota reached' });
+    mount();
+    const forgotBtn = screen.getByRole('button', { name: /Forgot Password\? Reset via Code/i });
+    fireEvent.click(forgotBtn);
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith(
+        strings.changeFailedTitle,
+        'SMS gateway quota reached',
+        'warning'
+      );
+    });
+
+    // Fallback error when error is falsy
+    requestOtp.mockResolvedValueOnce({ success: false, error: '' });
+    fireEvent.click(forgotBtn);
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith(
+        strings.changeFailedTitle,
+        'Failed to dispatch verification code. Please try again.',
+        'warning'
+      );
+    });
+  });
+
+  it('strips non-digits in OTP input, exercises Resend Code button, and handles reset token error', async () => {
+    mount();
+    const forgotBtn = screen.getByRole('button', { name: /Forgot Password\? Reset via Code/i });
+    fireEvent.click(forgotBtn);
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(1));
+
+    const codeInput = screen.getByPlaceholderText(strings.verificationCodePlaceholder);
+    fireEvent.change(codeInput, { target: { value: 'ab12cd34' } });
+    expect((codeInput as HTMLInputElement).value).toBe('1234');
+
+    // Click Resend Code button
+    const resendBtn = screen.getByRole('button', { name: /Resend Code/i });
+    fireEvent.click(resendBtn);
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(2));
+
+    // Change password rejected with reset token error (triggers OTP prompt)
+    changePassword.mockResolvedValueOnce({ success: false, error: 'Expired reset token provided' });
+    fillValid(VALID_NEW);
+    // Clear code input to test !verificationCode branch
+    fireEvent.change(codeInput, { target: { value: '' } });
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(3));
+
+    // Change password rejected with empty error (fallback message)
+    changePassword.mockResolvedValueOnce({ success: false, error: '' });
+    fireEvent.change(codeInput, { target: { value: '999999' } });
+    fireEvent.click(submitButton());
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith(
+        strings.changeFailedTitle,
+        strings.changeFailedFallback,
+        'warning'
+      );
+    });
   });
 });

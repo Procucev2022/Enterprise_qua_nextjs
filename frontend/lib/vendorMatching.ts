@@ -8,6 +8,7 @@
 import type { VendorEntry } from './types';
 import { isProcucevVendor } from '../app/buyer/vendor-summary';
 import { VENDOR_ASSIGNMENT_LIMITS } from './constants';
+import { findMajorForMinor } from './categoryTaxonomy';
 
 export interface CategoryMatchResult {
   isMatch: boolean;
@@ -66,6 +67,20 @@ export function extractRfqCategorySignals(form: {
   return { signals, rawSignals };
 }
 
+function matchesCategoryToken(target: string, signal: string): boolean {
+  if (!target || !signal) return false;
+  const t = target.trim().toLowerCase();
+  const s = signal.trim().toLowerCase();
+  if (t === s) return true;
+  // Word boundary regex check to prevent substring collisions (e.g. "it" in "security")
+  const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sReg = new RegExp(`(^|\\b)${escapeRegExp(s)}(\\b|$)`, 'i');
+  if (sReg.test(t)) return true;
+  const tReg = new RegExp(`(^|\\b)${escapeRegExp(t)}(\\b|$)`, 'i');
+  if (tReg.test(s)) return true;
+  return false;
+}
+
 /**
  * Checks if a vendor's categories match the given RFQ category signals.
  */
@@ -76,9 +91,6 @@ export function matchVendorAgainstSignals(
   if (!vendor || !signals || signals.length === 0) {
     return { isMatch: false, matchScore: 0, matchedCategories: [], matchedMajor: vendor?.majorCategory || 'General Industrial' };
   }
-
-  const matched = new Set<string>();
-  let highestScore = 0;
 
   const vendorMajor = vendor.majorCategory ? normalizeCategory(vendor.majorCategory) : '';
   const vendorMinors = (Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [])
@@ -91,16 +103,26 @@ export function matchVendorAgainstSignals(
     .map(normalizeCategory)
     .filter(Boolean);
 
+  const hasAnyCategory = Boolean(vendorMajor || vendorMinors.length > 0 || vendorSelected.length > 0 || vendorMapped.length > 0);
+  if (!hasAnyCategory) {
+    return { isMatch: false, matchScore: 0, matchedCategories: [], matchedMajor: 'General Industrial' };
+  }
+
+  const matched = new Set<string>();
+  let highestScore = 0;
+
   for (const signal of signals) {
     if (!signal) continue;
+    const normSignal = normalizeCategory(signal);
+    if (!normSignal) continue;
 
     // 1. Check Minor Categories match (highest specificity -> 98%)
     for (let i = 0; i < vendorMinors.length; i++) {
       const vMinor = vendorMinors[i];
-      if (vMinor === signal) {
+      if (vMinor === normSignal) {
         matched.add(vendor.minorCategories![i]);
         highestScore = Math.max(highestScore, 98);
-      } else if (vMinor.includes(signal) || signal.includes(vMinor)) {
+      } else if (matchesCategoryToken(vMinor, normSignal)) {
         matched.add(vendor.minorCategories![i]);
         highestScore = Math.max(highestScore, 92);
       }
@@ -109,10 +131,10 @@ export function matchVendorAgainstSignals(
     // 2. Check Client Mapped Categories (from PO history -> 96%)
     for (let i = 0; i < vendorMapped.length; i++) {
       const vMapped = vendorMapped[i];
-      if (vMapped === signal) {
+      if (vMapped === normSignal) {
         matched.add(vendor.clientMappedCategories![i]);
         highestScore = Math.max(highestScore, 96);
-      } else if (vMapped.includes(signal) || signal.includes(vMapped)) {
+      } else if (matchesCategoryToken(vMapped, normSignal)) {
         matched.add(vendor.clientMappedCategories![i]);
         highestScore = Math.max(highestScore, 90);
       }
@@ -120,10 +142,10 @@ export function matchVendorAgainstSignals(
 
     // 3. Check Major Category match (95%)
     if (vendorMajor) {
-      if (vendorMajor === signal) {
+      if (vendorMajor === normSignal) {
         matched.add(vendor.majorCategory!);
         highestScore = Math.max(highestScore, 95);
-      } else if (vendorMajor.includes(signal) || signal.includes(vendorMajor)) {
+      } else if (matchesCategoryToken(vendorMajor, normSignal)) {
         matched.add(vendor.majorCategory!);
         highestScore = Math.max(highestScore, 88);
       }
@@ -132,12 +154,27 @@ export function matchVendorAgainstSignals(
     // 4. Check Vendor Profile Selected Categories (94%)
     for (let i = 0; i < vendorSelected.length; i++) {
       const vSel = vendorSelected[i];
-      if (vSel === signal) {
+      if (vSel === normSignal) {
         matched.add(vendor.vendorSelectedCategories![i]);
         highestScore = Math.max(highestScore, 94);
-      } else if (vSel.includes(signal) || signal.includes(vSel)) {
+      } else if (matchesCategoryToken(vSel, normSignal)) {
         matched.add(vendor.vendorSelectedCategories![i]);
         highestScore = Math.max(highestScore, 86);
+      }
+    }
+
+    // 5. Check taxonomy major/minor association
+    const signalMajor = findMajorForMinor(signal);
+    if (signalMajor && vendorMajor && normalizeCategory(signalMajor) === vendorMajor) {
+      matched.add(vendor.majorCategory!);
+      highestScore = Math.max(highestScore, 93);
+    }
+    for (let i = 0; i < vendorMinors.length; i++) {
+      const vMinor = vendorMinors[i];
+      const vMinorMajor = findMajorForMinor(vMinor);
+      if (vMinorMajor && normalizeCategory(vMinorMajor) === normSignal) {
+        matched.add(vendor.minorCategories![i]);
+        highestScore = Math.max(highestScore, 93);
       }
     }
   }
@@ -296,11 +333,13 @@ export function getCategoryMatchedProcucevVendors(
  * Selects candidate vendors considering the rule:
  * For each category, up to maxPerCategory vendors (default 5, configurable via env)
  * should be selected, deduplicated across categories.
+ * When destination is provided, vendors closer to delivery location are prioritized.
  */
 export function selectVendorsForCategories(
   vendors: VendorEntry[],
   signals: string[],
-  maxPerCategory = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY
+  maxPerCategory = VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
+  destination?: { location?: string | null; pincode?: string | null }
 ): MatchedVendorResult[] {
   if (!Array.isArray(vendors) || !signals || signals.length === 0) return [];
 
@@ -322,6 +361,11 @@ export function selectVendorsForCategories(
       }
     }
     catMatches.sort((a, b) => {
+      if (destination && (destination.pincode || destination.location)) {
+        const aLoc = scoreVendorLocation(a.vendor, destination).score;
+        const bLoc = scoreVendorLocation(b.vendor, destination).score;
+        if (bLoc !== aLoc) return bLoc - aLoc;
+      }
       if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
       return (b.vendor.rating || 0) - (a.vendor.rating || 0);
     });
@@ -335,6 +379,11 @@ export function selectVendorsForCategories(
 
   const results = Array.from(selectedMap.values());
   return results.sort((a, b) => {
+    if (destination && (destination.pincode || destination.location)) {
+      const aLoc = scoreVendorLocation(a.vendor, destination).score;
+      const bLoc = scoreVendorLocation(b.vendor, destination).score;
+      if (bLoc !== aLoc) return bLoc - aLoc;
+    }
     if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
     return (b.vendor.rating || 0) - (a.vendor.rating || 0);
   });

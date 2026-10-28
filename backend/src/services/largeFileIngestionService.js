@@ -926,4 +926,6 @@ module.exports = {
   extractHeaderIndices,
   mapRowValues,
   activeCancellations,
+  deleteFromR2,
+  normalizePoDate,
 };

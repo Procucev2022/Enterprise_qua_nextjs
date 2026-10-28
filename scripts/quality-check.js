@@ -70,5 +70,5 @@ if (process.env.DATABASE_URL) {
 }
 
 console.log('================================================================================');
-console.log('  🎉 ALL WORKSPACE QUALITY CHECKS PASSED SUCCESSFULLY (0 ERRORS, 0 WARNINGS)');
+console.log('  🎉 ALL WORKSPACE QUALITY CHECKS PASSED SUCCESSFULLY');
 console.log('================================================================================\n');

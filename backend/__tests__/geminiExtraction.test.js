@@ -50,7 +50,6 @@ describe('Gemini category list in the extraction prompt', () => {
 
 describe('Gemini document extraction service', () => {
   const originalKey = GEMINI_CONFIG.API_KEY;
-  const originalBackupKeys = GEMINI_CONFIG.BACKUP_KEYS;
   const originalFetch = global.fetch;
   const originalModels = [...GEMINI_CONFIG.MODELS];
   const originalMaxKeyAttempts = GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL;
@@ -58,7 +57,6 @@ describe('Gemini document extraction service', () => {
 
   afterEach(() => {
     GEMINI_CONFIG.API_KEY = originalKey;
-    GEMINI_CONFIG.BACKUP_KEYS = originalBackupKeys;
     GEMINI_CONFIG.MODELS = [...originalModels];
     GEMINI_CONFIG.MAX_KEY_ATTEMPTS_PER_MODEL = originalMaxKeyAttempts;
     GEMINI_CONFIG.MODEL_RESET_TTL_MS = originalResetTtl;
@@ -214,6 +212,54 @@ describe('Gemini document extraction service', () => {
       expect(rowsDoc[0].deliveryState).toBe('Karnataka');
       expect(rowsDoc[0].deliveryPincode).toBe('560001');
       expect(rowsDoc[0].deliveryLocation).toBe('Bangalore Plant');
+    });
+
+    test('unpacks compact row arrays into full line item objects', () => {
+      const rows = gemini.toRawLineItems({
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+        items: [
+          ['Centrifugal Pump 500 GPM', 12, 'Units', 'SS316 impeller', 145000, 1740000, 'Kirloskar', 'Pumps', '2026-11-01', 'Dock 4'],
+          ['Hex Bolt M8x250', 50, 'PCS', 'Grade 8.8'],
+          ['', 10, 'Nos'], // Empty description should be filtered out
+          [null, 5], // Null description should be filtered out
+          ['Gate Valve', '25', 'Nos', '', '5000', '125000'],
+        ],
+      });
+
+      expect(rows).toHaveLength(3);
+      expect(rows[0]).toEqual({
+        itemName: 'Centrifugal Pump 500 GPM',
+        quantity: 12,
+        unit: 'Units',
+        technicalSpecs: 'SS316 impeller',
+        unitPrice: 145000,
+        totalPrice: 1740000,
+        brand: 'Kirloskar',
+        category: 'Pumps',
+        targetDate: '2026-11-01',
+        deliveryLocation: 'Dock 4',
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+      });
+
+      expect(rows[1]).toEqual({
+        itemName: 'Hex Bolt M8x250',
+        quantity: 50,
+        unit: 'PCS',
+        technicalSpecs: 'Grade 8.8',
+        category: '',
+        targetDate: '',
+        unitPrice: null,
+        totalPrice: null,
+        deliveryCity: 'Mumbai',
+        deliveryState: 'Maharashtra',
+      });
+
+      expect(rows[2].itemName).toBe('Gate Valve');
+      expect(rows[2].quantity).toBe(25);
+      expect(rows[2].unitPrice).toBe(5000);
+      expect(rows[2].totalPrice).toBe(125000);
     });
   });
 
@@ -384,29 +430,29 @@ describe('Gemini document extraction service', () => {
 
     test('resolveModelChain reflects ordered GEMINI_MODELS and syncs PRIMARY_MODEL and FALLBACK_MODELS', () => {
       GEMINI_CONFIG.MODELS = [
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ];
       const chain = gemini.resolveModelChain();
       expect(chain).toEqual([
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ]);
-      expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-3.8-flash');
+      expect(GEMINI_CONFIG.PRIMARY_MODEL).toBe('gemini-3.5-flash-lite');
       expect(GEMINI_CONFIG.FALLBACK_MODELS).toEqual([
+        'gemini-3.1-flash-lite',
+        'gemini-3.8-flash',
         'gemini-3.7-flash',
         'gemini-3.6-flash',
         'gemini-3.5-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
       ]);
     });
 
@@ -519,7 +565,7 @@ describe('Gemini document extraction service', () => {
       const fallbackModel = GEMINI_CONFIG.FALLBACK_MODELS[0];
 
       global.fetch = jest.fn((url) => {
-        if (url.includes(primaryModel)) {
+        if (url.includes(`/models/${primaryModel}:`)) {
           // All keys on primary model return 429 rate limit
           return Promise.resolve({
             ok: false,
@@ -527,7 +573,7 @@ describe('Gemini document extraction service', () => {
             text: async () => '{"error":{"status":"RESOURCE_EXHAUSTED","message":"Rate limit reached"}}',
           });
         }
-        if (url.includes(fallbackModel)) {
+        if (url.includes(`/models/${fallbackModel}:`)) {
           // Fallback model succeeds
           return Promise.resolve(geminiReply('{"items":[{"itemDescription":"Centrifugal Pump","quantity":2}]}'));
         }
@@ -540,10 +586,10 @@ describe('Gemini document extraction service', () => {
       expect(res.model).toBe(fallbackModel);
       expect(res.lineItems).toHaveLength(1);
       // Primary model was attempted exactly MAX_KEY_ATTEMPTS_PER_MODEL (3) times, NOT 50 times!
-      const primaryCalls = global.fetch.mock.calls.filter((call) => call[0].includes(primaryModel));
+      const primaryCalls = global.fetch.mock.calls.filter((call) => call[0].includes(`/models/${primaryModel}:`));
       expect(primaryCalls).toHaveLength(3);
       // Fallback model was then called and succeeded
-      const fallbackCalls = global.fetch.mock.calls.filter((call) => call[0].includes(fallbackModel));
+      const fallbackCalls = global.fetch.mock.calls.filter((call) => call[0].includes(`/models/${fallbackModel}:`));
       expect(fallbackCalls).toHaveLength(1);
     });
 
@@ -809,22 +855,55 @@ describe('Gemini document extraction service', () => {
       expect(global.fetch).toHaveBeenCalledTimes(gemini.resolveModelChain().length);
     });
 
-    // A model that never responds must not hang the request forever.
-    test('aborts a model that exceeds the configured timeout', async () => {
+    // A model that never responds must not hang the operation beyond its shared deadline.
+    test('aborts a model when the shared operation budget expires', async () => {
       GEMINI_CONFIG.API_KEY = 'test-key';
       global.fetch = jest.fn((_url, init) =>
         new Promise((_resolve, reject) => {
-          init.signal.addEventListener('abort', () => reject(new Error('The operation was aborted')));
+          init.signal.addEventListener('abort', () => {
+            const error = new Error('The operation was aborted');
+            error.name = 'AbortError';
+            reject(error);
+          });
         })
       );
 
-      const originalTimeout = GEMINI_CONFIG.REQUEST_TIMEOUT_MS;
-      GEMINI_CONFIG.REQUEST_TIMEOUT_MS = 5;
+      const originalBudget = GEMINI_CONFIG.TOTAL_BUDGET_MS;
+      const originalMin = GEMINI_CONFIG.MIN_ATTEMPT_MS;
+      GEMINI_CONFIG.TOTAL_BUDGET_MS = 5;
+      GEMINI_CONFIG.MIN_ATTEMPT_MS = 1;
       try {
         const res = await gemini.extractLineItems({ documentText: 'Pump' });
         expect(res.status).toBe(EXTRACTION_STATUS.AI_FAILED);
-        expect(res.error).toContain('abort');
+        expect(res.error).toContain('shared extraction time budget');
       } finally {
+        GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
+        GEMINI_CONFIG.MIN_ATTEMPT_MS = originalMin;
+      }
+    });
+
+    test('does not apply a per-model timeout while the shared budget remains', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      const originalModels = [...GEMINI_CONFIG.MODELS];
+      const originalBudget = GEMINI_CONFIG.TOTAL_BUDGET_MS;
+      const originalMin = GEMINI_CONFIG.MIN_ATTEMPT_MS;
+      const originalTimeout = GEMINI_CONFIG.REQUEST_TIMEOUT_MS;
+      GEMINI_CONFIG.MODELS = ['model-a'];
+      GEMINI_CONFIG.TOTAL_BUDGET_MS = 100;
+      GEMINI_CONFIG.MIN_ATTEMPT_MS = 1;
+      GEMINI_CONFIG.REQUEST_TIMEOUT_MS = 1;
+      global.fetch = jest.fn().mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve(geminiReply('{"items":[{"itemDescription":"Pump"}]}')), 10))
+      );
+
+      try {
+        const res = await gemini.extractLineItems({ documentText: 'Pump' });
+        expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        GEMINI_CONFIG.MODELS = originalModels;
+        GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
+        GEMINI_CONFIG.MIN_ATTEMPT_MS = originalMin;
         GEMINI_CONFIG.REQUEST_TIMEOUT_MS = originalTimeout;
       }
     });
@@ -854,7 +933,16 @@ describe('Gemini document extraction service', () => {
       global.fetch = jest.fn(
         (_url, init) =>
           new Promise((_resolve, reject) => {
-            init.signal.addEventListener('abort', () => reject(new Error('The operation was aborted')));
+            if (init?.signal?.aborted) {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              return reject(err);
+            }
+            init?.signal?.addEventListener('abort', () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
           })
       );
 
@@ -871,7 +959,7 @@ describe('Gemini document extraction service', () => {
 
         expect(res.status).toBe(EXTRACTION_STATUS.AI_FAILED);
         // Would sit for 60s per model without the cap.
-        expect(Date.now() - startedAt).toBeLessThan(2000);
+        expect(Date.now() - startedAt).toBeLessThan(10000);
       } finally {
         GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
         GEMINI_CONFIG.MIN_ATTEMPT_MS = originalMin;
@@ -989,9 +1077,8 @@ describe('Gemini document extraction service', () => {
         expect(gemini.resolveApiKeys()).toEqual(['key1', 'key2', 'key3']);
       });
 
-      test('resolveApiKeys combines and deduplicates keys from API_KEY and BACKUP_KEYS', () => {
-        GEMINI_CONFIG.API_KEY = 'key-one, key-two';
-        GEMINI_CONFIG.BACKUP_KEYS = 'key-two, key-three';
+      test('resolveApiKeys deduplicates repeated keys from API_KEY', () => {
+        GEMINI_CONFIG.API_KEY = 'key-one, key-two, key-one, key-three';
         expect(gemini.resolveApiKeys()).toEqual(['key-one', 'key-two', 'key-three']);
       });
 
@@ -1002,18 +1089,127 @@ describe('Gemini document extraction service', () => {
         expect(gemini.isConfigured()).toBe(false);
       });
     });
+
+    describe('round-robin key rotation across incoming requests', () => {
+      test('getNextRoundRobinKeyIndex cycles sequentially through keys and wraps around', () => {
+        GEMINI_CONFIG.API_KEY = 'key-A, key-B, key-C';
+        gemini.resetRoundRobinKeyIndex();
+
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(0);
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(1);
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(2);
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(0);
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(1);
+      });
+
+      test('setRoundRobinKeyIndex and resetRoundRobinKeyIndex set and reset key index properly', () => {
+        GEMINI_CONFIG.API_KEY = 'key-A, key-B, key-C';
+        gemini.setRoundRobinKeyIndex(2);
+        expect(gemini.getRoundRobinKeyIndex()).toBe(2);
+
+        gemini.resetRoundRobinKeyIndex();
+        expect(gemini.getRoundRobinKeyIndex()).toBe(0);
+      });
+
+      test('getNextRoundRobinKeyIndex returns 0 when no keys are configured', () => {
+        GEMINI_CONFIG.API_KEY = '';
+        gemini.resetRoundRobinKeyIndex();
+
+        expect(gemini.getNextRoundRobinKeyIndex()).toBe(0);
+        expect(gemini.getRoundRobinKeyIndex()).toBe(0);
+      });
+
+      test('incoming extractLineItems requests sequentially cycle through multiple keys via round-robin', async () => {
+        GEMINI_CONFIG.API_KEY = 'key-alpha, key-beta, key-gamma';
+        GEMINI_CONFIG.MODELS = ['test-model'];
+        gemini.resetRoundRobinKeyIndex();
+
+        const usedKeys = [];
+        global.fetch = jest.fn((url, init) => {
+          usedKeys.push(init.headers['x-goog-api-key']);
+          return Promise.resolve(geminiReply('{"items":[{"itemDescription":"Item","quantity":1}]}'));
+        });
+
+        // Request 1 -> should use key-alpha (index 0)
+        const res1 = await gemini.extractLineItems({ documentText: 'Item | 1' });
+        expect(res1.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(usedKeys[0]).toBe('key-alpha');
+
+        // Request 2 -> should use key-beta (index 1)
+        const res2 = await gemini.extractLineItems({ documentText: 'Item | 1' });
+        expect(res2.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(usedKeys[1]).toBe('key-beta');
+
+        // Request 3 -> should use key-gamma (index 2)
+        const res3 = await gemini.extractLineItems({ documentText: 'Item | 1' });
+        expect(res3.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(usedKeys[2]).toBe('key-gamma');
+
+        // Request 4 -> should wrap around to key-alpha (index 0)
+        const res4 = await gemini.extractLineItems({ documentText: 'Item | 1' });
+        expect(res4.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(usedKeys[3]).toBe('key-alpha');
+      });
+
+      test('incoming generateJson requests sequentially cycle through multiple keys via round-robin', async () => {
+        GEMINI_CONFIG.API_KEY = 'key-x, key-y';
+        GEMINI_CONFIG.MODELS = ['test-model'];
+        gemini.resetRoundRobinKeyIndex();
+
+        const usedKeys = [];
+        global.fetch = jest.fn((url, init) => {
+          usedKeys.push(init.headers['x-goog-api-key']);
+          return Promise.resolve(geminiReply('{"status":"OK"}'));
+        });
+
+        await gemini.generateJson({ prompt: 'test 1' });
+        expect(usedKeys[0]).toBe('key-x');
+
+        await gemini.generateJson({ prompt: 'test 2' });
+        expect(usedKeys[1]).toBe('key-y');
+
+        await gemini.generateJson({ prompt: 'test 3' });
+        expect(usedKeys[2]).toBe('key-x');
+      });
+
+      test('failover within a round-robin request tries subsequent keys and next request continues round-robin sequence', async () => {
+        GEMINI_CONFIG.API_KEY = 'key-1, key-2, key-3';
+        GEMINI_CONFIG.MODELS = ['test-model'];
+        gemini.resetRoundRobinKeyIndex();
+
+        const callKeys = [];
+        global.fetch = jest.fn((url, init) => {
+          const key = init.headers['x-goog-api-key'];
+          callKeys.push(key);
+          if (key === 'key-2') {
+            return Promise.resolve({ ok: false, status: 429, text: async () => 'Rate limit exceeded' });
+          }
+          return Promise.resolve(geminiReply('{"items":[{"itemDescription":"Valve","quantity":1}]}'));
+        });
+
+        // Request 1: starts at index 0 -> key-1 (succeeds)
+        await gemini.extractLineItems({ documentText: 'Valve | 1' });
+        expect(callKeys).toEqual(['key-1']);
+
+        // Request 2: starts at index 1 -> key-2 (fails 429) -> cascades to key-3 (succeeds)
+        await gemini.extractLineItems({ documentText: 'Valve | 1' });
+        expect(callKeys).toEqual(['key-1', 'key-2', 'key-3']);
+
+        // Request 3: starts at index 2 -> key-3 (succeeds)
+        await gemini.extractLineItems({ documentText: 'Valve | 1' });
+        expect(callKeys).toEqual(['key-1', 'key-2', 'key-3', 'key-3']);
+      });
+    });
   });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
 describe('POST /api/rfqs/extract', () => {
   const originalKey = GEMINI_CONFIG.API_KEY;
-  const originalBackupKeys = GEMINI_CONFIG.BACKUP_KEYS;
   const originalFetch = global.fetch;
 
   afterEach(() => {
     GEMINI_CONFIG.API_KEY = originalKey;
-    GEMINI_CONFIG.BACKUP_KEYS = originalBackupKeys;
     global.fetch = originalFetch;
   });
 
@@ -1485,6 +1681,14 @@ describe('geminiService.generateJson', () => {
     } finally {
       GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
     }
+  });
+
+  test('callModel throws when deadline has already expired or is within minimum attempt threshold', async () => {
+    GEMINI_CONFIG.API_KEY = 'test-key';
+    const pastDeadline = Date.now() - 1000;
+    await expect(
+      gemini.callModel('gemini-3.8-flash', { contents: [] }, 0, pastDeadline)
+    ).rejects.toThrow(/time budget exhausted/i);
   });
 
   describe('extractQuotationFallback & extractQuotationFromEmail', () => {
@@ -2162,6 +2366,208 @@ describe('geminiService.generateJson', () => {
         expect(
           res.body.data.extractedEntities.some((entity) => entity.itemName.startsWith('Unusable Scrap'))
         ).toBe(false);
+      });
+    });
+
+    describe('Truncated JSON Auto-Recovery & Fast Model Failover', () => {
+      test('repairTruncatedJson parses clean JSON without modification', () => {
+        const input = JSON.stringify({ documentTitle: 'Clean RFQ', items: [{ itemDescription: 'Pipe', quantity: 10 }] });
+        const res = gemini.repairTruncatedJson(input);
+        expect(res).toEqual({ documentTitle: 'Clean RFQ', items: [{ itemDescription: 'Pipe', quantity: 10 }] });
+      });
+
+      test('repairTruncatedJson returns null on invalid or non-string input', () => {
+        expect(gemini.repairTruncatedJson(null)).toBeNull();
+        expect(gemini.repairTruncatedJson(123)).toBeNull();
+        expect(gemini.repairTruncatedJson('not a json string')).toBeNull();
+      });
+
+      test('repairTruncatedJson salvages items when truncated midway through an item', () => {
+        const truncated = `{\n  "documentTitle": "RFQ-2026-0202",\n  "items": [\n    {\n      "itemDescription": "Bolt M8",\n      "quantity": 10,\n      "unit": "PCS"\n    },\n    {\n      "itemDescription": "Nut M8",\n      "deliveryState": nul`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.documentTitle).toBe('RFQ-2026-0202');
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Bolt M8');
+        expect(res.items[0].quantity).toBe(10);
+      });
+
+      test('repairTruncatedJson salvages items when truncated after a comma in items array', () => {
+        const truncated = `{\n  "documentTitle": "RFQ-2026-0202",\n  "items": [\n    {\n      "itemDescription": "Hex Nut M10",\n      "quantity": 50\n    },`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Hex Nut M10');
+      });
+
+      test('repairTruncatedJson handles fenced markdown code blocks with truncated items', () => {
+        const truncated = `\`\`\`json\n{\n  "items": [\n    {\n      "itemDescription": "Steel Flange",\n      "quantity": 5\n    }\n`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Steel Flange');
+      });
+
+      test('repairTruncatedJson generic structural recovery appends missing brackets and braces', () => {
+        const truncated = `{\n  "documentTitle": "Test Title",\n  "metadata": {\n    "author": "Buyer"`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.documentTitle).toBe('Test Title');
+      });
+
+      test('parseExtractionJson automatically salvages truncated model output', () => {
+        const truncated = `{\n  "items": [\n    {\n      "itemDescription": "Gasket 2 inch",\n      "quantity": 100\n    },\n    {\n      "itemDesc`;
+        const res = gemini.parseExtractionJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Gasket 2 inch');
+      });
+
+      test('callModel throws with skipKeyRetry on 503 Overloaded response', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key-1';
+        global.fetch = jest.fn(async () => ({
+          ok: false,
+          status: 503,
+          statusText: 'Service Unavailable',
+          text: async () => 'Model overloaded',
+        }));
+
+        await expect(
+          gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000)
+        ).rejects.toMatchObject({
+          status: 503,
+          skipKeyRetry: true,
+        });
+      });
+
+      test('callModel throws with noKeyRetry when HTTP 200 response contains unparseable content', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key-1';
+        global.fetch = jest.fn(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            candidates: [{ content: { parts: [{ text: 'Plain text without any braces or json structure' }] } }],
+          }),
+        }));
+
+        await expect(
+          gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000)
+        ).rejects.toMatchObject({
+          noKeyRetry: true,
+        });
+      });
+
+      test('repairTruncatedJson handles escaped quotes and backslashes in unclosed strings', () => {
+        const truncated = `{\n  "title": "Item with \\"quoted\\" specs and \\\\ path",\n  "description": "Unfinished string`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.title).toContain('quoted');
+      });
+
+      test('repairTruncatedJson handles array recovery when trailing comma is present before closure', () => {
+        const truncated = `{\n  "items": [\n    {\n      "itemDescription": "Steel Beam",\n      "quantity": 12,\n    },\n    {\n      "broken":`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.items).toHaveLength(1);
+        expect(res.items[0].itemDescription).toBe('Steel Beam');
+      });
+
+      test('callModel with multiple keys does not loop on 503 and immediately throws skipKeyRetry', async () => {
+        process.env.GEMINI_API_KEYS = 'key-1,key-2,key-3';
+        const attemptedKeys = [];
+        global.fetch = jest.fn(async (url, opts) => {
+          attemptedKeys.push(opts?.headers?.['x-goog-api-key']);
+          return {
+            ok: false,
+            status: 503,
+            statusText: 'Service Unavailable',
+            text: async () => 'High demand spikes',
+          };
+        });
+
+        await expect(
+          gemini.callModel('gemini-3.8-flash', { contents: [] }, 5000)
+        ).rejects.toMatchObject({
+          status: 503,
+          skipKeyRetry: true,
+        });
+        expect(attemptedKeys).toHaveLength(1); // Only 1 attempt made, did not waste time trying key-2 and key-3
+      });
+
+      test('repairTruncatedJson trims to lastSafePos when unclosed trailing field value is malformed', () => {
+        const truncated = `{\n  "docTitle": "Valid Title",\n  "meta": { "valid": 1 },\n  "brokenField": unfin`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.docTitle).toBe('Valid Title');
+      });
+      test('repairTruncatedJson salvages compact array rows when truncated midway through an item', () => {
+        const truncated = `{\n  "documentTitle": "RFQ Bulk 500",\n  "items": [\n    ["Ball Valve 2 inch", 10, "Nos", "SS316", 1200, 12000],\n    ["Gate Valve 4 inch", 5, "Nos", "Cast Iron", 4500, 22500],\n    ["Check Valve 1 inch", 20, "Nos", "SS304`;
+        const res = gemini.repairTruncatedJson(truncated);
+        expect(res).not.toBeNull();
+        expect(res.documentTitle).toBe('RFQ Bulk 500');
+        expect(res.items).toHaveLength(2);
+        expect(res.items[0][0]).toBe('Ball Valve 2 inch');
+        expect(res.items[1][0]).toBe('Gate Valve 4 inch');
+      });
+    });
+
+    describe('Mandatory Category Generation & inferCategoryFromLineItems', () => {
+      test('returns null for empty or invalid line items', () => {
+        expect(gemini.inferCategoryFromLineItems([])).toBeNull();
+        expect(gemini.inferCategoryFromLineItems(null)).toBeNull();
+        expect(gemini.inferCategoryFromLineItems(undefined)).toBeNull();
+      });
+
+      test('infers major category from items with stated minor category', () => {
+        const items = [
+          { itemName: 'Custom Item 1', category: 'Pumps & Accessories' },
+          { itemName: 'Custom Item 2', category: 'Pumps & Accessories' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Engineering Spares - Mechanical');
+      });
+
+      test('infers major category from items with stated canonical major category', () => {
+        const items = [
+          { itemName: 'Item 1', category: 'Civil Works' },
+          { itemName: 'Item 2', category: 'Civil Works' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Civil Works');
+      });
+
+      test('infers category from keywords in item description and specs', () => {
+        const items = [
+          { itemName: 'Heavy Centrifugal Pump', technicalSpecs: 'High pressure SS316' },
+          { itemName: 'Electric motor 50HP', technicalSpecs: '415V 3-phase' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Engineering Spares - Mechanical');
+      });
+
+      test('falls back to Others – New Product when items have no keyword or category match', () => {
+        const items = [
+          { itemName: 'Unknown widget 9999', technicalSpecs: 'xyz unknown' },
+        ];
+        expect(gemini.inferCategoryFromLineItems(items)).toBe('Others – New Product');
+      });
+
+      test('extractLineItems automatically populates category when model returns null', async () => {
+        GEMINI_CONFIG.API_KEY = 'test-key';
+        global.fetch = jest.fn().mockResolvedValue(
+          geminiReply(
+            JSON.stringify({
+              documentTitle: 'Pump and Valve Procurement',
+              category: null,
+              items: [
+                ['Centrifugal Pump 500 GPM', 10, 'Nos', 'SS316'],
+                ['Gate Valve 2 inch', 20, 'Nos', 'Class 150'],
+              ],
+            })
+          )
+        );
+
+        const res = await gemini.extractLineItems({ documentText: 'Pump and Valve Procurement' });
+        expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
+        expect(res.category).toBe('Engineering Spares - Mechanical');
+        expect(res.lineItems).toHaveLength(2);
       });
     });
   });

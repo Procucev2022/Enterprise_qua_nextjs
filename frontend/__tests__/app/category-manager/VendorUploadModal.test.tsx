@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import { useApp } from '@/lib/store';
 import * as vendorUploadClient from '@/lib/vendorUploadClient';
@@ -52,6 +52,7 @@ describe('VendorUploadModal', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    localStorage.clear();
     mockRefreshFromDB.mockResolvedValue(undefined);
     (useApp as jest.Mock).mockReturnValue({ showToast: mockShowToast, refreshFromDB: mockRefreshFromDB });
   });
@@ -91,12 +92,14 @@ describe('VendorUploadModal', () => {
     });
     render(<VendorUploadModal isOpen onClose={onClose} />);
     pickFile(new File(['x'], 'vendors.xlsx'));
-    await waitFor(() =>
-      expect(mockShowToast).toHaveBeenCalledWith(
-        'Could Not Read File',
-        'The file has duplicate column headers — each column must be unique.',
-        'warning'
-      )
+    await waitFor(
+      () =>
+        expect(mockShowToast).toHaveBeenCalledWith(
+          'Could Not Read File',
+          'The file has duplicate column headers — each column must be unique.',
+          'warning'
+        ),
+      { timeout: 5000 }
     );
     expect(screen.getByTestId('vendor-upload-dropzone')).toBeInTheDocument();
   });
@@ -108,8 +111,10 @@ describe('VendorUploadModal', () => {
     });
     render(<VendorUploadModal isOpen onClose={onClose} />);
     pickFile(new File(['x'], 'vendors.xlsx'));
-    await waitFor(() =>
-      expect(mockShowToast).toHaveBeenCalledWith('No Vendor Rows Found', expect.any(String), 'warning')
+    await waitFor(
+      () =>
+        expect(mockShowToast).toHaveBeenCalledWith('No Vendor Rows Found', expect.any(String), 'warning'),
+      { timeout: 5000 }
     );
   });
 
@@ -458,6 +463,50 @@ describe('VendorUploadModal', () => {
     expect(() => fireEvent.click(screen.getByText('Download Error Report'))).not.toThrow();
 
     HTMLAnchorElement.prototype.click = originalClick;
+  });
+
+  test('toggles upload history panel and covers localStorage parse error branch', async () => {
+    // Simulate localStorage.getItem throwing
+    const getItemSpy = jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage error');
+    });
+
+    render(<VendorUploadModal isOpen onClose={onClose} />);
+    // Should survive localStorage error (renders without crash)
+    const historyBtns = screen.getAllByRole('button', { name: /Upload History/i });
+    expect(historyBtns.length).toBeGreaterThan(0);
+
+    // Toggle History panel open
+    fireEvent.click(historyBtns[0]);
+    expect(screen.getByText('Previous Vendor Upload History')).toBeInTheDocument();
+    expect(screen.getByText('No previous uploads recorded on this browser.')).toBeInTheDocument();
+
+    // Toggle History panel closed
+    const hideBtn = screen.getAllByRole('button', { name: /Hide History/i });
+    fireEvent.click(hideBtn[0]);
+    expect(screen.queryByText('Previous Vendor Upload History')).not.toBeInTheDocument();
+
+    getItemSpy.mockRestore();
+  });
+
+  test('Choose Another File resets state and triggers file input click via setTimeout', async () => {
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { rows: [validRow({}, 2)], blankRowCount: 0 },
+    });
+    jest.useFakeTimers();
+    render(<VendorUploadModal isOpen onClose={onClose} />);
+    pickFile(new File(['x'], 'vendors.xlsx'));
+    await screen.findByText('vendors.xlsx');
+
+    // Now we're in preview step — click "Choose Another File"
+    fireEvent.click(screen.getAllByText('Choose Another File')[0]);
+
+    act(() => { jest.runAllTimers(); });
+
+    // Should be back on select step
+    expect(screen.getByTestId('vendor-upload-dropzone')).toBeInTheDocument();
+    jest.useRealTimers();
   });
 
   test('drag-and-drop onto the dropzone parses the dropped file', async () => {

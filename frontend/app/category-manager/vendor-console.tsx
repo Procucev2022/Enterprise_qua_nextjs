@@ -5,6 +5,7 @@ import { useApp } from '@/lib/store';
 import { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
+import { getMajorCategories } from '@/lib/categoryTaxonomy';
 import { formatCurrency } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import {
@@ -199,7 +200,7 @@ const VENDOR_CARDS_PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 350;
 
 export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluation }: VendorConsoleProps) {
-  const { rfqs } = useApp();
+  const { rfqs, categoryTaxonomy } = useApp();
   const [fetchedVendors, setFetchedVendors] = useState<RFQVendorCandidate[]>([]);
   const [vendorsPagination, setVendorsPagination] = useState<VendorPageMeta | null>(null);
   const [vendorsLoading, setVendorsLoading] = useState(true);
@@ -208,7 +209,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
-  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
+  const [categoryOptions, setCategoryOptions] = useState<string[]>(() => getMajorCategories());
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
   const [expandedQuoteNumber, setExpandedQuoteNumber] = useState<string | null>(null);
   // Tracks an explicit user collapse ("Hide Details") so dropdown-driven
@@ -229,12 +230,36 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   }, [searchTerm]);
 
   useEffect(() => {
-    void fetchCategoryTaxonomy().then((result) => {
-      if (result.success) {
-        setCategoryOptions(result.data.map((c) => c.majorCategory));
-      }
-    });
+    void fetchCategoryTaxonomy()
+      .then((result) => {
+        if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+          const fetched = result.data.map((c) => c.majorCategory).filter(Boolean);
+          if (fetched.length > 0) {
+            setCategoryOptions(fetched);
+          }
+        }
+      })
+      .catch(() => {
+        // Fall back gracefully to standard major categories
+      });
   }, []);
+
+  const effectiveCategoryOptions = useMemo(() => {
+    const set = new Set<string>();
+    const baseOptions = categoryOptions.length > 0 ? categoryOptions : getMajorCategories();
+    baseOptions.forEach((cat) => {
+      if (cat && cat.trim()) set.add(cat.trim());
+    });
+    if (Array.isArray(categoryTaxonomy)) {
+      categoryTaxonomy.forEach((c) => {
+        if (c?.majorCategory?.trim()) set.add(c.majorCategory.trim());
+      });
+    }
+    fetchedVendors.forEach((v) => {
+      if (v?.majorCategory?.trim()) set.add(v.majorCategory.trim());
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [categoryOptions, categoryTaxonomy, fetchedVendors]);
 
   const lastFetchedKeyRef = useRef<string | null>(null);
   // Guards against a slower, earlier request (e.g. the initial unfiltered
@@ -243,13 +268,25 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   // applied.
   const fetchSeqRef = useRef(0);
   useEffect(() => {
-    const key = `${debouncedSearch}|${categoryFilter}`;
-    if (fetchedVendors.length > 0 && lastFetchedKeyRef.current === key) return;
+    const trimmedSearch = debouncedSearch.trim();
+    const matchedCat = effectiveCategoryOptions.find(
+      (c) => c.toLowerCase().trim() === trimmedSearch.toLowerCase()
+    );
+    const effectiveCategory = categoryFilter || matchedCat || '';
+    const effectiveSearch = matchedCat ? '' : trimmedSearch;
+
+    const key = `${effectiveSearch}|${effectiveCategory}`;
+    if (lastFetchedKeyRef.current === key) return;
     lastFetchedKeyRef.current = key;
     const seq = ++fetchSeqRef.current;
     setVendorsLoading(true);
     setVendorsError(null);
-    void fetchAllVendors({ page: 1, pageSize: VENDOR_CARDS_PAGE_SIZE, search: debouncedSearch, category: categoryFilter }).then((result) => {
+    void fetchAllVendors({
+      page: 1,
+      pageSize: VENDOR_CARDS_PAGE_SIZE,
+      search: effectiveSearch,
+      category: effectiveCategory,
+    }).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
         setFetchedVendors(result.candidates);
@@ -260,15 +297,27 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
       setVendorsLoading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, categoryFilter]);
+  }, [debouncedSearch, categoryFilter, effectiveCategoryOptions]);
 
   const loadMoreVendors = () => {
     if (!vendorsPagination || vendorsLoadingMore) return;
     const nextPage = vendorsPagination.page + 1;
     if (nextPage > vendorsPagination.totalPages) return;
+    const trimmedSearch = debouncedSearch.trim();
+    const matchedCat = categoryOptions.find(
+      (c) => c.toLowerCase().trim() === trimmedSearch.toLowerCase()
+    );
+    const effectiveCategory = categoryFilter || matchedCat || '';
+    const effectiveSearch = matchedCat ? '' : trimmedSearch;
+
     const seq = ++fetchSeqRef.current;
     setVendorsLoadingMore(true);
-    void fetchAllVendors({ page: nextPage, pageSize: VENDOR_CARDS_PAGE_SIZE, search: debouncedSearch, category: categoryFilter }).then((result) => {
+    void fetchAllVendors({
+      page: nextPage,
+      pageSize: VENDOR_CARDS_PAGE_SIZE,
+      search: effectiveSearch,
+      category: effectiveCategory,
+    }).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
         setFetchedVendors((prev) => [...prev, ...result.candidates]);
@@ -563,30 +612,15 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   return (
     <div className="space-y-6 animate-fade-in pb-10">
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* TITLE HEADER & ACTION BAR */}
+      {/* ACTION BAR */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-              Vendor Summary & Performance Analytics
-            </h1>
-            <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
-              <Sparkles size={11} /> Dual-Stream Directory
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Unified console segmented into Category Manager uploaded Procucev vendors and Self-Onboarded / Buyer-Added private vendors.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => setUploadModalOpen(true)}
-            className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-sm"
-          >
-            <Upload size={14} /> Bulk Upload Vendors
-          </button>
-        </div>
+      <div className="flex items-center justify-end gap-2 pb-1">
+        <button
+          onClick={() => setUploadModalOpen(true)}
+          className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-sm"
+        >
+          <Upload size={14} /> Bulk Upload Vendors
+        </button>
       </div>
 
       <VendorUploadModal isOpen={uploadModalOpen} onClose={() => setUploadModalOpen(false)} />
@@ -923,7 +957,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
               className="select py-1.5 px-3 text-xs w-full sm:w-44 bg-white dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-medium"
             >
               <option value="">All categories</option>
-              {categoryOptions.map((c) => (
+              {effectiveCategoryOptions.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
@@ -1228,7 +1262,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                                   <div className="space-y-1.5 text-[11px]">
                                     <div className="flex justify-between">
                                       <span className="text-slate-500">Unit Sourced Price:</span>
-                                      <span className="font-bold text-slate-900 dark:text-white">${matchingQuote.unitPrice?.toLocaleString()}</span>
+                                      <span className="font-bold text-slate-900 dark:text-white">{formatCurrency(matchingQuote.unitPrice)}</span>
                                     </div>
                                     <div className="flex justify-between">
                                       <span className="text-slate-500">Total Bidded Price:</span>

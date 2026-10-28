@@ -8,7 +8,7 @@ const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
-const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS } = require('../config/constants');
+const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
 /**
@@ -17,12 +17,8 @@ const vendorPresenceService = require('../services/vendorPresenceService');
  * and rate vendors elsewhere but have no business editing a vendor's own
  * registration details.
  */
-async function assertVendorOwnership(req, res, vendorOrEmail) {
-  const user = req.user;
-  if (!user) {
-    res.status(401).json({ success: false, error: 'Authentication required.' });
-    return false;
-  }
+async function checkVendorOwnership(user, vendorOrEmail) {
+  if (!user) return false;
   if (user.role === 'admin') return true;
 
   const vendorEmail = typeof vendorOrEmail === 'string' ? vendorOrEmail : vendorOrEmail && vendorOrEmail.email;
@@ -41,6 +37,18 @@ async function assertVendorOwnership(req, res, vendorOrEmail) {
       (vendorOrEmail.id && (String(vendorOrEmail.id).startsWith('v-hist-') || String(vendorOrEmail.id).startsWith('v-navin-') || String(vendorOrEmail.id).startsWith('v-1788') || String(vendorOrEmail.id).startsWith('v-buyer-') || String(vendorOrEmail.id).startsWith('vm-')));
     if (isOwner) return true;
   }
+
+  return false;
+}
+
+async function assertVendorOwnership(req, res, vendorOrEmail) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  const isOwner = await checkVendorOwnership(user, vendorOrEmail);
+  if (isOwner) return true;
 
   res.status(403).json({ success: false, error: 'You do not have permission to modify this vendor profile.' });
   return false;
@@ -181,7 +189,7 @@ async function getVendors(req, res, next) {
 
     // Pagination is opt-in (passing `page`) so existing callers that expect
     // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
-    const { page, search, category } = req.query || {};
+    const { page, search, email, category } = req.query || {};
 
     // Any paginated request is answered straight from Postgres with
     // LIMIT/OFFSET — it must never route through storeService.getVendors(),
@@ -206,7 +214,8 @@ async function getVendors(req, res, next) {
       const { rows, total } = await domainQueries.getVendorsPageFromDB({
         limit: pageSize,
         offset: (pageNumber - 1) * pageSize,
-        search: search ? String(search) : '',
+        search: search ? String(search).trim() : '',
+        email: email ? String(email).trim() : '',
         category: category ? String(category) : '',
         scopedBuyerId: buyerId && buyerId !== 'all' ? buyerId : '',
       });
@@ -218,17 +227,43 @@ async function getVendors(req, res, next) {
       });
     }
 
-    let vendors = await storeService.getVendors(buyerId);
+    const hasFilters = Boolean(search || email || category);
+    const limitQuery = (!hasFilters && req.query && req.query.limit)
+      ? Math.min(Number(req.query.limit), 500)
+      : null;
+    let vendors = await storeService.getVendors(buyerId, limitQuery);
     if (search) {
-      const q = String(search).toLowerCase();
+      const q = String(search).toLowerCase().trim();
       vendors = vendors.filter((v) =>
-        [v.name, v.email, v.majorCategory, ...(v.minorCategories || [])].some((field) =>
-          String(field || '').toLowerCase().includes(q)
+        [
+          v.name,
+          v.email,
+          v.contactPerson,
+          v.contact,
+          v.location,
+          v.city,
+          v.deliveryLocation,
+        ].some((field) => String(field || '').toLowerCase().includes(q)) ||
+        (q.length <= 3
+          ? String(v.majorCategory || v.category || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
+          : String(v.majorCategory || v.category || '').toLowerCase().includes(q)
+        ) ||
+        (v.minorCategories || []).some((m) =>
+          q.length <= 3
+            ? String(m || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
+            : String(m || '').toLowerCase().includes(q)
         )
       );
     }
+    if (email) {
+      const eq = String(email).toLowerCase().trim();
+      vendors = vendors.filter((v) => String(v.email || '').toLowerCase().includes(eq));
+    }
     if (category) {
-      vendors = vendors.filter((v) => v.majorCategory === category);
+      const cat = String(category).toLowerCase().trim();
+      vendors = vendors.filter((v) =>
+        String(v.majorCategory || v.category || '').toLowerCase().trim() === cat
+      );
     }
     if (page !== undefined) {
       const pageNumber = Math.max(1, parseInt(page, 10) || 1);
@@ -245,6 +280,13 @@ async function getVendors(req, res, next) {
         data: pageData.map(withoutTemporaryPassword),
         pagination: { page: pageNumber, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
       });
+    }
+
+    if (req.query && req.query.limit) {
+      const limit = Number(req.query.limit);
+      if (Number.isInteger(limit) && limit > 0) {
+        vendors = vendors.slice(0, Math.min(limit, 500));
+      }
     }
 
     res.json({
@@ -326,6 +368,10 @@ async function createVendor(req, res, next) {
       body.source = 'self_registration';
     } else if (req.user.role === 'admin') {
       buyerId = (req.query && req.query.buyerId) || null;
+    } else if (req.user.role === 'category_manager') {
+      buyerId = null;
+      addedByBuyerCompany = null;
+      body.source = 'procucev_network';
     } else if (req.user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
       if (!buyerAccount) {
@@ -344,7 +390,7 @@ async function createVendor(req, res, next) {
       logger.warn('Failed to create vendor: Missing name or majorCategory', { body }, 'VENDOR_CONTROLLER');
       return res.status(400).json({ success: false, error: 'Vendor name and majorCategory are required.' });
     }
-    if (req.user.role === 'buyer' && !body.email) {
+    if ((req.user.role === 'buyer' || req.user.role === 'category_manager') && !body.email) {
       return res.status(400).json({ success: false, error: 'Vendor email is required.' });
     }
     if (addedByBuyerCompany) {
@@ -361,7 +407,16 @@ async function createVendor(req, res, next) {
     if (body.email && storeService.getVendorById(body.email, 'all')) {
       return res.status(409).json({ success: false, error: `A vendor with the email ${body.email} already exists.` });
     }
-    logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory, buyerId }, 'VENDOR_CONTROLLER');
+    const phone = body.contactPhone || body.phone;
+    if (phone && Array.isArray(storeService.vendors)) {
+      const existingByPhone = storeService.vendors.find(
+        (v) => (v.contactPhone && v.contactPhone === phone) || (v.phone && v.phone === phone)
+      );
+      if (existingByPhone) {
+        return res.status(409).json({ success: false, error: `A vendor with the contact number ${phone} already exists.` });
+      }
+    }
+    logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory, buyerId, role: req.user.role }, 'VENDOR_CONTROLLER');
     const created = storeService.addVendor(body, req.user && req.user.email, buyerId);
     // Confirms the write actually landed in Postgres before reporting
     // success — a duplicate email (vendors.email is UNIQUE) used to fail
@@ -441,6 +496,65 @@ async function deleteVendor(req, res, next) {
     next(err);
   }
 }
+
+async function bulkDeleteVendors(req, res, next) {
+  try {
+    const { vendorIds, ids } = req.body || {};
+    const targetIds = Array.isArray(vendorIds) ? vendorIds : (Array.isArray(ids) ? ids : []);
+
+    if (targetIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'vendorIds array is required and must not be empty.' });
+    }
+
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+
+    const deletedIds = [];
+    const skippedIds = [];
+
+    for (const rawId of targetIds) {
+      const id = String(rawId).trim();
+      if (!id) continue;
+      const existing = storeService.getVendorById(id, 'all');
+
+      if (!existing) {
+        if (
+          (user.role === 'buyer' || user.role === 'admin') &&
+          (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('v-navin-') || id.startsWith('v-1788') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
+        ) {
+          storeService.deleteVendor(id, user.email);
+          deletedIds.push(id);
+          continue;
+        }
+        skippedIds.push(id);
+        continue;
+      }
+
+      if (await checkVendorOwnership(user, existing)) {
+        storeService.deleteVendor(existing.id, user.email);
+        deletedIds.push(existing.id);
+      } else {
+        skippedIds.push(id);
+      }
+    }
+
+    logger.info(`Bulk deleted ${deletedIds.length} vendors`, { deletedCount: deletedIds.length, skippedCount: skippedIds.length }, 'VENDOR_CONTROLLER');
+
+    return res.json({
+      success: true,
+      message: `Successfully deleted ${deletedIds.length} vendor${deletedIds.length === 1 ? '' : 's'}.`,
+      deletedCount: deletedIds.length,
+      deletedIds,
+      skippedIds,
+    });
+  } catch (err) {
+    logger.error('Error during bulk vendor deletion', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
 
 async function reviseRating(req, res, next) {
   try {
@@ -563,7 +677,8 @@ const ZOHO_PAYABLE_PLANS = ['connect', 'select'];
 async function createSubscriptionPaymentLink(req, res, next) {
   try {
     const { id } = req.params;
-    const { plan } = req.body;
+    const { plan, billingDuration = '12_months', duration } = req.body || {};
+    const normalizedDuration = (billingDuration || duration) === '6_months' ? '6_months' : '12_months';
     const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -576,11 +691,12 @@ async function createSubscriptionPaymentLink(req, res, next) {
       return res.status(400).json({ success: false, error: 'Vendor has no email on file to create a payment link for.' });
     }
 
-    // Not re-checked for null here: ZOHO_PAYABLE_PLANS above is exactly the set
-    // of plans ZOHO_SUBSCRIPTION_PRICING (computeZohoPlanAmount's source) prices,
-    // so this can never actually be null for a plan that passed that gate.
-    const amount = computeZohoPlanAmount(plan);
-    const planLabel = (VENDOR_SUBSCRIPTION_PLANS.find((p) => p.id === plan) || {}).name || plan;
+    const amount = computeZohoPlanAmount(plan, normalizedDuration);
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ success: false, error: `Invalid pricing for plan ${plan}.` });
+    }
+    const durationSuffix = normalizedDuration === '6_months' ? ' (6 Months)' : ' (12 Months)';
+    const planLabel = ((VENDOR_SUBSCRIPTION_PLANS.find((p) => p.id === plan) || {}).name || plan) + durationSuffix;
     // Generated before the Zoho call so it can be embedded in returnUrl — see
     // the matching comment in buyerAccountController.createSubscriptionPaymentLink
     // for why a hardcoded `?payment=success` here would misreport a real
@@ -601,18 +717,30 @@ async function createSubscriptionPaymentLink(req, res, next) {
       id: linkId,
       zohoPaymentLinkId: result.zohoPaymentLinkId,
       vendorId: existing.id,
+      payerType: 'vendor',
       planId: plan,
+      billingDuration: normalizedDuration,
       amount,
       paymentUrl: result.paymentUrl,
       status: result.status || 'CREATED',
       rawResponse: result.rawResponse,
     });
 
-    logger.info(`Created Zoho payment link for vendor ${id} (${plan})`, { id, plan, zohoPaymentLinkId: link.zohoPaymentLinkId }, 'VENDOR_CONTROLLER');
+    logger.info(`Created Zoho payment link for vendor ${id} (${plan}, ${normalizedDuration})`, { id, plan, billingDuration: normalizedDuration, zohoPaymentLinkId: link.zohoPaymentLinkId }, 'VENDOR_CONTROLLER');
     res.json({ success: true, data: { paymentUrl: link.paymentUrl, paymentLinkId: link.id, status: link.status } });
   } catch (err) {
     logger.error(`Error creating Zoho payment link for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
     res.status(502).json({ success: false, error: 'Unable to create a payment link right now. Please try again shortly.' });
+  }
+}
+
+function getSubscriptionPricing(req, res) {
+  try {
+    const config = getSubscriptionPricingConfig();
+    res.json({ success: true, data: config });
+  } catch (err) {
+    logger.error('Failed to get subscription pricing', err, 'VENDOR_CONTROLLER');
+    res.status(500).json({ success: false, error: 'Failed to retrieve subscription pricing' });
   }
 }
 
@@ -844,12 +972,27 @@ async function getVendorRfqCredits(req, res, next) {
       return res.status(401).json({ success: false, error: 'Authentication required.' });
     }
 
+    if (user.role === 'buyer') {
+      return res.json({
+        success: true,
+        data: {
+          vendorId: user.email,
+          freeCreditsAllocated: 0,
+          freeCreditsUsed: 0,
+          freeCreditsRemaining: 0,
+          isSubscribed: false,
+          subscriptionPlan: 'free',
+          unlockedRfqIds: [],
+        },
+      });
+    }
+
     let vendor = null;
     if (id && id !== 'me' && id !== 'current') {
-      vendor = storeService.getVendorById(id, 'all');
+      vendor = storeService.getVendorById(id, 'all') || (await storeService.getVendorByIdWithDBFallback(id, 'all'));
     }
     if (!vendor && user.email) {
-      vendor = storeService.getVendorById(user.email, 'all');
+      vendor = storeService.getVendorById(user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(user.email, 'all'));
     }
 
     if (!vendor) {
@@ -1006,6 +1149,7 @@ module.exports = {
   createVendor,
   updateVendor,
   deleteVendor,
+  bulkDeleteVendors,
   reviseRating,
   generateOnboardingEmailPreview,
   updateCategories,
@@ -1019,4 +1163,5 @@ module.exports = {
   recordVendorHeartbeat,
   getPublicVendors,
   getPublicVendorById,
+  getSubscriptionPricing,
 };

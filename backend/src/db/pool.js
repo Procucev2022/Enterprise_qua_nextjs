@@ -12,6 +12,8 @@
 
 const { Pool } = require('pg');
 const { getD1Binding, getD1HttpClient, queryD1 } = require('./d1Bridge');
+const { queryCache } = require('./queryCache');
+const { queryAuditor } = require('./queryAuditor');
 
 const DEFAULT_POOL_MAX = 10;
 const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
@@ -149,19 +151,60 @@ function hasStorage() {
  * param instead of one array.
  */
 async function query(text, params = [], options = {}) {
-  if (options.d1) {
-    // Priority 1: Workers D1 binding (production on Cloudflare Workers)
-    const db = getD1Binding();
-    if (db) return queryD1(db, options.d1Text || text, options.d1Params || params);
+  const d1 = getD1Binding() || getD1HttpClient();
+  const sql = options.d1Text || text;
+  const boundParams = options.d1Params || params;
+  const isWrite = /^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|UPSERT)\b/i.test(sql);
 
-    // Priority 2: D1 HTTP REST API (Node dev / Render / any non-Workers host)
-    const httpClient = getD1HttpClient();
-    if (httpClient) return queryD1(httpClient, options.d1Text || text, options.d1Params || params);
+  // Auto-invalidation on write queries
+  if (isWrite) {
+    const table = queryAuditor.detectTable(sql);
+    if (table && table !== 'other') {
+      queryCache.invalidate(table);
+      if (table === 'rfqs') queryCache.invalidate('rfqs');
+      if (table === 'vendors') queryCache.invalidate('vendors');
+      if (table === 'buyer_accounts') queryCache.invalidate('buyer_accounts');
+      if (table === 'evaluations') queryCache.invalidate('evaluations');
+      if (table === 'vendor_catalogue') queryCache.invalidate('catalogue');
+      if (table === 'category_division' || table === 'org_division_category') queryCache.invalidate('taxonomy');
+      if (table === 'ai_feed') queryCache.invalidate('ai_feed');
+    }
   }
-  if (!poolModule.pool) {
-    throw new Error(NOT_CONFIGURED_MESSAGE);
+
+  // 1. Check Query Cache if cacheable read
+  const cacheKey = options.cacheKey || (options.useCache ? queryCache.generateKey(sql, boundParams) : null);
+  if (options.useCache && cacheKey && !isWrite) {
+    const cachedData = queryCache.get(cacheKey, boundParams);
+    if (cachedData !== null) {
+      queryAuditor.auditQuery(sql, boundParams, 0, true);
+      return { rows: cachedData, rowCount: cachedData.length, isCacheHit: true };
+    }
   }
-  return poolModule.pool.query(text, params);
+
+  // 2. Query execution with latency measurement
+  const startTime = Date.now();
+  let result;
+  if (d1) {
+    result = await queryD1(d1, sql, boundParams);
+  } else {
+    if (!poolModule.pool) {
+      throw new Error(NOT_CONFIGURED_MESSAGE);
+    }
+    result = await poolModule.pool.query(text, params);
+  }
+  const durationMs = Date.now() - startTime;
+
+  // 3. Continuous query auditing
+  queryAuditor.auditQuery(sql, boundParams, durationMs, false);
+
+  // 4. Cache storage if cache was enabled for this query
+  if (options.useCache && cacheKey && !isWrite && result && Array.isArray(result.rows)) {
+    const ttlMs = options.ttlMs || 60000;
+    const tag = options.tag || queryAuditor.detectTable(sql) || 'general';
+    queryCache.set(cacheKey, boundParams, result.rows, { tag, ttlMs, executionDurationMs: durationMs });
+  }
+
+  return result;
 }
 
 /**
@@ -177,14 +220,18 @@ async function rows(text, params = [], options = {}) {
 }
 
 /**
- * Run `fn` inside a single transaction on one dedicated client.
- *
- * The client is always released and the transaction is always resolved, so a
- * failure part-way cannot leave a connection checked out of the pool holding an
- * open transaction — which on a serverless provider means paying for an idle
- * compute instance until the statement timeout fires.
+ * Run `fn` inside a transaction.
+ * On Cloudflare D1, provides an active D1 query client wrapper.
+ * On PostgreSQL (or test mocks), runs within a checked-out transaction client.
  */
 async function withTransaction(fn) {
+  const d1 = getD1Binding() || getD1HttpClient();
+  if (d1) {
+    const client = {
+      query: (sql, params = []) => query(sql, params, { d1: true }),
+    };
+    return await fn(client);
+  }
   if (!poolModule.pool) {
     throw new Error(NOT_CONFIGURED_MESSAGE);
   }
@@ -250,7 +297,7 @@ async function checkDatabaseHealth() {
   // leftover DATABASE_URL secret reported reachability/row-counts against
   // an unrelated personal Neon database instead of the D1 store the app
   // actually reads and writes.
-  const d1 = getD1Binding();
+  const d1 = getD1Binding() || getD1HttpClient();
   if (d1) {
     const startedAt = Date.now();
     try {
@@ -261,7 +308,7 @@ async function checkDatabaseHealth() {
         isConnected: true,
         provider: 'cloudflare_d1',
         providerLabel: 'Cloudflare D1',
-        poolStatus: 'ACTIVE (D1 binding)',
+        poolStatus: getD1Binding() ? 'ACTIVE (D1 binding)' : 'ACTIVE (D1 HTTP REST)',
         database: 'enterprise-qua-d1',
         latencyMs: Date.now() - startedAt,
         userCount: Number(row.user_count || 0),
@@ -369,5 +416,7 @@ poolModule.withTransaction = withTransaction;
 poolModule.checkDatabaseHealth = checkDatabaseHealth;
 poolModule.checkDomainDBHealth = checkDatabaseHealth;
 poolModule.closePool = closePool;
+poolModule.queryCache = queryCache;
+poolModule.queryAuditor = queryAuditor;
 
 module.exports = poolModule;

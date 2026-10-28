@@ -25,6 +25,18 @@ class MockFileReader {
       if (this.onload) this.onload(null as any);
       return;
     }
+    if (file.__throwString) {
+      if (this.onload) {
+        this.onload({
+          target: {
+            get result(): any {
+              throw 'Custom raw string exception';
+            },
+          },
+        } as any);
+      }
+      return;
+    }
     const buf = file.__buffer !== undefined ? file.__buffer : new ArrayBuffer(0);
     if (this.onload) this.onload({ target: { result: buf } });
   }
@@ -193,6 +205,38 @@ describe('vendorUploadClient', () => {
       expect(result.data.rows[0].isValid).toBe(true);
       expect(result.data.rows[1].isValid).toBe(false);
       expect(result.data.rows[1].errors[0]).toContain('Duplicate email');
+    });
+
+    test('flags the second occurrence of a duplicate vendor code within the same file', async () => {
+      const file = xlsxFile([
+        { 'Vendor Code': 'V-001', 'Company Name': 'First Co', 'Email Id': 'first@example.com', 'Mobile No': '9876543210' },
+        { 'Vendor Code': 'V-001', 'Company Name': 'Second Co', 'Email Id': 'second@example.com', 'Mobile No': '9876543211' },
+      ]);
+      const result = await parseVendorUploadFile(file);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.rows[0].isValid).toBe(true);
+      expect(result.data.rows[1].isValid).toBe(false);
+      expect(result.data.rows[1].errors[0]).toContain('Duplicate Vendor Code');
+    });
+
+    test('reports non-Error throw as generic parse error', async () => {
+      const file: any = new File([], 'throw-string.xlsx');
+      file.__throwString = true;
+      const result = await parseVendorUploadFile(file);
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toContain('Could not parse the file');
+    });
+
+    test('handles null and undefined cell values gracefully', async () => {
+      const file = xlsxFile([
+        { 'Company Name': 'Sparse Co', 'Email Id': 'sparse@example.com', 'Mobile No': '9876543210', GSTIN: null, 'Pin Code': undefined },
+      ]);
+      const result = await parseVendorUploadFile(file);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.rows[0].isValid).toBe(true);
     });
 
     test('rejects a file with duplicate column headers', async () => {
