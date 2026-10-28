@@ -203,44 +203,41 @@ export default function Header() {
 
   if (!isLoggedIn) {
     return (
-      <header className="sticky top-0 z-50 w-full border-b border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-[#0b0f19]/90 backdrop-blur-xl transition-colors">
-        <div className="max-w-[1600px] mx-auto px-4 lg:px-6 h-16 flex items-center justify-between gap-4">
-          {/* Brand & Logo */}
-          <div className="flex items-center gap-3 py-1">
-            <div className="bg-white dark:bg-white/95 px-3.5 py-1.5 rounded-xl border border-slate-200 dark:border-gray-700 shadow-sm flex items-center gap-3">
-              <img src="/procucev-logo.png" alt="Procucev Logo" className="h-10 sm:h-11 w-auto object-contain shrink-0" />
-              <div className="h-7 w-[1px] bg-slate-200 shrink-0" />
-              <img src="/qua-ai-logo.jpeg" alt="Qua AI Logo" className="h-10 sm:h-11 w-auto object-contain rounded shrink-0" />
-            </div>
-            <span className="px-2.5 py-1 text-[11px] font-bold rounded-full bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30 shrink-0 self-center">
+      <header className="sticky top-0 z-50 w-full border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-[#0b0f19] transition-colors">
+        <div className="max-w-[1280px] mx-auto px-5 sm:px-6 lg:px-10 xl:px-16 py-2 flex items-center justify-between gap-3">
+          {/* Brand & Logo: Procucev | QUA AI | version pill */}
+          <div className="flex items-center gap-2.5 sm:gap-5 min-w-0">
+            <img
+              src="/procucev-logo.png"
+              alt="Procucev Logo"
+              className="h-7 sm:h-10 lg:h-12 w-auto object-contain shrink-0"
+            />
+            <div className="h-7 sm:h-9 w-px bg-slate-200 dark:bg-slate-700 shrink-0" />
+            <img
+              src="/qua-ai-logo.jpeg"
+              alt="Qua AI Logo"
+              className="h-10 sm:h-14 lg:h-[68px] w-auto object-contain shrink-0"
+            />
+            <span className="hidden sm:inline-flex items-center px-3.5 py-1 text-[13px] font-semibold rounded-full bg-[#EEF2FA] dark:bg-slate-800 text-[#0B1B3D] dark:text-slate-200 border border-[#CBD5E8] dark:border-slate-700 shrink-0">
               QUA AI 2.0
             </span>
           </div>
-
-          {/* Minimal Login Header Controls */}
-          <div className="flex items-center gap-3">
+ 
+          {/* Controls */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <button
               onClick={toggleTheme}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700 transition-all text-xs font-semibold shadow-sm"
+              className="px-3 sm:px-4 py-1.5 rounded-xl bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-[#0B1B3D] dark:text-gray-200 hover:bg-slate-50 dark:hover:bg-gray-700 transition-all text-xs sm:text-sm font-semibold shadow-xs"
               title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
             >
-              {theme === 'light' ? (
-                <>
-                  <Sun size={15} className="text-amber-500 fill-amber-500" />
-                  <span className="hidden sm:inline">Light</span>
-                </>
-              ) : (
-                <>
-                  <Moon size={15} className="text-indigo-400 fill-indigo-400" />
-                  <span className="hidden sm:inline">Dark</span>
-                </>
-              )}
+              {theme === 'dark' ? 'Dark' : 'Light'}
             </button>
             <a
               href="mailto:support@procucev.com"
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 text-xs font-bold hover:bg-indigo-100 transition-all"
+              className="px-3 sm:px-4 py-1.5 rounded-xl bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-[#0B1B3D] dark:text-gray-200 hover:bg-slate-50 dark:hover:bg-gray-700 transition-all text-xs sm:text-sm font-semibold shadow-xs"
             >
-              Need Support?
+              <span className="sm:hidden">Support</span>
+              <span className="hidden sm:inline">Need Support?</span>
             </a>
           </div>
         </div>
