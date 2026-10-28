@@ -270,6 +270,7 @@ describe('authService registration OTP verification and startup', () => {
     expect(authService.resolveAuthSecret({ JWT_SECRET: 'jwt' })).toBe('jwt');
     expect(() => authService.resolveAuthSecret({ NODE_ENV: 'production' })).toThrow('AUTH_SECRET (or JWT_SECRET) must be set');
     expect(authService.resolveAuthSecret({})).toMatch(/^[0-9a-f]{96}$/);
+    expect(authService.getAuthSecret({ AUTH_SECRET: 'lazy-test' })).toBe('lazy-test');
   });
 
   test('hydrateFromDB sweeps expired state and survives a failed sweep', async () => {

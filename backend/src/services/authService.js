@@ -11,7 +11,6 @@ const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
 const vendorPresenceService = require('./vendorPresenceService');
 
-const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
 
 /**
  * Resolve the session-signing key.
@@ -46,7 +45,16 @@ function resolveAuthSecret(env = process.env) {
   return ephemeral;
 }
 
-const AUTH_SECRET = resolveAuthSecret();
+let memoizedAuthSecret = null;
+
+function getAuthSecret(env = process.env) {
+  const configured = env.AUTH_SECRET || env.JWT_SECRET || '';
+  if (configured) return configured;
+  if (!memoizedAuthSecret) {
+    memoizedAuthSecret = resolveAuthSecret(env);
+  }
+  return memoizedAuthSecret;
+}
 
 const SESSION_TTL_SECONDS = 24 * 60 * 60;
 
@@ -219,7 +227,7 @@ function generateSessionToken(user) {
   ).toString('base64url');
 
   const signature = crypto
-    .createHmac('sha256', AUTH_SECRET)
+    .createHmac('sha256', getAuthSecret())
     .update(`${header}.${payload}`)
     .digest('base64url');
 
@@ -246,7 +254,7 @@ function verifySessionToken(token) {
 
   const [header, payload, signature] = parts;
   const expectedSignature = crypto
-    .createHmac('sha256', AUTH_SECRET)
+    .createHmac('sha256', getAuthSecret())
     .update(`${header}.${payload}`)
     .digest('base64url');
 
@@ -1336,6 +1344,7 @@ async function getAllUsers(limit = 200) {
 
 module.exports = {
   resolveAuthSecret,
+  getAuthSecret,
   hashPassword,
   verifyPassword,
   loadIdentityUser,
