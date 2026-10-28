@@ -47,7 +47,7 @@ describe('authService OTP delivery confirmation', () => {
     dbPool.pool = { query: jest.fn() };
     jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(activeBuyer());
     jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValue(true);
-    jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+    jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => { });
     delete globalThis.__CF_WAIT_UNTIL__;
   });
 
@@ -107,7 +107,7 @@ describe('authService OTP delivery confirmation', () => {
 
     test('reports a send still running at the wait bound as pending', async () => {
       jest.useFakeTimers();
-      jest.spyOn(mailerService, 'sendOtpEmail').mockReturnValue(new Promise(() => {}));
+      jest.spyOn(mailerService, 'sendOtpEmail').mockReturnValue(new Promise(() => { }));
       jest.spyOn(smsService, 'sendOtpSms').mockResolvedValue({ success: true });
       const pending = authService.dispatchOtpCodes(args);
       await jest.advanceTimersByTimeAsync(20 * 1000 + 1);
@@ -212,7 +212,7 @@ describe('authService registration OTP verification and startup', () => {
     dbPool.pool = { query: jest.fn() };
     jest.spyOn(authSessionQueries, 'deleteOtp').mockResolvedValue(true);
     jest.spyOn(authSessionQueries, 'incrementOtpAttempts').mockResolvedValue(true);
-    jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+    jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => { });
     jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({
       created: true,
       user: { id: 'u1', email: EMAIL, name: 'New User', role: 'buyer', orgId: 'o1', orgName: 'Org' },
