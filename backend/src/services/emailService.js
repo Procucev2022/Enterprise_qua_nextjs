@@ -80,6 +80,23 @@ function generateStandardRFQEmail(rfq, vendor) {
 
   const subject = `[OFFICIAL RFQ] ${rfqNumber} - Request for Quotation: ${rfq.title}`;
 
+  const isBuyerVendor = Boolean(
+    vendor && (
+      vendor.isBuyerUploaded === true ||
+      vendor.addedByBuyerCompany ||
+      vendor.buyerAccountId ||
+      vendor.buyerId ||
+      (vendor.source && String(vendor.source).toLowerCase().includes('buyer')) ||
+      (vendor.id && (
+        String(vendor.id).startsWith('v-hist-') ||
+        String(vendor.id).startsWith('v-navin-') ||
+        String(vendor.id).startsWith('vm-') ||
+        String(vendor.id).startsWith('v-ingest-') ||
+        String(vendor.id).startsWith('v-buyer-')
+      ))
+    )
+  );
+
   const htmlBody = `
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="email-wrapper" style="width: 100%; min-width: 100%; margin: 0; padding: 0; background-color: #ffffff; border-collapse: collapse;">
       <tr>
@@ -113,6 +130,14 @@ function generateStandardRFQEmail(rfq, vendor) {
                   <td style="padding: 8px 12px; font-weight: bold;">Title / Requirement:</td>
                   <td style="padding: 8px 12px;">${rfq.title}</td>
                 </tr>
+                ${
+                  isBuyerVendor && rfq.buyerAccountName
+                    ? `<tr>
+                  <td style="padding: 8px 12px; font-weight: bold;">Buyer:</td>
+                  <td style="padding: 8px 12px;">${rfq.buyerAccountName}</td>
+                </tr>`
+                    : ''
+                }
                 <tr>
                   <td style="padding: 8px 12px; font-weight: bold;">Category:</td>
                   <td style="padding: 8px 12px;">${category}</td>
