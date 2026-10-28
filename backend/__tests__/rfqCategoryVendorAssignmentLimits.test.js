@@ -326,4 +326,228 @@ describe('RFQ Category Vendor Assignment Limits (5 Client & 5 Procucev per Categ
       expect(rfq.procucevVendorCount).toBe(5); // Capped at MAX_PROCUCEV_PER_CATEGORY (5)
     });
   });
+
+  describe('Automatic vendor assignment based on RFQ category and delivery location', () => {
+    test('prioritizes vendors matching delivery location (city and pincode) over distant vendors', () => {
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'Location Test Corp',
+        corporateEmail: 'location@test.com',
+        subscriptionPlan: 'version_2',
+      });
+
+      // Vendor in Mumbai with matching pincode
+      const vMumbaiPin = storeService.addVendor({
+        name: 'Mumbai Exact Pin Vendor',
+        email: 'mum-pin@test.com',
+        majorCategory: 'Civil Works',
+        city: 'Mumbai',
+        state: 'Maharashtra',
+        pincode: '400001',
+        rating: 4.0,
+      });
+
+      // Vendor in Mumbai without exact pincode
+      const vMumbaiCity = storeService.addVendor({
+        name: 'Mumbai City Vendor',
+        email: 'mum-city@test.com',
+        majorCategory: 'Civil Works',
+        city: 'Mumbai',
+        state: 'Maharashtra',
+        pincode: '400099',
+        rating: 4.1,
+      });
+
+      // Vendor in Maharashtra (state match)
+      const vState = storeService.addVendor({
+        name: 'Maharashtra State Vendor',
+        email: 'mah-state@test.com',
+        majorCategory: 'Civil Works',
+        city: 'Pune',
+        state: 'Maharashtra',
+        pincode: '411001',
+        rating: 4.5,
+      });
+
+      // Distant vendor in Delhi
+      const vDelhi = storeService.addVendor({
+        name: 'Delhi Distant Vendor',
+        email: 'delhi@test.com',
+        majorCategory: 'Civil Works',
+        city: 'Delhi',
+        state: 'Delhi',
+        pincode: '110001',
+        rating: 4.9, // Higher rating but distant
+      });
+
+      const rfq = storeService.createRFQ(
+        {
+          title: 'Civil Works RFQ for Mumbai Site',
+          category: 'Civil Works',
+          deliveryLocation: 'Mumbai Plant Site',
+          deliveryPincode: '400001',
+          sourcingMode: 'mode_0',
+        },
+        buyer
+      );
+
+      const assigned = rfq.assignedVendors || [];
+      expect(assigned.length).toBeGreaterThanOrEqual(2);
+      // The exact pincode match in Mumbai should rank first
+      expect(assigned[0].id).toBe(vMumbaiPin.id);
+      // Mumbai city match should rank above distant Delhi vendor despite lower rating
+      const assignedIds = assigned.map((v) => v.id);
+      expect(assignedIds.indexOf(vMumbaiCity.id)).toBeLessThan(assignedIds.indexOf(vDelhi.id));
+    });
+
+    test('automatically assigns eligible vendors through taxonomy major and minor hierarchy', () => {
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'Taxonomy Test Corp',
+        corporateEmail: 'tax@test.com',
+        subscriptionPlan: 'version_2',
+      });
+
+      // Vendor specialized in minor category 'Bricks' (part of Civil Works)
+      const vBricks = storeService.addVendor({
+        name: 'Bricks Supplier',
+        email: 'bricks@test.com',
+        minorCategories: ['Bricks'],
+        rating: 4.5,
+      });
+
+      // Vendor with alias 'Civil'
+      const vCivilAlias = storeService.addVendor({
+        name: 'Civil Alias Vendor',
+        email: 'civil-alias@test.com',
+        majorCategory: 'Civil',
+        rating: 4.6,
+      });
+
+      const rfq = storeService.createRFQ(
+        {
+          title: 'Masonry Work RFQ',
+          category: 'Civil Works',
+          sourcingMode: 'mode_0',
+        },
+        buyer
+      );
+
+      const assignedIds = (rfq.assignedVendors || []).map((v) => v.id);
+      expect(assignedIds).toContain(vBricks.id);
+      expect(assignedIds).toContain(vCivilAlias.id);
+    });
+
+    test('Mode 1 auto-assigns eligible private roster vendors when assignedVendors is empty', () => {
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'Private Auto Assign Corp',
+        corporateEmail: 'private-auto@test.com',
+        subscriptionPlan: 'version_1',
+      });
+
+      // Private roster vendor belonging to this buyer
+      const privateVendor = storeService.addVendor({
+        name: 'My Private Vendor',
+        email: 'myprivate@test.com',
+        majorCategory: 'Packing Material',
+        buyerId: buyer.id,
+        source: 'buyer_uploaded',
+        rating: 4.8,
+      });
+
+      // Network vendor that must NOT be assigned in Mode 1
+      const networkVendor = storeService.addVendor({
+        name: 'Network Packaging Supplier',
+        email: 'netpack@test.com',
+        majorCategory: 'Packing Material',
+        source: 'procucev_network',
+        rating: 5.0,
+      });
+
+      // RFQ created without passing assignedVendors
+      const rfq = storeService.createRFQ(
+        {
+          title: 'Packaging boxes requisition',
+          category: 'Packing Material',
+          sourcingMode: 'mode_1',
+        },
+        buyer
+      );
+
+      const assignedIds = (rfq.assignedVendors || []).map((v) => v.id);
+      expect(assignedIds).toContain(privateVendor.id);
+      expect(assignedIds).not.toContain(networkVendor.id);
+      expect(rfq.followUpData.totalInvited).toBe(1);
+    });
+  });
+
+  describe('vendorCoversCategory & scoreVendorLocation branch coverage', () => {
+    test('scoreVendorLocation evaluates PIN proximity, city, state, tokens, and fallbacks', () => {
+      expect(storeService.scoreVendorLocation(null, null)).toBe(40);
+      expect(storeService.scoreVendorLocation({}, null)).toBe(40);
+
+      const vPin = { pincode: '400001', city: 'Mumbai', state: 'Maharashtra', location: 'Navi Mumbai Plant' };
+      // Exact PIN match (100)
+      expect(storeService.scoreVendorLocation(vPin, { pincode: '400001' })).toBe(100);
+      // String 6-digit PIN destination (100)
+      expect(storeService.scoreVendorLocation(vPin, '400001')).toBe(100);
+      // Same district PIN (90)
+      expect(storeService.scoreVendorLocation(vPin, { pincode: '400050' })).toBe(90);
+      // Same region PIN (70)
+      expect(storeService.scoreVendorLocation(vPin, { pincode: '411001' })).toBe(70);
+      // Different postal zone (destText check)
+      expect(storeService.scoreVendorLocation(vPin, { pincode: '560001' })).toBe(40);
+
+      // City match (85)
+      expect(storeService.scoreVendorLocation(vPin, { location: 'Delivery at Mumbai Site' })).toBe(85);
+      // String text destination (85)
+      expect(storeService.scoreVendorLocation(vPin, 'Site at Mumbai Central')).toBe(85);
+      // State match (65)
+      const vStateOnly = { state: 'Maharashtra' };
+      expect(storeService.scoreVendorLocation(vStateOnly, { location: 'Pune, Maharashtra' })).toBe(65);
+      // Regional token match (60)
+      const vToken = { location: 'Greater Noida Warehouse' };
+      expect(storeService.scoreVendorLocation(vToken, { location: 'Noida Project' })).toBe(60);
+      // No match fallback (40)
+      expect(storeService.scoreVendorLocation(vToken, { location: 'Chennai Depot' })).toBe(40);
+    });
+
+    test('vendorCoversCategory handles edge cases, empty values, aliases, and taxonomy directions', () => {
+      expect(storeService.vendorCoversCategory(null, 'Civil Works')).toBe(false);
+      expect(storeService.vendorCoversCategory({}, null)).toBe(false);
+      expect(storeService.vendorCoversCategory({}, '')).toBe(false);
+      expect(storeService.vendorCoversCategory({}, 'Civil Works')).toBe(false);
+
+      const vendor = {
+        majorCategory: 'Civil Works',
+        minorCategories: ['Bricks', 'Painting'],
+        vendorSelectedCategories: ['Interior Finishes'],
+        clientMappedCategories: ['Plumbing'],
+      };
+
+      // Exact matches
+      expect(storeService.vendorCoversCategory(vendor, 'Civil Works')).toBe(true);
+      expect(storeService.vendorCoversCategory(vendor, 'Bricks')).toBe(true);
+      expect(storeService.vendorCoversCategory(vendor, 'Painting')).toBe(true);
+      expect(storeService.vendorCoversCategory(vendor, 'Interior Finishes')).toBe(true);
+      expect(storeService.vendorCoversCategory(vendor, 'Plumbing')).toBe(true);
+
+      // Major covers minor (taxonomy)
+      const vendorMajorOnly = { majorCategory: 'Civil Works' };
+      expect(storeService.vendorCoversCategory(vendorMajorOnly, 'Excavation')).toBe(true);
+
+      // Minor mapped to major (taxonomy)
+      const vendorMinorOnly = { minorCategories: ['Excavation'] };
+      expect(storeService.vendorCoversCategory(vendorMinorOnly, 'Civil Works')).toBe(true);
+
+      // Canonical alias matching
+      const vendorAlias = { majorCategory: 'Civil' };
+      expect(storeService.vendorCoversCategory(vendorAlias, 'Civil Works')).toBe(true);
+
+      // Token matching
+      const vendorToken = { majorCategory: 'Centrifugal Water Pumps' };
+      expect(storeService.vendorCoversCategory(vendorToken, 'Water Pumps')).toBe(true);
+
+      // Unrelated category
+      expect(storeService.vendorCoversCategory(vendor, 'Medical Devices')).toBe(false);
+    });
+  });
 });

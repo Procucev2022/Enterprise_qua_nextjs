@@ -129,6 +129,35 @@ describe('vendorMatching module', () => {
       expect(matchVendorAgainstSignals(mockVendor, []).isMatch).toBe(false);
       expect(matchVendorAgainstSignals(mockVendor, ['']).isMatch).toBe(false);
     });
+
+    it('handles vendor with no category information gracefully', () => {
+      const emptyVendor = { id: 'v-empty', name: 'No Cat Vendor' } as unknown as VendorEntry;
+      const res = matchVendorAgainstSignals(emptyVendor, ['Civil Works']);
+      expect(res.isMatch).toBe(false);
+      expect(res.matchScore).toBe(0);
+    });
+
+    it('matches through taxonomy hierarchy bidirectionally', () => {
+      // Vendor has major 'Civil Works', signal is minor 'Bricks'
+      const majorVendor = {
+        id: 'v-major',
+        name: 'Civil Co',
+        majorCategory: 'Civil Works',
+      } as unknown as VendorEntry;
+      const res1 = matchVendorAgainstSignals(majorVendor, ['Bricks']);
+      expect(res1.isMatch).toBe(true);
+      expect(res1.matchScore).toBe(93);
+
+      // Vendor has minor 'Bricks', signal is major 'Civil Works'
+      const minorVendor = {
+        id: 'v-minor',
+        name: 'Brick Maker',
+        minorCategories: ['Bricks'],
+      } as unknown as VendorEntry;
+      const res2 = matchVendorAgainstSignals(minorVendor, ['Civil Works']);
+      expect(res2.isMatch).toBe(true);
+      expect(res2.matchScore).toBe(93);
+    });
   });
 
   describe('getCategoryMatchedProcucevVendors', () => {
@@ -226,6 +255,35 @@ describe('vendorMatching module', () => {
       expect(directMatches[2].vendor.email).toBe('norating@test.com');
     });
 
+    it('prioritizes vendors closer to delivery destination when destination is provided', () => {
+      const locPool: VendorEntry[] = [
+        { id: 'v-delhi', name: 'Delhi Vendor', majorCategory: 'Cat1', city: 'Delhi', pincode: '110001', rating: 4.9 } as unknown as VendorEntry,
+        { id: 'v-mumbai', name: 'Mumbai Vendor', majorCategory: 'Cat1', city: 'Mumbai', pincode: '400001', rating: 4.2 } as unknown as VendorEntry,
+      ];
+      const result = selectVendorsForCategories(locPool, ['Cat1'], 5, { location: 'Mumbai Plant', pincode: '400001' });
+      expect(result.length).toBe(2);
+      expect(result[0].vendor.id).toBe('v-mumbai');
+      expect(result[1].vendor.id).toBe('v-delhi');
+    });
+
+    it('handles location tie-breaks, single dimension location filters, and equal score fallbacks', () => {
+      const vendorA = { id: 'v-a', email: 'a@test.com', majorCategory: 'Cat1', city: 'Mumbai', pincode: '400001', rating: 4.5 } as unknown as VendorEntry;
+      const vendorB = { id: 'v-b', email: 'b@test.com', majorCategory: 'Cat1', city: 'Mumbai', pincode: '400001', rating: 4.0 } as unknown as VendorEntry;
+
+      // Equal location scores with destination, ranks by rating
+      const equalLoc = selectVendorsForCategories([vendorB, vendorA], ['Cat1'], 5, { location: 'Mumbai' });
+      expect(equalLoc[0].vendor.id).toBe('v-a');
+
+      // Only pincode in destination
+      const pinOnly = selectVendorsForCategories([vendorB, vendorA], ['Cat1'], 5, { pincode: '400001' });
+      expect(pinOnly[0].vendor.id).toBe('v-a');
+
+      // Non-matching PIN digits
+      const distantVendor = { id: 'v-c', email: 'c@test.com', majorCategory: 'Cat1', pincode: '600001', rating: 4.0 } as unknown as VendorEntry;
+      const resDiffPin = selectVendorsForCategories([distantVendor, vendorA], ['Cat1'], 5, { pincode: '400001' });
+      expect(resDiffPin[0].vendor.id).toBe('v-a');
+    });
+
     it('handles empty inputs safely', () => {
       expect(selectVendorsForCategories([], ['Cat1'])).toEqual([]);
       expect(selectVendorsForCategories(null as any, ['Cat1'])).toEqual([]);
@@ -321,8 +379,43 @@ describe('vendorMatching module', () => {
       expect(ranked[0].categoryScore).toBeGreaterThan(0);
     });
 
+    it('handles V3 tie-breaks and excludes non-matching vendors', () => {
+      const vNoMatch = vendor({ id: 'no-match', majorCategory: 'Aerospace', minorCategories: ['Satellites'] });
+      const vSameOverallHighCat = vendor({ id: 'v-high-cat', majorCategory: 'Mechanical', rating: 4.0 });
+      const vSameOverallLowCat = vendor({ id: 'v-low-cat', majorCategory: 'Mechanical', rating: 4.8 });
+      const pool = [vNoMatch, vSameOverallLowCat, vSameOverallHighCat];
+      const res = rankProcucevVendorsForV3(pool, ['mechanical'], {});
+      expect(res.some((r) => r.vendor.id === 'no-match')).toBe(false);
+      expect(res.length).toBe(2);
+    });
+
     it('returns an empty list for a non-array input', () => {
       expect(rankProcucevVendorsForV3(null as any, signals, {}, 10)).toEqual([]);
+    });
+  });
+
+  describe('additional branch coverage for category signals and match fallbacks', () => {
+    it('extracts signals from extractedEntities with fallback category fields', () => {
+      const form = {
+        extractedEntities: [
+          { category: 'Pumps & Spares', majorCategory: 'Mechanical', minorCategory: 'Centrifugal Pumps' },
+        ],
+      };
+      const { rawSignals } = extractRfqCategorySignals(form);
+      expect(rawSignals).toContain('Pumps & Spares');
+      expect(rawSignals).toContain('Mechanical');
+      expect(rawSignals).toContain('Centrifugal Pumps');
+    });
+
+    it('handles whitespace-only and punctuation signals in matchVendorAgainstSignals', () => {
+      const v = {
+        id: 'v-minor-only',
+        name: 'Minor Only Vendor',
+        minorCategories: ['Centrifugal Pumps'],
+      } as unknown as VendorEntry;
+      const res = matchVendorAgainstSignals(v, ['  ---  ', 'centrifugal pumps']);
+      expect(res.isMatch).toBe(true);
+      expect(res.matchedMajor).toBe('Centrifugal Pumps');
     });
   });
 });
