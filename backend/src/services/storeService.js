@@ -2491,6 +2491,12 @@ class StoreService {
           contactPerson: v.contactPerson || null,
           phone: v.phone || null,
           source: v.source || (this.isProcucevVendor(v) ? 'procucev_network' : 'buyer_uploaded'),
+          majorCategory: v.majorCategory || v.category || null,
+          minorCategories: v.minorCategories || [],
+          city: v.city || null,
+          state: v.state || null,
+          location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
+          pincode: v.pincode || null,
         }));
       if (additions.length > 0) {
         newRFQ.assignedVendors = [...newRFQ.assignedVendors, ...additions];
@@ -3330,7 +3336,8 @@ class StoreService {
     const selectedMap = new Map();
 
     for (const cat of cats) {
-      const catCandidates = candidatePool.filter((v) => {
+      const catCandidates = candidatePool.filter((candidate) => {
+        const v = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null) || candidate;
         const hasCategory = Boolean(
           v.majorCategory ||
           (Array.isArray(v.minorCategories) && v.minorCategories.length > 0) ||
@@ -3589,7 +3596,14 @@ class StoreService {
       dbMatches = this.candidateVendorsForRFQ(rfq).filter((v) => this.isProcucevVendor(v));
     }
 
-    if (!Array.isArray(dbMatches) || dbMatches.length === 0) return rfq;
+    if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+      const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+      if (existing.length === 0) {
+        this.updateRFQ(rfq.id, { needsCategoryManagerAssignment: true });
+        rfq.needsCategoryManagerAssignment = true;
+      }
+      return rfq;
+    }
 
     // Prefer vendors in the RFQ's delivery pincode, then by rating — select up to maxProcucevPerCat per category.
     const targetPincode = rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null;
@@ -3615,6 +3629,7 @@ class StoreService {
     }
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+
     const existingKeys = new Set(
       existing.map((v) => (v.id || v.email || v.name || '').toLowerCase())
     );
@@ -3627,6 +3642,12 @@ class StoreService {
         contactPerson: v.contactPerson || null,
         phone: v.phone || v.mobile || v.mobileNumber || null,
         source: v.source || 'procucev_network',
+        majorCategory: v.majorCategory || v.category || null,
+        minorCategories: v.minorCategories || [],
+        city: v.city || null,
+        state: v.state || null,
+        location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
+        pincode: v.pincode || null,
       }));
 
     if (additions.length === 0) return rfq;
@@ -3837,6 +3858,13 @@ class StoreService {
       email: v.email || null,
       contactPerson: v.contactPerson || null,
       phone: v.phone || v.mobile || v.mobileNumber || null,
+      source: v.source || (this.isProcucevVendor(v) ? 'procucev_network' : 'buyer_uploaded'),
+      majorCategory: v.majorCategory || v.category || null,
+      minorCategories: v.minorCategories || [],
+      city: v.city || null,
+      state: v.state || null,
+      location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
+      pincode: v.pincode || null,
     }));
     const allAssigned = [...existing, ...entries];
     const updatePayload = {
