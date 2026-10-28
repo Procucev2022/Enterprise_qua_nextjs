@@ -384,7 +384,7 @@
       "r2_buckets": [
         {
           "binding": "R2_BUCKET",
-          "bucket_name": "procucec-dev"
+          "bucket_name": "enterprise-qua-dev"
         }
       ]
     },
