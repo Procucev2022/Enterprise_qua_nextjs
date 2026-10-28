@@ -11,6 +11,7 @@ const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
 const vendorPresenceService = require('./vendorPresenceService');
 
+const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
 
 /**
  * Resolve the session-signing key.
@@ -45,16 +46,7 @@ function resolveAuthSecret(env = process.env) {
   return ephemeral;
 }
 
-let memoizedAuthSecret = null;
-
-function getAuthSecret(env = process.env) {
-  const configured = env.AUTH_SECRET || env.JWT_SECRET || '';
-  if (configured) return configured;
-  if (!memoizedAuthSecret) {
-    memoizedAuthSecret = resolveAuthSecret(env);
-  }
-  return memoizedAuthSecret;
-}
+const AUTH_SECRET = resolveAuthSecret();
 
 const SESSION_TTL_SECONDS = 24 * 60 * 60;
 
@@ -227,7 +219,7 @@ function generateSessionToken(user) {
   ).toString('base64url');
 
   const signature = crypto
-    .createHmac('sha256', getAuthSecret())
+    .createHmac('sha256', AUTH_SECRET)
     .update(`${header}.${payload}`)
     .digest('base64url');
 
@@ -254,7 +246,7 @@ function verifySessionToken(token) {
 
   const [header, payload, signature] = parts;
   const expectedSignature = crypto
-    .createHmac('sha256', getAuthSecret())
+    .createHmac('sha256', AUTH_SECRET)
     .update(`${header}.${payload}`)
     .digest('base64url');
 
@@ -1171,8 +1163,8 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   const emailCombinedKey = buildOtpKey(normalizedEmail, cleanedMobile);
   const emailDirectKey = buildOtpKey(normalizedEmail, 'email');
   let storedEmailOtp = (await authSessionQueries.findOtp(emailOtpKey)) ||
-                       (await authSessionQueries.findOtp(emailCombinedKey)) ||
-                       (await authSessionQueries.findOtp(emailDirectKey));
+    (await authSessionQueries.findOtp(emailCombinedKey)) ||
+    (await authSessionQueries.findOtp(emailDirectKey));
 
   if (!storedEmailOtp) {
     // Check demo OTP fallback in test environments or if OTP was sent to account
@@ -1196,7 +1188,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   // 4. Verify Mobile OTP
   const mobileOtpKey = buildOtpKey(normalizedEmail, `${cleanedMobile}_mobile`);
   let storedMobileOtp = (await authSessionQueries.findOtp(mobileOtpKey)) ||
-                        (await authSessionQueries.findOtp(emailCombinedKey));
+    (await authSessionQueries.findOtp(emailCombinedKey));
 
   if (storedMobileOtp && storedMobileOtp.expiresAt && Date.now() > storedMobileOtp.expiresAt) {
     throw new Error('Mobile verification OTP has expired. Please request a new code.');
@@ -1213,9 +1205,9 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
 
   // Consume used OTPs
   await Promise.all([
-    authSessionQueries.deleteOtp(emailOtpKey).catch(() => {}),
-    authSessionQueries.deleteOtp(mobileOtpKey).catch(() => {}),
-    authSessionQueries.deleteOtp(emailCombinedKey).catch(() => {}),
+    authSessionQueries.deleteOtp(emailOtpKey).catch(() => { }),
+    authSessionQueries.deleteOtp(mobileOtpKey).catch(() => { }),
+    authSessionQueries.deleteOtp(emailCombinedKey).catch(() => { }),
   ]);
 
   // 5. Update user identity record
@@ -1344,7 +1336,6 @@ async function getAllUsers(limit = 200) {
 
 module.exports = {
   resolveAuthSecret,
-  getAuthSecret,
   hashPassword,
   verifyPassword,
   loadIdentityUser,
