@@ -1464,6 +1464,7 @@ const EMAIL_GATEWAY_CONFIG = {
   // Emails have no file name; this stands in wherever one is recorded.
   SYNTHETIC_FILE_NAME: 'inbound-email.eml',
   DEFAULT_GATEWAY_ADDRESS: 'rfq@procucev.com',
+  DEFAULT_FALLBACK_RFQ_TITLE: 'Request for Quotation',
   MAX_LINE_ITEMS_PER_RFQ: 49,
 };
 

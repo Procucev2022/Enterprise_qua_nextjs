@@ -20,7 +20,7 @@
 // ==============================================================================
 
 const { logger } = require('./loggerService');
-const { EMAIL_INGESTION_CONFIG, EMAIL_INGESTION_STATUS } = require('../config/constants');
+const { EMAIL_INGESTION_CONFIG, EMAIL_INGESTION_STATUS, EMAIL_GATEWAY_CONFIG } = require('../config/constants');
 
 /** True when the file name looks like a message container this module handles. */
 function isEmailFileName(fileName) {
@@ -182,6 +182,89 @@ function referencesText(value) {
   return typeof value === 'string' ? value : '';
 }
 
+/** Decode Quoted-Printable encoded string */
+function decodeQuotedPrintable(text, charset = 'utf-8') {
+  const binary = String(text || '')
+    .replace(/_/g, ' ')
+    .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+  try {
+    const isLatin1 = /latin1|iso-8859|windows-1252/i.test(charset);
+    return Buffer.from(binary, 'binary').toString(isLatin1 ? 'latin1' : 'utf8');
+  } catch {
+    return binary;
+  }
+}
+
+/** Decode Base64 encoded string */
+function decodeBase64(text, charset = 'utf-8') {
+  try {
+    const isLatin1 = /latin1|iso-8859|windows-1252/i.test(charset);
+    return Buffer.from(String(text || ''), 'base64').toString(isLatin1 ? 'latin1' : 'utf8');
+  } catch {
+    return String(text || '');
+  }
+}
+
+/**
+ * Decode RFC 2047 MIME encoded words (=?charset?[B|Q]?encoded?=) in an email subject or header.
+ */
+function decodeRfc2047(text) {
+  if (!text || typeof text !== 'string') return '';
+  // Collapse whitespace between adjacent encoded words as per RFC 2047 section 6.2
+  const joined = text.replace(/(=\?[^?]+\?[bBqQ]\?[^?]+\?=)\s+(=\?[^?]+\?[bBqQ]\?[^?]+\?=)/g, '$1$2');
+  return joined.replace(/=\?([^?]+)\?([bBqQ])\?([^?]+)\?=/gi, (match, charset, encoding, payload) => {
+    const enc = encoding.toUpperCase();
+    if (enc === 'B') {
+      return decodeBase64(payload, charset);
+    }
+    if (enc === 'Q') {
+      return decodeQuotedPrintable(payload, charset);
+    }
+    return match;
+  });
+}
+
+/**
+ * Decode common HTML entities.
+ */
+function decodeHtmlEntities(text) {
+  if (!text || typeof text !== 'string') return '';
+  return text
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&nbsp;/gi, ' ');
+}
+
+/**
+ * Safely decodes encoded headers, HTML entities, and normalizes leading/trailing/multiple whitespace.
+ * Capped at 200 characters to comply with RFQ title validation.
+ */
+function decodeAndNormalizeEmailSubject(rawSubject) {
+  if (rawSubject === undefined || rawSubject === null) return '';
+  const str = String(rawSubject);
+  const decoded = decodeHtmlEntities(decodeRfc2047(str));
+  let normalized = decoded.replace(/[\r\n\t\s]+/g, ' ').trim();
+  if (normalized.length > 200) {
+    normalized = `${normalized.slice(0, 199).trimEnd()}…`;
+  }
+  return normalized;
+}
+
+/**
+ * Resolves the final RFQ title from an email subject line.
+ * If the subject is empty or missing, safely falls back to the generic default title.
+ */
+function resolveEmailRfqTitle(rawSubject, fallback = EMAIL_GATEWAY_CONFIG.DEFAULT_FALLBACK_RFQ_TITLE) {
+  const normalized = decodeAndNormalizeEmailSubject(rawSubject);
+  return normalized || fallback || 'Request for Quotation';
+}
+
 /**
  * Parse a raw RFC822 message.
  *
@@ -207,9 +290,14 @@ async function parseEmailMessage(rawBuffer) {
       content: attachment.content,
     }));
 
+  const rawSubject = (parsed && typeof parsed.subject === 'string' && parsed.subject.trim())
+    ? parsed.subject
+    : (headerText(parsed && parsed.headers, 'subject') || '');
+  const subject = decodeAndNormalizeEmailSubject(rawSubject);
+
   return {
     messageId: String(parsed.messageId || '').trim(),
-    subject: String(parsed.subject || '').trim(),
+    subject,
     fromAddress,
     fromName: firstAddressName(parsed.from, fromAddress),
     toAddress: firstAddress(parsed.to),
@@ -367,6 +455,12 @@ const emailIngestion = {
   prepareEmailForExtraction,
   extractCcAddresses,
   detectAutomatedMessage,
+  decodeQuotedPrintable,
+  decodeBase64,
+  decodeRfc2047,
+  decodeHtmlEntities,
+  decodeAndNormalizeEmailSubject,
+  resolveEmailRfqTitle,
 };
 
 module.exports = emailIngestion;
