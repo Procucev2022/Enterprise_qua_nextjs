@@ -100,12 +100,16 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
     return matchCompany && matchBuyer;
   });
 
-  // Filter buyers based on search term (name, company)
-  const filteredBuyers = filteredByDropdownBuyers.filter(
-    (b) =>
-      b.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      b.company.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Filter buyers based on search term (company name, contact name, email ID)
+  const cleanSearch = searchTerm.trim().toLowerCase();
+  const filteredBuyers = filteredByDropdownBuyers.filter((b) => {
+    if (!cleanSearch) return true;
+    return (
+      b.company.toLowerCase().includes(cleanSearch) ||
+      b.name.toLowerCase().includes(cleanSearch) ||
+      (b.email && b.email.toLowerCase().includes(cleanSearch))
+    );
+  });
 
   // Overall Analytics computations based on dropdown filter scope
   const grandTotalSpend = filteredByDropdownBuyers.reduce((sum, b) => sum + b.totalSpend, 0);
@@ -139,7 +143,21 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
           <span>Active Context Selection:</span>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto text-xs">
+        <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto text-xs items-center">
+          {/* Search by company or email */}
+          <div className="relative w-full sm:w-56">
+            <span className="absolute inset-y-0 left-0 flex items-center pl-2.5 text-slate-400">
+              <Search size={12} />
+            </span>
+            <input
+              type="text"
+              placeholder="Search Buyer name or company or email..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="input pl-7 py-1 text-xs w-full bg-slate-50 dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-medium"
+            />
+          </div>
+
           {/* Company Dropdown */}
           <div className="flex items-center gap-2">
             <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-500">Company</label>
@@ -283,7 +301,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
             </span>
             <input
               type="text"
-              placeholder="Search Buyer name or company..."
+              placeholder="Search buyer company, name, or email..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="input pl-8 py-1.5 text-xs w-full sm:w-64"

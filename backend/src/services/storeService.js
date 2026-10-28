@@ -11,6 +11,7 @@ const {
   VENDOR_FREE_CREDITS_LIMIT,
   VENDOR_ASSIGNMENT_LIMITS,
   MAJOR_CATEGORY_ALIASES,
+  DEFAULT_CATEGORY_TAXONOMY,
   INQUIRIES_PERSISTENCE_FILE,
 } = require('../config/constants');
 const crypto = require('crypto');
@@ -41,6 +42,41 @@ const { logger } = require('./loggerService');
 // shared in-memory cache used by both paths, so they should stay consistent.
 const MAX_HYDRATION_VENDORS = 500;
 const path = require('path');
+
+const MINOR_TO_MAJOR_MAP = new Map();
+const MAJOR_TO_MINORS_MAP = new Map();
+
+function buildTaxonomyMaps(taxonomy) {
+  if (!Array.isArray(taxonomy)) return;
+  for (const group of taxonomy) {
+    if (!group || !group.majorCategory) continue;
+    const majorCanonical = String(group.majorCategory).trim();
+    const majorKey = majorCanonical.toLowerCase();
+    if (!MAJOR_TO_MINORS_MAP.has(majorKey)) {
+      MAJOR_TO_MINORS_MAP.set(majorKey, new Set());
+    }
+    const minorSet = MAJOR_TO_MINORS_MAP.get(majorKey);
+    for (const minor of Array.isArray(group.minorCategories) ? group.minorCategories : []) {
+      if (!minor) continue;
+      const mTrimmed = String(minor).trim();
+      const mKey = mTrimmed.toLowerCase();
+      minorSet.add(mKey);
+      if (!MINOR_TO_MAJOR_MAP.has(mKey)) {
+        MINOR_TO_MAJOR_MAP.set(mKey, majorCanonical);
+      }
+    }
+  }
+}
+buildTaxonomyMaps(DEFAULT_CATEGORY_TAXONOMY);
+
+function resolveCanonicalCategory(cat) {
+  if (!cat) return '';
+  const trimmed = String(cat).trim();
+  const lower = trimmed.toLowerCase();
+  const alias = MAJOR_CATEGORY_ALIASES && MAJOR_CATEGORY_ALIASES[lower];
+  if (alias) return alias;
+  return trimmed;
+}
 
 const SEEDED_INQUIRIES = [
   {
@@ -2156,6 +2192,7 @@ class StoreService {
   }
 
   createRFQ(rfqData, requestingBuyerAccount = null) {
+    const hadExplicitVendors = Array.isArray(rfqData.assignedVendors) && rfqData.assignedVendors.length > 0;
     const rfqNumber = rfqData.rfqNumber || this.generateRFQNumber();
     const id = rfqData.id || `rfq-${Date.now()}`;
 
@@ -2333,7 +2370,10 @@ class StoreService {
           shortlisted,
           distinctCategories,
           maxClientPerCat,
-          newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null
+          {
+            pincode: newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null,
+            location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
+          }
         );
       } else {
         newRFQ.assignedVendors = shortlisted;
@@ -2350,6 +2390,49 @@ class StoreService {
           action: `Vendor ${vendor.name || vendor.id} excluded from automatic RFQ matching due to category mismatch.`,
           rfqNumber,
         });
+      }
+    }
+
+    // Enterprise QUA – V1 (Mode 1 / Client Sourcing):
+    // If assignedVendors is empty, automatically identify and assign eligible vendors from
+    // the buyer's private roster matching the RFQ category and delivery location.
+    const isV1 = newRFQ.sourcingMode === 'mode_1' || newRFQ.sourcingMode === 'v1' || newRFQ.sourcingMode === 'version_1';
+    if (isV1 && !hadExplicitVendors && (!Array.isArray(newRFQ.assignedVendors) || newRFQ.assignedVendors.length === 0)) {
+      const categories = this._rfqDistinctCategories(newRFQ);
+      const targetCategories = categories.length > 0 ? categories : (newRFQ.category ? [newRFQ.category] : []);
+      if (targetCategories.length > 0) {
+        const clientCandidates = this.candidateVendorsForRFQ(newRFQ).filter(
+          (v) => !this.isProcucevVendor(v) && this.isVendorMappedToRfqBuyer(v, newRFQ)
+        );
+        const clientMatches = this.selectVendorsPerCategory(
+          clientCandidates,
+          targetCategories,
+          maxClientPerCat,
+          {
+            pincode: newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null,
+            location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
+          }
+        );
+        if (clientMatches.length > 0) {
+          newRFQ.assignedVendors = clientMatches.map((v) => ({
+            id: v.id,
+            name: v.name,
+            email: v.email || null,
+            contactPerson: v.contactPerson || null,
+            phone: v.phone || v.mobile || v.mobileNumber || null,
+            source: v.source || 'buyer_uploaded',
+            majorCategory: v.majorCategory || v.category || null,
+            minorCategories: v.minorCategories || [],
+            city: v.city || null,
+            state: v.state || null,
+            location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
+            pincode: v.pincode || null,
+          }));
+          if (newRFQ.followUpData) {
+            newRFQ.followUpData.totalInvited = newRFQ.assignedVendors.length;
+            newRFQ.followUpData.vendors = newRFQ.assignedVendors;
+          }
+        }
       }
     }
 
@@ -2387,7 +2470,10 @@ class StoreService {
           candidatePool,
           categories,
           maxProcucevPerCat,
-          newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null
+          {
+            pincode: newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null,
+            location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
+          }
         );
 
         const existingKeys = new Set(
@@ -2469,14 +2555,17 @@ class StoreService {
       const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
       const categories = this._rfqDistinctCategories(newRFQ);
       const targetCategories = categories.length > 0 ? categories : (newRFQ.category ? [newRFQ.category] : []);
-      const targetPincode = newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null;
+      const targetLocation = {
+        pincode: newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null,
+        location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
+      };
 
       const allCandidates = this.candidateVendorsForRFQ(newRFQ);
       const clientCandidates = allCandidates.filter((v) => !this.isProcucevVendor(v));
       const procucevCandidates = allCandidates.filter((v) => this.isProcucevVendor(v));
 
-      const clientMatches = this.selectVendorsPerCategory(clientCandidates, targetCategories, maxClientPerCat, targetPincode);
-      const procucevMatches = this.selectVendorsPerCategory(procucevCandidates, targetCategories, maxProcucevPerCat, targetPincode);
+      const clientMatches = this.selectVendorsPerCategory(clientCandidates, targetCategories, maxClientPerCat, targetLocation);
+      const procucevMatches = this.selectVendorsPerCategory(procucevCandidates, targetCategories, maxProcucevPerCat, targetLocation);
       const categoryMatches = [...clientMatches, ...procucevMatches];
 
       const existingKeys = new Set(
@@ -2522,7 +2611,10 @@ class StoreService {
         procucevCandidates,
         targetCategories,
         maxProcucevPerCat,
-        newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null
+        {
+          pincode: newRFQ.deliveryPincode ? String(newRFQ.deliveryPincode).trim() : null,
+          location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
+        }
       );
       mode3ProcucevCount = v3Matches.length;
     }
@@ -3232,33 +3324,123 @@ class StoreService {
   }
 
   /**
+   * Scores vendor location relevance to delivery destination.
+   * Priority:
+   *  - Exact 6-digit pincode match: 100
+   *  - Same 3-digit postal district prefix: 90
+   *  - Same 1-digit postal region: 70
+   *  - City name match in destination or vendor: 85
+   *  - State name match in destination or vendor: 65
+   *  - Regional token match (>=4 chars): 60
+   *  - Nationwide baseline / no location specified: 40
+   */
+  scoreVendorLocation(vendor, destination) {
+    if (!vendor || !destination) return 40;
+    const vendorPin = String(vendor.pincode || '').replace(/\D/g, '');
+    const destPin = String(
+      (typeof destination === 'string' && /^\d{6}$/.test(destination.trim())
+        ? destination
+        : destination.pincode || destination.deliveryPincode) || ''
+    ).replace(/\D/g, '');
+
+    if (vendorPin.length === 6 && destPin.length === 6) {
+      if (vendorPin === destPin) return 100;
+      if (vendorPin.slice(0, 3) === destPin.slice(0, 3)) return 90;
+      if (vendorPin[0] === destPin[0]) return 70;
+    }
+
+    const destText = String(
+      (typeof destination === 'string' && !/^\d{6}$/.test(destination.trim())
+        ? destination
+        : destination.location || destination.deliveryLocation) || ''
+    )
+      .toLowerCase()
+      .trim();
+
+    const vendorText = `${vendor.location || ''} ${vendor.city || ''} ${vendor.state || ''}`.toLowerCase().trim();
+
+    if (destText) {
+      if (vendor.city && destText.includes(String(vendor.city).toLowerCase().trim())) {
+        return 85;
+      }
+      if (vendor.state && destText.includes(String(vendor.state).toLowerCase().trim())) {
+        return 65;
+      }
+      if (vendorText) {
+        const tokens = destText.split(/[\s,/]+/).filter((t) => t.length >= 4);
+        if (tokens.some((tok) => vendorText.includes(tok))) {
+          return 60;
+        }
+      }
+    }
+
+    return 40;
+  }
+
+  /**
    * Whether a vendor covers an RFQ's category.
    *
-   * The RFQ carries one `category` string (major or minor). A vendor covers it
-   * when it equals their `majorCategory` or appears in `minorCategories` /
-   * `vendorSelectedCategories` / `clientMappedCategories`. Compared
-   * case-insensitively and trimmed, because the taxonomy master and the vendor
-   * upload sheets disagree on casing.
+   * Matches across:
+   * 1. Exact match (case-insensitive, trimmed)
+   * 2. Canonical major category alias matching
+   * 3. Taxonomy hierarchy: Major covering Minor, or Minor mapped to Major
+   * 4. Token & word boundary matching for specific categories
    */
   vendorCoversCategory(vendor, category) {
-    if (!category) return false;
+    if (!vendor || !category) return false;
     const target = String(category).trim().toLowerCase();
     if (!target) return false;
-    const targetAlias = MAJOR_CATEGORY_ALIASES && MAJOR_CATEGORY_ALIASES[target];
-    const targetNormalized = (targetAlias || target).toLowerCase();
+
+    const targetCanonical = resolveCanonicalCategory(target).toLowerCase();
+    const targetMajorFromMinor = MINOR_TO_MAJOR_MAP.get(target);
+
     const pools = [
       vendor.majorCategory,
       ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : []),
       ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
       ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
     ];
+
     return pools.some((c) => {
       if (!c) return false;
       const normalized = String(c).trim().toLowerCase();
+      if (!normalized) return false;
+
+      // 1. Exact match
       if (normalized === target) return true;
-      const alias = MAJOR_CATEGORY_ALIASES && MAJOR_CATEGORY_ALIASES[normalized];
-      const poolNormalized = (alias || normalized).toLowerCase();
-      return poolNormalized === targetNormalized;
+
+      // 2. Canonical alias match
+      const poolCanonical = resolveCanonicalCategory(normalized).toLowerCase();
+      if (poolCanonical === targetCanonical) return true;
+
+      // 3. Taxonomy hierarchy
+      // a) RFQ target is Major Category, vendor's category is Minor under that Major
+      const poolMajor = MINOR_TO_MAJOR_MAP.get(normalized);
+      if (poolMajor && (poolMajor.toLowerCase() === targetCanonical || poolMajor.toLowerCase() === target)) {
+        return true;
+      }
+      const targetMinors = MAJOR_TO_MINORS_MAP.get(targetCanonical) || MAJOR_TO_MINORS_MAP.get(target);
+      if (targetMinors && targetMinors.has(normalized)) {
+        return true;
+      }
+
+      // b) RFQ target is Minor Category, vendor's category is the Major Category
+      if (targetMajorFromMinor && (normalized === targetMajorFromMinor.toLowerCase() || poolCanonical === targetMajorFromMinor.toLowerCase())) {
+        return true;
+      }
+      const poolMinors = MAJOR_TO_MINORS_MAP.get(poolCanonical) || MAJOR_TO_MINORS_MAP.get(normalized);
+      if (poolMinors && poolMinors.has(target)) {
+        return true;
+      }
+
+      // 4. Token / word-boundary matching
+      if (target.length >= 4 && normalized.length >= 4) {
+        if (target.includes(normalized) || normalized.includes(target)) {
+          return true;
+        }
+      }
+
+      return false;
     });
   }
 
@@ -3319,15 +3501,15 @@ class StoreService {
   /**
    * Selects candidate vendors for an RFQ ensuring balanced representation per category:
    * Up to `maxPerCategory` vendors per distinct category signal, deduplicated across categories.
-   * Candidates within each category are prioritized by delivery pincode proximity and rating.
+   * Candidates within each category are prioritized by delivery location proximity (pincode, city, state) and rating.
    *
    * @param {Array<Object>} candidatePool
    * @param {Array<string>} categories
    * @param {number} maxPerCategory
-   * @param {string|null} targetPincode
+   * @param {string|Object|null} targetLocationOrPincode
    * @returns {Array<Object>}
    */
-  selectVendorsPerCategory(candidatePool, categories, maxPerCategory = 5, targetPincode = null) {
+  selectVendorsPerCategory(candidatePool, categories, maxPerCategory = 5, targetLocationOrPincode = null) {
     if (!Array.isArray(candidatePool) || candidatePool.length === 0) return [];
     const cats = Array.isArray(categories) ? categories.filter((c) => typeof c === 'string' && c.trim()) : [];
     if (cats.length === 0) return candidatePool.slice(0, maxPerCategory);
@@ -3348,10 +3530,10 @@ class StoreService {
       });
 
       catCandidates.sort((a, b) => {
-        if (targetPincode) {
-          const aPin = a.pincode && String(a.pincode).trim() === targetPincode ? 1 : 0;
-          const bPin = b.pincode && String(b.pincode).trim() === targetPincode ? 1 : 0;
-          if (aPin !== bPin) return bPin - aPin;
+        if (targetLocationOrPincode) {
+          const aLoc = this.scoreVendorLocation(a, targetLocationOrPincode);
+          const bLoc = this.scoreVendorLocation(b, targetLocationOrPincode);
+          if (aLoc !== bLoc) return bLoc - aLoc;
         }
         return (Number(b.rating) || 0) - (Number(a.rating) || 0);
       });
@@ -3605,23 +3787,26 @@ class StoreService {
       return rfq;
     }
 
-    // Prefer vendors in the RFQ's delivery pincode, then by rating — select up to maxProcucevPerCat per category.
-    const targetPincode = rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null;
+    // Prefer vendors in the RFQ's delivery location and pincode, then by rating — select up to maxProcucevPerCat per category.
+    const targetLocation = {
+      pincode: rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
+      location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
+    };
     const candidatePool = dbMatches.filter((v) => this.isProcucevVendor(v));
     let sorted = this.selectVendorsPerCategory(
       candidatePool,
       targetCategories,
       maxProcucevPerCat,
-      targetPincode
+      targetLocation
     );
 
     if (!sorted || sorted.length === 0) {
       sorted = candidatePool
         .sort((a, b) => {
-          if (targetPincode) {
-            const aPin = a.pincode && String(a.pincode).trim() === targetPincode ? 1 : 0;
-            const bPin = b.pincode && String(b.pincode).trim() === targetPincode ? 1 : 0;
-            if (aPin !== bPin) return bPin - aPin;
+          if (targetLocation.pincode || targetLocation.location) {
+            const aLoc = this.scoreVendorLocation(a, targetLocation);
+            const bLoc = this.scoreVendorLocation(b, targetLocation);
+            if (aLoc !== bLoc) return bLoc - aLoc;
           }
           return (Number(b.rating) || 0) - (Number(a.rating) || 0);
         })
@@ -3769,10 +3954,24 @@ class StoreService {
    */
   candidateVendorsForRFQ(rfq, limit = null) {
     const signals = this._rfqCategorySignals(rfq);
+    const destination = {
+      pincode: rfq?.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
+      location: rfq?.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
+    };
     const candidates = this.vendors
       .filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq))
       .filter((v) => signals.some((c) => this.vendorCoversCategory(v, c)))
       .map((v) => ({ ...v, alreadyInvited: this._isInvitedVendor(v, rfq) }));
+
+    if (destination.pincode || destination.location) {
+      candidates.sort((a, b) => {
+        const aLoc = this.scoreVendorLocation(a, destination);
+        const bLoc = this.scoreVendorLocation(b, destination);
+        if (aLoc !== bLoc) return bLoc - aLoc;
+        return (Number(b.rating) || 0) - (Number(a.rating) || 0);
+      });
+    }
+
     if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
       return candidates.slice(0, Number(limit));
     }
