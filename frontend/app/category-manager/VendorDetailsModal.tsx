@@ -47,6 +47,25 @@ export default function VendorDetailsModal({
 }: VendorDetailsModalProps) {
   const { buyerVendors = [] } = useApp() || {};
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [remoteVendor, setRemoteVendor] = useState<VendorEntry | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setRemoteVendor(null);
+      return;
+    }
+    const resolvedId = vendorId || directQuote?.vendorId || assignedVendor?.id || (assignedVendor as any)?.vendorId;
+    if (resolvedId) {
+      fetch(`/api/vendors/${encodeURIComponent(resolvedId)}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data && data.success && data.data) {
+            setRemoteVendor(data.data);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isOpen, vendorId, directQuote, assignedVendor]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -60,15 +79,17 @@ export default function VendorDetailsModal({
 
   if (!isOpen) return null;
 
-  // Resolve matching vendor record from store
-  const matchedVendor: VendorEntry | undefined = (buyerVendors || []).find((v) => {
-    if (vendorId && v.id === vendorId) return true;
-    if (directQuote?.vendorId && v.id === directQuote.vendorId) return true;
-    if (vendorName && v.name?.trim().toLowerCase() === vendorName.trim().toLowerCase()) return true;
-    if (directQuote?.vendorName && v.name?.trim().toLowerCase() === directQuote.vendorName.trim().toLowerCase()) return true;
-    if (assignedVendor?.name && v.name?.trim().toLowerCase() === assignedVendor.name.trim().toLowerCase()) return true;
-    return false;
-  });
+  // Resolve matching vendor record from store or remote fetch
+  const matchedVendor: VendorEntry | undefined =
+    remoteVendor ||
+    (buyerVendors || []).find((v) => {
+      if (vendorId && v.id === vendorId) return true;
+      if (directQuote?.vendorId && v.id === directQuote.vendorId) return true;
+      if (vendorName && v.name?.trim().toLowerCase() === vendorName.trim().toLowerCase()) return true;
+      if (directQuote?.vendorName && v.name?.trim().toLowerCase() === directQuote.vendorName.trim().toLowerCase()) return true;
+      if (assignedVendor?.name && v.name?.trim().toLowerCase() === assignedVendor.name.trim().toLowerCase()) return true;
+      return false;
+    });
 
   // Resolve matching assigned vendor from RFQ invite list
   const matchedAssignedVendor: RFQAssignedVendor | undefined =
@@ -129,6 +150,7 @@ export default function VendorDetailsModal({
   // Registered Location
   const displayLocation =
     matchedVendor?.location ||
+    (matchedVendor?.city ? `${matchedVendor.city}${matchedVendor.state ? ', ' + matchedVendor.state : ''}` : null) ||
     matchedAssignedVendor?.location ||
     matchedAssignedVendor?.city ||
     (rfq?.deliveryLocation ? rfq.deliveryLocation.split(',')[0]?.trim() : null) ||
@@ -137,8 +159,9 @@ export default function VendorDetailsModal({
   const displayMajorCategory =
     matchedVendor?.majorCategory ||
     assignedVendor?.majorCategory ||
-    rfq?.category ||
-    'Industrial Supplies';
+    (matchedAssignedVendor as any)?.majorCategory ||
+    (matchedVendor as any)?.category ||
+    'General Supplies';
 
   const displayMinorCategories =
     matchedVendor?.minorCategories && matchedVendor.minorCategories.length > 0

@@ -293,20 +293,39 @@ async function countPublicVendorsMatchingCategories(signals) {
   const orGroups = [];
   const d1OrGroups = [];
   for (const sig of cleaned) {
-    params.push(`%${sig}%`);
-    const p = params.length;
-    orGroups.push(`(
-      lower(major_category) LIKE $${p}
-      OR lower((raw->'minorCategories')::text) LIKE $${p}
-      OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
-      OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
-    )`);
-    d1OrGroups.push(`(
-      lower(major_category) LIKE $${p}
-      OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
-      OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
-      OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
-    )`);
+    if (sig.length <= 3) {
+      params.push(sig);
+      const pExact = params.length;
+      params.push(`%"${sig}"%`);
+      const pJson = params.length;
+      orGroups.push(`(
+        lower(major_category) = $${pExact}
+        OR lower((raw->'minorCategories')::text) LIKE $${pJson}
+        OR lower((raw->'vendorSelectedCategories')::text) LIKE $${pJson}
+        OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
+      )`);
+      d1OrGroups.push(`(
+        lower(major_category) = $${pExact}
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
+        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
+        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
+      )`);
+    } else {
+      params.push(`%${sig}%`);
+      const p = params.length;
+      orGroups.push(`(
+        lower(major_category) LIKE $${p}
+        OR lower((raw->'minorCategories')::text) LIKE $${p}
+        OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
+        OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
+      )`);
+      d1OrGroups.push(`(
+        lower(major_category) LIKE $${p}
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
+        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
+        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
+      )`);
+    }
   }
 
   // Public-only: a vendor tagged to a specific buyer is never in the network pool.
@@ -355,20 +374,39 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
   const orGroups = [];
   const d1OrGroups = [];
   for (const sig of cleaned) {
-    params.push(`%${sig}%`);
-    const p = params.length;
-    orGroups.push(`(
-      lower(major_category) LIKE $${p}
-      OR lower((raw->'minorCategories')::text) LIKE $${p}
-      OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
-      OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
-    )`);
-    d1OrGroups.push(`(
-      lower(major_category) LIKE $${p}
-      OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
-      OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
-      OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
-    )`);
+    if (sig.length <= 3) {
+      params.push(sig);
+      const pExact = params.length;
+      params.push(`%"${sig}"%`);
+      const pJson = params.length;
+      orGroups.push(`(
+        lower(major_category) = $${pExact}
+        OR lower((raw->'minorCategories')::text) LIKE $${pJson}
+        OR lower((raw->'vendorSelectedCategories')::text) LIKE $${pJson}
+        OR lower((raw->'clientMappedCategories')::text) LIKE $${pJson}
+      )`);
+      d1OrGroups.push(`(
+        lower(major_category) = $${pExact}
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${pJson}
+        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${pJson}
+        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${pJson}
+      )`);
+    } else {
+      params.push(`%${sig}%`);
+      const p = params.length;
+      orGroups.push(`(
+        lower(major_category) LIKE $${p}
+        OR lower((raw->'minorCategories')::text) LIKE $${p}
+        OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
+        OR lower((raw->'clientMappedCategories')::text) LIKE $${p}
+      )`);
+      d1OrGroups.push(`(
+        lower(major_category) LIKE $${p}
+        OR lower(json_extract(raw,'$.minorCategories')) LIKE $${p}
+        OR lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $${p}
+        OR lower(json_extract(raw,'$.clientMappedCategories')) LIKE $${p}
+      )`);
+    }
   }
 
   const publicPg = `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`;

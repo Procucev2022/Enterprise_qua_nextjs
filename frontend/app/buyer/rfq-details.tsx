@@ -1825,9 +1825,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
           );
           const resolvedCategory =
-            v.majorCategory || found?.majorCategory || (isProc ? activeRfq?.category || null : null);
+            v.majorCategory || found?.majorCategory || (v as any).category || (found as any)?.category || (isProc ? activeRfq?.category || null : null);
           const resolvedLocation =
-            v.location || found?.location || found?.city || found?.state || null;
+            v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null) || found?.location || found?.city || found?.state || null;
           let resolvedScore: number | null =
             typeof v.matchScore === 'number' ? v.matchScore : null;
           if (resolvedScore === null && typeof (quoteForVendor as any)?.aiMatchScore === 'number') {

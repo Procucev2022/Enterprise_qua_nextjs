@@ -409,8 +409,13 @@ async function getAllRFQs(req, res, next) {
           buyerAccountId: r.buyerAccountId,
           buyerAccountName: r.buyerAccountName,
           assignedVendors: (r.assignedVendors || []).map((av) => ({
-            vendorId: av.vendorId,
-            vendorName: av.vendorName,
+            id: av.id || av.vendorId,
+            name: av.name || av.vendorName || av.companyName || '',
+            vendorId: av.vendorId || av.id,
+            vendorName: av.vendorName || av.name || av.companyName || '',
+            majorCategory: av.majorCategory || '',
+            city: av.city || '',
+            location: av.location || '',
             status: av.status,
           })),
           quotes: (r.quotes || []).map((q) => ({
