@@ -41,13 +41,14 @@ export default function RootLayout({
             <NotificationToast />
             <StandardRFQEmailModal />
             <VendorRatingRevisionModal />
-            <footer className="border-t border-slate-200 dark:border-slate-800/80 bg-white/80 dark:bg-[#0b0f19]/80 py-4 text-center text-xs text-slate-500 dark:text-gray-500">
-              <div className="max-w-[1600px] mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+            <footer className="w-full bg-white dark:bg-[#0b0f19] border-t border-slate-200 dark:border-slate-800 py-3.5 text-[11px] text-slate-600 dark:text-slate-400">
+              <div className="max-w-[1280px] mx-auto px-5 sm:px-6 lg:px-10 xl:px-16 flex flex-col sm:flex-row items-center justify-between gap-2">
                 <div>
-                  <span className="font-semibold text-slate-700 dark:text-gray-400">PROCUCEV ENTERPRISE SOLUTIONS</span> • Enterprise QUA AI Production Release 2.0
+                  <span className="font-extrabold text-slate-800 dark:text-slate-200 tracking-tight">PROCUCEV ENTERPRISE SOLUTIONS</span> <span className="text-slate-400 mx-1">•</span> <span>Enterprise QUA AI Production Release 2.0</span>
                 </div>
-                <div className="flex items-center gap-4 text-[11px]">
-                  <span>Azure Region: <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Central India (Primary) / West US 2</span></span>
+                <div>
+                  <span>Azure Region: </span>
+                  <span className="text-[#059669] dark:text-emerald-400 font-bold">Central India (Primary) / West US 2</span>
                 </div>
               </div>
             </footer>

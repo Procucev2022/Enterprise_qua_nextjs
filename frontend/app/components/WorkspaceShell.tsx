@@ -55,7 +55,17 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
 
   useEffect(() => {
     if (!isLoggedIn) {
-      router.replace(LOGIN_ROUTE);
+      let redirectUrl = LOGIN_ROUTE;
+      if (typeof window !== 'undefined') {
+        const fullPath = `${window.location.pathname || ''}${window.location.search || ''}`;
+        if (fullPath && fullPath !== '/' && fullPath !== LOGIN_ROUTE && !fullPath.startsWith(`${LOGIN_ROUTE}?`)) {
+          const params = new URLSearchParams(window.location.search);
+          const email = params.get('email');
+          const emailQuery = email ? `&email=${encodeURIComponent(email)}` : '';
+          redirectUrl = `${LOGIN_ROUTE}?redirect=${encodeURIComponent(fullPath)}${emailQuery}`;
+        }
+      }
+      router.replace(redirectUrl);
       return;
     }
     if (mustChangeVendorPassword) {
