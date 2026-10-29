@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import { AppProvider } from '@/lib/store';
 import Header from '@/app/components/Header';
+import Footer from '@/app/components/Footer';
 import NotificationToast from '@/app/components/NotificationToast';
 import StandardRFQEmailModal from '@/app/components/StandardRFQEmailModal';
 import VendorRatingRevisionModal from '@/app/components/VendorRatingRevisionModal';
@@ -37,21 +38,11 @@ export default function RootLayout({
         <AppProvider>
           <div className="min-h-screen flex flex-col">
             <Header />
-            <main className="flex-1 w-full">{children}</main>
+            <main className="flex-1 w-full flex flex-col">{children}</main>
             <NotificationToast />
             <StandardRFQEmailModal />
             <VendorRatingRevisionModal />
-            <footer className="w-full bg-white dark:bg-[#0b0f19] border-t border-slate-200 dark:border-slate-800 py-3.5 text-[11px] text-slate-600 dark:text-slate-400">
-              <div className="max-w-[1280px] mx-auto px-5 sm:px-6 lg:px-10 xl:px-16 flex flex-col sm:flex-row items-center justify-between gap-2">
-                <div>
-                  <span className="font-extrabold text-slate-800 dark:text-slate-200 tracking-tight">PROCUCEV ENTERPRISE SOLUTIONS</span> <span className="text-slate-400 mx-1">•</span> <span>Enterprise QUA AI Production Release 2.0</span>
-                </div>
-                <div>
-                  <span>Azure Region: </span>
-                  <span className="text-[#059669] dark:text-emerald-400 font-bold">Central India (Primary) / West US 2</span>
-                </div>
-              </div>
-            </footer>
+            <Footer />
           </div>
         </AppProvider>
       </body>
