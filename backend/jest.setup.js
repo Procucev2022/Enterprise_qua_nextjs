@@ -55,3 +55,12 @@ process.env.CLOUDFLARE_API_TOKEN = '';
 // signing key for any deployment that forgot to set AUTH_SECRET was sitting in
 // the repository. Pinning it here is the test-side replacement.
 process.env.AUTH_SECRET = 'test-only-session-signing-key-not-used-anywhere-else';
+
+// Dummy credentials for unit tests so application source code does not embed hardcoded secrets
+process.env.SMS_GATEWAY_USER = 'Procucev_OTP';
+process.env.SMS_GATEWAY_RFQ_USER = 'ProcucevWapp1';
+process.env.SMS_GATEWAY_PASS = 'test-sms-pass';
+process.env.SMS_GATEWAY_RFQ_PASS = 'test-sms-rfq-pass';
+process.env.WHATSAPP_USERNAME = 'test-wa-user';
+process.env.WHATSAPP_PASSWORD = 'test-wa-pass';
+process.env.WHATSAPP_FROM_NUMBER = '917090170801';

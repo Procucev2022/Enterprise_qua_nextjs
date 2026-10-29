@@ -111,7 +111,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
   const load = async () => {
     setLoading(true);
     setError(null);
-    const result = await fetchAllRFQs();
+    const result = await fetchAllRFQs({ summary: true, limit: 100 });
     if (result.success) {
       setRfqs(result.rfqs);
     } else {
@@ -427,7 +427,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                         </span>
                         <div className="flex flex-wrap items-center gap-1.5">
                           {rfq.assignedVendors.slice(0, 2).map((av, idx) => {
-                            const vName = av.name || (av as any).vendorName || 'Vendor';
+                            const vName = av.name || (av as any).vendorName || (av as any).companyName || (typeof av === 'string' ? av : '') || 'Vendor';
                             const vId = av.id || (av as any).vendorId || null;
                             return (
                               <button
@@ -626,7 +626,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     </div>
                   ))
                 : (vendorListModalData.rfq.assignedVendors || []).map((av, idx) => {
-                    const vName = av.name || (av as any).vendorName || 'Vendor';
+                    const vName = av.name || (av as any).vendorName || (av as any).companyName || (typeof av === 'string' ? av : '') || 'Vendor';
                     const vId = av.id || (av as any).vendorId || null;
                     return (
                       <div

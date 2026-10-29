@@ -5,6 +5,7 @@
 // ==============================================================================
 
 const pool = require('./pool');
+const { queryCache } = require('./queryCache');
 
 const memoryOtpStore = new Map();
 const memoryRevokedTokens = new Set();
@@ -170,6 +171,7 @@ async function incrementOtpAttempts(otpKey) {
  */
 async function revokeToken(signature, expiresAt) {
   const isoExpiry = new Date(expiresAt).toISOString();
+  queryCache.invalidate('auth_revoked_tokens');
   try {
     await pool.query(
       `insert into auth_revoked_tokens (signature, expires_at, revoked_at)
@@ -199,7 +201,7 @@ async function isTokenRevoked(signature) {
   const rows = await pool.rows(
     'select 1 from auth_revoked_tokens where signature = $1 limit 1',
     [signature],
-    { d1: true }
+    { d1: true, useCache: true, tag: 'auth_revoked_tokens', ttlMs: 30000 }
   );
   return rows.length > 0;
 }
@@ -228,6 +230,7 @@ async function purgeExpiredAuthState() {
         d1Params: [isoNow],
       }
     );
+    queryCache.invalidate('auth_revoked_tokens');
     return {
       otpsPurged: otps.rowCount || 0,
       revokedTokensPurged: tokens.rowCount || 0,

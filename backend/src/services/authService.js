@@ -1163,8 +1163,8 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   const emailCombinedKey = buildOtpKey(normalizedEmail, cleanedMobile);
   const emailDirectKey = buildOtpKey(normalizedEmail, 'email');
   let storedEmailOtp = (await authSessionQueries.findOtp(emailOtpKey)) ||
-                       (await authSessionQueries.findOtp(emailCombinedKey)) ||
-                       (await authSessionQueries.findOtp(emailDirectKey));
+    (await authSessionQueries.findOtp(emailCombinedKey)) ||
+    (await authSessionQueries.findOtp(emailDirectKey));
 
   if (!storedEmailOtp) {
     // Check demo OTP fallback in test environments or if OTP was sent to account
@@ -1188,7 +1188,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   // 4. Verify Mobile OTP
   const mobileOtpKey = buildOtpKey(normalizedEmail, `${cleanedMobile}_mobile`);
   let storedMobileOtp = (await authSessionQueries.findOtp(mobileOtpKey)) ||
-                        (await authSessionQueries.findOtp(emailCombinedKey));
+    (await authSessionQueries.findOtp(emailCombinedKey));
 
   if (storedMobileOtp && storedMobileOtp.expiresAt && Date.now() > storedMobileOtp.expiresAt) {
     throw new Error('Mobile verification OTP has expired. Please request a new code.');
@@ -1205,9 +1205,9 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
 
   // Consume used OTPs
   await Promise.all([
-    authSessionQueries.deleteOtp(emailOtpKey).catch(() => {}),
-    authSessionQueries.deleteOtp(mobileOtpKey).catch(() => {}),
-    authSessionQueries.deleteOtp(emailCombinedKey).catch(() => {}),
+    authSessionQueries.deleteOtp(emailOtpKey).catch(() => { }),
+    authSessionQueries.deleteOtp(mobileOtpKey).catch(() => { }),
+    authSessionQueries.deleteOtp(emailCombinedKey).catch(() => { }),
   ]);
 
   // 5. Update user identity record
@@ -1226,8 +1226,11 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   // 6. Update buyer account in storeService
   const updatedBuyer = storeService.updateBuyerAccount(normalizedEmail, {
     companyName: companyName || dbUser.orgName,
+    organizationName: companyName || dbUser.orgName,
     contactName: contactName || dbUser.name,
+    contactPerson: contactName || dbUser.name,
     phone: cleanedMobile,
+    mobileNumber: cleanedMobile,
     city: city || '',
     state: state || '',
     pincode: pincode || '',
@@ -1241,6 +1244,8 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     emailVerified: true,
     phoneVerified: true,
     isApproved: true,
+    isAutoRegistered: false,
+    tempPasswordRequired: false,
   });
 
   // Also update organization profile in database if available
@@ -1312,11 +1317,11 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
 /**
  * Get all registered users (for admin inspection).
  */
-async function getAllUsers() {
+async function getAllUsers(limit = 200) {
   if (!pool.hasStorage()) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
-  const users = await identityQueries.listUsers();
+  const users = await identityQueries.listUsers(limit);
   return users.map((u) => ({
     id: u.id,
     email: u.email,

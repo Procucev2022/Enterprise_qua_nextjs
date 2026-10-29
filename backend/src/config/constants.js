@@ -1,6 +1,12 @@
+const path = require('path');
+
 // ==============================================================================
 // PROCUCEV ENTERPRISE (QUA AI 2.0) - CONSTANTS, TAXONOMIES & SYSTEM DEFAULTS
 // ==============================================================================
+
+const INQUIRIES_PERSISTENCE_FILE = typeof __dirname !== 'undefined'
+  ? path.join(__dirname, '../../data/enterprise_inquiries.json')
+  : './data/enterprise_inquiries.json';
 
 /**
  * Centralized RFQ Modes Enum / Constants
@@ -1458,8 +1464,18 @@ const EMAIL_GATEWAY_CONFIG = {
   // Emails have no file name; this stands in wherever one is recorded.
   SYNTHETIC_FILE_NAME: 'inbound-email.eml',
   DEFAULT_GATEWAY_ADDRESS: 'rfq@procucev.com',
+  DEFAULT_FALLBACK_RFQ_TITLE: 'Request for Quotation',
   MAX_LINE_ITEMS_PER_RFQ: 49,
+  LABEL_PROCESSED: 'Processed',
+  LABEL_ERROR: 'Error',
 };
+
+const GMAIL_GATEWAY_LABELS = Object.freeze({
+  PROCESSED: 'Processed',
+  ERROR: 'Error',
+  INBOX: 'INBOX',
+  UNREAD: 'UNREAD',
+});
 
 const VENDOR_EMAIL_GATEWAY_CONFIG = {
   DEFAULT_POLL_MS: 60000,
@@ -2615,6 +2631,7 @@ module.exports = {
   EMAIL_INGESTION_STATUS,
   EMAIL_INGESTION_MESSAGES,
   EMAIL_GATEWAY_CONFIG,
+  GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
   EMAIL_GATEWAY_STATE,
@@ -2676,5 +2693,6 @@ module.exports = {
   QUA_AI_EMAIL_TEMPLATES,
   QUA_AI_EMAIL_SUPPORT,
   VENDOR_QUOTE_SUPPORT_CC,
+  INQUIRIES_PERSISTENCE_FILE,
 };
 

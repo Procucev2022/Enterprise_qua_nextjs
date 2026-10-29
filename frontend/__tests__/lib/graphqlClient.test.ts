@@ -148,4 +148,46 @@ describe('Frontend GraphQLClient Unit Tests', () => {
     expect(res2.errors).toBeDefined();
     expect(res2.errors![0].message).toBe('Network request failed');
   });
+
+  test('batchQuery executes multiple operations, handles empty input, HTTP errors, and network failures', async () => {
+    // 1. Empty input
+    const emptyRes = await graphqlClient.batchQuery([]);
+    expect(emptyRes).toEqual([]);
+
+    // 2. Successful batch
+    const mockBatchResult = [
+      { data: { rfqs: [{ id: 'rfq-1' }] } },
+      { data: { systemConfig: { maintenanceMode: false } } },
+    ];
+    global.fetch = jest.fn().mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(mockBatchResult),
+      })
+    );
+
+    const ops = [
+      { query: 'query { rfqs { id } }' },
+      { query: 'query { systemConfig { maintenanceMode } }' },
+    ];
+    const res = await graphqlClient.batchQuery(ops);
+    expect(res).toEqual(mockBatchResult);
+
+    // 3. HTTP error status in batch
+    global.fetch = jest.fn().mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 502,
+      })
+    );
+    const errRes = await graphqlClient.batchQuery(ops);
+    expect(errRes.length).toBe(2);
+    expect(errRes[0].errors![0].message).toContain('status: 502');
+
+    // 4. Network failure in batch
+    global.fetch = jest.fn().mockImplementation(() => Promise.reject(new Error('Connection lost')));
+    const netErrRes = await graphqlClient.batchQuery(ops);
+    expect(netErrRes.length).toBe(2);
+    expect(netErrRes[0].errors![0].message).toBe('Connection lost');
+  });
 });

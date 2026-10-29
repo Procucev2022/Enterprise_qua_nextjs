@@ -477,4 +477,57 @@ describe('normalizePoDate', () => {
       expect(UNLIMITED_ACCESS_EMAILS.has('sudheer.kangala@procucev.com')).toBe(true);
     });
   });
+
+  describe('VENDOR_ASSIGNMENT_LIMITS & resolveBuyerSourcingMode branch boosts', () => {
+    it('evaluates VENDOR_ASSIGNMENT_LIMITS getters with and without environment overrides', () => {
+      const { VENDOR_ASSIGNMENT_LIMITS } = require('@/lib/constants');
+      // Defaults
+      delete process.env.NEXT_PUBLIC_MAX_CLIENT_VENDORS_PER_CATEGORY;
+      delete process.env.NEXT_PUBLIC_MAX_PROCUCEV_VENDORS_PER_CATEGORY;
+      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(5);
+      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(5);
+
+      // With overrides
+      process.env.NEXT_PUBLIC_MAX_CLIENT_VENDORS_PER_CATEGORY = '12';
+      process.env.NEXT_PUBLIC_MAX_PROCUCEV_VENDORS_PER_CATEGORY = '8';
+      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(12);
+      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(8);
+
+      delete process.env.NEXT_PUBLIC_MAX_CLIENT_VENDORS_PER_CATEGORY;
+      delete process.env.NEXT_PUBLIC_MAX_PROCUCEV_VENDORS_PER_CATEGORY;
+    });
+
+    it('resolves unlimitedRfqAccess and unlimitedAccess with various requested modes', () => {
+      const { resolveBuyerSourcingMode, RFQ_MODES } = require('@/lib/constants');
+      expect(resolveBuyerSourcingMode({ unlimitedRfqAccess: true, sourcingMode: 'mode_0' })).toBe(RFQ_MODES.MODE_0);
+      expect(resolveBuyerSourcingMode({ unlimitedAccess: true, sourcing_mode: 'mode_1' })).toBe(RFQ_MODES.MODE_1);
+      expect(resolveBuyerSourcingMode({ unlimitedRfqAccess: true, sourcingMode: 'v2' })).toBe(RFQ_MODES.MODE_2);
+      expect(resolveBuyerSourcingMode({ unlimitedRfqAccess: true }, 'v3')).toBe(RFQ_MODES.MODE_3);
+      expect(resolveBuyerSourcingMode({ unlimitedRfqAccess: true }, 'unknown_mode')).toBe(RFQ_MODES.MODE_3);
+    });
+
+    it('resolves subscriptions array and single plan variations', () => {
+      const { resolveBuyerSourcingMode, RFQ_MODES } = require('@/lib/constants');
+      // Subscriptions array with version_1 and version_0
+      expect(resolveBuyerSourcingMode({ subscriptions: [{ plan: 'version_1', status: 'active' }] })).toBe(RFQ_MODES.MODE_1);
+      expect(resolveBuyerSourcingMode({ subscriptions: [{ plan: 'version_0', status: 'active' }] })).toBe(RFQ_MODES.MODE_0);
+
+      // Subscriptions with active === false or past expiry
+      const expiredSub = { plan: 'version_3', status: 'active', expiresAt: new Date(Date.now() - 100000).toISOString() };
+      const inactiveSub = { plan: 'version_3', status: 'active', active: false };
+      expect(resolveBuyerSourcingMode({ subscriptions: [expiredSub, inactiveSub] })).toBe(RFQ_MODES.MODE_0);
+
+      // Single plan version_0
+      expect(resolveBuyerSourcingMode('version_0')).toBe(RFQ_MODES.MODE_0);
+    });
+
+    it('normalizePoDate handles number out of range and templates constants exist', () => {
+      const { normalizePoDate, QUA_AI_TRANSACTIONAL_EMAIL_TEMPLATES, QUA_AI_EMAIL_SUPPORT, PRESENCE_ONLINE_THRESHOLD_MS } = require('@/lib/constants');
+      expect(normalizePoDate('200000')).toBe('');
+      expect(QUA_AI_TRANSACTIONAL_EMAIL_TEMPLATES.EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED).toBeDefined();
+      expect(QUA_AI_EMAIL_SUPPORT.PHONE).toBe('+91 8247722944');
+      expect(PRESENCE_ONLINE_THRESHOLD_MS).toBe(600000);
+    });
+  });
 });
+

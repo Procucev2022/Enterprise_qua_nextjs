@@ -219,7 +219,7 @@ export default function BuyerDetailsModal({
   const displayCategories: Array<{ major?: string; minor?: string } | string> =
     liveProfile?.categories?.length ? liveProfile.categories : (account as any)?.categories || [];
 
-  const displaySourcingMode = account?.sourcingMode || liveProfile?.sourcingMode || rfq?.sourcingMode || 'mode_1';
+  const displaySourcingMode = rfq?.sourcingMode || account?.sourcingMode || liveProfile?.sourcingMode || 'mode_0';
   const displayPlan = account?.subscriptionPlan || liveProfile?.subscriptionPlan || 'free_trial';
 
     const isVerified = Boolean(

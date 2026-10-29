@@ -63,13 +63,45 @@ describe('Database pool (Neon PostgreSQL)', () => {
       expect(dbPool.createPool({})).toBeNull();
     });
 
-    test('returns a pool object when configuration is present', () => {
+    test('returns a pool object when configuration is present and handles idle error', () => {
+      const origEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
       const pool = dbPool.createPool({ DATABASE_URL: 'postgres://user:pass@127.0.0.1:5432/db' });
 
       expect(pool).toBeTruthy();
       expect(typeof pool.query).toBe('function');
+      // Trigger error listener to verify idle client recovery log
+      pool.emit('error', new Error('Connection reset by peer'));
+      process.env.NODE_ENV = origEnv;
       // Created lazily, so ending it performs no network I/O.
       return pool.end().catch(() => {});
+    });
+  });
+
+  describe('hasStorage', () => {
+    test('reports true when pool is active', () => {
+      const origPool = dbPool.pool;
+      dbPool.pool = { query: jest.fn() };
+      expect(dbPool.hasStorage()).toBe(true);
+      dbPool.pool = origPool;
+    });
+
+    test('reports true when D1 binding or HTTP client is present', () => {
+      const origPool = dbPool.pool;
+      dbPool.pool = null;
+
+      globalThis.__CF_ENV__ = { DB: { prepare: jest.fn() } };
+      expect(dbPool.hasStorage()).toBe(true);
+      delete globalThis.__CF_ENV__;
+
+      dbPool.pool = origPool;
+    });
+
+    test('reports false when neither pool nor D1 is present', () => {
+      const origPool = dbPool.pool;
+      dbPool.pool = null;
+      expect(dbPool.hasStorage()).toBe(false);
+      dbPool.pool = origPool;
     });
   });
 
@@ -155,6 +187,42 @@ describe('Database pool (Neon PostgreSQL)', () => {
 
       jest.dontMock('../src/db/d1Bridge');
       jest.resetModules();
+    });
+
+    test('supports query caching with { useCache: true } and returns cached data on hit', async () => {
+      const dbResult = { rows: [{ id: 'cached-1', title: 'Cached Item' }], rowCount: 1 };
+      dbPool.pool = { query: jest.fn().mockResolvedValue(dbResult) };
+      dbPool.queryCache.clear();
+
+      // First query: cache miss -> queries pool and sets cache
+      const res1 = await dbPool.query('SELECT raw FROM rfqs WHERE id = $1', ['rfq-123'], {
+        useCache: true,
+        tag: 'rfqs',
+        ttlMs: 60000,
+      });
+      expect(res1.rows).toEqual(dbResult.rows);
+      expect(dbPool.pool.query).toHaveBeenCalledTimes(1);
+
+      // Second query: cache hit -> returned from memory without calling pool.query
+      const res2 = await dbPool.query('SELECT raw FROM rfqs WHERE id = $1', ['rfq-123'], {
+        useCache: true,
+        tag: 'rfqs',
+        ttlMs: 60000,
+      });
+      expect(res2.rows).toEqual(dbResult.rows);
+      expect(res2.isCacheHit).toBe(true);
+      expect(dbPool.pool.query).toHaveBeenCalledTimes(1);
+
+      // Write query: invalidates the rfqs tag
+      await dbPool.query('INSERT INTO rfqs (id, title) VALUES ($1, $2)', ['rfq-999', 'New RFQ']);
+      
+      // Third query after write: cache miss again -> queries pool
+      await dbPool.query('SELECT raw FROM rfqs WHERE id = $1', ['rfq-123'], {
+        useCache: true,
+        tag: 'rfqs',
+        ttlMs: 60000,
+      });
+      expect(dbPool.pool.query).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -242,9 +310,55 @@ describe('Database pool (Neon PostgreSQL)', () => {
       expect(client.release).toHaveBeenCalledTimes(1);
     });
 
+    test('executes transaction with D1 client wrapper when D1 is available', async () => {
+      globalThis.__CF_ENV__ = {
+        DB: {
+          prepare: jest.fn().mockReturnValue({
+            bind: jest.fn().mockReturnThis(),
+            all: jest.fn().mockResolvedValue({ results: [{ id: 'tx-1' }] }),
+          }),
+        },
+      };
+
+      const result = await dbPool.withTransaction(async (client) => {
+        const res = await client.query('select 1');
+        return res.rows;
+      });
+
+      expect(result).toEqual([{ id: 'tx-1' }]);
+      delete globalThis.__CF_ENV__;
+    });
+
     test('throws without connecting when the pool is not configured', async () => {
       dbPool.pool = null;
       await expect(dbPool.withTransaction(async () => 1)).rejects.toThrow(dbPool.NOT_CONFIGURED_MESSAGE);
+    });
+  });
+
+  describe('query invalidations across domain tables', () => {
+    test('invalidates respective tags on INSERT/UPDATE/DELETE across domain tables', async () => {
+      dbPool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      const invalidateSpy = jest.spyOn(dbPool.queryCache, 'invalidate');
+
+      await dbPool.query('INSERT INTO vendors (id, name) VALUES ($1, $2)', ['v1', 'Acme']);
+      expect(invalidateSpy).toHaveBeenCalledWith('vendors');
+
+      await dbPool.query('UPDATE buyer_accounts SET status = $1 WHERE id = $2', ['active', 'b1']);
+      expect(invalidateSpy).toHaveBeenCalledWith('buyer_accounts');
+
+      await dbPool.query('DELETE FROM evaluations WHERE id = $1', ['e1']);
+      expect(invalidateSpy).toHaveBeenCalledWith('evaluations');
+
+      await dbPool.query('INSERT INTO vendor_catalogue (id, sku) VALUES ($1, $2)', ['c1', 'SKU-1']);
+      expect(invalidateSpy).toHaveBeenCalledWith('catalogue');
+
+      await dbPool.query('UPDATE category_division SET division = $1 WHERE uuid = $2', ['IT', 'cat-1']);
+      expect(invalidateSpy).toHaveBeenCalledWith('taxonomy');
+
+      await dbPool.query('DELETE FROM ai_feed WHERE id = $1', ['f1']);
+      expect(invalidateSpy).toHaveBeenCalledWith('ai_feed');
+
+      invalidateSpy.mockRestore();
     });
   });
 

@@ -23,6 +23,7 @@
 const crypto = require('crypto');
 const pool = require('./pool');
 const { getD1Binding, getD1HttpClient } = require('./d1Bridge');
+const { queryCache } = require('./queryCache');
 
 function hasD1() {
   return Boolean(getD1Binding() || getD1HttpClient());
@@ -151,7 +152,7 @@ async function loadCategories(organizationId, userId) {
         where user_id = $1 and category is not null and category <> ''
         order by division, category`,
       [userId],
-      { d1: true }
+      { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
     );
   }
 
@@ -161,7 +162,7 @@ async function loadCategories(organizationId, userId) {
         where organization_id = $1 and category is not null and category <> ''
         order by division, category`,
       [organizationId],
-      { d1: true }
+      { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
     );
   }
 
@@ -178,7 +179,12 @@ async function loadCategories(organizationId, userId) {
 async function findProfileByUserId(userId) {
   if (!userId) return { found: false, reason: 'NO_USER_ID' };
 
-  const rows = await pool.rows(`${PROFILE_SELECT} where u.uuid = $1 limit 1`, [userId], { d1: true });
+  const rows = await pool.rows(`${PROFILE_SELECT} where u.uuid = $1 limit 1`, [userId], {
+    d1: true,
+    useCache: true,
+    tag: 'buyer_accounts',
+    ttlMs: 60000,
+  });
 
   if (rows.length === 0) return { found: false, reason: 'USER_NOT_FOUND' };
   if (!rows[0].org_uuid) return { found: false, reason: 'ORG_NOT_LINKED' };
@@ -213,7 +219,12 @@ async function findProfileByIdentifier({ email, organizationName, organizationId
     }
     const query = `${PROFILE_SELECT} where ${userConditions.join(' or ')} limit 1`;
     try {
-      const rows = await pool.rows(query, userParams, { d1: true });
+      const rows = await pool.rows(query, userParams, {
+        d1: true,
+        useCache: true,
+        tag: 'buyer_accounts',
+        ttlMs: 60000,
+      });
       if (rows && rows.length > 0) {
         const profile = mapRowToProfile(rows[0]);
         try {
@@ -244,7 +255,12 @@ async function findProfileByIdentifier({ email, organizationName, organizationId
     }
     const query = `${PROFILE_SELECT} where ${orgConditions.join(' or ')} limit 1`;
     try {
-      const rows = await pool.rows(query, orgParams, { d1: true });
+      const rows = await pool.rows(query, orgParams, {
+        d1: true,
+        useCache: true,
+        tag: 'buyer_accounts',
+        ttlMs: 60000,
+      });
       if (rows && rows.length > 0) {
         const profile = mapRowToProfile(rows[0]);
         try {
@@ -466,6 +482,7 @@ async function updateProfile({ organizationId, userId, patch, categories, actor 
       categoryCount = await replaceCategoriesD1(organizationId, userId, categories);
     }
 
+    queryCache.invalidate('buyer_accounts');
     return { updated: true, fieldsUpdated: assignments.length, categoryCount };
   }
 
@@ -507,6 +524,7 @@ async function updateProfile({ organizationId, userId, patch, categories, actor 
       categoryCount = await replaceCategories(client, organizationId, userId, categories);
     }
 
+    queryCache.invalidate('buyer_accounts');
     return { updated: true, fieldsUpdated: assignments.length, categoryCount };
   });
 }
@@ -545,7 +563,7 @@ async function findCategoryTaxonomy() {
         and cd.category is not null and cd.category <> ''
       order by ord.first_seen, cd.division, cd.category`,
     [],
-    { d1: true }
+    { d1: true, useCache: true, tag: 'taxonomy', ttlMs: 300000 }
   );
 
   const byDivision = new Map();
@@ -609,7 +627,7 @@ async function getDispatchTemplates(organizationId) {
        from vendor_dispatch_templates
       where organization_id = $1`,
     [organizationId],
-    { d1: true }
+    { d1: true, useCache: true, tag: 'vendor_dispatch_templates', ttlMs: 60000 }
   );
   const byType = {};
   rows.forEach((row) => {
@@ -641,6 +659,7 @@ async function upsertDispatchTemplate(organizationId, templateType, { subject, m
       [organizationId, templateType],
       { d1: true }
     );
+    queryCache.invalidate('vendor_dispatch_templates');
     return null;
   }
 
@@ -665,6 +684,7 @@ async function upsertDispatchTemplate(organizationId, templateType, { subject, m
            updated_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
     }
   );
+  queryCache.invalidate('vendor_dispatch_templates');
   return { subject: cleanSubject || null, message: cleanMessage || null };
 }
 

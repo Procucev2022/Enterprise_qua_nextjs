@@ -1,5 +1,6 @@
 const identityQueries = require('../src/db/identityQueries');
 const dbPool = require('../src/db/pool');
+const d1Bridge = require('../src/db/d1Bridge');
 const { IDENTITY_MASTER_DATA } = require('../src/config/constants');
 
 describe('Identity queries (Neon PostgreSQL)', () => {
@@ -676,6 +677,245 @@ describe('Identity queries (Neon PostgreSQL)', () => {
         ['New@1234', 'enterprise-workspace', UUID],
         expect.objectContaining({ d1: true })
       );
+    });
+  });
+
+  // ── Vendor creation ────────────────────────────────────────────────────────
+  describe('insertVendorAccount', () => {
+    let client;
+    let originalPool;
+    let masterRows;
+
+    const payload = {
+      email: 'vendor@example.com',
+      password: 'Pass@123',
+      phone: '9157154504',
+      fullName: 'Vendor Name',
+      organizationName: 'Vendor Org',
+    };
+
+    beforeEach(() => {
+      masterRows = { role: [{ uuid: '5002' }], org_types: [{ uuid: '3002' }], master_status: [{ uuid: '102' }] };
+      client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      originalPool = dbPool.pool;
+      dbPool.pool = { connect: jest.fn() };
+      jest.spyOn(dbPool, 'withTransaction').mockImplementation(async (fn) => fn(client));
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) => {
+        if (sql.includes('from "role"')) return masterRows.role;
+        if (sql.includes('from "org_types"')) return masterRows.org_types;
+        if (sql.includes('from "master_status"')) return masterRows.master_status;
+        return [];
+      });
+      jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [] });
+    });
+
+    afterEach(() => {
+      dbPool.pool = originalPool;
+    });
+
+    test('refuses to run when database is not configured', async () => {
+      dbPool.pool = null;
+      await expect(identityQueries.insertVendorAccount(payload)).rejects.toThrow(dbPool.NOT_CONFIGURED_MESSAGE);
+    });
+
+    test('requires email and password', async () => {
+      await expect(identityQueries.insertVendorAccount({ password: 'p' })).rejects.toThrow(/email and password are required/);
+      await expect(identityQueries.insertVendorAccount({ email: 'e' })).rejects.toThrow(/email and password are required/);
+    });
+
+    test('handles existing user with resetExisting true and false', async () => {
+      const existing = { uuid: 'v-ex-1', username: 'vendor@example.com', role_name: 'Vendor' };
+      jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([existing]);
+
+      const res1 = await identityQueries.insertVendorAccount({ ...payload, resetExisting: true });
+      expect(res1.created).toBe(false);
+      expect(res1.reason).toBe('ALREADY_EXISTS');
+
+      jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([existing]);
+      const res2 = await identityQueries.insertVendorAccount({ ...payload, resetExisting: false });
+      expect(res2.created).toBe(false);
+    });
+
+    test('creates vendor account in postgres transaction', async () => {
+      const res = await identityQueries.insertVendorAccount(payload);
+      expect(res.created).toBe(true);
+      expect(res.user.role).toBe('vendor');
+      expect(res.user.orgName).toBe('Vendor Org');
+    });
+
+    test('creates vendor account under D1 path', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({ prepare: jest.fn() });
+      jest.spyOn(dbPool, 'query')
+        .mockResolvedValueOnce({ rows: [] }) // orgLookup
+        .mockResolvedValueOnce({ rows: [] }) // insert org
+        .mockResolvedValueOnce({ rows: [] }); // insert user
+
+      const res = await identityQueries.insertVendorAccount({
+        email: 'd1vendor@example.com',
+        password: 'Pass@123',
+      });
+      expect(res.created).toBe(true);
+      expect(res.user.role).toBe('vendor');
+      d1Bridge.getD1Binding.mockRestore();
+    });
+
+    test('fails clearly when master rows are missing', async () => {
+      masterRows.role = [];
+      await expect(identityQueries.insertVendorAccount(payload)).rejects.toThrow(/Role.*not found/);
+    });
+  });
+
+  // ── Buyer onboarding update ────────────────────────────────────────────────
+  describe('updateBuyerOnboardingStatus', () => {
+    test('updates buyer account phone, password, and status', async () => {
+      const querySpy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 1 });
+      const res = await identityQueries.updateBuyerOnboardingStatus({
+        userUuid: 'u-b-1',
+        newPhone: '9876543210',
+        newPassword: 'NewPassword@123',
+        verificationStatus: 'EMAIL_VERIFIED',
+      });
+
+      expect(res).toBe(true);
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('update "user" set phone = $1, password = $2'),
+        ['+919876543210', 'NewPassword@123', 'EMAIL_VERIFIED', 'buyer-onboarding', 'u-b-1'],
+        expect.any(Object)
+      );
+    });
+  });
+
+  // ── Username lookup & D1 registration branches ────────────────────────────
+  describe('findExistingUsernames and placeholder phone', () => {
+    test('findExistingUsernames returns set of existing emails', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([{ username: 'a@b.com' }]);
+      const set = await identityQueries.findExistingUsernames(['a@b.com', 'c@d.com']);
+      expect(set.has('a@b.com')).toBe(true);
+      expect(set.has('c@d.com')).toBe(false);
+
+      expect(await identityQueries.findExistingUsernames([])).toEqual(new Set());
+      dbPool.pool = null;
+      expect(await identityQueries.findExistingUsernames(['a@b.com'])).toEqual(new Set());
+    });
+
+    test('findUserByEmailAndPhone checks placeholder phone when 9999999999 requested', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      jest.spyOn(dbPool, 'rows')
+        .mockResolvedValueOnce([]) // not found on primary
+        .mockResolvedValueOnce([{ uuid: 'u-ph', username: 'auto@buyer.com', phone: '9999999999', role_name: 'ClientInitiator' }]);
+
+      const user = await identityQueries.findUserByEmailAndPhone('auto@buyer.com', '9999999999');
+      expect(user).toMatchObject({ id: 'u-ph', email: 'auto@buyer.com' });
+    });
+
+    test('insertBuyerAccount and insertStaffAccount under D1 path with existing org address update', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      const d1Bridge = require('../src/db/d1Bridge');
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({ prepare: jest.fn() });
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) => {
+        if (sql.includes('from "user"')) return [];
+        return [{ uuid: 'master-uuid' }];
+      });
+      // Return existing org so it executes the update organization branch
+      jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [{ uuid: 'existing-org-d1' }] });
+
+      const buyerRes = await identityQueries.insertBuyerAccount({
+        email: 'd1buyer@example.com',
+        password: 'Pass@123',
+        phone: '9157154504',
+        city: 'Mumbai',
+        gstin: '27AAAAA0000A1Z5',
+      });
+      expect(buyerRes.created).toBe(true);
+      expect(buyerRes.organizationReused).toBe(true);
+
+      const staffRes = await identityQueries.insertStaffAccount({
+        email: 'd1staff@example.com',
+        password: 'Pass@123',
+        phone: '9157154504',
+        roleName: IDENTITY_MASTER_DATA.ADMIN_ROLE_NAME,
+        orgTypeName: IDENTITY_MASTER_DATA.ADMIN_ORG_TYPE,
+        statusName: IDENTITY_MASTER_DATA.ADMIN_STATUS,
+      });
+      expect(staffRes.created).toBe(true);
+      d1Bridge.getD1Binding.mockRestore();
+    });
+
+    test('insertBuyerAccount under Postgres with existing org updates org address', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      const client = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ uuid: 'existing-pg-org' }] }) // org lookup found
+          .mockResolvedValueOnce({ rows: [] }) // org update
+          .mockResolvedValueOnce({ rows: [] }), // user insert
+      };
+      jest.spyOn(dbPool, 'withTransaction').mockImplementation(async (fn) => fn(client));
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) => {
+        if (sql.includes('from "user"')) return [];
+        return [{ uuid: 'master-uuid' }];
+      });
+
+      const res = await identityQueries.insertBuyerAccount({
+        email: 'pgbuyer@example.com',
+        password: 'Pass@123',
+        phone: '9157154504',
+        city: 'Delhi',
+        pincode: '110001',
+      });
+      expect(res.created).toBe(true);
+      expect(res.organizationReused).toBe(true);
+    });
+
+    test('insertBuyerAccount and insertStaffAccount under D1 path with new org creation', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({
+        prepare: () => ({
+          bind: () => ({
+            all: async () => ({ results: [] }),
+            run: async () => ({ success: true }),
+          }),
+        }),
+      });
+
+      jest.spyOn(dbPool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('from "user" where lower(email) = lower($1)')) {
+          return { rows: [] };
+        }
+        if (sql.includes('from organization where organization_name = $1')) {
+          return { rows: [] }; // Organization not found, so it inserts a new organization
+        }
+        if (sql.includes('select uuid from "user"')) {
+          return { rows: [{ uuid: 'new-user-uuid' }] };
+        }
+        return { rows: [] };
+      });
+
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) => {
+        if (sql.includes('from "user"')) return [];
+        return [{ uuid: 'resolved-master-uuid' }];
+      });
+
+      const buyerRes = await identityQueries.insertBuyerAccount({
+        email: 'd1newbuyer@example.com',
+        password: 'Pass@123',
+        phone: '9157154504',
+      });
+      expect(buyerRes.created).toBe(true);
+      expect(buyerRes.organizationReused).toBe(false);
+
+      const staffRes = await identityQueries.insertStaffAccount({
+        email: 'd1newstaff@example.com',
+        password: 'Pass@123',
+        phone: '9157154504',
+        roleName: IDENTITY_MASTER_DATA.ADMIN_ROLE_NAME,
+        orgTypeName: IDENTITY_MASTER_DATA.ADMIN_ORG_TYPE,
+        statusName: IDENTITY_MASTER_DATA.ADMIN_STATUS,
+      });
+      expect(staffRes.created).toBe(true);
+      expect(staffRes.organizationReused).toBe(false);
+      d1Bridge.getD1Binding.mockRestore();
     });
   });
 });

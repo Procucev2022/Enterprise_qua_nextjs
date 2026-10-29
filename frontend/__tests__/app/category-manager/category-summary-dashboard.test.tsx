@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import CategorySummaryDashboard, {
   parseTimestamp,
   rfqsInWindow,
@@ -14,7 +14,8 @@ import CategorySummaryDashboard, {
   formatContactPerson,
 } from '@/app/category-manager/category-summary-dashboard';
 import * as storeModule from '@/lib/store';
-import { RFQItem, VendorEntry, BuyerAccount } from '@/lib/types';
+import type { RFQItem, VendorEntry, BuyerAccount } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE } from '../../../test-fixtures/categoryTaxonomy';
 
 jest.mock('@/lib/store');
@@ -196,6 +197,45 @@ describe('category-summary-dashboard pure helpers', () => {
   });
 
   describe('extractQuotesFromRfqs', () => {
+    it('normalizes legacy quotation records and preserves an explicit zero price', () => {
+      const rfq = {
+        ...makeRfq({ category: 'Civil Works', createdAt: '2026-06-01' }),
+        quotes: undefined,
+        quoteComparison: [
+          { unitPrice: 0, totalPrice: 0, leadTimeDays: 0, complianceStatus: '' },
+          { unitPrice: 2500 },
+          {},
+        ],
+        bestQuoteVendor: 'Legacy Supplier',
+        lowestQuote: 1800,
+      } as unknown as RFQItem;
+
+      expect(extractQuotesFromRfqs([rfq], []).map(({ quote }) => quote)).toEqual([
+        { vendorName: 'Legacy Supplier', unitPrice: 0, totalPrice: 0, leadTimeDays: 0, complianceStatus: '', vendorId: undefined },
+        { vendorName: 'Legacy Supplier', unitPrice: 2500, totalPrice: 2500, leadTimeDays: 7, complianceStatus: UI_STRINGS.badges.fullyCompliant, vendorId: undefined },
+        { vendorName: 'Legacy Supplier', unitPrice: 1800, totalPrice: 1800, leadTimeDays: 7, complianceStatus: UI_STRINGS.badges.fullyCompliant, vendorId: undefined },
+      ]);
+    });
+
+    it('uses safe quote defaults when legacy responses omit every optional field', () => {
+      const rfq = {
+        ...makeRfq({ category: 'Civil Works', createdAt: '2026-06-01' }),
+        quotes: [{}],
+      } as unknown as RFQItem;
+      const [result] = extractQuotesFromRfqs([rfq], []);
+
+      expect(result.quote).toEqual({
+        vendorName: 'Quoted Vendor',
+        unitPrice: 0,
+        totalPrice: 0,
+        leadTimeDays: 7,
+        complianceStatus: UI_STRINGS.badges.fullyCompliant,
+        vendorId: undefined,
+      });
+      const noQuotationData = { ...rfq, quotes: undefined, quotesCount: 0 } as unknown as RFQItem;
+      expect(extractQuotesFromRfqs([noQuotationData], [])).toEqual([]);
+    });
+
     it('extracts real quotes when quotes array is populated', () => {
       const rfq = makeRfq({
         category: 'Civil Works',
@@ -359,6 +399,70 @@ describe('CategorySummaryDashboard', () => {
       categoryTaxonomyError: null,
     });
   }
+
+  it('keeps legacy buyer identity fields visible and includes dormant accounts in the buyer breakdown', () => {
+    const organization = 'Organization Without Contact';
+    const legacyName = 'Legacy Buyer Name';
+    const legacyDepartment = 'Legacy Purchasing Department';
+    const legacyEmail = 'legacy-buyer@example.test';
+    const accounts = [
+      makeBuyerAccount({ id: 'organization-only', contactPerson: '', organizationName: organization }),
+      {
+        ...makeBuyerAccount({ id: 'legacy-buyer', contactPerson: '', organizationName: '', corporateEmail: '' }),
+        name: legacyName,
+        department: legacyDepartment,
+        email: legacyEmail,
+      },
+      makeBuyerAccount({ id: 'sparse-buyer', contactPerson: '', organizationName: '', corporateEmail: '' }),
+    ];
+    mockApp([], [], accounts);
+    render(<CategorySummaryDashboard />);
+
+    fireEvent.click(screen.getAllByText(/Active Buyers/i)[0]);
+    expect(screen.getAllByText(organization)).toHaveLength(2);
+    expect(screen.getByText(legacyName)).toBeInTheDocument();
+    expect(screen.getByText(legacyDepartment)).toBeInTheDocument();
+    expect(screen.getByText(legacyEmail)).toBeInTheDocument();
+  });
+
+  it('renders sparse quotation values in both quote breakdowns without losing the submitted response', () => {
+    const rfq = {
+      ...makeRfq({ category: 'Civil Works', createdAt: '2026-06-14' }),
+      quotesCount: undefined,
+      quotes: [{ vendorName: 'Sparse Quote Supplier', unitPrice: 0, totalPrice: 0, leadTimeDays: 0, complianceStatus: '' }],
+    } as unknown as RFQItem;
+    const vendors = [
+      makeVendor({ majorCategory: 'Civil Works', rating: undefined }),
+      makeVendor({ majorCategory: 'Civil Works', rating: 0 }),
+      makeVendor({ majorCategory: undefined, rating: undefined } as unknown as VendorEntry),
+    ];
+    mockApp([rfq, makeRfq({ category: '', createdAt: '2026-06-14' })], vendors);
+    render(<CategorySummaryDashboard />);
+
+    fireEvent.click(screen.getAllByText(/Quotes Received/i)[0]);
+    const quoteRow = screen.getByText('Sparse Quote Supplier').closest('tr');
+    expect(quoteRow).not.toBeNull();
+    expect(within(quoteRow as HTMLTableRowElement).getAllByText('₹0')).toHaveLength(2);
+    expect(within(quoteRow as HTMLTableRowElement).getAllByRole('cell')[4]).toHaveTextContent(String(7));
+    fireEvent.click(screen.getByText(/Close Breakdown/i));
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Details/i })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /Quotes & Pricing/i }));
+    expect(screen.getByText('Sparse Quote Supplier')).toBeInTheDocument();
+    expect(screen.getAllByText('₹0')).toHaveLength(2);
+  });
+
+  it('shows the taxonomy recovery message while taxonomy has not been loaded', () => {
+    mockApp([]);
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      rfqs: [], buyerVendors: [], buyerAccounts: [],
+      addAuditLog: mockAddAuditLog, showToast: mockShowToast,
+      categoryTaxonomy: undefined, categoryTaxonomyError: null,
+    });
+    render(<CategorySummaryDashboard />);
+
+    expect(screen.getByText(UI_STRINGS.buyerProfile.taxonomyEmpty)).toBeInTheDocument();
+  });
 
   it('renders real category/RFQ/vendor counts instead of any hardcoded figures', () => {
     const rfqs = [

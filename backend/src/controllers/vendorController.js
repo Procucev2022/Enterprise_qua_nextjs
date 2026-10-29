@@ -17,12 +17,8 @@ const vendorPresenceService = require('../services/vendorPresenceService');
  * and rate vendors elsewhere but have no business editing a vendor's own
  * registration details.
  */
-async function assertVendorOwnership(req, res, vendorOrEmail) {
-  const user = req.user;
-  if (!user) {
-    res.status(401).json({ success: false, error: 'Authentication required.' });
-    return false;
-  }
+async function checkVendorOwnership(user, vendorOrEmail) {
+  if (!user) return false;
   if (user.role === 'admin') return true;
 
   const vendorEmail = typeof vendorOrEmail === 'string' ? vendorOrEmail : vendorOrEmail && vendorOrEmail.email;
@@ -41,6 +37,18 @@ async function assertVendorOwnership(req, res, vendorOrEmail) {
       (vendorOrEmail.id && (String(vendorOrEmail.id).startsWith('v-hist-') || String(vendorOrEmail.id).startsWith('v-navin-') || String(vendorOrEmail.id).startsWith('v-1788') || String(vendorOrEmail.id).startsWith('v-buyer-') || String(vendorOrEmail.id).startsWith('vm-')));
     if (isOwner) return true;
   }
+
+  return false;
+}
+
+async function assertVendorOwnership(req, res, vendorOrEmail) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  const isOwner = await checkVendorOwnership(user, vendorOrEmail);
+  if (isOwner) return true;
 
   res.status(403).json({ success: false, error: 'You do not have permission to modify this vendor profile.' });
   return false;
@@ -173,7 +181,11 @@ async function getVendors(req, res, next) {
       });
     }
 
-    let vendors = await storeService.getVendors(buyerId);
+    const hasFilters = Boolean(search || email || category);
+    const limitQuery = (!hasFilters && req.query && req.query.limit)
+      ? Math.min(Number(req.query.limit), 500)
+      : null;
+    let vendors = await storeService.getVendors(buyerId, limitQuery);
     if (search) {
       const q = String(search).toLowerCase().trim();
       vendors = vendors.filter((v) =>
@@ -222,6 +234,13 @@ async function getVendors(req, res, next) {
         data: pageData.map(withoutTemporaryPassword),
         pagination: { page: pageNumber, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
       });
+    }
+
+    if (req.query && req.query.limit) {
+      const limit = Number(req.query.limit);
+      if (Number.isInteger(limit) && limit > 0) {
+        vendors = vendors.slice(0, Math.min(limit, 500));
+      }
     }
 
     res.json({
@@ -431,6 +450,65 @@ async function deleteVendor(req, res, next) {
     next(err);
   }
 }
+
+async function bulkDeleteVendors(req, res, next) {
+  try {
+    const { vendorIds, ids } = req.body || {};
+    const targetIds = Array.isArray(vendorIds) ? vendorIds : (Array.isArray(ids) ? ids : []);
+
+    if (targetIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'vendorIds array is required and must not be empty.' });
+    }
+
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+
+    const deletedIds = [];
+    const skippedIds = [];
+
+    for (const rawId of targetIds) {
+      const id = String(rawId).trim();
+      if (!id) continue;
+      const existing = storeService.getVendorById(id, 'all');
+
+      if (!existing) {
+        if (
+          (user.role === 'buyer' || user.role === 'admin') &&
+          (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('v-navin-') || id.startsWith('v-1788') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
+        ) {
+          storeService.deleteVendor(id, user.email);
+          deletedIds.push(id);
+          continue;
+        }
+        skippedIds.push(id);
+        continue;
+      }
+
+      if (await checkVendorOwnership(user, existing)) {
+        storeService.deleteVendor(existing.id, user.email);
+        deletedIds.push(existing.id);
+      } else {
+        skippedIds.push(id);
+      }
+    }
+
+    logger.info(`Bulk deleted ${deletedIds.length} vendors`, { deletedCount: deletedIds.length, skippedCount: skippedIds.length }, 'VENDOR_CONTROLLER');
+
+    return res.json({
+      success: true,
+      message: `Successfully deleted ${deletedIds.length} vendor${deletedIds.length === 1 ? '' : 's'}.`,
+      deletedCount: deletedIds.length,
+      deletedIds,
+      skippedIds,
+    });
+  } catch (err) {
+    logger.error('Error during bulk vendor deletion', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
 
 async function reviseRating(req, res, next) {
   try {
@@ -865,10 +943,10 @@ async function getVendorRfqCredits(req, res, next) {
 
     let vendor = null;
     if (id && id !== 'me' && id !== 'current') {
-      vendor = storeService.getVendorById(id, 'all');
+      vendor = storeService.getVendorById(id, 'all') || (await storeService.getVendorByIdWithDBFallback(id, 'all'));
     }
     if (!vendor && user.email) {
-      vendor = storeService.getVendorById(user.email, 'all');
+      vendor = storeService.getVendorById(user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(user.email, 'all'));
     }
 
     if (!vendor) {
@@ -956,6 +1034,7 @@ module.exports = {
   createVendor,
   updateVendor,
   deleteVendor,
+  bulkDeleteVendors,
   reviseRating,
   generateOnboardingEmailPreview,
   updateCategories,

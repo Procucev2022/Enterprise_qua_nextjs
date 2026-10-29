@@ -246,6 +246,93 @@ describe('Backend Validation Schemas Unit Tests', () => {
       expect(normalizePoDate('invalid-date')).toBe('invalid-date');
     });
   });
+
+  describe('isDummyPincode and custom schema validators', () => {
+    const { isDummyPincode } = require('../src/config/validationSchemas');
+
+    test('isDummyPincode identifies dummy and repetitive pincodes', () => {
+      expect(isDummyPincode('')).toBe(false);
+      expect(isDummyPincode(null)).toBe(false);
+      expect(isDummyPincode('   ')).toBe(false);
+      expect(isDummyPincode('123456')).toBe(true);
+      expect(isDummyPincode('000000')).toBe(true);
+      expect(isDummyPincode('888888')).toBe(true);
+      expect(isDummyPincode('560001')).toBe(false);
+    });
+
+    test('createRFQ and updateRFQ custom deliveryPincode validator flags dummy pincodes', () => {
+      const createCustom = VALIDATION_SCHEMAS.createRFQ.deliveryPincode.custom;
+      expect(createCustom('123456')).toMatch(/Dummy or sequential/);
+      expect(createCustom('560001')).toBeNull();
+
+      const updateCustom = VALIDATION_SCHEMAS.updateRFQ.deliveryPincode.custom;
+      expect(updateCustom('123456')).toMatch(/Dummy or sequential/);
+      expect(updateCustom('560001')).toBeNull();
+
+      const res = validatePayload(VALIDATION_SCHEMAS.createRFQ, {
+        title: 'Valid RFQ',
+        budget: 1000,
+        deliveryLocation: 'Mumbai',
+        deliveryPincode: '123456',
+        targetDeliveryDate: '2026-05-01',
+        lineItems: [{ name: 'Item' }],
+      });
+      expect(res.isValid).toBe(false);
+      expect(res.errors.deliveryPincode).toMatch(/Dummy or sequential/);
+
+      const updateRes = validatePayload(VALIDATION_SCHEMAS.updateRFQ, {
+        deliveryPincode: '123456',
+        isExtended: true,
+      });
+      expect(updateRes.isValid).toBe(false);
+      expect(updateRes.errors.deliveryPincode).toMatch(/Dummy or sequential/);
+      expect(updateRes.sanitizedData.isExtended).toBe(true);
+    });
+
+    test('extendRFQ custom hours validator allows 24 or 48 and rejects others', () => {
+      const customFn = VALIDATION_SCHEMAS.extendRFQ.hours.custom;
+      expect(customFn(24)).toBeNull();
+      expect(customFn(48)).toBeNull();
+      expect(customFn(36)).toMatch(/Extension duration must be either 24 or 48 hours/);
+
+      const res = validatePayload(VALIDATION_SCHEMAS.extendRFQ, { hours: 36 });
+      expect(res.isValid).toBe(false);
+      expect(res.errors.hours).toMatch(/Extension duration must be either 24 or 48 hours/);
+    });
+
+    test('completeBuyerOnboarding mobile validator flags placeholder 9999999999', () => {
+      const customFn = VALIDATION_SCHEMAS.completeBuyerOnboarding.mobile.custom;
+      expect(customFn('9999999999')).toMatch(/Placeholder phone number/);
+      expect(customFn('+91 9999999999')).toMatch(/Placeholder phone number/);
+      expect(customFn('9876543210')).toBeNull();
+    });
+
+    test('validatePayload handles maxLength, custom string, and non-string types', () => {
+      // maxLength
+      const maxRes = validatePayload(VALIDATION_SCHEMAS.createRFQ, {
+        title: 'A'.repeat(250),
+        budget: 100,
+      });
+      expect(maxRes.isValid).toBe(false);
+      expect(maxRes.errors.title).toMatch(/must not exceed 200 characters/);
+
+      // Boolean and other types sanitized
+      const boolRes = validatePayload(VALIDATION_SCHEMAS.createRFQ, {
+        title: 'Proper RFQ Title',
+        budget: 500,
+        isExtended: true,
+      });
+      expect(boolRes.sanitizedData.isExtended).toBe(true);
+
+      // Enum violation
+      const enumRes = validatePayload(VALIDATION_SCHEMAS.auditQuery, {
+        severity: 'INVALID_LEVEL',
+      });
+      expect(enumRes.isValid).toBe(false);
+      expect(enumRes.errors.severity).toMatch(/must be one of/);
+    });
+  });
 });
+
 
 

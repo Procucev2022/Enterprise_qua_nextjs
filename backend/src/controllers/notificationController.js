@@ -33,11 +33,13 @@ async function listNotifications(req, res, next) {
     if (!recipient) {
       return res.json({ success: true, data: [], unreadCount: 0 });
     }
-    const data = storeService.getNotificationsFor(recipient.type, recipient.id);
-    const unreadCount = data.filter((n) => !n.read).length;
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const limit = (parsedLimit && Number.isInteger(parsedLimit) && parsedLimit > 0) ? Math.min(parsedLimit, 200) : 50;
+    const data = storeService.getNotificationsFor(recipient.type, recipient.id, limit);
+    const unreadCount = storeService.getUnreadNotificationCountFor(recipient.type, recipient.id);
     logger.info(
       'Fetching notifications',
-      { recipientType: recipient.type, count: data.length, unreadCount },
+      { recipientType: recipient.type, count: data.length, unreadCount, limit },
       'NOTIFICATION_CONTROLLER'
     );
     res.json({ success: true, data, unreadCount });

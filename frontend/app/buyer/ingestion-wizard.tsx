@@ -1205,7 +1205,12 @@ export default function IngestionWizard({
         }
 
         const finalMatching = dispatchSignals.length > 0
-          ? selectVendorsForCategories(matchingVendors, dispatchSignals, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).map((r) => r.vendor)
+          ? selectVendorsForCategories(
+              matchingVendors,
+              dispatchSignals,
+              VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
+              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode }
+            ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
         if (finalMatching.length > 0) {

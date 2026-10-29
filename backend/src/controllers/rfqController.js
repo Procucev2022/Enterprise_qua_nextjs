@@ -274,7 +274,7 @@ function applyVendorBuyerPrivacy(rfq, vendorRecord) {
 
 /** Apply a read scope to the full RFQ list. */
 function scopedRfqList(scope) {
-  const all = storeService.getRFQs();
+  const all = storeService.getRFQs(scope.restricted && scope.role === 'buyer' ? scope.buyerAccountId : null);
   if (!scope.restricted) return all;
   if (scope.role === 'vendor') {
     return all
@@ -330,11 +330,38 @@ function pickUpdatableRfqFields(body) {
  */
 async function getRFQs(req, res, next) {
   try {
-    await storeService.syncRFQsFromDB();
     const scope = await resolveRfqReadScope(req);
-    const rfqs = scopedRfqList(scope);
-    logger.info('Fetching RFQs list', { role: scope.role, restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
-    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: rfqs });
+    if (scope.restricted && scope.role === 'buyer' && scope.buyerAccountId) {
+      await storeService.syncRFQsFromDB(false, scope.buyerAccountId);
+    } else {
+      await storeService.syncRFQsFromDB();
+    }
+    let rfqs = scopedRfqList(scope);
+    const limit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
+      ? Math.min(Number(req.query.limit), 500)
+      : 200;
+    rfqs = rfqs.slice(0, limit);
+    const summaryOnly = req.query && req.query.summary === 'true';
+    const data = summaryOnly
+      ? rfqs.map((r) => ({
+          id: r.id,
+          rfqNumber: r.rfqNumber,
+          title: r.title,
+          category: r.category,
+          status: r.status,
+          sourcingMode: r.sourcingMode,
+          budget: r.budget,
+          createdAt: r.createdAt,
+          deadline: r.deadline,
+          targetDeliveryDate: r.targetDeliveryDate,
+          deliveryLocation: r.deliveryLocation,
+          quotesCount: r.quotesCount,
+          buyerAccountId: r.buyerAccountId,
+          buyerAccountName: r.buyerAccountName,
+        }))
+      : rfqs;
+    logger.info('Fetching RFQs list', { role: scope.role, restricted: scope.restricted, count: data.length, summaryOnly }, 'RFQ_CONTROLLER');
+    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data });
   } catch (err) {
     logger.error('Error fetching RFQs list', err, 'RFQ_CONTROLLER');
     next(err);
@@ -354,15 +381,58 @@ async function getRFQs(req, res, next) {
 async function getAllRFQs(req, res, next) {
   try {
     await storeService.syncRFQsFromDB();
-    const rfqs = storeService
+    let rfqs = storeService
       .getRFQs()
       .slice()
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-    logger.info('Fetching all RFQs for CM console', { count: rfqs.length }, 'RFQ_CONTROLLER');
+
+    const limit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
+      ? Math.min(Number(req.query.limit), 500)
+      : 200;
+    rfqs = rfqs.slice(0, limit);
+
+    const summaryOnly = req.query && (req.query.summary === 'true' || req.query.summary === true);
+    const data = summaryOnly
+      ? rfqs.map((r) => ({
+          id: r.id,
+          rfqNumber: r.rfqNumber,
+          title: r.title,
+          category: r.category,
+          status: r.status,
+          sourcingMode: r.sourcingMode,
+          budget: r.budget,
+          createdAt: r.createdAt,
+          deadline: r.deadline,
+          targetDeliveryDate: r.targetDeliveryDate,
+          deliveryLocation: r.deliveryLocation,
+          quotesCount: r.quotesCount,
+          buyerAccountId: r.buyerAccountId,
+          buyerAccountName: r.buyerAccountName,
+          assignedVendors: (r.assignedVendors || []).map((av) => ({
+            id: av.id || av.vendorId,
+            name: av.name || av.vendorName || av.companyName || '',
+            vendorId: av.vendorId || av.id,
+            vendorName: av.vendorName || av.name || av.companyName || '',
+            majorCategory: av.majorCategory || '',
+            city: av.city || '',
+            location: av.location || '',
+            status: av.status,
+          })),
+          quotes: (r.quotes || []).map((q) => ({
+            id: q.id,
+            vendorId: q.vendorId,
+            vendorName: q.vendorName,
+            submittedAt: q.submittedAt,
+            totalAmount: q.totalAmount,
+          })),
+        }))
+      : rfqs;
+
+    logger.info('Fetching all RFQs for CM console', { count: data.length, summaryOnly }, 'RFQ_CONTROLLER');
     res.json({
       success: true,
       source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',
-      data: rfqs,
+      data,
     });
   } catch (err) {
     logger.error('Error fetching all RFQs', err, 'RFQ_CONTROLLER');
@@ -382,7 +452,13 @@ async function getVendorCandidates(req, res, next) {
     if (!rfq || !(await canAccessRfq(req, rfq))) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    const candidates = storeService.candidateVendorsForRFQ(rfq);
+    const candidateLimit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
+      ? Math.min(Number(req.query.limit), 500)
+      : 100;
+    let candidates = storeService.candidateVendorsForRFQ(rfq, candidateLimit);
+    if (candidateLimit && Array.isArray(candidates) && candidates.length > candidateLimit) {
+      candidates = candidates.slice(0, candidateLimit);
+    }
     res.json({ success: true, data: candidates });
   } catch (err) {
     logger.error(`Error fetching vendor candidates for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
@@ -1018,11 +1094,12 @@ async function extractRFQFromDocument(req, res, next) {
       fileName: body.fileName,
     };
     let sourceEmail;
-
-    if (
+    let emailSubject;
+    const isEmail =
       emailIngestionService.isEmailFileName(body.fileName) ||
-      emailIngestionService.isOutlookMsgFileName(body.fileName)
-    ) {
+      emailIngestionService.isOutlookMsgFileName(body.fileName);
+
+    if (isEmail) {
       const prepared = await emailIngestionService.prepareEmailForExtraction({
         fileName: body.fileName,
         content: inlineData,
@@ -1041,6 +1118,7 @@ async function extractRFQFromDocument(req, res, next) {
       }
       extractionInput = prepared.extractionInput;
       sourceEmail = prepared.message.fromAddress;
+      emailSubject = prepared.message.subject;
       logger.info(
         `[RFQ_CONTROLLER] Email document prepared for extraction: from=${sourceEmail}`,
         { fileName: body.fileName, sourceEmail },
@@ -1086,11 +1164,14 @@ async function extractRFQFromDocument(req, res, next) {
       'RFQ_CONTROLLER'
     );
 
+    const isGenericDocumentTitle = !extraction.documentTitle || /^(request for quotation|rfq|inquiry|requisition)$/i.test(String(extraction.documentTitle).trim());
+    const draftTitle = body.title ? String(body.title).trim() : (!isEmail && !isGenericDocumentTitle ? extraction.documentTitle : null);
+
     // Reuse the shared normalisation + taxonomy classification so an AI-extracted
     // RFQ is shaped identically to one keyed by hand.
     const { draft, classification } = await rfqIngestionService.buildRFQDraft({
       lineItems: extraction.lineItems,
-      title: extraction.documentTitle,
+      title: draftTitle,
       category: extraction.category,
       estimatedBudget: extraction.estimatedBudget,
       targetDeliveryDate: extraction.deliveryDate,
@@ -1179,8 +1260,8 @@ async function stageExtractionDocument(req, res, next) {
  */
 async function getRFQSummary(req, res, next) {
   try {
-    await storeService.syncRFQsFromDB();
     const scope = await resolveRfqReadScope(req);
+    await storeService.syncRFQsFromDB(false, scope.buyerAccountId);
     const rfqs = scopedRfqList(scope);
     logger.info('Building RFQ portfolio summary', { role: scope.role, restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
     res.json({ success: true, data: rfqSummaryService.buildPortfolioSummary(rfqs) });

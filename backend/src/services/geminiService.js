@@ -1995,4 +1995,5 @@ module.exports = {
   isLocationUnsupportedError,
   repairTruncatedJson,
   inferCategoryFromLineItems,
+  getBackoffMs,
 };

@@ -187,7 +187,7 @@ async function enrichVendorsForRfqs(rfqs, existingVendors = []) {
         const res = await pool.query(
           `SELECT id, email, created_at, updated_at, raw FROM vendors WHERE id IN (${placeholders})`,
           chunk,
-          { d1: true }
+          { d1: true, useCache: true, tag: 'vendors', ttlMs: 60000 }
         );
         for (const r of (res.rows || [])) {
           const v = typeof r.raw === 'string' ? JSON.parse(r.raw) : (r.raw || {});
@@ -392,12 +392,17 @@ async function getSellerReports(req, res, next) {
       return res.status(400).json({ success: false, error: 'Invalid requestType for seller report' });
     }
 
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const dataRows = (parsedLimit && Number.isInteger(parsedLimit) && parsedLimit > 0)
+      ? rows.slice(0, Math.min(parsedLimit, 5000))
+      : (rows.length > 5000 ? rows.slice(0, 5000) : rows);
+
     return res.json({
       success: true,
       reportType: requestType,
       dateRange: { startDate: formatDateISO(fromDate), endDate: formatDateISO(toDate) },
       totalRecords: rows.length,
-      data: rows,
+      data: dataRows,
     });
   } catch (err) {
     logger.error('Error in getSellerReports', err, LOG_CATEGORY);
@@ -510,12 +515,17 @@ async function getBuyerReports(req, res, next) {
       return res.status(400).json({ success: false, error: 'Invalid requestType for buyer report' });
     }
 
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const dataRows = (parsedLimit && Number.isInteger(parsedLimit) && parsedLimit > 0)
+      ? rows.slice(0, Math.min(parsedLimit, 5000))
+      : (rows.length > 5000 ? rows.slice(0, 5000) : rows);
+
     return res.json({
       success: true,
       reportType: requestType,
       dateRange: { startDate: formatDateISO(fromDate), endDate: formatDateISO(toDate) },
       totalRecords: rows.length,
-      data: rows,
+      data: dataRows,
     });
   } catch (err) {
     logger.error('Error in getBuyerReports', err, LOG_CATEGORY);
@@ -656,12 +666,17 @@ async function getRfqReports(req, res, next) {
       return res.status(400).json({ success: false, error: 'Invalid requestType for RFQ report' });
     }
 
+    const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
+    const dataRows = (parsedLimit && Number.isInteger(parsedLimit) && parsedLimit > 0)
+      ? rows.slice(0, Math.min(parsedLimit, 5000))
+      : (rows.length > 5000 ? rows.slice(0, 5000) : rows);
+
     return res.json({
       success: true,
       reportType: requestType,
       dateRange: { startDate: formatDateISO(fromDate), endDate: formatDateISO(toDate) },
       totalRecords: rows.length,
-      data: rows,
+      data: dataRows,
     });
   } catch (err) {
     logger.error('Error in getRfqReports', err, LOG_CATEGORY);

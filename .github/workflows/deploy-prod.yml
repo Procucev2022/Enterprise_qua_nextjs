@@ -23,13 +23,11 @@ jobs:
     name: Deploy to Cloudflare Production Environment
     runs-on: ubuntu-latest
     environment: prod
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     env:
       CI: "true"
       NODE_OPTIONS: "--max-old-space-size=4096"
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
     steps:
       - name: Checkout Repository
@@ -46,6 +44,22 @@ jobs:
           npm ci --prefix frontend --legacy-peer-deps || npm install --prefix frontend --legacy-peer-deps
           npm ci --prefix backend --legacy-peer-deps || npm install --prefix backend --legacy-peer-deps
 
+      - name: Enforce Workspace Unit Tests & 90% Per-File Coverage
+        run: npm run test:coverage
+
+      - name: Verify Coverage Against Every Application Source File
+        run: npm run check:coverage
+
+      - name: Upload Coverage & Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-deployment-coverage
+          path: |
+            backend/coverage/
+            frontend/coverage/
+          if-no-files-found: error
+
       - name: Build Frontend (Vinext)
         run: npm run build:vinext
         env:
@@ -55,7 +69,13 @@ jobs:
       - name: Deploy Frontend to Cloudflare (Production Environment)
         run: npx wrangler deploy --env prod
         working-directory: frontend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Deploy Backend Worker to Cloudflare (Production Environment)
         run: npx wrangler deploy --env prod
         working-directory: backend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -620,6 +620,23 @@ describe('Qua AI Transactional Email Templates Suite', () => {
       expect(resolveTemplateKey('email_1')).toBe('EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED');
       expect(resolveTemplateKey('EMAIL_1')).toBe('EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED');
     });
+
+    test('wrapQuaAiEmail enforces responsive layout with full-width container, mobile media queries and presentation tables', () => {
+      const html = wrapQuaAiEmail({
+        title: 'Responsive Check',
+        innerHtml: '<p>Responsive test content</p>',
+      });
+      expect(html).toContain('max-width: 100%');
+      expect(html).toContain('width: 100%');
+      expect(html).toContain('background-color: #ffffff');
+      expect(html).toContain('box-sizing: border-box');
+      expect(html).toContain('role="presentation"');
+      expect(html).toContain('class="email-wrapper"');
+      expect(html).toContain('class="email-container"');
+      expect(html).toContain('@media only screen and (max-width: 640px)');
+      expect(html).toContain('.email-wrapper');
+      expect(html).toContain('.email-container');
+    });
   });
 });
 

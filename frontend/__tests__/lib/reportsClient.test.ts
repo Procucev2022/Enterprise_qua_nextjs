@@ -65,6 +65,22 @@ describe('reportsClient Suite', () => {
       );
     });
 
+    test('appends limit parameter when provided', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: [{ RFQID: 'RFQ-1' }] }),
+      } as Response);
+
+      const config = REPORT_OPTIONS[0];
+      const res = await fetchReportData(config, '2026-01-01', '2026-01-31', 50);
+
+      expect(res.success).toBe(true);
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('limit=50'),
+        expect.any(Object)
+      );
+    });
+
     test('omits Authorization header when no session token is held', async () => {
       const { authClient } = require('@/lib/authClient');
       jest.spyOn(authClient, 'getToken').mockReturnValue(null);

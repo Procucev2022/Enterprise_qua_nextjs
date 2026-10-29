@@ -617,7 +617,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         }
 
         const finalMatching = signals.length > 0
-          ? selectVendorsForCategories(matchingVendors, signals, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).map((r) => r.vendor)
+          ? selectVendorsForCategories(
+              matchingVendors,
+              signals,
+              VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
+              { location: form.deliveryLocation, pincode: form.deliveryPincode }
+            ).map((r) => r.vendor)
           : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
         if (finalMatching.length > 0) {

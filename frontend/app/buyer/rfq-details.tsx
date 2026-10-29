@@ -1825,9 +1825,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
           );
           const resolvedCategory =
-            v.majorCategory || found?.majorCategory || (isProc ? activeRfq?.category || null : null);
+            v.majorCategory || found?.majorCategory || (v as any).category || (found as any)?.category || (isProc ? activeRfq?.category || null : null);
           const resolvedLocation =
-            v.location || found?.location || found?.city || found?.state || null;
+            v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null) || found?.location || found?.city || found?.state || null;
           let resolvedScore: number | null =
             typeof v.matchScore === 'number' ? v.matchScore : null;
           if (resolvedScore === null && typeof (quoteForVendor as any)?.aiMatchScore === 'number') {
@@ -2712,6 +2712,16 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                             <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                               All Answered
                             </span>
+                          )}
+                          {activeChannel.inquiry && (
+                            <button
+                              type="button"
+                              onClick={() => setReplyModalInquiry(activeChannel.inquiry || null)}
+                              className="px-2 py-0.5 rounded text-[9px] font-bold bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 inline-flex items-center gap-1"
+                            >
+                              <Reply size={10} />
+                              <span>Reply</span>
+                            </button>
                           )}
                         </div>
                         <div className="text-[10px] text-slate-400 flex items-center gap-2 truncate">

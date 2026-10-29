@@ -36,6 +36,7 @@ const pool = require('../db/pool');
 const { logger } = require('./loggerService');
 const {
   EMAIL_GATEWAY_CONFIG,
+  GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
   EMAIL_GATEWAY_STATE,
@@ -103,6 +104,7 @@ const runtime = {
   lastPollAt: null,
   lastPollDurationMs: null,
   lastError: null,
+  recentErrors: [],
   lastConnectedAt: null,
   consideredThisRun: 0,
   ingestedThisRun: 0,
@@ -117,10 +119,88 @@ const vendorRuntime = {
   lastPollAt: null,
   lastPollDurationMs: null,
   lastError: null,
+  recentErrors: [],
   lastConnectedAt: null,
   consideredThisRun: 0,
   ingestedThisRun: 0,
 };
+
+const labelIdCache = new Map();
+
+function clearLabelCache() {
+  labelIdCache.clear();
+}
+
+function recordRecentError(state, errorInfo = {}) {
+  if (!state) return;
+  if (!Array.isArray(state.recentErrors)) {
+    state.recentErrors = [];
+  }
+  const summary = errorInfo.detail || errorInfo.error || errorInfo.status || 'Email processing error';
+  state.lastError = summary;
+  state.recentErrors.unshift({
+    timestamp: new Date().toISOString(),
+    ...errorInfo,
+  });
+  if (state.recentErrors.length > 20) {
+    state.recentErrors.length = 20;
+  }
+}
+
+async function getOrCreateLabelId(gmail, labelName) {
+  if (!gmail?.users?.labels || !labelName) return null;
+  const trimmed = String(labelName).trim();
+  const cacheKey = trimmed.toLowerCase();
+  if (labelIdCache.has(cacheKey)) {
+    return labelIdCache.get(cacheKey);
+  }
+
+  // 1. Check existing labels
+  if (typeof gmail.users.labels.list === 'function') {
+    try {
+      const listRes = await withTimeout(
+        gmail.users.labels.list({ userId: 'me' }),
+        POLL_CALL_TIMEOUT_MS,
+        `Gmail label lookup (${trimmed})`
+      );
+      const existing = (listRes?.data?.labels || []).find(
+        (l) => l.name && l.name.trim().toLowerCase() === cacheKey
+      );
+      if (existing?.id) {
+        labelIdCache.set(cacheKey, existing.id);
+        return existing.id;
+      }
+    } catch (err) {
+      logger.warn(`Failed to list Gmail labels for "${trimmed}": ${err.message}`, { labelName: trimmed }, 'EMAIL_GATEWAY');
+    }
+  }
+
+  // 2. If not found, attempt to create it
+  if (typeof gmail.users.labels.create === 'function') {
+    try {
+      const createRes = await withTimeout(
+        gmail.users.labels.create({
+          userId: 'me',
+          requestBody: {
+            name: trimmed,
+            labelListVisibility: 'labelShow',
+            messageListVisibility: 'show',
+          },
+        }),
+        POLL_CALL_TIMEOUT_MS,
+        `Gmail label create (${trimmed})`
+      );
+      if (createRes?.data?.id) {
+        labelIdCache.set(cacheKey, createRes.data.id);
+        return createRes.data.id;
+      }
+    } catch (err) {
+      logger.warn(`Failed to create Gmail label "${trimmed}": ${err.message}`, { labelName: trimmed }, 'EMAIL_GATEWAY');
+    }
+  }
+
+  return null;
+}
 
 /**
  * Resolve gateway configuration from the environment.
@@ -159,6 +239,8 @@ function resolveConfig(env = process.env) {
     allowedDomains: splitList(env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
     allowedSenders: splitList(env.EMAIL_GATEWAY_ALLOWED_SENDERS),
     autoRegisterUnregisteredBuyers: String(env.EMAIL_GATEWAY_AUTO_REGISTER || 'true').toLowerCase() !== 'false',
+    labelProcessed: (env.GMAIL_LABEL_PROCESSED || EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED).trim(),
+    labelError: (env.GMAIL_LABEL_ERROR || EMAIL_GATEWAY_CONFIG.LABEL_ERROR).trim(),
   };
 }
 
@@ -181,11 +263,16 @@ function resolveVendorConfig(env = process.env) {
     // IMAP support was removed — see resolveConfig()'s comment. The vendor
     // mailbox is read exclusively via the vendor Gmail REST API identity
     // (VENDOR_GMAIL_* in mailerService).
-    user: (env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').trim(),
+    user: (
+      env.VENDOR_EMAIL_GATEWAY_USER ||
+      VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS ||
+      ''
+    ).trim(),
     address: (
       env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
       env.VENDOR_EMAIL_GATEWAY_USER ||
-      'srinu20252026@gmail.com'
+      VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS ||
+      ''
     ).trim(),
     mailbox: (env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
     pollIntervalMs: Math.max(
@@ -207,6 +294,8 @@ function resolveVendorConfig(env = process.env) {
     allowedSenders: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS || env.EMAIL_GATEWAY_ALLOWED_SENDERS),
     allowedDomains: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS || env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
     isVendorMailbox: true,
+    labelProcessed: (env.VENDOR_GMAIL_LABEL_PROCESSED || env.GMAIL_LABEL_PROCESSED || EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED).trim(),
+    labelError: (env.VENDOR_GMAIL_LABEL_ERROR || env.GMAIL_LABEL_ERROR || EMAIL_GATEWAY_CONFIG.LABEL_ERROR).trim(),
   };
 }
 
@@ -2012,7 +2101,6 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
     const { draft, classification } = await rfqIngestionService.buildRFQDraft({
       lineItems: group.items,
-      title: extraction.documentTitle || message.subject,
       category: extraction.category,
       estimatedBudget: extraction.estimatedBudget,
       source: 'email_gateway',
@@ -2042,7 +2130,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
         source: 'email_gateway',
         sourceEmail: message.fromAddress,
         buyerEmail: message.fromAddress,
-        sourceFileName: message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
+        sourceFileName: draft.title || message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
         raisedByEmail: message.fromAddress,
         budget: draft.estimatedBudget || 0,
         targetDeliveryDate: draft.targetDeliveryDate,
@@ -2062,7 +2150,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
         status: INGESTION_OUTCOME.RFQ_GROUP_CREATED,
         detail: `RFQ ${groupIndex + 1} of ${groups.length} raised from this email`,
         fromAddress: message.fromAddress,
-        subject: message.subject,
+        subject: draft.title || message.subject,
         rfqId: created.id,
         rfqNumber: created.rfqNumber,
       });
@@ -2263,6 +2351,37 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
     // notice to the same newsletter every minute, a Gemini call every minute,
     // and, once ten such messages piled up, no slot left in `maxPerPoll` for a
     // real requisition behind them.
+    const processedLabelName = config.labelProcessed || EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED;
+    const errorLabelName = config.labelError || EMAIL_GATEWAY_CONFIG.LABEL_ERROR;
+
+    const processedLabelId = await getOrCreateLabelId(gmail, processedLabelName).catch(() => null);
+    const errorLabelId = await getOrCreateLabelId(gmail, errorLabelName).catch(() => null);
+
+    const moveMessageToLabel = (id, targetLabelId, labelName, operationLabel) => {
+      const addLabelIds = targetLabelId ? [targetLabelId] : [];
+      const removeLabelIds = targetLabelId ? ['UNREAD', 'INBOX'] : ['UNREAD'];
+      return withTimeout(
+        gmail.users.messages
+          .modify({
+            userId: 'me',
+            id,
+            requestBody: {
+              ...(addLabelIds.length > 0 ? { addLabelIds } : {}),
+              removeLabelIds,
+            },
+          })
+          .catch((modifyErr) => {
+            logger.warn(
+              `${operationLabel} modify failed for message ${id}: ${modifyErr.message}`,
+              { id, targetLabelId, labelName },
+              'EMAIL_GATEWAY'
+            );
+          }),
+        POLL_CALL_TIMEOUT_MS,
+        operationLabel
+      ).catch(() => {});
+    };
+
     const markRead = (id, label) =>
       withTimeout(
         gmail.users.messages.modify({ userId: 'me', id, requestBody: { removeLabelIds: ['UNREAD'] } }).catch(() => {}),
@@ -2324,8 +2443,17 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
           break;
         }
         if (alreadyProcessed) {
-          await markRead(ref.id, 'Gmail mark-read');
-          outcomes.push({ uid: ref.id, messageId: dedupeKey, status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED });
+          if (processedLabelId) {
+            await moveMessageToLabel(ref.id, processedLabelId, processedLabelName, 'Gmail move to Processed (already processed)');
+          } else {
+            await markRead(ref.id, 'Gmail mark-read');
+          }
+          outcomes.push({
+            uid: ref.id,
+            messageId: dedupeKey,
+            status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED,
+            labelApplied: processedLabelId ? processedLabelName : null,
+          });
           continue;
         }
 
@@ -2337,13 +2465,26 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             'Gmail message fetch'
           );
           if (!full.data || !full.data.raw) {
+            const errorDetail = 'Gmail returned no message body';
             await emailGatewayQueries.recordProcessed({
               messageId: dedupeKey,
               status: INGESTION_OUTCOME.UNREADABLE,
-              detail: 'Gmail returned no message body',
+              detail: errorDetail,
             });
-            await markRead(ref.id, 'Gmail mark-read (unreadable)');
-            outcomes.push({ uid: ref.id, status: INGESTION_OUTCOME.UNREADABLE });
+            recordRecentError(state, {
+              messageId: dedupeKey,
+              status: INGESTION_OUTCOME.UNREADABLE,
+              detail: errorDetail,
+              uid: ref.id,
+            });
+            await moveMessageToLabel(ref.id, errorLabelId, errorLabelName, 'Gmail move to Error (unreadable)');
+            outcomes.push({
+              uid: ref.id,
+              status: INGESTION_OUTCOME.UNREADABLE,
+              detail: errorDetail,
+              error: errorDetail,
+              labelApplied: errorLabelId ? errorLabelName : null,
+            });
             continue;
           }
           const rawSource = Buffer.from(full.data.raw, 'base64url');
@@ -2356,8 +2497,17 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             headerMessageId &&
             (await withTimeout(emailGatewayQueries.hasProcessed(headerMessageId, { strict: true }), POLL_CALL_TIMEOUT_MS, 'Ledger check'))
           ) {
-            await markRead(ref.id, 'Gmail mark-read (duplicate)');
-            outcomes.push({ uid: ref.id, messageId: headerMessageId, status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED });
+            if (processedLabelId) {
+              await moveMessageToLabel(ref.id, processedLabelId, processedLabelName, 'Gmail move to Processed (duplicate)');
+            } else {
+              await markRead(ref.id, 'Gmail mark-read (duplicate)');
+            }
+            outcomes.push({
+              uid: ref.id,
+              messageId: headerMessageId,
+              status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED,
+              labelApplied: processedLabelId ? processedLabelName : null,
+            });
             continue;
           }
 
@@ -2382,15 +2532,49 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
                 : null,
           });
 
-          if (result.status === INGESTION_OUTCOME.INGESTED || result.status === INGESTION_OUTCOME.QUOTE_INGESTED) {
+          const isSuccess =
+            result.status === INGESTION_OUTCOME.INGESTED ||
+            result.status === INGESTION_OUTCOME.QUOTE_INGESTED;
+
+          if (isSuccess) {
             state.ingestedThisRun += 1;
+            await moveMessageToLabel(ref.id, processedLabelId, processedLabelName, 'Gmail move to Processed (post-process)');
+          } else if (result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND) {
+            await markRead(ref.id, 'Gmail mark-read (skipped outbound)');
+          } else {
+            recordRecentError(state, {
+              messageId: resolvedMessageId,
+              status: result.status,
+              detail: result.detail,
+              fromAddress: result.message?.fromAddress,
+              subject: result.message?.subject,
+              uid: ref.id,
+            });
+            logger.error(
+              `RFQ creation failed for message ${resolvedMessageId} (${result.status}): ${result.detail || 'unknown reason'}`,
+              {
+                messageId: resolvedMessageId,
+                status: result.status,
+                detail: result.detail,
+                fromAddress: result.message?.fromAddress,
+                subject: result.message?.subject,
+                uid: ref.id,
+              },
+              'EMAIL_GATEWAY'
+            );
+            await moveMessageToLabel(ref.id, errorLabelId, errorLabelName, 'Gmail move to Error (rfq failed)');
           }
-          // After the ledger write, bounded and self-swallowed: a slow mark-read
-          // must never reach the catch below and overwrite a correct outcome
-          // with FAILED. If it times out the message is still unread and the
-          // ledger check above catches it next poll.
-          await markRead(ref.id, 'Gmail mark-read (post-process)');
-          outcomes.push({ uid: ref.id, messageId: resolvedMessageId, status: result.status });
+
+          outcomes.push({
+            uid: ref.id,
+            messageId: resolvedMessageId,
+            status: result.status,
+            detail: result.detail || null,
+            ...(isSuccess ? {} : { error: result.detail || result.status }),
+            labelApplied: isSuccess
+              ? (processedLabelId ? processedLabelName : null)
+              : (result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND ? null : (errorLabelId ? errorLabelName : null)),
+          });
         } catch (err) {
           // A failure here is usually transient (Gemini or Gmail timeout, D1
           // hiccup). The message is left unread and retried on later polls, up
@@ -2398,6 +2582,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
           // marked read — after the first one.
           const attempt = (await emailGatewayQueries.countFailedAttempts(dedupeKey)) + 1;
           const exhausted = attempt >= EMAIL_GATEWAY_MAX_ATTEMPTS;
+          const failureDetail = `${err.message} (attempt ${attempt}/${EMAIL_GATEWAY_MAX_ATTEMPTS})`;
           logger.error(
             `Inbound message could not be processed (Gmail API), attempt ${attempt}/${EMAIL_GATEWAY_MAX_ATTEMPTS}`,
             err,
@@ -2407,13 +2592,24 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             .recordProcessed({
               messageId: exhausted ? dedupeKey : `${dedupeKey}#attempt-${attempt}`,
               status: INGESTION_OUTCOME.FAILED,
-              detail: `${err.message} (attempt ${attempt}/${EMAIL_GATEWAY_MAX_ATTEMPTS})`,
+              detail: failureDetail,
               fromAddress: err.fromAddress || null,
               subject: err.subject || null,
             })
             .catch(() => {});
+          recordRecentError(state, {
+            messageId: dedupeKey,
+            status: INGESTION_OUTCOME.FAILED,
+            detail: failureDetail,
+            error: err.message,
+            stack: err.stack,
+            fromAddress: err.fromAddress || null,
+            subject: err.subject || null,
+            uid: ref.id,
+            exhausted,
+          });
           if (exhausted) {
-            await markRead(ref.id, 'Gmail mark-read (failed)');
+            await moveMessageToLabel(ref.id, errorLabelId, errorLabelName, 'Gmail move to Error (failed)');
             // Out of retries: tell the buyer their requirement was not raised,
             // rather than leaving them waiting for an acknowledgement.
             if (typeof err.onGiveUp === 'function') {
@@ -2422,13 +2618,23 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
                 .catch((notifyErr) => logger.error('Failed to send give-up notice to buyer', notifyErr, 'EMAIL_GATEWAY'));
             }
           }
-          outcomes.push({ uid: ref.id, messageId: dedupeKey, status: INGESTION_OUTCOME.FAILED, willRetry: !exhausted });
+          outcomes.push({
+            uid: ref.id,
+            messageId: dedupeKey,
+            status: INGESTION_OUTCOME.FAILED,
+            detail: failureDetail,
+            error: err.message,
+            willRetry: !exhausted,
+            labelApplied: exhausted ? (errorLabelId ? errorLabelName : null) : null,
+          });
         }
       }
       pageToken = listRes.data.nextPageToken;
     } while (pageToken && workDone < config.maxPerPoll && !ledgerUnavailable && !outOfTime && pages < EMAIL_GATEWAY_MAX_LIST_PAGES);
 
-    state.lastError = ledgerUnavailable ? 'Email ingestion ledger unavailable; unread mail left for the next poll' : null;
+    state.lastError = ledgerUnavailable
+      ? 'Email ingestion ledger unavailable; unread mail left for the next poll'
+      : (state.lastError || null);
 
     // Acknowledgements are buyer mail, so only the buyer inbox poll retries
     // them; skipped when the ledger is down or the poll is already out of time.
@@ -2684,6 +2890,7 @@ async function getStatus() {
     lastPollDurationMs: runtime.lastPollDurationMs,
     lastConnectedAt: runtime.lastConnectedAt,
     lastError,
+    recentErrors: runtime.recentErrors,
     isPolling: runtime.isPolling,
     // Which outbound mailboxes/providers can send right now, and which are
     // cooling down after a rate limit or a rejected credential.
@@ -2691,6 +2898,10 @@ async function getStatus() {
     counts: configured ? await emailGatewayQueries.countsByStatus() : {},
     recent: configured ? await emailGatewayQueries.listRecent() : [],
     ingestedStatus: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
+    labels: {
+      processed: config.labelProcessed,
+      error: config.labelError,
+    },
     vendorGateway: {
       enabled: vendorConfig.enabled,
       configured: vendorConfigured,
@@ -2704,7 +2915,12 @@ async function getStatus() {
       lastPollDurationMs: vendorRuntime.lastPollDurationMs,
       lastConnectedAt: vendorRuntime.lastConnectedAt,
       lastError: vendorLastError,
+      recentErrors: vendorRuntime.recentErrors,
       isPolling: vendorRuntime.isPolling,
+      labels: {
+        processed: vendorConfig.labelProcessed,
+        error: vendorConfig.labelError,
+      },
     },
   };
 }
@@ -2755,6 +2971,9 @@ const emailGateway = {
   stopPolling,
   getStatus,
   getOrCreateBuyerAccount,
+  getOrCreateLabelId,
+  clearLabelCache,
+  recordRecentError,
 };
 
 module.exports = emailGateway;

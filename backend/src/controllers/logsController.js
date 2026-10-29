@@ -5,13 +5,15 @@ const { performanceOptimizer } = require('../services/performanceOptimizer');
 function getLogs(req, res, next) {
   try {
     const q = req.query || {};
+    const parsedLimit = q.limit ? parseInt(q.limit, 10) : 100;
+    const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
     const result = logger.queryLogs({
       level: q.level,
       category: q.category,
       search: q.search,
       from: q.from,
       to: q.to,
-      limit: q.limit ? parseInt(q.limit, 10) : 100,
+      limit,
       offset: q.offset ? parseInt(q.offset, 10) : 0,
     });
     res.json({ success: true, ...result });

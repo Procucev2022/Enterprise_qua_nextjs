@@ -10,6 +10,8 @@ const evaluationController = require('../src/controllers/evaluationController');
 const buyerAccountController = require('../src/controllers/buyerAccountController');
 const rfqController = require('../src/controllers/rfqController');
 const vendorController = require('../src/controllers/vendorController');
+const catalogueController = require('../src/controllers/catalogueController');
+const domainQueries = require('../src/db/domainQueries');
 
 function mockRes() {
   const res = {};
@@ -45,6 +47,13 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'persisted' }));
 
     storeService.isHydratedFromDB = false;
+  });
+
+  test('auditController.getAuditLogs with limit', async () => {
+    const res = mockRes();
+    const next = jest.fn();
+    await auditController.getAuditLogs({ query: { limit: '10' } }, res, next);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
 
   test('aiChaserService fallback default parameters', () => {
@@ -642,5 +651,693 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     storeService.refundFreeRFQ(activeBuyer.id);
     expect(storeService.activeBuyerAccount.remainingFreeRFQs).toBe(3);
   });
+
+  test('getAllRFQs and getRFQSummary optimization coverage', async () => {
+    const rfqController = require('../src/controllers/rfqController');
+    const resSummary = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    };
+    const next = jest.fn();
+
+    // 1. getAllRFQs with summary=true and limit
+    await rfqController.getAllRFQs({ query: { summary: 'true', limit: '1' } }, resSummary, next);
+    expect(resSummary.json).toHaveBeenCalled();
+    const summaryData = resSummary.json.mock.calls[0][0].data;
+    expect(Array.isArray(summaryData)).toBe(true);
+
+    // 2. getRFQSummary with buyer account scope
+    const resRfqSum = {
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+    };
+    await rfqController.getRFQSummary({ user: { role: 'buyer', email: 'test-buyer@example.com' }, query: {} }, resRfqSum, next);
+    expect(resRfqSum.json).toHaveBeenCalled();
+
+    // 3. getBootstrapData vendorCatalogue scoping
+    const vendorBootstrap = await storeService.getBootstrapData(null, 'apex@supplier.com');
+    expect(Array.isArray(vendorBootstrap.vendorCatalogue)).toBe(true);
+
+    const buyerBootstrap = await storeService.getBootstrapData('buyer-scoped-id', 'buyer@corp.com');
+    expect(buyerBootstrap.vendorCatalogue).toEqual([]);
+  });
+
+  test('Controllers and domainQueries data fetching optimization coverage', async () => {
+    const next = jest.fn();
+
+    // 1. evaluationController with limit and invalid limit
+    const resEval = mockRes();
+    await evaluationController.getEvaluations({ query: { limit: '2' } }, resEval, next);
+    expect(resEval.json).toHaveBeenCalled();
+    const resEvalInvalid = mockRes();
+    await evaluationController.getEvaluations({ query: { limit: 'abc' } }, resEvalInvalid, next);
+    expect(resEvalInvalid.json).toHaveBeenCalled();
+
+    // 2. buyerAccountController with limit and invalid limit
+    const resBuyer = mockRes();
+    await buyerAccountController.getBuyerAccounts({ query: { limit: '2' } }, resBuyer, next);
+    expect(resBuyer.json).toHaveBeenCalled();
+    const resBuyerInvalid = mockRes();
+    await buyerAccountController.getBuyerAccounts({ query: { limit: 'abc' } }, resBuyerInvalid, next);
+    expect(resBuyerInvalid.json).toHaveBeenCalled();
+
+    // 3. catalogueController with limit and invalid limit
+    const resCat = mockRes();
+    await catalogueController.getProducts({ query: { limit: '2' } }, resCat, next);
+    expect(resCat.json).toHaveBeenCalled();
+    const resCatInvalid = mockRes();
+    await catalogueController.getProducts({ query: { limit: 'abc' } }, resCatInvalid, next);
+    expect(resCatInvalid.json).toHaveBeenCalled();
+
+    // 4. vendorController with limit and invalid limit
+    const resVend = mockRes();
+    await vendorController.getVendors({ query: { limit: '2' } }, resVend, next);
+    expect(resVend.json).toHaveBeenCalled();
+    const resVendInvalid = mockRes();
+    await vendorController.getVendors({ query: { limit: 'abc' } }, resVendInvalid, next);
+    expect(resVendInvalid.json).toHaveBeenCalled();
+
+    // 5. domainQueries scoped payment links, catalogue, unlocks, credits & evaluations
+    const origPool = dbPool.pool;
+    try {
+      dbPool.pool = {
+        query: jest.fn().mockResolvedValue({ rows: [{ raw: { id: 'test-1' } }] }),
+      };
+
+      // evaluations with and without limit
+      const evalsLimited = await domainQueries.getEvaluationsFromDB(10);
+      expect(evalsLimited).toEqual([{ id: 'test-1' }]);
+      const evalsAll = await domainQueries.getEvaluationsFromDB(null);
+      expect(evalsAll).toEqual([{ id: 'test-1' }]);
+
+      // vendor catalogue with and without limit
+      const catLimited = await domainQueries.getVendorCatalogueFromDB(10);
+      expect(catLimited).toEqual([{ id: 'test-1' }]);
+      const catAll = await domainQueries.getVendorCatalogueFromDB(null);
+      expect(catAll).toEqual([{ id: 'test-1' }]);
+
+      // payment links with and without limit
+      const plLimited = await domainQueries.getPaymentLinksFromDB(10);
+      expect(plLimited).toEqual([{ id: 'test-1' }]);
+      const plAll = await domainQueries.getPaymentLinksFromDB(null);
+      expect(plAll).toEqual([{ id: 'test-1' }]);
+
+      // payment link by ID
+      const plById = await domainQueries.getPaymentLinkByIdFromDB('pl-1');
+      expect(plById).toEqual({ id: 'test-1' });
+      const plByIdNull = await domainQueries.getPaymentLinkByIdFromDB(null);
+      expect(plByIdNull).toBeNull();
+
+      // payment links by vendor
+      const plVendorLimited = await domainQueries.getPaymentLinksByVendorFromDB('v-test', 25);
+      expect(plVendorLimited).toEqual([{ id: 'test-1' }]);
+      const plVendorAll = await domainQueries.getPaymentLinksByVendorFromDB('v-test', null);
+      expect(plVendorAll).toEqual([{ id: 'test-1' }]);
+      const plVendorEmpty = await domainQueries.getPaymentLinksByVendorFromDB(null, 10);
+      expect(plVendorEmpty).toEqual([]);
+
+      // payment links by buyer
+      const plBuyerLimited = await domainQueries.getPaymentLinksByBuyerFromDB('b-test', 25);
+      expect(plBuyerLimited).toEqual([{ id: 'test-1' }]);
+      const plBuyerAll = await domainQueries.getPaymentLinksByBuyerFromDB('b-test', null);
+      expect(plBuyerAll).toEqual([{ id: 'test-1' }]);
+      const plBuyerEmpty = await domainQueries.getPaymentLinksByBuyerFromDB(null, 10);
+      expect(plBuyerEmpty).toEqual([]);
+
+      // vendor unlocks with and without limit
+      const unlLimited = await domainQueries.getVendorUnlocksFromDB('v-test', 10);
+      expect(unlLimited).toEqual([{ raw: { id: 'test-1' } }]);
+      const unlAll = await domainQueries.getVendorUnlocksFromDB('v-test', null);
+      expect(unlAll).toEqual([{ raw: { id: 'test-1' } }]);
+      const unlEmpty = await domainQueries.getVendorUnlocksFromDB(null, 10);
+      expect(unlEmpty).toEqual([]);
+
+      // vendor credit transactions with and without limit
+      const txLimited = await domainQueries.getVendorCreditTransactionsFromDB('v-test', 10);
+      expect(txLimited).toEqual([{ raw: { id: 'test-1' } }]);
+      const txAll = await domainQueries.getVendorCreditTransactionsFromDB('v-test', null);
+      expect(txAll).toEqual([{ raw: { id: 'test-1' } }]);
+      const txEmpty = await domainQueries.getVendorCreditTransactionsFromDB(null, 10);
+      expect(txEmpty).toEqual([]);
+
+      // buyer accounts with and without limit
+      const baLimited = await domainQueries.getBuyerAccountsFromDB(10);
+      expect(baLimited).toEqual({ accounts: [{ id: 'test-1' }], activeId: null });
+      const baAll = await domainQueries.getBuyerAccountsFromDB(null);
+      expect(baAll).toEqual({ accounts: [{ id: 'test-1' }], activeId: null });
+
+      // pending chaser jobs with and without limit
+      const chaserLimited = await domainQueries.getPendingChaserJobsFromDB(10);
+      expect(chaserLimited).toEqual([{ raw: { id: 'test-1' } }]);
+      const chaserAll = await domainQueries.getPendingChaserJobsFromDB(null);
+      expect(chaserAll).toEqual([{ raw: { id: 'test-1' } }]);
+
+      // unconfigured storage branches
+      dbPool.pool = null;
+      expect(await domainQueries.getEvaluationsFromDB(10)).toEqual([]);
+      expect(await domainQueries.getVendorCatalogueFromDB(10)).toEqual([]);
+      expect(await domainQueries.getBuyerAccountsFromDB(10)).toEqual({ accounts: [], activeId: null });
+      expect(await domainQueries.getPendingChaserJobsFromDB(10)).toEqual([]);
+      expect(await domainQueries.getPaymentLinksFromDB(10)).toEqual([]);
+      expect(await domainQueries.getPaymentLinkByIdFromDB('pl-1')).toBeNull();
+      expect(await domainQueries.getPaymentLinksByVendorFromDB('v-test')).toEqual([]);
+      expect(await domainQueries.getPaymentLinksByBuyerFromDB('b-test')).toEqual([]);
+      expect(await domainQueries.getVendorUnlocksFromDB('v-test')).toEqual([]);
+      expect(await domainQueries.getVendorCreditTransactionsFromDB('v-test')).toEqual([]);
+    } finally {
+      dbPool.pool = origPool;
+    }
+  });
+
+  test('rfqController getRFQs limit query parameter and storeService getRFQByIdAsync clean null return', async () => {
+    const res = mockRes();
+    const next = jest.fn();
+
+    // 1. rfqController.getRFQs with ?limit=1
+    await rfqController.getRFQs({
+      query: { limit: '1' },
+      user: { role: 'category_manager', email: 'cm@procucev.com' },
+    }, res, next);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      data: expect.any(Array),
+    }));
+    const data = res.json.mock.calls[0][0].data;
+    expect(data.length).toBeLessThanOrEqual(1);
+
+    const storageSpy = jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const getSpy = jest.spyOn(domainQueries, 'getRFQByIdFromDB');
+    const syncSpy = jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue([]);
+
+    try {
+      // 2. storeService.getRFQByIdAsync when DB returns null
+      getSpy.mockResolvedValueOnce(null);
+      const result = await storeService.getRFQByIdAsync('definitely-non-existent-rfq-id-12345');
+      expect(result).toBeUndefined();
+      expect(syncSpy).toHaveBeenCalledTimes(1);
+
+      // 3. storeService.getRFQByIdAsync when DB throws error
+      getSpy.mockRejectedValueOnce(new Error('DB connection drop'));
+      const resultAfterErr = await storeService.getRFQByIdAsync('definitely-non-existent-rfq-id-12345');
+      expect(resultAfterErr).toBeUndefined();
+      expect(syncSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      storageSpy.mockRestore();
+      getSpy.mockRestore();
+      syncSpy.mockRestore();
+    }
+  });
+
+  test('reportsController limit query parameter branch coverage', async () => {
+    const reportsController = require('../src/controllers/reportsController');
+    const next = jest.fn();
+
+    // 1. getSellerReports with limit
+    const resSeller = mockRes();
+    await reportsController.getSellerReports({ query: { limit: '1' } }, resSeller, next);
+    expect(resSeller.json).toHaveBeenCalled();
+    const sellerBody = resSeller.json.mock.calls[0][0];
+    expect(sellerBody.success).toBe(true);
+    expect(sellerBody.data.length).toBeLessThanOrEqual(1);
+
+    // 2. getBuyerReports with limit
+    const resBuyer = mockRes();
+    await reportsController.getBuyerReports({ query: { limit: '1' } }, resBuyer, next);
+    expect(resBuyer.json).toHaveBeenCalled();
+    const buyerBody = resBuyer.json.mock.calls[0][0];
+    expect(buyerBody.success).toBe(true);
+    expect(buyerBody.data.length).toBeLessThanOrEqual(1);
+
+    // 3. getRfqReports with limit
+    const resRfq = mockRes();
+    await reportsController.getRfqReports({ query: { limit: '1' } }, resRfq, next);
+    expect(resRfq.json).toHaveBeenCalled();
+    const rfqBody = resRfq.json.mock.calls[0][0];
+    expect(rfqBody.success).toBe(true);
+    expect(rfqBody.data.length).toBeLessThanOrEqual(1);
+
+    // 4. Invalid limit fallthrough
+    const resInvalid = mockRes();
+    await reportsController.getSellerReports({ query: { limit: 'invalid' } }, resInvalid, next);
+    expect(resInvalid.json).toHaveBeenCalled();
+  });
+
+  test('notificationController listNotifications limit branches', async () => {
+    const notificationController = require('../src/controllers/notificationController');
+    const next = jest.fn();
+
+    // 1. Unauthenticated or empty recipient
+    const resEmpty = mockRes();
+    await notificationController.listNotifications({}, resEmpty, next);
+    expect(resEmpty.json).toHaveBeenCalledWith({ success: true, data: [], unreadCount: 0 });
+
+    // 2. Authenticated vendor with explicit limit
+    const mockVendorReq = {
+      user: { role: 'vendor', email: 'test-limit-vendor@supplier.com' },
+      query: { limit: '5' },
+    };
+    const getVendorSpy = jest.spyOn(storeService, 'getVendorById').mockReturnValue({ id: 'v-101' });
+    const getNotificationsSpy = jest.spyOn(storeService, 'getNotificationsFor').mockReturnValue([
+      { id: 'n-1', read: false },
+    ]);
+    const getUnreadSpy = jest.spyOn(storeService, 'getUnreadNotificationCountFor').mockReturnValue(1);
+
+    const resVendor = mockRes();
+    await notificationController.listNotifications(mockVendorReq, resVendor, next);
+    expect(resVendor.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      data: expect.any(Array),
+      unreadCount: 1,
+    }));
+    expect(getNotificationsSpy).toHaveBeenCalledWith('vendor', 'v-101', 5);
+
+    // 3. Fallback to default limit 50 when invalid limit provided
+    const mockVendorInvalidReq = {
+      user: { role: 'vendor', email: 'test-limit-vendor@supplier.com' },
+      query: { limit: 'invalid' },
+    };
+    const resInvalid = mockRes();
+    await notificationController.listNotifications(mockVendorInvalidReq, resInvalid, next);
+    expect(getNotificationsSpy).toHaveBeenCalledWith('vendor', 'v-101', 50);
+
+    getVendorSpy.mockRestore();
+    getNotificationsSpy.mockRestore();
+    getUnreadSpy.mockRestore();
+  });
+
+  test('syncRFQsFromDB caches buyer-specific syncs within 25s window', async () => {
+    const storageSpy = jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const getRFQsSpy = jest.spyOn(domainQueries, 'getRFQsFromDB').mockResolvedValue([{ id: 'rfq-c-1', buyerAccountId: 'buyer-acc-throttle' }]);
+
+    try {
+      // First call fetches from DB
+      await storeService.syncRFQsFromDB(true, 'buyer-acc-throttle');
+      expect(getRFQsSpy).toHaveBeenCalledTimes(1);
+
+      // Second call within 25s should hit cache without calling getRFQsFromDB again
+      await storeService.syncRFQsFromDB(false, 'buyer-acc-throttle');
+      expect(getRFQsSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      storageSpy.mockRestore();
+      getRFQsSpy.mockRestore();
+    }
+  });
+
+  test('rfqController getVendorCandidates respects query limit', async () => {
+    const rfqController = require('../src/controllers/rfqController');
+    const mockRfq = { id: 'rfq-cand-1', buyerAccountId: 'b-1', category: 'Raw Materials' };
+    const getRfqSpy = jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue(mockRfq);
+    const candidateSpy = jest.spyOn(storeService, 'candidateVendorsForRFQ').mockReturnValue([
+      { id: 'v-1' },
+      { id: 'v-2' },
+      { id: 'v-3' },
+    ]);
+
+    const reqWithLimit = {
+      user: { role: 'admin', email: 'admin@procucev.com' },
+      params: { id: 'rfq-cand-1' },
+      query: { limit: '2' },
+    };
+    const res = mockRes();
+    const next = jest.fn();
+    await rfqController.getVendorCandidates(reqWithLimit, res, next);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [{ id: 'v-1' }, { id: 'v-2' }],
+    });
+
+    // Test invalid limit fallback
+    const reqInvalidLimit = {
+      user: { role: 'admin', email: 'admin@procucev.com' },
+      params: { id: 'rfq-cand-1' },
+      query: { limit: 'invalid' },
+    };
+    const resInvalid = mockRes();
+    await rfqController.getVendorCandidates(reqInvalidLimit, resInvalid, next);
+    expect(resInvalid.json).toHaveBeenCalledWith({
+      success: true,
+      data: [{ id: 'v-1' }, { id: 'v-2' }, { id: 'v-3' }],
+    });
+
+    getRfqSpy.mockRestore();
+    candidateSpy.mockRestore();
+  });
+
+  test('storeService limit parameters for evaluations, aiFeed, and vendorCatalogue', () => {
+    storeService.evaluations = [{ id: 'e-1' }, { id: 'e-2' }, { id: 'e-3' }];
+    expect(storeService.getEvaluations(2)).toHaveLength(2);
+    expect(storeService.getEvaluations()).toHaveLength(3);
+
+    storeService.aiFeed = [{ id: 'f-1' }, { id: 'f-2' }, { id: 'f-3' }];
+    expect(storeService.getAIFeed(1)).toHaveLength(1);
+    expect(storeService.getAIFeed()).toHaveLength(3);
+
+    storeService.vendorCatalogue = [
+      { id: 'p-1', vendorId: 'v-cat' },
+      { id: 'p-2', vendorId: 'v-cat' },
+      { id: 'p-3', vendorId: 'v-cat' },
+      { id: 'p-4', vendorId: 'v-other' },
+    ];
+    expect(storeService.getVendorCatalogue('v-cat', 2)).toHaveLength(2);
+    expect(storeService.getVendorCatalogue('v-cat')).toHaveLength(3);
+    expect(storeService.getVendorCatalogue(null, 2)).toHaveLength(2);
+
+    storeService.enterpriseInquiries = [{ id: 'inq-1' }, { id: 'inq-2' }, { id: 'inq-3' }];
+    expect(storeService.getEnterpriseInquiries(2)).toHaveLength(2);
+    expect(storeService.getEnterpriseInquiries()).toHaveLength(3);
+
+    storeService.buyerAccounts = [{ id: 'b-1' }, { id: 'b-2' }, { id: 'b-3' }];
+    expect(storeService.getBuyerAccounts(2)).toHaveLength(2);
+    expect(storeService.getBuyerAccounts()).toHaveLength(3);
+  });
+
+  test('controllers getBuyerAccounts, getEvaluations, and getProducts respect limit query', async () => {
+    const buyerAccountController = require('../src/controllers/buyerAccountController');
+    const evaluationController = require('../src/controllers/evaluationController');
+    const catalogueController = require('../src/controllers/catalogueController');
+
+    storeService.buyerAccounts = [{ id: 'ba-1' }, { id: 'ba-2' }, { id: 'ba-3' }];
+    const resBA = mockRes();
+    buyerAccountController.getBuyerAccounts({ query: { limit: '2' } }, resBA, jest.fn());
+    expect(resBA.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      data: [{ id: 'ba-1' }, { id: 'ba-2' }],
+    }));
+
+    storeService.evaluations = [{ id: 'ev-1' }, { id: 'ev-2' }];
+    const resEv = mockRes();
+    evaluationController.getEvaluations({ query: { limit: '1' } }, resEv, jest.fn());
+    expect(resEv.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      data: [{ id: 'ev-1' }],
+    }));
+
+    storeService.vendorCatalogue = [{ id: 'prod-1' }, { id: 'prod-2' }, { id: 'prod-3' }];
+    const resCat = mockRes();
+    catalogueController.getProducts({ query: { limit: '2' } }, resCat, jest.fn());
+    expect(resCat.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      data: [{ id: 'prod-1' }, { id: 'prod-2' }],
+    }));
+  });
+
+  test('upsertAuditLogInDB invalidates audit_logs cache', async () => {
+    const { queryCache } = require('../src/db/queryCache');
+    const invalidateSpy = jest.spyOn(queryCache, 'invalidate');
+    const storageSpy = jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    dbPool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: { id: 'log-cache-1' } }] }) };
+
+    try {
+      await domainQueries.upsertAuditLogInDB({ id: 'log-cache-1', action: 'TEST' });
+      expect(invalidateSpy).toHaveBeenCalledWith('audit_logs');
+    } finally {
+      invalidateSpy.mockRestore();
+      storageSpy.mockRestore();
+    }
+  });
+
+  test('vendorIngestionController getVendorMasterPreview respects limit query', async () => {
+    const vendorIngestionController = require('../src/controllers/vendorIngestionController');
+    const vendorIngestionService = require('../src/services/vendorIngestionService');
+    const previewSpy = jest.spyOn(vendorIngestionService, 'getVendorMasterPreview').mockResolvedValue({
+      records: [{ id: 'vm-1' }],
+      total: 10,
+    });
+
+    const req = {
+      user: { email: 'buyer@corp.com', role: 'buyer' },
+      params: { sessionId: 'sess-1' },
+      query: { limit: '25' },
+    };
+    const res = mockRes();
+    await vendorIngestionController.getVendorMasterPreview(req, res, jest.fn());
+    expect(previewSpy).toHaveBeenCalledWith(req.user, 'sess-1', 25);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: { records: [{ id: 'vm-1' }], total: 10 },
+    });
+
+    previewSpy.mockRestore();
+  });
+
+  test('updateProfile invalidates buyer_accounts cache', async () => {
+    const { queryCache } = require('../src/db/queryCache');
+    const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+    const invalidateSpy = jest.spyOn(queryCache, 'invalidate');
+    const storageSpy = jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const withTxSpy = jest.spyOn(dbPool, 'withTransaction').mockImplementation(async (cb) => {
+      const client = {
+        query: jest.fn().mockResolvedValue({ rows: [{ uuid: 'org-1' }] }),
+      };
+      return cb(client);
+    });
+
+    try {
+      const res = await buyerProfileQueries.updateProfile({
+        organizationId: 'org-1',
+        userId: 'u-1',
+        patch: { companyName: 'New Org' },
+      });
+      expect(res.updated).toBe(true);
+      expect(invalidateSpy).toHaveBeenCalledWith('buyer_accounts');
+    } finally {
+      invalidateSpy.mockRestore();
+      storageSpy.mockRestore();
+      withTxSpy.mockRestore();
+    }
+  });
+
+  test('aiFeedController getAIFeed passes limit to storeService when unrestricted', async () => {
+    const aiFeedController = require('../src/controllers/aiFeedController');
+    const feedSpy = jest.spyOn(storeService, 'getAIFeed').mockReturnValue([{ id: 'f-1' }]);
+    const req = {
+      user: { role: 'admin', email: 'admin@procucev.com' },
+      query: { limit: '1' },
+    };
+    const res = mockRes();
+    await aiFeedController.getAIFeed(req, res, jest.fn());
+    expect(feedSpy).toHaveBeenCalledWith(1);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [{ id: 'f-1' }],
+    });
+    feedSpy.mockRestore();
+  });
+
+  test('domainQueries getVendorsFromDB and countVendorsCreatedBetween caching and limit', async () => {
+    const storageSpy = jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const querySpy = jest.spyOn(dbPool, 'query').mockImplementation(async (sql, params, opts) => {
+      if (sql.includes('COUNT(*)')) {
+        return { rows: [{ count: 42 }] };
+      }
+      return { rows: [{ id: 'v-1', raw: JSON.stringify({ id: 'v-1', name: 'Vendor 1' }) }] };
+    });
+
+    try {
+      const vendorsLimited = await domainQueries.getVendorsFromDB(5);
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('LIMIT $1'),
+        [5],
+        expect.objectContaining({ useCache: true, tag: 'vendors' })
+      );
+      expect(vendorsLimited).toHaveLength(1);
+
+      const count = await domainQueries.countVendorsCreatedBetween(new Date('2026-01-01'), new Date('2026-12-31'));
+      expect(count).toBe(42);
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('COUNT(*)'),
+        expect.any(Array),
+        expect.objectContaining({ useCache: true, tag: 'vendors' })
+      );
+    } finally {
+      storageSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
+  test('buyerProfileQueries dispatch templates caching and invalidation', async () => {
+    const { queryCache } = require('../src/db/queryCache');
+    const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+    const invalidateSpy = jest.spyOn(queryCache, 'invalidate');
+    const storageSpy = jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rowsSpy = jest.spyOn(dbPool, 'rows').mockResolvedValue([
+      { template_type: 'category_mapped', subject: 'Subj', message: 'Msg' }
+    ]);
+    const querySpy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [] });
+
+    try {
+      const templates = await buyerProfileQueries.getDispatchTemplates('org-dispatch-1');
+      expect(rowsSpy).toHaveBeenCalledWith(
+        expect.stringContaining('vendor_dispatch_templates'),
+        ['org-dispatch-1'],
+        expect.objectContaining({ useCache: true, tag: 'vendor_dispatch_templates' })
+      );
+      expect(templates.category_mapped).toEqual({ subject: 'Subj', message: 'Msg' });
+
+      await buyerProfileQueries.upsertDispatchTemplate('org-dispatch-1', 'category_mapped', { subject: 'New', message: 'Msg' });
+      expect(invalidateSpy).toHaveBeenCalledWith('vendor_dispatch_templates');
+
+      await buyerProfileQueries.upsertDispatchTemplate('org-dispatch-1', 'category_mapped', { subject: '', message: '' });
+      expect(invalidateSpy).toHaveBeenCalledWith('vendor_dispatch_templates');
+    } finally {
+      invalidateSpy.mockRestore();
+      storageSpy.mockRestore();
+      rowsSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
+  test('storeService getVendors and candidateVendorsForRFQ with limit', async () => {
+    storeService.vendors = [
+      { id: 'v-lim-1', majorCategory: 'Electronics', name: 'Vendor Lim 1' },
+      { id: 'v-lim-2', majorCategory: 'Electronics', name: 'Vendor Lim 2' },
+      { id: 'v-lim-3', majorCategory: 'Electronics', name: 'Vendor Lim 3' },
+    ];
+
+    const vendorsAllLimited = await storeService.getVendors('all', 2);
+    expect(vendorsAllLimited).toHaveLength(2);
+
+    const candidates = storeService.candidateVendorsForRFQ({ category: 'Electronics' }, 1);
+    expect(candidates).toHaveLength(1);
+  });
+
+  test('buyerProfileQueries loadCategories with cache options', async () => {
+    const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+    const rowsSpy = jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) => {
+      if (sql.includes('from "user"')) {
+        return [{ user_uuid: 'user-cat-1', org_uuid: 'org-1' }];
+      }
+      return [{ division: 'IT', category: 'Laptops' }];
+    });
+    try {
+      await buyerProfileQueries.findProfileByUserId('user-cat-1');
+      expect(rowsSpy).toHaveBeenCalledWith(
+        expect.stringContaining('org_division_category'),
+        ['user-cat-1'],
+        expect.objectContaining({ useCache: true, tag: 'buyer_accounts' })
+      );
+    } finally {
+      rowsSpy.mockRestore();
+    }
+  });
+
+  test('authSessionQueries isTokenRevoked, revokeToken, and purgeExpiredAuthState cache management', async () => {
+    const authSessionQueries = require('../src/db/authSessionQueries');
+    const realAuth = authSessionQueries.__real || authSessionQueries;
+    const { queryCache } = require('../src/db/queryCache');
+    const rowsSpy = jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
+    const querySpy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 1 });
+    const invalidateSpy = jest.spyOn(queryCache, 'invalidate');
+    try {
+      const isRevoked = await realAuth.isTokenRevoked('test-sig-1');
+      expect(isRevoked).toBe(false);
+      expect(rowsSpy).toHaveBeenCalledWith(
+        expect.stringContaining('auth_revoked_tokens'),
+        ['test-sig-1'],
+        expect.objectContaining({ useCache: true, tag: 'auth_revoked_tokens' })
+      );
+
+      await realAuth.revokeToken('test-sig-2', Date.now() + 60000);
+      expect(invalidateSpy).toHaveBeenCalledWith('auth_revoked_tokens');
+
+      await realAuth.purgeExpiredAuthState();
+      expect(invalidateSpy).toHaveBeenCalledWith('auth_revoked_tokens');
+    } finally {
+      rowsSpy.mockRestore();
+      querySpy.mockRestore();
+      invalidateSpy.mockRestore();
+    }
+  });
+
+  test('vendorIngestionQueries findOrganizationCategoryMaster with cache options', async () => {
+    const vendorIngestionQueries = require('../src/db/vendorIngestionQueries');
+    const storageSpy = jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rowsSpy = jest.spyOn(dbPool, 'rows').mockResolvedValue([
+      { division: 'IT', category: 'Laptops' },
+      { division: 'IT', category: 'Monitors' },
+    ]);
+    try {
+      const res = await vendorIngestionQueries.findOrganizationCategoryMaster('org-ingest-1');
+      expect(res).toEqual([{ majorCategory: 'IT', minorCategories: ['Laptops', 'Monitors'] }]);
+      expect(rowsSpy).toHaveBeenCalledWith(
+        expect.stringContaining('org_division_category'),
+        ['org-ingest-1'],
+        expect.objectContaining({ useCache: true, tag: 'taxonomy' })
+      );
+    } finally {
+      storageSpy.mockRestore();
+      rowsSpy.mockRestore();
+    }
+  });
+
+  test('graphql resolvers aiFeed forwards limit when caller is unrestricted', async () => {
+    const rootResolvers = require('../src/graphql/resolvers');
+    const getAIFeedSpy = jest.spyOn(storeService, 'getAIFeed').mockReturnValue([
+      { id: 'feed-1', title: 'Feed 1' },
+      { id: 'feed-2', title: 'Feed 2' },
+    ]);
+    try {
+      const result = await rootResolvers.aiFeed({ limit: 5 }, { req: { user: { role: 'admin' } } });
+      expect(getAIFeedSpy).toHaveBeenCalledWith(5);
+      expect(result).toHaveLength(2);
+    } finally {
+      getAIFeedSpy.mockRestore();
+    }
+  });
+
+  test('domainQueries vendor search and lookup queries pass cache options to pool.query', async () => {
+    const domainQueries = require('../src/db/domainQueries');
+    const storageSpy = jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const querySpy = jest.spyOn(dbPool, 'query').mockImplementation(async (sql, params, opts) => {
+      if (sql.includes('COUNT(*)')) {
+        return { rows: [{ total: 42 }] };
+      }
+      return { rows: [{ raw: JSON.stringify({ id: 'v-cached-1', email: 'cached@vendor.com' }) }] };
+    });
+
+    try {
+      // 1. countPublicVendorsMatchingCategories
+      const count = await domainQueries.countPublicVendorsMatchingCategories(['industrial']);
+      expect(count).toBe(42);
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('COUNT(*)'),
+        expect.any(Array),
+        expect.objectContaining({ useCache: true, tag: 'vendors', ttlMs: 60000 })
+      );
+
+      // 2. getPublicVendorsMatchingCategories
+      const list = await domainQueries.getPublicVendorsMatchingCategories(['industrial'], 10);
+      expect(list).toHaveLength(1);
+      expect(list[0].id).toBe('v-cached-1');
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('SELECT raw FROM vendors'),
+        expect.any(Array),
+        expect.objectContaining({ useCache: true, tag: 'vendors', ttlMs: 60000 })
+      );
+
+      // 3. getVendorByEmailFromDB
+      const vendorEmail = await domainQueries.getVendorByEmailFromDB('cached@vendor.com');
+      expect(vendorEmail.id).toBe('v-cached-1');
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('lower(email) = lower($1)'),
+        ['cached@vendor.com'],
+        expect.objectContaining({ useCache: true, tag: 'vendors', ttlMs: 60000 })
+      );
+
+      // 4. getVendorByIdFromDB
+      const vendorId = await domainQueries.getVendorByIdFromDB('v-cached-1');
+      expect(vendorId.id).toBe('v-cached-1');
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('WHERE id = $1'),
+        ['v-cached-1'],
+        expect.objectContaining({ useCache: true, tag: 'vendors', ttlMs: 60000 })
+      );
+    } finally {
+      storageSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
 });
+
 

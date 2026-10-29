@@ -302,8 +302,11 @@ CREATE TABLE IF NOT EXISTS rfqs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rfqs_rfq_number ON rfqs (rfq_number);
+CREATE INDEX IF NOT EXISTS idx_rfqs_category ON rfqs (category);
 CREATE INDEX IF NOT EXISTS idx_rfqs_status ON rfqs (status);
+CREATE INDEX IF NOT EXISTS idx_rfqs_status_created ON rfqs (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_rfqs_sourcing_mode ON rfqs (sourcing_mode);
+CREATE INDEX IF NOT EXISTS idx_rfqs_created_at ON rfqs (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS evaluations (
   id VARCHAR(64) PRIMARY KEY,
@@ -315,6 +318,8 @@ CREATE TABLE IF NOT EXISTS evaluations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_evaluations_vendor_id ON evaluations (vendor_id);
+CREATE INDEX IF NOT EXISTS idx_evaluations_status ON evaluations (status);
+CREATE INDEX IF NOT EXISTS idx_evaluations_created_at ON evaluations (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS vendor_catalogue (
   id VARCHAR(64) PRIMARY KEY,
@@ -331,6 +336,8 @@ CREATE TABLE IF NOT EXISTS vendor_catalogue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_vendor_catalogue_vendor_id ON vendor_catalogue (vendor_id);
+CREATE INDEX IF NOT EXISTS idx_vendor_catalogue_category ON vendor_catalogue (category);
+CREATE INDEX IF NOT EXISTS idx_vendor_catalogue_sku ON vendor_catalogue (sku);
 
 CREATE TABLE IF NOT EXISTS buyer_accounts (
   id VARCHAR(64) PRIMARY KEY,
@@ -345,6 +352,8 @@ CREATE TABLE IF NOT EXISTS buyer_accounts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_buyer_accounts_corporate_email ON buyer_accounts (corporate_email);
+CREATE INDEX IF NOT EXISTS idx_buyer_accounts_is_active ON buyer_accounts (is_active);
+CREATE INDEX IF NOT EXISTS idx_buyer_accounts_status ON buyer_accounts (status);
 
 CREATE TABLE IF NOT EXISTS ai_feed (
   id VARCHAR(64) PRIMARY KEY,
@@ -357,6 +366,7 @@ CREATE TABLE IF NOT EXISTS ai_feed (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ai_feed_sequence ON ai_feed (sequence);
+CREATE INDEX IF NOT EXISTS idx_ai_feed_created_at ON ai_feed (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id VARCHAR(64) PRIMARY KEY,

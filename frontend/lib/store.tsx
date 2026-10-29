@@ -215,6 +215,7 @@ interface AppContextType {
   addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => Promise<VendorEntry | null>;
   updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => void;
   deleteBuyerVendor: (vendorId: string) => void;
+  deleteMultipleBuyerVendors: (vendorIds: string[]) => Promise<void>;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
   generateVendorOnboardingEmail: (vendor: VendorEntry, isExisting: boolean, tempPassword?: string) => VendorOnboardingEmailPayload;
   selectedOnboardingEmail: VendorOnboardingEmailPayload | null;
@@ -697,7 +698,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsLoadingRFQs(true);
     }
     try {
-      const result = await fetchRFQList();
+      const result = await fetchRFQList({ limit: 100 });
       if (!result.success) {
         console.error('Failed to load RFQs:', result.error);
         return;
@@ -869,7 +870,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     try {
       const activeBuyerId = activeBuyerAccount?.id;
-      const queryParam = activeBuyerId ? `?buyerAccountId=${encodeURIComponent(activeBuyerId)}` : '';
+      const queryParam = activeBuyerId ? `?buyerAccountId=${encodeURIComponent(activeBuyerId)}&limit=50` : '?limit=50';
       const res = await fetch(`/api/ai-feed${queryParam}`, { headers: authFetchHeaders() });
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
@@ -1760,7 +1761,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const newV = body.data;
-    setBuyerVendors((prev) => [newV, ...prev]);
+    setBuyerVendors((prev) => {
+      const updated = [newV, ...prev];
+      setSessionCache('vendors', updated);
+      return updated;
+    });
 
     addFeedItem(
       `Vendor Added: ${newV.name}`,
@@ -1820,6 +1825,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
     showToast('Vendor Removed', 'Vendor deleted from directory.', 'info');
+  };
+
+  const deleteMultipleBuyerVendors = async (vendorIds: string[]) => {
+    if (!Array.isArray(vendorIds) || vendorIds.length === 0) return;
+    const idsSet = new Set(vendorIds);
+    setBuyerVendors((prev) => prev.filter((v) => !idsSet.has(v.id)));
+
+    // Asynchronously delete from backend database
+    try {
+      const res = await fetch('/api/vendors/bulk-delete', {
+        method: 'POST',
+        headers: {
+          ...authFetchHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ vendorIds }),
+      });
+      if (!res.ok) {
+        // Fallback to sequential deletion if endpoint returned error
+        await Promise.allSettled(
+          vendorIds.map((id) =>
+            fetch(`/api/vendors/${encodeURIComponent(id)}`, {
+              method: 'DELETE',
+              headers: authFetchHeaders(),
+            })
+          )
+        );
+      }
+    } catch (err) {
+      console.error('Failed to sync bulk vendor deletion to backend:', err);
+      // Fallback
+      await Promise.allSettled(
+        vendorIds.map((id) =>
+          fetch(`/api/vendors/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: authFetchHeaders(),
+          })
+        )
+      );
+    }
+
+    addAuditLog(`Removed ${vendorIds.length} vendor record(s) from buyer vendor master.`);
+    showToast('Vendors Removed', `Successfully deleted ${vendorIds.length} supplier record(s).`, 'info');
   };
 
   // Dynamic Matching Logic based on Minor & Major Categories
@@ -2836,6 +2884,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addBuyerVendor,
         updateBuyerVendor,
         deleteBuyerVendor,
+        deleteMultipleBuyerVendors,
         matchSuitableVendors,
         generateVendorOnboardingEmail,
         selectedOnboardingEmail,

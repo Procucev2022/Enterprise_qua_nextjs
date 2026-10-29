@@ -164,37 +164,35 @@ describe('storeService branch coverage — buyer accounts, vendors, RFQs, notifi
     // so both throw after building the inquiry thread. These tests pin the
     // CURRENT behaviour (the thread-building branches run, then the call throws)
     // until the underlying bug is addressed — see the flag raised to the parent.
-    test('addInquiryToRFQ builds a new thread then throws on the missing addFeedItem helper', () => {
+    test('addInquiryToRFQ builds a new thread successfully', () => {
       const rfq = makeRfq();
-      expect(() =>
-        storeService.addInquiryToRFQ(rfq.id, {
-          message: 'Is stainless steel acceptable?',
-          vendorName: 'Vendor Q',
-          vendorEmail: 'q@v.com',
-          vendorId: 'vq-1',
-        }),
-      ).toThrow(/addFeedItem is not a function/);
-      // The thread was recorded on the RFQ before the throw.
+      const res = storeService.addInquiryToRFQ(rfq.id, {
+        message: 'Is stainless steel acceptable?',
+        vendorName: 'Vendor Q',
+        vendorEmail: 'q@v.com',
+        vendorId: 'vq-1',
+      });
+      expect(res.inquiry).toBeDefined();
+      // The thread was recorded on the RFQ.
       const stored = storeService.getRFQById(rfq.id);
       expect(Array.isArray(stored.inquiries)).toBe(true);
       expect(stored.inquiries).toHaveLength(1);
 
-      // A second message takes the existing-thread branch, then throws again.
-      expect(() =>
-        storeService.addInquiryToRFQ(rfq.id, {
-          message: 'Following up on my earlier question.',
-          vendorName: 'Vendor Q',
-          vendorEmail: 'q@v.com',
-          vendorId: 'vq-1',
-        }),
-      ).toThrow(/addFeedItem is not a function/);
+      // A second message takes the existing-thread branch cleanly.
+      const res2 = storeService.addInquiryToRFQ(rfq.id, {
+        message: 'Following up on my earlier question.',
+        vendorName: 'Vendor Q',
+        vendorEmail: 'q@v.com',
+        vendorId: 'vq-1',
+      });
+      expect(res2.inquiry.messages).toHaveLength(2);
     });
 
-    test('replyToRFQInquiry returns null for unknown RFQ or inquiry, then throws on the missing helper', () => {
+    test('replyToRFQInquiry returns null for unknown RFQ or inquiry, and answers thread successfully', () => {
       expect(storeService.replyToRFQInquiry('ghost', 'inq-x', { reply: 'hi' })).toBeNull();
 
       const rfq = makeRfq();
-      // Seed an inquiry directly on the RFQ (bypassing the throwing addInquiryToRFQ).
+      // Seed an inquiry directly on the RFQ.
       const inq = {
         id: 'inq-seed-1',
         rfqNumber: rfq.rfqNumber,
@@ -208,10 +206,9 @@ describe('storeService branch coverage — buyer accounts, vendors, RFQs, notifi
       storeService.updateRFQ(rfq.id, { inquiries: [inq] });
 
       expect(storeService.replyToRFQInquiry(rfq.id, 'wrong-id', { reply: 'x' })).toBeNull();
-      // The reply branch builds the thread (including the legacy prevMsgs path), then throws.
-      expect(() =>
-        storeService.replyToRFQInquiry(rfq.id, inq.id, { reply: 'Yes, that is fine.', repliedBy: 'Buyer Officer' }),
-      ).toThrow(/addFeedItem is not a function/);
+      // The reply branch builds the thread successfully.
+      const res = storeService.replyToRFQInquiry(rfq.id, inq.id, { reply: 'Yes, that is fine.', repliedBy: 'Buyer Officer' });
+      expect(res.inquiry.status).toBe('answered');
     });
   });
 

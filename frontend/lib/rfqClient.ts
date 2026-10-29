@@ -495,12 +495,18 @@ export async function fetchRFQById(identifier: string): Promise<RFQFetchResult> 
  * Reads the authenticated, org-scoped endpoint. There is no way to ask for
  * anything wider: the previous global list is what leaked RFQs between buyers.
  */
-export async function fetchRFQList(): Promise<RFQListResult> {
+export async function fetchRFQList(
+  options: { summary?: boolean; limit?: number } = {}
+): Promise<RFQListResult> {
   const token = authClient.getToken();
+  const params = new URLSearchParams();
+  if (options.summary) params.set('summary', 'true');
+  if (options.limit) params.set('limit', String(options.limit));
+  const queryStr = params.toString() ? `?${params.toString()}` : '';
 
   let res: Response;
   try {
-    res = await fetch('/api/rfqs', {
+    res = await fetch(`/api/rfqs${queryStr}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
   } catch {
@@ -536,12 +542,18 @@ export async function fetchRFQList(): Promise<RFQListResult> {
  * wider view of the buyer-scoped `fetchRFQList`, it is a separate oversight
  * endpoint. The rows come back newest first.
  */
-export async function fetchAllRFQs(): Promise<RFQListResult> {
+export async function fetchAllRFQs(
+  options: { summary?: boolean; limit?: number } = {}
+): Promise<RFQListResult> {
   const token = authClient.getToken();
+  const params = new URLSearchParams();
+  if (options.summary) params.set('summary', 'true');
+  if (options.limit) params.set('limit', String(options.limit));
+  const queryStr = params.toString() ? `?${params.toString()}` : '';
 
   let res: Response;
   try {
-    res = await fetch('/api/rfqs/all', {
+    res = await fetch(`/api/rfqs/all${queryStr}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
   } catch {
@@ -576,12 +588,13 @@ export async function fetchAllRFQs(): Promise<RFQListResult> {
  * admin. Being in this list grants no visibility by itself — only actually
  * inviting a vendor (inviteVendorsToRFQ) does.
  */
-export async function fetchVendorCandidates(rfqId: string): Promise<RFQVendorCandidatesResult> {
+export async function fetchVendorCandidates(rfqId: string, limit?: number): Promise<RFQVendorCandidatesResult> {
   const token = authClient.getToken();
+  const queryParam = limit && limit > 0 ? `?limit=${encodeURIComponent(limit)}` : '';
 
   let res: Response;
   try {
-    res = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/vendor-candidates`, {
+    res = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/vendor-candidates${queryParam}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
   } catch {

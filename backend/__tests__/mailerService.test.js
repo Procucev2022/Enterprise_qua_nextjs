@@ -248,14 +248,29 @@ describe('mailerService', () => {
     };
 
     test('renders only real fields and names the RFQ in the subject', () => {
-      const msg = mailerService.buildRfqInviteEmail('v@x.com', { rfq: RFQ, recipientName: 'Priya' });
-      expect(msg.to).toBe('v@x.com');
-      expect(msg.subject).toBe('New RFQ RFQ-2026-00500 in Pumps & Accessories');
-      expect(msg.html).toContain('Dear <strong>Priya</strong>');
-      expect(msg.html).toContain('Acme Buyer Co');
-      expect(msg.html).toContain('Centrifugal Pumps');
-      expect(msg.html).toContain('Pump 500 GPM');
-      expect(msg.html).toContain('Navi Mumbai Plant');
+      // Scenario 1: Buyer-uploaded vendor receives buyer company name
+      const buyerUploadedMsg = mailerService.buildRfqInviteEmail('v@x.com', {
+        rfq: RFQ,
+        recipientName: 'Priya',
+        isBuyerUploaded: true,
+      });
+      expect(buyerUploadedMsg.to).toBe('v@x.com');
+      expect(buyerUploadedMsg.subject).toBe('New RFQ RFQ-2026-00500 in Pumps & Accessories');
+      expect(buyerUploadedMsg.html).toContain('Dear <strong>Priya</strong>');
+      expect(buyerUploadedMsg.html).toContain('Acme Buyer Co');
+      expect(buyerUploadedMsg.html).toContain('Centrifugal Pumps');
+      expect(buyerUploadedMsg.html).toContain('Pump 500 GPM');
+      expect(buyerUploadedMsg.html).toContain('Navi Mumbai Plant');
+
+      // Scenario 2: Procucev platform vendor does NOT receive buyer company name
+      const platformVendorMsg = mailerService.buildRfqInviteEmail('v@x.com', {
+        rfq: RFQ,
+        recipientName: 'Priya',
+        isBuyerUploaded: false,
+      });
+      expect(platformVendorMsg.html).not.toContain('Acme Buyer Co');
+      expect(platformVendorMsg.html).toContain('We have a new verified business enquiry that matches your category.');
+      expect(platformVendorMsg.html).toContain('Centrifugal Pumps');
     });
 
     test('labels follow-up mail as an RFQ reminder', () => {
@@ -1878,7 +1893,7 @@ describe('mailerService', () => {
       expect(viaLineItems.html).toBeDefined();
 
       // Multi-item + buyerAccountName => the items.length > 1 sample-format and
-      // the named-buyer greeting branches.
+      // the named-buyer greeting branches when vendor is buyer-uploaded.
       const multiItem = mailerService.buildRfqInviteEmail('vendor@x.com', {
         rfq: {
           rfqNumber: 'RFQ-INV-4',
@@ -1888,9 +1903,26 @@ describe('mailerService', () => {
             { name: 'Valve', quantity: 5 },
           ],
         },
+        isBuyerUploaded: true,
         isReminder: false,
       });
       expect(multiItem.html).toContain('Named Buyer Co');
+
+      // Procucev platform vendor: buyer company name must be hidden
+      const multiItemPlatform = mailerService.buildRfqInviteEmail('vendor@x.com', {
+        rfq: {
+          rfqNumber: 'RFQ-INV-4',
+          buyerAccountName: 'Named Buyer Co',
+          extractedEntities: [
+            { itemName: 'Pump', quantity: 2, unit: 'Nos' },
+            { name: 'Valve', quantity: 5 },
+          ],
+        },
+        isBuyerUploaded: false,
+        isReminder: false,
+      });
+      expect(multiItemPlatform.html).not.toContain('Named Buyer Co');
+      expect(multiItemPlatform.html).toContain('We have a new verified business enquiry that matches your category.');
 
       const bare = mailerService.buildRfqInviteEmail('vendor@x.com', { rfq: {} });
       expect(bare.html).toBeDefined();
@@ -2068,6 +2100,29 @@ describe('mailerService', () => {
       // exercised on the live module instance even though nothing is sent.
       const res = await mailerService.sendOtpEmail('newuser@example.com', '4321', 60, { isRegistration: true });
       expect(res).toEqual({ sent: false, reason: 'test environment' });
+    });
+
+    test('wrapEmail and mailerService templates produce responsive full-width presentation table layouts', () => {
+      const invite = mailerService.buildRfqInviteEmail('vendor@example.com', {
+        recipientName: 'Vendor Lead',
+        rfq: { rfqNumber: 'RFQ-RESP-01', title: 'Motors' },
+      });
+      expect(invite.html).toContain('max-width: 100%');
+      expect(invite.html).toContain('width: 100%');
+      expect(invite.html).toContain('background-color: #ffffff');
+      expect(invite.html).toContain('box-sizing: border-box');
+      expect(invite.html).toContain('role="presentation"');
+      expect(invite.html).toContain('class="email-wrapper"');
+
+      const req = mailerService.buildRequisitionEmail('buyer@example.com', {
+        rfqNumber: 'REQ-RESP-01',
+        title: 'Sensors',
+      });
+      expect(req.html).toContain('max-width: 100%');
+      expect(req.html).toContain('width: 100%');
+      expect(req.html).toContain('background-color: #ffffff');
+      expect(req.html).toContain('box-sizing: border-box');
+      expect(req.html).toContain('role="presentation"');
     });
   });
 });

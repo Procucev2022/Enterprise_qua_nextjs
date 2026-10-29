@@ -77,6 +77,72 @@ describe('WorkspaceShell route guard', () => {
     expect(screen.getByText(UI_STRINGS.auth.redirecting)).toBeInTheDocument();
   });
 
+  it('preserves full path and email query param when redirecting unauthenticated visitor', () => {
+    mockStore({ isLoggedIn: false });
+    window.history.pushState({}, '', '/vendor/quotation-form?rfq=RFQ123&email=vendor%40example.com');
+
+    render(
+      <WorkspaceShell role="vendor">
+        <p>screen</p>
+      </WorkspaceShell>
+    );
+
+    expect(mockReplace).toHaveBeenCalledWith(
+      `${LOGIN_ROUTE}?redirect=${encodeURIComponent('/vendor/quotation-form?rfq=RFQ123&email=vendor%40example.com')}&email=${encodeURIComponent('vendor@example.com')}`
+    );
+    window.history.pushState({}, '', '/');
+  });
+
+  it('redirects unauthenticated visitor without email query param when not present', () => {
+    mockStore({ isLoggedIn: false });
+    window.history.pushState({}, '', '/buyer/rfq-summary');
+
+    render(
+      <WorkspaceShell role="buyer">
+        <p>screen</p>
+      </WorkspaceShell>
+    );
+
+    expect(mockReplace).toHaveBeenCalledWith(
+      `${LOGIN_ROUTE}?redirect=${encodeURIComponent('/buyer/rfq-summary')}`
+    );
+    window.history.pushState({}, '', '/');
+  });
+
+  it('sends first-login buyers to onboarding without rendering the workspace', () => {
+    mockStore({
+      isLoggedIn: true,
+      currentRole: 'buyer',
+      currentUserSession: { role: 'buyer', onboardingRequired: true },
+    });
+
+    render(
+      <WorkspaceShell role="buyer">
+        <p>buyer screen</p>
+      </WorkspaceShell>
+    );
+
+    expect(mockReplace).toHaveBeenCalledWith('/buyer-first-login');
+    expect(screen.queryByText('buyer screen')).not.toBeInTheDocument();
+  });
+
+  it('calls ensureRouteData when logged in and role matches', () => {
+    const ensureRouteData = jest.fn();
+    mockStore({
+      isLoggedIn: true,
+      currentRole: 'buyer',
+      ensureRouteData,
+    });
+
+    render(
+      <WorkspaceShell role="buyer">
+        <p>buyer screen</p>
+      </WorkspaceShell>
+    );
+
+    expect(ensureRouteData).toHaveBeenCalledWith('/buyer/dashboard', 'buyer');
+  });
+
   it('redirects a vendor away from a buyer URL to their own workspace', () => {
     mockStore({ isLoggedIn: true, currentRole: 'vendor' });
 

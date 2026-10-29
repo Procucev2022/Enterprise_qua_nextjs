@@ -304,4 +304,133 @@ describe('downloadSingleVendorQuoteExcel', () => {
     expect(createObjectURLSpy).toHaveBeenCalled();
     expect(clickSpy).toHaveBeenCalled();
   });
+
+  test('exports single vendor quote when lineItemQuotes is empty and handles special character vendor name', () => {
+    const quoteWithoutLineItems = makeQuote({
+      vendorName: 'Delta & Sons / Ltd.',
+      lineItemQuotes: undefined,
+      totalPrice: 2000,
+      unitPrice: 200,
+      leadTimeDays: 15,
+      warrantyYears: 2,
+    });
+
+    downloadSingleVendorQuoteExcel(
+      makeRfq({
+        extractedEntities: [
+          { id: 'li-x', itemName: 'Spare Part', quantity: 10, unit: undefined } as any,
+        ],
+      }),
+      quoteWithoutLineItems
+    );
+
+    expect(XLSX.utils.json_to_sheet).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ 'Item Name': 'Spare Part', 'Unit': 'Nos' }),
+      ]),
+      expect.anything()
+    );
+  });
 });
+
+describe('bidComparisonExport Additional Branch Coverage', () => {
+  let createObjectURLSpy: jest.SpyInstance;
+  let revokeObjectURLSpy: jest.SpyInstance;
+  let clickSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    createObjectURLSpy = jest.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-url');
+    revokeObjectURLSpy = jest.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    createObjectURLSpy.mockRestore();
+    revokeObjectURLSpy.mockRestore();
+    clickSpy.mockRestore();
+  });
+
+  test('downloadFullQuotesExcel covers score breakdown, missing fallbacks, and non-itemized remarks', () => {
+    const fullScoreQuote = makeQuote({
+      vendorName: 'Alpha Tech',
+      scoreBreakdown: {
+        price: { raw: 100, weighted: 45 },
+        leadTime: { raw: 90, weighted: 27 },
+        warranty: { raw: 80, weighted: 20 },
+      } as any,
+      aiMatchScore: undefined,
+      isBestPrice: true,
+      leadTimeDays: undefined,
+      warrantyYears: undefined,
+      complianceStatus: undefined,
+      paymentTerms: undefined,
+      submittedAt: '2026-05-01T12:00:00Z',
+      remarks: undefined,
+      vendorCategory: undefined,
+      totalPrice: undefined,
+      unitPrice: undefined,
+      lineItemQuotes: [
+        {
+          lineItemId: undefined,
+          itemName: 'Item Without ID',
+          quantity: 1,
+          unit: undefined,
+          unitPrice: 50,
+          totalPrice: 50,
+          leadTimeDays: undefined,
+          warrantyYears: undefined,
+        } as any,
+      ],
+    });
+
+    const fallbackQuote = makeQuote({
+      vendorName: 'Beta Tech',
+      scoreBreakdown: undefined,
+      aiMatchScore: 75,
+      isBestPrice: false,
+      leadTimeDays: 0,
+      warrantyYears: 0,
+      paymentTerms: '50% advance',
+      submittedAt: undefined,
+      remarks: 'Fast delivery',
+      lineItemQuotes: [],
+    });
+
+    const rfqWithEmptyFields: RFQItem = {
+      rfqNumber: 'RFQ-EMPTY-01',
+      title: 'Empty Fields RFQ',
+      category: undefined,
+      extractedEntities: [
+        {
+          id: undefined,
+          itemName: '',
+          quantity: undefined,
+          unit: undefined,
+          majorCategory: undefined,
+          minorCategory: undefined,
+          targetDate: undefined,
+          technicalSpecs: undefined,
+        } as any,
+      ],
+    } as any;
+
+    downloadFullQuotesExcel(rfqWithEmptyFields, [fullScoreQuote, fallbackQuote]);
+    expect(XLSX.utils.json_to_sheet).toHaveBeenCalled();
+  });
+
+  test('downloadBidComparisonExcel and downloadVendorQuotationExcel handle empty and unpriced lines', () => {
+    // Empty extractedEntities in rfq
+    downloadBidComparisonExcel({ rfqNumber: 'RFQ-NONE', extractedEntities: undefined } as any, []);
+
+    // Line items with and without rates
+    const lineBids: LineItemBid[] = [
+      { id: 'lb-1', description: 'Item 1', quantity: 5, unit: undefined, unitPrice: 0, leadTimeDays: 0, marketBandStatus: 'optimal' as const, paymentTerms: 'Net 30' },
+      { id: 'lb-2', description: 'Item 2', quantity: 2, unit: 'Kg', unitPrice: 150, leadTimeDays: 5, marketBandStatus: 'optimal' as const, paymentTerms: 'Net 30' },
+    ];
+    downloadVendorQuotationExcel('RFQ-RATE-TEST', lineBids, { 'lb-2': '150' });
+
+    expect(XLSX.utils.json_to_sheet).toHaveBeenCalled();
+  });
+});
+

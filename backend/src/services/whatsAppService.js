@@ -24,10 +24,10 @@ const WHATSAPP_CONFIG = {
   // ── sendmsg.in (primary) ──────────────────────────────────────────────────
   get SENDMSG_BASE_URL() { return getEnv('WHATSAPP_BASE_URL', 'https://media.sendmsg.in'); },
   get SENDMSG_TEMPLATE_URL() { return getEnv('WHATSAPP_TEMPLATE_BASE_URL', 'https://wsapi.sendmsg.in'); },
-  get USERNAME() { return getEnv('WHATSAPP_USERNAME', 'ProcucevnewWapp'); },
-  get PASSWORD() { return getEnv('WHATSAPP_PASSWORD', 'ProcucevnewWapp@987'); },
-  get FROM_NUMBER() { return getEnv('WHATSAPP_FROM_NUMBER', '917090170801'); },
-  get TEMPLATE_RFQ_INVITE() { return getEnv('WHATSAPP_TEMPLATE_RFQ_NOTIFICATION', 'rfq_notification_for_sellers_for_rfq_feb_5'); },
+  get USERNAME() { return getEnv('WHATSAPP_USERNAME', ''); },
+  get PASSWORD() { return getEnv('WHATSAPP_PASSWORD', ''); },
+  get FROM_NUMBER() { return getEnv('WHATSAPP_FROM_NUMBER', ''); },
+  get TEMPLATE_RFQ_INVITE() { return getEnv('WHATSAPP_TEMPLATE_RFQ_INVITE', getEnv('WHATSAPP_TEMPLATE_RFQ_NOTIFICATION', 'rfq_notification_for_sellers_for_rfq_feb_5')); },
 
   // ── Meta Cloud API (secondary) ────────────────────────────────────────────
   get META_API_URL() { return getEnv('WHATSAPP_API_URL', 'https://graph.facebook.com/v19.0'); },
@@ -35,7 +35,7 @@ const WHATSAPP_CONFIG = {
   get ACCESS_TOKEN() { return getEnv('WHATSAPP_ACCESS_TOKEN', ''); },
 
   // ── Shared ────────────────────────────────────────────────────────────────
-  get SUPPORT_NUMBER() { return getEnv('WHATSAPP_SUPPORT_NUMBER', '+917090170801'); },
+  get SUPPORT_NUMBER() { return getEnv('WHATSAPP_SUPPORT_NUMBER', ''); },
 };
 
 // In-memory throttle cache (30-second cooldown per destination number)
@@ -108,48 +108,8 @@ function buildDirectWhatsAppLink(phone, messageText) {
  * @returns {object} keyed placeholders dict { "0": val0, ... }
  */
 function _buildRfqTemplatePlaceholders({ vendorName, contactPerson, rfqNumber, rfqTitle, deliveryDate, deliveryLocation, portalLink }) {
-  const currentTemplate = WHATSAPP_CONFIG.TEMPLATE_RFQ_INVITE || '';
   const defaultFrontend = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
   const resolvedPortalLink = portalLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber || '')}`;
-
-  // 6-placeholder template: rfq_reminder_notification_v2
-  // Approved template body (sendmsg.in dashboard, status: Approved):
-  //   Hello {{1}},
-  //   Reminder: You have a pending RFQ Invitation for {{2}}.
-  //   📋 RFQ Summary:
-  //   • RFQ No: #{{3}}
-  //   • Delivery Date: {{4}}
-  //   • Location: {{5}}
-  //   Please click the link below to review requirements and submit your quotation:
-  //   {{6}}
-  //   Best regards, Team Procucev
-  //
-  // {{1}} = contact person name  (greeting: "Hello <name>")
-  // {{2}} = RFQ title / scope    (what they're being invited for)
-  // {{3}} = RFQ reference number (e.g. RFQ260110013321)
-  // {{4}} = delivery date        (e.g. 2026-10-15)
-  // {{5}} = delivery location    (e.g. Gandhinagar, Gujarat)
-  // {{6}} = 1-click portal link  (actual workers.dev quotation-form URL)
-  if (currentTemplate.includes('v2') || currentTemplate.includes('reminder')) {
-    // {{1}} must be the contact person name for the "Hello {{1}}," greeting.
-    // Fall back to vendorName only if no contactPerson is set.
-    const p1 = String(contactPerson || vendorName || 'Supplier Partner');
-    const p2 = String(rfqTitle || 'RFQ Requirement');
-    const p3 = String(rfqNumber || 'N/A');
-    const p4 = deliveryDate ? String(deliveryDate) : 'As per RFQ';
-    const p5 = deliveryLocation ? String(deliveryLocation) : 'India';
-    const p6 = resolvedPortalLink;
-
-    return {
-      // Exact 1-indexed keys (matches WABA template variables {{1}} to {{6}})
-      '1': p1,
-      '2': p2,
-      '3': p3,
-      '4': p4,
-      '5': p5,
-      '6': p6,
-    };
-  }
 
   // Approved 5-placeholder template: rfq_notification_for_sellers_for_rfq_feb_5
   // Body (sendmsg.in dashboard, status: Approved):
@@ -173,7 +133,6 @@ function _buildRfqTemplatePlaceholders({ vendorName, contactPerson, rfqNumber, r
     '3': lp3,
     '4': lp4,
     '5': lp5,
-    '0': lp1,
   };
 }
 

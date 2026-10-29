@@ -95,7 +95,7 @@ export default function EnterpriseInquiriesConsole() {
     setLoading(true);
     let serverInquiries: EnterpriseInquiry[] = [];
     try {
-      const res = await fetch('/api/enterprise-inquiries');
+      const res = await fetch('/api/enterprise-inquiries?limit=100');
       const json = await res.json();
       if (json && json.success && Array.isArray(json.data)) {
         serverInquiries = json.data;
