@@ -1233,5 +1233,119 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       expect(resetAcc.tempPassword).toBe('reset-pwd-123');
     });
   });
+
+  describe('Bulk-imported buyer (onboarded login, no buyer_accounts row) emailing the gateway', () => {
+    const importedUser = (email) => ({
+      id: `uuid-${email}`,
+      email,
+      name: 'Imported Buyer',
+      role: 'buyer',
+      orgId: 'org-imported-1',
+      orgName: 'Imported Industries',
+      mobile: '+919876543210',
+      password: 'RealPassword@1',
+      resetPasswordRequired: false,
+      verificationStatus: 'VERIFIED',
+    });
+
+    test('links the existing login, issues no credentials and never touches the password', async () => {
+      const email = 'bulk.imported.buyer@industrial-corp.com';
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(importedUser(email));
+      const insertSpy = jest.spyOn(identityQueries, 'insertBuyerAccount');
+      const updatePwSpy = jest.spyOn(identityQueries, 'updateUserPassword');
+
+      const result = await emailGatewayService.getOrCreateBuyerAccount(email);
+
+      expect(result.isNew).toBe(false);
+      expect(result.isOnboardingPending).toBe(false);
+      expect(result.tempPassword).toBeNull();
+      expect(result.buyerAccount.id).toBe(`uuid-${email}`);
+      expect(result.buyerAccount.mobileNumber).toBe('+919876543210');
+      expect(result.buyerAccount.status).toBe('ACTIVE_VERIFIED');
+      expect(result.buyerAccount.isAutoRegistered).toBeUndefined();
+      expect(insertSpy).not.toHaveBeenCalled();
+      expect(updatePwSpy).not.toHaveBeenCalled();
+    });
+
+    test('processMessage sends the plain acknowledgement, not onboarding credentials', async () => {
+      const email = 'bulk.imported.rfq@industrial-corp.com';
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(importedUser(email));
+      const updatePwSpy = jest.spyOn(identityQueries, 'updateUserPassword');
+      jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue({ success: true });
+      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+        status: geminiService.EXTRACTION_STATUS.SUCCESS,
+        model: 'gemini-test',
+        lineItems: [{ itemName: 'Gate Valve', quantity: 10, unit: 'Nos', technicalSpecs: 'DN50' }],
+      });
+
+      const raw = makeRawEmail(email, 'Require 10 units of Gate Valves. Target delivery: 2028-12-01.', 'Requisition: Valves');
+      const config = emailGatewayService.resolveConfig({
+        EMAIL_GATEWAY_ENABLED: 'true',
+        EMAIL_GATEWAY_USER: 'client@procucev.com',
+      });
+
+      const result = await emailGatewayService.processMessage(raw, config);
+      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+      expect(mailerService.sendBuyerOnboardingWithRfqEmail).not.toHaveBeenCalled();
+      expect(mailerService.sendBuyerCredentialsEmail).not.toHaveBeenCalled();
+      expect(mailerService.sendRfqAcknowledgementEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ to: email, tempPassword: null })
+      );
+      expect(updatePwSpy).not.toHaveBeenCalled();
+    });
+
+    test('an already wrongly-flagged account stops receiving credentials and keeps its password', async () => {
+      const email = 'flagged.imported@industrial-corp.com';
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(importedUser(email));
+      const updatePwSpy = jest.spyOn(identityQueries, 'updateUserPassword');
+      const flagged = { id: 'buyer-flagged-1', status: 'PENDING_ONBOARDING', isAutoRegistered: true };
+
+      const auth = await emailGatewayService.resolveSenderAuthorisation(email, {}, flagged);
+      expect(auth.allowed).toBe(true);
+      expect(auth.tempPassword).toBeNull();
+
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(flagged);
+      const acc = await emailGatewayService.getOrCreateBuyerAccount(email);
+      expect(acc.tempPassword).toBeNull();
+      expect(updatePwSpy).not.toHaveBeenCalled();
+    });
+
+    test('falls back to auto-registration when the identity lookup fails or the login is not a buyer', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValueOnce(new Error('Identity down'));
+      const failed = await emailGatewayService.getOrCreateBuyerAccount('lookup.fails@industrial-corp.com');
+      expect(failed.isNew).toBe(true);
+
+      const vendorEmail = 'vendor.login@industrial-corp.com';
+      const vendorUser = { ...importedUser(vendorEmail), role: 'vendor' };
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(vendorUser);
+      jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({ created: false, user: vendorUser });
+      const vendorRes = await emailGatewayService.getOrCreateBuyerAccount(vendorEmail);
+      expect(vendorRes.isNew).toBe(true);
+      // The generated password was never saved over the existing login, so none is mailed.
+      expect(vendorRes.tempPassword).toBeNull();
+    });
+
+    test('mails the stored temp password when the existing login is itself still pending', async () => {
+      const email = 'pending.login@industrial-corp.com';
+      const pendingUser = { id: 'uuid-pending', email, role: 'buyer', password: 'StoredTemp#1', verificationStatus: 'PENDING_ONBOARDING' };
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(pendingUser);
+      jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({ created: false, user: pendingUser });
+
+      const res = await emailGatewayService.getOrCreateBuyerAccount(email);
+      expect(res.isNew).toBe(true);
+      expect(res.tempPassword).toBe('StoredTemp#1');
+    });
+
+    test('returns null-safe when ensureBuyerAccountForUser yields no account', async () => {
+      const email = 'no.account@industrial-corp.com';
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(importedUser(email));
+      jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce(null);
+      jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({ created: false, user: importedUser(email) });
+
+      const res = await emailGatewayService.getOrCreateBuyerAccount(email);
+      expect(res.isNew).toBe(true);
+      expect(res.tempPassword).toBeNull();
+    });
+  });
 });
 
