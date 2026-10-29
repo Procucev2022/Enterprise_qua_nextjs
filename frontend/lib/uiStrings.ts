@@ -209,6 +209,10 @@ export const UI_STRINGS = {
         label: 'Daily Reports',
         description: 'Downloadable operational, buyer, seller & RFQ Excel/CSV reports',
       },
+      internalTasks: {
+        label: 'Action Center',
+        description: 'Internal tasks, management approvals, tickets & executive scorecards',
+      },
       opportunityFeed: {
         label: 'Dashboard',
         description: 'Your enquiries, quotes, and sourcing activity',
@@ -846,6 +850,7 @@ export const UI_STRINGS = {
     outsideCategoryBadge: 'Outside Category',
     noVendorsFound: 'No vendors match your search.',
     allVendorsLoadFailed: 'The vendor list could not be loaded.',
+    dbQueryTimeout: 'The vendor search timed out. Please try refining your search or checking specific emails.',
     loadMoreVendors: 'Load {pageSize} more vendors',
     candidateCountOfTotal: 'Showing {count} of {total} vendors',
     selectedVendorCount: '{count}/{max} Selected',

@@ -960,33 +960,32 @@ backend\check_srinivas.js why are these file nned now check extra file and remov
  PASS  __tests__/emailService.test.js (5.995 s)
 A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
 
-=============================== Coverage summary ===============================
-Statements   : 98.86% ( 15308/15484 )
-Branches     : 92.61% ( 15660/16909 )
-Functions    : 99.21% ( 2013/2029 )
-Lines        : 99.46% ( 14080/14156 )
-================================================================================
-Jest: "S:\procucev\Precucev-github\Enterprise_qua_nextjs\backend\src\services\authService.js" coverage threshold for functions (90%) not met: 89.74%
-
-Test Suites: 128 passed, 128 total
-Tests:       3944 passed, 3944 total
-Snapshots:   0 total
-Time:        478.688 s, estimated 704 s
-Ran all test suites.
-Test results written to: coverage\test-results.json
-Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
-
-✖ [FAILED] Step 2A: Backend Test Suite & 90% Per-File Coverage Enforcement encountered an error.     
-
-❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
-PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
-```
-
-
----
-
-### 2026-10-29T22:19:11+05:30
 
 ```text
 okay just need to fix timmer we show the otp expire in 5 min but we are showing 30 sec need too update in frontend 
+```
+
+---
+
+### 2026-10-29T15:28:40+05:30
+
+```text
+i give 5 email only but it is showing time limit 
+please check the issue first and then fix this issue
+```
+
+---
+
+### 2026-10-29T15:58:42+05:30
+
+```text
+raise the pr for this code
+```
+
+---
+
+### 2026-10-29T17:42:27+05:30
+
+```text
+continue
 ```

@@ -16,6 +16,7 @@ router.get('/public', authenticate, requireRole('category_manager'), requireVend
 router.get('/public/filters', authenticate, requireRole('category_manager'), requireVendorDirectorySession, vendorController.getPublicVendorFilters);
 router.get('/public/:id', authenticate, requireRole('category_manager'), requireVendorDirectorySession, vendorController.getPublicVendorById);
 
+router.post('/directory-auth', vendorController.authenticateVendorDirectory);
 router.get('/subscription-pricing', vendorController.getSubscriptionPricing);
 router.get('/:id/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/:id', optionalAuthenticate, vendorController.getVendorById);
