@@ -704,4 +704,23 @@ describe('InviteVendorsModal — Comprehensive Multi-Filter & 20-Vendor Limit Su
       expect(screen.queryByText('Gujarat Techno Forge')).not.toBeInTheDocument();
     });
   });
+
+  it('maps D1 CPU time limit errors to descriptive user-facing timeout message', async () => {
+    (rfqClient.fetchVendorCandidates as jest.Mock).mockResolvedValue({
+      success: true,
+      candidates: mockVendorsPool,
+    });
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+      success: false,
+      error: 'D1_ERROR: D1 DB exceeded its CPU time limit and was reset.',
+    });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+
+    await waitFor(() => {
+      expect(screen.getByText(UI_STRINGS.inviteVendors.dbQueryTimeout)).toBeInTheDocument();
+    });
+  });
 });
