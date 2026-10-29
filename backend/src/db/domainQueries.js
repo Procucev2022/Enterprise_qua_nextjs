@@ -59,9 +59,9 @@ async function getVendorsFromDB(limit = null) {
  * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
  * a page request only ever touches the rows it actually returns.
  */
-async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', publicOnly = false, scopedBuyerId = '', skipCount = false } = {}) {
+async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', state = '', city = '', publicOnly = false, scopedBuyerId = '', skipCount = false } = {}) {
   if (!pool.hasStorage()) return { rows: [], total: 0 };
-  const cacheKey = (!search && !email && !category)
+  const cacheKey = (!search && !email && !category && !state && !city)
     ? `vendors_page_${limit}_${offset}_${publicOnly}_${scopedBuyerId}_${skipCount}`
     : null;
   if (cacheKey) {
@@ -177,6 +177,30 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     const p = params.length;
     conditions.push(`(major_category = $${p} OR lower(major_category) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}))`);
     d1Conditions.push(`(lower(major_category) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}))`);
+  }
+  if (state) {
+    params.push(`%${state.trim()}%`);
+    const p = params.length;
+    conditions.push(`(raw->>'state' ILIKE $${p} OR raw->>'location' ILIKE $${p})`);
+    d1Conditions.push(`(lower(json_extract(raw,'$.state')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p}))`);
+  }
+  if (city) {
+    const trimmedCity = city.trim();
+    const aliasMatch = trimmedCity.match(/^([^(]+)\s*\(([^)]+)\)$/);
+    if (aliasMatch) {
+      const p1 = `%${aliasMatch[1].trim()}%`;
+      const p2 = `%${aliasMatch[2].trim()}%`;
+      params.push(p1, p2);
+      const idx1 = params.length - 1;
+      const idx2 = params.length;
+      conditions.push(`(raw->>'city' ILIKE ${idx1} OR raw->>'location' ILIKE ${idx1} OR raw->>'city' ILIKE ${idx2} OR raw->>'location' ILIKE ${idx2})`);
+      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower(${idx1}) OR lower(json_extract(raw,'$.location')) LIKE lower(${idx1}) OR lower(json_extract(raw,'$.city')) LIKE lower(${idx2}) OR lower(json_extract(raw,'$.location')) LIKE lower(${idx2}))`);
+    } else {
+      params.push(`%${trimmedCity}%`);
+      const p = params.length;
+      conditions.push(`(raw->>'city' ILIKE ${p} OR raw->>'location' ILIKE ${p})`);
+      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower(${p}) OR lower(json_extract(raw,'$.location')) LIKE lower(${p}))`);
+    }
   }
   if (publicOnly) {
     // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a
