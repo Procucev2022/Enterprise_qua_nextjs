@@ -25,6 +25,7 @@ const {
   hasUnlimitedQuoteAccess,
   hasUnlimitedDownloadAccess,
   resolveBuyerSourcingMode,
+  MAX_INVITE_VENDORS_PER_REQUEST,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
@@ -481,10 +482,18 @@ async function inviteVendors(req, res, next) {
       return res.status(400).json({ success: false, error: 'vendorIds must be a non-empty array.' });
     }
     const rfq = await storeService.getRFQByIdAsync(id);
+    const maxInviteLimit = MAX_INVITE_VENDORS_PER_REQUEST || 20;
+    const uniqueVendorIds = Array.from(new Set(vendorIds.filter(Boolean)));
+    if (uniqueVendorIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'vendorIds must be a non-empty array.' });
+    }
+    if (uniqueVendorIds.length > maxInviteLimit) {
+      return res.status(400).json({ success: false, error: 'Maximum of ' + maxInviteLimit + ' vendors can be invited per invitation.' });
+    }
     if (!rfq || !(await canAccessRfq(req, rfq))) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    const result = await storeService.inviteVendorsToRFQ(id, vendorIds, req.user && req.user.email);
+    const result = await storeService.inviteVendorsToRFQ(id, uniqueVendorIds, req.user && req.user.email);
     res.json({
       success: true,
       data: result.updatedRFQ,

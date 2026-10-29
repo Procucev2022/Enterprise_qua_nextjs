@@ -77,7 +77,7 @@ test('combines API, store, RFQ and vendor categories while ignoring blank values
   for (const category of ['Store Category', 'RFQ Major', 'Item Category']) {
     expect(screen.getByRole('option', { name: category })).toBeInTheDocument();
   }
-  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'API Category' } });
+  fireEvent.change(screen.getByRole('combobox', { name: s.categoryLabel }), { target: { value: 'API Category' } });
   await waitFor(() => expect(fetchAllVendors).toHaveBeenCalledWith(expect.objectContaining({ category: 'API Category' })));
 });
 
@@ -93,7 +93,7 @@ test('ignores an earlier list response after a category-filtered response has co
     .mockImplementationOnce(() => new Promise((resolve) => { resolveEarlier = resolve; }))
     .mockResolvedValueOnce(page([{ ...candidate, name: 'Filtered supplier' }]));
   await openAll();
-  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Cables' } });
+  fireEvent.change(screen.getByRole('combobox', { name: s.categoryLabel }), { target: { value: 'Cables' } });
   await waitFor(() => expect(screen.getByText('Filtered supplier')).toBeInTheDocument());
   await act(async () => resolveEarlier(page([{ ...candidate, name: 'Stale supplier' }])));
   expect(screen.queryByText('Stale supplier')).not.toBeInTheDocument();
@@ -108,7 +108,7 @@ test('ignores a stale next-page response when the category changes', async () =>
   await openAll();
   fireEvent.click(await screen.findByTestId('load-more-vendors'));
   expect(screen.getByTestId('load-more-vendors')).toBeDisabled();
-  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Cables' } });
+  fireEvent.change(screen.getByRole('combobox', { name: s.categoryLabel }), { target: { value: 'Cables' } });
   await waitFor(() => expect(screen.getByText('Current supplier')).toBeInTheDocument());
   await act(async () => resolveMore(page([{ ...candidate, name: 'Stale next page' }], 2, 2)));
   expect(screen.queryByText('Stale next page')).not.toBeInTheDocument();

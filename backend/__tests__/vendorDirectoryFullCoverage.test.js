@@ -1022,6 +1022,72 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       }
     });
 
+    test('getVendors: state and city query params are passed through to the SQL fast path', async () => {
+      const next = jest.fn();
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { query: jest.fn() };
+      const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({ rows: [], total: 0 });
+
+      try {
+        const res = mockRes();
+        await vendorController.getVendors(
+          { query: { buyerId: 'all', page: '1', pageSize: '10', state: 'Maharashtra', city: 'Pune' } },
+          res,
+          next
+        );
+
+        expect(pageSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ state: 'Maharashtra', city: 'Pune' })
+        );
+      } finally {
+        pool.pool = originalPool;
+        pageSpy.mockRestore();
+      }
+    });
+
+    test('getVendors: the in-memory fallback also applies state and city filters when no pool is configured', async () => {
+      const next = jest.fn();
+      const originalPool = pool.pool;
+      pool.pool = null;
+      const getVendorsSpy = jest.spyOn(storeService, 'getVendors').mockResolvedValue([
+        { id: 'v-1', name: 'A', state: 'Maharashtra', city: 'Pune' },
+        { id: 'v-2', name: 'B', state: 'Gujarat', city: 'Surat' },
+      ]);
+
+      try {
+        const res = mockRes();
+        await vendorController.getVendors({ query: { state: 'Maharashtra', city: 'Pune' } }, res, next);
+        expect(res.json).toHaveBeenCalledWith(
+          expect.objectContaining({ success: true, data: [{ id: 'v-1', name: 'A', state: 'Maharashtra', city: 'Pune' }] })
+        );
+      } finally {
+        pool.pool = originalPool;
+        getVendorsSpy.mockRestore();
+      }
+    });
+
+    test('getVendors: in-memory fallback matches city with parenthesized alias', async () => {
+      const next = jest.fn();
+      const originalPool = pool.pool;
+      pool.pool = null;
+      const getVendorsSpy = jest.spyOn(storeService, 'getVendors').mockResolvedValue([
+        { id: 'v-1', name: 'Andaman Marine', state: 'Andaman and Nicobar Islands', city: 'Port Blair', location: 'Port Blair' },
+        { id: 'v-2', name: 'Gujarat Forge', state: 'Gujarat', city: 'Surat', location: 'Surat' },
+      ]);
+
+      try {
+        const res = mockRes();
+        await vendorController.getVendors({ query: { state: 'Andaman and Nicobar Islands', city: 'Sri Vijaya Puram (Port Blair)' } }, res, next);
+        expect(res.json).toHaveBeenCalledWith(
+          expect.objectContaining({ success: true, data: [expect.objectContaining({ id: 'v-1' })] })
+        );
+      } finally {
+        pool.pool = originalPool;
+        getVendorsSpy.mockRestore();
+      }
+    });
+
     test('createVendor role handling and validation', async () => {
       const res = mockRes();
       const next = jest.fn();

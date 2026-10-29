@@ -113,6 +113,18 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       await rfqController.inviteVendors({ params: { id: 'rfq-1' }, body: { vendorIds: [] } }, resEmpty, next);
       expect(resEmpty.statusCode).toBe(400);
 
+      // Over 20 vendorIds returns 400
+      const resLimit = mockRes();
+      const twentyOne = Array.from({ length: 21 }, (_, i) => `v-${i + 1}`);
+      await rfqController.inviteVendors({ params: { id: 'rfq-1' }, body: { vendorIds: twentyOne } }, resLimit, next);
+      expect(resLimit.statusCode).toBe(400);
+      expect(resLimit.data.error).toContain('Maximum of 20 vendors');
+
+      // Only falsy vendorIds returns 400
+      const resFalsy = mockRes();
+      await rfqController.inviteVendors({ params: { id: 'rfq-1' }, body: { vendorIds: ['', null] } }, resFalsy, next);
+      expect(resFalsy.statusCode).toBe(400);
+
       // 404
       jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue(null);
       const res404 = mockRes();
