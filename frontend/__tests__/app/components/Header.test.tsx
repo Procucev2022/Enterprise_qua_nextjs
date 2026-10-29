@@ -494,7 +494,7 @@ describe('Header Session Timer and Auto Logout', () => {
     expect(screen.getByTestId('header-session-timer')).toBeInTheDocument();
   });
 
-  it('renders session timer badge for category manager dashboard', () => {
+  it('renders session timer badge and extends session by 3 hours for category manager dashboard', () => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       isLoggedIn: true,
       currentRole: 'category_manager',
@@ -505,7 +505,14 @@ describe('Header Session Timer and Auto Logout', () => {
       addAuditLog: mockAddAuditLog,
     });
     render(<Header />);
-    expect(screen.getByTestId('header-session-timer')).toBeInTheDocument();
+    const timer = screen.getByTestId('header-session-timer');
+    expect(timer).toBeInTheDocument();
+    fireEvent.click(timer);
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Session Extended',
+      expect.stringContaining('3 hours'),
+      'info'
+    );
   });
 
   it('allows user to click session timer to extend session by 30 minutes', () => {

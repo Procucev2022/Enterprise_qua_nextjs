@@ -62,7 +62,9 @@ async function main() {
     console.log(`  Pending:    ${result.buyerMailbox.pending || 0}`);
     if (result.buyerMailbox.outcomes && result.buyerMailbox.outcomes.length > 0) {
       result.buyerMailbox.outcomes.forEach((o, i) => {
-        console.log(`    ${i + 1}. UID: ${o.uid} | Message-ID: ${o.messageId || 'N/A'} | Status: ${o.status}`);
+        const labelPart = o.labelApplied ? ` | Label: [${o.labelApplied}]` : '';
+        const detailPart = o.detail ? ` | ${o.detail}` : (o.error ? ` | Error: ${o.error}` : '');
+        console.log(`    ${i + 1}. UID: ${o.uid} | Message-ID: ${o.messageId || 'N/A'} | Status: ${o.status}${labelPart}${detailPart}`);
       });
     } else {
       console.log('  No new unseen messages.');
@@ -82,7 +84,9 @@ async function main() {
     console.log(`  Pending:    ${result.vendorMailbox.pending || 0}`);
     if (result.vendorMailbox.outcomes && result.vendorMailbox.outcomes.length > 0) {
       result.vendorMailbox.outcomes.forEach((o, i) => {
-        console.log(`    ${i + 1}. UID: ${o.uid} | Message-ID: ${o.messageId || 'N/A'} | Status: ${o.status}`);
+        const labelPart = o.labelApplied ? ` | Label: [${o.labelApplied}]` : '';
+        const detailPart = o.detail ? ` | ${o.detail}` : (o.error ? ` | Error: ${o.error}` : '');
+        console.log(`    ${i + 1}. UID: ${o.uid} | Message-ID: ${o.messageId || 'N/A'} | Status: ${o.status}${labelPart}${detailPart}`);
       });
     } else {
       console.log('  No new unseen messages.');
