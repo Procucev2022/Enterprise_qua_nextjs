@@ -632,14 +632,16 @@ export async function fetchVendorCandidates(rfqId: string, limit?: number): Prom
  * vendor id already invites successfully.
  */
 export async function fetchAllVendors(
-  options: { page?: number; pageSize?: number; search?: string; category?: string } = {}
+  options: { page?: number; pageSize?: number; search?: string; category?: string; state?: string; city?: string } = {}
 ): Promise<RFQVendorPageResult> {
   const token = authClient.getToken();
-  const { page = 1, pageSize = 50, search = '', category = '' } = options;
+  const { page = 1, pageSize = 50, search = '', category = '', state = '', city = '' } = options;
 
   const params = new URLSearchParams({ buyerId: 'all', page: String(page), pageSize: String(pageSize) });
   if (search.trim()) params.set('search', search.trim());
   if (category.trim()) params.set('category', category.trim());
+  if (state.trim()) params.set('state', state.trim());
+  if (city.trim()) params.set('city', city.trim());
 
   let res: Response;
   try {
