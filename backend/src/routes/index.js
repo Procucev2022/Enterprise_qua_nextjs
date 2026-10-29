@@ -26,8 +26,10 @@ const enterpriseInquiriesRoutes = require('./enterpriseInquiries');
 const reportsRoutes = require('./reports');
 const subscriptionRoutes = require('./subscriptions');
 const transactionalEmailRoutes = require('./transactionalEmails');
+const internalTaskRoutes = require('./internalTasks');
 
 // Mount sub-routers
+router.use('/internal-tasks', internalTaskRoutes);
 router.use('/subscriptions', subscriptionRoutes);
 router.use('/auth', authRoutes);
 router.use('/bootstrap', bootstrapRoutes);
