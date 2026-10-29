@@ -4745,3 +4745,76 @@ raise the pr
 ```
 
 ---
+
+---
+### 2026-10-29T07:58:01+05:30
+
+```text
+Update the existing **Invite Vendors** popup with the following features without breaking the current category-based vendor filtering.
+
+1. **State and City Filters:** Add State and City dropdown filters alongside the existing Category filter. After selecting a category, allow the buyer to filter vendors by State and City, dynamically displaying only matching vendors. City options should update based on the selected State.
+
+2. **Search and Bulk Vendor Selection:** Enhance the search bar to search vendors by vendor name or email address. Allow the buyer to select a maximum of 20 vendors per invitation, display the selected vendor count (e.g., 15/20), and provide a clear option to remove selected vendors.
+
+3. **Invite All Selected Vendors:** Add an “Invite Selected Vendors” button that sends RFQ invitations to all selected vendors in a single action, with proper loading states, success/error messages, and duplicate-invitation prevention.
+
+4. **Popup UI:** Expand the popup dimensions to accommodate the new filters and vendor list. Make it responsive for desktop, tablet, and mobile without overlapping or merging content.
+
+5. **Validation and Testing:** Ensure category, State, City, and name/email search filters work together. Enforce the 20-vendor limit in both frontend and backend, handle pagination correctly, and test the complete vendor selection and invitation flow.
+```
+
+---
+### 2026-10-29T10:04:26+05:30
+
+```text
+India – State-wise Cities and Towns List
+Below is a large list of cities and towns across all 28 states and 8 Union Territories of India, grouped by state.
+
+This includes major cities, smaller cities, and many towns I know. It is not an exhaustive official list of every census town.
+1. Andhra Pradesh
+Visakhapatnam, Vijayawada, Guntur, Tirupati, Nellore, Kurnool, Kakinada, Rajahmundry, Kadapa, Anantapur, Eluru, Ongole, Chittoor, Srikakulam, Vizianagaram, Machilipatnam, Tenali, Narasaraopet, Chilakaluripet, Bapatla, Chirala, Kavali, Gudur, Sullurpeta, Naidupeta, Venkatagiri, Puttur, Nagari, Madanapalle, Punganur, Palamaner, Pileru, Rayachoti, Proddatur, Jammalamadugu, Pulivendula, Mydukur, Nandyal, Adoni, Yemmiganur, Dhone, Atmakur, Allagadda, Banaganapalle, Markapur, Kanigiri, Giddalur, Podili, Kandukur, Addanki, Parchur, Repalle, Ponnur, Mangalagiri, Tadepalli, Sattenapalle, Vinukonda, Piduguralla, Macherla, Gurazala, Amaravati, Ibrahimpatnam, Nuzvid, Gudivada, Pedana, Vuyyuru, Jaggayyapeta, Nandigama, Tiruvuru, Kaikaluru, Bhimavaram, Tadepalligudem, Tanuku, Palakollu, Narasapuram, Nidadavole, Kovvur, Jangareddygudem, Akividu, Attili, Amalapuram, Mandapeta, Ramachandrapuram, Peddapuram, Samalkot, Pithapuram, Tuni, Yeleswaram, Anakapalle, Narsipatnam, Yelamanchili, Bheemunipatnam, Pendurthi, Parvathipuram, Bobbili, Salur, Palasa, Ichchapuram, Tekkali, Amadalavalasa, Rajam, Puttur, Hindupur, Dharmavaram, Tadipatri, Gooty, Guntakal, Rayadurg, Kalyandurg, Penukonda, Puttaparthi, Kadiri, Palakonda.
+2. Arunachal Pradesh
+Itanagar, Naharlagun, Pasighat, Tawang, Bomdila, Ziro, Along (Aalo), Tezu, Roing, Namsai, Changlang, Khonsa, Seppa, Daporijo, Yingkiong, Anini, Koloriang, Basar, Jairampur, Miao, Deomali, Bordumsa, Lekang, Wakro, Dirang, Rupa, Bhalukpong, Doimukh, Nirjuli, Yupia, Sagalee, Palin, Mechuka, Hawai, Hayuliang, Mariyang, Tuting, Boleng, Likabali.
+3. Assam
+Guwahati, Dispur, Silchar, Dibrugarh, Jorhat, Tezpur, Tinsukia, Nagaon, Sivasagar, Bongaigaon, Barpeta, Barpeta Road, Dhubri, Goalpara, Kok
+<truncated 49380 bytes>
+hanamandi, Mendhar, Surankote, Mendhar, Gurez, Sumbal, Hajin, Kangan, Sonamarg.
+
+34. Ladakh: Leh, Kargil, Dras, Diskit, Hunder, Nubra, Sumur, Panamik, Turtuk, Tangtse, Durbuk, Nyoma, Hanle, Chushul, Karzok, Khaltse, Saspol, Nimmu, Basgo, Likir, Alchi, Lamayuru, Hemis, Thiksey, Shey, Choglamsar, Spituk, Stok, Sankoo, Panikhar, Parkachik, Rangdum, Padum, Zanskar, Batalik, Shargole, Mulbekh, Wakha.
+
+35. Lakshadweep: Kavaratti, Agatti, Andrott, Amini, Kadmat, Kiltan, Chetlat, Bitra, Kalpeni, Minicoy, Bangaram.
+
+36. Puducherry: Puducherry, Karaikal, Mahe, Yanam, Ozhukarai, Villianur, Ariyankuppam, Bahour, Nettapakkam, Mannadipet, Thirubuvanai, Madagadipet, Lawspet, Mudaliarpet, Muthialpet, Reddiarpalayam, Nellithope, Orleanpet, Kalapet, Kirumampakkam, Thavalakuppam, Karikalampakkam, Nedungadu, Thirunallar, Kottucherry, Neravy, Thirumalairayanpattinam, Palloor, Pandakkal.
+
+Check in want all this data in vendor invite and filter and come this vendor baseed on the category , city, state
+```
+
+---
+### 2026-10-29T11:02:08+05:30
+
+```text
+raise a pr for this code
+```
+
+---
+### 2026-10-29T11:26:04+05:30
+
+```text
+continue
+```
+
+---
+### 2026-10-29T11:51:42+05:30
+
+```text
+continue raise pr
+```
+
+---
+### 2026-10-29T12:48:20+05:30
+
+```text
+govardhan.kilari@procucev.com, veerababu.v@procucev.com, nilesh.murme@procucev.com, chandan.behera@procucev.com, prerna.shrivastava@procucev.com, prajwal.karakoon@procucev.com, sudheer.kangala@procucev.com, reshma.menon@procucev.com, srinivas.mukku@procucev.com, suneel.koneru@procucev.com
+i give like this in search bar it should give all that vendor if they exist 
+please check this issue and fix it
+```

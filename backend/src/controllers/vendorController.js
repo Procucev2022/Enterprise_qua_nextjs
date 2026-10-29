@@ -8,7 +8,7 @@ const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
-const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig } = require('../config/constants');
+const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig, parseSearchTokens } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
 /**
@@ -189,27 +189,35 @@ async function getVendors(req, res, next) {
       : null;
     let vendors = await storeService.getVendors(buyerId, limitQuery);
     if (search) {
-      const q = String(search).toLowerCase().trim();
-      vendors = vendors.filter((v) =>
-        [
-          v.name,
-          v.email,
-          v.contactPerson,
-          v.contact,
-          v.location,
-          v.city,
-          v.deliveryLocation,
-        ].some((field) => String(field || '').toLowerCase().includes(q)) ||
-        (q.length <= 3
-          ? String(v.majorCategory || v.category || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
-          : String(v.majorCategory || v.category || '').toLowerCase().includes(q)
-        ) ||
-        (v.minorCategories || []).some((m) =>
-          q.length <= 3
-            ? String(m || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
-            : String(m || '').toLowerCase().includes(q)
-        )
-      );
+      const tokens = parseSearchTokens(search);
+      if (tokens.length > 0) {
+        vendors = vendors.filter((v) => {
+          return tokens.some((token) => {
+            const q = token.toLowerCase().trim();
+            if (!q) return false;
+            return (
+              [
+                v.name,
+                v.email,
+                v.contactPerson,
+                v.contact,
+                v.location,
+                v.city,
+                v.deliveryLocation,
+              ].some((field) => String(field || '').toLowerCase().includes(q)) ||
+              (q.length <= 3
+                ? String(v.majorCategory || v.category || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
+                : String(v.majorCategory || v.category || '').toLowerCase().includes(q)
+              ) ||
+              (v.minorCategories || []).some((m) =>
+                q.length <= 3
+                  ? String(m || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
+                  : String(m || '').toLowerCase().includes(q)
+              )
+            );
+          });
+        });
+      }
     }
     if (email) {
       const eq = String(email).toLowerCase().trim();

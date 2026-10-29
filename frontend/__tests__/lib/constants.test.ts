@@ -528,6 +528,30 @@ describe('normalizePoDate', () => {
       expect(QUA_AI_EMAIL_SUPPORT.PHONE).toBe('+91 8247722944');
       expect(PRESENCE_ONLINE_THRESHOLD_MS).toBe(600000);
     });
+
+    it('parseSearchTokens handles single terms, comma-separated lists, and multi-email search', () => {
+      const { parseSearchTokens } = require('@/lib/constants');
+      expect(parseSearchTokens(null)).toEqual([]);
+      expect(parseSearchTokens('')).toEqual([]);
+      expect(parseSearchTokens('   ')).toEqual([]);
+
+      // Single phrase
+      expect(parseSearchTokens('Sudheer Solutions pvt LTD')).toEqual(['Sudheer Solutions pvt LTD']);
+
+      // Comma separated emails
+      const multiEmail = 'govardhan.kilari@procucev.com, veerababu.v@procucev.com, nilesh.murme@procucev.com';
+      expect(parseSearchTokens(multiEmail)).toEqual([
+        'govardhan.kilari@procucev.com',
+        'veerababu.v@procucev.com',
+        'nilesh.murme@procucev.com',
+      ]);
+
+      // Semicolon and newlines
+      expect(parseSearchTokens('a@b.com; c@d.com\ne@f.com')).toEqual(['a@b.com', 'c@d.com', 'e@f.com']);
+
+      // Space separated emails
+      expect(parseSearchTokens('user1@x.com user2@y.com')).toEqual(['user1@x.com', 'user2@y.com']);
+    });
   });
 });
 

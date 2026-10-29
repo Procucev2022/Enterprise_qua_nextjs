@@ -29,7 +29,7 @@ import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { getMajorCategories } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { MAX_INVITE_VENDORS, getIndianStates, getCitiesForState } from '@/lib/constants';
+import { MAX_INVITE_VENDORS, getIndianStates, getCitiesForState, parseSearchTokens } from '@/lib/constants';
 import type { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 
 // "All Vendors" can legitimately span tens of thousands of rows (the real
@@ -310,13 +310,20 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   // Filter candidates in Category Matches tab by search, category, state, and city
   const filteredCategoryCandidates = useMemo(() => {
     return candidates.filter((c) => {
-      // 1. Search by vendor name or email address
+      // 1. Search by vendor name or email address (supports multi-token/comma-separated search)
       if (debouncedSearch.trim()) {
-        const q = debouncedSearch.trim().toLowerCase();
-        const matchName = String(c.name || '').toLowerCase().includes(q);
-        const matchEmail = String(c.email || '').toLowerCase().includes(q);
-        const matchContact = String(c.contactPerson || '').toLowerCase().includes(q);
-        if (!matchName && !matchEmail && !matchContact) return false;
+        const tokens = parseSearchTokens(debouncedSearch);
+        if (tokens.length > 0) {
+          const matchesAnyToken = tokens.some((token) => {
+            const q = token.toLowerCase().trim();
+            if (!q) return false;
+            const matchName = String(c.name || '').toLowerCase().includes(q);
+            const matchEmail = String(c.email || '').toLowerCase().includes(q);
+            const matchContact = String(c.contactPerson || '').toLowerCase().includes(q);
+            return matchName || matchEmail || matchContact;
+          });
+          if (!matchesAnyToken) return false;
+        }
       }
       // 2. Category filter
       if (categoryFilter.trim()) {
