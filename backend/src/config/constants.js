@@ -2632,6 +2632,33 @@ function getCitiesForState(state) {
   return key ? [...INDIAN_STATES_AND_CITIES[key]].sort((a, b) => a.localeCompare(b)) : [];
 }
 
+
+
+
+function parseSearchTokens(search) {
+  if (!search || typeof search !== 'string') return [];
+  const raw = search.trim();
+  if (!raw) return [];
+
+  if (/[\n\r,;]/.test(raw)) {
+    return Array.from(
+      new Set(
+        raw
+          .split(/[\n\r,;]+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      )
+    ).slice(0, 50);
+  }
+
+  const parts = raw.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length > 1 && parts.every((p) => p.includes('@'))) {
+    return Array.from(new Set(parts)).slice(0, 50);
+  }
+
+  return [raw];
+}
+
 module.exports = {
   normalizePoDate,
   VENDOR_INGESTION_SESSION_STATUS,
@@ -2751,6 +2778,7 @@ module.exports = {
   INDIAN_STATES_AND_CITIES,
   getIndianStates,
   getCitiesForState,
+  parseSearchTokens,
   INQUIRIES_PERSISTENCE_FILE,
 };
 

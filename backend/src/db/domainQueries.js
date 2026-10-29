@@ -14,6 +14,7 @@
 const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
+const { parseSearchTokens } = require('../config/constants');
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
@@ -78,93 +79,109 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   const conditions = [];
   const d1Conditions = [];
   if (search) {
-    const trimmed = search.trim();
-    params.push(`%${trimmed}%`);
-    const p = params.length;
+    const tokens = parseSearchTokens(search);
+    if (tokens.length > 0) {
+      const tokenConditions = [];
+      const d1TokenConditions = [];
 
-    // For short search tokens (<= 3 characters, e.g. "IT", "HR"), fields
-    // must match on discrete word boundaries or exact match, not substring '%it%', which erroneously
-    // matches "switches" (sw-IT-ches), "commoditiess" (commod-IT-iess), "limited", "solitaire", etc.
-    let catCondition = `major_category ILIKE $${p}`;
-    let d1CatCondition = `lower(major_category) LIKE lower($${p})`;
-    let nameCondition = `raw->>'name' ILIKE $${p}`;
-    let d1NameCondition = `lower(json_extract(raw,'$.name')) LIKE lower($${p})`;
-    let minorCatCondition = `(raw->'minorCategories')::text ILIKE $${p}`;
-    let d1MinorCatCondition = `lower(json_extract(raw,'$.minorCategories')) LIKE lower($${p})`;
-    let contactCondition = `raw->>'contactPerson' ILIKE $${p}`;
-    let d1ContactCondition = `lower(json_extract(raw,'$.contactPerson')) LIKE lower($${p})`;
+      for (const token of tokens) {
+        const trimmed = token.trim();
+        if (!trimmed) continue;
 
-    if (trimmed.length <= 3) {
-      params.push(trimmed.toLowerCase());
-      const pExact = params.length;
-      catCondition = `(
-        lower(major_category) = $${pExact}
-        OR lower(major_category) LIKE ($${pExact} || ' %')
-        OR lower(major_category) LIKE ('% ' || $${pExact})
-        OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
-        OR lower(raw->>'majorCategory') = $${pExact}
-      )`;
-      d1CatCondition = `(
-        lower(major_category) = $${pExact}
-        OR lower(major_category) LIKE ($${pExact} || ' %')
-        OR lower(major_category) LIKE ('% ' || $${pExact})
-        OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
-        OR lower(json_extract(raw,'$.majorCategory')) = $${pExact}
-      )`;
-      nameCondition = `(
-        lower(raw->>'name') = $${pExact}
-        OR lower(raw->>'name') LIKE ($${pExact} || ' %')
-        OR lower(raw->>'name') LIKE ('% ' || $${pExact})
-        OR lower(raw->>'name') LIKE ('% ' || $${pExact} || ' %')
-      )`;
-      d1NameCondition = `(
-        lower(json_extract(raw,'$.name')) = $${pExact}
-        OR lower(json_extract(raw,'$.name')) LIKE ($${pExact} || ' %')
-        OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact})
-        OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact} || ' %')
-      )`;
-      minorCatCondition = `(
-        (raw->'minorCategories')::text ILIKE '%"' || $${pExact} || '"%'
-        OR (raw->'minorCategories')::text ILIKE '% ' || $${pExact} || ' %'
-        OR (raw->'minorCategories')::text ILIKE '%[' || $${pExact} || ']%'
-      )`;
-      d1MinorCatCondition = `(
-        lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || $${pExact} || '"%')
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE ('% ' || $${pExact} || ' %')
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%[' || $${pExact} || ']%')
-      )`;
-      contactCondition = `(
-        lower(raw->>'contactPerson') = $${pExact}
-        OR lower(raw->>'contactPerson') LIKE ($${pExact} || ' %')
-        OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact})
-        OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact} || ' %')
-      )`;
-      d1ContactCondition = `(
-        lower(json_extract(raw,'$.contactPerson')) = $${pExact}
-        OR lower(json_extract(raw,'$.contactPerson')) LIKE ($${pExact} || ' %')
-        OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact})
-        OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact} || ' %')
-      )`;
+        params.push(`%${trimmed}%`);
+        const p = params.length;
+
+        // For short search tokens (<= 3 characters, e.g. "IT", "HR"), fields
+        // must match on discrete word boundaries or exact match, not substring '%it%', which erroneously
+        // matches "switches" (sw-IT-ches), "commoditiess" (commod-IT-iess), "limited", "solitaire", etc.
+        let catCondition = `major_category ILIKE $${p}`;
+        let d1CatCondition = `lower(major_category) LIKE lower($${p})`;
+        let nameCondition = `raw->>'name' ILIKE $${p}`;
+        let d1NameCondition = `lower(json_extract(raw,'$.name')) LIKE lower($${p})`;
+        let minorCatCondition = `(raw->'minorCategories')::text ILIKE $${p}`;
+        let d1MinorCatCondition = `lower(json_extract(raw,'$.minorCategories')) LIKE lower($${p})`;
+        let contactCondition = `raw->>'contactPerson' ILIKE $${p}`;
+        let d1ContactCondition = `lower(json_extract(raw,'$.contactPerson')) LIKE lower($${p})`;
+
+        if (trimmed.length <= 3) {
+          params.push(trimmed.toLowerCase());
+          const pExact = params.length;
+          catCondition = `(
+            lower(major_category) = $${pExact}
+            OR lower(major_category) LIKE ($${pExact} || ' %')
+            OR lower(major_category) LIKE ('% ' || $${pExact})
+            OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
+            OR lower(raw->>'majorCategory') = $${pExact}
+          )`;
+          d1CatCondition = `(
+            lower(major_category) = $${pExact}
+            OR lower(major_category) LIKE ($${pExact} || ' %')
+            OR lower(major_category) LIKE ('% ' || $${pExact})
+            OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
+            OR lower(json_extract(raw,'$.majorCategory')) = $${pExact}
+          )`;
+          nameCondition = `(
+            lower(raw->>'name') = $${pExact}
+            OR lower(raw->>'name') LIKE ($${pExact} || ' %')
+            OR lower(raw->>'name') LIKE ('% ' || $${pExact})
+            OR lower(raw->>'name') LIKE ('% ' || $${pExact} || ' %')
+          )`;
+          d1NameCondition = `(
+            lower(json_extract(raw,'$.name')) = $${pExact}
+            OR lower(json_extract(raw,'$.name')) LIKE ($${pExact} || ' %')
+            OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact})
+            OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact} || ' %')
+          )`;
+          minorCatCondition = `(
+            (raw->'minorCategories')::text ILIKE '%"' || $${pExact} || '"%'
+            OR (raw->'minorCategories')::text ILIKE '% ' || $${pExact} || ' %'
+            OR (raw->'minorCategories')::text ILIKE '%[' || $${pExact} || ']%'
+          )`;
+          d1MinorCatCondition = `(
+            lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || $${pExact} || '"%')
+            OR lower(json_extract(raw,'$.minorCategories')) LIKE ('% ' || $${pExact} || ' %')
+            OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%[' || $${pExact} || ']%')
+          )`;
+          contactCondition = `(
+            lower(raw->>'contactPerson') = $${pExact}
+            OR lower(raw->>'contactPerson') LIKE ($${pExact} || ' %')
+            OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact})
+            OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact} || ' %')
+          )`;
+          d1ContactCondition = `(
+            lower(json_extract(raw,'$.contactPerson')) = $${pExact}
+            OR lower(json_extract(raw,'$.contactPerson')) LIKE ($${pExact} || ' %')
+            OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact})
+            OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact} || ' %')
+          )`;
+        }
+
+        tokenConditions.push(`(${catCondition}
+          OR email ILIKE $${p}
+          OR ${nameCondition}
+          OR ${minorCatCondition}
+          OR ${contactCondition}
+          OR raw->>'contact' ILIKE $${p}
+          OR raw->>'location' ILIKE $${p}
+          OR raw->>'city' ILIKE $${p}
+          OR raw->>'deliveryLocation' ILIKE $${p})`);
+
+        d1TokenConditions.push(`(${d1CatCondition}
+          OR lower(email) LIKE lower($${p})
+          OR ${d1NameCondition}
+          OR ${d1MinorCatCondition}
+          OR ${d1ContactCondition}
+          OR lower(json_extract(raw,'$.contact')) LIKE lower($${p})
+          OR lower(json_extract(raw,'$.location')) LIKE lower($${p})
+          OR lower(json_extract(raw,'$.city')) LIKE lower($${p})
+          OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`);
+      }
+
+      if (tokenConditions.length > 0) {
+        conditions.push(`(${tokenConditions.join(' OR ')})`);
+        d1Conditions.push(`(${d1TokenConditions.join(' OR ')})`);
+      }
     }
-
-    conditions.push(`(${catCondition}
-      OR email ILIKE $${p}
-      OR ${nameCondition}
-      OR ${minorCatCondition}
-      OR ${contactCondition}
-      OR raw->>'contact' ILIKE $${p}
-      OR raw->>'location' ILIKE $${p}
-      OR raw->>'city' ILIKE $${p}
-      OR raw->>'deliveryLocation' ILIKE $${p})`);
-    d1Conditions.push(`(${d1CatCondition}
-      OR lower(email) LIKE lower($${p})
-      OR ${d1NameCondition}
-      OR ${d1MinorCatCondition}
-      OR ${d1ContactCondition}
-      OR lower(json_extract(raw,'$.contact')) LIKE lower($${p})
-      OR lower(json_extract(raw,'$.location')) LIKE lower($${p})
-      OR lower(json_extract(raw,'$.city')) LIKE lower($${p})
-      OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`);
   }
   if (email) {
     params.push(`%${email.trim()}%`);
