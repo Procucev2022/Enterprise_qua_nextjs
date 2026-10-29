@@ -4727,3 +4727,21 @@ continue
 `
 
 ---
+
+### 2026-10-28T21:34:47+05:30
+
+```text
+After an RFQ is successfully created, automatically move the email to the Processed label in Gmail.
+If RFQ creation fails, move the email to the Error label and retain the error details for debugging.
+Fix and test this label-handling workflow in production to ensure emails are correctly labeled based on the RFQ creation status.
+check the issue first and reuse the functionality and fix this error
+```
+
+---
+### 2026-10-28T22:50:56+05:30
+
+```text
+raise the pr
+```
+
+---
