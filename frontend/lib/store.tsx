@@ -698,7 +698,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsLoadingRFQs(true);
     }
     try {
-      const result = await fetchRFQList({ limit: 100 });
+      const result = await fetchRFQList({ limit: 500 });
       if (!result.success) {
         console.error('Failed to load RFQs:', result.error);
         return;
@@ -716,7 +716,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const ensureRFQs = async (force = false) => {
-    if (!force && loadedEntitiesRef.current.rfqs) {
+    if (!force && loadedEntitiesRef.current.rfqs && rfqs.length > 0) {
       return;
     }
     return dedupeRequest('rfqs', async () => {
@@ -956,7 +956,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       tasks.push(refreshVendorCredits());
       tasks.push(ensureRFQs());
       tasks.push(ensureVendors());
+    } else if (r === 'category_manager' || r === 'admin') {
+      tasks.push(ensureRFQs());
+      tasks.push(ensureVendors());
+      tasks.push(ensureVendorEvaluations());
+      tasks.push(ensureCategoryTaxonomy());
+      tasks.push(refreshFromDB());
     } else {
+      tasks.push(ensureRFQs());
       tasks.push(refreshFromDB());
     }
 
@@ -1003,6 +1010,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     if (currentRole === 'vendor') {
       void refreshVendorCredits();
+    }
+    if (currentRole === 'category_manager' || currentRole === 'admin') {
+      void ensureRFQs();
+      void ensureVendors();
     }
 
     if (process.env.NODE_ENV === 'test') {

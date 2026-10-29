@@ -370,15 +370,18 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig(),
 
   let tempPassword = null;
   if (isOnboardingPending) {
+    let idUser = null;
     try {
-      const idUser = await identityQueries.findUserByEmail(address);
-      if (idUser && (idUser.verificationStatus === 'PENDING_ONBOARDING' || idUser.resetPasswordRequired)) {
+      idUser = await identityQueries.findUserByEmail(address);
+      if (isIdentityOnboardingPending(idUser)) {
         tempPassword = idUser.password || null;
       }
     } catch (err) {
       logger.warn('Failed to query identity user password in resolveSenderAuthorisation', { address, error: err.message }, 'EMAIL_GATEWAY');
     }
-    if (!tempPassword) {
+    // A login that has finished onboarding holds the buyer's real password:
+    // never overwrite it or mail out a fresh one.
+    if (!tempPassword && !hasCompletedIdentity(idUser)) {
       tempPassword = storeService._generateTempPassword();
       try {
         await identityQueries.updateUserPassword(address, tempPassword);
@@ -433,6 +436,51 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig(),
   return { allowed: true, reason: null, buyerAccount, isOnboardingPending, tempPassword };
 }
 
+/** Is this identity login still waiting on its first sign-in (temp password)? */
+function isIdentityOnboardingPending(idUser) {
+  return Boolean(idUser && (idUser.verificationStatus === 'PENDING_ONBOARDING' || idUser.resetPasswordRequired));
+}
+
+/** Does a login exist that has finished onboarding, i.e. holds a real password? */
+function hasCompletedIdentity(idUser) {
+  return Boolean(idUser) && !isIdentityOnboardingPending(idUser);
+}
+
+/**
+ * Resolve the buyer account for a sender whose onboarded buyer login exists
+ * but who has no buyer_accounts row, exactly as their first sign-in would
+ * (storeService.ensureBuyerAccountForUser). Null when that does not apply.
+ */
+async function linkExistingIdentityBuyer(email) {
+  let idUser = null;
+  try {
+    idUser = await identityQueries.findUserByEmail(email);
+  } catch (err) {
+    logger.warn('Failed to look up identity user in linkExistingIdentityBuyer', { email, error: err.message }, 'EMAIL_GATEWAY');
+    return null;
+  }
+  if (!hasCompletedIdentity(idUser) || idUser.role !== 'buyer') return null;
+
+  const buyerAccount = await storeService.ensureBuyerAccountForUser({
+    id: idUser.id,
+    sub: idUser.id,
+    email: idUser.email || email,
+    role: 'buyer',
+    name: idUser.name,
+    orgId: idUser.orgId,
+    orgName: idUser.orgName,
+    phone: idUser.mobile,
+  });
+  if (!buyerAccount) return null;
+
+  logger.info(
+    `Linked existing buyer login for sender ${email}; no onboarding credentials issued`,
+    { buyerAccountId: buyerAccount.id },
+    'EMAIL_GATEWAY'
+  );
+  return { buyerAccount, isNew: false, isOnboardingPending: false, tempPassword: null, user: idUser };
+}
+
 const inFlightBuyerRegistrations = new Map();
 
 /**
@@ -454,15 +502,16 @@ async function getOrCreateBuyerAccount(email) {
     );
     let tempPassword = null;
     if (isPending) {
+      let idUser = null;
       try {
-        const idUser = await identityQueries.findUserByEmail(normEmail);
-        if (idUser && (idUser.verificationStatus === 'PENDING_ONBOARDING' || idUser.resetPasswordRequired)) {
+        idUser = await identityQueries.findUserByEmail(normEmail);
+        if (isIdentityOnboardingPending(idUser)) {
           tempPassword = idUser.password || null;
         }
       } catch (err) {
         logger.warn('Failed to resolve identity user temp password in getOrCreateBuyerAccount', { email: normEmail, error: err.message }, 'EMAIL_GATEWAY');
       }
-      if (!tempPassword) {
+      if (!tempPassword && !hasCompletedIdentity(idUser)) {
         tempPassword = storeService._generateTempPassword();
         try {
           await identityQueries.updateUserPassword(normEmail, tempPassword);
@@ -493,6 +542,13 @@ async function getOrCreateBuyerAccount(email) {
       const { isPending, tempPassword } = await resolvePendingTempPassword(existing);
       return { buyerAccount: existing, isNew: false, isOnboardingPending: isPending, tempPassword };
     }
+
+    // A sender who already has a fully onboarded buyer login — typically a
+    // bulk-imported buyer who has never signed in, so has no buyer_accounts
+    // row yet — is not a new sign-up: give them the same account a login
+    // would, and never mint or mail credentials.
+    const linked = await linkExistingIdentityBuyer(normEmail);
+    if (linked) return linked;
 
     const tempPassword = storeService._generateTempPassword();
     const displayName = normEmail.split('@')[0];
@@ -547,11 +603,19 @@ async function getOrCreateBuyerAccount(email) {
       'EMAIL_GATEWAY'
     );
 
+    // insertBuyerAccount leaves an existing login untouched, so the password
+    // generated above was never saved: mail the stored one only while that
+    // login is itself still pending onboarding, otherwise mail none.
+    let issuedPassword = tempPassword;
+    if (userResult && userResult.created === false) {
+      issuedPassword = isIdentityOnboardingPending(userResult.user) ? userResult.user.password || null : null;
+    }
+
     return {
       buyerAccount: newBuyerAccount,
       isNew: true,
       isOnboardingPending: true,
-      tempPassword,
+      tempPassword: issuedPassword,
       user: userResult?.user || null,
     };
   })();
