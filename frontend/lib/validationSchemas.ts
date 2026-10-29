@@ -29,6 +29,10 @@ export const PHONE_PATTERN = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
  * +91 / 0 / 91.
  */
 export const INDIAN_MOBILE_PATTERN = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
+export const PROCUCEV_EMAIL_PATTERN = /^[a-zA-Z0-9._%+-]+@procucev\.com$/i;
+export const PROCUCEV_EMAIL_MESSAGE = 'Must be a valid Procucev corporate email address ending in @procucev.com';
+export const OTP_CODE_PATTERN = /^\d{6}$/;
+export const OTP_CODE_MESSAGE = 'OTP code must be exactly 6 numeric digits';
 
 /**
  * Delivery pincode or zipcode.
@@ -98,6 +102,13 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
    * the account by email + mobile together, so the mobile number is a hard
    * requirement here rather than an optional contact detail.
    */
+  vendorDirectoryOtpRequest: {
+    email: { required: true, pattern: PROCUCEV_EMAIL_PATTERN, message: PROCUCEV_EMAIL_MESSAGE },
+  },
+  vendorDirectoryOtpVerify: {
+    email: { required: true, pattern: PROCUCEV_EMAIL_PATTERN, message: PROCUCEV_EMAIL_MESSAGE },
+    code: { required: true, pattern: OTP_CODE_PATTERN, message: OTP_CODE_MESSAGE },
+  },
   loginForm: {
     email: { required: true, pattern: EMAIL_PATTERN, message: UI_STRINGS.auth.emailInvalid },
     mobile: { required: true, pattern: INDIAN_MOBILE_PATTERN, message: UI_STRINGS.auth.mobileInvalid },

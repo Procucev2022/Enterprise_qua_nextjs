@@ -2,13 +2,16 @@ import {
   getVendorDirectorySession,
   isVendorDirectoryAuthenticated,
   getVendorDirectoryAuthToken,
-  authenticateVendorDirectory,
+  touchVendorDirectoryActivity,
+  requestVendorDirectoryOtp,
+  verifyVendorDirectoryOtp,
   logoutVendorDirectory,
 } from '@/lib/vendorAuthClient';
-import { DEFAULT_VENDOR_DIRECTORY_PASSKEY, VENDOR_DIRECTORY_AUTH_STORAGE_KEY } from '@/lib/constants';
+import { VENDOR_DIRECTORY_AUTH_STORAGE_KEY } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 
 describe('vendorAuthClient', () => {
+  const S = UI_STRINGS.vendorDirectoryLogin;
   const originalFetch = global.fetch;
 
   beforeEach(() => {
@@ -98,232 +101,275 @@ describe('vendorAuthClient', () => {
     });
   });
 
-  describe('authenticateVendorDirectory', () => {
-    test('returns error when passkey is empty or whitespace or falsy', async () => {
-      const res1 = await authenticateVendorDirectory('   ');
+  describe('touchVendorDirectoryActivity', () => {
+    test('does nothing if no active session', () => {
+      expect(() => touchVendorDirectoryActivity()).not.toThrow();
+    });
+
+    test('updates lastActivityAt if session exists', () => {
+      const past = Date.now() - 5000;
+      window.sessionStorage.setItem(
+        VENDOR_DIRECTORY_AUTH_STORAGE_KEY,
+        JSON.stringify({ token: 'vdir_token', authenticated: true, expiresAt: Date.now() + 60000, lastActivityAt: past })
+      );
+      touchVendorDirectoryActivity();
+      const updated = getVendorDirectorySession();
+      expect(updated?.lastActivityAt).toBeGreaterThanOrEqual(past);
+    });
+  });
+
+  describe('requestVendorDirectoryOtp', () => {
+    test('rejects empty or whitespace email', async () => {
+      const res1 = await requestVendorDirectoryOtp('');
       expect(res1.success).toBe(false);
-      expect(res1.error).toBe(UI_STRINGS.vendorDirectoryLogin.emptyPasskey);
+      expect(res1.error).toBe(S.emptyEmail);
 
-      // @ts-expect-error test undefined input
-      const res2 = await authenticateVendorDirectory(undefined);
+      const res2 = await requestVendorDirectoryOtp('   ');
       expect(res2.success).toBe(false);
-      expect(res2.error).toBe(UI_STRINGS.vendorDirectoryLogin.emptyPasskey);
+      expect(res2.error).toBe(S.emptyEmail);
     });
 
-    test('authenticates successfully via backend API with explicit expiresAt', async () => {
-      const customExpiry = Date.now() + 86400000;
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          success: true,
-          token: 'vdir_api_token_456',
-          expiresAt: customExpiry,
-        }),
-      });
-
-      const res = await authenticateVendorDirectory('Procucev@Vendors2026');
-      expect(res.success).toBe(true);
-      expect(res.token).toBe('vdir_api_token_456');
-
-      const saved = JSON.parse(window.sessionStorage.getItem(VENDOR_DIRECTORY_AUTH_STORAGE_KEY) || '{}');
-      expect(saved.authenticated).toBe(true);
-      expect(saved.token).toBe('vdir_api_token_456');
-      expect(saved.expiresAt).toBe(customExpiry);
-    });
-
-    test('authenticates successfully via backend API when expiresAt is omitted (uses 24h default)', async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          success: true,
-          token: 'vdir_api_token_no_expiry',
-        }),
-      });
-
-      const res = await authenticateVendorDirectory('Procucev@Vendors2026');
-      expect(res.success).toBe(true);
-      expect(res.token).toBe('vdir_api_token_no_expiry');
-
-      const saved = JSON.parse(window.sessionStorage.getItem(VENDOR_DIRECTORY_AUTH_STORAGE_KEY) || '{}');
-      expect(saved.authenticated).toBe(true);
-      expect(saved.expiresAt).toBeGreaterThan(Date.now());
-    });
-
-    test('handles ok:true response where payload lacks token — falls through to error parse path', async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ success: false, error: 'Token not issued' }),
-      });
-
-      const res = await authenticateVendorDirectory('some-key');
+    test('rejects non-procucev email', async () => {
+      const res = await requestVendorDirectoryOtp('user@gmail.com');
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Token not issued');
+      expect(res.error).toBe(S.procucevEmailRequired);
     });
 
-    test('handles API HTTP 401 response with backend error message', async () => {
+    test('sends request and returns success when server responds ok', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          message: 'OTP sent successfully',
+          expiresInSeconds: 300,
+        }),
+      } as any);
+
+      const res = await requestVendorDirectoryOtp('cm@procucev.com');
+      expect(res.success).toBe(true);
+      expect(res.message).toBe('OTP sent successfully');
+      expect(res.expiresInSeconds).toBe(300);
+      expect(global.fetch).toHaveBeenCalledWith('/api/auth/vendor-directory/request-otp', expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ email: 'cm@procucev.com' }),
+      }));
+    });
+
+    test('returns accessDeniedNotice when server responds with 403', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: false,
-        status: 401,
-        json: async () => ({
-          success: false,
-          error: 'Custom invalid passkey error',
-        }),
-      });
+        status: 403,
+        json: async () => ({ success: false }),
+      } as any);
 
-      const res = await authenticateVendorDirectory('wrong-key');
+      const res = await requestVendorDirectoryOtp('not_cm@procucev.com');
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Custom invalid passkey error');
+      expect(res.error).toBe(S.accessDeniedNotice);
     });
 
-    test('handles API HTTP error without specific error property (uses default invalidPasskey)', async () => {
+    test('returns server error message when available', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: false,
         status: 400,
-        json: async () => ({}),
-      });
+        json: async () => ({ success: false, error: 'Custom rate limit exceeded' }),
+      } as any);
 
-      const res = await authenticateVendorDirectory('wrong-key');
+      const res = await requestVendorDirectoryOtp('cm@procucev.com');
       expect(res.success).toBe(false);
-      expect(res.error).toBe(UI_STRINGS.vendorDirectoryLogin.invalidPasskey);
+      expect(res.error).toBe('Custom rate limit exceeded');
     });
 
-    test('handles API HTTP error when json parsing fails (uses default invalidPasskey)', async () => {
+    test('handles JSON parse error on non-ok response', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: false,
         status: 500,
         json: async () => {
-          throw new Error('Not JSON');
+          throw new Error('Invalid JSON');
         },
-      });
+      } as any);
 
-      const res = await authenticateVendorDirectory('bad-key');
+      const res = await requestVendorDirectoryOtp('cm@procucev.com');
       expect(res.success).toBe(false);
-      expect(res.error).toBe(UI_STRINGS.vendorDirectoryLogin.invalidPasskey);
+      expect(res.error).toBe(S.networkError);
     });
 
-    test('falls back gracefully to offline verification if network request fails and passkey matches default', async () => {
-      global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+    test('catches fetch network failure and returns networkError', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network failure'));
 
-      const res = await authenticateVendorDirectory(DEFAULT_VENDOR_DIRECTORY_PASSKEY);
-      expect(res.success).toBe(true);
-      expect(res.token).toContain('vdir_offline_');
-
-      const saved = JSON.parse(window.sessionStorage.getItem(VENDOR_DIRECTORY_AUTH_STORAGE_KEY) || '{}');
-      expect(saved.authenticated).toBe(true);
-    });
-
-    test('falls back gracefully to offline verification with VENDOR2026 alias key', async () => {
-      global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
-
-      const res = await authenticateVendorDirectory('VENDOR2026');
-      expect(res.success).toBe(true);
-      expect(res.token).toContain('vdir_offline_');
-
-      const saved = JSON.parse(window.sessionStorage.getItem(VENDOR_DIRECTORY_AUTH_STORAGE_KEY) || '{}');
-      expect(saved.authenticated).toBe(true);
-    });
-
-    test('returns invalidPasskey error if network request fails and passkey does not match default or alias', async () => {
-      global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
-
-      const res = await authenticateVendorDirectory('completely-wrong-key');
+      const res = await requestVendorDirectoryOtp('cm@procucev.com');
       expect(res.success).toBe(false);
-      expect(res.error).toBe(UI_STRINGS.vendorDirectoryLogin.invalidPasskey);
+      expect(res.error).toBe(S.networkError);
     });
   });
 
-  describe('logoutVendorDirectory', () => {
-    test('removes session from sessionStorage', () => {
-      window.sessionStorage.setItem(
-        VENDOR_DIRECTORY_AUTH_STORAGE_KEY,
-        JSON.stringify({ token: 'vdir_active', authenticated: true, expiresAt: Date.now() + 60000 })
-      );
-      expect(isVendorDirectoryAuthenticated()).toBe(true);
+  describe('verifyVendorDirectoryOtp', () => {
+    test('validates inputs (empty email, non-procucev email, empty code, invalid code length)', async () => {
+      const res1 = await verifyVendorDirectoryOtp('', '123456');
+      expect(res1.success).toBe(false);
+      expect(res1.error).toBe(S.emptyEmail);
 
-      logoutVendorDirectory();
-      expect(isVendorDirectoryAuthenticated()).toBe(false);
-      expect(window.sessionStorage.getItem(VENDOR_DIRECTORY_AUTH_STORAGE_KEY)).toBeNull();
+      const res2 = await verifyVendorDirectoryOtp('cm@gmail.com', '123456');
+      expect(res2.success).toBe(false);
+      expect(res2.error).toBe(S.procucevEmailRequired);
+
+      const res3 = await verifyVendorDirectoryOtp('cm@procucev.com', '');
+      expect(res3.success).toBe(false);
+      expect(res3.error).toBe(S.emptyOtp);
+
+      const res4 = await verifyVendorDirectoryOtp('cm@procucev.com', '123');
+      expect(res4.success).toBe(false);
+      expect(res4.error).toBe(S.invalidOtp);
+
+      const res5 = await verifyVendorDirectoryOtp('cm@procucev.com', 'abcdef');
+      expect(res5.success).toBe(false);
+      expect(res5.error).toBe(S.invalidOtp);
     });
 
-    test('handles storage exceptions gracefully during logout', () => {
-      const original = window.sessionStorage.removeItem.bind(window.sessionStorage);
-      Object.defineProperty(window.sessionStorage, 'removeItem', {
-        configurable: true,
-        value: () => {
-          throw new Error('Storage exception');
-        },
-      });
-
-      expect(() => logoutVendorDirectory()).not.toThrow();
-
-      Object.defineProperty(window.sessionStorage, 'removeItem', {
-        configurable: true,
-        value: original,
-      });
-    });
-  });
-
-  describe('Storage / SSR unavailable environment guards', () => {
-    test('gracefully handles missing sessionStorage in storage helper', () => {
-      const originalStorage = window.sessionStorage;
-      Object.defineProperty(window, 'sessionStorage', {
-        configurable: true,
-        value: null,
-      });
-
-      expect(getVendorDirectorySession()).toBeNull();
-      expect(isVendorDirectoryAuthenticated()).toBe(false);
-      expect(getVendorDirectoryAuthToken()).toBeNull();
-      expect(() => logoutVendorDirectory()).not.toThrow();
-
-      Object.defineProperty(window, 'sessionStorage', {
-        configurable: true,
-        value: originalStorage,
-      });
-    });
-
-    test('authenticateVendorDirectory succeeds even if sessionStorage is unavailable', async () => {
-      const originalStorage = window.sessionStorage;
-      Object.defineProperty(window, 'sessionStorage', {
-        configurable: true,
-        value: null,
-      });
-
+    test('verifies OTP and stores session on success', async () => {
+      const futureIso = new Date(Date.now() + 300000).toISOString();
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
           success: true,
-          token: 'vdir_token_no_storage',
+          token: 'jwt_vd_token',
+          sessionId: 'vdir_session_abc',
+          expiresAt: futureIso,
+          user: { id: 'u1', email: 'cm@procucev.com', role: 'category_manager', name: 'Category Mgr' },
         }),
-      });
+      } as any);
 
-      const res = await authenticateVendorDirectory('Procucev@Vendors2026');
+      const res = await verifyVendorDirectoryOtp('cm@procucev.com', '123456');
       expect(res.success).toBe(true);
-      expect(res.token).toBe('vdir_token_no_storage');
+      expect(res.token).toBe('jwt_vd_token');
+      expect(res.sessionId).toBe('vdir_session_abc');
+      expect(res.user?.role).toBe('category_manager');
 
-      Object.defineProperty(window, 'sessionStorage', {
-        configurable: true,
-        value: originalStorage,
-      });
+      const saved = getVendorDirectorySession();
+      expect(saved?.authenticated).toBe(true);
+      expect(saved?.sessionId).toBe('vdir_session_abc');
     });
 
-    test('offline fallback succeeds even if sessionStorage is unavailable', async () => {
-      const originalStorage = window.sessionStorage;
-      Object.defineProperty(window, 'sessionStorage', {
-        configurable: true,
-        value: null,
-      });
+    test('verifies OTP with numeric expiresAt and fallback when omitted', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          token: 'jwt_vd_token_num',
+          sessionId: 'ses_num',
+          expiresAt: Date.now() + 120000,
+        }),
+      } as any);
 
-      global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
-
-      const res = await authenticateVendorDirectory(DEFAULT_VENDOR_DIRECTORY_PASSKEY);
+      const res = await verifyVendorDirectoryOtp('cm@procucev.com', '123456');
       expect(res.success).toBe(true);
-      expect(res.token).toContain('vdir_offline_');
 
-      Object.defineProperty(window, 'sessionStorage', {
-        configurable: true,
-        value: originalStorage,
-      });
+      // Omitted expiresAt fallback
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          token: 'jwt_vd_token_fallback',
+          sessionId: 'ses_fallback',
+        }),
+      } as any);
+
+      const resFallback = await verifyVendorDirectoryOtp('cm@procucev.com', '123456');
+      expect(resFallback.success).toBe(true);
+
+      // Invalid date string fallback
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          token: 'jwt_vd_token_nan',
+          sessionId: 'ses_nan',
+          expiresAt: 'not-a-date',
+        }),
+      } as any);
+
+      const resNan = await verifyVendorDirectoryOtp('cm@procucev.com', '123456');
+      expect(resNan.success).toBe(true);
+    });
+
+    test('returns accessDeniedNotice on 403 response', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        json: async () => ({ success: false }),
+      } as any);
+
+      const res = await verifyVendorDirectoryOtp('cm@procucev.com', '123456');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(S.accessDeniedNotice);
+    });
+
+    test('returns server error message on 401 response', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ success: false, error: 'OTP has expired' }),
+      } as any);
+
+      const res = await verifyVendorDirectoryOtp('cm@procucev.com', '123456');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('OTP has expired');
+    });
+
+    test('handles non-JSON error response', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => {
+          throw new Error('bad json');
+        },
+      } as any);
+
+      const res = await verifyVendorDirectoryOtp('cm@procucev.com', '123456');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(S.invalidOtp);
+    });
+
+    test('handles fetch rejection on verify', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Connection aborted'));
+
+      const res = await verifyVendorDirectoryOtp('cm@procucev.com', '123456');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(S.networkError);
+    });
+  });
+
+  describe('logoutVendorDirectory', () => {
+    test('clears storage and calls logout endpoint with token and reason', async () => {
+      window.sessionStorage.setItem(
+        VENDOR_DIRECTORY_AUTH_STORAGE_KEY,
+        JSON.stringify({ token: 'active_token', authenticated: true, expiresAt: Date.now() + 60000 })
+      );
+
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true }) } as any);
+
+      await logoutVendorDirectory('INACTIVITY');
+
+      expect(window.sessionStorage.getItem(VENDOR_DIRECTORY_AUTH_STORAGE_KEY)).toBeNull();
+      expect(global.fetch).toHaveBeenCalledWith('/api/auth/logout', expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer active_token',
+        }),
+        body: JSON.stringify({ logoutReason: 'INACTIVITY' }),
+      }));
+    });
+
+    test('clears storage even if no token was present or fetch fails', async () => {
+      window.sessionStorage.setItem(
+        VENDOR_DIRECTORY_AUTH_STORAGE_KEY,
+        JSON.stringify({ token: '', authenticated: false, expiresAt: 0 })
+      );
+
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+      await logoutVendorDirectory();
+
+      expect(window.sessionStorage.getItem(VENDOR_DIRECTORY_AUTH_STORAGE_KEY)).toBeNull();
     });
   });
 });

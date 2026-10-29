@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const vendorController = require('../controllers/vendorController');
-const { authenticate, optionalAuthenticate } = require('../middleware/auth');
+const { authenticate, optionalAuthenticate, requireRole, requireVendorDirectorySession } = require('../middleware/auth');
 
 router.get('/', optionalAuthenticate, vendorController.getVendors);
 router.post('/', authenticate, vendorController.createVendor);
@@ -11,11 +11,11 @@ router.get('/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/presence', optionalAuthenticate, vendorController.getVendorsPresence);
 router.post('/heartbeat', optionalAuthenticate, vendorController.recordVendorHeartbeat);
 router.get('/bulk-import/:sessionId', authenticate, vendorController.getBulkImportSessionStatus);
-// Public directory — no auth required, must be before /:id to avoid swallowing the literal path segment.
-router.get('/public', vendorController.getPublicVendors);
-router.get('/public/filters', vendorController.getPublicVendorFilters);
-router.get('/public/:id', vendorController.getPublicVendorById);
-router.post('/directory-auth', vendorController.authenticateVendorDirectory);
+// Protected Vendor Directory — Category Manager with active directory session only.
+router.get('/public', authenticate, requireRole('category_manager'), requireVendorDirectorySession, vendorController.getPublicVendors);
+router.get('/public/filters', authenticate, requireRole('category_manager'), requireVendorDirectorySession, vendorController.getPublicVendorFilters);
+router.get('/public/:id', authenticate, requireRole('category_manager'), requireVendorDirectorySession, vendorController.getPublicVendorById);
+
 router.get('/subscription-pricing', vendorController.getSubscriptionPricing);
 router.get('/:id/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/:id', optionalAuthenticate, vendorController.getVendorById);

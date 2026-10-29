@@ -1,4 +1,5 @@
 import { fetchPublicVendors, fetchPublicVendorById, fetchPublicVendorFilters, clearPublicVendorClientCache } from '@/lib/vendorDirectoryClient';
+import * as vendorAuthClient from '@/lib/vendorAuthClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 
 describe('vendorDirectoryClient', () => {
@@ -360,6 +361,81 @@ describe('vendorDirectoryClient', () => {
       // Requesting the 1st page again should have been evicted, so it triggers a new fetch (call 52)
       await fetchPublicVendors({ page: 1, pageSize: 1 });
       expect(global.fetch).toHaveBeenCalledTimes(52);
+    });
+
+    test('attaches Authorization header with Bearer token when directory session exists', async () => {
+      window.sessionStorage.setItem(
+        'procucev_vendor_directory_auth',
+        JSON.stringify({
+          authenticated: true,
+          token: 'mock-jwt-directory-token',
+          expiresAt: Date.now() + 60000,
+        })
+      );
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: [], pagination: { page: 1, pageSize: 24, total: 0, totalPages: 1 } }),
+      });
+
+      await fetchPublicVendors({ page: 1 });
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/vendors/public'),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer mock-jwt-directory-token',
+          }),
+          cache: 'no-store',
+        })
+      );
+    });
+
+    test('attaches Authorization header for fetchPublicVendorFilters and fetchPublicVendorById when session exists', async () => {
+      window.sessionStorage.setItem(
+        'procucev_vendor_directory_auth',
+        JSON.stringify({
+          authenticated: true,
+          token: 'mock-jwt-directory-token',
+          expiresAt: Date.now() + 60000,
+        })
+      );
+      global.fetch = jest.fn().mockImplementation(async (url) => {
+        if (url.includes('/filters')) {
+          return {
+            ok: true,
+            json: async () => ({ success: true, data: {} }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: { id: 'v-101', name: 'Vendor 101' } }),
+        };
+      });
+
+      const filtersResult = await fetchPublicVendorFilters();
+      expect(filtersResult.categories).toEqual([]);
+      expect(filtersResult.states).toEqual([]);
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/vendors/public/filters',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer mock-jwt-directory-token',
+          }),
+          cache: 'no-store',
+        })
+      );
+
+      const vendor = await fetchPublicVendorById('v-101');
+      expect(vendor?.name).toBe('Vendor 101');
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/vendors/public/v-101',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer mock-jwt-directory-token',
+          }),
+          cache: 'no-store',
+        })
+      );
     });
   });
 });

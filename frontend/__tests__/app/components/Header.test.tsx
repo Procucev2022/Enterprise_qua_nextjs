@@ -91,9 +91,14 @@ describe('Header', () => {
 
   it('renders logged out state when isLoggedIn is false and handles theme toggling in light/dark', () => {
     mockCurrentPath = '/login';
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      isLoggedIn: false,
+      theme: 'light',
+      toggleTheme: mockToggleTheme,
+    });
     const { unmount } = render(<Header />);
     expect(screen.getByText('QUA AI 2.0')).toBeInTheDocument();
-    expect(screen.getByText(UI_STRINGS.headerNav.vendorDirectory)).toBeInTheDocument();
+    expect(screen.queryByText(UI_STRINGS.headerNav.vendorDirectory)).not.toBeInTheDocument();
     unmount();
 
     mockCurrentPath = '/vendors';
@@ -107,6 +112,7 @@ describe('Header', () => {
     expect(screen.getByText('QUA AI 2.0')).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.headerNav.signIn)).toBeInTheDocument();
     expect(screen.getByText('Need Support?')).toBeInTheDocument();
+    expect(screen.queryByText(UI_STRINGS.headerNav.vendorDirectory)).not.toBeInTheDocument();
 
     const themeBtn = screen.getByTitle('Switch to Light Mode');
     fireEvent.click(themeBtn);
@@ -121,6 +127,69 @@ describe('Header', () => {
   // tier changes only ever happen through the real, payment-gated
   // vendor-subscription screen. This test asserts the pill/dropdown is gone
   // for both roles rather than testing switch behavior that no longer exists.
+  it('renders Vendor Directory in header for category_manager but hides it for buyer and vendor', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      currentRole: 'category_manager',
+      isLoggedIn: true,
+      currentUserSession: {
+        id: 'cm-1',
+        email: 'cm@procucev.com',
+        role: 'category_manager',
+        orgName: 'Procucev Category Team',
+      },
+      aiFeed: [],
+      theme: 'light',
+      toggleTheme: mockToggleTheme,
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      setCurrentUserSession: mockSetCurrentUserSession,
+    });
+
+    const { rerender } = render(<Header />);
+    expect(screen.getByText(UI_STRINGS.headerNav.vendorDirectory)).toBeInTheDocument();
+
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      currentRole: 'buyer',
+      isLoggedIn: true,
+      currentUserSession: {
+        id: 'b-1',
+        email: 'buyer@example.com',
+        role: 'buyer',
+        orgName: 'Buyer Org',
+      },
+      aiFeed: [],
+      theme: 'light',
+      toggleTheme: mockToggleTheme,
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      setCurrentUserSession: mockSetCurrentUserSession,
+      activeBuyerAccount: { organizationName: 'Buyer Org', subscriptionPlan: 'version_3' },
+    });
+
+    rerender(<Header />);
+    expect(screen.queryByText(UI_STRINGS.headerNav.vendorDirectory)).not.toBeInTheDocument();
+
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      currentRole: 'vendor',
+      isLoggedIn: true,
+      currentUserSession: {
+        id: 'v-1',
+        email: 'vendor@example.com',
+        role: 'vendor',
+        orgName: 'Vendor Org',
+      },
+      aiFeed: [],
+      theme: 'light',
+      toggleTheme: mockToggleTheme,
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      setCurrentUserSession: mockSetCurrentUserSession,
+    });
+
+    rerender(<Header />);
+    expect(screen.queryByText(UI_STRINGS.headerNav.vendorDirectory)).not.toBeInTheDocument();
+  });
+
   it('renders no sourcing-mode or vendor-tier quick-switcher for either role', () => {
     const { rerender } = render(<Header />);
     expect(screen.queryByTitle('Switch Sourcing Mode')).not.toBeInTheDocument();

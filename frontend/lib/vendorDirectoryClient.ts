@@ -8,6 +8,7 @@
  */
 
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { getVendorDirectoryAuthToken } from '@/lib/vendorAuthClient';
 import type { PublicVendorFilterState, PublicVendorPageResult, PublicVendor, PublicVendorFilterOptions } from '@/lib/types';
 
 interface CacheEntry<T> {
@@ -89,10 +90,15 @@ export async function fetchPublicVendors(
   }
 
   try {
+    const token = getVendorDirectoryAuthToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
     const res = await fetch(`/api/vendors/public?${params.toString()}`, {
       method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-      cache: 'default',
+      headers,
+      cache: 'no-store',
     });
 
     if (!res.ok) {
@@ -141,10 +147,15 @@ export async function fetchPublicVendorFilters(): Promise<{
   }
 
   try {
+    const token = getVendorDirectoryAuthToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
     const res = await fetch('/api/vendors/public/filters', {
       method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-      cache: 'default',
+      headers,
+      cache: 'no-store',
     });
     if (!res.ok) {
       return { success: false, categories: [], states: [] };
@@ -179,9 +190,15 @@ export async function fetchPublicVendorById(
   }
 
   try {
+    const token = getVendorDirectoryAuthToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
     const res = await fetch(`/api/vendors/public/${encodeURIComponent(id)}`, {
       method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
+      cache: 'no-store',
     });
     if (!res.ok) return null;
     const json: { success: boolean; data?: PublicVendor } = await res.json();

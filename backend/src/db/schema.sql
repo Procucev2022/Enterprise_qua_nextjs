@@ -838,3 +838,28 @@ CREATE TABLE IF NOT EXISTS vendor_credit_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_vendor_credit_transactions_vendor ON vendor_credit_transactions (vendor_id, created_at DESC);
 
+-- ============================================================================
+-- VENDOR DIRECTORY SESSIONS (Dedicated Category Manager Access Audit & Inactivity)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS vendor_directory_sessions (
+  id VARCHAR(64) PRIMARY KEY,
+  user_uuid VARCHAR(64) NOT NULL,
+  email VARCHAR(255) NOT NULL,
+  role VARCHAR(64) NOT NULL DEFAULT 'category_manager',
+  auth_method VARCHAR(32) NOT NULL DEFAULT 'EMAIL_OTP',
+  login_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_activity_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  logout_at TIMESTAMPTZ,
+  duration_seconds INTEGER DEFAULT 0,
+  logout_reason VARCHAR(64),
+  status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+  ip_address VARCHAR(128),
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_user_login ON vendor_directory_sessions (user_uuid, login_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email_login ON vendor_directory_sessions (email, login_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status_act ON vendor_directory_sessions (status, last_activity_at DESC);
+
+

@@ -229,7 +229,7 @@ export default function Header() {
  
           {/* Controls */}
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            {pathname?.startsWith('/vendors') ? (
+            {pathname !== '/login' && (
               <Link
                 href="/login"
                 className="px-3 sm:px-4 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white transition-all text-xs sm:text-sm font-semibold shadow-xs flex items-center gap-1.5"
@@ -237,15 +237,6 @@ export default function Header() {
               >
                 <LogIn size={15} />
                 <span>{UI_STRINGS.headerNav.signIn}</span>
-              </Link>
-            ) : (
-              <Link
-                href="/vendors"
-                className="px-3 sm:px-4 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/80 transition-all text-xs sm:text-sm font-semibold shadow-xs flex items-center gap-1.5"
-                title={UI_STRINGS.headerNav.vendorDirectory}
-              >
-                <Building2 size={15} />
-                <span>{UI_STRINGS.headerNav.vendorDirectory}</span>
               </Link>
             )}
             <button
@@ -296,14 +287,16 @@ export default function Header() {
 
         {/* Right Section: Buyer Credits / Active Plan, Theme Toggle, Notifications, and Sleek Corner User Profile Box */}
         <div className="flex items-center gap-2 sm:gap-3">
-          <Link
-            href="/vendors"
-            className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700 transition-all text-xs font-semibold shadow-xs"
-            title={UI_STRINGS.headerNav.vendorDirectory}
-          >
-            <Building2 size={14} className="text-indigo-600 dark:text-indigo-400" />
-            <span>{UI_STRINGS.headerNav.vendorDirectory}</span>
-          </Link>
+          {currentRole === 'category_manager' && (
+            <Link
+              href="/vendors"
+              className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700 transition-all text-xs font-semibold shadow-xs"
+              title={UI_STRINGS.headerNav.vendorDirectory}
+            >
+              <Building2 size={14} className="text-indigo-600 dark:text-indigo-400" />
+              <span>{UI_STRINGS.headerNav.vendorDirectory}</span>
+            </Link>
+          )}
           {/* Buyer Credits / Active Plan Display */}
           {currentRole === 'buyer' && (
             <>
