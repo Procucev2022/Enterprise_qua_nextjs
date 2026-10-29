@@ -3875,6 +3875,157 @@ class StoreService {
   }
 
   /**
+   * Automatically identify and assign eligible vendors based on RFQ category,
+   * delivery location, and vendor eligibility rules from the DATABASE.
+   *
+   * Covers Mode 0, Mode 2, Mode 3, and Email-ingested RFQs.
+   * Mode 1 (Private Roster Only) is strictly guarded and never auto-assigned from the public network.
+   *
+   * @param {Object} rfq The RFQ to assign vendors to.
+   * @returns {Promise<Object>} The updated RFQ with assigned vendors.
+   */
+  async autoAssignVendorsFromDB(rfq) {
+    if (!rfq) return rfq;
+    const mode = String(rfq.sourcingMode || '');
+    const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
+    if (isV1) return rfq;
+
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    if (isV0) {
+      return await this.augmentV0AssignmentsFromDB(rfq);
+    }
+
+    const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY || 5;
+    const signals = this._rfqCategorySignals(rfq);
+    const categories = this._rfqDistinctCategories(rfq);
+
+    if (!Array.isArray(signals) || signals.length === 0) {
+      return rfq;
+    }
+    const targetCategories = categories.length > 0 ? categories : signals;
+    const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
+
+    let dbMatches = [];
+    if (pool.hasStorage()) {
+      try {
+        dbMatches = await domainQueries.getPublicVendorsMatchingCategories(signals, limit * 2);
+      } catch (err) {
+        logger.warn(
+          'Auto-assign DB-backed vendor assignment query failed',
+          { rfqNumber: rfq.rfqNumber, error: err.message },
+          'STORE_SERVICE'
+        );
+      }
+
+      if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+        try {
+          const page = await domainQueries.getVendorsPageFromDB({
+            limit,
+            offset: 0,
+            publicOnly: true,
+          });
+          dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
+        } catch (err) {
+          logger.warn(
+            'Auto-assign DB-backed network fallback query failed',
+            { rfqNumber: rfq.rfqNumber, error: err.message },
+            'STORE_SERVICE'
+          );
+        }
+      }
+    }
+
+    if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+      dbMatches = this.candidateVendorsForRFQ(rfq).filter((v) => this.isProcucevVendor(v));
+    }
+
+    if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+      return rfq;
+    }
+
+    const targetLocation = {
+      pincode: rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
+      location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
+    };
+    const candidatePool = dbMatches.filter((v) => this.isProcucevVendor(v));
+    const sorted = this.selectVendorsPerCategory(
+      candidatePool,
+      targetCategories,
+      maxProcucevPerCat,
+      targetLocation
+    ) || [];
+
+    const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+    const existingKeys = new Set(
+      existing.map((v) => (v.id || v.email || v.name || '').toLowerCase())
+    );
+    const additions = sorted
+      .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
+      .map((v) => ({
+        id: v.id,
+        name: v.name,
+        email: v.email || null,
+        contactPerson: v.contactPerson || null,
+        phone: v.phone || v.mobile || null,
+        source: v.source || 'procucev_network',
+        majorCategory: v.majorCategory || v.category || null,
+        minorCategories: v.minorCategories || [],
+        city: v.city || null,
+        state: v.state || null,
+        location: v.location || null,
+        pincode: v.pincode || null,
+      }));
+
+    if (additions.length === 0) return rfq;
+
+    const merged = [...existing, ...additions];
+    const followUpData = rfq.followUpData
+      ? { ...rfq.followUpData, totalInvited: merged.length, vendors: merged }
+      : { totalInvited: merged.length, vendors: merged };
+
+    const updated = this.updateRFQ(rfq.id, {
+      assignedVendors: merged,
+      procucevVendorCount: merged.length,
+      followUpData,
+    }) || { ...rfq, assignedVendors: merged, procucevVendorCount: merged.length, followUpData };
+
+    try {
+      const resolvedAdditions = additions.map((v) => {
+        const full = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+        return {
+          ...v,
+          phone: full.phone || v.phone || null,
+          email: full.email || v.email || null,
+          name: full.name || v.name,
+          contactPerson: full.contactPerson || v.contactPerson || null,
+        };
+      });
+      rfqChaserScheduler.scheduleRFQChasers(
+        updated,
+        resolvedAdditions,
+        (vendor) => this.checkVendorQuotationEligibility(vendor)
+      );
+    } catch (err) {
+      logger.warn('Failed to schedule chasers for auto-assigned vendors', { error: err.message }, 'STORE_SERVICE');
+    }
+
+    if (pool.hasStorage()) {
+      try {
+        await domainQueries.upsertRFQInDB(updated);
+      } catch (dbErr) {
+        logger.warn('Failed to persist auto-assigned RFQ to DB', { rfqNumber: rfq.rfqNumber, error: dbErr.message }, 'STORE_SERVICE');
+      }
+    }
+
+    logger.info(
+      `RFQ ${rfq.rfqNumber}: auto-assigned ${merged.length} vendors from DB (${additions.length} added)`,
+      { rfqNumber: rfq.rfqNumber, assigned: merged.length },
+      'STORE_SERVICE'
+    );
+    return updated;
+  }
+
+  /**
    * Whether an RFQ should reach a given vendor.
    *
    * True when the vendor was explicitly added by the RFQ's buyer
@@ -3976,6 +4127,49 @@ class StoreService {
       return candidates.slice(0, Number(limit));
     }
     return candidates;
+  }
+
+  /**
+   * Async version of candidateVendorsForRFQ that falls back to querying the database
+   * when in-memory candidate count is zero.
+   */
+  async candidateVendorsForRFQAsync(rfq, limit = null) {
+    let candidates = this.candidateVendorsForRFQ(rfq, limit);
+    if ((!candidates || candidates.length === 0) && pool.hasStorage()) {
+      const signals = this._rfqCategorySignals(rfq);
+      if (Array.isArray(signals) && signals.length > 0) {
+        try {
+          const fetchLimit = (limit && Number.isInteger(Number(limit)) && Number(limit) > 0)
+            ? Number(limit)
+            : 100;
+          const dbVendors = await domainQueries.getPublicVendorsMatchingCategories(signals, fetchLimit);
+          if (Array.isArray(dbVendors) && dbVendors.length > 0) {
+            const destination = {
+              pincode: rfq?.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
+              location: rfq?.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
+            };
+            candidates = dbVendors.map((v) => ({
+              ...v,
+              alreadyInvited: this._isInvitedVendor(v, rfq),
+            }));
+            if (destination.pincode || destination.location) {
+              candidates.sort((a, b) => {
+                const aLoc = this.scoreVendorLocation(a, destination);
+                const bLoc = this.scoreVendorLocation(b, destination);
+                if (aLoc !== bLoc) return bLoc - aLoc;
+                return (Number(b.rating) || 0) - (Number(a.rating) || 0);
+              });
+            }
+          }
+        } catch (err) {
+          logger.warn('Failed to query candidate vendors from DB', { error: err.message }, 'STORE_SERVICE');
+        }
+      }
+    }
+    if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0 && Array.isArray(candidates)) {
+      return candidates.slice(0, Number(limit));
+    }
+    return candidates || [];
   }
 
   /**

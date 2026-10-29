@@ -455,7 +455,9 @@ async function getVendorCandidates(req, res, next) {
     const candidateLimit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
       ? Math.min(Number(req.query.limit), 500)
       : 100;
-    let candidates = storeService.candidateVendorsForRFQ(rfq, candidateLimit);
+    let candidates = typeof storeService.candidateVendorsForRFQAsync === 'function'
+      ? await storeService.candidateVendorsForRFQAsync(rfq, candidateLimit)
+      : storeService.candidateVendorsForRFQ(rfq, candidateLimit);
     if (candidateLimit && Array.isArray(candidates) && candidates.length > candidateLimit) {
       candidates = candidates.slice(0, candidateLimit);
     }
@@ -604,10 +606,19 @@ async function getRFQById(req, res, next) {
   try {
     const { id } = req.params;
     logger.info(`Fetching RFQ by ID: ${id}`, { id }, 'RFQ_CONTROLLER');
-    const rfq = await storeService.getRFQByIdAsync(id);
+    let rfq = await storeService.getRFQByIdAsync(id);
     if (!rfq || !(await canAccessRfq(req, rfq))) {
       logger.warn(`RFQ not found for ID: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+    const mode = String(rfq.sourcingMode || '');
+    const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
+    if (!isV1 && (!Array.isArray(rfq.assignedVendors) || rfq.assignedVendors.length === 0) && typeof storeService.autoAssignVendorsFromDB === 'function') {
+      try {
+        rfq = await storeService.autoAssignVendorsFromDB(rfq);
+      } catch (assignErr) {
+        logger.warn('Auto-assignment on RFQ view failed', { id, error: assignErr.message }, 'RFQ_CONTROLLER');
+      }
     }
     const role = req.user && req.user.role;
     let data = applyQuotesVisibility(rfq, role);
@@ -861,13 +872,22 @@ async function createRFQ(req, res, next) {
         logger.warn('Could not apply DB-backed V0 vendor assignment', { error: err.message }, 'RFQ_CONTROLLER');
       }
     } else {
+      const isV1 = createdMode === 'mode_1' || createdMode === 'v1' || createdMode === 'version_1';
+      if (!isV1 && typeof storeService.autoAssignVendorsFromDB === 'function') {
+        try {
+          finalRFQ = await storeService.autoAssignVendorsFromDB(created);
+        } catch (err) {
+          logger.warn('Could not apply DB-backed vendor auto-assignment', { error: err.message }, 'RFQ_CONTROLLER');
+        }
+      }
+
       // V2/V3 expand into the whole public network — recompute the available
       // Procucev count from the DB so the popup figure is not undercounted by
       // the capped in-memory subset.
       try {
-        const dbCount = await storeService.resolveProcucevVendorCountFromDB(created);
-        if (typeof dbCount === 'number' && dbCount > (created.procucevVendorCount || 0)) {
-          created.procucevVendorCount = dbCount;
+        const dbCount = await storeService.resolveProcucevVendorCountFromDB(finalRFQ);
+        if (typeof dbCount === 'number' && dbCount > (finalRFQ.procucevVendorCount || 0)) {
+          finalRFQ.procucevVendorCount = dbCount;
         }
       } catch (err) {
         logger.warn('Could not resolve DB-backed Procucev vendor count', { error: err.message }, 'RFQ_CONTROLLER');
