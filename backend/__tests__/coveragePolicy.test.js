@@ -433,7 +433,8 @@ describe('native Jest coverage enforcement', () => {
     writeFile(testPath, `${project === 'frontend' ? "require('./lib/constant.js');\n" : ''}${testSource(8)}`);
     const rejected = run();
     expect(rejected.status).toBe(1);
-    expect(rejected.stderr).toContain('Tests:       1 passed');
+    const cleanStderr = (rejected.stderr || '').replace(/\u001b\[[0-9;]*m/g, '');
+    expect(cleanStderr).toMatch(/Tests:\s+1 passed/);
     expect(rejected.stderr).toContain('coverage threshold for functions (90%) not met');
     let summary = JSON.parse(fs.readFileSync(path.join(testFixture.projectRoot, 'coverage/coverage-summary.json'), 'utf8'));
     expect(summary.total.functions.pct).toBeGreaterThan(90);

@@ -508,3 +508,30 @@ export function resolveLocationFromPostalResult(
   return getFallbackLocationForPincode(pincode);
 }
 
+/** Public vendor directory search/filter query parameter limits. */
+export const PUBLIC_VENDOR_QUERY_SCHEMA = {
+  search: { maxLength: 200 },
+  category: { maxLength: 200 },
+  state: { maxLength: 100 },
+  pageSize: { min: 1, max: 100 },
+  page: { min: 1 },
+  minRating: { min: 0, max: 5 },
+  verifiedOnly: { type: 'boolean' },
+} as const;
+
+/** Indian states list for the public vendor directory state filter. */
+export const INDIAN_STATES: readonly string[] = [
+  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
+  'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand',
+  'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur',
+  'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab',
+  'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura',
+  'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
+  'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu',
+  'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry',
+];
+
+/** Vendor directory login passkey validation boundaries. */
+export const VENDOR_DIRECTORY_AUTH_SCHEMA = {
+  passkey: { minLength: 1, maxLength: 100 },
+} as const;
