@@ -131,8 +131,8 @@ export default function Header() {
   // fallback.
   const currentOrgName = resolveSessionOrgName(currentUserSession, activeBuyerAccount);
 
-  // Session timeout state (standard enterprise 30-minute session)
-  const SESSION_DURATION_SECONDS = 30 * 60; // 30 minutes (1800s)
+  // Session timeout state: 3 hours for category manager (10800s), standard 30 minutes for other roles (1800s)
+  const SESSION_DURATION_SECONDS = currentRole === 'category_manager' ? 3 * 60 * 60 : 30 * 60;
   const [sessionSecondsLeft, setSessionSecondsLeft] = useState<number>(SESSION_DURATION_SECONDS);
 
   const handleLogout = useCallback(() => {
@@ -140,6 +140,7 @@ export default function Header() {
     clearSessionCache();
     if (typeof window !== 'undefined') {
       localStorage.removeItem('procucev_session_expires_at');
+      localStorage.removeItem('procucev_session_role');
     }
     addAuditLog('User logged out of session', undefined, sessionEmail || undefined);
     setIsLoggedIn(false);
@@ -155,6 +156,7 @@ export default function Header() {
     clearSessionCache();
     if (typeof window !== 'undefined') {
       localStorage.removeItem('procucev_session_expires_at');
+      localStorage.removeItem('procucev_session_role');
     }
     addAuditLog('Session expired - automatic logout', undefined, sessionEmail || undefined);
     setIsLoggedIn(false);
@@ -169,21 +171,26 @@ export default function Header() {
     if (typeof window !== 'undefined') {
       const newExpiresAt = Date.now() + SESSION_DURATION_SECONDS * 1000;
       localStorage.setItem('procucev_session_expires_at', String(newExpiresAt));
+      localStorage.setItem('procucev_session_role', currentRole);
     }
     setSessionSecondsLeft(SESSION_DURATION_SECONDS);
-    showToast('Session Extended', 'Your session has been extended by 30 minutes.', 'info');
-  }, [SESSION_DURATION_SECONDS, showToast]);
+    const durationLabel = currentRole === 'category_manager' ? '3 hours' : '30 minutes';
+    showToast('Session Extended', `Your session has been extended by ${durationLabel}.`, 'info');
+  }, [SESSION_DURATION_SECONDS, currentRole, showToast]);
 
   useEffect(() => {
     if (!isLoggedIn) return;
 
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('procucev_session_expires_at');
+      const storedRole = localStorage.getItem('procucev_session_role');
       const now = Date.now();
       let expiresAt = stored ? Number(stored) : NaN;
-      if (!expiresAt || isNaN(expiresAt) || expiresAt <= now) {
+      const roleChanged = Boolean(storedRole && storedRole !== currentRole);
+      if (!expiresAt || isNaN(expiresAt) || expiresAt <= now || roleChanged) {
         expiresAt = now + SESSION_DURATION_SECONDS * 1000;
         localStorage.setItem('procucev_session_expires_at', String(expiresAt));
+        localStorage.setItem('procucev_session_role', currentRole);
       }
       setSessionSecondsLeft(Math.max(0, Math.floor((expiresAt - now) / 1000)));
     }
@@ -203,30 +210,30 @@ export default function Header() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isLoggedIn, handleAutoLogout, SESSION_DURATION_SECONDS]);
+  }, [isLoggedIn, handleAutoLogout, SESSION_DURATION_SECONDS, currentRole]);
 
   if (!isLoggedIn) {
     return (
       <header className="sticky top-0 z-50 w-full border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-[#0b0f19] transition-colors">
-        <div className="max-w-[1280px] mx-auto px-5 sm:px-6 lg:px-10 xl:px-16 py-2 flex items-center justify-between gap-3">
+        <div className="max-w-[1280px] mx-auto px-5 sm:px-6 lg:px-10 xl:px-16 py-1.5 sm:py-2 flex items-center justify-between gap-3">
           {/* Brand & Logo: Procucev | QUA AI | version pill */}
-          <div className="flex items-center gap-2.5 sm:gap-5 min-w-0">
+          <div className="flex items-center gap-2.5 sm:gap-4 min-w-0">
             <img
               src="/procucev-logo.png"
               alt="Procucev Logo"
-              className="h-7 sm:h-10 lg:h-12 w-auto object-contain shrink-0"
+              className="h-6 sm:h-8 lg:h-9 w-auto object-contain shrink-0"
             />
-            <div className="h-7 sm:h-9 w-px bg-slate-200 dark:bg-slate-700 shrink-0" />
+            <div className="h-6 sm:h-7 w-px bg-slate-200 dark:bg-slate-700 shrink-0" />
             <img
               src="/qua-ai-logo.jpeg"
               alt="Qua AI Logo"
-              className="h-10 sm:h-14 lg:h-[68px] w-auto object-contain shrink-0"
+              className="h-8 sm:h-10 lg:h-11 w-auto object-contain shrink-0"
             />
-            <span className="hidden sm:inline-flex items-center px-3.5 py-1 text-[13px] font-semibold rounded-full bg-[#EEF2FA] dark:bg-slate-800 text-[#0B1B3D] dark:text-slate-200 border border-[#CBD5E8] dark:border-slate-700 shrink-0">
+            <span className="hidden sm:inline-flex items-center px-2.5 py-0.5 text-xs font-semibold rounded-full bg-[#EEF2FA] dark:bg-slate-800 text-[#0B1B3D] dark:text-slate-200 border border-[#CBD5E8] dark:border-slate-700 shrink-0">
               QUA AI 2.0
             </span>
           </div>
- 
+
           {/* Controls */}
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             {pathname !== '/login' && (
@@ -241,14 +248,14 @@ export default function Header() {
             )}
             <button
               onClick={toggleTheme}
-              className="px-3 sm:px-4 py-1.5 rounded-xl bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-[#0B1B3D] dark:text-gray-200 hover:bg-slate-50 dark:hover:bg-gray-700 transition-all text-xs sm:text-sm font-semibold shadow-xs"
+              className="px-2.5 sm:px-3 py-1 rounded-xl bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-[#0B1B3D] dark:text-gray-200 hover:bg-slate-50 dark:hover:bg-gray-700 transition-all text-xs font-semibold shadow-xs"
               title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
             >
               {theme === 'dark' ? 'Dark' : 'Light'}
             </button>
             <a
               href="mailto:support@procucev.com"
-              className="px-3 sm:px-4 py-1.5 rounded-xl bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-[#0B1B3D] dark:text-gray-200 hover:bg-slate-50 dark:hover:bg-gray-700 transition-all text-xs sm:text-sm font-semibold shadow-xs"
+              className="px-2.5 sm:px-3 py-1 rounded-xl bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-[#0B1B3D] dark:text-gray-200 hover:bg-slate-50 dark:hover:bg-gray-700 transition-all text-xs font-semibold shadow-xs"
             >
               <span className="sm:hidden">{UI_STRINGS.headerNav.support}</span>
               <span className="hidden sm:inline">{UI_STRINGS.headerNav.needSupport}</span>
@@ -365,7 +372,7 @@ export default function Header() {
           <div
             data-testid="header-session-timer"
             onClick={handleExtendSession}
-            title={`Active Session: ${formatSessionCountdown(sessionSecondsLeft)} remaining. Click to extend by 30 mins.`}
+            title={`Active Session: ${formatSessionCountdown(sessionSecondsLeft)} remaining. Click to extend by ${currentRole === 'category_manager' ? '3 hrs' : '30 mins'}.`}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {

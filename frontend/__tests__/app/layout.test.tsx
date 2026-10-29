@@ -23,8 +23,8 @@ describe('RootLayout Component', () => {
     );
 
     expect(screen.getByTestId('test-child-page')).toBeInTheDocument();
-    expect(screen.getByText(/PROCUCEV ENTERPRISE SOLUTIONS/i)).toBeInTheDocument();
-    expect(screen.getByText(/Central India \(Primary\) \/ West US 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/Procucev Enterprise Solutions Private Limited/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Azure Region/i)).not.toBeInTheDocument();
   });
 
   test('does not advertise a hardcoded system identifier account in the footer', () => {

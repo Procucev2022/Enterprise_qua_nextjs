@@ -8,7 +8,7 @@ const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
-const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig, DEFAULT_VENDOR_DIRECTORY_PASSKEY } = require('../config/constants');
+const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig,parseSearchTokens, DEFAULT_VENDOR_DIRECTORY_PASSKEY } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
 /**
@@ -189,7 +189,7 @@ async function getVendors(req, res, next) {
 
     // Pagination is opt-in (passing `page`) so existing callers that expect
     // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
-    const { page, search, email, category } = req.query || {};
+    const { page, search, email, category, state, city } = req.query || {};
 
     // Any paginated request is answered straight from Postgres with
     // LIMIT/OFFSET — it must never route through storeService.getVendors(),
@@ -217,6 +217,8 @@ async function getVendors(req, res, next) {
         search: search ? String(search).trim() : '',
         email: email ? String(email).trim() : '',
         category: category ? String(category) : '',
+        ...(state ? { state: String(state).trim() } : {}),
+        ...(city ? { city: String(city).trim() } : {}),
         scopedBuyerId: buyerId && buyerId !== 'all' ? buyerId : '',
       });
       return res.json({
@@ -227,33 +229,41 @@ async function getVendors(req, res, next) {
       });
     }
 
-    const hasFilters = Boolean(search || email || category);
+    const hasFilters = Boolean(search || email || category || state || city);
     const limitQuery = (!hasFilters && req.query && req.query.limit)
       ? Math.min(Number(req.query.limit), 500)
       : null;
     let vendors = await storeService.getVendors(buyerId, limitQuery);
     if (search) {
-      const q = String(search).toLowerCase().trim();
-      vendors = vendors.filter((v) =>
-        [
-          v.name,
-          v.email,
-          v.contactPerson,
-          v.contact,
-          v.location,
-          v.city,
-          v.deliveryLocation,
-        ].some((field) => String(field || '').toLowerCase().includes(q)) ||
-        (q.length <= 3
-          ? String(v.majorCategory || v.category || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
-          : String(v.majorCategory || v.category || '').toLowerCase().includes(q)
-        ) ||
-        (v.minorCategories || []).some((m) =>
-          q.length <= 3
-            ? String(m || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
-            : String(m || '').toLowerCase().includes(q)
-        )
-      );
+      const tokens = parseSearchTokens(search);
+      if (tokens.length > 0) {
+        vendors = vendors.filter((v) => {
+          return tokens.some((token) => {
+            const q = token.toLowerCase().trim();
+            if (!q) return false;
+            return (
+              [
+                v.name,
+                v.email,
+                v.contactPerson,
+                v.contact,
+                v.location,
+                v.city,
+                v.deliveryLocation,
+              ].some((field) => String(field || '').toLowerCase().includes(q)) ||
+              (q.length <= 3
+                ? String(v.majorCategory || v.category || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
+                : String(v.majorCategory || v.category || '').toLowerCase().includes(q)
+              ) ||
+              (v.minorCategories || []).some((m) =>
+                q.length <= 3
+                  ? String(m || '').toLowerCase().split(/[\s,–—\-_/\\()]+/).includes(q)
+                  : String(m || '').toLowerCase().includes(q)
+              )
+            );
+          });
+        });
+      }
     }
     if (email) {
       const eq = String(email).toLowerCase().trim();
@@ -264,6 +274,27 @@ async function getVendors(req, res, next) {
       vendors = vendors.filter((v) =>
         String(v.majorCategory || v.category || '').toLowerCase().trim() === cat
       );
+    }
+    if (state) {
+      const sq = String(state).toLowerCase().trim();
+      vendors = vendors.filter((v) =>
+        String(v.state || '').toLowerCase().trim() === sq ||
+        String(v.location || '').toLowerCase().includes(sq)
+      );
+    }
+    if (city) {
+      const cq = String(city).toLowerCase().trim();
+      const aliasMatch = cq.match(/^([^(]+)\s*\(([^)]+)\)$/);
+      const p1 = aliasMatch ? aliasMatch[1].trim() : cq;
+      const p2 = aliasMatch ? aliasMatch[2].trim() : null;
+      vendors = vendors.filter((v) => {
+        const vCity = String(v.city || '').toLowerCase().trim();
+        const vLoc = String(v.location || '').toLowerCase();
+        if (p2) {
+          return vCity === cq || vCity === p1 || vCity === p2 || vLoc.includes(p1) || vLoc.includes(p2);
+        }
+        return vCity === cq || vLoc.includes(cq);
+      });
     }
     if (page !== undefined) {
       const pageNumber = Math.max(1, parseInt(page, 10) || 1);
