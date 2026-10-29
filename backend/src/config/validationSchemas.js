@@ -618,6 +618,7 @@ const VALIDATION_SCHEMAS = {
     category: { type: 'string', required: false, maxLength: 200 },
     state: { type: 'string', required: false, maxLength: 100 },
     minRating: { type: 'number', required: false, min: 0, max: 5 },
+    verifiedOnly: { type: 'boolean', required: false },
   },
 
   transactionalEmailPreview: {
@@ -627,6 +628,13 @@ const VALIDATION_SCHEMAS = {
   transactionalEmailSend: {
     templateId: { type: 'string', required: true, minLength: 1, maxLength: 100, message: 'Template ID or number is required.' },
     recipientEmail: { type: 'string', required: true, pattern: EMAIL_REGEX, message: 'A valid recipient email is required.' },
+  },
+
+  vendorDirectoryAuth: {
+    passcode: { type: 'string', required: false, maxLength: 100 },
+    accessKey: { type: 'string', required: false, maxLength: 100 },
+    username: { type: 'string', required: false, maxLength: 100 },
+    password: { type: 'string', required: false, maxLength: 100 },
   },
 };
 

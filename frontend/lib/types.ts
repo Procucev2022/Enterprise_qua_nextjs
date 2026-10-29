@@ -2274,3 +2274,24 @@ export interface PublicVendorFilterState {
   page: number;
   pageSize: number;
 }
+
+/** Dynamic filter options returned from the public vendor directory API */
+export interface PublicVendorFilterOptions {
+  categories: string[];
+  states: string[];
+}
+
+/** Session record stored in client storage for authorized vendor directory access */
+export interface VendorDirectoryAuthSession {
+  token: string;
+  expiresAt: number;
+  authenticated: boolean;
+}
+
+/** Result returned by the vendor directory authentication client */
+export interface VendorDirectoryAuthResult {
+  success: boolean;
+  error?: string;
+  token?: string;
+}
+

@@ -15,8 +15,9 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PublicVendor, PublicVendorFilterState } from '@/lib/types';
-import { fetchPublicVendors } from '@/lib/vendorDirectoryClient';
+import { fetchPublicVendors, fetchPublicVendorFilters } from '@/lib/vendorDirectoryClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { isVendorDirectoryAuthenticated, logoutVendorDirectory } from '@/lib/vendorAuthClient';
 import {
   Building2,
   Search,
@@ -26,17 +27,26 @@ import {
   Filter,
   AlertCircle,
   RefreshCw,
+  ShieldCheck,
+  Lock,
 } from 'lucide-react';
 import { DEFAULT_FILTER } from './vendorUtils';
 import VendorCard from './VendorCard';
 import VendorDetailModal from './VendorDetailModal';
 import VendorFilterSidebar from './VendorFilterSidebar';
 import VendorEmptyState from './VendorEmptyState';
+import VendorDirectoryLoginGate from './VendorDirectoryLoginGate';
 
 const S = UI_STRINGS.publicVendorDirectory;
 
 export default function PublicVendorDirectoryPage() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [authChecked, setAuthChecked] = useState<boolean>(false);
   const [filter, setFilter] = useState<PublicVendorFilterState>(DEFAULT_FILTER);
+  const [filterOptions, setFilterOptions] = useState<{ categories: string[]; states: string[] }>({
+    categories: [],
+    states: [],
+  });
   const [vendors, setVendors] = useState<PublicVendor[]>([]);
   const [pagination, setPagination] = useState({ page: 1, pageSize: 24, total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(false);
@@ -44,6 +54,33 @@ export default function PublicVendorDirectoryPage() {
   const [selectedVendor, setSelectedVendor] = useState<PublicVendor | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setIsAuthenticated(isVendorDirectoryAuthenticated());
+    setAuthChecked(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let isMounted = true;
+    async function loadFilterOptions() {
+      try {
+        const res = await fetchPublicVendorFilters();
+        if (isMounted && res.success) {
+          setFilterOptions({
+            categories: res.categories,
+            states: res.states,
+          });
+        }
+      } catch {
+        // graceful fallback to static defaults
+      }
+    }
+    loadFilterOptions();
+    return () => {
+      isMounted = false;
+    };
+  }, [isAuthenticated]);
 
   const loadVendors = useCallback(async (f: PublicVendorFilterState) => {
     setLoading(true);
@@ -67,6 +104,7 @@ export default function PublicVendorDirectoryPage() {
 
   // Debounce search by 350ms, immediate for filter dropdown changes
   useEffect(() => {
+    if (!isAuthenticated) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       loadVendors(filter);
@@ -74,7 +112,7 @@ export default function PublicVendorDirectoryPage() {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [filter, loadVendors]);
+  }, [filter, loadVendors, isAuthenticated]);
 
   function updateFilter(patch: Partial<PublicVendorFilterState>) {
     setFilter((prev) => ({
@@ -86,6 +124,11 @@ export default function PublicVendorDirectoryPage() {
 
   function clearFilters() {
     setFilter(DEFAULT_FILTER);
+  }
+
+  function handleLogout() {
+    logoutVendorDirectory();
+    setIsAuthenticated(false);
   }
 
   function goToPage(p: number) {
@@ -103,6 +146,22 @@ export default function PublicVendorDirectoryPage() {
     [filter]
   );
 
+  if (!authChecked) {
+    return (
+      <div data-testid="vendor-directory-auth-loading" className="min-h-screen bg-slate-50 dark:bg-[#04060b] flex items-center justify-center">
+        <div className="w-8 h-8 border-3 border-indigo-600/30 border-t-indigo-600 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-[#04060b]">
+        <VendorDirectoryLoginGate onAuthenticated={() => setIsAuthenticated(true)} />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#04060b]">
       {/* ── Hero Banner ── */}
@@ -115,13 +174,32 @@ export default function PublicVendorDirectoryPage() {
           }}
         />
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 py-12 sm:py-16">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center">
-              <Building2 size={20} className="text-[#00dbff]" />
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center">
+                <Building2 size={20} className="text-[#00dbff]" />
+              </div>
+              <span className="text-[#00dbff] text-sm font-semibold tracking-widest uppercase">
+                Procucev Enterprise
+              </span>
             </div>
-            <span className="text-[#00dbff] text-sm font-semibold tracking-widest uppercase">
-              Procucev Enterprise
-            </span>
+
+            <div className="flex items-center gap-2">
+              <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                <ShieldCheck size={13} className="text-emerald-400" />
+                <span>{UI_STRINGS.vendorDirectoryLogin.sessionActive}</span>
+              </span>
+              <button
+                type="button"
+                data-testid="exit-directory-btn"
+                onClick={handleLogout}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-blue-200 hover:text-white bg-white/10 hover:bg-white/20 border border-white/20 transition-all cursor-pointer"
+                title={UI_STRINGS.vendorDirectoryLogin.exitDirectory}
+              >
+                <Lock size={13} />
+                <span>{UI_STRINGS.vendorDirectoryLogin.exitDirectory}</span>
+              </button>
+            </div>
           </div>
           <h1 className="text-3xl sm:text-4xl font-bold text-white leading-tight mb-3">
             {S.title}
@@ -132,10 +210,6 @@ export default function PublicVendorDirectoryPage() {
 
           {/* Search bar */}
           <div className="mt-8 relative max-w-2xl">
-            <Search
-              size={18}
-              className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
-            />
             <input
               id="vendor-directory-search"
               type="text"
@@ -143,7 +217,7 @@ export default function PublicVendorDirectoryPage() {
               onChange={(e) => updateFilter({ search: e.target.value })}
               placeholder={S.searchPlaceholder}
               maxLength={200}
-              className="w-full pl-11 pr-4 py-3.5 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 border border-white/20 dark:border-slate-700 shadow-xl focus:outline-none focus:ring-2 focus:ring-[#00dbff]/60 text-sm"
+              className="w-full pl-12 pr-4 py-3.5 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 border border-white/20 dark:border-slate-700 shadow-xl focus:outline-none focus:ring-2 focus:ring-[#00dbff]/60 text-sm"
             />
             {filter.search && (
               <button
@@ -168,6 +242,8 @@ export default function PublicVendorDirectoryPage() {
               hasActiveFilters={hasActiveFilters}
               onUpdateFilter={updateFilter}
               onClearFilters={clearFilters}
+              categories={filterOptions.categories}
+              states={filterOptions.states}
             />
           </aside>
 
@@ -189,8 +265,8 @@ export default function PublicVendorDirectoryPage() {
                   {loading
                     ? S.loadingText
                     : formatString(S.totalFound, {
-                        count: pagination.total.toLocaleString('en-IN'),
-                      })}
+                      count: pagination.total.toLocaleString('en-IN'),
+                    })}
                 </p>
               </div>
               {hasActiveFilters && (
@@ -291,6 +367,8 @@ export default function PublicVendorDirectoryPage() {
               hasActiveFilters={hasActiveFilters}
               onUpdateFilter={updateFilter}
               onClearFilters={clearFilters}
+              categories={filterOptions.categories}
+              states={filterOptions.states}
               isMobile={true}
               onCloseMobile={() => setSidebarOpen(false)}
             />

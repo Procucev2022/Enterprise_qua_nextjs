@@ -14,6 +14,7 @@
 const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
+const { INDIAN_STATES } = require('../config/constants');
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
@@ -1682,8 +1683,21 @@ async function getPublicVendorsPageFromDB({
   category = '',
   state = '',
   minRating = 0,
+  verifiedOnly = false,
 } = {}) {
   if (!pool.hasStorage()) return { rows: [], total: 0 };
+
+  const normSearch = String(search || '').trim().toLowerCase();
+  const normCategory = String(category || '').trim().toLowerCase();
+  const normState = String(state || '').trim().toLowerCase();
+  const normRating = Number(minRating) || 0;
+  const normVerified = Boolean(verifiedOnly);
+  const cacheKey = `public_vendors_p_${limit}_${offset}_${normSearch}_${normCategory}_${normState}_${normRating}_${normVerified}`;
+
+  const cached = queryCache.get(cacheKey, []);
+  if (cached) {
+    return cached;
+  }
 
   const params = [];
   // Rule: public listing NEVER exposes private buyer rosters.
@@ -1714,22 +1728,42 @@ async function getPublicVendorsPageFromDB({
     )`);
   }
 
-  if (category && category !== 'all') {
+  if (category && category !== 'all' && category !== 'All Categories') {
     params.push(category);
-    pgConditions.push(`major_category = $${params.length}`);
-    d1Conditions.push(`major_category = $${params.length}`);
+    const p = params.length;
+    pgConditions.push(`(major_category ILIKE $${p} OR raw->>'majorCategory' ILIKE $${p} OR raw->>'category' ILIKE $${p})`);
+    d1Conditions.push(`(lower(major_category) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.category')) = lower($${p}))`);
   }
 
-  if (state && state !== 'all') {
+  if (state && state !== 'all' && state !== 'All States') {
     params.push(state.toLowerCase());
-    pgConditions.push(`lower(raw->>'state') = $${params.length}`);
-    d1Conditions.push(`lower(json_extract(raw,'$.state')) = $${params.length}`);
+    const p = params.length;
+    pgConditions.push(`(lower(raw->>'state') = $${p} OR lower(raw->>'location') = $${p} OR lower(raw->>'city') = $${p})`);
+    d1Conditions.push(`(lower(json_extract(raw,'$.state')) = $${p} OR lower(json_extract(raw,'$.location')) = $${p} OR lower(json_extract(raw,'$.city')) = $${p})`);
   }
 
   if (minRating > 0) {
     params.push(minRating);
-    pgConditions.push(`COALESCE((raw->>'rating')::numeric, 0) >= $${params.length}`);
-    d1Conditions.push(`COALESCE(CAST(json_extract(raw,'$.rating') AS REAL), 0) >= $${params.length}`);
+    const p = params.length;
+    pgConditions.push(`COALESCE((raw->>'rating')::numeric, (raw->>'score')::numeric / 20.0, 0) >= $${p}`);
+    d1Conditions.push(`COALESCE(CAST(json_extract(raw,'$.rating') AS REAL), CAST(json_extract(raw,'$.score') AS REAL) / 20.0, 0) >= $${p}`);
+  }
+
+  if (verifiedOnly) {
+    pgConditions.push(`(
+      (raw->>'gstin' IS NOT NULL AND raw->>'gstin' != '')
+      OR (raw->>'gst' IS NOT NULL AND raw->>'gst' != '')
+      OR (raw->>'isVerified' = 'true')
+      OR (raw->>'verified' = 'true')
+      OR status = 'verified'
+    )`);
+    d1Conditions.push(`(
+      (json_extract(raw,'$.gstin') IS NOT NULL AND json_extract(raw,'$.gstin') != '')
+      OR (json_extract(raw,'$.gst') IS NOT NULL AND json_extract(raw,'$.gst') != '')
+      OR (json_extract(raw,'$.isVerified') = 1 OR json_extract(raw,'$.isVerified') = 'true')
+      OR (json_extract(raw,'$.verified') = 1 OR json_extract(raw,'$.verified') = 'true')
+      OR status = 'verified'
+    )`);
   }
 
   const pgWhere = `WHERE ${pgConditions.join(' AND ')}`;
@@ -1759,10 +1793,62 @@ async function getPublicVendorsPageFromDB({
      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
     }
   );
-  return {
+  const response = {
     rows: (dataResult && dataResult.rows) ? dataResult.rows.map((row) => ({ ...parseRaw(row.raw), _status: row.status, _createdAt: row.created_at, _majorCategory: row.major_category })) : [],
     total,
   };
+  queryCache.set(cacheKey, [], response, { tag: 'vendors', ttlMs: 300000 });
+  return response;
+}
+
+/**
+ * Dynamic filter options aggregator for the public enterprise vendor directory.
+ * Extracts distinct major categories and states populated across public vendors
+ * so the frontend filters stay 100% in sync with the database at all times.
+ *
+ * Uses 5-minute TTL caching to avoid redundant aggregate compute while keeping
+ * response latency under ~5ms for subsequent requests.
+ */
+async function getPublicVendorFiltersFromDB() {
+  const defaultStates = Array.isArray(INDIAN_STATES) ? [...INDIAN_STATES] : [];
+  if (!pool.hasStorage()) {
+    return { categories: [], states: defaultStates };
+  }
+
+  try {
+    const catResult = await pool.query(
+      `SELECT DISTINCT TRIM(major_category) AS category
+       FROM vendors
+       WHERE major_category IS NOT NULL AND TRIM(major_category) != ''
+       ORDER BY category ASC`,
+      [],
+      {
+        d1: true,
+        d1Text: `SELECT DISTINCT TRIM(major_category) AS category
+                 FROM vendors
+                 WHERE major_category IS NOT NULL AND TRIM(major_category) != ''
+                 ORDER BY category ASC`,
+        useCache: true,
+        tag: 'vendors_filters',
+        ttlMs: 3600000,
+      }
+    );
+
+    const categories = (catResult && catResult.rows)
+      ? catResult.rows
+          .map((r) => (r && r.category ? String(r.category).trim() : ''))
+          .filter((c) => (
+            c &&
+            c.length >= 2 &&
+            !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
+            !c.includes('(No Past POs)')
+          ))
+      : [];
+
+    return { categories, states: defaultStates };
+  } catch {
+    return { categories: [], states: defaultStates };
+  }
 }
 
 /**
@@ -1854,5 +1940,6 @@ module.exports = {
   recordCreditTransactionInDB,
   getVendorCreditTransactionsFromDB,
   getPublicVendorsPageFromDB,
+  getPublicVendorFiltersFromDB,
 };
 

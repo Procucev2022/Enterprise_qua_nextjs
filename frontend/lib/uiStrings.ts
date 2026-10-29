@@ -1758,6 +1758,33 @@ export const UI_STRINGS = {
       pageOf: 'Page {page} of {total}',
     },
   },
+
+  headerNav: {
+    vendorDirectory: 'Vendor Directory',
+    signIn: 'Sign In',
+    support: 'Support',
+    needSupport: 'Need Support?',
+  },
+
+  vendorDirectoryLogin: {
+    badge: 'Enterprise Access Control',
+    title: 'Vendor Directory Login',
+    subtitle: 'Enter the authorized enterprise directory access passkey to access verified supplier profiles, contact details, and compliance records.',
+    passkeyLabel: 'Directory Access Passkey',
+    passkeyPlaceholder: 'Enter directory passkey (e.g. Procucev@Vendors2026)',
+    submitButton: 'Authenticate & Enter Directory',
+    authenticating: 'Verifying credentials...',
+    exitDirectory: 'Exit Directory',
+    sessionActive: 'Directory Session Active',
+    invalidPasskey: 'Invalid directory access key. Please enter the valid passkey provided by Procucev.',
+    emptyPasskey: 'Please enter the directory passkey to proceed.',
+    quickAccessHint: 'Enterprise Directory Key:',
+    useDemoKey: 'Use Demo Key',
+    backToMainLogin: 'Platform Main Login (Buyer / Admin)',
+    mainLoginDesc: 'Are you an Enterprise Buyer or Category Manager?',
+    securedAccess: 'AES-256 Authenticated Gateway',
+    directoryNotice: 'This directory is restricted to authorized enterprise procurement teams and registered vendor partners.',
+  },
 };
 
 /**

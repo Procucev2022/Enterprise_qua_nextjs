@@ -2,15 +2,60 @@
 
 /**
  * Public Vendor Directory Client
- * Unauthenticated fetch helpers for the public /vendors page.
+ * Unauthenticated fetch helpers for the public /vendors page with in-memory caching
+ * to minimize DB compute hours and eliminate redundant network roundtrips.
  * Never sends an Authorization header — the endpoint is open to all visitors.
  */
 
 import { UI_STRINGS } from '@/lib/uiStrings';
-import type { PublicVendorFilterState, PublicVendorPageResult, PublicVendor } from '@/lib/types';
+import type { PublicVendorFilterState, PublicVendorPageResult, PublicVendor, PublicVendorFilterOptions } from '@/lib/types';
+
+interface CacheEntry<T> {
+  data: T;
+  expiresAt: number;
+}
+
+const PAGE_CACHE_MAX_ENTRIES = 50;
+const PAGE_CACHE_TTL_MS = 60000; // 1 minute
+const FILTERS_CACHE_TTL_MS = 300000; // 5 minutes
+const VENDOR_CACHE_TTL_MS = 120000; // 2 minutes
+
+const pageCache = new Map<string, CacheEntry<PublicVendorPageResult>>();
+let filtersCache: CacheEntry<{ success: boolean; categories: string[]; states: string[] }> | null = null;
+const vendorDetailCache = new Map<string, CacheEntry<PublicVendor | null>>();
+
+function getFromCache<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefined {
+  const entry = cache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    cache.delete(key);
+    return undefined;
+  }
+  return entry.data;
+}
+
+function setInCache<T>(cache: Map<string, CacheEntry<T>>, key: string, data: T, ttlMs: number): void {
+  if (cache.size >= PAGE_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) {
+      cache.delete(oldestKey);
+    }
+  }
+  cache.set(key, { data, expiresAt: Date.now() + ttlMs });
+}
+
+/**
+ * Clear client-side public vendor caches (used for test isolation or explicit refresh).
+ */
+export function clearPublicVendorClientCache(): void {
+  pageCache.clear();
+  filtersCache = null;
+  vendorDetailCache.clear();
+}
 
 /**
  * Fetches a paginated, filtered listing of Procucev-network vendors.
+ * Utilizes client-side in-memory caching and browser/CDN HTTP caching.
  * No auth token is sent or required.
  */
 export async function fetchPublicVendors(
@@ -23,6 +68,7 @@ export async function fetchPublicVendors(
     category = '',
     state = '',
     minRating = 0,
+    verifiedOnly = false,
   } = filter;
 
   const params = new URLSearchParams({
@@ -34,12 +80,18 @@ export async function fetchPublicVendors(
   if (category && category !== 'all' && category.trim()) params.set('category', category.trim());
   if (state && state !== 'all' && state.trim()) params.set('state', state.trim());
   if (minRating > 0) params.set('minRating', String(Math.min(5, Math.max(0, minRating))));
+  if (verifiedOnly) params.set('verifiedOnly', 'true');
+
+  const cacheKey = params.toString();
+  const cached = getFromCache(pageCache, cacheKey);
+  if (cached) {
+    return cached;
+  }
 
   try {
     const res = await fetch(`/api/vendors/public?${params.toString()}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
-      // Allow browser/CDN caching of the public listing for 60s
       cache: 'default',
     });
 
@@ -60,6 +112,9 @@ export async function fetchPublicVendors(
     }
 
     const json: PublicVendorPageResult = await res.json();
+    if (json.success) {
+      setInCache(pageCache, cacheKey, json, PAGE_CACHE_TTL_MS);
+    }
     return json;
   } catch {
     return {
@@ -72,13 +127,57 @@ export async function fetchPublicVendors(
 }
 
 /**
+ * Fetches dynamic category and state filter options from the database.
+ * Utilizes a 5-minute client-side in-memory cache to prevent redundant queries.
+ * Completely public and unauthenticated.
+ */
+export async function fetchPublicVendorFilters(): Promise<{
+  success: boolean;
+  categories: string[];
+  states: string[];
+}> {
+  if (filtersCache && Date.now() <= filtersCache.expiresAt) {
+    return filtersCache.data;
+  }
+
+  try {
+    const res = await fetch('/api/vendors/public/filters', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'default',
+    });
+    if (!res.ok) {
+      return { success: false, categories: [], states: [] };
+    }
+    const json: { success: boolean; data?: PublicVendorFilterOptions } = await res.json();
+    const result = {
+      success: Boolean(json.success),
+      categories: Array.isArray(json.data?.categories) ? json.data.categories : [],
+      states: Array.isArray(json.data?.states) ? json.data.states : [],
+    };
+    if (result.success) {
+      filtersCache = { data: result, expiresAt: Date.now() + FILTERS_CACHE_TTL_MS };
+    }
+    return result;
+  } catch {
+    return { success: false, categories: [], states: [] };
+  }
+}
+
+/**
  * Fetches a single public vendor profile by id.
+ * Caches vendor details in memory for 2 minutes to prevent repeated fetches.
  * Returns null if not found or an error occurs.
  */
 export async function fetchPublicVendorById(
   id: string
 ): Promise<PublicVendor | null> {
   if (!id) return null;
+  const cached = getFromCache(vendorDetailCache, id);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   try {
     const res = await fetch(`/api/vendors/public/${encodeURIComponent(id)}`, {
       method: 'GET',
@@ -86,7 +185,11 @@ export async function fetchPublicVendorById(
     });
     if (!res.ok) return null;
     const json: { success: boolean; data?: PublicVendor } = await res.json();
-    return (json.success && json.data) ? json.data : null;
+    const vendor = (json.success && json.data) ? json.data : null;
+    if (vendor) {
+      setInCache(vendorDetailCache, id, vendor, VENDOR_CACHE_TTL_MS);
+    }
+    return vendor;
   } catch {
     return null;
   }

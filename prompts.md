@@ -4819,3 +4819,288 @@ resole all conflict
 ```text
 without daming any feature pass the test 
 ```
+
+---
+
+### 2026-10-29T00:00:16+05:30
+
+```text
+all the filter and search should be coming from the api not from the frontend them them in vendor page 
+```
+
+---
+
+### 2026-10-29T00:30:52+05:30
+
+```text
+for any kind of category selection getting no result what could be reason check by yourself by hitting the api see the categru not matching if it coming out to be differnt for differnent item so we can't put categories as filter I also check cess": true,
+    "data": [
+        {
+            "id": "v-1793074012329-pwjj",
+            "name": "wefgrf",
+            "brandName": null,
+            "email": "nodos31566@bitproy.com",
+            "phone": "9157154504",
+            "contactPerson": "wefgrf",
+            "contactDesignation": null,
+            "website": null,
+            "majorCategory": "Mechanical & Fluid Equipment",
+            "minorCategories": [
+                "Pumps & Compressors"
+            ],
+            "products": [],
+            "location": null,
+            "city": null,
+            "state": null,
+            "pincode": null,
+            "country": "India",
+            "factoryAddress": null,
+            "gstin": null,
+            "pan": null,
+            "msme": null,
+            "orgType": null,
+            "annualTurnover": null,
+            "status": "REGISTERED / NOT EVALUATED",
+            "rating": 4.5,
+            "isVerified": false,
+            "isProcucevNetwork": true,
+            "createdAt": "2026-10-27T04:06:54.858Z"
+        },
+        {
+            "id": "v-1793037858751-y41s",
+            "name": "Ob Pvt Ltd",
+            "brandName": "Ob Pvt Ltd",
+            "email": "rohithukkeri19@gmail.com",
+            "phone": "+918660216900",
+            "contactPerson": "Rohit Hukkeri",
+            "contactDesignation": null,
+            "website": null,
+            "majorCategory": "Engineering Spares - Electrical",
+            "minorCategories": [
+                "Wires"
+            ],
+            "products": [],
+            "location": "India",
+            "city": null,
+            "state": null,
+            "pincode": "560045",
+            "country": "India",
+            "factoryAddress": null,
+            "gstin": "29ADCFY1234G1Z5",
+            "pan": null,
+            "msme": null,
+            "orgType": null,
+            "annualTurnover": null,
+            "status": "PREFERRED ENTERPRISE SUPPLIER",
+            "rating": 4.5,
+            "isVerified": true,
+            "isProcucevNetwork": true,
+            "createdAt": "2026-10-26T18:04:18.022Z"
+        },
+        {
+            "id": "v-1793015706660-x2qs",
+            "name": "Op Pvt Ltd",
+            "brandName": "Op Pvt Ltd",
+            "email": "iamrohithukkeri19@yahoo.com",
+            "phone": "+918660216900",
+            "contactPerson": "Rohit Hukkeri",
+            "contactDesignation": null,
+            "website": null,
+            "majorCategory": "Mechanical & Fluid Equipment",
+            "minorCategories": [],
+            "products": [],
+            "location": "India",
+            "city": null,
+            "state": null,
+            "pincode": "560045",
+            "country": "India",
+            "factoryAddress": null,
+            "gstin": "29ABCDE1234F1Z5",
+            "pan": null,
+            "msme": null,
+            "orgType": null,
+            "annualTurnover": null,
+            "status": "PREFERRED ENTERPRISE SUPPLIER",
+            "rating": 4.5,
+            "isVerified": true,
+            "isProcucevNetwork": true,
+            "createdAt": "2026-10-26T11:55:06.788Z"
+        },
+        {
+            "id": "v-1793001107509-ize2",
+            "name": "Procucev’S Solutions Pvt Ltd",
+            "brandName": "Procucev’S Solutions Pvt Ltd",
+            "email": "srinu202326@gmail.com",
+            "phone": "+919966766905",
+            "contactPerson": "Govardhan",
+            "contactDesignation": null,
+            "website": null,
+            "majorCategory": "Raw Material",
+            "minorCategories": [
+                "Steels"
+            ],
+            "products": [],
+            "location": "India",
+            "city": null,
+            "state": null,
+            "pincode": "560037",
+            "country": "India",
+            "factoryAddress": null,
+            "gstin": "29AAMCP4349L1ZO",
+            "pan": null,
+            "msme": null,
+            "orgType": null,
+            "annualTurnover": null,
+            "status": "PREFERRED ENTERPRISE SUPPLIER",
+            "rating": 4.5,
+            "isVerified": true,
+            "isProcucevNetwork": true,
+            "createdAt": "2026-10-26T07:51:47.140Z"
+        },
+        {
+            "id": "v-1792578556141-ereo",
+            "name": "erwgfd",
+            "brandName": null,
+            "email": "masiv92369@ensproxy.com",
+            "phone": "9157154505",
+            "contactPerson": "rwer",
+            "contactDesignation": null,
+            "website": null,
+            "majorCategory": "IT",
+            "minorCategories": [
+                "Laptop"
+            ],
+            "products": [],
+            "location": "wdfwq",
+            "city": "wdfwq",
+            "state": "dfwd",
+            "pincode": "382006",
+            "country": "India",
+            "factoryAddress": null,
+            "gstin": null,
+            "pan": null,
+            "msme": null,
+            "orgType": null,
+            "annualTurnover": null,
+            "status": "PREFERRED ENTERPRISE SUPPLIER",
+            "rating": 4.5,
+            "isVerified": false,
+            "isProcucevNetwork": true,
+            "createdAt": "2026-10-21T10:29:16.268Z"
+        },
+        {
+            "id": "v-1792557856036",
+            "name": "Procucev Vendor",
+            "brandName": null,
+            "email": "procucevvendor@gmail.com",
+            "phone": "8247722944",
+            "contactPerson": null,
+            "contactDesignation": null,
+            "website": null,
+            "majorCategory": "Mechanical & Industrial",
+            "minorCategories": [],
+            "products": [],
+            "location": null,
+            "city": null,
+            "state": null,
+            "pincode": null,
+            "country": "India",
+            "factoryAddress": null,
+            "gstin": null,
+            "pan": null,
+            "msme": null,
+            "orgType": null,
+            "annualTurnover": null,
+            "status": "PREFERRED ENTERPRISE SUPPLIER",
+            "rating": 4.8,
+            "isVerified": false,
+            "isProcucevNetwork": true,
+            "createdAt": "2026-10-21T04:44:15.592Z"
+        },
+        {
+            "id": "v-1792556104559-7tqx",
+            "name": "added by cm",
+            "brandName": null,
+            "email": "wadewa4696@ensproxy.com",
+            "phone": "9157154504",
+            "contactPerson": "dbhwqyubd",
+            "contactDesignation": null,
+            "website": null,
+            "majorCategory": "IT",
+            "minorCategories": [
+                "Laptop"
+            ],
+            "products": [],
+            "location": "vdsfgv",
+            "city": "vdsfgv",
+            "state": "fe",
+            "pincode": "385310",
+            "country": "India",
+            "factoryAddress": null,
+            "gstin": null,
+            "pan": null,
+            "msme": null,
+            "orgType": null,
+            "annualTurnover": null,
+            "status": "PREFERRED ENTERPRISE SUPPLIER",
+            "rating": 4.5,
+            "isVerified": false,
+            "isProcucevNetwork": true,
+            "createdAt": "2026-10-21T04:15:04.573Z"
+        },
+        categories has starnage name it would be better remove them ??
+```
+
+---
+
+### 2026-10-29T10:36:51+05:30
+
+```text
+create a vandoe page redirect button on top navbar of login and also one thing for vedor page create a login only where vendor need to authenticate once only one login should be theri for every one just login then move to vendor page ??
+```
+
+---
+
+### 2026-10-29T11:00:41+05:30
+
+```text
+implemetation of cache in this page so our DB don;t get oveload 
+```
+
+---
+
+### 2026-10-29T11:31:26+05:30
+
+```text
+to access vendor page add one kind of login client has said other wise any one can access it will be different from the main login 
+```
+
+
+---
+
+### 2026-10-29T14:04:14+05:30
+
+```text
+=============================== Coverage summary ===============================
+Statements   : 98.13% ( 14482/14757 )
+Branches     : 93.61% ( 14258/15231 )
+Functions    : 98.61% ( 3282/3328 )
+Lines        : 98.85% ( 13181/13333 )
+================================================================================  
+Jest: Coverage for functions (66.66%) does not meet "S:\procucev\Precucev-github\Enterprise_qua_nextjs\frontend\app\vendors\login\page.tsx" threshold (90%)
+Jest: Coverage for branches (78.04%) does not meet "S:\procucev\Precucev-github\Enterprise_qua_nextjs\frontend\lib\vendorAuthClient.ts" threshold (90%)
+
+Test Suites: 116 passed, 116 total
+Tests:       3085 passed, 3085 total
+Snapshots:   0 total
+Time:        442.41 s
+Ran all test suites.
+Test results written to: coverage\test-results.json
+
+✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
+
+❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> git push
+Everything up-to-date
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
+```

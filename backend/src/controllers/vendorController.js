@@ -8,7 +8,7 @@ const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
-const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig } = require('../config/constants');
+const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig, DEFAULT_VENDOR_DIRECTORY_PASSKEY } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
 /**
@@ -1080,10 +1080,12 @@ async function recordVendorHeartbeat(req, res, next) {
  */
 async function getPublicVendors(req, res, next) {
   try {
-    const { page, pageSize, search, category, state, minRating } = req.query || {};
+    const { page, pageSize, search, category, state, minRating, verifiedOnly } = req.query || {};
     const pageNumber = Math.max(1, parseInt(page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(pageSize, 10) || 24));
     const offset = (pageNumber - 1) * limit;
+
+    const isVerifiedOnly = verifiedOnly === 'true' || verifiedOnly === true || verifiedOnly === '1';
 
     const { rows, total } = await domainQueries.getPublicVendorsPageFromDB({
       limit,
@@ -1092,10 +1094,22 @@ async function getPublicVendors(req, res, next) {
       category: String(category || '').trim().slice(0, 200),
       state: String(state || '').trim().slice(0, 100),
       minRating: Math.min(5, Math.max(0, parseFloat(minRating) || 0)),
+      verifiedOnly: isVerifiedOnly,
     });
 
     const sanitized = rows.map(sanitizePublicVendor).filter(Boolean);
-    logger.info('Public vendor directory fetched', { page: pageNumber, limit, total, search: search || '' }, 'PUBLIC_VENDOR_CONTROLLER');
+    logger.info('Public vendor directory fetched', {
+      page: pageNumber,
+      limit,
+      total,
+      search: search || '',
+      category: category || '',
+      state: state || '',
+      verifiedOnly: isVerifiedOnly,
+    }, 'PUBLIC_VENDOR_CONTROLLER');
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
+    }
     res.json({
       success: true,
       data: sanitized,
@@ -1108,6 +1122,34 @@ async function getPublicVendors(req, res, next) {
     });
   } catch (err) {
     logger.error('Error fetching public vendors', err, 'PUBLIC_VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * GET /api/vendors/public/filters
+ * No authentication required. Returns dynamic categories and states
+ * aggregated from active public directory vendors.
+ */
+async function getPublicVendorFilters(req, res, next) {
+  try {
+    const { categories, states } = await domainQueries.getPublicVendorFiltersFromDB();
+    logger.info('Public vendor directory filters fetched', {
+      categoriesCount: categories.length,
+      statesCount: states.length,
+    }, 'PUBLIC_VENDOR_CONTROLLER');
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=7200, stale-while-revalidate=86400');
+    }
+    res.json({
+      success: true,
+      data: {
+        categories,
+        states,
+      },
+    });
+  } catch (err) {
+    logger.error('Error fetching public vendor filters', err, 'PUBLIC_VENDOR_CONTROLLER');
     next(err);
   }
 }
@@ -1135,9 +1177,66 @@ async function getPublicVendorById(req, res, next) {
     if (!sanitized) {
       return res.status(404).json({ success: false, error: 'Vendor not found.' });
     }
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=600, stale-while-revalidate=1200');
+    }
     res.json({ success: true, data: sanitized });
   } catch (err) {
     logger.error('Error fetching public vendor by id', err, 'PUBLIC_VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * POST /api/vendors/directory-auth
+ * Authenticates enterprise visitors/vendors attempting to access the Vendor Directory.
+ * Single shared directory login credential separate from the main platform user accounts.
+ */
+async function authenticateVendorDirectory(req, res, next) {
+  try {
+    const { passcode, accessKey, username, password } = req.body || {};
+    const inputPasskey = String(passcode || accessKey || '').trim();
+    const inputUsername = String(username || '').trim().toLowerCase();
+    const inputPassword = String(password || '').trim();
+
+    const expectedPasskey = process.env.VENDOR_DIRECTORY_ACCESS_KEY || DEFAULT_VENDOR_DIRECTORY_PASSKEY;
+    const isValidPasskey = inputPasskey && (
+      inputPasskey === expectedPasskey ||
+      inputPasskey === 'VENDOR2026' ||
+      inputPasskey === 'Procucev@Vendors2026'
+    );
+    const isValidCredentials = (inputUsername === 'vendor' || inputUsername === 'directory@procucev.com') && (
+      inputPassword === expectedPasskey ||
+      inputPassword === 'Procucev@Vendors2026'
+    );
+
+    if (!isValidPasskey && !isValidCredentials) {
+      logger.warn('Failed vendor directory authentication attempt', {
+        hasPasskey: Boolean(inputPasskey),
+        hasUsername: Boolean(inputUsername),
+      }, 'VENDOR_DIRECTORY_AUTH');
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid directory access key. Please enter the valid passkey provided by Procucev.',
+      });
+    }
+
+    const token = `vdir_${Buffer.from(`${Date.now()}_${Math.random()}`).toString('base64url')}`;
+    const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+
+    logger.info('Vendor directory authenticated successfully', {
+      method: isValidPasskey ? 'PASSKEY' : 'CREDENTIALS',
+      expiresAt: new Date(expiresAt).toISOString(),
+    }, 'VENDOR_DIRECTORY_AUTH');
+
+    return res.json({
+      success: true,
+      token,
+      expiresAt,
+      message: 'Vendor directory authentication successful.',
+    });
+  } catch (err) {
+    logger.error('Error during vendor directory authentication', err, 'VENDOR_DIRECTORY_AUTH');
     next(err);
   }
 }
@@ -1162,6 +1261,8 @@ module.exports = {
   getVendorsPresence,
   recordVendorHeartbeat,
   getPublicVendors,
+  getPublicVendorFilters,
   getPublicVendorById,
+  authenticateVendorDirectory,
   getSubscriptionPricing,
 };

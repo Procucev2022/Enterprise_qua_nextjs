@@ -13,7 +13,9 @@ router.post('/heartbeat', optionalAuthenticate, vendorController.recordVendorHea
 router.get('/bulk-import/:sessionId', authenticate, vendorController.getBulkImportSessionStatus);
 // Public directory — no auth required, must be before /:id to avoid swallowing the literal path segment.
 router.get('/public', vendorController.getPublicVendors);
+router.get('/public/filters', vendorController.getPublicVendorFilters);
 router.get('/public/:id', vendorController.getPublicVendorById);
+router.post('/directory-auth', vendorController.authenticateVendorDirectory);
 router.get('/subscription-pricing', vendorController.getSubscriptionPricing);
 router.get('/:id/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/:id', optionalAuthenticate, vendorController.getVendorById);

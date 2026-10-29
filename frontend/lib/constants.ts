@@ -1234,5 +1234,8 @@ export const QUA_AI_EMAIL_SUPPORT = {
   COMPANY_NAME: 'Procucev Enterprise Solutions',
 } as const;
 
+export const DEFAULT_VENDOR_DIRECTORY_PASSKEY = 'Procucev@Vendors2026';
+export const VENDOR_DIRECTORY_AUTH_STORAGE_KEY = 'procucev_vendor_directory_auth';
+
 
 

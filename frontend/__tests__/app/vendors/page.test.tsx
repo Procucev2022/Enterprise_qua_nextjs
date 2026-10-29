@@ -5,7 +5,7 @@ import VendorsLayout, { metadata } from '@/app/vendors/layout';
 import VendorCard from '@/app/vendors/VendorCard';
 import VendorDetailModal from '@/app/vendors/VendorDetailModal';
 import VendorFilterSidebar from '@/app/vendors/VendorFilterSidebar';
-import { fetchPublicVendors } from '@/lib/vendorDirectoryClient';
+import { fetchPublicVendors, fetchPublicVendorFilters } from '@/lib/vendorDirectoryClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { PublicVendor, PublicVendorPageResult, PublicVendorFilterState } from '@/lib/types';
 import { avatarForName, getInitials, renderStars } from '@/app/vendors/vendorUtils';
@@ -13,6 +13,7 @@ import { avatarForName, getInitials, renderStars } from '@/app/vendors/vendorUti
 jest.mock('@/lib/vendorDirectoryClient', () => ({
   fetchPublicVendors: jest.fn(),
   fetchPublicVendorById: jest.fn(),
+  fetchPublicVendorFilters: jest.fn(),
 }));
 
 const S = UI_STRINGS.publicVendorDirectory;
@@ -62,6 +63,15 @@ describe('Public Vendor Directory (/vendors)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    (fetchPublicVendorFilters as jest.Mock).mockResolvedValue({
+      success: true,
+      categories: ['Mechanical & Fluid Equipment', 'Engineering Spares - Electrical'],
+      states: ['Maharashtra', 'Gujarat', 'Karnataka'],
+    });
+    window.sessionStorage.setItem(
+      'procucev_vendor_directory_auth',
+      JSON.stringify({ token: 'vdir_test_token', authenticated: true, expiresAt: Date.now() + 86400000 })
+    );
     window.scrollTo = jest.fn();
     Object.assign(navigator, {
       clipboard: {
@@ -71,6 +81,7 @@ describe('Public Vendor Directory (/vendors)', () => {
   });
 
   afterEach(() => {
+    window.sessionStorage.clear();
     jest.useRealTimers();
   });
 
@@ -694,5 +705,90 @@ describe('Public Vendor Directory (/vendors)', () => {
 
     // Unmount before timer expires to cover cleanup branch
     unmount();
+  });
+
+  test('fetches dynamic category and state filters from API on mount and renders them in dropdown', async () => {
+    (fetchPublicVendors as jest.Mock).mockResolvedValue(MOCK_PAGE_RESULT);
+    (fetchPublicVendorFilters as jest.Mock).mockResolvedValue({
+      success: true,
+      categories: ['Custom Industrial Equipment', 'Heavy Chemical Processing'],
+      states: ['Goa', 'Sikkim'],
+    });
+
+    render(<PublicVendorDirectoryPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('option', { name: 'Custom Industrial Equipment' }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole('option', { name: 'Heavy Chemical Processing' }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole('option', { name: 'Goa' }).length).toBeGreaterThan(0);
+    });
+  });
+
+  test('gracefully falls back when fetchPublicVendorFilters rejects or fails', async () => {
+    (fetchPublicVendors as jest.Mock).mockResolvedValue(MOCK_PAGE_RESULT);
+    (fetchPublicVendorFilters as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+
+    render(<PublicVendorDirectoryPage />);
+
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Bharat Heavy Engineering Works')).toBeInTheDocument();
+    });
+  });
+
+  test('renders VendorDirectoryLoginGate when client is unauthenticated', async () => {
+    window.sessionStorage.clear();
+    (fetchPublicVendors as jest.Mock).mockResolvedValue(MOCK_PAGE_RESULT);
+
+    render(<PublicVendorDirectoryPage />);
+
+    expect(screen.getByTestId('vendor-directory-login-gate')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorDirectoryLogin.title)).toBeInTheDocument();
+    expect(fetchPublicVendors).not.toHaveBeenCalled();
+  });
+
+  test('unlocks directory when user logs in through the gate and locks when clicking exit directory', async () => {
+    window.sessionStorage.clear();
+    (fetchPublicVendors as jest.Mock).mockResolvedValue(MOCK_PAGE_RESULT);
+
+    // Mock fetch so authenticateVendorDirectory resolves successfully
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        token: 'vdir_gate_test_token',
+        expiresAt: Date.now() + 86400000,
+      }),
+    });
+
+    render(<PublicVendorDirectoryPage />);
+
+    expect(screen.getByTestId('vendor-directory-login-gate')).toBeInTheDocument();
+
+    // Fill demo key and submit
+    fireEvent.click(screen.getByTestId('use-demo-key-btn'));
+    fireEvent.click(screen.getByTestId('directory-auth-submit'));
+
+    // Flush async auth + debounced vendor fetch
+    await act(async () => {
+      jest.advanceTimersByTime(600);
+    });
+
+    // Directory becomes visible after authentication
+    await waitFor(() => {
+      expect(screen.getByText(S.title)).toBeInTheDocument();
+      expect(screen.getByTestId('exit-directory-btn')).toBeInTheDocument();
+    });
+
+    // Click Exit Directory button to lock
+    fireEvent.click(screen.getByTestId('exit-directory-btn'));
+
+    // Should return to login gate
+    await waitFor(() => {
+      expect(screen.getByTestId('vendor-directory-login-gate')).toBeInTheDocument();
+    });
   });
 });

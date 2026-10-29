@@ -1,16 +1,24 @@
 const vendorController = require('../src/controllers/vendorController');
 const domainQueries = require('../src/db/domainQueries');
 const pool = require('../src/db/pool');
+const { INDIAN_STATES } = require('../src/config/constants');
+const { queryCache } = require('../src/db/queryCache');
 
 function mockRes() {
   const res = {};
   res.status = jest.fn().mockReturnValue(res);
   res.json = jest.fn().mockReturnValue(res);
+  res.setHeader = jest.fn().mockReturnValue(res);
   return res;
 }
 
 describe('Public Vendor Directory Backend Controller & Database Queries', () => {
+  beforeEach(() => {
+    queryCache.clear();
+  });
+
   afterEach(() => {
+    queryCache.clear();
     jest.restoreAllMocks();
   });
 
@@ -73,6 +81,10 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
           }),
         })
       );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Cache-Control',
+        expect.stringContaining('public')
+      );
       expect(next).not.toHaveBeenCalled();
     });
 
@@ -97,6 +109,30 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
       );
     });
 
+    test('passes verifiedOnly boolean when requested in query params', async () => {
+      const dbSpy = jest.spyOn(domainQueries, 'getPublicVendorsPageFromDB').mockResolvedValue({
+        rows: [],
+        total: 0,
+      });
+
+      const req = {
+        query: {
+          verifiedOnly: 'true',
+        },
+      };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.getPublicVendors(req, res, next);
+
+      expect(dbSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          verifiedOnly: true,
+        })
+      );
+      expect(res.json).toHaveBeenCalled();
+    });
+
     test('calls next(err) if domain query throws an exception', async () => {
       const dbError = new Error('Database connection failed');
       jest.spyOn(domainQueries, 'getPublicVendorsPageFromDB').mockRejectedValue(dbError);
@@ -106,6 +142,47 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
       const next = jest.fn();
 
       await vendorController.getPublicVendors(req, res, next);
+
+      expect(next).toHaveBeenCalledWith(dbError);
+    });
+  });
+
+  describe('vendorController.getPublicVendorFilters', () => {
+    test('returns categories and states successfully', async () => {
+      jest.spyOn(domainQueries, 'getPublicVendorFiltersFromDB').mockResolvedValue({
+        categories: ['Mechanical & Fluid Equipment', 'Electrical'],
+        states: ['Gujarat', 'Maharashtra'],
+      });
+
+      const req = {};
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.getPublicVendorFilters(req, res, next);
+
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: {
+          categories: ['Mechanical & Fluid Equipment', 'Electrical'],
+          states: ['Gujarat', 'Maharashtra'],
+        },
+      });
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Cache-Control',
+        expect.stringContaining('public')
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    test('calls next(err) when domain query throws an exception', async () => {
+      const dbError = new Error('DB filter aggregate failed');
+      jest.spyOn(domainQueries, 'getPublicVendorFiltersFromDB').mockRejectedValue(dbError);
+
+      const req = {};
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.getPublicVendorFilters(req, res, next);
 
       expect(next).toHaveBeenCalledWith(dbError);
     });
@@ -194,6 +271,11 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
           }),
         })
       );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Cache-Control',
+        expect.stringContaining('public')
+      );
+      expect(next).not.toHaveBeenCalled();
     });
 
     test('calls next(err) when database error occurs', async () => {
@@ -265,6 +347,212 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
 
       expect(result.total).toBe(0);
       expect(result.rows).toEqual([]);
+    });
+
+    test('builds and executes queries when verifiedOnly is true', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+      const querySpy = jest.spyOn(pool, 'query')
+        .mockResolvedValueOnce({ rows: [{ total: 2 }] })
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: 'v-sql-ver-1',
+              major_category: 'Mechanical',
+              status: 'verified',
+              created_at: '2024-03-01',
+              raw: JSON.stringify({ id: 'v-sql-ver-1', name: 'Verified Supplier Co', isVerified: true }),
+            },
+          ],
+        });
+
+      const result = await domainQueries.getPublicVendorsPageFromDB({
+        verifiedOnly: true,
+      });
+
+      expect(result.total).toBe(2);
+      expect(result.rows).toHaveLength(1);
+      expect(querySpy.mock.calls[0][0]).toContain('status = \'verified\'');
+    });
+
+    test('serves subsequent requests from queryCache without hitting database', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+      const querySpy = jest.spyOn(pool, 'query')
+        .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: 'v-cached-sql-1',
+              major_category: 'Electrical',
+              status: 'active',
+              created_at: '2024-03-01',
+              raw: JSON.stringify({ id: 'v-cached-sql-1', name: 'Cached Cables Ltd' }),
+            },
+          ],
+        });
+
+      const firstCall = await domainQueries.getPublicVendorsPageFromDB({
+        limit: 10,
+        offset: 0,
+        category: 'Electrical',
+      });
+      expect(firstCall.total).toBe(1);
+      expect(firstCall.rows).toHaveLength(1);
+      expect(querySpy).toHaveBeenCalledTimes(2);
+
+      // Second call with same parameters should return cached result without calling pool.query
+      const secondCall = await domainQueries.getPublicVendorsPageFromDB({
+        limit: 10,
+        offset: 0,
+        category: 'Electrical',
+      });
+      expect(secondCall).toEqual(firstCall);
+      expect(querySpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('domainQueries.getPublicVendorFiltersFromDB', () => {
+    test('returns empty categories and standard states when storage is not available', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+
+      const result = await domainQueries.getPublicVendorFiltersFromDB();
+      expect(result.categories).toEqual([]);
+      expect(result.states).toEqual([...INDIAN_STATES]);
+    });
+
+    test('queries and returns distinct categories and standard states when storage is available', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+      jest.spyOn(pool, 'query')
+        .mockResolvedValueOnce({
+          rows: [
+            { category: 'Mechanical & Fluid Equipment' },
+            { category: 'Engineering Spares - Electrical' },
+            { category: 'Uncategorized (No Past POs)' },
+            { category: 'X' },
+          ],
+        });
+
+      const result = await domainQueries.getPublicVendorFiltersFromDB();
+
+      expect(result.categories).toEqual([
+        'Mechanical & Fluid Equipment',
+        'Engineering Spares - Electrical',
+      ]);
+      expect(result.states).toEqual([...INDIAN_STATES]);
+    });
+
+    test('handles empty or null query rows gracefully', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+      jest.spyOn(pool, 'query')
+        .mockResolvedValueOnce(null);
+
+      const result = await domainQueries.getPublicVendorFiltersFromDB();
+      expect(result.categories).toEqual([]);
+      expect(result.states).toEqual([...INDIAN_STATES]);
+    });
+
+    test('catches query errors and returns empty categories with standard states', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('Filter query failed'));
+
+      const result = await domainQueries.getPublicVendorFiltersFromDB();
+      expect(result.categories).toEqual([]);
+      expect(result.states).toEqual([...INDIAN_STATES]);
+    });
+  });
+
+  describe('vendorController.authenticateVendorDirectory', () => {
+    test('authenticates successfully with default passkey', async () => {
+      const req = { body: { passcode: 'Procucev@Vendors2026' } };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.authenticateVendorDirectory(req, res, next);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          token: expect.stringMatching(/^vdir_/),
+          expiresAt: expect.any(Number),
+          message: 'Vendor directory authentication successful.',
+        })
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    test('authenticates successfully with alias passkey VENDOR2026', async () => {
+      const req = { body: { accessKey: 'VENDOR2026' } };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.authenticateVendorDirectory(req, res, next);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          token: expect.stringMatching(/^vdir_/),
+        })
+      );
+    });
+
+    test('authenticates successfully with credentials username and password', async () => {
+      const req = {
+        body: {
+          username: 'directory@procucev.com',
+          password: 'Procucev@Vendors2026',
+        },
+      };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.authenticateVendorDirectory(req, res, next);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          token: expect.stringMatching(/^vdir_/),
+        })
+      );
+    });
+
+    test('returns 401 with descriptive error when passkey is invalid', async () => {
+      const req = { body: { passcode: 'wrong-passkey' } };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.authenticateVendorDirectory(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Invalid directory access key. Please enter the valid passkey provided by Procucev.',
+      });
+    });
+
+    test('returns 401 when body is empty or missing passkey', async () => {
+      const req = {};
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.authenticateVendorDirectory(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false })
+      );
+    });
+
+    test('handles exceptions and calls next(err)', async () => {
+      const req = null; // triggers exception in destructuring or body access
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.authenticateVendorDirectory(req, res, next);
+
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
     });
   });
 });
