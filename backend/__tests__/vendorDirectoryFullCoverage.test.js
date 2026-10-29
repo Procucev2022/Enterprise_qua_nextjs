@@ -1547,6 +1547,9 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(capturedSql).toContain('email ILIKE');
       expect(capturedSql).toContain('OR');
       expect(capturedD1).toContain('lower(email) LIKE');
+      expect(capturedD1).not.toContain('json_extract');
+      expect(capturedD1).not.toContain('major_category');
+      expect(capturedSql).toContain("raw->>'corporateEmail'");
       expect(capturedParams.length).toBeGreaterThanOrEqual(3);
       // Ensure no param string sent to LIKE exceeds 50 chars
       capturedParams.forEach((p) => {

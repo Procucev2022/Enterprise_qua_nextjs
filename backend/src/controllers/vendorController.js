@@ -245,6 +245,7 @@ async function getVendors(req, res, next) {
               [
                 v.name,
                 v.email,
+                v.corporateEmail,
                 v.contactPerson,
                 v.contact,
                 v.location,

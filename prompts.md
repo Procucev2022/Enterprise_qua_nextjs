@@ -786,4 +786,32 @@ to access vendor page add one kind of login client has said other wise any one c
 ### 2026-10-29T14:04:14+05:30
 
 ```text
+govardhan.kilari@procucev.com, veerababu.v@procucev.com, nilesh.murme@procucev.com, chandan.behera@procucev.com, prerna.shrivastava@procucev.com, prajwal.karakoon@procucev.com, sudheer.kangala@procucev.com, reshma.menon@procucev.com, srinivas.mukku@procucev.com, suneel.koneru@procucev.com
+i give like this in search bar it should give all that vendor if they exist 
+please check this issue and fix it
+```
+
+---
+
+### 2026-10-29T15:28:40+05:30
+
+```text
+i give 5 email only but it is showing time limit 
+please check the issue first and then fix this issue
+```
+
+---
+
+### 2026-10-29T15:58:42+05:30
+
+```text
+raise the pr for this code
+```
+
+---
+
+### 2026-10-29T17:42:27+05:30
+
+```text
+continue
 ```

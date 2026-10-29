@@ -846,6 +846,7 @@ export const UI_STRINGS = {
     outsideCategoryBadge: 'Outside Category',
     noVendorsFound: 'No vendors match your search.',
     allVendorsLoadFailed: 'The vendor list could not be loaded.',
+    dbQueryTimeout: 'The vendor search timed out. Please try refining your search or checking specific emails.',
     loadMoreVendors: 'Load {pageSize} more vendors',
     candidateCountOfTotal: 'Showing {count} of {total} vendors',
     selectedVendorCount: '{count}/{max} Selected',
