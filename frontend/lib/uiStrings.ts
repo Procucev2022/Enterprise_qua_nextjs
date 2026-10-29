@@ -209,6 +209,10 @@ export const UI_STRINGS = {
         label: 'Daily Reports',
         description: 'Downloadable operational, buyer, seller & RFQ Excel/CSV reports',
       },
+      internalTasks: {
+        label: 'Action Center',
+        description: 'Internal tasks, management approvals, tickets & executive scorecards',
+      },
       opportunityFeed: {
         label: 'Dashboard',
         description: 'Your enquiries, quotes, and sourcing activity',

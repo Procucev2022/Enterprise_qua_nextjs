@@ -838,3 +838,63 @@ CREATE TABLE IF NOT EXISTS vendor_credit_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_vendor_credit_transactions_vendor ON vendor_credit_transactions (vendor_id, created_at DESC);
 
+-- ============================================================================
+-- RELATIONAL DYNAMIC INTERNAL TASKS & ACTION CENTER
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS internal_task_types (
+  id VARCHAR(64) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  code VARCHAR(64) UNIQUE NOT NULL,
+  default_module VARCHAR(64) NOT NULL DEFAULT 'GENERAL',
+  description TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS internal_tasks (
+  id VARCHAR(64) PRIMARY KEY,
+  task_number VARCHAR(64) UNIQUE NOT NULL,
+  title VARCHAR(512) NOT NULL,
+  description TEXT,
+  task_type_id VARCHAR(64) REFERENCES internal_task_types(id) ON DELETE SET NULL,
+  priority VARCHAR(32) NOT NULL DEFAULT 'Medium',
+  status VARCHAR(32) NOT NULL DEFAULT 'Pending',
+  assigned_to_user_id VARCHAR(64) REFERENCES "user"(uuid) ON DELETE SET NULL,
+  assigned_to_name VARCHAR(255),
+  assigned_team VARCHAR(100),
+  created_by_user_id VARCHAR(64) REFERENCES "user"(uuid) ON DELETE SET NULL,
+  created_by_name VARCHAR(255),
+  due_date DATE,
+  completed_at TIMESTAMPTZ,
+  related_entity_type VARCHAR(64) NOT NULL DEFAULT 'GENERAL',
+  related_entity_id VARCHAR(64),
+  related_entity_label VARCHAR(512),
+  notes TEXT,
+  attachments JSONB,
+  raw JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS internal_task_activities (
+  id VARCHAR(64) PRIMARY KEY,
+  task_id VARCHAR(64) NOT NULL REFERENCES internal_tasks(id) ON DELETE CASCADE,
+  action_type VARCHAR(64) NOT NULL,
+  actor_id VARCHAR(64),
+  actor_name VARCHAR(255),
+  from_value TEXT,
+  to_value TEXT,
+  comment TEXT,
+  metadata JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_status ON internal_tasks (status);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_priority ON internal_tasks (priority);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_related ON internal_tasks (related_entity_type, related_entity_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_due_date ON internal_tasks (due_date);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_assigned_to ON internal_tasks (assigned_to_user_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_task_type ON internal_tasks (task_type_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_at ON internal_tasks (created_at DESC);
+
