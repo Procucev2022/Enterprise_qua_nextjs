@@ -35,7 +35,7 @@ import {
   TaskEntityType,
   TaskFilterParams,
   TaskSummary,
-  RelatedEntityOption,
+  DEFAULT_TASK_TYPES,
   fetchInternalTasks,
   fetchTaskTypes,
   createNewTaskType,
@@ -44,7 +44,6 @@ import {
   createInternalTask,
   updateInternalTask,
   deleteInternalTask,
-  searchRelatedEntities,
   getExportTasksUrl,
 } from '@/lib/internalTaskClient';
 
@@ -52,7 +51,7 @@ export default function InternalTasksDashboard() {
   // Data state
   const [tasks, setTasks] = useState<InternalTask[]>([]);
   const [totalTasks, setTotalTasks] = useState<number>(0);
-  const [taskTypes, setTaskTypes] = useState<TaskType[]>([]);
+  const [taskTypes, setTaskTypes] = useState<TaskType[]>(DEFAULT_TASK_TYPES);
   const [summary, setSummary] = useState<TaskSummary>({
     total: 0,
     pending: 0,
@@ -101,19 +100,14 @@ export default function InternalTasksDashboard() {
   // Create Form State
   const [newTitle, setNewTitle] = useState('');
   const [newDescription, setNewDescription] = useState('');
-  const [newTaskTypeId, setNewTaskTypeId] = useState('');
+  const [newTaskTypeId, setNewTaskTypeId] = useState<string>(DEFAULT_TASK_TYPES[0]?.id || '');
   const [newPriority, setNewPriority] = useState<TaskPriority>('Medium');
   const [newStatus, setNewStatus] = useState<TaskStatus>('Pending');
   const [newAssignedToName, setNewAssignedToName] = useState('');
   const [newDueDate, setNewDueDate] = useState('');
-  const [newRelatedType, setNewRelatedType] = useState<TaskEntityType>('RFQ');
-  const [newRelatedEntityId, setNewRelatedEntityId] = useState('');
-  const [newRelatedEntityLabel, setNewRelatedEntityLabel] = useState('');
   const [newNotes, setNewNotes] = useState('');
   const [isCreatingTypeInline, setIsCreatingTypeInline] = useState(false);
   const [customTypeName, setCustomTypeName] = useState('');
-  const [entityOptions, setEntityOptions] = useState<RelatedEntityOption[]>([]);
-  const [isSearchingEntities, setIsSearchingEntities] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const showToast = useCallback((msg: string) => {
@@ -137,11 +131,11 @@ export default function InternalTasksDashboard() {
   // Load Task Types
   const loadTaskTypes = useCallback(async () => {
     const types = await fetchTaskTypes();
-    setTaskTypes(types);
-    if (types.length > 0 && !newTaskTypeId) {
-      setNewTaskTypeId(types[0].id);
+    if (types && types.length > 0) {
+      setTaskTypes(types);
+      setNewTaskTypeId((prev) => prev || types[0].id);
     }
-  }, [newTaskTypeId]);
+  }, []);
 
   // Load Task Summary
   const loadSummary = useCallback(async () => {
@@ -206,24 +200,13 @@ export default function InternalTasksDashboard() {
     setIsFilterDrawerOpen(false);
   };
 
-  // Search real entities whenever related type or modal opens
-  useEffect(() => {
-    if (isCreateModalOpen && newRelatedType) {
-      setIsSearchingEntities(true);
-      searchRelatedEntities(newRelatedType, '')
-        .then((options) => {
-          setEntityOptions(options);
-          if (options.length > 0) {
-            setNewRelatedEntityId(options[0].id);
-            setNewRelatedEntityLabel(options[0].label);
-          } else {
-            setNewRelatedEntityId('');
-            setNewRelatedEntityLabel('');
-          }
-        })
-        .finally(() => setIsSearchingEntities(false));
+  // Open Create Modal with pre-selected type
+  const handleOpenCreateModal = () => {
+    if (!newTaskTypeId && taskTypes.length > 0) {
+      setNewTaskTypeId(taskTypes[0].id);
     }
-  }, [isCreateModalOpen, newRelatedType]);
+    setIsCreateModalOpen(true);
+  };
 
   // Handle Quick Status Toggle
   const handleToggleStatus = async (task: InternalTask) => {
@@ -252,7 +235,7 @@ export default function InternalTasksDashboard() {
       if (isCreatingTypeInline && customTypeName.trim()) {
         const createdType = await createNewTaskType({
           name: customTypeName.trim(),
-          defaultModule: newRelatedType,
+          defaultModule: 'GENERAL',
         });
         if (createdType) {
           finalTypeId = createdType.id;
@@ -260,17 +243,16 @@ export default function InternalTasksDashboard() {
         }
       }
 
+      const selectedType = taskTypes.find((t) => t.id === finalTypeId);
       const newTask = await createInternalTask({
         title: newTitle.trim(),
         description: newDescription.trim(),
-        taskTypeId: finalTypeId,
+        taskTypeId: finalTypeId || undefined,
         priority: newPriority,
         status: newStatus,
         assignedToName: newAssignedToName.trim() || 'Unassigned',
         dueDate: newDueDate || undefined,
-        relatedEntityType: newRelatedType,
-        relatedEntityId: newRelatedEntityId || undefined,
-        relatedEntityLabel: newRelatedEntityLabel || undefined,
+        relatedEntityType: (selectedType?.default_module as TaskEntityType) || 'GENERAL',
         notes: newNotes.trim(),
       });
 
@@ -433,7 +415,7 @@ export default function InternalTasksDashboard() {
 
           {/* Create Internal Task Button */}
           <button
-            onClick={() => setIsCreateModalOpen(true)}
+            onClick={handleOpenCreateModal}
             className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm shadow-blue-600/20 transition-all"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -897,65 +879,10 @@ export default function InternalTasksDashboard() {
                 />
               </div>
 
-              {/* Related Entity Module & Dynamic Entity Selection */}
-              <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">
-                    Related Entity & Module *
-                  </span>
-                  <span className="text-[10px] text-slate-400">Relational Database Link</span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[10px] text-slate-500 block mb-1">Module / Entity Type</label>
-                    <select
-                      value={newRelatedType}
-                      onChange={(e) => setNewRelatedType(e.target.value as TaskEntityType)}
-                      className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
-                    >
-                      <option value="RFQ">RFQ</option>
-                      <option value="BUYER">Buyer</option>
-                      <option value="VENDOR">Seller / Vendor</option>
-                      <option value="CREDIT">Credit</option>
-                      <option value="CATEGORY">Category</option>
-                      <option value="PAYMENT">Payment</option>
-                      <option value="USER">User / Account</option>
-                      <option value="GENERAL">General Operational</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-slate-500 block mb-1">
-                      {isSearchingEntities ? 'Loading from DB...' : 'Select Real Entity from DB'}
-                    </label>
-                    <select
-                      value={newRelatedEntityId}
-                      onChange={(e) => {
-                        setNewRelatedEntityId(e.target.value);
-                        const match = entityOptions.find((opt) => opt.id === e.target.value);
-                        if (match) setNewRelatedEntityLabel(match.label);
-                      }}
-                      className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
-                    >
-                      {entityOptions.length === 0 ? (
-                        <option value="">No entities found in DB</option>
-                      ) : (
-                        entityOptions.map((opt) => (
-                          <option key={opt.id} value={opt.id}>
-                            {opt.label}
-                          </option>
-                        ))
-                      )}
-                    </select>
-                  </div>
-                </div>
-              </div>
-
               {/* Task Type (Dynamic) */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300">Task Type</label>
+                  <label className="font-semibold text-slate-700 dark:text-slate-300">Task Type *</label>
                   <button
                     type="button"
                     onClick={() => setIsCreatingTypeInline(!isCreatingTypeInline)}
@@ -981,6 +908,7 @@ export default function InternalTasksDashboard() {
                     onChange={(e) => setNewTaskTypeId(e.target.value)}
                     className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
                   >
+                    <option value="">Select Task Type</option>
                     {taskTypes.map((tt) => (
                       <option key={tt.id} value={tt.id}>
                         {tt.name} ({tt.default_module})

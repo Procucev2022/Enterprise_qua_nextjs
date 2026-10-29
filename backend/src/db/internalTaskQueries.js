@@ -17,18 +17,92 @@ function parseJsonSafe(val, fallback = null) {
   }
 }
 
+const DEFAULT_TASK_TYPES = [
+  {
+    id: 'itt_quotation_review',
+    name: 'Quotation Review',
+    code: 'quotation_review',
+    default_module: 'RFQ',
+    description: 'Review and approve technical quotes and commercial bids',
+    is_active: 1,
+  },
+  {
+    id: 'itt_buyer_onboarding',
+    name: 'Buyer Onboarding',
+    code: 'buyer_onboarding',
+    default_module: 'BUYER',
+    description: 'Assist buyer organizations with onboarding and profile verification',
+    is_active: 1,
+  },
+  {
+    id: 'itt_vendor_followup',
+    name: 'Vendor Follow-up',
+    code: 'vendor_followup',
+    default_module: 'VENDOR',
+    description: 'Follow-up with sellers on active tenders, pricing, or compliance',
+    is_active: 1,
+  },
+  {
+    id: 'itt_credit_approval',
+    name: 'Credit Approval',
+    code: 'credit_approval',
+    default_module: 'CREDIT',
+    description: 'Review and grant credits for RFQ generation or download allowance',
+    is_active: 1,
+  },
+  {
+    id: 'itt_category_audit',
+    name: 'Category Audit',
+    code: 'category_audit',
+    default_module: 'CATEGORY',
+    description: 'Audit procurement category taxonomy and vendor category mappings',
+    is_active: 1,
+  },
+  {
+    id: 'itt_payment_verification',
+    name: 'Payment Verification',
+    code: 'payment_verification',
+    default_module: 'PAYMENT',
+    description: 'Reconcile offline payments, gateway webhooks, and refunds',
+    is_active: 1,
+  },
+  {
+    id: 'itt_account_governance',
+    name: 'Account Governance',
+    code: 'account_governance',
+    default_module: 'USER',
+    description: 'Manage user accounts, credential resets, and permissions',
+    is_active: 1,
+  },
+  {
+    id: 'itt_general_ops',
+    name: 'General Operations',
+    code: 'general_ops',
+    default_module: 'GENERAL',
+    description: 'Internal operational escalations and triage tasks',
+    is_active: 1,
+  },
+];
+
 /**
  * Fetch all dynamic task types.
  */
 async function getTaskTypes() {
-  if (!pool.hasStorage()) return [];
-  const sql = 'SELECT * FROM internal_task_types WHERE is_active = 1 OR is_active = true ORDER BY name ASC';
-  const result = await pool.query(sql, [], {
-    d1: true,
-    d1Text: 'SELECT * FROM internal_task_types WHERE is_active = 1 ORDER BY name ASC',
-    useCache: false,
-  });
-  return result && result.rows ? result.rows : [];
+  if (!pool.hasStorage()) return DEFAULT_TASK_TYPES;
+  try {
+    const sql = 'SELECT * FROM internal_task_types WHERE is_active = 1 OR is_active = true ORDER BY name ASC';
+    const result = await pool.query(sql, [], {
+      d1: true,
+      d1Text: 'SELECT * FROM internal_task_types WHERE is_active = 1 ORDER BY name ASC',
+      useCache: true,
+    });
+    if (result && Array.isArray(result.rows) && result.rows.length > 0) {
+      return result.rows;
+    }
+    return DEFAULT_TASK_TYPES;
+  } catch {
+    return DEFAULT_TASK_TYPES;
+  }
 }
 
 /**
@@ -571,6 +645,7 @@ async function searchRelatedEntities(entityType, query = '') {
 }
 
 module.exports = {
+  DEFAULT_TASK_TYPES,
   getTaskTypes,
   createTaskType,
   getInternalTasks,

@@ -4,7 +4,22 @@ import InternalTasksDashboard from '@/app/category-manager/internal-tasks';
 import CategoryManagerInternalTasksPage from '@/app/category-manager/internal-tasks/page';
 import * as internalTaskClient from '@/lib/internalTaskClient';
 
-jest.mock('@/lib/internalTaskClient');
+jest.mock('@/lib/internalTaskClient', () => {
+  const actual = jest.requireActual('@/lib/internalTaskClient');
+  return {
+    ...actual,
+    fetchInternalTasks: jest.fn(),
+    fetchTaskTypes: jest.fn(),
+    createNewTaskType: jest.fn(),
+    fetchTaskSummary: jest.fn(),
+    fetchTaskById: jest.fn(),
+    createInternalTask: jest.fn(),
+    updateInternalTask: jest.fn(),
+    deleteInternalTask: jest.fn(),
+    searchRelatedEntities: jest.fn(),
+    getExportTasksUrl: jest.fn(),
+  };
+});
 
 const todayStr = new Date().toISOString().slice(0, 10);
 const futureDate = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
@@ -381,9 +396,9 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const notesInput = screen.getByPlaceholderText(/Optional internal remarks/i);
     fireEvent.change(notesInput, { target: { value: 'High priority customer' } });
 
-    // Change Related Entity Type
-    const relatedTypeSelect = screen.getByDisplayValue('RFQ');
-    fireEvent.change(relatedTypeSelect, { target: { value: 'BUYER' } });
+    // Select Task Type
+    const taskTypeSelect = screen.getByDisplayValue(/Quotation Review/i);
+    fireEvent.change(taskTypeSelect, { target: { value: 'itt_buyer_onboarding' } });
 
     const submitBtn = screen.getByRole('button', { name: 'Create Task' });
     fireEvent.click(submitBtn);
@@ -588,39 +603,30 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
   });
 
-  test('handles task type dropdown, entity selection change, and empty entity options', async () => {
-    (internalTaskClient.searchRelatedEntities as jest.Mock).mockResolvedValueOnce([]);
-
+  test('handles task type dropdown selection and switching between modes', async () => {
     render(<InternalTasksDashboard />);
 
     const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
     fireEvent.click(createBtn);
 
-    // Entity options should be empty
-    await waitFor(() => {
-      expect(screen.getByText('No entities found in DB')).toBeInTheDocument();
-    });
-
-    // Switch related entity type to VENDOR
-    (internalTaskClient.searchRelatedEntities as jest.Mock).mockResolvedValueOnce([
-      { id: 'vnd_1', label: 'Apex Industrial Spares', entity_type: 'VENDOR' },
-      { id: 'vnd_2', label: 'Beta Precision Ltd', entity_type: 'VENDOR' },
-    ]);
-
-    const relatedTypeSelect = screen.getByDisplayValue('RFQ');
-    fireEvent.change(relatedTypeSelect, { target: { value: 'VENDOR' } });
-
-    await waitFor(() => {
-      expect(screen.getByText('Apex Industrial Spares')).toBeInTheDocument();
-    });
-
-    // Change entity selection
-    const entitySelect = screen.getByDisplayValue('Apex Industrial Spares');
-    fireEvent.change(entitySelect, { target: { value: 'vnd_2' } });
+    // Verify task type dropdown exists and options are populated
+    const taskTypeSelect = screen.getByDisplayValue(/Quotation Review/i);
+    expect(taskTypeSelect).toBeInTheDocument();
 
     // Change task type select
-    const taskTypeSelect = screen.getByDisplayValue('Quotation Review (RFQ)');
     fireEvent.change(taskTypeSelect, { target: { value: 'itt_vendor_followup' } });
+
+    // Toggle custom task type inline input
+    const addCustomBtn = screen.getByRole('button', { name: /\+ Add Custom Task Type/i });
+    fireEvent.click(addCustomBtn);
+
+    expect(screen.getByPlaceholderText(/e\.g\. GST Exemption Verification/i)).toBeInTheDocument();
+
+    // Toggle back to existing
+    const chooseExistingBtn = screen.getByRole('button', { name: /Choose Existing/i });
+    fireEvent.click(chooseExistingBtn);
+
+    expect(screen.getByDisplayValue(/Vendor Follow-up/i)).toBeInTheDocument();
   });
 
   test('renders page wrapper CategoryManagerInternalTasksPage', () => {

@@ -280,7 +280,8 @@ describe('Internal Tasks API & Controller', () => {
 
     jest.spyOn(internalTaskQueries, 'getTaskTypes').mockRejectedValue(new Error('DB failure'));
     const ttRes = await request(app).get('/api/internal-tasks/task-types');
-    expect(ttRes.status).toBe(500);
+    expect(ttRes.status).toBe(200);
+    expect(ttRes.body.taskTypes).toEqual(internalTaskQueries.DEFAULT_TASK_TYPES);
 
     jest.spyOn(internalTaskQueries, 'createTaskType').mockRejectedValue(new Error('DB failure'));
     const ctRes = await request(app).post('/api/internal-tasks/task-types').send({ name: 'Test' });

@@ -1,4 +1,5 @@
 import {
+  DEFAULT_TASK_TYPES,
   fetchTaskTypes,
   createNewTaskType,
   fetchInternalTasks,
@@ -36,11 +37,11 @@ describe('internalTaskClient', () => {
 
     // Failure case (res.ok = false)
     global.fetch = jest.fn().mockResolvedValueOnce({ ok: false });
-    expect(await fetchTaskTypes()).toEqual([]);
+    expect(await fetchTaskTypes()).toEqual(DEFAULT_TASK_TYPES);
 
     // Exception case
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network error'));
-    expect(await fetchTaskTypes()).toEqual([]);
+    expect(await fetchTaskTypes()).toEqual(DEFAULT_TASK_TYPES);
   });
 
   test('createNewTaskType creates a new task type and handles failures', async () => {
@@ -234,7 +235,7 @@ describe('internalTaskClient', () => {
       ok: true,
       json: async () => ({ taskTypes: 'invalid' }),
     });
-    expect(await fetchTaskTypes()).toEqual([]);
+    expect(await fetchTaskTypes()).toEqual(DEFAULT_TASK_TYPES);
 
     // taskType missing in create
     global.fetch = jest.fn().mockResolvedValueOnce({

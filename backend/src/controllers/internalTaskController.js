@@ -73,7 +73,7 @@ async function getTaskTypes(req, res) {
     return res.status(200).json({ success: true, taskTypes: types });
   } catch (error) {
     logger.error('Failed to get task types', { error: error.message });
-    return res.status(500).json({ success: false, error: 'Failed to fetch task types' });
+    return res.status(200).json({ success: true, taskTypes: internalTaskQueries.DEFAULT_TASK_TYPES || [] });
   }
 }
 

@@ -90,14 +90,76 @@ function authHeaders(): Record<string, string> {
   };
 }
 
+export const DEFAULT_TASK_TYPES: TaskType[] = [
+  {
+    id: 'itt_quotation_review',
+    name: 'Quotation Review',
+    code: 'quotation_review',
+    default_module: 'RFQ',
+    description: 'Review and approve technical quotes and commercial bids',
+  },
+  {
+    id: 'itt_buyer_onboarding',
+    name: 'Buyer Onboarding',
+    code: 'buyer_onboarding',
+    default_module: 'BUYER',
+    description: 'Assist buyer organizations with onboarding and profile verification',
+  },
+  {
+    id: 'itt_vendor_followup',
+    name: 'Vendor Follow-up',
+    code: 'vendor_followup',
+    default_module: 'VENDOR',
+    description: 'Follow-up with sellers on active tenders, pricing, or compliance',
+  },
+  {
+    id: 'itt_credit_approval',
+    name: 'Credit Approval',
+    code: 'credit_approval',
+    default_module: 'CREDIT',
+    description: 'Review and grant credits for RFQ generation or download allowance',
+  },
+  {
+    id: 'itt_category_audit',
+    name: 'Category Audit',
+    code: 'category_audit',
+    default_module: 'CATEGORY',
+    description: 'Audit procurement category taxonomy and vendor category mappings',
+  },
+  {
+    id: 'itt_payment_verification',
+    name: 'Payment Verification',
+    code: 'payment_verification',
+    default_module: 'PAYMENT',
+    description: 'Reconcile offline payments, gateway webhooks, and refunds',
+  },
+  {
+    id: 'itt_account_governance',
+    name: 'Account Governance',
+    code: 'account_governance',
+    default_module: 'USER',
+    description: 'Manage user accounts, credential resets, and permissions',
+  },
+  {
+    id: 'itt_general_ops',
+    name: 'General Operations',
+    code: 'general_ops',
+    default_module: 'GENERAL',
+    description: 'Internal operational escalations and triage tasks',
+  },
+];
+
 export async function fetchTaskTypes(): Promise<TaskType[]> {
   try {
     const res = await fetch('/api/internal-tasks/task-types', { headers: authHeaders() });
-    if (!res.ok) return [];
+    if (!res.ok) return DEFAULT_TASK_TYPES;
     const data = await res.json();
-    return Array.isArray(data.taskTypes) ? data.taskTypes : [];
+    if (Array.isArray(data.taskTypes) && data.taskTypes.length > 0) {
+      return data.taskTypes;
+    }
+    return DEFAULT_TASK_TYPES;
   } catch {
-    return [];
+    return DEFAULT_TASK_TYPES;
   }
 }
 

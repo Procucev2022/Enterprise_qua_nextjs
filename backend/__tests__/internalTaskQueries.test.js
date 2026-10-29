@@ -18,13 +18,16 @@ describe('internalTaskQueries', () => {
       expect(types[0].id).toBe('itt_1');
     });
 
-    test('returns empty array when storage is not configured or rows missing', async () => {
+    test('returns default task types when storage is not configured, rows missing, or query errors', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
-      expect(await queries.getTaskTypes()).toEqual([]);
+      expect(await queries.getTaskTypes()).toEqual(queries.DEFAULT_TASK_TYPES);
 
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       jest.spyOn(pool, 'query').mockResolvedValue(null);
-      expect(await queries.getTaskTypes()).toEqual([]);
+      expect(await queries.getTaskTypes()).toEqual(queries.DEFAULT_TASK_TYPES);
+
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('D1 429 Overload'));
+      expect(await queries.getTaskTypes()).toEqual(queries.DEFAULT_TASK_TYPES);
     });
   });
 
