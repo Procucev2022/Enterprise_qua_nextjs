@@ -1163,8 +1163,8 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   const emailCombinedKey = buildOtpKey(normalizedEmail, cleanedMobile);
   const emailDirectKey = buildOtpKey(normalizedEmail, 'email');
   let storedEmailOtp = (await authSessionQueries.findOtp(emailOtpKey)) ||
-                       (await authSessionQueries.findOtp(emailCombinedKey)) ||
-                       (await authSessionQueries.findOtp(emailDirectKey));
+    (await authSessionQueries.findOtp(emailCombinedKey)) ||
+    (await authSessionQueries.findOtp(emailDirectKey));
 
   if (!storedEmailOtp) {
     // Check demo OTP fallback in test environments or if OTP was sent to account
@@ -1188,7 +1188,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   // 4. Verify Mobile OTP
   const mobileOtpKey = buildOtpKey(normalizedEmail, `${cleanedMobile}_mobile`);
   let storedMobileOtp = (await authSessionQueries.findOtp(mobileOtpKey)) ||
-                        (await authSessionQueries.findOtp(emailCombinedKey));
+    (await authSessionQueries.findOtp(emailCombinedKey));
 
   if (storedMobileOtp && storedMobileOtp.expiresAt && Date.now() > storedMobileOtp.expiresAt) {
     throw new Error('Mobile verification OTP has expired. Please request a new code.');
@@ -1205,9 +1205,9 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
 
   // Consume used OTPs
   await Promise.all([
-    authSessionQueries.deleteOtp(emailOtpKey).catch(() => {}),
-    authSessionQueries.deleteOtp(mobileOtpKey).catch(() => {}),
-    authSessionQueries.deleteOtp(emailCombinedKey).catch(() => {}),
+    authSessionQueries.deleteOtp(emailOtpKey).catch(() => { }),
+    authSessionQueries.deleteOtp(mobileOtpKey).catch(() => { }),
+    authSessionQueries.deleteOtp(emailCombinedKey).catch(() => { }),
   ]);
 
   // 5. Update user identity record

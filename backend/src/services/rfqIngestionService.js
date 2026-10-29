@@ -17,7 +17,7 @@
  *   - duplicate rows within one ingest are collapsed on a composite key
  */
 
-const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG, DEFAULT_CATEGORY_TAXONOMY } = require('../config/constants');
+const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG, DEFAULT_CATEGORY_TAXONOMY, EMAIL_GATEWAY_CONFIG } = require('../config/constants');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { logger } = require('./loggerService');
 
@@ -673,7 +673,11 @@ async function buildRFQDraft(payload = {}, options = {}) {
     });
   }
 
-  const title = String(payload.title || '').trim() || deriveTitle(entities);
+  const derivedTitle = deriveTitle(entities);
+  const fallbackTitle = (EMAIL_GATEWAY_CONFIG && EMAIL_GATEWAY_CONFIG.DEFAULT_FALLBACK_RFQ_TITLE) || 'Request for Quotation';
+  const title = (payload.source === 'email_gateway')
+    ? (derivedTitle || fallbackTitle)
+    : (String(payload.title || '').trim() || derivedTitle || fallbackTitle);
 
   // The RFQ header category follows the majority of its line items rather than
   // just the first, so a mixed BOQ lands in the category it mostly belongs to.

@@ -1094,11 +1094,12 @@ async function extractRFQFromDocument(req, res, next) {
       fileName: body.fileName,
     };
     let sourceEmail;
-
-    if (
+    let emailSubject;
+    const isEmail =
       emailIngestionService.isEmailFileName(body.fileName) ||
-      emailIngestionService.isOutlookMsgFileName(body.fileName)
-    ) {
+      emailIngestionService.isOutlookMsgFileName(body.fileName);
+
+    if (isEmail) {
       const prepared = await emailIngestionService.prepareEmailForExtraction({
         fileName: body.fileName,
         content: inlineData,
@@ -1117,6 +1118,7 @@ async function extractRFQFromDocument(req, res, next) {
       }
       extractionInput = prepared.extractionInput;
       sourceEmail = prepared.message.fromAddress;
+      emailSubject = prepared.message.subject;
       logger.info(
         `[RFQ_CONTROLLER] Email document prepared for extraction: from=${sourceEmail}`,
         { fileName: body.fileName, sourceEmail },
@@ -1162,11 +1164,14 @@ async function extractRFQFromDocument(req, res, next) {
       'RFQ_CONTROLLER'
     );
 
+    const isGenericDocumentTitle = !extraction.documentTitle || /^(request for quotation|rfq|inquiry|requisition)$/i.test(String(extraction.documentTitle).trim());
+    const draftTitle = body.title ? String(body.title).trim() : (!isEmail && !isGenericDocumentTitle ? extraction.documentTitle : null);
+
     // Reuse the shared normalisation + taxonomy classification so an AI-extracted
     // RFQ is shaped identically to one keyed by hand.
     const { draft, classification } = await rfqIngestionService.buildRFQDraft({
       lineItems: extraction.lineItems,
-      title: extraction.documentTitle,
+      title: draftTitle,
       category: extraction.category,
       estimatedBudget: extraction.estimatedBudget,
       targetDeliveryDate: extraction.deliveryDate,
