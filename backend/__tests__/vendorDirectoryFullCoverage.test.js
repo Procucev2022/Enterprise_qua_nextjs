@@ -1483,5 +1483,98 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(ingestedVendor.name).toBe('Ingested Supplier Ltd');
       expect(ingestedVendor.source).toBe('vendor_master_ingestion');
     });
+
+    test('getVendors in-memory handles multi-token comma-separated vendor emails', async () => {
+      const req = {
+        query: {
+          search: 'govardhan.kilari@procucev.com, veerababu.v@procucev.com, nonexisting@procucev.com',
+        },
+      };
+      const res = mockRes();
+      const next = jest.fn();
+
+      const mockVendors = [
+        { id: 'v-1', name: 'Govardhan Solutions', email: 'govardhan.kilari@procucev.com', majorCategory: 'IT' },
+        { id: 'v-2', name: 'Veerababu Corp', email: 'veerababu.v@procucev.com', majorCategory: 'Electrical' },
+        { id: 'v-3', name: 'Other Vendor', email: 'other@procucev.com', majorCategory: 'Mechanical' },
+      ];
+
+      jest.spyOn(storeService, 'getVendors').mockResolvedValue(mockVendors);
+
+      await vendorController.getVendors(req, res, next);
+      expect(res.json).toHaveBeenCalled();
+      const response = res.json.mock.calls[0][0];
+      expect(response.success).toBe(true);
+      expect(response.data.length).toBe(2);
+      expect(response.data.map((v) => v.id)).toEqual(['v-1', 'v-2']);
+
+      // Also test short token <= 3 characters matching minorCategories
+      const shortReq = { query: { search: 'HR, IT' } };
+      const shortRes = mockRes();
+      const mockWithMinor = [
+        { id: 'v-4', name: 'HR Services', email: 'hr@example.com', minorCategories: ['HR Consulting', 'Payroll'] },
+        { id: 'v-5', name: 'Hardware Spares', email: 'hw@example.com', minorCategories: ['Bolts'] },
+      ];
+      jest.spyOn(storeService, 'getVendors').mockResolvedValue(mockWithMinor);
+      await vendorController.getVendors(shortReq, shortRes, next);
+      expect(shortRes.json).toHaveBeenCalled();
+      const shortResponse = shortRes.json.mock.calls[0][0];
+      expect(shortResponse.success).toBe(true);
+      expect(shortResponse.data.map((v) => v.id)).toEqual(['v-4']);
+    });
+
+    test('getVendorsPageFromDB constructs multi-token conditions without D1 pattern overflow', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      let capturedSql = null;
+      let capturedD1 = null;
+      let capturedParams = null;
+
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockImplementation(async (sql, params, opts) => {
+        capturedSql = sql;
+        capturedD1 = opts && opts.d1Text;
+        capturedParams = params;
+        return { rows: [] };
+      });
+
+      const multiEmailSearch = 'govardhan.kilari@procucev.com, veerababu.v@procucev.com, nilesh.murme@procucev.com';
+      await domainQueries.getVendorsPageFromDB({
+        limit: 10,
+        offset: 0,
+        search: multiEmailSearch,
+      });
+
+      expect(capturedSql).toContain('email ILIKE');
+      expect(capturedSql).toContain('OR');
+      expect(capturedD1).toContain('lower(email) LIKE');
+      expect(capturedParams.length).toBeGreaterThanOrEqual(3);
+      // Ensure no param string sent to LIKE exceeds 50 chars
+      capturedParams.forEach((p) => {
+        if (typeof p === 'string' && p.startsWith('%') && p.endsWith('%')) {
+          expect(p.length).toBeLessThanOrEqual(50);
+        }
+      });
+
+      // Test state and city with parenthesized alias
+      await domainQueries.getVendorsPageFromDB({
+        limit: 10,
+        offset: 0,
+        state: 'Andaman and Nicobar Islands',
+        city: 'Sri Vijaya Puram (Port Blair)',
+      });
+      expect(capturedSql).toContain("raw->>'state' ILIKE");
+      expect(capturedSql).toContain("raw->>'city' ILIKE");
+      expect(capturedD1).toContain("lower(json_extract(raw,'$.state'))");
+      expect(capturedD1).toContain("lower(json_extract(raw,'$.city'))");
+
+      // Test plain city without alias
+      await domainQueries.getVendorsPageFromDB({
+        limit: 10,
+        offset: 0,
+        city: 'Pune',
+      });
+      expect(capturedSql).toContain("raw->>'city' ILIKE");
+      expect(capturedD1).toContain("lower(json_extract(raw,'$.city'))");
+    });
   });
 });

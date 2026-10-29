@@ -674,4 +674,34 @@ describe('InviteVendorsModal — Comprehensive Multi-Filter & 20-Vendor Limit Su
     // Pune vendor should not be visible
     expect(screen.queryByText('Apex Pune Fasteners Pvt Ltd')).not.toBeInTheDocument();
   });
+  it('searches multiple comma-separated emails and displays all matching candidates', async () => {
+    (rfqClient.fetchVendorCandidates as jest.Mock).mockResolvedValue({
+      success: true,
+      candidates: mockVendorsPool,
+    });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Apex Pune Fasteners Pvt Ltd')).toBeInTheDocument();
+      expect(screen.getByText('Precision Tools Pune')).toBeInTheDocument();
+      expect(screen.getByText('Bombay Industrial Hardware')).toBeInTheDocument();
+    });
+
+    const searchInput = screen.getByTestId('invite-vendors-search');
+
+    // Search two emails separated by comma
+    fireEvent.change(searchInput, {
+      target: { value: 'contact@apexfasteners.in, sales@precisiontools.com, nonexisting@nowhere.com' },
+    });
+
+    await waitFor(() => {
+      // Both matched candidates should be visible
+      expect(screen.getByText('Apex Pune Fasteners Pvt Ltd')).toBeInTheDocument();
+      expect(screen.getByText('Precision Tools Pune')).toBeInTheDocument();
+      // Unmatched vendors should not be visible
+      expect(screen.queryByText('Bombay Industrial Hardware')).not.toBeInTheDocument();
+      expect(screen.queryByText('Gujarat Techno Forge')).not.toBeInTheDocument();
+    });
+  });
 });

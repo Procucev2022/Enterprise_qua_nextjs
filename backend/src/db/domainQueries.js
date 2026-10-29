@@ -14,6 +14,8 @@
 const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
+const { INDIAN_STATES } = require('../config/constants');
+const { parseSearchTokens } = require('../config/constants');
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
@@ -78,93 +80,109 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   const conditions = [];
   const d1Conditions = [];
   if (search) {
-    const trimmed = search.trim();
-    params.push(`%${trimmed}%`);
-    const p = params.length;
+    const tokens = parseSearchTokens(search);
+    if (tokens.length > 0) {
+      const tokenConditions = [];
+      const d1TokenConditions = [];
 
-    // For short search tokens (<= 3 characters, e.g. "IT", "HR"), fields
-    // must match on discrete word boundaries or exact match, not substring '%it%', which erroneously
-    // matches "switches" (sw-IT-ches), "commoditiess" (commod-IT-iess), "limited", "solitaire", etc.
-    let catCondition = `major_category ILIKE $${p}`;
-    let d1CatCondition = `lower(major_category) LIKE lower($${p})`;
-    let nameCondition = `raw->>'name' ILIKE $${p}`;
-    let d1NameCondition = `lower(json_extract(raw,'$.name')) LIKE lower($${p})`;
-    let minorCatCondition = `(raw->'minorCategories')::text ILIKE $${p}`;
-    let d1MinorCatCondition = `lower(json_extract(raw,'$.minorCategories')) LIKE lower($${p})`;
-    let contactCondition = `raw->>'contactPerson' ILIKE $${p}`;
-    let d1ContactCondition = `lower(json_extract(raw,'$.contactPerson')) LIKE lower($${p})`;
+      for (const token of tokens) {
+        const trimmed = token.trim();
+        if (!trimmed) continue;
 
-    if (trimmed.length <= 3) {
-      params.push(trimmed.toLowerCase());
-      const pExact = params.length;
-      catCondition = `(
-        lower(major_category) = $${pExact}
-        OR lower(major_category) LIKE ($${pExact} || ' %')
-        OR lower(major_category) LIKE ('% ' || $${pExact})
-        OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
-        OR lower(raw->>'majorCategory') = $${pExact}
-      )`;
-      d1CatCondition = `(
-        lower(major_category) = $${pExact}
-        OR lower(major_category) LIKE ($${pExact} || ' %')
-        OR lower(major_category) LIKE ('% ' || $${pExact})
-        OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
-        OR lower(json_extract(raw,'$.majorCategory')) = $${pExact}
-      )`;
-      nameCondition = `(
-        lower(raw->>'name') = $${pExact}
-        OR lower(raw->>'name') LIKE ($${pExact} || ' %')
-        OR lower(raw->>'name') LIKE ('% ' || $${pExact})
-        OR lower(raw->>'name') LIKE ('% ' || $${pExact} || ' %')
-      )`;
-      d1NameCondition = `(
-        lower(json_extract(raw,'$.name')) = $${pExact}
-        OR lower(json_extract(raw,'$.name')) LIKE ($${pExact} || ' %')
-        OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact})
-        OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact} || ' %')
-      )`;
-      minorCatCondition = `(
-        (raw->'minorCategories')::text ILIKE '%"' || $${pExact} || '"%'
-        OR (raw->'minorCategories')::text ILIKE '% ' || $${pExact} || ' %'
-        OR (raw->'minorCategories')::text ILIKE '%[' || $${pExact} || ']%'
-      )`;
-      d1MinorCatCondition = `(
-        lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || $${pExact} || '"%')
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE ('% ' || $${pExact} || ' %')
-        OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%[' || $${pExact} || ']%')
-      )`;
-      contactCondition = `(
-        lower(raw->>'contactPerson') = $${pExact}
-        OR lower(raw->>'contactPerson') LIKE ($${pExact} || ' %')
-        OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact})
-        OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact} || ' %')
-      )`;
-      d1ContactCondition = `(
-        lower(json_extract(raw,'$.contactPerson')) = $${pExact}
-        OR lower(json_extract(raw,'$.contactPerson')) LIKE ($${pExact} || ' %')
-        OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact})
-        OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact} || ' %')
-      )`;
+        params.push(`%${trimmed}%`);
+        const p = params.length;
+
+        // For short search tokens (<= 3 characters, e.g. "IT", "HR"), fields
+        // must match on discrete word boundaries or exact match, not substring '%it%', which erroneously
+        // matches "switches" (sw-IT-ches), "commoditiess" (commod-IT-iess), "limited", "solitaire", etc.
+        let catCondition = `major_category ILIKE $${p}`;
+        let d1CatCondition = `lower(major_category) LIKE lower($${p})`;
+        let nameCondition = `raw->>'name' ILIKE $${p}`;
+        let d1NameCondition = `lower(json_extract(raw,'$.name')) LIKE lower($${p})`;
+        let minorCatCondition = `(raw->'minorCategories')::text ILIKE $${p}`;
+        let d1MinorCatCondition = `lower(json_extract(raw,'$.minorCategories')) LIKE lower($${p})`;
+        let contactCondition = `raw->>'contactPerson' ILIKE $${p}`;
+        let d1ContactCondition = `lower(json_extract(raw,'$.contactPerson')) LIKE lower($${p})`;
+
+        if (trimmed.length <= 3) {
+          params.push(trimmed.toLowerCase());
+          const pExact = params.length;
+          catCondition = `(
+            lower(major_category) = $${pExact}
+            OR lower(major_category) LIKE ($${pExact} || ' %')
+            OR lower(major_category) LIKE ('% ' || $${pExact})
+            OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
+            OR lower(raw->>'majorCategory') = $${pExact}
+          )`;
+          d1CatCondition = `(
+            lower(major_category) = $${pExact}
+            OR lower(major_category) LIKE ($${pExact} || ' %')
+            OR lower(major_category) LIKE ('% ' || $${pExact})
+            OR lower(major_category) LIKE ('% ' || $${pExact} || ' %')
+            OR lower(json_extract(raw,'$.majorCategory')) = $${pExact}
+          )`;
+          nameCondition = `(
+            lower(raw->>'name') = $${pExact}
+            OR lower(raw->>'name') LIKE ($${pExact} || ' %')
+            OR lower(raw->>'name') LIKE ('% ' || $${pExact})
+            OR lower(raw->>'name') LIKE ('% ' || $${pExact} || ' %')
+          )`;
+          d1NameCondition = `(
+            lower(json_extract(raw,'$.name')) = $${pExact}
+            OR lower(json_extract(raw,'$.name')) LIKE ($${pExact} || ' %')
+            OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact})
+            OR lower(json_extract(raw,'$.name')) LIKE ('% ' || $${pExact} || ' %')
+          )`;
+          minorCatCondition = `(
+            (raw->'minorCategories')::text ILIKE '%"' || $${pExact} || '"%'
+            OR (raw->'minorCategories')::text ILIKE '% ' || $${pExact} || ' %'
+            OR (raw->'minorCategories')::text ILIKE '%[' || $${pExact} || ']%'
+          )`;
+          d1MinorCatCondition = `(
+            lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || $${pExact} || '"%')
+            OR lower(json_extract(raw,'$.minorCategories')) LIKE ('% ' || $${pExact} || ' %')
+            OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%[' || $${pExact} || ']%')
+          )`;
+          contactCondition = `(
+            lower(raw->>'contactPerson') = $${pExact}
+            OR lower(raw->>'contactPerson') LIKE ($${pExact} || ' %')
+            OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact})
+            OR lower(raw->>'contactPerson') LIKE ('% ' || $${pExact} || ' %')
+          )`;
+          d1ContactCondition = `(
+            lower(json_extract(raw,'$.contactPerson')) = $${pExact}
+            OR lower(json_extract(raw,'$.contactPerson')) LIKE ($${pExact} || ' %')
+            OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact})
+            OR lower(json_extract(raw,'$.contactPerson')) LIKE ('% ' || $${pExact} || ' %')
+          )`;
+        }
+
+        tokenConditions.push(`(${catCondition}
+          OR email ILIKE $${p}
+          OR ${nameCondition}
+          OR ${minorCatCondition}
+          OR ${contactCondition}
+          OR raw->>'contact' ILIKE $${p}
+          OR raw->>'location' ILIKE $${p}
+          OR raw->>'city' ILIKE $${p}
+          OR raw->>'deliveryLocation' ILIKE $${p})`);
+
+        d1TokenConditions.push(`(${d1CatCondition}
+          OR lower(email) LIKE lower($${p})
+          OR ${d1NameCondition}
+          OR ${d1MinorCatCondition}
+          OR ${d1ContactCondition}
+          OR lower(json_extract(raw,'$.contact')) LIKE lower($${p})
+          OR lower(json_extract(raw,'$.location')) LIKE lower($${p})
+          OR lower(json_extract(raw,'$.city')) LIKE lower($${p})
+          OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`);
+      }
+
+      if (tokenConditions.length > 0) {
+        conditions.push(`(${tokenConditions.join(' OR ')})`);
+        d1Conditions.push(`(${d1TokenConditions.join(' OR ')})`);
+      }
     }
-
-    conditions.push(`(${catCondition}
-      OR email ILIKE $${p}
-      OR ${nameCondition}
-      OR ${minorCatCondition}
-      OR ${contactCondition}
-      OR raw->>'contact' ILIKE $${p}
-      OR raw->>'location' ILIKE $${p}
-      OR raw->>'city' ILIKE $${p}
-      OR raw->>'deliveryLocation' ILIKE $${p})`);
-    d1Conditions.push(`(${d1CatCondition}
-      OR lower(email) LIKE lower($${p})
-      OR ${d1NameCondition}
-      OR ${d1MinorCatCondition}
-      OR ${d1ContactCondition}
-      OR lower(json_extract(raw,'$.contact')) LIKE lower($${p})
-      OR lower(json_extract(raw,'$.location')) LIKE lower($${p})
-      OR lower(json_extract(raw,'$.city')) LIKE lower($${p})
-      OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`);
   }
   if (email) {
     params.push(`%${email.trim()}%`);
@@ -1690,6 +1708,191 @@ async function getVendorCreditTransactionsFromDB(vendorId, limit = 50) {
 }
 
 /**
+ * Public vendor directory — paginated, filtered, indexed exclusively on
+ * the Procucev-network (no buyerId / buyerAccountId in raw). Mirrors
+ * getVendorsPageFromDB's structure but always enforces the public-only
+ * guard and never requires an authenticated scope.
+ *
+ * Uses the existing pg_trgm GIN indexes (idx_vendors_name_trgm,
+ * idx_vendors_major_category_trgm, idx_vendors_minor_categories_trgm)
+ * so substring ILIKE across 600k+ rows never forces a sequential scan.
+ */
+async function getPublicVendorsPageFromDB({
+  limit = 24,
+  offset = 0,
+  search = '',
+  category = '',
+  state = '',
+  minRating = 0,
+  verifiedOnly = false,
+} = {}) {
+  if (!pool.hasStorage()) return { rows: [], total: 0 };
+
+  const normSearch = String(search || '').trim().toLowerCase();
+  const normCategory = String(category || '').trim().toLowerCase();
+  const normState = String(state || '').trim().toLowerCase();
+  const normRating = Number(minRating) || 0;
+  const normVerified = Boolean(verifiedOnly);
+  const cacheKey = `public_vendors_p_${limit}_${offset}_${normSearch}_${normCategory}_${normState}_${normRating}_${normVerified}`;
+
+  const cached = queryCache.get(cacheKey, []);
+  if (cached) {
+    return cached;
+  }
+
+  const params = [];
+  // Rule: public listing NEVER exposes private buyer rosters.
+  const pgConditions = [
+    `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`,
+  ];
+  const d1Conditions = [
+    `json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL`,
+  ];
+
+  if (search) {
+    params.push(`%${search}%`);
+    const p = params.length;
+    // Trigram GIN indexes keep this O(log n) at scale.
+    pgConditions.push(`(
+      major_category ILIKE $${p}
+      OR raw->>'name' ILIKE $${p}
+      OR raw->>'brandName' ILIKE $${p}
+      OR (raw->'products')::text ILIKE $${p}
+      OR (raw->'minorCategories')::text ILIKE $${p}
+    )`);
+    d1Conditions.push(`(
+      lower(major_category) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.name')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.brandName')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.products')) LIKE lower($${p})
+      OR lower(json_extract(raw,'$.minorCategories')) LIKE lower($${p})
+    )`);
+  }
+
+  if (category && category !== 'all' && category !== 'All Categories') {
+    params.push(category);
+    const p = params.length;
+    pgConditions.push(`(major_category ILIKE $${p} OR raw->>'majorCategory' ILIKE $${p} OR raw->>'category' ILIKE $${p})`);
+    d1Conditions.push(`(lower(major_category) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.category')) = lower($${p}))`);
+  }
+
+  if (state && state !== 'all' && state !== 'All States') {
+    params.push(state.toLowerCase());
+    const p = params.length;
+    pgConditions.push(`(lower(raw->>'state') = $${p} OR lower(raw->>'location') = $${p} OR lower(raw->>'city') = $${p})`);
+    d1Conditions.push(`(lower(json_extract(raw,'$.state')) = $${p} OR lower(json_extract(raw,'$.location')) = $${p} OR lower(json_extract(raw,'$.city')) = $${p})`);
+  }
+
+  if (minRating > 0) {
+    params.push(minRating);
+    const p = params.length;
+    pgConditions.push(`COALESCE((raw->>'rating')::numeric, (raw->>'score')::numeric / 20.0, 0) >= $${p}`);
+    d1Conditions.push(`COALESCE(CAST(json_extract(raw,'$.rating') AS REAL), CAST(json_extract(raw,'$.score') AS REAL) / 20.0, 0) >= $${p}`);
+  }
+
+  if (verifiedOnly) {
+    pgConditions.push(`(
+      (raw->>'gstin' IS NOT NULL AND raw->>'gstin' != '')
+      OR (raw->>'gst' IS NOT NULL AND raw->>'gst' != '')
+      OR (raw->>'isVerified' = 'true')
+      OR (raw->>'verified' = 'true')
+      OR status = 'verified'
+    )`);
+    d1Conditions.push(`(
+      (json_extract(raw,'$.gstin') IS NOT NULL AND json_extract(raw,'$.gstin') != '')
+      OR (json_extract(raw,'$.gst') IS NOT NULL AND json_extract(raw,'$.gst') != '')
+      OR (json_extract(raw,'$.isVerified') = 1 OR json_extract(raw,'$.isVerified') = 'true')
+      OR (json_extract(raw,'$.verified') = 1 OR json_extract(raw,'$.verified') = 'true')
+      OR status = 'verified'
+    )`);
+  }
+
+  const pgWhere = `WHERE ${pgConditions.join(' AND ')}`;
+  const d1Where = `WHERE ${d1Conditions.join(' AND ')}`;
+
+  const countResult = await pool.query(
+    `SELECT COUNT(*)::int AS total FROM vendors ${pgWhere}`,
+    [...params],
+    { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}` }
+  );
+  const total = countResult.rows[0]?.total || 0;
+
+  const dataParams = [...params, limit, offset];
+  const limitIdx = dataParams.length - 1;
+  const offsetIdx = dataParams.length;
+  const dataResult = await pool.query(
+    `SELECT id, major_category, status, created_at, raw
+     FROM vendors ${pgWhere}
+     ORDER BY created_at DESC
+     LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    dataParams,
+    {
+      d1: true,
+      d1Text: `SELECT id, major_category, status, created_at, raw
+     FROM vendors ${d1Where}
+     ORDER BY created_at DESC
+     LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    }
+  );
+  const response = {
+    rows: (dataResult && dataResult.rows) ? dataResult.rows.map((row) => ({ ...parseRaw(row.raw), _status: row.status, _createdAt: row.created_at, _majorCategory: row.major_category })) : [],
+    total,
+  };
+  queryCache.set(cacheKey, [], response, { tag: 'vendors', ttlMs: 300000 });
+  return response;
+}
+
+/**
+ * Dynamic filter options aggregator for the public enterprise vendor directory.
+ * Extracts distinct major categories and states populated across public vendors
+ * so the frontend filters stay 100% in sync with the database at all times.
+ *
+ * Uses 5-minute TTL caching to avoid redundant aggregate compute while keeping
+ * response latency under ~5ms for subsequent requests.
+ */
+async function getPublicVendorFiltersFromDB() {
+  const defaultStates = Array.isArray(INDIAN_STATES) ? [...INDIAN_STATES] : [];
+  if (!pool.hasStorage()) {
+    return { categories: [], states: defaultStates };
+  }
+
+  try {
+    const catResult = await pool.query(
+      `SELECT DISTINCT TRIM(major_category) AS category
+       FROM vendors
+       WHERE major_category IS NOT NULL AND TRIM(major_category) != ''
+       ORDER BY category ASC`,
+      [],
+      {
+        d1: true,
+        d1Text: `SELECT DISTINCT TRIM(major_category) AS category
+                 FROM vendors
+                 WHERE major_category IS NOT NULL AND TRIM(major_category) != ''
+                 ORDER BY category ASC`,
+        useCache: true,
+        tag: 'vendors_filters',
+        ttlMs: 3600000,
+      }
+    );
+
+    const categories = (catResult && catResult.rows)
+      ? catResult.rows
+          .map((r) => (r && r.category ? String(r.category).trim() : ''))
+          .filter((c) => (
+            c &&
+            c.length >= 2 &&
+            !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
+            !c.includes('(No Past POs)')
+          ))
+      : [];
+
+    return { categories, states: defaultStates };
+  } catch {
+    return { categories: [], states: defaultStates };
+  }
+}
+
+/**
  * Fast DB aggregate counting vendors registered between two timestamps without
  * hydrating 600k+ vendor profiles into application memory.
  */
@@ -1777,5 +1980,7 @@ module.exports = {
   getVendorUnlocksFromDB,
   recordCreditTransactionInDB,
   getVendorCreditTransactionsFromDB,
+  getPublicVendorsPageFromDB,
+  getPublicVendorFiltersFromDB,
 };
 

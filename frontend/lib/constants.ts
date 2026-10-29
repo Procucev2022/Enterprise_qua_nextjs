@@ -1244,6 +1244,9 @@ export const QUA_AI_EMAIL_SUPPORT = {
   COMPANY_NAME: 'Procucev Enterprise Solutions',
 } as const;
 
+export const DEFAULT_VENDOR_DIRECTORY_PASSKEY = 'Procucev@Vendors2026';
+export const VENDOR_DIRECTORY_AUTH_STORAGE_KEY = 'procucev_vendor_directory_auth';
+
 
 
 
@@ -1299,4 +1302,34 @@ export function getCitiesForState(state: string): string[] {
   if (direct) return [...direct].sort((a, b) => a.localeCompare(b));
   const key = Object.keys(INDIAN_STATES_AND_CITIES).find((k) => k.toLowerCase() === normalized.toLowerCase());
   return key ? [...INDIAN_STATES_AND_CITIES[key]].sort((a, b) => a.localeCompare(b)) : [];
+}
+
+
+/**
+ * Parse a raw search query into discrete search tokens.
+ * Supports comma-separated, semicolon-separated, newline-separated, or space-separated email/name lists.
+ * Preserves multi-word single search terms (e.g., "Sudheer Solutions pvt LTD") when no list delimiters are present.
+ */
+export function parseSearchTokens(search?: string | null): string[] {
+  if (!search || typeof search !== 'string') return [];
+  const raw = search.trim();
+  if (!raw) return [];
+
+  if (/[,\n\r;]/.test(raw)) {
+    return Array.from(
+      new Set(
+        raw
+          .split(/[,\n\r;]+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      )
+    ).slice(0, 50);
+  }
+
+  const parts = raw.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length > 1 && parts.every((p) => p.includes('@'))) {
+    return Array.from(new Set(parts)).slice(0, 50);
+  }
+
+  return [raw];
 }

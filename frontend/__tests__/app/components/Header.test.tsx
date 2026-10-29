@@ -9,8 +9,10 @@ jest.mock('@/lib/store');
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
+let mockCurrentPath = '/login';
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ replace: mockReplace, push: mockPush }),
+  usePathname: () => mockCurrentPath,
 }));
 
 jest.mock('@/lib/authClient', () => ({
@@ -88,23 +90,29 @@ describe('Header', () => {
   });
 
   it('renders logged out state when isLoggedIn is false and handles theme toggling in light/dark', () => {
+    mockCurrentPath = '/login';
     const { unmount } = render(<Header />);
     expect(screen.getByText('QUA AI 2.0')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.headerNav.vendorDirectory)).toBeInTheDocument();
     unmount();
 
+    mockCurrentPath = '/vendors';
     (storeModule.useApp as jest.Mock).mockReturnValue({
       isLoggedIn: false,
       theme: 'dark',
       toggleTheme: mockToggleTheme,
     });
 
-    render(<Header />);
+    const { unmount: unmountVendors } = render(<Header />);
     expect(screen.getByText('QUA AI 2.0')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.headerNav.signIn)).toBeInTheDocument();
     expect(screen.getByText('Need Support?')).toBeInTheDocument();
 
     const themeBtn = screen.getByTitle('Switch to Light Mode');
     fireEvent.click(themeBtn);
     expect(mockToggleTheme).toHaveBeenCalled();
+    unmountVendors();
+    mockCurrentPath = '/login';
   });
 
   // The buyer/CM "Sourcing Mode" and vendor "Access Tier" header

@@ -2580,6 +2580,18 @@ function normalizePoDate(value) {
   return str;
 }
 
+const INDIAN_STATES = Object.freeze([
+  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
+  'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand',
+  'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur',
+  'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab',
+  'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura',
+  'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
+  'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu',
+  'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry',
+]);
+
+const DEFAULT_VENDOR_DIRECTORY_PASSKEY = 'Procucev@Vendors2026';
 const INDIAN_STATES_AND_CITIES = {
   "Andhra Pradesh": ["Visakhapatnam", "Vijayawada", "Guntur", "Tirupati", "Nellore", "Kurnool", "Kakinada", "Rajahmundry", "Kadapa", "Anantapur", "Eluru", "Ongole", "Chittoor", "Srikakulam", "Vizianagaram", "Machilipatnam", "Tenali", "Narasaraopet", "Chilakaluripet", "Bapatla", "Chirala", "Kavali", "Gudur", "Sullurpeta", "Naidupeta", "Venkatagiri", "Puttur", "Nagari", "Madanapalle", "Punganur", "Palamaner", "Pileru", "Rayachoti", "Proddatur", "Jammalamadugu", "Pulivendula", "Mydukur", "Nandyal", "Adoni", "Yemmiganur", "Dhone", "Atmakur", "Allagadda", "Banaganapalle", "Markapur", "Kanigiri", "Giddalur", "Podili", "Kandukur", "Addanki", "Parchur", "Repalle", "Ponnur", "Mangalagiri", "Tadepalli", "Sattenapalle", "Vinukonda", "Piduguralla", "Macherla", "Gurazala", "Amaravati", "Ibrahimpatnam", "Nuzvid", "Gudivada", "Pedana", "Vuyyuru", "Jaggayyapeta", "Nandigama", "Tiruvuru", "Kaikaluru", "Bhimavaram", "Tadepalligudem", "Tanuku", "Palakollu", "Narasapuram", "Nidadavole", "Kovvur", "Jangareddygudem", "Akividu", "Attili", "Amalapuram", "Mandapeta", "Ramachandrapuram", "Peddapuram", "Samalkot", "Pithapuram", "Tuni", "Yeleswaram", "Anakapalle", "Narsipatnam", "Yelamanchili", "Bheemunipatnam", "Pendurthi", "Parvathipuram", "Bobbili", "Salur", "Palasa", "Ichchapuram", "Tekkali", "Amadalavalasa", "Rajam", "Hindupur", "Dharmavaram", "Tadipatri", "Gooty", "Guntakal", "Rayadurg", "Kalyandurg", "Penukonda", "Puttaparthi", "Kadiri", "Palakonda"],
   "Arunachal Pradesh": ["Itanagar", "Naharlagun", "Pasighat", "Tawang", "Bomdila", "Ziro", "Along (Aalo)", "Tezu", "Roing", "Namsai", "Changlang", "Khonsa", "Seppa", "Daporijo", "Yingkiong", "Anini", "Koloriang", "Basar", "Jairampur", "Miao", "Deomali", "Bordumsa", "Lekang", "Wakro", "Dirang", "Rupa", "Bhalukpong", "Doimukh", "Nirjuli", "Yupia", "Sagalee", "Palin", "Mechuka", "Hawai", "Hayuliang", "Mariyang", "Tuting", "Boleng", "Likabali"],
@@ -2632,7 +2644,36 @@ function getCitiesForState(state) {
   return key ? [...INDIAN_STATES_AND_CITIES[key]].sort((a, b) => a.localeCompare(b)) : [];
 }
 
+
+
+
+function parseSearchTokens(search) {
+  if (!search || typeof search !== 'string') return [];
+  const raw = search.trim();
+  if (!raw) return [];
+
+  if (/[\n\r,;]/.test(raw)) {
+    return Array.from(
+      new Set(
+        raw
+          .split(/[\n\r,;]+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      )
+    ).slice(0, 50);
+  }
+
+  const parts = raw.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length > 1 && parts.every((p) => p.includes('@'))) {
+    return Array.from(new Set(parts)).slice(0, 50);
+  }
+
+  return [raw];
+}
+
 module.exports = {
+  DEFAULT_VENDOR_DIRECTORY_PASSKEY,
+  INDIAN_STATES,
   normalizePoDate,
   VENDOR_INGESTION_SESSION_STATUS,
   VENDOR_INGESTION_STEP,
@@ -2751,6 +2792,7 @@ module.exports = {
   INDIAN_STATES_AND_CITIES,
   getIndianStates,
   getCitiesForState,
+  parseSearchTokens,
   INQUIRIES_PERSISTENCE_FILE,
 };
 
