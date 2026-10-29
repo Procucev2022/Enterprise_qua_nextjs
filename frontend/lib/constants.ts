@@ -631,6 +631,16 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       group: NAV_GROUPS.categoryGovernance,
       route: '/category-manager/daily-reports',
     },
+    {
+      id: 'internal_tasks',
+      screenTag: 'Screen 2.12',
+      shortTag: '2.12',
+      label: NAV_ITEMS.internalTasks.label,
+      description: NAV_ITEMS.internalTasks.description,
+      icon: 'ClipboardList',
+      group: NAV_GROUPS.categoryOperations,
+      route: '/category-manager/internal-tasks',
+    },
   ],
   vendor: [
     {

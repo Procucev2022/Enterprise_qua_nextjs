@@ -666,3 +666,63 @@ CREATE TABLE IF NOT EXISTS vendor_credit_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_vendor_credit_transactions_vendor ON vendor_credit_transactions (vendor_id, created_at DESC);
 
+-- =============================================================================
+-- RELATIONAL DYNAMIC INTERNAL TASKS & ACTION CENTER
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS internal_task_types (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  code TEXT UNIQUE NOT NULL,
+  default_module TEXT NOT NULL DEFAULT 'GENERAL',
+  description TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS internal_tasks (
+  id TEXT PRIMARY KEY,
+  task_number TEXT UNIQUE NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  task_type_id TEXT REFERENCES internal_task_types(id),
+  priority TEXT NOT NULL DEFAULT 'Medium',
+  status TEXT NOT NULL DEFAULT 'Pending',
+  assigned_to_user_id TEXT,
+  assigned_to_name TEXT,
+  assigned_team TEXT,
+  created_by_user_id TEXT,
+  created_by_name TEXT,
+  due_date TEXT,
+  completed_at TEXT,
+  related_entity_type TEXT NOT NULL DEFAULT 'GENERAL',
+  related_entity_id TEXT,
+  related_entity_label TEXT,
+  notes TEXT,
+  attachments TEXT,
+  raw TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS internal_task_activities (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES internal_tasks(id) ON DELETE CASCADE,
+  action_type TEXT NOT NULL,
+  actor_id TEXT,
+  actor_name TEXT,
+  from_value TEXT,
+  to_value TEXT,
+  comment TEXT,
+  metadata TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_status ON internal_tasks (status);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_priority ON internal_tasks (priority);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_related ON internal_tasks (related_entity_type, related_entity_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_due_date ON internal_tasks (due_date);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_assigned_to ON internal_tasks (assigned_to_user_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_task_type ON internal_tasks (task_type_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_at ON internal_tasks (created_at DESC);
+
