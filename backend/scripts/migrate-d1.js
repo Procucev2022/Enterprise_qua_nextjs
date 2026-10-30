@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin / env node
 // =============================================================================
 // D1 MIGRATION  — applies schema.d1.sql to Cloudflare D1 via the REST API
 // =============================================================================
@@ -17,7 +17,7 @@
 
 'use strict';
 
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
 const targetEnv = process.argv.includes('--prod')
   ? 'prod'
@@ -28,16 +28,16 @@ if (fs.existsSync(envSpecific)) {
 }
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
-const ACCOUNT_ID  = process.env.CLOUDFLARE_ACCOUNT_ID;
+const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
 const DATABASE_ID = process.env.CLOUDFLARE_D1_DATABASE_ID;
-const API_TOKEN   = process.env.CLOUDFLARE_API_TOKEN;
+const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
 
 const SCHEMA_PATH = path.join(__dirname, '../src/db/schema.d1.sql');
 
 const QUERY_URL = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DATABASE_ID}/query`;
 const HEADERS = {
   'Authorization': `Bearer ${API_TOKEN}`,
-  'Content-Type':  'application/json',
+  'Content-Type': 'application/json',
 };
 
 // Tables to report row-counts for after migration
@@ -51,14 +51,15 @@ const REPORTED_TABLES = [
   'vendor_ingestion_sessions', 'ingestion_jobs', 'vendor_master_records',
   'po_line_items', 'vendor_category_mappings', 'vendor_category_dispatches',
   'vendor_email_dispatch_log', 'vendor_ingestion_audit', 'ai_classification_logs',
-  'bulk_vendor_import_sessions',
+  'bulk_vendor_import_sessions', 'vendor_directory_sessions',
+  'payment_dues_communications',
 ];
 
 async function d1Query(sql, params = []) {
-  const res  = await fetch(QUERY_URL, {
-    method:  'POST',
+  const res = await fetch(QUERY_URL, {
+    method: 'POST',
     headers: HEADERS,
-    body:    JSON.stringify({ sql, params }),
+    body: JSON.stringify({ sql, params }),
   });
   const text = await res.text();
   let json;
@@ -136,7 +137,7 @@ async function migrate() {
   console.log('\n[migrate-d1] Row counts:');
   for (const table of REPORTED_TABLES) {
     try {
-      const res  = await d1Query(`SELECT COUNT(*) AS total FROM "${table}"`);
+      const res = await d1Query(`SELECT COUNT(*) AS total FROM "${table}"`);
       const rows = res.result[0].results;
       const total = rows && rows[0] ? rows[0].total : 0;
       console.log(`  ${table.padEnd(32)} ${total}`);

@@ -754,25 +754,52 @@ describe('Public Vendor Directory (/vendors)', () => {
     window.sessionStorage.clear();
     (fetchPublicVendors as jest.Mock).mockResolvedValue(MOCK_PAGE_RESULT);
 
-    // Mock fetch so authenticateVendorDirectory resolves successfully
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        success: true,
-        token: 'vdir_gate_test_token',
-        expiresAt: Date.now() + 86400000,
-      }),
-    });
+    // Mock fetch for request-otp and verify-otp
+    global.fetch = jest.fn()
+      .mockImplementationOnce(async () => ({
+        ok: true,
+        json: async () => ({ success: true, message: 'OTP sent' }),
+      }))
+      .mockImplementationOnce(async () => ({
+        ok: true,
+        json: async () => ({
+          success: true,
+          token: 'vdir_gate_test_token',
+          sessionId: 'ses_123',
+          expiresAt: Date.now() + 300000,
+          user: { email: 'cm@procucev.com', role: 'category_manager' },
+        }),
+      }))
+      .mockImplementation(async () => ({
+        ok: true,
+        json: async () => ({ success: true }),
+      }));
 
     render(<PublicVendorDirectoryPage />);
 
     expect(screen.getByTestId('vendor-directory-login-gate')).toBeInTheDocument();
 
-    // Fill demo key and submit
-    fireEvent.click(screen.getByTestId('use-demo-key-btn'));
-    fireEvent.click(screen.getByTestId('directory-auth-submit'));
+    // Step 1: Submit Procucev email
+    fireEvent.change(screen.getByTestId('directory-email-input'), {
+      target: { value: 'cm@procucev.com' },
+    });
+    fireEvent.click(screen.getByTestId('directory-request-otp-submit'));
 
-    // Flush async auth + debounced vendor fetch
+    // Flush request-otp promise
+    await act(async () => {
+      jest.advanceTimersByTime(100);
+    });
+
+    // Step 2: Submit OTP
+    await waitFor(() => {
+      expect(screen.getByTestId('directory-otp-input')).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByTestId('directory-otp-input'), {
+      target: { value: '123456' },
+    });
+    fireEvent.click(screen.getByTestId('directory-verify-otp-submit'));
+
+    // Flush async verify + debounced vendor fetch
     await act(async () => {
       jest.advanceTimersByTime(600);
     });

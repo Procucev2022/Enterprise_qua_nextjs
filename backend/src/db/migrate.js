@@ -61,6 +61,8 @@ const REPORTED_TABLES = [
   'vendor_email_dispatch_log',
   'vendor_ingestion_audit',
   'ai_classification_logs',
+  'vendor_directory_sessions',
+  'payment_dues_communications',
 ];
 
 async function reportRowCounts() {

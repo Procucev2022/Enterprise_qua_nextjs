@@ -8,6 +8,8 @@ router.post('/login', authController.login);
 router.post('/request-otp', authController.requestOtp);
 router.post('/verify-otp', authController.verifyOtp);
 router.post('/register', authController.register);
+router.post('/vendor-directory/request-otp', authController.requestVendorDirectoryOtp);
+router.post('/vendor-directory/verify-otp', authController.verifyVendorDirectoryOtp);
 router.get('/session', authController.getSession);
 router.post('/logout', authController.logout);
 // Account holder changing their own password. The account is taken from the

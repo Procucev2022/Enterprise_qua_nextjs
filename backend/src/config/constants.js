@@ -378,6 +378,20 @@ const AUTH_MESSAGES = {
     'This self-registered account is still awaiting administrator approval, so sign-in is blocked. You will be able to log in once it is approved.',
   ACCOUNT_ALREADY_EXISTS:
     'An account already exists for this email address and mobile number. Use the Sign In tab instead of creating a new account.',
+  VENDOR_DIRECTORY_CM_ONLY:
+    'Access to the Vendor Directory is restricted to authorized @procucev.com corporate accounts.',
+  VENDOR_DIRECTORY_PROCUCEV_EMAIL_REQUIRED:
+    'Only official @procucev.com email addresses are eligible for Vendor Directory access.',
+  VENDOR_DIRECTORY_OTP_SENT:
+    'Verification code sent to your official Procucev email address.',
+  VENDOR_DIRECTORY_OTP_EXPIRED:
+    'Verification code has expired. Please request a new code.',
+  VENDOR_DIRECTORY_OTP_MAX_ATTEMPTS:
+    'Maximum verification attempts exceeded. Please request a new code.',
+  VENDOR_DIRECTORY_OTP_INVALID:
+    'Invalid verification code. Please check and try again.',
+  VENDOR_DIRECTORY_INACTIVITY_TIMEOUT:
+    'Your directory session ended due to 5 minutes of inactivity. Please sign in again.',
 };
 
 // ==============================================================================
@@ -2030,6 +2044,24 @@ const QUA_AI_EMAIL_SUPPORT = {
 
 const VENDOR_QUOTE_SUPPORT_CC = process.env.VENDOR_QUOTE_SUPPORT_CC || '';
 
+const PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES = [
+  'Not Notified',
+  'Notification Sent',
+  'Delivery Pending',
+  'Delivered',
+  'Acknowledgement Pending',
+  'Acknowledged',
+  'Failed',
+];
+
+const PAYMENT_DUES_CHANNELS = ['email', 'message', 'whatsapp'];
+
+const DEFAULT_LOW_CREDIT_NOTIFICATION = {
+  subject: 'Low Credit Balance Notification – QUA AI',
+  buildMessage: ({ contactPerson = 'Valued Partner', availableCredits = 0 } = {}) =>
+    `Dear ${contactPerson},\n\nThis is to inform you that your QUA AI account currently has only ${availableCredits} credits remaining.\n\nPlease review your credit balance and take the necessary action to continue using the platform without interruption.\n\nKindly acknowledge receipt of this notification.\n\nRegards,\nQUA AI Team\nProcucev Enterprises Solutions Pvt Ltd.`,
+};
+
 
 /** Outcome of preparing an email for extraction. */
 const EMAIL_INGESTION_STATUS = {
@@ -2671,7 +2703,32 @@ function parseSearchTokens(search) {
   return [raw];
 }
 
+const VENDOR_DIRECTORY_SESSION_STATUS = Object.freeze({
+  ACTIVE: 'ACTIVE',
+  CLOSED: 'CLOSED',
+});
+
+const VENDOR_DIRECTORY_LOGOUT_REASONS = Object.freeze({
+  MANUAL: 'MANUAL',
+  INACTIVITY: 'INACTIVITY',
+  TOKEN_EXPIRED: 'TOKEN_EXPIRED',
+  REVOKED: 'REVOKED',
+  SESSION_EXPIRED: 'SESSION_EXPIRED',
+});
+
+const VENDOR_DIRECTORY_AUTH_CONFIG = Object.freeze({
+  INACTIVITY_TIMEOUT_SECONDS: 300,
+  OTP_TTL_SECONDS: 300,
+  MAX_OTP_ATTEMPTS: 5,
+  ALLOWED_EMAIL_DOMAIN: '@procucev.com',
+  REQUIRED_ROLE: 'category_manager',
+  SESSION_SCOPE: 'vendor_directory',
+});
+
 module.exports = {
+  VENDOR_DIRECTORY_SESSION_STATUS,
+  VENDOR_DIRECTORY_LOGOUT_REASONS,
+  VENDOR_DIRECTORY_AUTH_CONFIG,
   DEFAULT_VENDOR_DIRECTORY_PASSKEY,
   INDIAN_STATES,
   normalizePoDate,
@@ -2794,5 +2851,8 @@ module.exports = {
   getCitiesForState,
   parseSearchTokens,
   INQUIRIES_PERSISTENCE_FILE,
+  PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES,
+  PAYMENT_DUES_CHANNELS,
+  DEFAULT_LOW_CREDIT_NOTIFICATION,
 };
 

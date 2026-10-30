@@ -839,6 +839,29 @@ CREATE TABLE IF NOT EXISTS vendor_credit_transactions (
 CREATE INDEX IF NOT EXISTS idx_vendor_credit_transactions_vendor ON vendor_credit_transactions (vendor_id, created_at DESC);
 
 -- ============================================================================
+-- VENDOR DIRECTORY SESSIONS (Dedicated Category Manager Access Audit & Inactivity)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS vendor_directory_sessions (
+  id VARCHAR(64) PRIMARY KEY,
+  user_uuid VARCHAR(64) NOT NULL,
+  email VARCHAR(255) NOT NULL,
+  role VARCHAR(64) NOT NULL DEFAULT 'category_manager',
+  auth_method VARCHAR(32) NOT NULL DEFAULT 'EMAIL_OTP',
+  login_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_activity_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  logout_at TIMESTAMPTZ,
+  duration_seconds INTEGER DEFAULT 0,
+  logout_reason VARCHAR(64),
+  status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+  ip_address VARCHAR(128),
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_user_login ON vendor_directory_sessions (user_uuid, login_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email_login ON vendor_directory_sessions (email, login_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status_act ON vendor_directory_sessions (status, last_activity_at DESC);
+
 -- RELATIONAL DYNAMIC INTERNAL TASKS & ACTION CENTER
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS internal_task_types (
@@ -898,3 +921,33 @@ CREATE INDEX IF NOT EXISTS idx_internal_tasks_assigned_to ON internal_tasks (ass
 CREATE INDEX IF NOT EXISTS idx_internal_tasks_task_type ON internal_tasks (task_type_id);
 CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_at ON internal_tasks (created_at DESC);
 
+
+
+-- ==============================================================================
+-- PAYMENT DUES - LOW CREDIT MONITORING & COMMUNICATION
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS payment_dues_communications (
+  id VARCHAR(64) PRIMARY KEY,
+  account_id VARCHAR(64) NOT NULL,
+  account_type VARCHAR(20) NOT NULL,
+  channel VARCHAR(20) NOT NULL,
+  recipient VARCHAR(255) NOT NULL,
+  subject VARCHAR(255),
+  message TEXT NOT NULL,
+  notification_status VARCHAR(50) NOT NULL DEFAULT 'Notification Sent',
+  delivery_status VARCHAR(50) NOT NULL DEFAULT 'Delivered',
+  acknowledgement_status VARCHAR(50) NOT NULL DEFAULT 'Acknowledgement Pending',
+  communicated_by VARCHAR(255) DEFAULT 'Category Manager',
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  acknowledged_at TIMESTAMPTZ,
+  acknowledged_by VARCHAR(255),
+  notes TEXT,
+  metadata JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_account_id ON payment_dues_communications (account_id);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_account_type ON payment_dues_communications (account_type);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_ack_status ON payment_dues_communications (acknowledgement_status);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_sent_at ON payment_dues_communications (sent_at DESC);

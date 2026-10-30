@@ -83,7 +83,7 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
       );
       expect(res.setHeader).toHaveBeenCalledWith(
         'Cache-Control',
-        expect.stringContaining('public')
+        expect.stringContaining('private')
       );
       expect(next).not.toHaveBeenCalled();
     });
@@ -169,7 +169,7 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
       });
       expect(res.setHeader).toHaveBeenCalledWith(
         'Cache-Control',
-        expect.stringContaining('public')
+        expect.stringContaining('private')
       );
       expect(next).not.toHaveBeenCalled();
     });
@@ -273,7 +273,7 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
       );
       expect(res.setHeader).toHaveBeenCalledWith(
         'Cache-Control',
-        expect.stringContaining('public')
+        expect.stringContaining('private')
       );
       expect(next).not.toHaveBeenCalled();
     });

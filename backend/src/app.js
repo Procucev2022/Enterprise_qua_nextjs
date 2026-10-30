@@ -110,6 +110,10 @@ app.get('/', (req, res) => {
       catalogue: '/api/catalogue',
       supportChat: '/api/support-chat',
       logs: '/api/logs',
+      internalTasks: '/api/internal-tasks',
+      tickets: '/api/tickets',
+      approvals: '/api/approvals',
+      scorecard: '/api/scorecard',
     },
   });
 });

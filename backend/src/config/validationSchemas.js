@@ -43,6 +43,9 @@ const INDIAN_MOBILE_MESSAGE = 'Enter a valid 10-digit Indian mobile number, for 
 const OTP_CODE_REGEX = /^\d{6}$/;
 const OTP_CODE_MESSAGE = 'Enter the 6-digit verification code sent to your registered email address.';
 
+const PROCUCEV_EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@procucev\.com$/i;
+const PROCUCEV_EMAIL_MESSAGE = 'Enter a valid corporate Procucev email address ending in @procucev.com.';
+
 // Shortest password accepted when an account holder changes their own password.
 // Mirrors PASSWORD_MIN_LENGTH in frontend/lib/constants.ts, which also drives the
 // `minLength` attribute on the field, so the browser hint and this boundary
@@ -110,6 +113,48 @@ const ORGANIZATION_TYPES = [
 ];
 
 const VALIDATION_SCHEMAS = {
+  sendPaymentDuesEmail: {
+    accountId: { type: 'string', required: true, minLength: 1 },
+    accountType: { type: 'string', required: true, enum: ['buyer', 'seller'] },
+    recipientEmail: { type: 'string', required: true, pattern: EMAIL_REGEX, message: 'Valid recipient email address is required.' },
+    subject: { type: 'string', required: true, minLength: 3, maxLength: 255, message: 'Email subject is required (3 to 255 characters).' },
+    message: { type: 'string', required: true, minLength: 5, maxLength: 5000, message: 'Email message is required (5 to 5000 characters).' },
+  },
+
+  sendPaymentDuesMessage: {
+    accountId: { type: 'string', required: true, minLength: 1 },
+    accountType: { type: 'string', required: true, enum: ['buyer', 'seller'] },
+    title: { type: 'string', required: false, maxLength: 255 },
+    message: { type: 'string', required: true, minLength: 5, maxLength: 5000, message: 'Notification message is required (5 to 5000 characters).' },
+  },
+
+  sendPaymentDuesWhatsApp: {
+    accountId: { type: 'string', required: true, minLength: 1 },
+    accountType: { type: 'string', required: true, enum: ['buyer', 'seller'] },
+    phone: { type: 'string', required: true, minLength: 8, message: 'Valid recipient phone number is required.' },
+    message: { type: 'string', required: true, minLength: 5, maxLength: 5000, message: 'WhatsApp message is required (5 to 5000 characters).' },
+  },
+
+  updatePaymentDuesAcknowledgement: {
+    accountId: { type: 'string', required: true, minLength: 1 },
+    accountType: { type: 'string', required: true, enum: ['buyer', 'seller'] },
+    acknowledgementStatus: {
+      type: 'string',
+      required: true,
+      enum: [
+        'Not Notified',
+        'Notification Sent',
+        'Delivery Pending',
+        'Delivered',
+        'Acknowledgement Pending',
+        'Acknowledged',
+        'Failed',
+      ],
+      message: 'Valid acknowledgement status is required.',
+    },
+    notes: { type: 'string', required: false, maxLength: 2000 },
+  },
+
   createRFQ: {
     title: { type: 'string', required: true, minLength: 3, maxLength: 200 },
     // A buyer may not know the exact taxonomy slot for every line item up
@@ -378,6 +423,31 @@ const VALIDATION_SCHEMAS = {
     },
   },
 
+  // Dedicated Category Manager Vendor Directory Email-OTP Schemas
+  vendorDirectoryOtpRequest: {
+    email: {
+      type: 'string',
+      required: true,
+      pattern: PROCUCEV_EMAIL_REGEX,
+      message: PROCUCEV_EMAIL_MESSAGE,
+    },
+  },
+
+  vendorDirectoryOtpVerify: {
+    email: {
+      type: 'string',
+      required: true,
+      pattern: PROCUCEV_EMAIL_REGEX,
+      message: PROCUCEV_EMAIL_MESSAGE,
+    },
+    code: {
+      type: 'string',
+      required: true,
+      pattern: OTP_CODE_REGEX,
+      message: OTP_CODE_MESSAGE,
+    },
+  },
+
   // Self-service password change, POST /api/auth/change-password.
   //
   // The caller is identified by the session token, so no email is accepted in
@@ -636,6 +706,48 @@ const VALIDATION_SCHEMAS = {
     username: { type: 'string', required: false, maxLength: 100 },
     password: { type: 'string', required: false, maxLength: 100 },
   },
+
+  ticketCreate: {
+    subject: { type: 'string', required: true, minLength: 3, maxLength: 512, message: 'Ticket subject is required (minimum 3 characters).' },
+    description: { type: 'string', required: false, maxLength: 5000 },
+    priority: { type: 'string', required: false, enum: ['Critical', 'High', 'Medium', 'Low'] },
+    status: { type: 'string', required: false, enum: ['Pending', 'In Progress', 'Escalated', 'Completed'] },
+    category: { type: 'string', required: false, maxLength: 100 },
+    project: { type: 'string', required: false, maxLength: 255 },
+    customerName: { type: 'string', required: false, maxLength: 255 },
+    customerEmail: { type: 'string', required: false, maxLength: 255 },
+    customerPhone: { type: 'string', required: false, maxLength: 64 },
+    assignedToName: { type: 'string', required: false, maxLength: 255 },
+    assignedTeam: { type: 'string', required: false, maxLength: 100 },
+    dueDate: { type: 'string', required: false, maxLength: 64 },
+  },
+
+  ticketUpdate: {
+    subject: { type: 'string', required: false, minLength: 3, maxLength: 512 },
+    description: { type: 'string', required: false, maxLength: 5000 },
+    priority: { type: 'string', required: false, enum: ['Critical', 'High', 'Medium', 'Low'] },
+    status: { type: 'string', required: false, enum: ['Pending', 'In Progress', 'Escalated', 'Completed'] },
+    category: { type: 'string', required: false, maxLength: 100 },
+    project: { type: 'string', required: false, maxLength: 255 },
+    assignedToName: { type: 'string', required: false, maxLength: 255 },
+    assignedTeam: { type: 'string', required: false, maxLength: 100 },
+    resolutionNotes: { type: 'string', required: false, maxLength: 5000 },
+    dueDate: { type: 'string', required: false, maxLength: 64 },
+  },
+
+  ticketEscalate: {
+    escalatedTo: { type: 'string', required: true, minLength: 2, maxLength: 255, message: 'Escalation target or manager name is required.' },
+    reason: { type: 'string', required: true, minLength: 3, maxLength: 2000, message: 'A specific reason for escalation is required.' },
+  },
+
+  ticketComment: {
+    comment: { type: 'string', required: true, minLength: 1, maxLength: 5000, message: 'Comment text cannot be empty.' },
+  },
+
+  approvalAction: {
+    action: { type: 'string', required: true, enum: ['APPROVE', 'REJECT', 'Approve', 'Reject', 'approved', 'rejected'], message: 'Action must be APPROVE or REJECT.' },
+    remarks: { type: 'string', required: false, maxLength: 1000 },
+  },
 };
 
 
@@ -648,11 +760,12 @@ function validatePayload(schema, data = {}) {
   const errors = {};
   const sanitized = {};
 
-  if (!schema || typeof schema !== 'object') {
+  const targetSchema = typeof schema === 'string' ? VALIDATION_SCHEMAS[schema] : schema;
+  if (!targetSchema || typeof targetSchema !== 'object') {
     return { isValid: true, errors: {}, sanitizedData: data };
   }
 
-  for (const [field, rules] of Object.entries(schema)) {
+  for (const [field, rules] of Object.entries(targetSchema)) {
     const value = data[field];
 
     // Required check
@@ -732,6 +845,8 @@ function validatePayload(schema, data = {}) {
 
 module.exports = {
   EMAIL_REGEX,
+  PROCUCEV_EMAIL_REGEX,
+  PROCUCEV_EMAIL_MESSAGE,
   PINCODE_REGEX,
   DUMMY_PINCODES,
   isDummyPincode,

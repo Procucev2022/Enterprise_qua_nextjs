@@ -95,6 +95,14 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
         // For short search tokens (<= 3 characters, e.g. "IT", "HR"), fields
         // must match on discrete word boundaries or exact match, not substring '%it%', which erroneously
         // matches "switches" (sw-IT-ches), "commoditiess" (commod-IT-iess), "limited", "solitaire", etc.
+        if (trimmed.includes('@')) {
+          // Discrete email search: match directly against the indexed email column without
+          // heavy unindexed JSON deserialization (which exceeds D1 CPU time limits on 600k+ rows).
+          tokenConditions.push(`(email ILIKE $${p} OR raw->>'email' ILIKE $${p} OR raw->>'corporateEmail' ILIKE $${p})`);
+          d1TokenConditions.push(`(lower(email) LIKE lower($${p}))`);
+          continue;
+        }
+
         let catCondition = `major_category ILIKE $${p}`;
         let d1CatCondition = `lower(major_category) LIKE lower($${p})`;
         let nameCondition = `raw->>'name' ILIKE $${p}`;
@@ -187,7 +195,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   if (email) {
     params.push(`%${email.trim()}%`);
     conditions.push(`(email ILIKE $${params.length} OR raw->>'email' ILIKE $${params.length})`);
-    d1Conditions.push(`(lower(email) LIKE lower($${params.length}) OR lower(json_extract(raw,'$.email')) LIKE lower($${params.length}))`);
+    d1Conditions.push(`(lower(email) LIKE lower($${params.length}))`);
   }
   if (category) {
     // Case-insensitive exact category filter matching both table column and raw JSON:
@@ -211,13 +219,13 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       params.push(p1, p2);
       const idx1 = params.length - 1;
       const idx2 = params.length;
-      conditions.push(`(raw->>'city' ILIKE ${idx1} OR raw->>'location' ILIKE ${idx1} OR raw->>'city' ILIKE ${idx2} OR raw->>'location' ILIKE ${idx2})`);
-      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower(${idx1}) OR lower(json_extract(raw,'$.location')) LIKE lower(${idx1}) OR lower(json_extract(raw,'$.city')) LIKE lower(${idx2}) OR lower(json_extract(raw,'$.location')) LIKE lower(${idx2}))`);
+      conditions.push(`(raw->>'city' ILIKE $${idx1} OR raw->>'location' ILIKE $${idx1} OR raw->>'city' ILIKE $${idx2} OR raw->>'location' ILIKE $${idx2})`);
+      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.city')) LIKE lower($${idx2}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx2}))`);
     } else {
       params.push(`%${trimmedCity}%`);
       const p = params.length;
-      conditions.push(`(raw->>'city' ILIKE ${p} OR raw->>'location' ILIKE ${p})`);
-      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower(${p}) OR lower(json_extract(raw,'$.location')) LIKE lower(${p}))`);
+      conditions.push(`(raw->>'city' ILIKE $${p} OR raw->>'location' ILIKE $${p})`);
+      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p}))`);
     }
   }
   if (publicOnly) {

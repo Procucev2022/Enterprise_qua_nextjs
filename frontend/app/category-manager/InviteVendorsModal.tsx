@@ -202,7 +202,9 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         setAllVendors(stampInvited(result.candidates));
         setAllVendorsPagination(result.pagination);
       } else {
-        setAllVendorsError(result.error || S.allVendorsLoadFailed);
+        const rawErr = result.error || S.allVendorsLoadFailed;
+        const isTimeout = /CPU time limit|D1_ERROR|timeout/i.test(rawErr);
+        setAllVendorsError(isTimeout ? S.dbQueryTimeout : rawErr);
       }
       setAllVendorsLoading(false);
     });
@@ -232,7 +234,9 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         });
         setAllVendorsPagination(result.pagination);
       } else {
-        setAllVendorsError(result.error || S.allVendorsLoadFailed);
+        const rawErr = result.error || S.allVendorsLoadFailed;
+        const isTimeout = /CPU time limit|D1_ERROR|timeout/i.test(rawErr);
+        setAllVendorsError(isTimeout ? S.dbQueryTimeout : rawErr);
       }
       setAllVendorsLoadingMore(false);
     });

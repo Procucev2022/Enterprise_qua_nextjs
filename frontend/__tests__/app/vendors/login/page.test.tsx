@@ -19,13 +19,14 @@ jest.mock('@/app/vendors/VendorDirectoryLoginGate', () => {
   };
 });
 
-// Module-level mock required — 'use client' module exports are non-writable;
-// jest.spyOn cannot redefine them at runtime.
 jest.mock('@/lib/vendorAuthClient', () => ({
   isVendorDirectoryAuthenticated: jest.fn(),
   getVendorDirectoryAuthToken: jest.fn(() => null),
-  authenticateVendorDirectory: jest.fn(),
+  getVendorDirectorySession: jest.fn(() => null),
+  requestVendorDirectoryOtp: jest.fn(),
+  verifyVendorDirectoryOtp: jest.fn(),
   logoutVendorDirectory: jest.fn(),
+  touchVendorDirectoryActivity: jest.fn(),
 }));
 
 import * as vendorAuthClient from '@/lib/vendorAuthClient';

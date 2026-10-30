@@ -173,4 +173,25 @@ describe('RoleNavigation Sidebar Dashboard', () => {
       '/admin/audit-log'
     );
   });
+
+  it('excludes Buyers Directory and Sellers Directory from Category Governance navigation since they exist in Action Center', () => {
+    mockStore({ currentRole: 'category_manager' });
+    render(<RoleNavigation onLogout={mockOnLogout} />);
+
+    // Verify Category Governance section exists
+    const catGovernanceSection = screen.getByRole('button', {
+      name: new RegExp(`Toggle ${NAV.groups.categoryGovernance} section`, 'i'),
+    });
+    expect(catGovernanceSection).toBeInTheDocument();
+
+    // Verify Category Governance retained items are present
+    expect(screen.getByText(NAV.items.categoryTrends.label)).toBeInTheDocument();
+    expect(screen.getByText(NAV.items.allRfqsConsole.label)).toBeInTheDocument();
+    expect(screen.getByText(NAV.items.enterpriseInquiries.label)).toBeInTheDocument();
+    expect(screen.getByText(NAV.items.dailyReports.label)).toBeInTheDocument();
+
+    // Ensure Buyers Directory & Sellers Directory are not present under Category Governance navigation
+    expect(screen.queryByRole('link', { name: new RegExp(NAV.items.buyersDirectory.label, 'i') })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: new RegExp(NAV.items.sellersDirectory.label, 'i') })).not.toBeInTheDocument();
+  });
 });

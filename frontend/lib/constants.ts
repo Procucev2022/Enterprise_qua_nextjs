@@ -602,29 +602,9 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       route: '/category-manager/enterprise-inquiries',
     },
     {
-      id: 'buyers_directory',
+      id: 'daily_reports',
       screenTag: 'Screen 2.9',
       shortTag: '2.9',
-      label: NAV_ITEMS.buyersDirectory.label,
-      description: NAV_ITEMS.buyersDirectory.description,
-      icon: 'Building2',
-      group: NAV_GROUPS.categoryGovernance,
-      route: '/category-manager/buyers-directory',
-    },
-    {
-      id: 'sellers_directory',
-      screenTag: 'Screen 2.10',
-      shortTag: '2.10',
-      label: NAV_ITEMS.sellersDirectory.label,
-      description: NAV_ITEMS.sellersDirectory.description,
-      icon: 'Truck',
-      group: NAV_GROUPS.categoryGovernance,
-      route: '/category-manager/sellers-directory',
-    },
-    {
-      id: 'daily_reports',
-      screenTag: 'Screen 2.11',
-      shortTag: '2.11',
       label: NAV_ITEMS.dailyReports.label,
       description: NAV_ITEMS.dailyReports.description,
       icon: 'FileSpreadsheet',
@@ -633,8 +613,8 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     },
     {
       id: 'internal_tasks',
-      screenTag: 'Screen 2.12',
-      shortTag: '2.12',
+      screenTag: 'Screen 2.10',
+      shortTag: '2.10',
       label: NAV_ITEMS.internalTasks.label,
       description: NAV_ITEMS.internalTasks.description,
       icon: 'ClipboardList',
@@ -1247,6 +1227,11 @@ export const QUA_AI_EMAIL_SUPPORT = {
 export const DEFAULT_VENDOR_DIRECTORY_PASSKEY = 'Procucev@Vendors2026';
 export const VENDOR_DIRECTORY_AUTH_STORAGE_KEY = 'procucev_vendor_directory_auth';
 
+export const VENDOR_DIRECTORY_AUTH_CONFIG = {
+  OTP_TTL_SECONDS: 300,
+  INACTIVITY_TIMEOUT_SECONDS: 300,
+  MAX_OTP_ATTEMPTS: 5,
+} as const;
 
 
 

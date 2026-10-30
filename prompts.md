@@ -787,3 +787,616 @@ to access vendor page add one kind of login client has said other wise any one c
 
 ```text
 ```
+---
+
+### 2026-10-29T16:23:20+05:30
+
+```text
+This vendor directrory should only be shown Category Manager only after when Category Manager  is login and also when category manager click on vendor directly on login page need only Procucev mail Id login  with otp on their mail and when they enter the vendor page after 5 min of inactivity  they will be auto logout and also store all the login detail who login and how much time they have spend first login and lout otu time all these and also when category manager upload any new vendor that will be visible by default what I belive these are thing need to done 
+
+for these these their is a plan just need to execute plan_to_implement\plan.md check all these and start implement ing by phases start with phase 1 
+```
+---
+
+### 2026-10-29T16:39:50+05:30
+
+```text
+yes proceed to phase 2 
+```
+
+---
+
+### 2026-10-29T17:11:06+05:30
+
+```text
+okay phase 2 complete now work on phase 3 
+```
+
+---
+
+### 2026-10-29T18:05:06+05:30
+
+```text
+okay priority change only otp verification and vendor directory will only be show in after login cateogry manager should be visible complete this first and then move to other part
+like in phase 4 otp will be complete take study other phase also check complete these part only as of now  
+```
+
+---
+
+### 2026-10-29T18:48:04+05:30
+
+```text
+why I am seeing Vendor Directory on login page ?? it should only be access after login in category manager page 
+```
+
+---
+
+### 2026-10-29T18:59:49+05:30
+
+```text
+abc@procucev.com  check for an active procucev account getitig theis 
+SrinivasM@procucev.com
+ user_id = $1 and category is not null and category <> '' order by division, category","durationMs":223,"table":"org_division_category"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'org_division_category': 337ms {"query":"select division, category from org_division_category where organization_id = $1 and category is not null and category <> '' order by division, category","durationMs":337,"table":"org_division_category"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'vendors': 785ms {"query":"SELECT id, created_at, updated_at, raw FROM vendors WHERE source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump') ORDER BY created_at DESC LIMIT $1 OFFSET $2","durationMs":785,"table":"vendors"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'buyer_accounts': 259ms {"query":"SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1","durationMs":259,"table":"buyer_accounts"} 
+[BACKEND] GET /api/buyer-accounts/active 304 (1395ms)      
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/buyer-accounts/active -> 304 (1395ms) {"method":"GET","url":"/api/buyer-accounts/active","statusCode":304,"durationMs":1395,"requestId":"req-1793280385006-xzktt","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}       
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'vendors': 4629ms {"query":"SELECT raw FROM vendors WHERE lower(email) = lower($1) OR lower(json_extract(raw,'$.corporateEmail')) = lower($1) LIMIT 1","durationMs":4629,"table":"vendors"}
+[BACKEND] GET /api/bootstrap 200 (6148ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 200 (6148ms) {"method":"GET","url":"/api/bootstrap","statusCode":200,"durationMs":6148,"requestId":"req-1793280384868-tx3fe","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [INFO] [BOOTSTRAP_CONTROLLER] Fetching application bootstrap data payload
+[BACKEND] GET /api/bootstrap 304 (57ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 304 (57ms) {"method":"GET","url":"/api/bootstrap","statusCode":304,"durationMs":57,"requestId":"req-1793280391041-1u46f","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [INFO] [BOOTSTRAP_CONTROLLER] Fetching application bootstrap data payload
+[BACKEND] GET /api/bootstrap 304 (44ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 304 (44ms) {"method":"GET","url":"/api/bootstrap","statusCode":304,"durationMs":44,"requestId":"req-1793280391103-2gszh","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [INFO] [BOOTSTRAP_CONTROLLER] Fetching application bootstrap data payload
+[BACKEND] GET /api/bootstrap 304 (30ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 304 (30ms) {"method":"GET","url":"/api/bootstrap","statusCode":304,"durationMs":30,"requestId":"req-1793280391161-zwaod","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[FRONTEND]  ✓ Compiled in 3.2s (823 modules)
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'role': 715ms {"query":"select u.uuid, u.username, u.email, u.password, u.full_name, u.first_name, u.phone, u.is_active, u.is_approved, u.self_client, u.reset_password, u.verification_status, u.org_uuid, r.role_name, o.organ","durationMs":715,"table":"role"}
+[BACKEND] POST /api/auth/vendor-directory/request-otp 403 (741ms)
+[BACKEND] [WARN] [AUTH_SERVICE] Vendor directory OTP denied for unauthorized or non-CM account: abc@procucev.com {"ipAddress":"::1"}
+[BACKEND] [WARN] [AUTH_CONTROLLER] Vendor directory OTP request failure in authController {"error":"Access to the Vendor Directory is restricted to Category Managers with an active @procucev.com account.","email":"abc@procucev.com"}    
+[BACKEND] [WARN] [HTTP_REQUEST] POST /api/auth/vendor-directory/request-otp -> 403 (741ms) {"method":"POST","url":"/api/auth/vendor-directory/request-otp","statusCode":403,"durationMs":741,"requestId":"req-1793280481425-0fbrz","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'payment_links': 579ms {"query":"SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT $1","durationMs":579,"table":"payment_links"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'role': 330ms {"query":"select u.uuid, u.username, u.email, u.password, u.full_name, u.first_name, u.phone, u.is_active, u.is_approved, u.self_client, u.reset_password, u.verification_status, u.org_uuid, r.role_name, o.organ","durationMs":330,"table":"role"}
+[BACKEND] POST /api/auth/vendor-directory/request-otp 403 (348ms)
+[BACKEND] [WARN] [AUTH_SERVICE] Vendor directory OTP denied for unauthorized or non-CM account: srinivasm@procucev.com {"ipAddress":"::1"}
+[BACKEND] [WARN] [AUTH_CONTROLLER] Vendor directory OTP request failure in authController {"error":"Access to the Vendor Directory is restricted to Category Managers with an active @procucev.com account.","email":"srinivasm@procucev.com"}
+[BACKEND] [WARN] [HTTP_REQUEST] POST /api/auth/vendor-directory/request-otp -> 403 (348ms) {"method":"POST","url":"/api/auth/vendor-directory/request-otp","statusCode":403,"durationMs":348,"requestId":"req-1793280527374-9dqns","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+```
+
+
+---
+
+### 2026-10-29T19:14:03+05:30
+
+```text
+339556 otp
+```
+
+
+---
+
+### 2026-10-29T21:01:05+05:30
+
+```text
+it just have to accept any mail with  @procucev.com that neccessary have role of category manger It has common account to access every but to access vendor only company employee can access by writting their mail Id of the company with otp
+```
+
+
+---
+
+### 2026-10-29T21:02:39+05:30
+
+```text
+Access to the Vendor Directory is restricted to Category Managers with an active @procucev.com account.
+Procucev Corporate Email
+mukul.rai@procucev.com
+Must end in @procucev.com
+
+
+ it just have to accept any mail with  @procucev.com that neccessary have role of category manger It has common account to access every but to access vendor only company employee can access by writting their mail Id of the company with otp 
+```
+
+
+---
+
+### 2026-10-29T21:24:59+05:30
+
+```text
+why I am seeing verification code on verify otp it shoudn't be their 
+```
+
+
+---
+
+### 2026-10-29T21:52:33+05:30
+
+```text
+backend\check_db_users.js
+backend\check_procucev_users.js
+backend\check_srinivas.js why are these file nned now check extra file and remove latest create files only 
+```
+
+
+---
+
+### 2026-10-29T22:05:24+05:30
+
+```text
+|           ^
+      22 | }
+      23 |
+      24 | /**
+
+      at warn (src/db/vendorDirectorySessionQueries.js:21:11)
+      at logWarn (src/db/vendorDirectorySessionQueries.js:162:5)
+      at Object.closeSession (src/db/vendorDirectorySessionQueries.js:232:19)
+      at Object.<anonymous> (__tests__/vendorDirectorySessionQueries.test.js:294:7)
+
+(node:13820) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ PASS  __tests__/ciSummary.test.js (7.081 s)
+ PASS  __tests__/buyerAccountResolver.test.js (6.127 s)
+ PASS  __tests__/vendorControllerBranches.test.js (16.692 s)
+ PASS  __tests__/unlimitedAccessAccounts.test.js (26.385 s)
+ PASS  __tests__/v0RfqWorkflow.test.js (19.456 s)
+ PASS  __tests__/vendorIngestionDispatchCoverage.test.js (19.926 s)
+ PASS  __tests__/constantsConfig.test.js (8.459 s)
+ PASS  __tests__/invoiceService.test.js (11.792 s)
+ PASS  __tests__/zohoWebhookController.test.js (18.122 s)
+ PASS  __tests__/storeServiceAutoClosure.test.js (8.736 s)
+ PASS  __tests__/types.test.js (10.311 s)
+ PASS  __tests__/servicesDeep.test.js (5.533 s)
+ PASS  __tests__/ppoClosureFix.test.js (6.589 s)
+ PASS  __tests__/vendorIngestionQueries.test.js (19.076 s)
+ PASS  __tests__/vendorPresenceService.test.js (10.052 s)
+ PASS  __tests__/evaluationService.test.js (5.896 s)
+ PASS  __tests__/identityQueries.test.js (10.319 s)
+ PASS  __tests__/validationSchemas.test.js
+ PASS  __tests__/emailService.test.js (5.995 s)
+A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
+
+
+```text
+okay just need to fix timmer we show the otp expire in 5 min but we are showing 30 sec need too update in frontend 
+```
+
+---
+
+### 2026-10-29T15:28:40+05:30
+
+```text
+i give 5 email only but it is showing time limit 
+please check the issue first and then fix this issue
+```
+
+---
+
+### 2026-10-29T15:58:42+05:30
+
+```text
+raise the pr for this code
+```
+
+---
+
+### 2026-10-29T17:42:27+05:30
+
+```text
+continue
+```
+
+
+---
+
+### 2026-10-29T23:58:46+05:30
+
+```text
+PASS __tests__/mailTransportAttachments.test.js
+PASS __tests__/pincodeService.test.js
+PASS __tests__/vendorIngestionController.test.js
+PASS __tests__/evaluationService.test.js
+PASS __tests__/vendorPresenceRoutes.test.js
+PASS __tests__/transactionalEmailRoutes.test.js
+PASS __tests__/queryCache.test.js
+PASS __tests__/queryAuditor.test.js
+PASS __tests__/pincodeControllerBranches.test.js
+PASS __tests__/vendorCategories.test.js
+PASS __tests__/passwordChangeGate.test.js
+PASS __tests__/quoteAttachmentService.test.js
+PASS __tests__/auditService.test.js
+PASS __tests__/iconvLiteShim.test.js
+PASS __tests__/historicalData.test.js
+PASS __tests__/invoiceService.test.js
+PASS __tests__/aiChaserService.test.js
+PASS __tests__/localPersistenceIsolation.test.js
+PASS __tests__/supportChat.test.js
+PASS __tests__/types.test.js
+A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
+
+
+
+---
+
+### 2026-10-30T10:37:56+05:30
+
+```text
+Remove the Document Tracker, Loans ,Expiring Holes , Leads and  site visites i dont want this features in Action centers
+```
+
+---
+
+### 2026-10-30T11:02:00+05:30
+
+```text
+Remove the Buyer and seller directory from the category govarance because it is already there in Action center 
+```
+
+---
+
+### 2026-10-30T11:19:40+05:30
+
+```text
+raise the pr for this code
+```
+
+
+---
+
+### 2026-10-30T12:13:14+05:30
+
+```text
+# MASTER DEVELOPMENT PROMPT: PAYMENT DUES – LOW CREDIT MONITORING & COMMUNICATION MODULE
+
+Act as a senior full-stack developer working on the existing QUA AI platform.
+
+Implement a fully functional Payment Dues module inside the existing Action Center.
+
+Use the provided Payment Dues screenshot as the UI reference.
+
+## 1. Main Objective
+
+The Payment Dues module must identify and display all Buyers and Sellers whose available credit balance is less than or equal to 2 credits.
+
+The module must:
+- Fetch all relevant buyer and seller information directly from the existing database (BD).
+- Display complete account information.
+- Allow users to open the existing Buyer or Seller profile by clicking the company or account name.
+- Provide Email, Message, and WhatsApp communication options.
+- Track notification delivery and acknowledgement.
+- Support column-level filtering and ascending/descending sorting.
+- Provide a Gear icon to customize column visibility and column order using drag-and-drop.
+- Save individual user column preferences.
+
+**Important:** Reuse all existing functionality, database models, APIs, methods, services, and business logic wherever possible.
+
+## 2. Database Integration – Critical Requirement
+
+Fetch actual records from the existing database.
+
+### Buyer Records
+Retrieve all registered buyers whose available credits are:
+- 0 credits.
+- 1 credit.
+- 2 credits.
+
+### Seller Records
+Retrieve all registered sellers whose available credits are:
+- 0 credits.
+- 1 credit.
+- 2 credits.
+
+### Data Requirements
+- Include every eligible buyer and seller.
+- Use the actual available credit balance from the existing database.
+- Identify the existing credit calculation and consumption methods.
+- Do not calculate credits using a separate or duplicate implementation.
+- Reuse existing database models, queries, APIs, services, and relationships.
+- Do not use dummy records, hardcoded statistics, or mock responses.
+- Do not create duplicate buyer or seller records.
+- Exclude accounts with more than 2 available credits.
+- Ensure all eligible records are included, with proper pagination.
+
+## 3. Payment Dues Dashboard – Summary Cards
+
+Display dynamic summary cards at the top:
+
+1. Total Low-Credit Accounts.
+2. Total Buyers.
+3. Total Sellers.
+4. Accounts with 0 Credits.
+5. Accounts with 1–2 Credits.
+6. Acknowledgement Pending.
+
+All counts must come from actual database records and update when account credit balances or acknowledgement statuses change.
+
+Ensure that summary counts match the underlying filtered data and avoid double-counting.
+
+## 4. Payment Dues Table – All Relevant Database Fields
+
+Create a structured table containing all relevant available buyer and seller information.
+
+Include the following columns wherever the corresponding database fields exist:
+
+| Column | Information |
+|---|---|
+| Account ID | Existing buyer/seller identifier |
+| Account Type | Buyer / Seller |
+| Company Name | Registered company name |
+| Contact Person | Primary contact person |
+| Email | Registered email address |
+| Phone Number | Registered contact number |
+| Available Credits | Actual remaining credits |
+| Total Credits | Total allocated credits |
+| Credits Used | Consumed credits |
+| Account Status | Active / Inactive / Suspended |
+| Registration Date | Account creation date |
+| Last Activity | Last relevant account activity |
+| Assigned Executive | Responsible executive |
+| Last Notification | Last notification date |
+| Notification Channel | Email / Message / WhatsApp |
+| Acknowledgement Status | Current acknowledgement status |
+| Actions | Communication and profile actions |
+
+Requirements:
+- Fetch all applicable fields from the existing database.
+- Include other relevant existing fields where useful.
+- Do not expose sensitive internal fields unnecessarily.
+- Handle missing or null values properly.
+- Display consistent information for Buyers and Sellers.
+
+## 5. Buyer and Seller Profile Integration
+
+When a user clicks a company name or account name:
+
+### Buyer
+- Open the existing Buyer Profile.
+- Display complete buyer information from the existing Buyers Directory.
+- Include company information, contact information, account details, credit balance, and other existing profile fields.
+- Preserve all existing buyer profile operations.
+
+### Seller
+- Open the existing Seller Profile.
+- Display complete seller information from the existing Sellers Directory.
+- Include company information, contact information, account details, credit balance, and other existing profile fields.
+- Preserve all existing seller profile operations.
+
+**Do not create new Buyer or Seller profile pages. Reuse the existing profile components, APIs, routes, and database relationships.**
+
+## 6. Actions Column – Email, Message and WhatsApp
+
+Add an Actions column for each buyer and seller record.
+
+Provide the following options:
+
+### A. Send Email
+
+- Add a Send Email action.
+- Automatically fetch the registered email address from the database.
+- Open an email composition window.
+- Allow the executive to review and edit the message before sending.
+- Include the account name and actual available credit balance.
+- Maintain notification history.
+- Record sending status, timestamp, and delivery information where available.
+
+### B. Send Message
+
+- Add a Message action.
+- Reuse the existing in-app messaging functionality or integration.
+- Allow executives to send low-credit notifications.
+- Maintain communication history against the corresponding buyer or seller.
+- Track message status wherever supported.
+
+### C. WhatsApp Notification
+
+- Add a WhatsApp action.
+- Fetch the registered mobile or WhatsApp number from the existing profile.
+- Integrate with the existing WhatsApp API or messaging service.
+- Prepare a dynamic low-credit notification message.
+- Allow the executive to review and send the message.
+- Track notification attempts and acknowledgement where supported.
+
+Do not claim a notification was delivered simply because the Send button was clicked or WhatsApp was opened.
+
+## 7. Low-Credit Notification Template
+
+Use a professional default notification.
+
+**Subject: Low Credit Balance Notification – QUA AI**
+
+Dear [Contact Person],
+
+This is to inform you that your QUA AI account currently has only [Available Credits] credits remaining.
+
+Please review your credit balance and take the necessary action to continue using the platform without interruption.
+
+Kindly acknowledge receipt of this notification.
+
+Regards,  
+QUA AI Team  
+Procucev Enterprises Solutions Pvt Ltd.
+
+Requirements:
+- Dynamically populate account name, contact person, and available credits.
+- Support both buyer and seller notifications.
+- Allow executives to edit messages before sending.
+- Reuse existing email and WhatsApp templates and integrations where available.
+
+## 8. Acknowledgement Tracking
+
+Maintain notification and acknowledgement history separately for each account.
+
+Track:
+- Notification sent date and time.
+- Communication channel.
+- Notification status.
+- Delivery status, where supported.
+- Acknowledgement status.
+- Acknowledgement date and time.
+- Last communication by.
+- Communication history.
+- Follow-up history.
+
+Support these statuses:
+
+- Not Notified.
+- Notification Sent.
+- Delivery Pending.
+- Delivered.
+- Acknowledgement Pending.
+- Acknowledged.
+- Failed.
+
+Important business rules:
+- Sending a notification must not automatically mark it as acknowledged.
+- Record acknowledgement only after a verified recipient response or authorized manual confirmation.
+- Preserve a complete audit trail.
+- Allow executives to identify accounts that require follow-up.
+- Prevent duplicate notification submissions where appropriate.
+
+## 9. Column-Level Filtering and Sorting
+
+Every applicable data column must support sorting and filtering.
+
+### Sorting
+Support:
+- Ascending order.
+- Descending order.
+
+Examples:
+- Company Name: A–Z / Z–A.
+- Available Credits: Lowest–Highest / Highest–Lowest.
+- Registration Date: Oldest–Newest / Newest–Oldest.
+- Last Activity: Oldest–Newest / Newest–Oldest.
+- Last Notification: Oldest–Newest / Newest–Oldest.
+
+### Filtering
+Provide appropriate filters for:
+- Account Type.
+- Company Name.
+- Contact Person.
+- Email.
+- Phone Number.
+- Available Credits.
+- Account Status.
+- Registration Date.
+- Assigned Executive.
+- Acknowledgement Status.
+- Notification Channel.
+- Last Notification Date.
+
+Also provide:
+- Global search.
+- Reset Filters.
+- Refresh.
+- Pagination.
+- Export to Excel/CSV.
+
+All sorting and filtering must work with actual database records and across paginated results, not just the currently visible rows.
+
+## 10. Gear Icon – Dynamic Column Settings
+
+Add a **Gear (⚙️) icon** in the Payment Dues toolbar, preferably beside the Export button.
+
+When clicked, open a Column Settings dropdown or popover.
+
+### A. Available Columns
+
+Display all available Payment Dues table columns inside the settings panel.
+
+Each column must have:
+- Column name.
+- Visibility checkbox or toggle.
+- Drag-and-drop handle.
+
+### B. Show and Hide Columns
+
+Allow users to:
+- Select individual columns to display.
+- Hide unwanted columns.
+- Show previously hidden columns.
+- Select All.
+- Hide All optional columns.
+- Reset to Default.
+
+The table must immediately update when a column is enabled or disabled.
+
+Hiding a column must not delete or modify the underlying database information.
+
+### C. Drag-and-Drop Column Reordering
+
+Allow users to drag and drop columns directly inside the Gear icon settings panel.
+
+For example, the default order may be:
+
+1. Account ID.
+2. Account Type.
+3. Company Name.
+4. Contact Person.
+5. Email.
+6. Phone Number.
+7. Available Credits.
+8. Total Credits.
+9. Credits Used.
+10. Account Status.
+11. Registration Date.
+12. Last Activity.
+13. Assigned Executive.
+14. Last Notification.
+15. Notification Channel.
+16. Acknowledgement Status.
+17. Actions.
+
+Users can reorder columns (for example, move Available Credits next to Company Name).
+
+The table header and data rows must immediately reflect the updated column order.
+
+### D. Per-User Column Preferences Persistence
+
+Save column preferences per user.
+
+Persist:
+- Visible and hidden columns.
+- Custom column order.
+- Table density (if supported).
+
+Use local storage, browser cache, or database user preferences.
+
+Load preferences automatically on subsequent visits.
+
+Provide a Reset to Default option in the Column Settings panel.
+
+## 11. Security and Permissions
+
+- Accessible to authorized Category Managers, Admins, and Operations Executives.
+- Do not expose sensitive billing or system data to unauthorized users.
+- Log executive communication actions with user details and timestamps.
+
+## 12. Verification and Acceptance Criteria
+
+Before completing the task, verify:
+- Accurate low-credit account detection ($\le 2$ credits).
+- Reliable database fetching.
+- Functional summary cards with accurate counts.
+- Opening existing Buyer and Seller profiles when clicking names.
+- Working Email, Message, and WhatsApp actions with editable prefilled messages.
+- Proper acknowledgement tracking.
+- Accurate column sorting and filtering across pages.
+- Functional Gear icon with show/hide and drag-and-drop reordering.
+- Persistent column preferences.
+- Excel/CSV export functionality.
+- Professional error handling and zero console errors.
+```
+
+---
+
+### 2026-10-30T13:28:41+05:30
+
+```text
+raise the pr for the code
+```
+

@@ -2282,16 +2282,354 @@ export interface PublicVendorFilterOptions {
 }
 
 /** Session record stored in client storage for authorized vendor directory access */
+/** Authorized user details for a Vendor Directory session */
+export interface VendorDirectoryUser {
+  id?: string;
+  uuid?: string;
+  email: string;
+  name?: string;
+  role: string;
+}
+
+/** Session record stored in client storage for authorized vendor directory access */
 export interface VendorDirectoryAuthSession {
   token: string;
+  sessionId?: string;
   expiresAt: number;
+  lastActivityAt?: number;
   authenticated: boolean;
+  user?: VendorDirectoryUser;
 }
 
 /** Result returned by the vendor directory authentication client */
 export interface VendorDirectoryAuthResult {
   success: boolean;
   error?: string;
+  message?: string;
   token?: string;
+  sessionId?: string;
+  expiresAt?: number | string;
+  user?: VendorDirectoryUser;
 }
 
+
+
+// ==============================================================================
+// ACTION CENTER: TICKETS, APPROVALS, SCORECARD TYPES
+// ==============================================================================
+
+export type ActionCenterTabKey =
+  | 'tasks'
+  | 'tickets'
+  | 'approvals'
+  | 'scorecard'
+  | 'buyers'
+  | 'sellers'
+  | 'registrations'
+  | 'payment_dues';
+
+export type TicketPriority = 'Critical' | 'High' | 'Medium' | 'Low';
+export type TicketStatus = 'Pending' | 'In Progress' | 'Escalated' | 'Completed';
+
+export interface TicketActivity {
+  id: string;
+  ticket_id: string;
+  action_type: string;
+  actor_id?: string | null;
+  actor_name?: string | null;
+  from_value?: string | null;
+  to_value?: string | null;
+  comment?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface Ticket {
+  id: string;
+  ticket_number: string;
+  subject: string;
+  description?: string;
+  status: TicketStatus;
+  priority: TicketPriority;
+  category: string;
+  project?: string;
+  customer_id?: string;
+  customer_name?: string;
+  customer_email?: string;
+  customer_phone?: string;
+  assigned_to_user_id?: string;
+  assigned_to_name?: string;
+  assigned_team?: string;
+  created_by_user_id?: string;
+  created_by_name?: string;
+  last_edited_by_name?: string;
+  resolved_by_name?: string;
+  sla_hours?: number;
+  due_date?: string;
+  resolved_at?: string;
+  resolution_notes?: string;
+  escalation_level?: number;
+  escalated_to?: string;
+  escalation_reason?: string;
+  attachments?: Array<{ name: string; url?: string; size?: number }>;
+  activities?: TicketActivity[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TicketSummary {
+  total: number;
+  pending: number;
+  inProgress: number;
+  escalated: number;
+  completed: number;
+  criticalCount: number;
+}
+
+export interface TicketFilterParams {
+  search?: string;
+  status?: string;
+  priority?: string;
+  category?: string;
+  project?: string;
+  assignedTo?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ApprovalRequest {
+  id: string;
+  request_number: string;
+  module: string;
+  project: string;
+  applicant_name: string;
+  applicant_email: string;
+  value_impact: string;
+  maker_name: string;
+  maker_role: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  details?: string;
+  approver_name?: string;
+  approver_remarks?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApprovalSummary {
+  pending: number;
+  approved: number;
+  rejected: number;
+  total: number;
+}
+
+export interface ScorecardOperationsPillar {
+  tasksCompleted: number;
+  tasksAssigned: number;
+  taskCompletionRate: number | null;
+  ticketsCompleted: number;
+  ticketsAssigned: number;
+  ticketResolutionRate: number | null;
+  registrations: number;
+  registrationsTarget: number;
+  registrationRate: number | null;
+  siteVisits: number;
+  siteVisitsPlanned: number;
+  siteVisitRate: number | null;
+}
+
+export interface ScorecardRevenuePillar {
+  duesCollected: number;
+  totalDues: number;
+  pendingDues: number;
+  collectionPercentage: number | null;
+  loansDisbursed: number;
+  loansTarget: number;
+  loanDisbursementRate: number | null;
+  loanRealized: number;
+  loanRealizedTarget: number;
+  loanRealizationRate: number | null;
+}
+
+export interface ScorecardSalesPillar {
+  leadsContacted: number;
+  leadsTarget: number;
+  leadContactRate: number | null;
+  leadToVisitRate: number | null;
+  visitToDealRate: number | null;
+  dealsClosed: number;
+  dealsTarget: number;
+  dealAchievementRate: number | null;
+}
+
+export interface TeamScorecardRow {
+  rank: number;
+  id: string;
+  name: string;
+  role: string;
+  email: string;
+  project: string;
+  operations: {
+    tasksCompleted: number;
+    tasksAssigned: number;
+    taskCompletionRate: number | null;
+    ticketsResolved: number;
+    ticketsAssigned: number;
+    ticketResolutionRate: number | null;
+    registrationsCompleted: number;
+    registrationsTarget: number;
+    registrationAchievementRate: number | null;
+    siteVisitsCompleted: number;
+    siteVisitsPlanned: number;
+    siteVisitAchievementRate: number | null;
+  };
+  revenue: {
+    totalDues: number;
+    duesCollected: number;
+    pendingDues: number;
+    collectionPercentage: number | null;
+    loansDisbursed: number;
+    loansTarget: number;
+    loanDisbursementRate: number | null;
+    loanAmountRealized: number;
+    loanRealizedTarget: number;
+    loanRealizationRate: number | null;
+  };
+  sales: {
+    leadsContacted: number;
+    leadsTarget: number;
+    leadContactRate: number | null;
+    leadToVisitRate: number | null;
+    visitToDealRate: number | null;
+    dealsClosed: number;
+    dealsTarget: number;
+    dealAchievementRate: number | null;
+  };
+  score: number;
+  performanceStatus: 'On Track' | 'Average' | 'Needs Focus';
+}
+
+export interface ScorecardData {
+  dateRange: { startDate: string; endDate: string; label: string };
+  period: string;
+  project: string;
+  pillar: string;
+  executiveId?: string | null;
+  pillarSummary: {
+    operations: ScorecardOperationsPillar;
+    revenue: ScorecardRevenuePillar;
+    sales: ScorecardSalesPillar;
+  };
+  teamScores: TeamScorecardRow[];
+}
+
+
+// ==============================================================================
+// ACTION CENTER: PAYMENT DUES (LOW CREDIT MONITORING)
+// ==============================================================================
+
+export type PaymentDuesAccountType = 'buyer' | 'seller';
+
+export type PaymentDuesAcknowledgementStatus =
+  | 'Not Notified'
+  | 'Notification Sent'
+  | 'Delivery Pending'
+  | 'Delivered'
+  | 'Acknowledgement Pending'
+  | 'Acknowledged'
+  | 'Failed';
+
+export type PaymentDuesChannel = 'email' | 'message' | 'whatsapp';
+
+export interface PaymentDuesCommunication {
+  id: string;
+  accountId: string;
+  accountType: PaymentDuesAccountType;
+  channel: PaymentDuesChannel;
+  recipient: string;
+  subject?: string;
+  message: string;
+  notificationStatus: string;
+  deliveryStatus: string;
+  acknowledgementStatus: PaymentDuesAcknowledgementStatus;
+  communicatedBy: string;
+  sentAt: string;
+  acknowledgedAt?: string | null;
+  acknowledgedBy?: string | null;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaymentDuesAccount {
+  accountId: string;
+  accountType: PaymentDuesAccountType;
+  companyName: string;
+  contactPerson: string;
+  email: string;
+  phoneNumber: string;
+  availableCredits: number;
+  totalCredits: number;
+  creditsUsed: number;
+  accountStatus: string;
+  registrationDate: string;
+  lastActivity: string;
+  assignedExecutive: string;
+  lastNotification?: string | null;
+  notificationChannel?: string;
+  acknowledgementStatus: PaymentDuesAcknowledgementStatus;
+  deliveryStatus?: string;
+  notificationStatus?: string;
+  rawRecord?: Record<string, unknown>;
+}
+
+export interface PaymentDuesSummary {
+  totalLowCreditAccounts: number;
+  totalBuyers: number;
+  totalSellers: number;
+  zeroCredits: number;
+  oneToTwoCredits: number;
+  acknowledgementPending: number;
+}
+
+export type PaymentDuesColumnKey =
+  | 'accountId'
+  | 'accountType'
+  | 'companyName'
+  | 'contactPerson'
+  | 'email'
+  | 'phoneNumber'
+  | 'availableCredits'
+  | 'totalCredits'
+  | 'creditsUsed'
+  | 'accountStatus'
+  | 'registrationDate'
+  | 'lastActivity'
+  | 'assignedExecutive'
+  | 'lastNotification'
+  | 'notificationChannel'
+  | 'acknowledgementStatus'
+  | 'actions';
+
+export interface PaymentDuesColumnConfig {
+  key: PaymentDuesColumnKey;
+  label: string;
+  visible: boolean;
+  required?: boolean;
+}
+
+export interface PaymentDuesFilterParams {
+  search?: string;
+  accountType?: 'all' | 'buyer' | 'seller';
+  credits?: 'all' | '0' | '1-2';
+  acknowledgementStatus?: string;
+  accountStatus?: string;
+  assignedExecutive?: string;
+  notificationChannel?: string;
+  sortBy?: PaymentDuesColumnKey;
+  sortOrder?: 'asc' | 'desc';
+  page?: number;
+  limit?: number;
+}
