@@ -63,6 +63,11 @@ import {
   fetchApprovals,
   fetchApprovalSummary,
   updateApprovalStatus,
+  createApprovalRequest,
+  fetchApprovalRules,
+  updateApprovalRule,
+  ApprovalRuleConfig,
+  DEFAULT_APPROVAL_RULES,
   DEFAULT_APPROVAL_ITEMS,
   DEFAULT_EXECUTIVES,
   ExecutiveOption,
@@ -176,6 +181,25 @@ export default function InternalTasksDashboard() {
   const [approvalDateFrom, setApprovalDateFrom] = useState<string>('');
   const [approvalDateTo, setApprovalDateTo] = useState<string>('');
   const [isRulesModalOpen, setIsRulesModalOpen] = useState<boolean>(false);
+
+  // Extended Approvals State
+  const [selectedApprovalDetails, setSelectedApprovalDetails] = useState<ApprovalItem | null>(null);
+  const [isRequestApprovalModalOpen, setIsRequestApprovalModalOpen] = useState<boolean>(false);
+  const [newApprovalModule, setNewApprovalModule] = useState<string>('Credit Allocations');
+  const [newApprovalProject, setNewApprovalProject] = useState<string>('Enterprise Steel Tender 2026');
+  const [newApprovalApplicant, setNewApprovalApplicant] = useState<string>('');
+  const [newApprovalValue, setNewApprovalValue] = useState<string>('');
+  const [newApprovalMaker, setNewApprovalMaker] = useState<string>('Sudheer Kangala');
+  const [newApprovalNotes, setNewApprovalNotes] = useState<string>('');
+  const [isSubmittingApproval, setIsSubmittingApproval] = useState<boolean>(false);
+
+  // Rules State
+  const [approvalRules, setApprovalRules] = useState<ApprovalRuleConfig[]>(DEFAULT_APPROVAL_RULES);
+
+  // Scorecard State
+  const [scorecardTimeframe, setScorecardTimeframe] = useState<'all' | 'month' | 'week' | 'today'>('month');
+  const [scorecardDepartment, setScorecardDepartment] = useState<string>('All Roles');
+  const [selectedExecDetails, setSelectedExecDetails] = useState<ExecutiveOption | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -371,6 +395,9 @@ export default function InternalTasksDashboard() {
     const updated = await updateApprovalStatus(item.id, decision, 'Category Manager Admin');
     if (updated) {
       setApprovals((prev) => prev.map((a) => (a.id === item.id ? updated : a)));
+      if (selectedApprovalDetails && selectedApprovalDetails.id === item.id) {
+        setSelectedApprovalDetails(updated);
+      }
       const sum = await fetchApprovalSummary();
       setApprovalSummary(sum);
       showToast(`Request ${item.requestId} was marked as ${decision}.`);
@@ -378,6 +405,97 @@ export default function InternalTasksDashboard() {
       showToast(`Failed to update ${item.requestId}.`);
     }
   };
+
+  // Real CSV Export for Approvals Audit Trail
+  const handleExportApprovals = useCallback(() => {
+    const headers = ['Request ID', 'Created At', 'Module', 'Project', 'Applicant', 'Value / Impact', 'Maker', 'Status', 'Reviewer', 'Notes'];
+    const rows = approvals.map((a) => [
+      `"${a.requestId}"`,
+      `"${a.createdAt}"`,
+      `"${a.module}"`,
+      `"${a.project}"`,
+      `"${a.applicant}"`,
+      `"${a.valueImpact}"`,
+      `"${a.makerName}"`,
+      `"${a.status}"`,
+      `"${a.reviewerName || ''}"`,
+      `"${(a.notes || '').replace(/"/g, '""')}"`,
+    ]);
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `approvals_audit_trail_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast('Exporting approvals audit log...');
+  }, [approvals, showToast]);
+
+  // Submit New Approval Request
+  const handleCreateApprovalRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newApprovalApplicant.trim() || !newApprovalValue.trim()) {
+      showToast('Applicant and Value / Impact are required.');
+      return;
+    }
+    setIsSubmittingApproval(true);
+    try {
+      const created = await createApprovalRequest({
+        module: newApprovalModule,
+        project: newApprovalProject,
+        applicant: newApprovalApplicant.trim(),
+        valueImpact: newApprovalValue.trim(),
+        makerName: newApprovalMaker.trim() || 'Category Executive',
+        notes: newApprovalNotes.trim() || undefined,
+      });
+      setApprovals((prev) => [created, ...prev]);
+      const sum = await fetchApprovalSummary();
+      setApprovalSummary(sum);
+      showToast(`Approval request ${created.requestId} submitted.`);
+      setIsRequestApprovalModalOpen(false);
+      setNewApprovalApplicant('');
+      setNewApprovalValue('');
+      setNewApprovalNotes('');
+    } catch {
+      showToast('Error submitting approval request.');
+    } finally {
+      setIsSubmittingApproval(false);
+    }
+  };
+
+  // Toggle Rule requiresReview
+  const handleToggleRule = async (ruleId: string) => {
+    const existing = approvalRules.find((r) => r.id === ruleId);
+    if (!existing) return;
+    const updated = await updateApprovalRule(ruleId, { requiresReview: !existing.requiresReview });
+    if (updated) {
+      setApprovalRules((prev) => prev.map((r) => (r.id === ruleId ? updated : r)));
+      showToast(`Updated threshold rule for ${updated.module}.`);
+    }
+  };
+
+  // Filtered Executives for Scorecard
+  const filteredExecutives = useMemo(() => {
+    return DEFAULT_EXECUTIVES.filter((exec) => {
+      if (scorecardDepartment !== 'All Roles' && exec.department !== scorecardDepartment) {
+        return false;
+      }
+      return true;
+    });
+  }, [scorecardDepartment]);
+
+  // Dynamic Scorecard Aggregates
+  const scorecardAggregates = useMemo(() => {
+    const totalResolved = filteredExecutives.reduce((acc, e) => acc + e.resolvedTasks, 0);
+    const totalOpen = filteredExecutives.reduce((acc, e) => acc + e.openTasks, 0);
+    const avgSla = (
+      filteredExecutives.reduce((acc, e) => acc + e.slaAdherence, 0) / Math.max(1, filteredExecutives.length)
+    ).toFixed(1);
+    return { totalResolved, totalOpen, avgSla };
+  }, [filteredExecutives]);
 
   // Handle Create Task Submission
   const handleCreateTask = async (e: React.FormEvent) => {
@@ -1207,7 +1325,14 @@ export default function InternalTasksDashboard() {
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => showToast('Exporting approvals audit log...')}
+                onClick={() => setIsRequestApprovalModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Request Approval</span>
+              </button>
+              <button
+                onClick={handleExportApprovals}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300"
               >
                 <Download className="w-3.5 h-3.5 text-slate-500" />
@@ -1236,7 +1361,15 @@ export default function InternalTasksDashboard() {
           {/* 4 Distinct KPI Stat Cards (Image 2) */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             {/* Card 1: Pending Approvals (Amber/Yellow) */}
-            <div className="bg-amber-50/50 dark:bg-amber-950/20 border-l-4 border-l-amber-500 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm">
+            <div
+              role="button"
+              tabIndex={0}
+              data-testid="approvals-kpi-pending"
+              onClick={() => setApprovalStatusFilter((prev) => (prev === 'Pending' ? 'all' : 'Pending'))}
+              className={`bg-amber-50/50 dark:bg-amber-950/20 border-l-4 border-l-amber-500 border rounded-xl p-4 shadow-sm cursor-pointer transition-all hover:shadow-md ${
+                approvalStatusFilter === 'Pending' ? 'ring-2 ring-amber-500 border-amber-500' : 'border-slate-200 dark:border-slate-800'
+              }`}
+            >
               <span className="text-xs font-semibold text-amber-700 dark:text-amber-300 block">Pending Approvals</span>
               <div className="flex items-center gap-2 mt-2">
                 <Clock className="w-6 h-6 text-amber-600 dark:text-amber-400" />
@@ -1248,7 +1381,15 @@ export default function InternalTasksDashboard() {
             </div>
 
             {/* Card 2: Approved (Green) */}
-            <div className="bg-emerald-50/50 dark:bg-emerald-950/20 border-l-4 border-l-emerald-500 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm">
+            <div
+              role="button"
+              tabIndex={0}
+              data-testid="approvals-kpi-approved"
+              onClick={() => setApprovalStatusFilter((prev) => (prev === 'Approved' ? 'all' : 'Approved'))}
+              className={`bg-emerald-50/50 dark:bg-emerald-950/20 border-l-4 border-l-emerald-500 border rounded-xl p-4 shadow-sm cursor-pointer transition-all hover:shadow-md ${
+                approvalStatusFilter === 'Approved' ? 'ring-2 ring-emerald-500 border-emerald-500' : 'border-slate-200 dark:border-slate-800'
+              }`}
+            >
               <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-300 block">Approved</span>
               <div className="flex items-center gap-2 mt-2">
                 <CheckCircle2 className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
@@ -1260,7 +1401,15 @@ export default function InternalTasksDashboard() {
             </div>
 
             {/* Card 3: Rejected (Red) */}
-            <div className="bg-rose-50/50 dark:bg-rose-950/20 border-l-4 border-l-rose-500 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm">
+            <div
+              role="button"
+              tabIndex={0}
+              data-testid="approvals-kpi-rejected"
+              onClick={() => setApprovalStatusFilter((prev) => (prev === 'Rejected' ? 'all' : 'Rejected'))}
+              className={`bg-rose-50/50 dark:bg-rose-950/20 border-l-4 border-l-rose-500 border rounded-xl p-4 shadow-sm cursor-pointer transition-all hover:shadow-md ${
+                approvalStatusFilter === 'Rejected' ? 'ring-2 ring-rose-500 border-rose-500' : 'border-slate-200 dark:border-slate-800'
+              }`}
+            >
               <span className="text-xs font-semibold text-rose-700 dark:text-rose-300 block">Rejected</span>
               <div className="flex items-center gap-2 mt-2">
                 <XCircle className="w-6 h-6 text-rose-600 dark:text-rose-400" />
@@ -1272,7 +1421,15 @@ export default function InternalTasksDashboard() {
             </div>
 
             {/* Card 4: Total Requests (Blue) */}
-            <div className="bg-sky-50/50 dark:bg-sky-950/20 border-l-4 border-l-sky-500 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm">
+            <div
+              role="button"
+              tabIndex={0}
+              data-testid="approvals-kpi-total"
+              onClick={() => setApprovalStatusFilter('all')}
+              className={`bg-sky-50/50 dark:bg-sky-950/20 border-l-4 border-l-sky-500 border rounded-xl p-4 shadow-sm cursor-pointer transition-all hover:shadow-md ${
+                approvalStatusFilter === 'all' ? 'ring-2 ring-sky-500 border-sky-500' : 'border-slate-200 dark:border-slate-800'
+              }`}
+            >
               <span className="text-xs font-semibold text-sky-700 dark:text-sky-300 block">Total Requests</span>
               <div className="flex items-center gap-2 mt-2">
                 <ShieldCheck className="w-6 h-6 text-sky-600 dark:text-sky-400" />
@@ -1398,9 +1555,16 @@ export default function InternalTasksDashboard() {
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
                     {approvals.map((item) => (
-                      <tr key={item.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                      <tr
+                        key={item.id}
+                        onClick={() => setSelectedApprovalDetails(item)}
+                        className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
+                      >
                         <td className="py-3 px-3.5 font-mono">
-                          <div className="font-bold text-slate-900 dark:text-white">{item.requestId}</div>
+                          <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                            <span>{item.requestId}</span>
+                            <ExternalLink className="w-3 h-3 text-slate-400 opacity-60" />
+                          </div>
                           <span className="text-[10px] text-slate-400">{item.createdAt.slice(0, 10)}</span>
                         </td>
                         <td className="py-3 px-3.5">
@@ -1429,7 +1593,7 @@ export default function InternalTasksDashboard() {
                             {item.status}
                           </span>
                         </td>
-                        <td className="py-3 px-3.5 text-right">
+                        <td className="py-3 px-3.5 text-right" onClick={(e) => e.stopPropagation()}>
                           {item.status === 'Pending' ? (
                             <div className="flex items-center justify-end gap-1.5">
                               <button
@@ -1444,11 +1608,27 @@ export default function InternalTasksDashboard() {
                               >
                                 Reject
                               </button>
+                              <button
+                                onClick={() => setSelectedApprovalDetails(item)}
+                                className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
+                                title="View details"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </button>
                             </div>
                           ) : (
-                            <span className="text-[10px] text-slate-400 italic">
-                              Reviewed by {item.reviewerName || 'Executive'}
-                            </span>
+                            <div className="flex items-center justify-end gap-2">
+                              <span className="text-[10px] text-slate-400 italic">
+                                Reviewed by {item.reviewerName || 'Executive'}
+                              </span>
+                              <button
+                                onClick={() => setSelectedApprovalDetails(item)}
+                                className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
+                                title="View details"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           )}
                         </td>
                       </tr>
@@ -1466,51 +1646,95 @@ export default function InternalTasksDashboard() {
       {/* ============================================================== */}
       {activeTab === 'scorecard' && (
         <div className="space-y-6 animate-in fade-in duration-150">
-          <div>
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white">Individual & Team Performance Scorecards</h2>
-            <p className="text-xs text-slate-500">
-              Live operational throughput, SLA adherence scores, and resolution metrics across category executives.
-            </p>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white">Individual & Team Performance Scorecards</h2>
+              <p className="text-xs text-slate-500">
+                Live operational throughput, SLA adherence scores, and resolution metrics across category & growth teams.
+              </p>
+            </div>
+
+            {/* Timeframe Filter Selector */}
+            <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg text-xs font-semibold">
+              {(['all', 'month', 'week', 'today'] as const).map((period) => (
+                <button
+                  key={period}
+                  onClick={() => setScorecardTimeframe(period)}
+                  className={`px-3 py-1 rounded-md capitalize transition-all ${
+                    scorecardTimeframe === period
+                      ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-sm'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                  }`}
+                >
+                  {period === 'all' ? 'All Time' : period === 'month' ? 'This Month' : period === 'week' ? 'This Week' : 'Today'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Department / Team Filter Pills */}
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
+            {['All Roles', 'Category Management', 'Growth / Marketing', 'Operations', 'Finance'].map((dept) => (
+              <button
+                key={dept}
+                onClick={() => setScorecardDepartment(dept)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                  scorecardDepartment === dept
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                }`}
+              >
+                {dept}
+              </button>
+            ))}
           </div>
 
           {/* Team SLA Summary Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm">
               <span className="text-xs text-slate-500 block">Total Resolved Tasks</span>
-              <span className="text-2xl font-bold text-slate-900 dark:text-white mt-1 block">159</span>
-              <span className="text-[10px] text-emerald-600 font-semibold">+18% vs last month</span>
+              <span className="text-2xl font-bold text-slate-900 dark:text-white mt-1 block">
+                {scorecardAggregates.totalResolved}
+              </span>
+              <span className="text-[10px] text-emerald-600 font-semibold">+18% vs baseline</span>
             </div>
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm">
               <span className="text-xs text-slate-500 block">Team SLA Adherence</span>
-              <span className="text-2xl font-bold text-emerald-600 mt-1 block">97.4%</span>
+              <span className="text-2xl font-bold text-emerald-600 mt-1 block">{scorecardAggregates.avgSla}%</span>
               <span className="text-[10px] text-slate-400">Target: ≥ 95.0%</span>
             </div>
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm">
-              <span className="text-xs text-slate-500 block">Avg Resolution Time</span>
-              <span className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1 block">2.8h</span>
-              <span className="text-[10px] text-emerald-600 font-semibold">0.6h faster than baseline</span>
+              <span className="text-xs text-slate-500 block">Open Workload</span>
+              <span className="text-2xl font-bold text-amber-600 mt-1 block">{scorecardAggregates.totalOpen}</span>
+              <span className="text-[10px] text-slate-400">Active assigned items</span>
             </div>
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm">
-              <span className="text-xs text-slate-500 block">Escalation Rate</span>
-              <span className="text-2xl font-bold text-orange-600 mt-1 block">3.8%</span>
-              <span className="text-[10px] text-slate-400">Under 5% threshold</span>
+              <span className="text-xs text-slate-500 block">Avg Resolution Time</span>
+              <span className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1 block">2.4h</span>
+              <span className="text-[10px] text-emerald-600 font-semibold">0.6h faster than SLA limit</span>
             </div>
           </div>
 
           {/* Individual Executive Scorecards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {DEFAULT_EXECUTIVES.map((exec) => (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredExecutives.map((exec) => (
               <div
                 key={exec.id}
-                className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm space-y-3"
+                role="button"
+                tabIndex={0}
+                onClick={() => setSelectedExecDetails(exec)}
+                className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm space-y-3 hover:border-blue-400 hover:shadow-md cursor-pointer transition-all text-left"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-bold flex items-center justify-center text-sm">
+                    <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-bold flex items-center justify-center text-sm shrink-0">
                       {exec.name.slice(0, 2).toUpperCase()}
                     </div>
                     <div>
-                      <h4 className="font-bold text-sm text-slate-900 dark:text-white">{exec.name}</h4>
+                      <h4 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <span>{exec.name}</span>
+                        <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                      </h4>
                       <p className="text-xs text-slate-500">{exec.role}</p>
                     </div>
                   </div>
@@ -1532,6 +1756,11 @@ export default function InternalTasksDashboard() {
                     <span className="text-slate-400 text-[10px] uppercase font-semibold">Avg Speed</span>
                     <p className="font-bold text-indigo-600 dark:text-indigo-400 mt-0.5">{exec.avgResolutionTime}</p>
                   </div>
+                </div>
+
+                <div className="pt-1 flex items-center justify-between text-[11px] text-blue-600 dark:text-blue-400 font-semibold">
+                  <span>View performance breakdown</span>
+                  <span>→</span>
                 </div>
               </div>
             ))}
@@ -1719,25 +1948,29 @@ export default function InternalTasksDashboard() {
                 </button>
               </div>
 
-              <div className="space-y-3 text-xs">
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-lg border border-slate-200 dark:border-slate-700 space-y-1">
-                  <span className="font-bold text-slate-800 dark:text-slate-200 block">Credit Allocations</span>
-                  <p className="text-slate-500">
-                    Requests ≤ 50 credits auto-escalate to Category Manager. Requests &gt; 50 credits require Finance Head signoff.
-                  </p>
-                </div>
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-lg border border-slate-200 dark:border-slate-700 space-y-1">
-                  <span className="font-bold text-slate-800 dark:text-slate-200 block">Account Approvals</span>
-                  <p className="text-slate-500">
-                    Self-registered accounts must have verified GSTIN and business PAN before Category Manager activation.
-                  </p>
-                </div>
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-lg border border-slate-200 dark:border-slate-700 space-y-1">
-                  <span className="font-bold text-slate-800 dark:text-slate-200 block">Discounts & Waivers</span>
-                  <p className="text-slate-500">
-                    Fee waivers &gt; 10% require dual-maker verification (Category Executive + Finance Lead).
-                  </p>
-                </div>
+              <div className="space-y-3 text-xs max-h-[60vh] overflow-y-auto">
+                {approvalRules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-lg border border-slate-200 dark:border-slate-700 space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-800 dark:text-slate-200 block">{rule.name}</span>
+                      <button
+                        onClick={() => handleToggleRule(rule.id)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
+                          rule.requiresReview
+                            ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                            : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
+                        }`}
+                      >
+                        {rule.requiresReview ? 'Enforce Review' : 'Auto-Approve'}
+                      </button>
+                    </div>
+                    <p className="text-slate-500">{rule.threshold}</p>
+                    <span className="text-[10px] text-slate-400 block">Approver: {rule.approverRole}</span>
+                  </div>
+                ))}
               </div>
 
               <div className="flex justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
@@ -2134,6 +2367,356 @@ export default function InternalTasksDashboard() {
                 </button>
                 <button
                   onClick={() => setSelectedTaskDetails(null)}
+                  className="px-4 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg font-semibold text-slate-700 dark:text-slate-300"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* APPROVAL DETAILS DRAWER                                        */}
+      {/* ============================================================== */}
+      {selectedApprovalDetails && (
+        <div className="fixed inset-0 z-50 overflow-hidden" data-testid="approval-details-drawer">
+          <div
+            onClick={() => setSelectedApprovalDetails(null)}
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            data-testid="approval-drawer-backdrop"
+          />
+
+          <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
+            <div className="w-screen max-w-md bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200">
+              <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs text-slate-400 font-bold">
+                      {selectedApprovalDetails.requestId}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        selectedApprovalDetails.status === 'Approved'
+                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                          : selectedApprovalDetails.status === 'Rejected'
+                          ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                          : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                      }`}
+                    >
+                      {selectedApprovalDetails.status}
+                    </span>
+                  </div>
+                  <h3 className="font-bold text-base text-slate-900 dark:text-white mt-1">
+                    {selectedApprovalDetails.applicant}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setSelectedApprovalDetails(null)}
+                  className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg"
+                  data-testid="approval-details-close-btn"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 space-y-4 overflow-y-auto flex-1 text-xs">
+                {/* Meta details */}
+                <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-100 dark:border-slate-800">
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-semibold uppercase">Module</span>
+                    <p className="font-medium text-slate-900 dark:text-white mt-0.5">
+                      {selectedApprovalDetails.module}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-semibold uppercase">Project / Tender</span>
+                    <p className="font-medium text-slate-900 dark:text-white mt-0.5">
+                      {selectedApprovalDetails.project}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-semibold uppercase">Value / Commercial Impact</span>
+                    <p className="font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                      {selectedApprovalDetails.valueImpact}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-semibold uppercase">Requester (Maker)</span>
+                    <p className="font-medium text-slate-900 dark:text-white mt-0.5">
+                      {selectedApprovalDetails.makerName}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-semibold uppercase">Requested Date</span>
+                    <p className="font-medium text-slate-900 dark:text-white mt-0.5">
+                      {selectedApprovalDetails.createdAt.slice(0, 10)}
+                    </p>
+                  </div>
+                  {selectedApprovalDetails.reviewedAt && (
+                    <div>
+                      <span className="text-[10px] text-slate-400 font-semibold uppercase">Reviewed By</span>
+                      <p className="font-medium text-slate-900 dark:text-white mt-0.5">
+                        {selectedApprovalDetails.reviewerName || 'Manager'} ({selectedApprovalDetails.reviewedAt.slice(0, 10)})
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Maker Notes */}
+                {selectedApprovalDetails.notes && (
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-semibold uppercase">Request & Review Audit Notes</span>
+                    <div className="p-3 bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-lg text-slate-700 dark:text-slate-300 mt-1 whitespace-pre-wrap">
+                      {selectedApprovalDetails.notes}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                {selectedApprovalDetails.status === 'Pending' ? (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleApprovalDecision(selectedApprovalDetails, 'Approved')}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold text-xs shadow-sm transition-colors"
+                      data-testid="drawer-approve-btn"
+                    >
+                      Approve Request
+                    </button>
+                    <button
+                      onClick={() => handleApprovalDecision(selectedApprovalDetails, 'Rejected')}
+                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-semibold text-xs shadow-sm transition-colors"
+                      data-testid="drawer-reject-btn"
+                    >
+                      Reject Request
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-xs text-slate-400 italic">
+                    Decision logged on {selectedApprovalDetails.reviewedAt?.slice(0, 10) || 'audit history'}
+                  </span>
+                )}
+                <button
+                  onClick={() => setSelectedApprovalDetails(null)}
+                  className="px-4 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg font-semibold text-slate-700 dark:text-slate-300"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* REQUEST APPROVAL MODAL                                         */}
+      {/* ============================================================== */}
+      {isRequestApprovalModalOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto" data-testid="request-approval-modal">
+          <div
+            onClick={() => setIsRequestApprovalModalOpen(false)}
+            className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm"
+            data-testid="request-approval-backdrop"
+          />
+
+          <div className="flex min-h-full items-center justify-center p-4">
+            <div className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-blue-600" />
+                  <h3 className="font-bold text-base text-slate-900 dark:text-white">New Approval Request</h3>
+                </div>
+                <button
+                  onClick={() => setIsRequestApprovalModalOpen(false)}
+                  className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  data-testid="request-approval-close-btn"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateApprovalRequest} className="space-y-4 text-xs">
+                <div>
+                  <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">Approval Module *</label>
+                  <select
+                    value={newApprovalModule}
+                    onChange={(e) => setNewApprovalModule(e.target.value)}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                  >
+                    <option value="Credit Allocations">Credit Allocations</option>
+                    <option value="Account Approvals">Account Approvals</option>
+                    <option value="Discounts & Waivers">Discounts & Waivers</option>
+                    <option value="Trial Period Extensions">Trial Period Extensions</option>
+                    <option value="Payment Reconciliations">Payment Reconciliations</option>
+                    <option value="Unit Bookings">Unit Bookings</option>
+                    <option value="Cancellations & Refunds">Cancellations & Refunds</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">Applicant / Customer / Vendor *</label>
+                  <input
+                    type="text"
+                    required
+                    value={newApprovalApplicant}
+                    onChange={(e) => setNewApprovalApplicant(e.target.value)}
+                    placeholder="e.g. Apex Solar Energy Ltd"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">Project / Tender Context</label>
+                  <input
+                    type="text"
+                    value={newApprovalProject}
+                    onChange={(e) => setNewApprovalProject(e.target.value)}
+                    placeholder="e.g. Solar EPC Procurement"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">Value / Impact *</label>
+                    <input
+                      type="text"
+                      required
+                      value={newApprovalValue}
+                      onChange={(e) => setNewApprovalValue(e.target.value)}
+                      placeholder="e.g. +75 Credits (₹37,500 waiver)"
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">Requester (Maker)</label>
+                    <input
+                      type="text"
+                      value={newApprovalMaker}
+                      onChange={(e) => setNewApprovalMaker(e.target.value)}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">Justification & Commercial Notes</label>
+                  <textarea
+                    rows={3}
+                    value={newApprovalNotes}
+                    onChange={(e) => setNewApprovalNotes(e.target.value)}
+                    placeholder="Provide commercial rationale, client justification, or agreement clauses..."
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setIsRequestApprovalModalOpen(false)}
+                    className="px-3.5 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg font-semibold text-slate-700 dark:text-slate-300"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingApproval}
+                    className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-sm transition-all"
+                  >
+                    Submit Request
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* EXECUTIVE PROFILE DRAWER (From Scorecard)                      */}
+      {/* ============================================================== */}
+      {selectedExecDetails && (
+        <div className="fixed inset-0 z-50 overflow-hidden" data-testid="exec-profile-drawer">
+          <div
+            onClick={() => setSelectedExecDetails(null)}
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            data-testid="exec-drawer-backdrop"
+          />
+
+          <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
+            <div className="w-screen max-w-md bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200">
+              <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-bold flex items-center justify-center text-sm">
+                    {selectedExecDetails.name.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm text-slate-900 dark:text-white">{selectedExecDetails.name}</h3>
+                    <p className="text-xs text-slate-500">{selectedExecDetails.role}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedExecDetails(null)}
+                  className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg"
+                  data-testid="exec-drawer-close-btn"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 space-y-4 overflow-y-auto flex-1 text-xs">
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-100 dark:border-slate-800 space-y-2">
+                  <span className="text-[10px] text-slate-400 font-semibold uppercase">Performance Metrics</span>
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <span className="text-slate-500 block text-[11px]">SLA Adherence</span>
+                      <span className="text-lg font-bold text-emerald-600">{selectedExecDetails.slaAdherence}%</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[11px]">Average Speed</span>
+                      <span className="text-lg font-bold text-indigo-600 dark:text-indigo-400">
+                        {selectedExecDetails.avgResolutionTime}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[11px]">Tasks Resolved</span>
+                      <span className="text-lg font-bold text-slate-900 dark:text-white">
+                        {selectedExecDetails.resolvedTasks}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block text-[11px]">Open Workload</span>
+                      <span className="text-lg font-bold text-amber-600">{selectedExecDetails.openTasks}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800/40 rounded-xl space-y-2">
+                  <span className="font-bold text-blue-900 dark:text-blue-200 block text-xs">Workflow Quick Action</span>
+                  <p className="text-slate-600 dark:text-slate-400 text-xs">
+                    View active and overdue internal tasks currently assigned to {selectedExecDetails.name}.
+                  </p>
+                  <button
+                    onClick={() => {
+                      setSelectedExecDetails(null);
+                      setScopeFilter('exec');
+                      setSelectedExecName(selectedExecDetails.name);
+                      setActiveTab('tasks');
+                    }}
+                    className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold text-xs transition-colors shadow-sm"
+                    data-testid="view-exec-tasks-btn"
+                  >
+                    <span>View {selectedExecDetails.name}&apos;s Tasks in Action Center</span>
+                    <ArrowUpRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+                <button
+                  onClick={() => setSelectedExecDetails(null)}
                   className="px-4 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg font-semibold text-slate-700 dark:text-slate-300"
                 >
                   Close

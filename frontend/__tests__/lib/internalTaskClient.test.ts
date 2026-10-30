@@ -14,6 +14,10 @@ import {
   fetchApprovals,
   fetchApprovalSummary,
   updateApprovalStatus,
+  createApprovalRequest,
+  fetchApprovalRules,
+  updateApprovalRule,
+  DEFAULT_APPROVAL_RULES,
   DEFAULT_APPROVAL_ITEMS,
   DEFAULT_EXECUTIVES,
 } from '@/lib/internalTaskClient';
@@ -430,5 +434,61 @@ describe('internalTaskClient', () => {
     global.fetch = jest.fn().mockRejectedValueOnce(new Error('API Down'));
     const notFound = await updateApprovalStatus('app_does_not_exist', 'Approved');
     expect(notFound).toBeNull();
+  });
+
+  test('createApprovalRequest supports API dispatch and local in-memory fallback', async () => {
+    // API success case
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        approval: {
+          id: 'app_api_created',
+          requestId: 'REQ-2026-999',
+          module: 'Credit Allocations',
+          project: 'Project Solar',
+          applicant: 'Tata Solar',
+          valueImpact: '+100 Credits',
+          makerName: 'Sudheer',
+          status: 'Pending',
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    });
+
+    const apiCreated = await createApprovalRequest({
+      module: 'Credit Allocations',
+      project: 'Project Solar',
+      applicant: 'Tata Solar',
+      valueImpact: '+100 Credits',
+      makerName: 'Sudheer',
+      notes: 'Pilot expansion',
+    });
+    expect(apiCreated.id).toBe('app_api_created');
+
+    // API error case (fallback)
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network offline'));
+    const fallbackCreated = await createApprovalRequest({
+      module: 'Discounts & Waivers',
+      project: 'Project Wind',
+      applicant: 'Inox Wind',
+      valueImpact: '₹20,000 waiver',
+      makerName: 'Priya',
+    });
+    expect(fallbackCreated.status).toBe('Pending');
+    expect(fallbackCreated.applicant).toBe('Inox Wind');
+    expect(fallbackCreated.requestId).toMatch(/^REQ-2026-/);
+  });
+
+  test('fetchApprovalRules and updateApprovalRule manage approval rules', async () => {
+    const rules = await fetchApprovalRules();
+    expect(rules.length).toBe(DEFAULT_APPROVAL_RULES.length);
+
+    // Update existing rule
+    const updated = await updateApprovalRule('rule_1', { requiresReview: false });
+    expect(updated?.requiresReview).toBe(false);
+
+    // Update non-existent rule
+    const missing = await updateApprovalRule('non_existent_rule', { requiresReview: true });
+    expect(missing).toBeNull();
   });
 });

@@ -396,6 +396,7 @@ export interface ExecutiveOption {
   id: string;
   name: string;
   role: string;
+  department?: string;
   resolvedTasks: number;
   openTasks: number;
   slaAdherence: number;
@@ -407,6 +408,7 @@ export const DEFAULT_EXECUTIVES: ExecutiveOption[] = [
     id: 'exec_sudheer',
     name: 'Sudheer Kangala',
     role: 'Senior Category Manager',
+    department: 'Category Management',
     resolvedTasks: 42,
     openTasks: 5,
     slaAdherence: 98.1,
@@ -416,6 +418,7 @@ export const DEFAULT_EXECUTIVES: ExecutiveOption[] = [
     id: 'exec_priya',
     name: 'Priya Sharma',
     role: 'Category Executive',
+    department: 'Category Management',
     resolvedTasks: 37,
     openTasks: 3,
     slaAdherence: 96.5,
@@ -425,15 +428,27 @@ export const DEFAULT_EXECUTIVES: ExecutiveOption[] = [
     id: 'exec_rahul',
     name: 'Rahul Varma',
     role: 'Procurement Specialist',
+    department: 'Operations',
     resolvedTasks: 29,
     openTasks: 7,
     slaAdherence: 94.2,
     avgResolutionTime: '4.5h',
   },
   {
+    id: 'exec_marketing',
+    name: 'Ananya Rao',
+    role: 'Growth & Marketing Lead',
+    department: 'Growth / Marketing',
+    resolvedTasks: 34,
+    openTasks: 4,
+    slaAdherence: 97.2,
+    avgResolutionTime: '2.1h',
+  },
+  {
     id: 'exec_finance',
     name: 'Finance Desk Lead',
     role: 'Credit & Payment Manager',
+    department: 'Finance',
     resolvedTasks: 51,
     openTasks: 4,
     slaAdherence: 99.0,
@@ -619,4 +634,103 @@ export async function updateApprovalStatus(
 
   inMemoryApprovals[existingIndex] = updated;
   return updated;
+}
+
+export async function createApprovalRequest(payload: {
+  module: string;
+  project: string;
+  applicant: string;
+  valueImpact: string;
+  makerName: string;
+  notes?: string;
+}): Promise<ApprovalItem> {
+  const newReq: ApprovalItem = {
+    id: `app_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+    requestId: `REQ-2026-${Math.floor(100 + Math.random() * 900)}`,
+    module: payload.module,
+    project: payload.project,
+    applicant: payload.applicant,
+    valueImpact: payload.valueImpact,
+    makerName: payload.makerName,
+    status: 'Pending',
+    notes: payload.notes,
+    createdAt: new Date().toISOString(),
+  };
+
+  try {
+    const res = await fetch('/api/internal-tasks/approvals', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(newReq),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.approval) {
+        inMemoryApprovals.unshift(data.approval);
+        return data.approval;
+      }
+    }
+  } catch {
+    // Local fallback
+  }
+
+  inMemoryApprovals.unshift(newReq);
+  return newReq;
+}
+
+export interface ApprovalRuleConfig {
+  id: string;
+  name: string;
+  module: string;
+  threshold: string;
+  requiresReview: boolean;
+  approverRole: string;
+}
+
+export const DEFAULT_APPROVAL_RULES: ApprovalRuleConfig[] = [
+  {
+    id: 'rule_1',
+    name: 'Credit Allocation Cap',
+    module: 'Credit Allocations',
+    threshold: 'Credit addition > 50 credits (₹25,000)',
+    requiresReview: true,
+    approverRole: 'Finance Desk Lead / Admin',
+  },
+  {
+    id: 'rule_2',
+    name: 'Buyer KYC Fast-Track',
+    module: 'Account Approvals',
+    threshold: 'All Enterprise & Institutional Accounts',
+    requiresReview: true,
+    approverRole: 'Category Operations Head',
+  },
+  {
+    id: 'rule_3',
+    name: 'Commercial Waiver Limit',
+    module: 'Discounts & Waivers',
+    threshold: 'Discounts or Waivers > 10% fee',
+    requiresReview: true,
+    approverRole: 'Director of Procurement',
+  },
+  {
+    id: 'rule_4',
+    name: 'Trial Extension Period',
+    module: 'Trial Period Extensions',
+    threshold: 'Extensions exceeding 14 calendar days',
+    requiresReview: true,
+    approverRole: 'Senior Category Manager',
+  },
+];
+
+const inMemoryRules: ApprovalRuleConfig[] = [...DEFAULT_APPROVAL_RULES];
+
+export async function fetchApprovalRules(): Promise<ApprovalRuleConfig[]> {
+  return [...inMemoryRules];
+}
+
+export async function updateApprovalRule(id: string, updates: Partial<ApprovalRuleConfig>): Promise<ApprovalRuleConfig | null> {
+  const index = inMemoryRules.findIndex((r) => r.id === id);
+  if (index === -1) return null;
+  inMemoryRules[index] = { ...inMemoryRules[index], ...updates };
+  return inMemoryRules[index];
 }

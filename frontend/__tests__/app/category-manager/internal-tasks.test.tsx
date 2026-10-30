@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import InternalTasksDashboard from '@/app/category-manager/internal-tasks';
 import CategoryManagerInternalTasksPage from '@/app/category-manager/internal-tasks/page';
 import * as internalTaskClient from '@/lib/internalTaskClient';
@@ -22,6 +22,9 @@ jest.mock('@/lib/internalTaskClient', () => {
     fetchApprovals: jest.fn(),
     fetchApprovalSummary: jest.fn(),
     updateApprovalStatus: jest.fn(),
+    createApprovalRequest: jest.fn(),
+    fetchApprovalRules: jest.fn(),
+    updateApprovalRule: jest.fn(),
   };
 });
 
@@ -179,6 +182,17 @@ const mockApprovals: internalTaskClient.ApprovalItem[] = [
     createdAt: '2026-10-25T08:30:00Z',
     reviewedAt: '2026-10-25T11:00:00Z',
   },
+  {
+    id: 'app_104',
+    requestId: 'REQ-2026-084',
+    module: 'Credit Allocations',
+    project: 'Ceramic Tender',
+    applicant: 'Unique Ceramic Solutions',
+    valueImpact: '₹1,20,000 NEFT',
+    makerName: 'Finance Desk Lead',
+    status: 'Approved',
+    createdAt: '2026-10-24T08:30:00Z',
+  },
 ];
 
 describe('Action Center & Internal Tasks Redesign', () => {
@@ -234,6 +248,27 @@ describe('Action Center & Internal Tasks Redesign', () => {
     (internalTaskClient.searchRelatedEntities as jest.Mock).mockResolvedValue([
       { id: 'rfq-1', label: 'RFQ262910743626 — Engineering Spares', entityType: 'RFQ' },
     ]);
+    (internalTaskClient.createApprovalRequest as jest.Mock).mockImplementation((payload) =>
+      Promise.resolve({
+        id: 'app_new_1',
+        requestId: 'REQ-2026-999',
+        ...payload,
+        status: 'Pending',
+        createdAt: '2026-10-30T10:00:00Z',
+      })
+    );
+    (internalTaskClient.fetchApprovalRules as jest.Mock).mockResolvedValue(internalTaskClient.DEFAULT_APPROVAL_RULES);
+    (internalTaskClient.updateApprovalRule as jest.Mock).mockImplementation((id, updates) =>
+      Promise.resolve({
+        id,
+        name: 'Credit Allocation Cap',
+        module: 'Credit Allocations',
+        threshold: 'Credit addition > 50 credits (₹25,000)',
+        requiresReview: false,
+        approverRole: 'Finance Desk Lead / Admin',
+        ...updates,
+      })
+    );
   });
 
   test('renders top section controls, KPI cards, and tasks list', async () => {
@@ -528,9 +563,13 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const searchBtn = screen.getByRole('button', { name: /Search/i });
     fireEvent.click(searchBtn);
 
+    await waitFor(() => {
+      expect(screen.getByText('REQ-2026-081')).toBeInTheDocument();
+    });
+
     // Test failure branch in updateApprovalStatus
     (internalTaskClient.updateApprovalStatus as jest.Mock).mockResolvedValueOnce(null);
-    const approveBtn = screen.getAllByRole('button', { name: /Approve/i })[0];
+    const approveBtn = screen.getAllByRole('button', { name: /^Approve$/i })[0];
     fireEvent.click(approveBtn);
 
     await waitFor(() => {
@@ -760,7 +799,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
 
     // Test Approve button for first item
-    const approveButtons = screen.getAllByRole('button', { name: /Approve/i });
+    const approveButtons = screen.getAllByRole('button', { name: /^Approve$/i });
     fireEvent.click(approveButtons[0]);
 
     await waitFor(() => {
@@ -772,7 +811,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
 
     // Test Reject button for second pending item
-    const rejectButtons = screen.getAllByRole('button', { name: /Reject/i });
+    const rejectButtons = screen.getAllByRole('button', { name: /^Reject$/i });
     fireEvent.click(rejectButtons[0]);
 
     await waitFor(() => {
@@ -1070,6 +1109,219 @@ describe('Action Center & Internal Tasks Redesign', () => {
 
     const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
     fireEvent.click(cancelBtn);
+  });
+
+  test('exercises fully working Approvals: KPI filters, request modal, details drawer, and rule toggles', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    const approvalsTab = screen.getByRole('button', { name: /Approvals/i });
+    fireEvent.click(approvalsTab);
+
+    // 0. Export Approvals to CSV
+    const exportApprovalsBtn = screen.getByRole('button', { name: /^Export$/i });
+    fireEvent.click(exportApprovalsBtn);
+
+    // 1. Clickable KPI cards and toggling
+    fireEvent.click(screen.getByTestId('approvals-kpi-pending'));
+    fireEvent.click(screen.getByTestId('approvals-kpi-pending')); // toggles back to 'all'
+    fireEvent.click(screen.getByTestId('approvals-kpi-approved'));
+    fireEvent.click(screen.getByTestId('approvals-kpi-rejected'));
+    fireEvent.click(screen.getByTestId('approvals-kpi-total'));
+
+    // 2. Request Approval Modal
+    const requestApprovalBtn = screen.getByRole('button', { name: /\+ Request Approval/i });
+    fireEvent.click(requestApprovalBtn);
+    const modalEl = screen.getByTestId('request-approval-modal');
+    expect(modalEl).toBeInTheDocument();
+
+    const requestBackdrop = screen.getByTestId('request-approval-backdrop');
+    fireEvent.click(requestBackdrop);
+
+    fireEvent.click(requestApprovalBtn);
+    const requestCloseBtn = screen.getByTestId('request-approval-close-btn');
+    fireEvent.click(requestCloseBtn);
+
+    // Test form field changes and validations
+    fireEvent.click(requestApprovalBtn);
+    const modalEl2 = screen.getByTestId('request-approval-modal');
+    const formEl = modalEl2.querySelector('form')!;
+
+    // Validation branch 1: both empty
+    fireEvent.submit(formEl);
+    expect(screen.getByText('Applicant and Value / Impact are required.')).toBeInTheDocument();
+
+    // Validation branch 2: applicant filled, value empty
+    const applicantInputEmpty = within(modalEl2).getByPlaceholderText(/e\.g\. Apex Solar Energy Ltd/i);
+    fireEvent.change(applicantInputEmpty, { target: { value: 'Applicant Only' } });
+    fireEvent.submit(formEl);
+    expect(screen.getByText('Applicant and Value / Impact are required.')).toBeInTheDocument();
+
+    const moduleSelect = within(modalEl2).getByRole('combobox');
+    fireEvent.change(moduleSelect, { target: { value: 'Discounts & Waivers' } });
+
+    const projectInput = within(modalEl2).getByDisplayValue('Enterprise Steel Tender 2026');
+    fireEvent.change(projectInput, { target: { value: 'Solar EPC Phase 2' } });
+
+    const makerInput = within(modalEl2).getByDisplayValue('Sudheer Kangala');
+    fireEvent.change(makerInput, { target: { value: 'Marketing Executive' } });
+
+    const notesInput = within(modalEl2).getByPlaceholderText(/Provide commercial rationale/i);
+    fireEvent.change(notesInput, { target: { value: 'Special promo discount' } });
+
+    // Cancel button in modal
+    const cancelModalBtn = within(modalEl2).getByRole('button', { name: /^Cancel$/i });
+    fireEvent.click(cancelModalBtn);
+
+    // Reopen and test valid submission
+    fireEvent.click(requestApprovalBtn);
+    const applicantInput = screen.getByPlaceholderText(/e\.g\. Apex Solar Energy Ltd/i);
+    const valueInput = screen.getByPlaceholderText(/e\.g\. \+75 Credits/i);
+
+    fireEvent.change(applicantInput, { target: { value: 'Inox Wind Solutions' } });
+    fireEvent.change(valueInput, { target: { value: '₹50,000 NEFT waiver' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Submit Request/i }));
+
+    await waitFor(() => {
+      expect(internalTaskClient.createApprovalRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          applicant: 'Inox Wind Solutions',
+          valueImpact: '₹50,000 NEFT waiver',
+        })
+      );
+    });
+
+    // Test rejection in catch block for request submission
+    (internalTaskClient.createApprovalRequest as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    fireEvent.click(requestApprovalBtn);
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Apex Solar Energy Ltd/i), { target: { value: 'Fail Corp' } });
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. \+75 Credits/i), { target: { value: '₹10,000' } });
+    fireEvent.click(screen.getByRole('button', { name: /Submit Request/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Error submitting approval request.')).toBeInTheDocument();
+    });
+
+    // 3. Approval Details Drawer & Row clicks
+    // Click table row directly
+    fireEvent.click(screen.getByText('REQ-2026-081'));
+    const detailsDrawer = screen.getByTestId('approval-details-drawer');
+    expect(detailsDrawer).toBeInTheDocument();
+
+    // Close via bottom Close button
+    const drawerBottomCloseBtn = within(detailsDrawer).getByRole('button', { name: /^Close$/i });
+    fireEvent.click(drawerBottomCloseBtn);
+
+    // Reopen and test Reject from drawer
+    fireEvent.click(screen.getByText('REQ-2026-081'));
+    const drawerRejectBtn = screen.getByTestId('drawer-reject-btn');
+    fireEvent.click(drawerRejectBtn);
+
+    // Click on reviewed item without reviewedAt date
+    fireEvent.click(screen.getByText('Unique Ceramic Solutions'));
+    const drawerReviewed = screen.getByTestId('approval-details-drawer');
+    expect(within(drawerReviewed).getByText(/Decision logged on/i)).toBeInTheDocument();
+    fireEvent.click(within(drawerReviewed).getByRole('button', { name: /^Close$/i }));
+
+    // Reopen and test Approve from drawer
+    const viewDetailsButtons = screen.getAllByTitle('View details');
+    if (viewDetailsButtons.length > 0) {
+      fireEvent.click(viewDetailsButtons[0]);
+      const drawerCloseBtn = screen.getByTestId('approval-details-close-btn');
+      fireEvent.click(drawerCloseBtn);
+
+      fireEvent.click(viewDetailsButtons[0]);
+      const drawerBackdrop = screen.getByTestId('approval-drawer-backdrop');
+      fireEvent.click(drawerBackdrop);
+
+      fireEvent.click(viewDetailsButtons[0]);
+      const drawerApproveBtn = screen.queryByTestId('drawer-approve-btn');
+      if (drawerApproveBtn) {
+        fireEvent.click(drawerApproveBtn);
+      }
+    }
+
+    // 4. Configure Rules toggle
+    const rulesBtn = screen.getByRole('button', { name: /Configure Rules/i });
+    fireEvent.click(rulesBtn);
+    const enforceButtons = screen.getAllByText(/Enforce Review|Auto-Approve/i);
+    if (enforceButtons.length > 0) {
+      fireEvent.click(enforceButtons[0]);
+      expect(internalTaskClient.updateApprovalRule).toHaveBeenCalled();
+
+      // Test null update return
+      (internalTaskClient.updateApprovalRule as jest.Mock).mockResolvedValueOnce(null);
+      fireEvent.click(enforceButtons[0]);
+    }
+    const rulesClose = screen.getByTestId('rules-modal-close-btn');
+    fireEvent.click(rulesClose);
+  });
+
+  test('exercises fully working Scorecard: period filters, department filters, and executive profile drawer navigation', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    const scorecardTab = screen.getByRole('button', { name: /Scorecard/i });
+    fireEvent.click(scorecardTab);
+
+    // Period filters
+    const todayPeriod = screen.getByRole('button', { name: 'Today' });
+    fireEvent.click(todayPeriod);
+    const weekPeriod = screen.getByRole('button', { name: 'This Week' });
+    fireEvent.click(weekPeriod);
+    const monthPeriod = screen.getByRole('button', { name: 'This Month' });
+    fireEvent.click(monthPeriod);
+    const allPeriod = screen.getByRole('button', { name: 'All Time' });
+    fireEvent.click(allPeriod);
+
+    // Department filters
+    const catDept = screen.getByRole('button', { name: 'Category Management' });
+    fireEvent.click(catDept);
+    const growthDept = screen.getByRole('button', { name: 'Growth / Marketing' });
+    fireEvent.click(growthDept);
+    const opsDept = screen.getByRole('button', { name: 'Operations' });
+    fireEvent.click(opsDept);
+    const financeDept = screen.getByRole('button', { name: 'Finance' });
+    fireEvent.click(financeDept);
+    const allRoles = screen.getByRole('button', { name: 'All Roles' });
+    fireEvent.click(allRoles);
+
+    // Executive Card click -> Profile Drawer
+    const execCards = screen.getAllByText(/Sudheer Kangala/i);
+    fireEvent.click(execCards[0]);
+
+    const execDrawer = screen.getByTestId('exec-profile-drawer');
+    expect(execDrawer).toBeInTheDocument();
+    const execCloseBtn = screen.getByTestId('exec-drawer-close-btn');
+    fireEvent.click(execCloseBtn);
+
+    // Reopen and test bottom Close button
+    fireEvent.click(execCards[0]);
+    const execDrawer2 = screen.getByTestId('exec-profile-drawer');
+    const execBottomCloseBtn = within(execDrawer2).getByRole('button', { name: /^Close$/i });
+    fireEvent.click(execBottomCloseBtn);
+
+    // Reopen and test backdrop
+    fireEvent.click(execCards[0]);
+    const execBackdrop = screen.getByTestId('exec-drawer-backdrop');
+    fireEvent.click(execBackdrop);
+
+    // Reopen and test Action Center shortcut
+    fireEvent.click(execCards[0]);
+    const viewExecTasksBtn = screen.getByTestId('view-exec-tasks-btn');
+    fireEvent.click(viewExecTasksBtn);
+
+    // Verifies navigation back to Internal Tasks with exec scope active
+    await waitFor(() => {
+      expect(screen.getByDisplayValue(/Exec wise Tasks/i)).toBeInTheDocument();
+    });
   });
 
   test('renders page wrapper CategoryManagerInternalTasksPage', () => {
