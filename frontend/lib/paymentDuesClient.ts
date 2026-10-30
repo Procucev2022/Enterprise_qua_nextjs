@@ -78,11 +78,28 @@ export async function fetchPaymentDues(
   summary: PaymentDuesSummary;
   page: number;
   limit: number;
+  error?: string;
 }> {
   try {
     const params = buildQueryParams(filters);
     const res = await fetch(`/api/payment-dues?${params.toString()}`, { headers: authHeaders() });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      let errMsg = `Failed to load accounts (HTTP ${res.status})`;
+      try {
+        const errJson = await res.json();
+        if (errJson && errJson.error) errMsg = errJson.error;
+      } catch {
+        // ignore
+      }
+      return {
+        accounts: [],
+        total: 0,
+        summary: DEFAULT_SUMMARY,
+        page: 1,
+        limit: 25,
+        error: errMsg,
+      };
+    }
     const json = await res.json();
     return {
       accounts: json.accounts || [],
@@ -91,13 +108,14 @@ export async function fetchPaymentDues(
       page: json.page || 1,
       limit: json.limit || 25,
     };
-  } catch {
+  } catch (err) {
     return {
       accounts: [],
       total: 0,
       summary: DEFAULT_SUMMARY,
       page: 1,
       limit: 25,
+      error: err instanceof Error ? err.message : 'Network error loading payment dues data',
     };
   }
 }

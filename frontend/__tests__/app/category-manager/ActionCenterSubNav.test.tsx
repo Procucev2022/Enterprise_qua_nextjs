@@ -18,6 +18,7 @@ describe('ActionCenterSubNav', () => {
         tasksCount={5}
         ticketsCount={2}
         approvalsCount={4}
+        paymentDuesCount={120}
       />
     );
 

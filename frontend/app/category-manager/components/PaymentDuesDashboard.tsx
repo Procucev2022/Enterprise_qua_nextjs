@@ -92,6 +92,7 @@ export default function PaymentDuesDashboard() {
     acknowledgementPending: 0,
   });
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Filters & Sorting & Pagination
@@ -181,6 +182,7 @@ export default function PaymentDuesDashboard() {
   // Fetch low-credit accounts
   const loadData = useCallback(async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const filters: PaymentDuesFilterParams = {
         search,
@@ -193,10 +195,18 @@ export default function PaymentDuesDashboard() {
         limit: pageSize,
       };
       const res = await fetchPaymentDues(filters);
-      setAccounts(res.accounts);
-      setTotalAccounts(res.total);
-      setSummary(res.summary);
-    } catch {
+      if (res.error) {
+        setLoadError(res.error);
+        showToast('Failed to load low-credit accounts from database', 'error');
+      } else {
+        setAccounts(res.accounts);
+        setTotalAccounts(res.total);
+        setSummary(res.summary);
+        setLoadError(null);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load low-credit accounts from database';
+      setLoadError(msg);
       showToast('Failed to load low-credit accounts from database', 'error');
     } finally {
       setIsLoading(false);
@@ -206,13 +216,6 @@ export default function PaymentDuesDashboard() {
   useEffect(() => {
     loadData();
   }, [loadData]);
-
-  // Load summary independently on initial mount
-  useEffect(() => {
-    fetchPaymentDuesSummary()
-      .then((s) => setSummary(s))
-      .catch(() => {});
-  }, []);
 
   // Column Visibility Handlers
   const handleToggleColumnVisibility = (key: PaymentDuesColumnKey) => {
@@ -684,16 +687,6 @@ export default function PaymentDuesDashboard() {
         </div>
       )}
 
-      {/* Header Description */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-          {strings.title}
-        </h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          {strings.subtitle}
-        </p>
-      </div>
-
       {/* 6 Dynamic Summary KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {/* Total Low-Credit Accounts */}
@@ -842,12 +835,12 @@ export default function PaymentDuesDashboard() {
         </div>
       </div>
 
-      {/* Toolbar */}
-      <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        {/* Left: Search & Filters */}
-        <div className="flex flex-wrap items-center gap-2 flex-1">
+      {/* Horizontal Toolbar */}
+      <div className="bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+        {/* Left: Search & Filter Controls */}
+        <div className="flex items-center gap-2 flex-1 min-w-0">
           {/* Global Search */}
-          <div className="relative flex-1 min-w-[240px] max-w-md">
+          <div className="relative min-w-[180px] max-w-xs flex-1">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
@@ -857,7 +850,7 @@ export default function PaymentDuesDashboard() {
                 setPage(1);
               }}
               placeholder={strings.toolbar.searchPlaceholder}
-              className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="w-full pl-9 pr-3 h-8 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </div>
 
@@ -869,7 +862,7 @@ export default function PaymentDuesDashboard() {
               setPage(1);
             }}
             aria-label={strings.toolbar.accountTypeFilter}
-            className="px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none"
+            className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none shrink-0"
           >
             <option value="all">{strings.toolbar.allTypes}</option>
             <option value="buyer">{strings.toolbar.buyersOnly}</option>
@@ -884,7 +877,7 @@ export default function PaymentDuesDashboard() {
               setPage(1);
             }}
             aria-label={strings.toolbar.creditsFilter}
-            className="px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none"
+            className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none shrink-0"
           >
             <option value="all">{strings.toolbar.allCredits}</option>
             <option value="0">{strings.toolbar.zeroCreditsOnly}</option>
@@ -899,7 +892,7 @@ export default function PaymentDuesDashboard() {
               setPage(1);
             }}
             aria-label={strings.toolbar.statusFilter}
-            className="px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none"
+            className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none shrink-0"
           >
             <option value="all">{strings.toolbar.allStatuses}</option>
             <option value="Not Notified">Not Notified</option>
@@ -916,22 +909,22 @@ export default function PaymentDuesDashboard() {
             type="button"
             onClick={handleResetFilters}
             title={strings.toolbar.resetFilters}
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition"
+            className="h-8 flex items-center gap-1 px-2.5 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition shrink-0 cursor-pointer"
           >
             <RotateCcw size={13} />
-            <span className="hidden sm:inline">{strings.toolbar.resetFilters}</span>
+            <span className="hidden xl:inline">{strings.toolbar.resetFilters}</span>
           </button>
         </div>
 
         {/* Right: Refresh, Export & Gear Icon */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {/* Refresh */}
           <button
             type="button"
             onClick={() => loadData()}
             disabled={isLoading}
             title={strings.toolbar.refresh}
-            className="p-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition disabled:opacity-50"
+            className="h-8 w-8 flex items-center justify-center text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition disabled:opacity-50 cursor-pointer"
           >
             <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
           </button>
@@ -947,7 +940,7 @@ export default function PaymentDuesDashboard() {
               sortOrder,
             })}
             download="payment_dues_report.csv"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-sm transition"
+            className="h-8 flex items-center gap-1.5 px-3 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-xs transition shrink-0 cursor-pointer"
           >
             <Download size={13} />
             <span>{strings.toolbar.exportCsv}</span>
@@ -959,7 +952,7 @@ export default function PaymentDuesDashboard() {
               type="button"
               onClick={() => setIsColumnSettingsOpen((prev) => !prev)}
               title={strings.toolbar.columnSettings}
-              className={`p-1.5 rounded-lg border transition ${
+              className={`h-8 w-8 flex items-center justify-center rounded-lg border transition cursor-pointer ${
                 isColumnSettingsOpen
                   ? 'bg-indigo-50 border-indigo-400 text-indigo-600 dark:bg-indigo-950/40 dark:border-indigo-700 dark:text-indigo-400'
                   : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
@@ -1095,6 +1088,25 @@ export default function PaymentDuesDashboard() {
                   <td colSpan={visibleColumns.length} className="px-4 py-16 text-center text-slate-500">
                     <Loader2 size={24} className="animate-spin mx-auto text-indigo-600 mb-2" />
                     <span>Loading low-credit accounts from database...</span>
+                  </td>
+                </tr>
+              ) : loadError ? (
+                <tr>
+                  <td colSpan={visibleColumns.length} className="px-4 py-16 text-center text-slate-500">
+                    <AlertTriangle size={24} className="mx-auto text-rose-500 mb-2" />
+                    <p className="font-semibold text-rose-600 dark:text-rose-400">
+                      Failed to load low-credit accounts
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
+                      {loadError}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => loadData()}
+                      className="mt-3 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition cursor-pointer"
+                    >
+                      Retry Connection
+                    </button>
                   </td>
                 </tr>
               ) : accounts.length === 0 ? (

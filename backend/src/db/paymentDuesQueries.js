@@ -34,6 +34,21 @@ function parseCredits(val, fallback = 0) {
   return fallback;
 }
 
+function getSellerAvailableCredits(v) {
+  if (v.availableCredits != null) return parseCredits(v.availableCredits, 0);
+  if (v.freeQuotationCredits != null) return parseCredits(v.freeQuotationCredits, 0);
+  if (v.freeRfqDownloadCredits != null) return parseCredits(v.freeRfqDownloadCredits, 0);
+  if (v.freeCreditsRemaining != null) return parseCredits(v.freeCreditsRemaining, 0);
+  if (v.credits != null) return parseCredits(v.credits, 0);
+  return 0;
+}
+
+function getSellerCreditsUsed(v, totalCredits, available) {
+  if (v.freeCreditsUsed != null) return Number(v.freeCreditsUsed);
+  if (v.rfqDownloadsUsed != null) return Number(v.rfqDownloadsUsed);
+  return Math.max(0, totalCredits - available);
+}
+
 // In-memory communications storage when pool.hasStorage() is false (e.g. tests / offline)
 const inMemoryCommunications = new Map();
 
@@ -64,8 +79,8 @@ async function fetchRawBuyers() {
           return {
             id: row.id,
             ...raw,
-            createdAt: row.created_at || raw.createdAt || raw.created_at,
-            updatedAt: row.updated_at || raw.updatedAt || raw.updated_at,
+            createdAt: row.created_at || raw.createdAt || '',
+            updatedAt: row.updated_at || raw.updatedAt || '',
             isActive: row.is_active !== undefined ? row.is_active : raw.isActive,
           };
         });
@@ -129,6 +144,9 @@ async function fetchCommunicationsMap() {
       const result = await pool.query(sql, [], {
         d1: true,
         d1Text: 'SELECT * FROM payment_dues_communications ORDER BY sent_at DESC',
+        useCache: true,
+        tag: 'payment_dues_communications',
+        ttlMs: 15000,
       });
       if (result && Array.isArray(result.rows)) {
         result.rows.forEach((row) => {
@@ -229,14 +247,12 @@ async function getLowCreditAccounts({
 
   // 2. Process Sellers (Vendors)
   for (const v of vendors) {
-    const available = parseCredits(v.freeQuotationCredits, 10);
+    const available = getSellerAvailableCredits(v);
     // Strict eligibility: available credits <= 2 and >= 0
     if (available > 2 || available < 0) continue;
 
-    const totalCredits = Number(v.totalCredits || 10);
-    const creditsUsed = Number(
-      v.rfqDownloadsUsed != null ? v.rfqDownloadsUsed : Math.max(0, totalCredits - available)
-    );
+    const totalCredits = Number(v.totalCredits || v.freeCreditsAllocated || 10);
+    const creditsUsed = getSellerCreditsUsed(v, totalCredits, available);
     const history = commMap.get(v.id) || [];
     const latestComm = history[0] || null;
 
@@ -614,4 +630,6 @@ module.exports = {
   parseRaw,
   pickFirst,
   parseCredits,
+  getSellerAvailableCredits,
+  getSellerCreditsUsed,
 };
