@@ -655,3 +655,75 @@ describe('unwrapAccountData and unlimited access helpers', () => {
     expect(resolveBuyerSourcingMode('version_1')).toBe('mode_1');
   });
 });
+
+describe('INDIAN_STATES_AND_CITIES and location helper functions', () => {
+  const { INDIAN_STATES_AND_CITIES, getIndianStates, getCitiesForState } = require('../src/config/constants');
+
+  test('contains all 28 states and 8 union territories (36 total)', () => {
+    expect(Object.keys(INDIAN_STATES_AND_CITIES).length).toBe(36);
+    expect(INDIAN_STATES_AND_CITIES['Andhra Pradesh'].length).toBeGreaterThan(100);
+    expect(INDIAN_STATES_AND_CITIES['Delhi'].length).toBeGreaterThan(50);
+    expect(INDIAN_STATES_AND_CITIES['Ladakh'].length).toBeGreaterThan(30);
+    expect(INDIAN_STATES_AND_CITIES['Andaman and Nicobar Islands']).toContain('Sri Vijaya Puram (Port Blair)');
+  });
+
+  test('getIndianStates returns a sorted array of state names', () => {
+    const states = getIndianStates();
+    expect(Array.isArray(states)).toBe(true);
+    expect(states.length).toBe(36);
+    expect(states[0]).toBe('Andaman and Nicobar Islands');
+    const sortedCopy = [...states].sort((a, b) => a.localeCompare(b));
+    expect(states).toEqual(sortedCopy);
+  });
+
+  test('getCitiesForState returns sorted cities for state with direct or case-insensitive match', () => {
+    const apCities = getCitiesForState('Andhra Pradesh');
+    expect(apCities.length).toBeGreaterThan(100);
+    expect(apCities).toContain('Visakhapatnam');
+
+    // Case insensitive lookup
+    const delhiCities = getCitiesForState('delhi');
+    expect(delhiCities.length).toBeGreaterThan(50);
+    expect(delhiCities).toContain('New Delhi');
+
+    // Trimming
+    const goaCities = getCitiesForState('  Goa  ');
+    expect(goaCities).toContain('Panaji');
+
+    // Empty or non-matching state
+    expect(getCitiesForState('')).toEqual([]);
+    expect(getCitiesForState(null)).toEqual([]);
+    expect(getCitiesForState('NonExistentState')).toEqual([]);
+  });
+});
+
+describe('parseSearchTokens', () => {
+  const { parseSearchTokens } = require('../src/config/constants');
+
+  test('parses empty or invalid input', () => {
+    expect(parseSearchTokens(null)).toEqual([]);
+    expect(parseSearchTokens(undefined)).toEqual([]);
+    expect(parseSearchTokens('')).toEqual([]);
+    expect(parseSearchTokens('   ')).toEqual([]);
+    expect(parseSearchTokens(123)).toEqual([]);
+  });
+
+  test('parses single vendor term or phrase', () => {
+    expect(parseSearchTokens('Sudheer Solutions pvt LTD')).toEqual(['Sudheer Solutions pvt LTD']);
+    expect(parseSearchTokens('IT')).toEqual(['IT']);
+  });
+
+  test('parses comma-separated emails and terms', () => {
+    const input = 'govardhan.kilari@procucev.com, veerababu.v@procucev.com, nilesh.murme@procucev.com';
+    expect(parseSearchTokens(input)).toEqual([
+      'govardhan.kilari@procucev.com',
+      'veerababu.v@procucev.com',
+      'nilesh.murme@procucev.com',
+    ]);
+  });
+
+  test('parses semicolons, newlines, and space-separated emails', () => {
+    expect(parseSearchTokens('a@b.com; c@d.com\r\ne@f.com')).toEqual(['a@b.com', 'c@d.com', 'e@f.com']);
+    expect(parseSearchTokens('user1@x.com user2@y.com')).toEqual(['user1@x.com', 'user2@y.com']);
+  });
+});

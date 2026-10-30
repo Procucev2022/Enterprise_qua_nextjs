@@ -3,6 +3,7 @@ const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload, AUTH_MESSAGES } = require('../config/constants');
 const { extractToken } = require('../middleware/auth');
 const vendorPresenceService = require('../services/vendorPresenceService');
+const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueries');
 
 function getClientIp(req) {
   return req.ip || (req.headers && req.headers['x-forwarded-for']) || '127.0.0.1';
@@ -187,6 +188,15 @@ async function logout(req, res, next) {
     const ipAddress = getClientIp(req);
     const token = extractToken(req);
     if (token) {
+      try {
+        const decoded = authService.verifySessionToken(token);
+        if (decoded && decoded.valid && decoded.user && decoded.user.sessionId) {
+          const reason = (req.body && req.body.logoutReason) || 'MANUAL';
+          await vendorDirectorySessionQueries.closeSession(decoded.user.sessionId, { logoutReason: reason });
+        }
+      } catch (sessionErr) {
+        logger.warn('Failed to close directory session on logout', { error: sessionErr.message }, 'AUTH_CONTROLLER');
+      }
       // Awaited: the revocation is a database write now, and answering "logged
       // out" before it lands would let the very next request through.
       const revoked = await authService.revokeSessionToken(token);
@@ -299,6 +309,53 @@ async function listUsers(req, res, next) {
   }
 }
 
+async function requestVendorDirectoryOtp(req, res, next) {
+  try {
+    const { email } = req.body || {};
+    const ipAddress = getClientIp(req);
+
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.vendorDirectoryOtpRequest, { email });
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: Object.values(errors)[0] });
+    }
+
+    const result = await authService.requestVendorDirectoryOtp(email, ipAddress);
+    return res.json(result);
+  } catch (err) {
+    logger.warn(
+      'Vendor directory OTP request failure in authController',
+      { error: err.message, email: req.body && req.body.email },
+      'AUTH_CONTROLLER'
+    );
+    const status = err.message === AUTH_MESSAGES.VENDOR_DIRECTORY_CM_ONLY ? 403 : 400;
+    return res.status(status).json({ success: false, error: err.message || AUTH_MESSAGES.OTP_DELIVERY_FAILED });
+  }
+}
+
+async function verifyVendorDirectoryOtp(req, res, next) {
+  try {
+    const { email, code } = req.body || {};
+    const ipAddress = getClientIp(req);
+    const userAgent = (req.headers && req.headers['user-agent']) || '';
+
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.vendorDirectoryOtpVerify, { email, code });
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: Object.values(errors)[0] });
+    }
+
+    const result = await authService.verifyVendorDirectoryOtp(email, code, ipAddress, userAgent);
+    return res.json(result);
+  } catch (err) {
+    logger.warn(
+      'Vendor directory OTP verification failure in authController',
+      { error: err.message, email: req.body && req.body.email },
+      'AUTH_CONTROLLER'
+    );
+    const status = err.message === AUTH_MESSAGES.VENDOR_DIRECTORY_CM_ONLY ? 403 : 401;
+    return res.status(status).json({ success: false, error: err.message || AUTH_MESSAGES.VENDOR_DIRECTORY_OTP_INVALID });
+  }
+}
+
 module.exports = {
   getClientIp,
   extractToken,
@@ -311,4 +368,6 @@ module.exports = {
   changePassword,
   completeBuyerOnboarding,
   listUsers,
+  requestVendorDirectoryOtp,
+  verifyVendorDirectoryOtp,
 };

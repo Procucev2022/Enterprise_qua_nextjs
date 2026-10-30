@@ -29,6 +29,10 @@ export const PHONE_PATTERN = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
  * +91 / 0 / 91.
  */
 export const INDIAN_MOBILE_PATTERN = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
+export const PROCUCEV_EMAIL_PATTERN = /^[a-zA-Z0-9._%+-]+@procucev\.com$/i;
+export const PROCUCEV_EMAIL_MESSAGE = 'Must be a valid Procucev corporate email address ending in @procucev.com';
+export const OTP_CODE_PATTERN = /^\d{6}$/;
+export const OTP_CODE_MESSAGE = 'OTP code must be exactly 6 numeric digits';
 
 /**
  * Delivery pincode or zipcode.
@@ -98,6 +102,13 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
    * the account by email + mobile together, so the mobile number is a hard
    * requirement here rather than an optional contact detail.
    */
+  vendorDirectoryOtpRequest: {
+    email: { required: true, pattern: PROCUCEV_EMAIL_PATTERN, message: PROCUCEV_EMAIL_MESSAGE },
+  },
+  vendorDirectoryOtpVerify: {
+    email: { required: true, pattern: PROCUCEV_EMAIL_PATTERN, message: PROCUCEV_EMAIL_MESSAGE },
+    code: { required: true, pattern: OTP_CODE_PATTERN, message: OTP_CODE_MESSAGE },
+  },
   loginForm: {
     email: { required: true, pattern: EMAIL_PATTERN, message: UI_STRINGS.auth.emailInvalid },
     mobile: { required: true, pattern: INDIAN_MOBILE_PATTERN, message: UI_STRINGS.auth.mobileInvalid },
@@ -204,6 +215,19 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     ciphertext: { required: true, minLength: 1, message: 'Ciphertext is required for decryption' },
     iv: { required: true, minLength: 12, message: 'Initialization vector is required' },
     authTag: { required: true, minLength: 16, message: 'Authentication tag is required' },
+  },
+
+  ticketCreateForm: {
+    subject: { required: true, minLength: 3, message: 'Ticket subject must be at least 3 characters.' },
+  },
+
+  ticketEscalateForm: {
+    escalatedTo: { required: true, minLength: 2, message: 'Escalation target or manager name is required.' },
+    reason: { required: true, minLength: 3, message: 'Reason for escalation is required.' },
+  },
+
+  approvalActionForm: {
+    action: { required: true, message: 'Action is required.' },
   },
 
   extendRFQ: {
@@ -508,3 +532,61 @@ export function resolveLocationFromPostalResult(
   return getFallbackLocationForPincode(pincode);
 }
 
+/** Public vendor directory search/filter query parameter limits. */
+export const PUBLIC_VENDOR_QUERY_SCHEMA = {
+  search: { maxLength: 200 },
+  category: { maxLength: 200 },
+  state: { maxLength: 100 },
+  pageSize: { min: 1, max: 100 },
+  page: { min: 1 },
+  minRating: { min: 0, max: 5 },
+  verifiedOnly: { type: 'boolean' },
+} as const;
+
+/** Indian states list for the public vendor directory state filter. */
+export const INDIAN_STATES: readonly string[] = [
+  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
+  'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand',
+  'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur',
+  'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab',
+  'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura',
+  'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
+  'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu',
+  'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry',
+];
+
+/** Vendor directory login passkey validation boundaries. */
+export const VENDOR_DIRECTORY_AUTH_SCHEMA = {
+  passkey: { minLength: 1, maxLength: 100 },
+} as const;
+
+
+/** Payment dues communication validation schemas */
+export const PAYMENT_DUES_COMMUNICATION_SCHEMA = {
+  email: {
+    recipientEmail: { minLength: 5, maxLength: 255, pattern: EMAIL_PATTERN },
+    subject: { minLength: 3, maxLength: 255 },
+    message: { minLength: 5, maxLength: 5000 },
+  },
+  message: {
+    message: { minLength: 5, maxLength: 5000 },
+  },
+  whatsapp: {
+    phone: { minLength: 8, maxLength: 20 },
+    message: { minLength: 5, maxLength: 5000 },
+  },
+  acknowledgement: {
+    acknowledgementStatus: {
+      allowed: [
+        'Not Notified',
+        'Notification Sent',
+        'Delivery Pending',
+        'Delivered',
+        'Acknowledgement Pending',
+        'Acknowledged',
+        'Failed',
+      ],
+    },
+    notes: { maxLength: 2000 },
+  },
+} as const;

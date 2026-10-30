@@ -517,4 +517,47 @@ describe('authService remaining branch tests', () => {
       expect(result.dispatchedQuotesCount).toBe(0);
     });
   });
+
+  describe('vendor directory session token generation & scope verification', () => {
+    test('generates vendor directory token with scope and sessionId', () => {
+      const user = {
+        id: 'cm-user-123',
+        email: 'cm@procucev.com',
+        name: 'Category Manager',
+        role: 'category_manager',
+      };
+
+      const token = authService.generateVendorDirectoryToken(user, 'sess-dir-abc');
+      expect(typeof token).toBe('string');
+
+      const verified = authService.verifySessionToken(token);
+      expect(verified.valid).toBe(true);
+      expect(verified.user.sub).toBe('cm-user-123');
+      expect(verified.user.email).toBe('cm@procucev.com');
+      expect(verified.user.role).toBe('category_manager');
+      expect(verified.user.scope).toBe('vendor_directory');
+      expect(verified.user.sessionId).toBe('sess-dir-abc');
+    });
+
+    test('generates session token with user.uuid fallback when user.id is missing', () => {
+      const user = {
+        uuid: 'uuid-cm-456',
+        email: 'cm2@procucev.com',
+        name: 'CM Two',
+        role: 'category_manager',
+      };
+
+      const token = authService.generateSessionToken(user, {
+        scope: 'vendor_directory',
+        sessionId: 'sess-uuid-789',
+        ttlSeconds: 600,
+      });
+
+      const verified = authService.verifySessionToken(token);
+      expect(verified.valid).toBe(true);
+      expect(verified.user.sub).toBe('uuid-cm-456');
+      expect(verified.user.sessionId).toBe('sess-uuid-789');
+      expect(verified.user.scope).toBe('vendor_directory');
+    });
+  });
 });

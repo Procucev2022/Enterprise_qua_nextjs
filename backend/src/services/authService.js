@@ -3,7 +3,13 @@ const { logger } = require('./loggerService');
 const storeService = require('./storeService');
 const mailerService = require('./mailerService');
 const smsService = require('./smsService');
-const { AUTH_MESSAGES, IDENTITY_OTP_CONFIG, PASSWORD_MIN_LENGTH } = require('../config/constants');
+const {
+  AUTH_MESSAGES,
+  IDENTITY_OTP_CONFIG,
+  PASSWORD_MIN_LENGTH,
+  VENDOR_DIRECTORY_AUTH_CONFIG,
+} = require('../config/constants');
+const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueries');
 const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
 const authSessionQueries = require('../db/authSessionQueries');
@@ -80,6 +86,15 @@ function buildOtpKey(normalizedEmail, mobile, channel = '') {
  * Generate a zero-padded numeric OTP of the configured length using a
  * cryptographically secure source rather than Math.random.
  */
+/**
+ * Build the namespaced OTP storage key for Vendor Directory access:
+ * `vendor_dir_otp:${lowercased email}`.
+ */
+function buildVendorDirectoryOtpKey(normalizedEmail) {
+  const clean = String(normalizedEmail || '').toLowerCase().trim();
+  return `vendor_dir_otp:${clean}`;
+}
+
 function generateOtpCode() {
   const ceiling = 10 ** OTP_LENGTH;
   return String(crypto.randomInt(0, ceiling)).padStart(OTP_LENGTH, '0');
@@ -196,14 +211,15 @@ async function hydrateFromDB() {
 /**
  * Generate a cryptographically signed session token (JWT structure).
  */
-function generateSessionToken(user) {
+function generateSessionToken(user, options = {}) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const issuedAt = Math.floor(Date.now() / 1000);
-  const expiresAt = issuedAt + SESSION_TTL_SECONDS;
+  const ttl = options.ttlSeconds || SESSION_TTL_SECONDS;
+  const expiresAt = issuedAt + ttl;
 
   const payload = Buffer.from(
     JSON.stringify({
-      sub: user.id,
+      sub: user.id || user.uuid,
       email: user.email,
       name: user.name,
       role: user.role,
@@ -215,6 +231,8 @@ function generateSessionToken(user) {
         (user.role === 'buyer' && (user.verificationStatus === 'pending_onboarding' || (user.resetPasswordRequired === true && user.mobile === '+919999999999'))),
       iat: issuedAt,
       exp: expiresAt,
+      ...(options.scope ? { scope: options.scope } : {}),
+      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
     })
   ).toString('base64url');
 
@@ -224,6 +242,18 @@ function generateSessionToken(user) {
     .digest('base64url');
 
   return `${header}.${payload}.${signature}`;
+}
+
+/**
+ * Generate a dedicated Vendor Directory session token with directory scope and session UUID.
+ */
+function generateVendorDirectoryToken(user, sessionId, options = {}) {
+  return generateSessionToken(user, {
+    scope: 'vendor_directory',
+    sessionId,
+    ttlSeconds: options.ttlSeconds || 300,
+    ...options,
+  });
 }
 
 /**
@@ -845,6 +875,196 @@ async function verifyOtp(email, code, ipAddress, mobile) {
 /**
  * Register a new user / enterprise entity. The only path that creates an account.
  */
+async function requestVendorDirectoryOtp(email, ipAddress) {
+  if (!email) {
+    throw new Error(AUTH_MESSAGES.OTP_EMAIL_REQUIRED);
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+
+  if (!normalizedEmail.endsWith(VENDOR_DIRECTORY_AUTH_CONFIG.ALLOWED_EMAIL_DOMAIN)) {
+    throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_PROCUCEV_EMAIL_REQUIRED);
+  }
+
+  let user = null;
+  if (pool.hasStorage()) {
+    try {
+      user = await identityQueries.findUserByEmail(normalizedEmail);
+    } catch (err) {
+      logger.warn('Failed to load identity user for Vendor Directory OTP', { error: err.message, email: normalizedEmail }, 'AUTH_SERVICE');
+      user = null;
+    }
+  }
+
+  // Deactivated/inactive accounts cannot request OTP
+  if (user && (user.isActive === false || user.status === 'inactive')) {
+    logger.warn(
+      `Vendor directory OTP denied for inactive Procucev account: ${normalizedEmail}`,
+      { ipAddress, role: user?.role },
+      'AUTH_SERVICE'
+    );
+    throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_CM_ONLY);
+  }
+
+  const code = generateOtpCode();
+  const expiresAt = Date.now() + VENDOR_DIRECTORY_AUTH_CONFIG.OTP_TTL_SECONDS * 1000;
+  const otpKey = buildVendorDirectoryOtpKey(normalizedEmail);
+
+  try {
+    await authSessionQueries.saveOtp(otpKey, code, expiresAt, normalizedEmail);
+  } catch (err) {
+    logger.error('Failed to store Vendor Directory OTP', err, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.OTP_STORAGE_FAILED);
+  }
+
+  let delivery = 'SENT';
+  try {
+    if (mailerService && typeof mailerService.sendOtpEmail === 'function') {
+      await mailerService.sendOtpEmail(normalizedEmail, code, VENDOR_DIRECTORY_AUTH_CONFIG.OTP_TTL_SECONDS, {
+        purpose: 'Vendor Directory Login',
+        role: 'category_manager',
+      });
+    }
+  } catch (err) {
+    delivery = 'FAILED';
+    logger.warn('Failed to deliver Vendor Directory OTP email', { error: err.message, email: normalizedEmail }, 'AUTH_SERVICE');
+  }
+
+  storeService.addAuditLog({
+    userEmail: normalizedEmail,
+    action: `Vendor Directory 6-digit OTP requested for Category Manager (${normalizedEmail})`,
+    ipAddress,
+  });
+
+  logger.info(
+    `Vendor Directory OTP generated for Category Manager: ${normalizedEmail}`,
+    { ipAddress, delivery },
+    'AUTH_SERVICE'
+  );
+
+  return {
+    success: true,
+    message: AUTH_MESSAGES.VENDOR_DIRECTORY_OTP_SENT,
+    email: normalizedEmail,
+    expiresInSeconds: VENDOR_DIRECTORY_AUTH_CONFIG.OTP_TTL_SECONDS,
+  };
+}
+
+async function verifyVendorDirectoryOtp(email, code, ipAddress, userAgent) {
+  if (!email || !code) {
+    throw new Error(AUTH_MESSAGES.OTP_CODE_REQUIRED);
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const cleanCode = String(code).trim();
+
+  if (!normalizedEmail.endsWith(VENDOR_DIRECTORY_AUTH_CONFIG.ALLOWED_EMAIL_DOMAIN)) {
+    throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_PROCUCEV_EMAIL_REQUIRED);
+  }
+
+  if (!/^\d{6}$/.test(cleanCode)) {
+    throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_OTP_INVALID);
+  }
+
+  let user = null;
+  if (pool.hasStorage()) {
+    try {
+      user = await identityQueries.findUserByEmail(normalizedEmail);
+    } catch (err) {
+      user = null;
+    }
+  }
+
+  // Deactivated/inactive accounts cannot access Vendor Directory
+  if (user && (user.isActive === false || user.status === 'inactive')) {
+    throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_CM_ONLY);
+  }
+
+  const otpKey = buildVendorDirectoryOtpKey(normalizedEmail);
+  const storedOtp = await authSessionQueries.findOtp(otpKey);
+
+  if (!storedOtp) {
+    throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_OTP_INVALID);
+  }
+
+  if (storedOtp.expiresAt && Date.now() > storedOtp.expiresAt) {
+    await authSessionQueries.deleteOtp(otpKey);
+    throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_OTP_EXPIRED);
+  }
+
+  if (storedOtp.attempts >= VENDOR_DIRECTORY_AUTH_CONFIG.MAX_OTP_ATTEMPTS) {
+    await authSessionQueries.deleteOtp(otpKey);
+    throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_OTP_MAX_ATTEMPTS);
+  }
+
+  if (storedOtp.code !== cleanCode) {
+    await authSessionQueries.incrementOtpAttempts(otpKey);
+    logger.warn(`Invalid Vendor Directory OTP submitted for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.VENDOR_DIRECTORY_OTP_INVALID);
+  }
+
+  await authSessionQueries.deleteOtp(otpKey);
+
+  if (!user) {
+    const localPart = normalizedEmail.split('@')[0] || 'Employee';
+    const displayName = localPart
+      .split(/[._-]/)
+      .filter(Boolean)
+      .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+      .join(' ') || 'Procucev Employee';
+
+    user = {
+      id: `procucev-emp-${crypto.createHash('sha256').update(normalizedEmail).digest('hex').slice(0, 16)}`,
+      email: normalizedEmail,
+      name: displayName,
+      role: VENDOR_DIRECTORY_AUTH_CONFIG.REQUIRED_ROLE,
+      orgId: 'org-procucev-internal',
+      orgName: 'Procucev',
+      isActive: true,
+      isApproved: true,
+    };
+  } else {
+    user = {
+      ...user,
+      role: VENDOR_DIRECTORY_AUTH_CONFIG.REQUIRED_ROLE,
+    };
+  }
+
+  const session = await vendorDirectorySessionQueries.createSession({
+    userUuid: user.id || user.uuid,
+    email: normalizedEmail,
+    role: VENDOR_DIRECTORY_AUTH_CONFIG.REQUIRED_ROLE,
+    authMethod: 'EMAIL_OTP',
+    ipAddress,
+    userAgent,
+  });
+
+  const token = generateVendorDirectoryToken(user, session.id, {
+    ttlSeconds: VENDOR_DIRECTORY_AUTH_CONFIG.INACTIVITY_TIMEOUT_SECONDS,
+  });
+
+  logger.audit(
+    `Procucev employee logged into Vendor Directory via OTP: ${user.email} (Session: ${session.id})`,
+    user.email,
+    { role: user.role, ipAddress, sessionId: session.id }
+  );
+
+  storeService.addAuditLog({
+    userEmail: user.email,
+    action: `Procucev employee authenticated to Vendor Directory [Session: ${session.id}]`,
+    ipAddress,
+  });
+
+  return {
+    success: true,
+    token,
+    sessionId: session.id,
+    expiresAt: new Date(Date.now() + VENDOR_DIRECTORY_AUTH_CONFIG.INACTIVITY_TIMEOUT_SECONDS * 1000).toISOString(),
+    expiresInSeconds: VENDOR_DIRECTORY_AUTH_CONFIG.INACTIVITY_TIMEOUT_SECONDS,
+    user: toPublicUser(user),
+  };
+}
+
 async function registerUser(payload, ipAddress) {
   const {
     name,
@@ -1204,11 +1424,15 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   }
 
   // Consume used OTPs
-  await Promise.all([
-    authSessionQueries.deleteOtp(emailOtpKey).catch(() => { }),
-    authSessionQueries.deleteOtp(mobileOtpKey).catch(() => { }),
-    authSessionQueries.deleteOtp(emailCombinedKey).catch(() => { }),
-  ]);
+  try {
+    await Promise.all([
+      authSessionQueries.deleteOtp(emailOtpKey),
+      authSessionQueries.deleteOtp(mobileOtpKey),
+      authSessionQueries.deleteOtp(emailCombinedKey),
+    ]);
+  } catch {
+    // Ignore cleanup error
+  }
 
   // 5. Update user identity record
   const updateSuccess = await identityQueries.updateBuyerOnboardingStatus({
@@ -1342,6 +1566,7 @@ module.exports = {
   assertUserCanSignIn,
   buildOtpKey,
   generateSessionToken,
+  generateVendorDirectoryToken,
   verifySessionToken,
   assertSessionActive,
   revokeSessionToken,
@@ -1352,6 +1577,9 @@ module.exports = {
   dispatchOtpCodes,
   OTP_DELIVERY_STATUS,
   verifyOtp,
+  buildVendorDirectoryOtpKey,
+  requestVendorDirectoryOtp,
+  verifyVendorDirectoryOtp,
   registerUser,
   getAllUsers,
   hydrateFromDB,
