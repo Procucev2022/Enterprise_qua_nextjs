@@ -127,12 +127,15 @@ describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
     });
   });
 
-  describe('3. Vendor 5 Free RFQ Download Credits & Exhaustion', () => {
-    test('initializes with 5 free credits and tracks atomic deductions', async () => {
+  describe('3. Vendor Free RFQ Download Credits & Exhaustion', () => {
+    test('tracks atomic deductions from a granted 5-credit balance', async () => {
+      // Vendors get no free credits by default; grant 5 to exercise deductions.
       const vendor = storeService.addVendor({
         name: 'Credit Test Vendor',
         email: 'credits@test.com',
         majorCategory: 'General Supplies',
+        freeQuotationCredits: 5,
+        freeCreditsAllocated: 5,
       });
 
       // 1. Check initial credits
@@ -173,7 +176,7 @@ describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
       const res6 = await storeService.unlockRFQForVendor(vendor.id, rfq6.id);
       expect(res6.success).toBe(false);
       expect(res6.creditsExhausted).toBe(true);
-      expect(res6.error).toContain('You have used all 5 free RFQ download credits');
+      expect(res6.error).toContain('You have no free RFQ download credits available');
 
       // Previously unlocked RFQs remain unlocked
       expect(storeService.isRfqUnlockedForVendor(vendor.id, rfq1.id)).toBe(true);
@@ -188,6 +191,7 @@ describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
         name: 'Bidder Vendor',
         email: 'bidder@vendor.com',
         majorCategory: 'Pumps & Valves',
+        freeQuotationCredits: 5,
       });
 
       const rfq = clearAutoInvites(storeService.createRFQ({
@@ -271,6 +275,7 @@ describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
         name: 'API Quoter Vendor',
         email: 'vendor@apexsupplies.com',
         majorCategory: 'Hydraulic Systems',
+        freeQuotationCredits: 5,
       });
 
       const rfq = clearAutoInvites(storeService.createRFQ({
@@ -318,8 +323,9 @@ describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
         .set(authHeader('vendor'));
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.freeCreditsAllocated).toBe(5);
-      expect(res.body.data.freeCreditsRemaining).toBe(5);
+      // New vendors receive no free credits.
+      expect(res.body.data.freeCreditsAllocated).toBe(0);
+      expect(res.body.data.freeCreditsRemaining).toBe(0);
     });
 
     test('POST /api/rfqs/:id/invite-vendors performs Category Manager assignment & override', async () => {

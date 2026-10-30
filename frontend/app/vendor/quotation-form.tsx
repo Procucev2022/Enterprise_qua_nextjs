@@ -393,7 +393,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       setShowUpgradeModal(true);
       showToast(
         UI_STRINGS.vendorSubscriptionModal?.subscriptionRequiredToastTitle || 'Subscription Required',
-        UI_STRINGS.vendorSubscriptionModal?.subscriptionRequiredToastDesc || 'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
+        UI_STRINGS.vendorSubscriptionModal?.subscriptionRequiredToastDesc || 'You have no free quotation credits. Please upgrade your subscription to continue quoting on external buyer RFQs.',
         'warning'
       );
       return;
@@ -595,7 +595,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        const errorMsg = data.error || (data.upgradeRequired ? (UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedToastDesc || 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.') : 'Failed to submit quotation.');
+        const errorMsg = data.error || (data.upgradeRequired ? (UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedToastDesc || 'You have no free quotation credits available. Please upgrade your subscription plan to continue submitting quotations.') : 'Failed to submit quotation.');
         setSubmitModalError(errorMsg);
         if (data.upgradeRequired || res.status === 403) {
           showToast(UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedToastTitle || 'Quotation Credits Exhausted', errorMsg, 'warning');
@@ -654,7 +654,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       const data = await res.json();
       if (!res.ok || !data.success) {
         if (data.exhausted || res.status === 403) {
-          showToast('Free Credits Exhausted', data.error || 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.', 'warning');
+          showToast('Free Credits Exhausted', data.error || 'You have no free RFQ download credits available. Please upgrade your subscription to download this RFQ.', 'warning');
           return;
         }
         throw new Error(data.error || 'Could not generate the RFQ specification.');
@@ -1753,7 +1753,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               </div>
 
               <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/40 text-xs leading-relaxed">
-                {UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedWarning || '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.'}
+                {UI_STRINGS.vendorSubscriptionModal?.creditsExhaustedWarning || '⚠️ No Free Quotation Credits: Free quotation credits are not available for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.'}
               </div>
 
               <div className="space-y-3">

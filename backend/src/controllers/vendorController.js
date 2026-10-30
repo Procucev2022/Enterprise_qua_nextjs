@@ -8,7 +8,7 @@ const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
-const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig,parseSearchTokens, DEFAULT_VENDOR_DIRECTORY_PASSKEY } = require('../config/constants');
+const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig,parseSearchTokens, DEFAULT_VENDOR_DIRECTORY_PASSKEY, VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
 /**
@@ -1033,9 +1033,9 @@ async function getVendorRfqCredits(req, res, next) {
         success: true,
         data: {
           vendorId: user.email,
-          freeCreditsAllocated: 5,
+          freeCreditsAllocated: VENDOR_FREE_CREDITS_LIMIT,
           freeCreditsUsed: 0,
-          freeCreditsRemaining: 5,
+          freeCreditsRemaining: VENDOR_FREE_CREDITS_LIMIT,
           isSubscribed: false,
           subscriptionPlan: 'free',
           unlockedRfqIds: [],

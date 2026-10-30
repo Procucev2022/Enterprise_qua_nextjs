@@ -189,7 +189,7 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
         rating: typeof (v as any).rating === 'number' ? (v as any).rating : 4.5,
         status: (v as any).status || 'ACTIVE',
         subscriptionPlan: (v as any).subscriptionPlan || 'Preferred Partner',
-        freeQuotationCredits: (v as any).freeQuotationCredits ?? 15,
+        freeQuotationCredits: (v as any).freeQuotationCredits ?? 0,
         rfqDownloadsUsed: (v as any).rfqDownloadsUsed ?? 4,
         gstNumber: (v as any).gstNumber || '27AAACG0000A1Z5',
         panNumber: (v as any).panNumber || 'AAACG0000A',
