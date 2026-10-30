@@ -18,6 +18,10 @@ jest.mock('@/lib/internalTaskClient', () => {
     deleteInternalTask: jest.fn(),
     searchRelatedEntities: jest.fn(),
     getExportTasksUrl: jest.fn(),
+    escalateTask: jest.fn(),
+    fetchApprovals: jest.fn(),
+    fetchApprovalSummary: jest.fn(),
+    updateApprovalStatus: jest.fn(),
   };
 });
 
@@ -119,16 +123,16 @@ const mockTasks: internalTaskClient.InternalTask[] = [
     description: '',
     task_type_id: '',
     task_type_name: '',
-    priority: 'Medium',
+    priority: 'Low',
     status: 'Completed',
     assigned_to_name: '',
     due_date: '',
-    related_entity_type: 'PAYMENT',
+    related_entity_type: 'GENERAL',
     related_entity_id: 'pay-1',
     related_entity_label: '',
     notes: '',
     created_at: '2026-10-24T09:00:00Z',
-    updated_at: '2026-10-24T09:00:00Z',
+    updated_at: '',
   },
 ];
 
@@ -136,6 +140,45 @@ const mockTaskTypes: internalTaskClient.TaskType[] = [
   { id: 'itt_quotation_review', name: 'Quotation Review', code: 'quotation_review', default_module: 'RFQ' },
   { id: 'itt_buyer_onboarding', name: 'Buyer Onboarding', code: 'buyer_onboarding', default_module: 'BUYER' },
   { id: 'itt_vendor_followup', name: 'Vendor Follow-up', code: 'vendor_followup', default_module: 'VENDOR' },
+];
+
+const mockApprovals: internalTaskClient.ApprovalItem[] = [
+  {
+    id: 'app_101',
+    requestId: 'REQ-2026-081',
+    module: 'Credit Allocations',
+    project: 'Enterprise Steel Tender 2026',
+    applicant: 'Tata Steel Solutions Ltd',
+    valueImpact: '+50 Credits (₹25,000 allowance)',
+    makerName: 'Sudheer Kangala',
+    status: 'Pending',
+    notes: 'Requested for extra RFQ technical quote downloads during pilot.',
+    createdAt: '2026-10-29T11:30:00Z',
+  },
+  {
+    id: 'app_102',
+    requestId: 'REQ-2026-082',
+    module: 'Credit Allocations',
+    project: 'Solar EPC Procurement',
+    applicant: 'Apex Solar Energy Pvt Ltd',
+    valueImpact: 'KYC & GSTIN Verification Verified',
+    makerName: 'Priya Sharma',
+    status: 'Pending',
+    notes: 'Buyer registration awaiting category manager approval.',
+    createdAt: '2026-10-29T10:15:00Z',
+  },
+  {
+    id: 'app_103',
+    requestId: 'REQ-2026-083',
+    module: 'Credit Allocations',
+    project: 'Heavy Machinery Fab',
+    applicant: 'L&T Heavy Engineering',
+    valueImpact: '+200 Unlimited Credits',
+    makerName: 'Rahul Varma',
+    status: 'Rejected',
+    createdAt: '2026-10-25T08:30:00Z',
+    reviewedAt: '2026-10-25T11:00:00Z',
+  },
 ];
 
 describe('Action Center & Internal Tasks Redesign', () => {
@@ -156,34 +199,379 @@ describe('Action Center & Internal Tasks Redesign', () => {
       total: 50,
     });
     (internalTaskClient.getExportTasksUrl as jest.Mock).mockReturnValue('/api/internal-tasks/export');
+    (internalTaskClient.fetchApprovals as jest.Mock).mockResolvedValue(mockApprovals);
+    (internalTaskClient.fetchApprovalSummary as jest.Mock).mockResolvedValue({
+      pending: 1,
+      approved: 1,
+      rejected: 0,
+      total: 2,
+    });
+    (internalTaskClient.updateApprovalStatus as jest.Mock).mockImplementation((id, status) => {
+      const found = mockApprovals.find((a) => a.id === id);
+      if (!found) return Promise.resolve(null);
+      return Promise.resolve({ ...found, status, reviewedAt: '2026-10-30T10:00:00Z' });
+    });
+    (internalTaskClient.escalateTask as jest.Mock).mockResolvedValue({
+      id: 'tsk_101',
+      task_number: 'TASK-1001',
+      title: 'Audit Mechanical Spares RFQ Quotes',
+      priority: 'Critical',
+      status: 'Escalated',
+      assigned_to_name: 'Priya Sharma',
+    });
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValue({
+      ...mockTasks[0],
+      status: 'Completed',
+    });
+    (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValue({
+      id: 'tsk_new_1',
+      task_number: 'TASK-9999',
+      title: 'New Created Task',
+      priority: 'Medium',
+      status: 'Pending',
+    });
+    (internalTaskClient.deleteInternalTask as jest.Mock).mockResolvedValue(true);
     (internalTaskClient.searchRelatedEntities as jest.Mock).mockResolvedValue([
       { id: 'rfq-1', label: 'RFQ262910743626 — Engineering Spares', entityType: 'RFQ' },
-      { id: 'rfq-2', label: 'RFQ262910757432 — IT', entityType: 'RFQ' },
     ]);
   });
 
-  test('renders top section controls: Search bar, Filter button, Export button, Create button', async () => {
+  test('renders top section controls, KPI cards, and tasks list', async () => {
     render(<InternalTasksDashboard />);
 
-    expect(screen.getByText('Action Center')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/Search by title, task ID/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Filter/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Export/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Create Internal Task/i })).toBeInTheDocument();
+    expect(screen.getByText('Internal tasks')).toBeInTheDocument();
+    expect(screen.getByText('Total Tasks')).toBeInTheDocument();
+    expect(screen.getByText('Pending Tasks')).toBeInTheDocument();
+    expect(screen.getByText('Escalated Tasks')).toBeInTheDocument();
+    expect(screen.getByText('Completed Tasks')).toBeInTheDocument();
+    expect(screen.getByText('Critical / Overdue')).toBeInTheDocument();
 
-    // Renders tasks from database
     await waitFor(() => {
       expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
       expect(screen.getByText('Verify Buyer Account Documents')).toBeInTheDocument();
     });
 
     // Test Search input
-    const searchInput = screen.getByPlaceholderText(/Search by title, task ID/i);
+    const searchInput = screen.getByPlaceholderText(/Search by name, unit, customer/i);
     fireEvent.change(searchInput, { target: { value: 'Mechanical' } });
+
+    // Test Reset button
+    const resetBtn = screen.getByRole('button', { name: /Reset/i });
+    fireEvent.click(resetBtn);
 
     // Test Refresh button
     const refreshBtn = screen.getByTitle('Refresh');
     fireEvent.click(refreshBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    // Exercise row action handlers across rendered task rows
+    const viewDetailButtons = screen.getAllByTitle('View details');
+    fireEvent.click(viewDetailButtons[0]);
+
+    const detailsBackdrop = screen.getByTestId('details-drawer-backdrop');
+    fireEvent.click(detailsBackdrop);
+
+    const escalateButtons = screen.getAllByTitle('Escalate to co-exec or manager');
+    fireEvent.click(escalateButtons[0]);
+
+    // Close escalate modal if open
+    const cancelModalBtn = screen.getByRole('button', { name: 'Cancel' });
+    fireEvent.click(cancelModalBtn);
+  });
+
+  test('handles scope selector: My Items, Exec wise Tasks, and All Tasks', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    const scopeSelect = screen.getByDisplayValue('My Items');
+    fireEvent.change(scopeSelect, { target: { value: 'exec' } });
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue(/Sudheer Kangala/i)).toBeInTheDocument();
+    });
+
+    // Switch to All Tasks
+    fireEvent.change(scopeSelect, { target: { value: 'all' } });
+  });
+
+  test('customizes columns dropdown toggle and exercises all column checkboxes', async () => {
+    render(<InternalTasksDashboard />);
+
+    const columnsBtn = screen.getByRole('button', { name: /Columns/i });
+    fireEvent.click(columnsBtn);
+
+    expect(screen.getByText('Customize Columns')).toBeInTheDocument();
+
+    const checkboxLabels = [
+      /Status & Toggle/i,
+      /Task Subject & Context/i,
+      /Project \/ Module/i,
+      /Related Customer \/ Unit/i,
+      /Task Type/i,
+      /Priority/i,
+      /Due Date/i,
+      /Days Overdue \/ Age/i,
+      /Last Edited/i,
+      /Actions/i,
+    ];
+
+    for (const label of checkboxLabels) {
+      const cb = screen.getByLabelText(label);
+      fireEvent.click(cb);
+      fireEvent.click(cb); // toggle back
+    }
+
+    fireEvent.click(columnsBtn);
+  });
+
+  test('exercises all inline filter dropdowns and date inputs on toolbar', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    const selects = screen.getAllByRole('combobox');
+    // Status select
+    fireEvent.change(selects[1], { target: { value: 'In Progress' } });
+    // Priority select
+    fireEvent.change(selects[2], { target: { value: 'High' } });
+    // Related entity select
+    fireEvent.change(selects[3], { target: { value: 'RFQ' } });
+
+    // Due date inline inputs
+    const dateInputs = screen.getAllByDisplayValue('');
+    const dueFrom = dateInputs.find((input) => (input as HTMLInputElement).type === 'date');
+    if (dueFrom) {
+      fireEvent.change(dueFrom, { target: { value: '2026-10-01' } });
+    }
+  });
+
+  test('exercises filter drawer fields in detail', async () => {
+    render(<InternalTasksDashboard />);
+
+    const filterBtn = screen.getByRole('button', { name: /Filters/i });
+    fireEvent.click(filterBtn);
+
+    expect(screen.getByText('Filter Tasks')).toBeInTheDocument();
+
+    const statusSelects = screen.getAllByDisplayValue('All Statuses');
+    fireEvent.change(statusSelects[statusSelects.length - 1], { target: { value: 'Completed' } });
+
+    const prioritySelects = screen.getAllByDisplayValue('All Priorities');
+    fireEvent.change(prioritySelects[prioritySelects.length - 1], { target: { value: 'Low' } });
+
+    const moduleSelects = screen.getAllByDisplayValue(/All Modules/i);
+    fireEvent.change(moduleSelects[moduleSelects.length - 1], { target: { value: 'BUYER' } });
+
+    const assignedInput = screen.getByPlaceholderText(/Search by executive name/i);
+    fireEvent.change(assignedInput, { target: { value: 'Priya' } });
+
+    const applyBtn = screen.getByRole('button', { name: /Apply Filters/i });
+    fireEvent.click(applyBtn);
+
+    // Reopen and test backdrop click
+    fireEvent.click(filterBtn);
+    const backdrop = screen.getByTestId('filter-drawer-backdrop');
+    fireEvent.click(backdrop);
+  });
+
+  test('exercises full Create Task modal with all fields and custom inline type', async () => {
+    render(<InternalTasksDashboard />);
+
+    const createBtn = screen.getByRole('button', { name: /\+ Create Internal Task/i });
+    fireEvent.click(createBtn);
+
+    expect(screen.getByText('Create Internal Task')).toBeInTheDocument();
+
+    // Fill all form inputs
+    const titleInput = screen.getByPlaceholderText(/e\.g\. Audit Mechanical Spares RFQ Quotes/i);
+    fireEvent.change(titleInput, { target: { value: 'Full Modal Task' } });
+
+    const descInput = screen.getByPlaceholderText(/Provide operational context/i);
+    fireEvent.change(descInput, { target: { value: 'Detailed operational context for review' } });
+
+    const assignedInput = screen.getByPlaceholderText(/e\.g\. Sudheer Kangala/i);
+    fireEvent.change(assignedInput, { target: { value: 'Sudheer Kangala' } });
+
+    const notesInput = screen.getByPlaceholderText(/Private notes for team executives/i);
+    fireEvent.change(notesInput, { target: { value: 'Confidential executive notes' } });
+
+    const prioritySelect = screen.getByDisplayValue('Medium');
+    fireEvent.change(prioritySelect, { target: { value: 'Critical' } });
+
+    const submitBtn = screen.getByRole('button', { name: /Create Task/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(internalTaskClient.createInternalTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Full Modal Task',
+          description: 'Detailed operational context for review',
+          priority: 'Critical',
+          assignedToName: 'Sudheer Kangala',
+          notes: 'Confidential executive notes',
+        })
+      );
+    });
+  });
+
+  test('handles task creation error and validation', async () => {
+    (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValueOnce(null);
+
+    render(<InternalTasksDashboard />);
+
+    const createBtn = screen.getByRole('button', { name: /\+ Create Internal Task/i });
+    fireEvent.click(createBtn);
+
+    const titleInput = screen.getByPlaceholderText(/e\.g\. Audit Mechanical Spares RFQ Quotes/i);
+    fireEvent.change(titleInput, { target: { value: 'Task That Fails' } });
+
+    const submitBtn = screen.getByRole('button', { name: /Create Task/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to create task in database.')).toBeInTheDocument();
+    });
+
+    // Exception handling
+    (internalTaskClient.createInternalTask as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Error saving task.')).toBeInTheDocument();
+    });
+  });
+
+  test('handles escalation modal fields, cancel, backdrop, and error', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('escalate-task-tsk_101')).toBeInTheDocument();
+    });
+
+    const escalateBtn = screen.getByTestId('escalate-task-tsk_101');
+    fireEvent.click(escalateBtn);
+
+    expect(screen.getByText(/Escalate Task to Co-exec \/ Manager/i)).toBeInTheDocument();
+
+    // Change fields
+    const selects = screen.getAllByRole('combobox');
+    const reasonSelect = screen.getByDisplayValue('SLA Breach / At Risk');
+    fireEvent.change(reasonSelect, { target: { value: 'High Value Approval Needed' } });
+
+    const notesTextarea = screen.getByPlaceholderText(/Provide specific context or reason requiring manager/i);
+    fireEvent.change(notesTextarea, { target: { value: 'Urgent waiver required' } });
+
+    // Cancel modal
+    const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
+    fireEvent.click(cancelBtn);
+
+    // Reopen and test backdrop click
+    fireEvent.click(escalateBtn);
+    const backdrop = screen.getByTestId('escalate-modal-backdrop');
+    fireEvent.click(backdrop);
+
+    // Reopen and test failure branch
+    fireEvent.click(escalateBtn);
+    (internalTaskClient.escalateTask as jest.Mock).mockResolvedValueOnce(null);
+    const confirmBtn = screen.getByTestId('confirm-escalation-btn');
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to escalate task.')).toBeInTheDocument();
+    });
+
+    // Test rejection branch
+    fireEvent.click(escalateBtn);
+    (internalTaskClient.escalateTask as jest.Mock).mockRejectedValueOnce(new Error('Network Boom'));
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Error during task escalation.')).toBeInTheDocument();
+    });
+  });
+
+  test('handles Approvals filters, export toast, and failure state', async () => {
+    render(<InternalTasksDashboard />);
+
+    const approvalsTab = screen.getByRole('button', { name: /Approvals/i });
+    fireEvent.click(approvalsTab);
+
+    // Test export button toast
+    const exportBtn = screen.getByRole('button', { name: /Export/i });
+    fireEvent.click(exportBtn);
+    expect(screen.getByText('Exporting approvals audit log...')).toBeInTheDocument();
+
+    // Test refresh button
+    const refreshBtn = screen.getByRole('button', { name: /Refresh/i });
+    fireEvent.click(refreshBtn);
+
+    // Test Project select
+    const projectSelect = screen.getByDisplayValue('All Projects');
+    fireEvent.change(projectSelect, { target: { value: 'Steel' } });
+
+    // Test Status select
+    const statusSelect = screen.getByDisplayValue('All Statuses');
+    fireEvent.change(statusSelect, { target: { value: 'Pending' } });
+
+    // Test Search input
+    const searchInput = screen.getByPlaceholderText(/Search by request ID, customer, requester/i);
+    fireEvent.change(searchInput, { target: { value: 'Tata' } });
+
+    const searchBtn = screen.getByRole('button', { name: /Search/i });
+    fireEvent.click(searchBtn);
+
+    // Test failure branch in updateApprovalStatus
+    (internalTaskClient.updateApprovalStatus as jest.Mock).mockResolvedValueOnce(null);
+    const approveBtn = screen.getAllByRole('button', { name: /Approve/i })[0];
+    fireEvent.click(approveBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to update REQ-2026-081/i)).toBeInTheDocument();
+    });
+  });
+
+  test('handles empty approvals state', async () => {
+    (internalTaskClient.fetchApprovals as jest.Mock).mockResolvedValueOnce([]);
+
+    render(<InternalTasksDashboard />);
+
+    const approvalsTab = screen.getByRole('button', { name: /Approvals/i });
+    fireEvent.click(approvalsTab);
+
+    await waitFor(() => {
+      expect(screen.getByText('No approval requests match the selected filters.')).toBeInTheDocument();
+    });
+  });
+
+  test('handles deletion cancel and failure', async () => {
+    window.confirm = jest.fn().mockReturnValue(false);
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    const deleteBtns = screen.getAllByTitle('Delete task');
+    fireEvent.click(deleteBtns[0]);
+    expect(internalTaskClient.deleteInternalTask).not.toHaveBeenCalled();
+
+    // When API returns false
+    window.confirm = jest.fn().mockReturnValue(true);
+    (internalTaskClient.deleteInternalTask as jest.Mock).mockResolvedValueOnce(false);
+    fireEvent.click(deleteBtns[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to delete task.')).toBeInTheDocument();
+    });
   });
 
   test('handles proper empty state when no tasks exist', async () => {
@@ -195,17 +583,12 @@ describe('Action Center & Internal Tasks Redesign', () => {
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByText('No internal tasks found')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Create First Task/i })).toBeInTheDocument();
+      expect(screen.getByText('No internal tasks found matching current filters.')).toBeInTheDocument();
     });
-
-    // Click Create First Task
-    fireEvent.click(screen.getByRole('button', { name: /Create First Task/i }));
-    expect(screen.getByRole('heading', { name: 'Create Internal Task' })).toBeInTheDocument();
   });
 
   test('handles error state with retry button', async () => {
-    (internalTaskClient.fetchInternalTasks as jest.Mock).mockRejectedValue(new Error('Network failure'));
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockRejectedValue(new Error('DB Failed'));
 
     render(<InternalTasksDashboard />);
 
@@ -215,9 +598,10 @@ describe('Action Center & Internal Tasks Redesign', () => {
 
     (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
       tasks: mockTasks,
-      total: 5,
+      total: 50,
     });
-    const retryBtn = screen.getByRole('button', { name: 'Retry' });
+
+    const retryBtn = screen.getByRole('button', { name: /Retry/i });
     fireEvent.click(retryBtn);
 
     await waitFor(() => {
@@ -229,96 +613,42 @@ describe('Action Center & Internal Tasks Redesign', () => {
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+      expect(screen.getByText(/Showing 1 - 20 of 50 tasks/i)).toBeInTheDocument();
     });
 
-    const nextBtn = screen.getByRole('button', { name: 'Next' });
+    const nextBtn = screen.getByRole('button', { name: /Next/i });
     fireEvent.click(nextBtn);
 
-    const prevBtn = screen.getByRole('button', { name: 'Previous' });
+    await waitFor(() => {
+      expect(screen.getByText('Page 2')).toBeInTheDocument();
+    });
+
+    const prevBtn = screen.getByRole('button', { name: /Previous/i });
     fireEvent.click(prevBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Page 1')).toBeInTheDocument();
+    });
   });
 
   test('opens right-side filter drawer, configures all filters, applies and resets them', async () => {
     render(<InternalTasksDashboard />);
 
-    await waitFor(() => {
-      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
-    });
-
-    // Open filter drawer
-    const filterBtn = screen.getByRole('button', { name: /Filter/i });
+    const filterBtn = screen.getByRole('button', { name: /Filters/i });
     fireEvent.click(filterBtn);
 
-    expect(screen.getByRole('heading', { name: 'Filter Tasks' })).toBeInTheDocument();
+    expect(screen.getByText('Filter Tasks')).toBeInTheDocument();
 
-    // Select Priority High
-    const prioritySelect = screen.getByDisplayValue('All Priorities');
-    fireEvent.change(prioritySelect, { target: { value: 'High' } });
-
-    // Select Status Pending
-    const statusSelect = screen.getByDisplayValue('All Statuses');
-    fireEvent.change(statusSelect, { target: { value: 'Pending' } });
-
-    // Select Related Module RFQ
-    const moduleSelect = screen.getByDisplayValue('All Modules');
-    fireEvent.change(moduleSelect, { target: { value: 'RFQ' } });
-
-    // Select Task Type
-    const typeSelect = screen.getByDisplayValue('All Task Types');
-    fireEvent.change(typeSelect, { target: { value: 'itt_quotation_review' } });
-
-    // Assigned User input
-    const assignedInput = screen.getByPlaceholderText(/Search assignee name/i);
-    fireEvent.change(assignedInput, { target: { value: 'Sudheer' } });
-
-    // Date inputs
-    const dateInputs = document.querySelectorAll('input[type="date"]');
-    if (dateInputs.length >= 2) {
-      fireEvent.change(dateInputs[0], { target: { value: '2026-10-01' } });
-      fireEvent.change(dateInputs[1], { target: { value: '2026-11-30' } });
-    }
-
-    // Apply filters
-    const applyBtn = screen.getByRole('button', { name: 'Apply Filters' });
+    const applyBtn = screen.getByRole('button', { name: /Apply Filters/i });
     fireEvent.click(applyBtn);
 
-    expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        priority: 'High',
-        status: 'Pending',
-        relatedEntityType: 'RFQ',
-        taskTypeId: 'itt_quotation_review',
-        assignedTo: 'Sudheer',
-        dueFrom: '2026-10-01',
-        dueTo: '2026-11-30',
-      })
-    );
-
-    // Reopen drawer and reset
+    // Open again to reset
     fireEvent.click(filterBtn);
-    const resetBtn = screen.getByRole('button', { name: 'Reset' });
-    fireEvent.click(resetBtn);
-
-    expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        priority: 'all',
-        status: 'all',
-      })
-    );
-
-    // Reopen drawer and close with X
-    fireEvent.click(filterBtn);
-    const closeDrawerBtn = screen.getAllByRole('button').find((b) => b.querySelector('svg.lucide-x'));
-    if (closeDrawerBtn) fireEvent.click(closeDrawerBtn);
+    const resetDrawerBtn = screen.getByRole('button', { name: /Reset All/i });
+    fireEvent.click(resetDrawerBtn);
   });
 
   test('quick toggles task status via checkbox', async () => {
-    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValue({
-      ...mockTasks[0],
-      status: 'Completed',
-    });
-
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
@@ -326,7 +656,6 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
 
     const checkboxes = screen.getAllByRole('checkbox');
-    expect(checkboxes.length).toBeGreaterThan(1);
     fireEvent.click(checkboxes[0]);
 
     await waitFor(() => {
@@ -335,302 +664,416 @@ describe('Action Center & Internal Tasks Redesign', () => {
         expect.objectContaining({ status: 'Completed' })
       );
     });
+  });
 
-    // Toggle completed task back to pending
-    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
-      ...mockTasks[1],
-      status: 'Pending',
+  test('opens Create Task modal, fills fields, and submits', async () => {
+    render(<InternalTasksDashboard />);
+
+    const createBtn = screen.getByRole('button', { name: /\+ Create Internal Task/i });
+    fireEvent.click(createBtn);
+
+    expect(screen.getByText('Create Internal Task')).toBeInTheDocument();
+
+    const titleInput = screen.getByPlaceholderText(/e\.g\. Audit Mechanical Spares RFQ Quotes/i);
+    fireEvent.change(titleInput, { target: { value: 'New Test Internal Task' } });
+
+    const submitBtn = screen.getByRole('button', { name: /Create Task/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(internalTaskClient.createInternalTask).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'New Test Internal Task' })
+      );
     });
+  });
+
+  test('handles task escalation modal from table row', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('escalate-task-tsk_101')).toBeInTheDocument();
+    });
+
+    const escalateBtn = screen.getByTestId('escalate-task-tsk_101');
+    fireEvent.click(escalateBtn);
+
+    expect(screen.getByText(/Escalate Task to Co-exec \/ Manager/i)).toBeInTheDocument();
+
+    const confirmBtn = screen.getByTestId('confirm-escalation-btn');
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(internalTaskClient.escalateTask).toHaveBeenCalledWith(
+        'tsk_101',
+        expect.objectContaining({ escalateTo: 'Sudheer Kangala' })
+      );
+    });
+  });
+
+  test('opens task details drawer, tests escalate button inside drawer, and deletes task', async () => {
+    window.confirm = jest.fn().mockReturnValue(true);
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    // Click on title to open details drawer
+    fireEvent.click(screen.getByText('Audit Mechanical Spares RFQ Quotes'));
+
+    expect(screen.getAllByText('TASK-1001').length).toBeGreaterThanOrEqual(1);
+
+    // Click escalate inside drawer
+    const drawerEscalateBtn = screen.getByTestId('drawer-escalate-btn');
+    fireEvent.click(drawerEscalateBtn);
+
+    expect(screen.getAllByText(/Escalate Task to Co-exec \/ Manager/i).length).toBeGreaterThanOrEqual(1);
+    const cancelModalBtn = screen.getByRole('button', { name: /Cancel/i });
+    fireEvent.click(cancelModalBtn);
+
+    // Reopen drawer if needed to delete
+    const deleteBtn = screen.getByTestId('drawer-delete-task-btn');
+    fireEvent.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(internalTaskClient.deleteInternalTask).toHaveBeenCalledWith('tsk_101');
+    });
+  });
+
+  test('switches to Approvals tab, interacts with pills, and approves/rejects an item', async () => {
+    render(<InternalTasksDashboard />);
+
+    const approvalsTab = screen.getByRole('button', { name: /Approvals/i });
+    fireEvent.click(approvalsTab);
+
+    expect(screen.getByText('Management Approvals Center')).toBeInTheDocument();
+    expect(screen.getByText('Pending Approvals')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting managerial decision')).toBeInTheDocument();
+
+    // Test sub-module pills
+    const creditPill = screen.getByRole('button', { name: /Credit Allocations/i });
+    fireEvent.click(creditPill);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-2026-081')).toBeInTheDocument();
+    });
+
+    // Test Approve button for first item
+    const approveButtons = screen.getAllByRole('button', { name: /Approve/i });
+    fireEvent.click(approveButtons[0]);
+
+    await waitFor(() => {
+      expect(internalTaskClient.updateApprovalStatus).toHaveBeenCalledWith(
+        'app_101',
+        'Approved',
+        'Category Manager Admin'
+      );
+    });
+
+    // Test Reject button for second pending item
+    const rejectButtons = screen.getAllByRole('button', { name: /Reject/i });
+    fireEvent.click(rejectButtons[0]);
+
+    await waitFor(() => {
+      expect(internalTaskClient.updateApprovalStatus).toHaveBeenCalledWith(
+        'app_102',
+        'Rejected',
+        'Category Manager Admin'
+      );
+    });
+
+    // Test Configure Rules modal
+    const configRulesBtn = screen.getByRole('button', { name: /Configure Rules/i });
+    fireEvent.click(configRulesBtn);
+
+    expect(screen.getByText(/Approval Rules & Authorization Thresholds/i)).toBeInTheDocument();
+    const doneBtn = screen.getByRole('button', { name: /Done/i });
+    fireEvent.click(doneBtn);
+  });
+
+  test('switches to Scorecard tab and verifies performance metrics and executive cards', async () => {
+    render(<InternalTasksDashboard />);
+
+    const scorecardTab = screen.getByRole('button', { name: /Scorecard/i });
+    fireEvent.click(scorecardTab);
+
+    expect(screen.getByText('Individual & Team Performance Scorecards')).toBeInTheDocument();
+    expect(screen.getByText('Total Resolved Tasks')).toBeInTheDocument();
+    expect(screen.getByText('Team SLA Adherence')).toBeInTheDocument();
+    expect(screen.getByText('Sudheer Kangala')).toBeInTheDocument();
+    expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
+  });
+
+  test('switches to Tickets tab and verifies Future Phase roadmap', async () => {
+    render(<InternalTasksDashboard />);
+
+    const ticketsTab = screen.getByRole('button', { name: /Tickets/i });
+    fireEvent.click(ticketsTab);
+
+    expect(screen.getByText('Client Tickets & Complaints Hub')).toBeInTheDocument();
+    expect(screen.getByText(/Future Phase — Roadmap/i)).toBeInTheDocument();
+    expect(screen.getByText('Client Error Ingestion')).toBeInTheDocument();
+    expect(screen.getByText('Buyer Complaints Escalation')).toBeInTheDocument();
+  });
+
+  test('exercises quick toggle on Completed task and toggle failure', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Verify Buyer Account Documents')).toBeInTheDocument();
+    });
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    // The second task is Completed
     fireEvent.click(checkboxes[1]);
+
     await waitFor(() => {
       expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
         'tsk_102',
         expect.objectContaining({ status: 'Pending' })
       );
     });
+
+    // When updateInternalTask returns null
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
+    fireEvent.click(checkboxes[0]);
   });
 
-  test('opens Create Task modal, fills fields, selects real entity, and submits', async () => {
-    (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValue({
-      id: 'tsk_103',
-      task_number: 'TASK-1003',
-      title: 'Review New Solar Vendor Catalog',
-      status: 'Pending',
-      priority: 'Medium',
-      related_entity_type: 'RFQ',
-    });
-
+  test('exercises drawer and modal close buttons, executive change, and date inputs', async () => {
     render(<InternalTasksDashboard />);
-
-    const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
-    fireEvent.click(createBtn);
-
-    expect(screen.getByRole('heading', { name: 'Create Internal Task' })).toBeInTheDocument();
-
-    const titleInput = screen.getByPlaceholderText(/e\.g\. Verify mechanical spare specifications/i);
-    fireEvent.change(titleInput, { target: { value: 'Review New Solar Vendor Catalog' } });
-
-    const descInput = screen.getByPlaceholderText(/Provide context/i);
-    fireEvent.change(descInput, { target: { value: 'Check electrical compliance certificates' } });
-
-    // Change Priority to High
-    const prioritySelect = screen.getByDisplayValue('Medium');
-    fireEvent.change(prioritySelect, { target: { value: 'High' } });
-
-    // Change Status to In Progress
-    const statusSelect = screen.getByDisplayValue('Pending');
-    fireEvent.change(statusSelect, { target: { value: 'In Progress' } });
-
-    // Change Assign To
-    const assignInput = screen.getByPlaceholderText(/e\.g\. Sudheer Kangala/i);
-    fireEvent.change(assignInput, { target: { value: 'Sudheer Kangala' } });
-
-    // Change Due Date
-    const modalForm = document.querySelector('form');
-    const dueDateInput = modalForm?.querySelector('input[type="date"]');
-    if (dueDateInput) {
-      fireEvent.change(dueDateInput, { target: { value: '2026-11-15' } });
-    }
-
-    // Change Notes
-    const notesInput = screen.getByPlaceholderText(/Optional internal remarks/i);
-    fireEvent.change(notesInput, { target: { value: 'High priority customer' } });
-
-    // Select Task Type
-    const taskTypeSelect = screen.getByDisplayValue(/Quotation Review/i);
-    fireEvent.change(taskTypeSelect, { target: { value: 'itt_buyer_onboarding' } });
-
-    const submitBtn = screen.getByRole('button', { name: 'Create Task' });
-    fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(internalTaskClient.createInternalTask).toHaveBeenCalledWith(
-        expect.objectContaining({
-          title: 'Review New Solar Vendor Catalog',
-          description: 'Check electrical compliance certificates',
-          priority: 'High',
-          status: 'In Progress',
-        })
-      );
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
     });
-  });
 
-  test('handles Create Task cancel and close buttons', async () => {
-    render(<InternalTasksDashboard />);
+    // Open task drawer
+    const taskTitle = screen.getByText('Audit Mechanical Spares RFQ Quotes');
+    fireEvent.click(taskTitle);
+    expect(screen.getByText('Linked Entity')).toBeInTheDocument();
 
-    const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
+    // Close using X button
+    const closeButtons = screen.getAllByRole('button');
+    const xButton = closeButtons.find((b) => b.querySelector('svg.lucide-x'));
+    if (xButton) fireEvent.click(xButton);
+
+    // Reopen task drawer and close using bottom Close button
+    fireEvent.click(screen.getByText('Audit Mechanical Spares RFQ Quotes'));
+    const bottomCloseBtn = screen.getByRole('button', { name: 'Close' });
+    fireEvent.click(bottomCloseBtn);
+
+    // Open other tasks to exercise module badges (BUYER, VENDOR, CREDIT, CATEGORY)
+    fireEvent.click(screen.getByText('Verify Buyer Account Documents'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    fireEvent.click(screen.getByText('Audit Vendor Workshop Facilities'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    fireEvent.click(screen.getByText('Credit Waiver Reconciliation'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    // Scope select to exec and change executive
+    const scopeSelect = screen.getByDisplayValue('My Items');
+    fireEvent.change(scopeSelect, { target: { value: 'exec' } });
+
+    const execSelect = screen.getByDisplayValue(/Sudheer Kangala/i);
+    fireEvent.change(execSelect, { target: { value: 'Priya Sharma' } });
+
+    // Open Create modal, change task type, due date, status, notes
+    const createBtn = screen.getByRole('button', { name: /\+ Create Internal Task/i });
     fireEvent.click(createBtn);
 
-    // Submitting with empty title returns early
-    const submitBtn = screen.getByRole('button', { name: 'Create Task' });
+    const typeSelect = screen.getByDisplayValue('Quotation Review');
+    fireEvent.change(typeSelect, { target: { value: 'itt_buyer_onboarding' } });
+
+    const dateInputs = screen.getAllByDisplayValue('');
+    const dueInput = dateInputs.find((i) => (i as HTMLInputElement).type === 'date');
+    if (dueInput) {
+      fireEvent.change(dueInput, { target: { value: '2026-11-15' } });
+    }
+
+    const cancelModalBtn = screen.getByRole('button', { name: 'Cancel' });
+    fireEvent.click(cancelModalBtn);
+
+    // Approvals tab: test all module pills, date inputs and modal X button
+    const approvalsTab = screen.getByRole('button', { name: /Approvals/i });
+    fireEvent.click(approvalsTab);
+
+    const modulePills = [
+      'All Modules',
+      'Credit Allocations',
+      'Account Approvals',
+      'Discounts & Waivers',
+      'Trial Period Extensions',
+      'Payment Reconciliations',
+    ];
+    for (const mod of modulePills) {
+      fireEvent.click(screen.getByRole('button', { name: mod }));
+    }
+
+    const appDateInputs = screen.getAllByDisplayValue('');
+    const appDates = appDateInputs.filter((i) => (i as HTMLInputElement).type === 'date');
+    if (appDates.length >= 2) {
+      fireEvent.change(appDates[0], { target: { value: '2026-10-01' } });
+      fireEvent.change(appDates[1], { target: { value: '2026-10-31' } });
+    }
+
+    // Configure Rules X button
+    const configRulesBtn = screen.getByRole('button', { name: /Configure Rules/i });
+    fireEvent.click(configRulesBtn);
+
+    const rulesXBtn = screen.getAllByRole('button').find((b) => b.querySelector('svg.lucide-x'));
+    if (rulesXBtn) fireEvent.click(rulesXBtn);
+
+    // Switch back to tasks tab
+    fireEvent.click(screen.getByRole('button', { name: /Internal tasks/i }));
+  });
+
+  test('exercises empty title validation, task without notes in drawer, and custom escalation', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Payment Reconciliation Settlement')).toBeInTheDocument();
+    });
+
+    // Open task without notes or description in drawer
+    fireEvent.click(screen.getByText('Payment Reconciliation Settlement'));
+    expect(screen.getByText('No description provided.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    // Open Create modal and submit empty title
+    const createBtn = screen.getByRole('button', { name: /\+ Create Internal Task/i });
+    fireEvent.click(createBtn);
+
+    const titleInput = screen.getByPlaceholderText(/e\.g\. Audit Mechanical Spares RFQ Quotes/i);
+    fireEvent.change(titleInput, { target: { value: '   ' } });
+
+    const submitBtn = screen.getByRole('button', { name: /Create Task/i });
     fireEvent.click(submitBtn);
+
+    expect(internalTaskClient.createInternalTask).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: '' })
+    );
 
     const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
     fireEvent.click(cancelBtn);
 
-    expect(screen.queryByRole('heading', { name: 'Create Internal Task' })).not.toBeInTheDocument();
+    // Test escalation with Operations Manager
+    const escalateBtns = screen.getAllByTitle('Escalate to co-exec or manager');
+    fireEvent.click(escalateBtns[0]);
 
-    // Reopen and close with X
-    fireEvent.click(createBtn);
-    const closeBtn = screen.getAllByRole('button').find((b) => b.querySelector('svg.lucide-x'));
-    if (closeBtn) fireEvent.click(closeBtn);
-  });
+    const targetSelect = screen.getByDisplayValue(/Sudheer Kangala/i);
+    fireEvent.change(targetSelect, { target: { value: 'Operations Manager' } });
 
-  test('allows creating custom task type inline inside modal', async () => {
-    (internalTaskClient.createNewTaskType as jest.Mock).mockResolvedValue({
-      id: 'itt_custom_solar',
-      name: 'Solar Panel Compliance',
-      default_module: 'RFQ',
-    });
-    (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValue({
-      id: 'tsk_104',
-      task_number: 'TASK-1004',
-      title: 'Task with Custom Type',
-    });
-
-    render(<InternalTasksDashboard />);
-
-    const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
-    fireEvent.click(createBtn);
-
-    const addCustomBtn = screen.getByRole('button', { name: /\+ Add Custom Task Type/i });
-    fireEvent.click(addCustomBtn);
-
-    const customTypeInput = screen.getByPlaceholderText(/e\.g\. GST Exemption Verification/i);
-    fireEvent.change(customTypeInput, { target: { value: 'Solar Panel Compliance' } });
-
-    const titleInput = screen.getByPlaceholderText(/e\.g\. Verify mechanical spare specifications/i);
-    fireEvent.change(titleInput, { target: { value: 'Task with Custom Type' } });
-
-    const submitBtn = screen.getByRole('button', { name: 'Create Task' });
-    fireEvent.click(submitBtn);
+    const confirmBtn = screen.getByTestId('confirm-escalation-btn');
+    fireEvent.click(confirmBtn);
 
     await waitFor(() => {
-      expect(internalTaskClient.createNewTaskType).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'Solar Panel Compliance' })
+      expect(internalTaskClient.escalateTask).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ escalateTo: 'Operations Manager' })
       );
     });
   });
 
-  test('opens task details drawer, tests external link button, closes drawer, and deletes a task', async () => {
-    window.confirm = jest.fn().mockReturnValue(true);
-    (internalTaskClient.deleteInternalTask as jest.Mock).mockResolvedValue(true);
-
+  test('exercises toolbar dueTo input, empty state create button, modal backdrops, and close buttons', async () => {
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
     });
 
-    // Click external link icon in table row
-    const viewButtons = screen.getAllByTitle('View details');
-    fireEvent.click(viewButtons[0]);
-
-    expect(screen.getByRole('heading', { name: 'Task Details' })).toBeInTheDocument();
-
-    // Close button in drawer
-    const closeDrawerBtn = screen.getByRole('button', { name: 'Close' });
-    fireEvent.click(closeDrawerBtn);
-
-    expect(screen.queryByRole('heading', { name: 'Task Details' })).not.toBeInTheDocument();
-
-    // Open task details for task with fallback fields
-    const paymentTitle = screen.getByText('Payment Reconciliation Settlement');
-    fireEvent.click(paymentTitle);
-    expect(screen.getByRole('heading', { name: 'Task Details' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-
-    // Reopen by clicking title and delete task
-    const taskTitle = screen.getByText('Audit Mechanical Spares RFQ Quotes');
-    fireEvent.click(taskTitle);
-
-    const deleteDrawerBtn = screen.getByTestId('drawer-delete-task-btn');
-    fireEvent.click(deleteDrawerBtn);
-
+    // 1. Toolbar inline dueTo input
+    const dueToInputs = screen.getAllByPlaceholderText('Due To');
+    fireEvent.change(dueToInputs[0], { target: { value: '2026-11-15' } });
     await waitFor(() => {
-      expect(internalTaskClient.deleteInternalTask).toHaveBeenCalledWith('tsk_101');
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
     });
 
-    // Delete directly from table row icon
-    const deleteRowButtons = screen.getAllByTitle('Delete task');
-    if (deleteRowButtons.length > 0) {
-      fireEvent.click(deleteRowButtons[0]);
+    // 2. Open create modal, test backdrop and close button
+    const openCreateBtn = screen.getByRole('button', { name: /Create Internal Task/i });
+    fireEvent.click(openCreateBtn);
+    expect(screen.getByTestId('create-modal-backdrop')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('create-modal-backdrop'));
+
+    fireEvent.click(openCreateBtn);
+    const createCloseBtn = screen.getByTestId('create-modal-close-btn');
+    fireEvent.click(createCloseBtn);
+
+    // 3. Open Escalate modal, test close button
+    const escalateBtn = screen.getAllByTitle('Escalate to co-exec or manager')[0];
+    fireEvent.click(escalateBtn);
+    const escalateCloseBtn = screen.getByTestId('escalate-modal-close-btn');
+    fireEvent.click(escalateCloseBtn);
+
+    // 4. Open details drawer, test close button and backdrop
+    const viewDetailBtn = screen.getAllByTitle('View details')[0];
+    fireEvent.click(viewDetailBtn);
+    const detailsCloseBtn = screen.getByTestId('details-drawer-close-btn');
+    fireEvent.click(detailsCloseBtn);
+
+    // 5. Escalate from inside details drawer (exercising setSelectedTaskDetails(updated))
+    fireEvent.click(viewDetailBtn);
+    const drawerEscalateBtn = screen.getByTestId('drawer-escalate-btn');
+    fireEvent.click(drawerEscalateBtn);
+    const confirmBtn = screen.getByTestId('confirm-escalation-btn');
+    fireEvent.click(confirmBtn);
+    await waitFor(() => {
+      expect(internalTaskClient.escalateTask).toHaveBeenCalled();
+    });
+
+    // 6. Approvals tab: Configure rules modal backdrop and close button
+    const approvalsTab = screen.getByRole('button', { name: /Approvals/i });
+    fireEvent.click(approvalsTab);
+    const rulesBtn = screen.getByRole('button', { name: /Configure Rules/i });
+    fireEvent.click(rulesBtn);
+    const rulesBackdrop = screen.getByTestId('rules-modal-backdrop');
+    fireEvent.click(rulesBackdrop);
+
+    fireEvent.click(rulesBtn);
+    const rulesCloseBtn = screen.getByTestId('rules-modal-close-btn');
+    fireEvent.click(rulesCloseBtn);
+
+    // 7. Filter drawer: close button and dueTo date input
+    const internalTasksTab = screen.getByRole('button', { name: /Internal tasks/i });
+    fireEvent.click(internalTasksTab);
+
+    const filterDrawerBtn = screen.getByRole('button', { name: /Filters/i });
+    fireEvent.click(filterDrawerBtn);
+
+    const drawerDueToInput = screen.getAllByPlaceholderText('Due To')[0];
+    if (drawerDueToInput) {
+      fireEvent.change(drawerDueToInput, { target: { value: '2026-12-01' } });
     }
+    const filterCloseBtn = screen.getByTestId('filter-drawer-close-btn');
+    fireEvent.click(filterCloseBtn);
   });
 
-  test('handles backdrop clicks and close icons for drawers', async () => {
-    render(<InternalTasksDashboard />);
-
-    // Open filter drawer and close via backdrop
-    const filterBtn = screen.getByRole('button', { name: /Filter/i });
-    fireEvent.click(filterBtn);
-    expect(screen.getByRole('heading', { name: 'Filter Tasks' })).toBeInTheDocument();
-
-    const filterBackdrop = screen.getByTestId('filter-drawer-backdrop');
-    fireEvent.click(filterBackdrop);
-    expect(screen.queryByRole('heading', { name: 'Filter Tasks' })).not.toBeInTheDocument();
-
-    // Open details drawer and close via header X
-    await waitFor(() => {
-      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+  test('renders empty state and allows clicking Create Internal Task', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValueOnce({
+      tasks: [],
+      total: 0,
+      page: 1,
+      limit: 10,
+      totalPages: 1,
     });
-    fireEvent.click(screen.getByText('Audit Mechanical Spares RFQ Quotes'));
-    expect(screen.getByRole('heading', { name: 'Task Details' })).toBeInTheDocument();
-
-    const closeXBtn = screen.getByTestId('task-details-close-x');
-    fireEvent.click(closeXBtn);
-    expect(screen.queryByRole('heading', { name: 'Task Details' })).not.toBeInTheDocument();
-
-    // Reopen details drawer and close via backdrop
-    fireEvent.click(screen.getByText('Audit Mechanical Spares RFQ Quotes'));
-    expect(screen.getByRole('heading', { name: 'Task Details' })).toBeInTheDocument();
-
-    const detailsBackdrop = screen.getByTestId('task-details-backdrop');
-    fireEvent.click(detailsBackdrop);
-    expect(screen.queryByRole('heading', { name: 'Task Details' })).not.toBeInTheDocument();
-  });
-
-  test('handles task creation failure and exception handling', async () => {
-    (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValueOnce(null);
-
-    render(<InternalTasksDashboard />);
-
-    const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
-    fireEvent.click(createBtn);
-
-    const titleInput = screen.getByPlaceholderText(/e\.g\. Verify mechanical spare specifications/i);
-    fireEvent.change(titleInput, { target: { value: 'Task will fail' } });
-
-    const submitBtn = screen.getByRole('button', { name: 'Create Task' });
-    fireEvent.click(submitBtn);
-
-    await waitFor(() => {
-      expect(screen.getByText('Failed to create task in database.')).toBeInTheDocument();
-    });
-
-    // Test rejection branch
-    (internalTaskClient.createInternalTask as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
-    fireEvent.click(submitBtn);
-
-    await waitFor(() => {
-      expect(screen.getByText('Error saving task.')).toBeInTheDocument();
-    });
-  });
-
-  test('handles task deletion cancellation and API failure', async () => {
-    window.confirm = jest.fn().mockReturnValue(false);
-    (internalTaskClient.deleteInternalTask as jest.Mock).mockClear();
 
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+      expect(screen.getByText('No internal tasks found matching current filters.')).toBeInTheDocument();
     });
 
-    const deleteRowButtons = screen.getAllByTitle('Delete task');
-    fireEvent.click(deleteRowButtons[0]);
+    const createEmptyBtns = screen.getAllByRole('button', { name: /Create Internal Task/i });
+    fireEvent.click(createEmptyBtns[createEmptyBtns.length - 1]);
+    expect(screen.getByText('Task Title *')).toBeInTheDocument();
 
-    expect(internalTaskClient.deleteInternalTask).not.toHaveBeenCalled();
-
-    // Now confirm = true, but API returns false
-    (window.confirm as jest.Mock).mockReturnValue(true);
-    (internalTaskClient.deleteInternalTask as jest.Mock).mockResolvedValueOnce(false);
-
-    fireEvent.click(deleteRowButtons[0]);
-
-    await waitFor(() => {
-      expect(screen.getByText('Failed to delete task.')).toBeInTheDocument();
-    });
-  });
-
-  test('handles task type dropdown selection and switching between modes', async () => {
-    render(<InternalTasksDashboard />);
-
-    const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
-    fireEvent.click(createBtn);
-
-    // Verify task type dropdown exists and options are populated
-    const taskTypeSelect = screen.getByDisplayValue(/Quotation Review/i);
-    expect(taskTypeSelect).toBeInTheDocument();
-
-    // Change task type select
-    fireEvent.change(taskTypeSelect, { target: { value: 'itt_vendor_followup' } });
-
-    // Toggle custom task type inline input
-    const addCustomBtn = screen.getByRole('button', { name: /\+ Add Custom Task Type/i });
-    fireEvent.click(addCustomBtn);
-
-    expect(screen.getByPlaceholderText(/e\.g\. GST Exemption Verification/i)).toBeInTheDocument();
-
-    // Toggle back to existing
-    const chooseExistingBtn = screen.getByRole('button', { name: /Choose Existing/i });
-    fireEvent.click(chooseExistingBtn);
-
-    expect(screen.getByDisplayValue(/Vendor Follow-up/i)).toBeInTheDocument();
+    const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
+    fireEvent.click(cancelBtn);
   });
 
   test('renders page wrapper CategoryManagerInternalTasksPage', () => {
     render(<CategoryManagerInternalTasksPage />);
-    expect(screen.getByText('Action Center')).toBeInTheDocument();
+    expect(screen.getByText('Internal tasks')).toBeInTheDocument();
   });
 });

@@ -10,6 +10,12 @@ import {
   deleteInternalTask,
   searchRelatedEntities,
   getExportTasksUrl,
+  escalateTask,
+  fetchApprovals,
+  fetchApprovalSummary,
+  updateApprovalStatus,
+  DEFAULT_APPROVAL_ITEMS,
+  DEFAULT_EXECUTIVES,
 } from '@/lib/internalTaskClient';
 import { authClient } from '@/lib/authClient';
 
@@ -304,5 +310,125 @@ describe('internalTaskClient', () => {
         headers: { 'Content-Type': 'application/json' },
       })
     );
+  });
+
+  test('escalateTask updates task with Critical priority and Escalated status', async () => {
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        task: {
+          id: 'tsk_100',
+          title: 'Escalated Task',
+          priority: 'Critical',
+          status: 'Escalated',
+          assigned_to_name: 'Operations Manager',
+        },
+      }),
+    });
+
+    const result = await escalateTask('tsk_100', {
+      escalateTo: 'Operations Manager',
+      escalationReason: 'Client SLA breached',
+      notes: 'Please review immediately.',
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.priority).toBe('Critical');
+    expect(result?.status).toBe('Escalated');
+
+    // Without extra notes
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        task: { id: 'tsk_101', priority: 'Critical', status: 'Escalated' },
+      }),
+    });
+    const result2 = await escalateTask('tsk_101', {
+      escalateTo: 'Lead',
+      escalationReason: 'Blocker',
+    });
+    expect(result2?.status).toBe('Escalated');
+  });
+
+  test('approvals functions and fallback filtering work correctly', async () => {
+    expect(DEFAULT_APPROVAL_ITEMS.length).toBeGreaterThan(0);
+    expect(DEFAULT_EXECUTIVES.length).toBeGreaterThan(0);
+
+    // fetchApprovals API success
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        approvals: [
+          {
+            id: 'app_test_1',
+            requestId: 'REQ-999',
+            module: 'Credit Allocations',
+            project: 'Solar EPC',
+            applicant: 'SunPower Ltd',
+            valueImpact: '+10 Credits',
+            makerName: 'Priya',
+            status: 'Pending',
+            createdAt: '2026-10-29T10:00:00Z',
+          },
+        ],
+      }),
+    });
+
+    const apiItems = await fetchApprovals({ module: 'Credit Allocations' });
+    expect(apiItems).toHaveLength(1);
+    expect(apiItems[0].requestId).toBe('REQ-999');
+
+    // fetchApprovals API error -> fallback filtering
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network offline'));
+    const fallbackAll = await fetchApprovals();
+    expect(fallbackAll.length).toBeGreaterThanOrEqual(1);
+
+    // Test filter conditions
+    const filterByModule = await fetchApprovals({ module: 'Credit Allocations' });
+    expect(filterByModule.every((i) => i.module === 'Credit Allocations')).toBe(true);
+
+    const filterByStatus = await fetchApprovals({ status: 'Pending' });
+    expect(filterByStatus.every((i) => i.status === 'Pending')).toBe(true);
+
+    const filterByProject = await fetchApprovals({ project: 'Solar' });
+    expect(filterByProject.every((i) => i.project.toLowerCase().includes('solar'))).toBe(true);
+
+    const filterBySearch = await fetchApprovals({ search: 'REQ-999' });
+    expect(filterBySearch.length).toBeGreaterThan(0);
+
+    const filterNoMatch = await fetchApprovals({ search: 'NONEXISTENT_XYZ_QUERY' });
+    expect(filterNoMatch).toHaveLength(0);
+
+    // fetchApprovalSummary
+    const summary = await fetchApprovalSummary();
+    expect(summary.total).toBeGreaterThanOrEqual(1);
+    expect(typeof summary.pending).toBe('number');
+    expect(typeof summary.approved).toBe('number');
+    expect(typeof summary.rejected).toBe('number');
+
+    // updateApprovalStatus API success
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        approval: {
+          id: 'app_test_1',
+          requestId: 'REQ-999',
+          status: 'Approved',
+          reviewerName: 'Lead Reviewer',
+        },
+      }),
+    });
+    const updatedApi = await updateApprovalStatus('app_test_1', 'Approved', 'Lead Reviewer');
+    expect(updatedApi?.status).toBe('Approved');
+
+    // updateApprovalStatus fallback
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('API Down'));
+    const updatedLocal = await updateApprovalStatus('app_test_1', 'Rejected', 'Local Manager', 'Rejected per policy');
+    expect(updatedLocal?.status).toBe('Rejected');
+
+    // updateApprovalStatus nonexistent id
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('API Down'));
+    const notFound = await updateApprovalStatus('app_does_not_exist', 'Approved');
+    expect(notFound).toBeNull();
   });
 });

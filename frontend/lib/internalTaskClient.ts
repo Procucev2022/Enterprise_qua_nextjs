@@ -332,3 +332,291 @@ export function getExportTasksUrl(filters: TaskFilterParams = {}): string {
   if (filters.dueTo) params.set('dueTo', filters.dueTo);
   return `/api/internal-tasks/export?${params.toString()}`;
 }
+
+export async function escalateTask(
+  taskId: string,
+  payload: {
+    escalateTo: string;
+    escalationReason: string;
+    notes?: string;
+  }
+): Promise<InternalTask | null> {
+  const comment = `Escalated to ${payload.escalateTo}: ${payload.escalationReason}`;
+  const notesText = payload.notes
+    ? `[ESCALATION to ${payload.escalateTo}] ${payload.escalationReason}\n${payload.notes}`
+    : `[ESCALATION to ${payload.escalateTo}] ${payload.escalationReason}`;
+
+  return updateInternalTask(taskId, {
+    priority: 'Critical',
+    status: 'Escalated',
+    assigned_to_name: payload.escalateTo,
+    notes: notesText,
+    activityComment: comment,
+  });
+}
+
+// ==============================================================================
+// APPROVALS MODULE TYPES & API (Action Center Approvals)
+// ==============================================================================
+
+export type ApprovalStatus = 'Pending' | 'Approved' | 'Rejected';
+
+export interface ApprovalItem {
+  id: string;
+  requestId: string;
+  module: string;
+  project: string;
+  applicant: string;
+  valueImpact: string;
+  makerName: string;
+  status: ApprovalStatus;
+  notes?: string;
+  createdAt: string;
+  reviewedAt?: string;
+  reviewerName?: string;
+}
+
+export interface ApprovalSummary {
+  pending: number;
+  approved: number;
+  rejected: number;
+  total: number;
+}
+
+export interface ApprovalFilterParams {
+  module?: string;
+  status?: string;
+  project?: string;
+  search?: string;
+  requestFrom?: string;
+  requestTo?: string;
+}
+
+export interface ExecutiveOption {
+  id: string;
+  name: string;
+  role: string;
+  resolvedTasks: number;
+  openTasks: number;
+  slaAdherence: number;
+  avgResolutionTime: string;
+}
+
+export const DEFAULT_EXECUTIVES: ExecutiveOption[] = [
+  {
+    id: 'exec_sudheer',
+    name: 'Sudheer Kangala',
+    role: 'Senior Category Manager',
+    resolvedTasks: 42,
+    openTasks: 5,
+    slaAdherence: 98.1,
+    avgResolutionTime: '2.4h',
+  },
+  {
+    id: 'exec_priya',
+    name: 'Priya Sharma',
+    role: 'Category Executive',
+    resolvedTasks: 37,
+    openTasks: 3,
+    slaAdherence: 96.5,
+    avgResolutionTime: '3.1h',
+  },
+  {
+    id: 'exec_rahul',
+    name: 'Rahul Varma',
+    role: 'Procurement Specialist',
+    resolvedTasks: 29,
+    openTasks: 7,
+    slaAdherence: 94.2,
+    avgResolutionTime: '4.5h',
+  },
+  {
+    id: 'exec_finance',
+    name: 'Finance Desk Lead',
+    role: 'Credit & Payment Manager',
+    resolvedTasks: 51,
+    openTasks: 4,
+    slaAdherence: 99.0,
+    avgResolutionTime: '1.8h',
+  },
+];
+
+export const DEFAULT_APPROVAL_ITEMS: ApprovalItem[] = [
+  {
+    id: 'app_101',
+    requestId: 'REQ-2026-081',
+    module: 'Credit Allocations',
+    project: 'Enterprise Steel Tender 2026',
+    applicant: 'Tata Steel Solutions Ltd',
+    valueImpact: '+50 Credits (₹25,000 allowance)',
+    makerName: 'Sudheer Kangala',
+    status: 'Pending',
+    notes: 'Requested for extra RFQ technical quote downloads during pilot.',
+    createdAt: '2026-10-29T11:30:00Z',
+  },
+  {
+    id: 'app_102',
+    requestId: 'REQ-2026-082',
+    module: 'Account Approvals',
+    project: 'Solar EPC Procurement',
+    applicant: 'Apex Solar Energy Pvt Ltd',
+    valueImpact: 'KYC & GSTIN Verification Verified',
+    makerName: 'Priya Sharma',
+    status: 'Pending',
+    notes: 'Buyer registration awaiting category manager approval for RFQ submission.',
+    createdAt: '2026-10-29T10:15:00Z',
+  },
+  {
+    id: 'app_103',
+    requestId: 'REQ-2026-083',
+    module: 'Discounts & Waivers',
+    project: 'Industrial Valve Ingestion',
+    applicant: 'Godrej Process Solutions',
+    valueImpact: '15% Commission Waiver (₹45,000)',
+    makerName: 'Rahul Varma',
+    status: 'Pending',
+    notes: 'Special rate waiver for first high-volume transaction milestone.',
+    createdAt: '2026-10-28T16:45:00Z',
+  },
+  {
+    id: 'app_104',
+    requestId: 'REQ-2026-084',
+    module: 'Trial Period Extensions',
+    project: 'Automotive Fasteners Contract',
+    applicant: 'Mahindra Logistics Hub',
+    valueImpact: '30 Days Extended Trial',
+    makerName: 'Sudheer Kangala',
+    status: 'Approved',
+    notes: 'Extension granted by management following board review.',
+    createdAt: '2026-10-27T14:20:00Z',
+    reviewedAt: '2026-10-28T09:10:00Z',
+    reviewerName: 'Veerababu Lead',
+  },
+  {
+    id: 'app_105',
+    requestId: 'REQ-2026-085',
+    module: 'Payment Reconciliations',
+    project: 'Ceramic Raw Materials RFP',
+    applicant: 'Unique Ceramic Solutions',
+    valueImpact: '₹1,20,000 Offline NEFT Settlement',
+    makerName: 'Finance Desk Lead',
+    status: 'Approved',
+    notes: 'UTR verified against bank statement successfully.',
+    createdAt: '2026-10-26T12:00:00Z',
+    reviewedAt: '2026-10-26T15:40:00Z',
+    reviewerName: 'Admin Auditor',
+  },
+  {
+    id: 'app_106',
+    requestId: 'REQ-2026-086',
+    module: 'Credit Allocations',
+    project: 'Heavy Machinery Fab',
+    applicant: 'L&T Heavy Engineering',
+    valueImpact: '+200 Unlimited Credits',
+    makerName: 'Rahul Varma',
+    status: 'Rejected',
+    notes: 'Quota exceed without executive director signoff.',
+    createdAt: '2026-10-25T08:30:00Z',
+    reviewedAt: '2026-10-25T11:00:00Z',
+    reviewerName: 'Operations Head',
+  },
+];
+
+let inMemoryApprovals: ApprovalItem[] = [...DEFAULT_APPROVAL_ITEMS];
+
+export async function fetchApprovals(filters: ApprovalFilterParams = {}): Promise<ApprovalItem[]> {
+  try {
+    const params = new URLSearchParams();
+    if (filters.module && filters.module !== 'All Modules') params.set('module', filters.module);
+    if (filters.status && filters.status !== 'all') params.set('status', filters.status);
+    if (filters.project && filters.project !== 'all') params.set('project', filters.project);
+    if (filters.search) params.set('search', filters.search);
+    if (filters.requestFrom) params.set('requestFrom', filters.requestFrom);
+    if (filters.requestTo) params.set('requestTo', filters.requestTo);
+
+    const res = await fetch(`/api/internal-tasks/approvals?${params.toString()}`, { headers: authHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.approvals)) {
+        inMemoryApprovals = data.approvals;
+        return inMemoryApprovals;
+      }
+    }
+  } catch {
+    // Graceful fallback to client state
+  }
+
+  // Client filtering
+  return inMemoryApprovals.filter((item) => {
+    if (filters.module && filters.module !== 'All Modules' && item.module !== filters.module) {
+      return false;
+    }
+    if (filters.status && filters.status !== 'all' && item.status !== filters.status) {
+      return false;
+    }
+    if (filters.project && filters.project !== 'all' && !item.project.toLowerCase().includes(filters.project.toLowerCase())) {
+      return false;
+    }
+    if (filters.search) {
+      const q = filters.search.toLowerCase();
+      const match =
+        item.requestId.toLowerCase().includes(q) ||
+        item.applicant.toLowerCase().includes(q) ||
+        item.makerName.toLowerCase().includes(q) ||
+        item.project.toLowerCase().includes(q) ||
+        (item.notes && item.notes.toLowerCase().includes(q));
+      if (!match) return false;
+    }
+    return true;
+  });
+}
+
+export async function fetchApprovalSummary(): Promise<ApprovalSummary> {
+  const pending = inMemoryApprovals.filter((a) => a.status === 'Pending').length;
+  const approved = inMemoryApprovals.filter((a) => a.status === 'Approved').length;
+  const rejected = inMemoryApprovals.filter((a) => a.status === 'Rejected').length;
+  return {
+    pending,
+    approved,
+    rejected,
+    total: inMemoryApprovals.length,
+  };
+}
+
+export async function updateApprovalStatus(
+  id: string,
+  status: ApprovalStatus,
+  reviewerName: string = 'Current Executive',
+  notes?: string
+): Promise<ApprovalItem | null> {
+  try {
+    const res = await fetch(`/api/internal-tasks/approvals/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({ status, reviewerName, notes }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.approval) {
+        inMemoryApprovals = inMemoryApprovals.map((a) => (a.id === id ? data.approval : a));
+        return data.approval;
+      }
+    }
+  } catch {
+    // Fallback to local update
+  }
+
+  const existingIndex = inMemoryApprovals.findIndex((a) => a.id === id);
+  if (existingIndex === -1) return null;
+
+  const updated: ApprovalItem = {
+    ...inMemoryApprovals[existingIndex],
+    status,
+    reviewedAt: new Date().toISOString(),
+    reviewerName,
+    ...(notes ? { notes: `${inMemoryApprovals[existingIndex].notes || ''}\n[Review Note]: ${notes}`.trim() } : {}),
+  };
+
+  inMemoryApprovals[existingIndex] = updated;
+  return updated;
+}
