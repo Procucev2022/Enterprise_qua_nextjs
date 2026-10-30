@@ -52,6 +52,7 @@ const REPORTED_TABLES = [
   'po_line_items', 'vendor_category_mappings', 'vendor_category_dispatches',
   'vendor_email_dispatch_log', 'vendor_ingestion_audit', 'ai_classification_logs',
   'bulk_vendor_import_sessions', 'vendor_directory_sessions',
+  'payment_dues_communications',
 ];
 
 async function d1Query(sql, params = []) {

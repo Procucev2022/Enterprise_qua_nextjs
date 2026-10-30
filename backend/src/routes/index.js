@@ -30,8 +30,10 @@ const internalTaskRoutes = require('./internalTasks');
 const ticketRoutes = require('./tickets');
 const approvalRoutes = require('./approvals');
 const scorecardRoutes = require('./scorecard');
+const paymentDuesRoutes = require('./paymentDues');
 
 // Mount sub-routers
+router.use('/payment-dues', paymentDuesRoutes);
 router.use('/internal-tasks', internalTaskRoutes);
 router.use('/tickets', ticketRoutes);
 router.use('/approvals', approvalRoutes);
@@ -64,5 +66,3 @@ router.use('/reports', reportsRoutes);
 router.use('/transactional-emails', transactionalEmailRoutes);
 
 module.exports = router;
-
-

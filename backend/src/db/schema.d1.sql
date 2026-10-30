@@ -749,3 +749,33 @@ CREATE INDEX IF NOT EXISTS idx_internal_tasks_assigned_to ON internal_tasks (ass
 CREATE INDEX IF NOT EXISTS idx_internal_tasks_task_type ON internal_tasks (task_type_id);
 CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_at ON internal_tasks (created_at DESC);
 
+
+
+-- ==============================================================================
+-- PAYMENT DUES - LOW CREDIT MONITORING & COMMUNICATION (Cloudflare D1)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS payment_dues_communications (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  account_type TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  subject TEXT,
+  message TEXT NOT NULL,
+  notification_status TEXT NOT NULL DEFAULT 'Notification Sent',
+  delivery_status TEXT NOT NULL DEFAULT 'Delivered',
+  acknowledgement_status TEXT NOT NULL DEFAULT 'Acknowledgement Pending',
+  communicated_by TEXT DEFAULT 'Category Manager',
+  sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  acknowledged_at TEXT,
+  acknowledged_by TEXT,
+  notes TEXT,
+  metadata TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_account_id ON payment_dues_communications (account_id);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_account_type ON payment_dues_communications (account_type);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_ack_status ON payment_dues_communications (acknowledgement_status);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_sent_at ON payment_dues_communications (sent_at DESC);

@@ -2523,3 +2523,113 @@ export interface ScorecardData {
   };
   teamScores: TeamScorecardRow[];
 }
+
+
+// ==============================================================================
+// ACTION CENTER: PAYMENT DUES (LOW CREDIT MONITORING)
+// ==============================================================================
+
+export type PaymentDuesAccountType = 'buyer' | 'seller';
+
+export type PaymentDuesAcknowledgementStatus =
+  | 'Not Notified'
+  | 'Notification Sent'
+  | 'Delivery Pending'
+  | 'Delivered'
+  | 'Acknowledgement Pending'
+  | 'Acknowledged'
+  | 'Failed';
+
+export type PaymentDuesChannel = 'email' | 'message' | 'whatsapp';
+
+export interface PaymentDuesCommunication {
+  id: string;
+  accountId: string;
+  accountType: PaymentDuesAccountType;
+  channel: PaymentDuesChannel;
+  recipient: string;
+  subject?: string;
+  message: string;
+  notificationStatus: string;
+  deliveryStatus: string;
+  acknowledgementStatus: PaymentDuesAcknowledgementStatus;
+  communicatedBy: string;
+  sentAt: string;
+  acknowledgedAt?: string | null;
+  acknowledgedBy?: string | null;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaymentDuesAccount {
+  accountId: string;
+  accountType: PaymentDuesAccountType;
+  companyName: string;
+  contactPerson: string;
+  email: string;
+  phoneNumber: string;
+  availableCredits: number;
+  totalCredits: number;
+  creditsUsed: number;
+  accountStatus: string;
+  registrationDate: string;
+  lastActivity: string;
+  assignedExecutive: string;
+  lastNotification?: string | null;
+  notificationChannel?: string;
+  acknowledgementStatus: PaymentDuesAcknowledgementStatus;
+  deliveryStatus?: string;
+  notificationStatus?: string;
+  rawRecord?: Record<string, unknown>;
+}
+
+export interface PaymentDuesSummary {
+  totalLowCreditAccounts: number;
+  totalBuyers: number;
+  totalSellers: number;
+  zeroCredits: number;
+  oneToTwoCredits: number;
+  acknowledgementPending: number;
+}
+
+export type PaymentDuesColumnKey =
+  | 'accountId'
+  | 'accountType'
+  | 'companyName'
+  | 'contactPerson'
+  | 'email'
+  | 'phoneNumber'
+  | 'availableCredits'
+  | 'totalCredits'
+  | 'creditsUsed'
+  | 'accountStatus'
+  | 'registrationDate'
+  | 'lastActivity'
+  | 'assignedExecutive'
+  | 'lastNotification'
+  | 'notificationChannel'
+  | 'acknowledgementStatus'
+  | 'actions';
+
+export interface PaymentDuesColumnConfig {
+  key: PaymentDuesColumnKey;
+  label: string;
+  visible: boolean;
+  required?: boolean;
+}
+
+export interface PaymentDuesFilterParams {
+  search?: string;
+  accountType?: 'all' | 'buyer' | 'seller';
+  credits?: 'all' | '0' | '1-2';
+  acknowledgementStatus?: string;
+  accountStatus?: string;
+  assignedExecutive?: string;
+  notificationChannel?: string;
+  sortBy?: PaymentDuesColumnKey;
+  sortOrder?: 'asc' | 'desc';
+  page?: number;
+  limit?: number;
+}

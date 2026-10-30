@@ -53,9 +53,11 @@ import { ApprovalsDashboard } from './components/ApprovalsDashboard';
 import { ScorecardDashboard } from './components/ScorecardDashboard';
 import BuyersDirectory from './buyers-directory';
 import SellersDirectory from './sellers-directory';
+import { PaymentDuesDashboard } from './components/PaymentDuesDashboard';
+import { fetchPaymentDuesSummary } from '@/lib/paymentDuesClient';
 import { fetchTicketSummary } from '@/lib/ticketClient';
 import { fetchApprovalSummary } from '@/lib/approvalClient';
-import type { TicketSummary, ApprovalSummary } from '@/lib/types';
+import type { PaymentDuesSummary, TicketSummary, ApprovalSummary } from '@/lib/types';
 
 export default function InternalTasksDashboard() {
   // Data state
@@ -78,6 +80,7 @@ export default function InternalTasksDashboard() {
   const [activeTab, setActiveTab] = useState<ActionCenterTabKey>('tasks');
   const [ticketSummary, setTicketSummary] = useState<TicketSummary | null>(null);
   const [approvalSummary, setApprovalSummary] = useState<ApprovalSummary | null>(null);
+  const [paymentDuesSummary, setPaymentDuesSummary] = useState<PaymentDuesSummary | null>(null);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -401,12 +404,14 @@ export default function InternalTasksDashboard() {
       {activeTab === 'scorecard' && <ScorecardDashboard />}
       {activeTab === 'buyers' && <BuyersDirectory />}
       {activeTab === 'sellers' && <SellersDirectory />}
+      {activeTab === 'payment_dues' && <PaymentDuesDashboard />}
       {activeTab !== 'tasks' &&
         activeTab !== 'tickets' &&
         activeTab !== 'approvals' &&
         activeTab !== 'scorecard' &&
         activeTab !== 'buyers' &&
-        activeTab !== 'sellers' && (
+        activeTab !== 'sellers' &&
+        activeTab !== 'payment_dues' && (
           <div className="bg-white dark:bg-slate-900 p-8 rounded-xl border border-slate-200 dark:border-slate-800 text-center space-y-3">
             <ClipboardList className="w-10 h-10 text-indigo-500 mx-auto" />
             <h3 className="text-base font-bold text-slate-900 dark:text-white capitalize">

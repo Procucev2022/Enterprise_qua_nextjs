@@ -2044,6 +2044,24 @@ const QUA_AI_EMAIL_SUPPORT = {
 
 const VENDOR_QUOTE_SUPPORT_CC = process.env.VENDOR_QUOTE_SUPPORT_CC || '';
 
+const PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES = [
+  'Not Notified',
+  'Notification Sent',
+  'Delivery Pending',
+  'Delivered',
+  'Acknowledgement Pending',
+  'Acknowledged',
+  'Failed',
+];
+
+const PAYMENT_DUES_CHANNELS = ['email', 'message', 'whatsapp'];
+
+const DEFAULT_LOW_CREDIT_NOTIFICATION = {
+  subject: 'Low Credit Balance Notification – QUA AI',
+  buildMessage: ({ contactPerson = 'Valued Partner', availableCredits = 0 } = {}) =>
+    `Dear ${contactPerson},\n\nThis is to inform you that your QUA AI account currently has only ${availableCredits} credits remaining.\n\nPlease review your credit balance and take the necessary action to continue using the platform without interruption.\n\nKindly acknowledge receipt of this notification.\n\nRegards,\nQUA AI Team\nProcucev Enterprises Solutions Pvt Ltd.`,
+};
+
 
 /** Outcome of preparing an email for extraction. */
 const EMAIL_INGESTION_STATUS = {
@@ -2833,5 +2851,8 @@ module.exports = {
   getCitiesForState,
   parseSearchTokens,
   INQUIRIES_PERSISTENCE_FILE,
+  PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES,
+  PAYMENT_DUES_CHANNELS,
+  DEFAULT_LOW_CREDIT_NOTIFICATION,
 };
 
