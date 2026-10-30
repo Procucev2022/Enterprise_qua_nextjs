@@ -815,3 +815,314 @@ raise the pr for this code
 ```text
 continue
 ```
+
+
+---
+
+### 2026-10-29T19:50:00+05:30
+
+```text
+# Master Prompt: Action Center, Tickets, Scorecard & Directory Integration — QUA AI
+
+## 1. Objective
+
+Act as a senior full-stack developer working on the existing QUA AI platform.
+
+Enhance the existing application by organizing the Action Center, integrating the existing Buyers Directory and Sellers Directory into it, implementing the Tickets module, and implementing the initial Scorecard module for individual and team performance tracking.
+
+Critical priority: Reuse existing functionality, methods, components, APIs, database models, and business logic wherever possible. Do not break, remove, or unnecessarily change any existing functionality.
+
+This is an enhancement to an existing production application, not a rebuild.
+
+Use the provided screenshots as UI and layout references.
+
+## 2. Mandatory Pre-Implementation Analysis
+
+Before modifying any code:
+
+1. Inspect the existing repository structure and identify the frontend, backend, database, authentication, authorization, and API architecture.
+2. Review the current Action Center, Internal Tasks, Tickets, Scorecard, Buyers Directory, and Sellers Directory implementations.
+3. Identify existing reusable components, functions, methods, hooks, services, database models, API endpoints, and shared utilities.
+4. Determine which features are fully implemented, partially implemented, or missing.
+5. Understand existing roles, permissions, relationships, workflows, database constraints, and integrations.
+6. Check existing tests and establish baseline build and test results.
+7. Prepare a minimal implementation plan that reuses existing code and limits changes to the requested scope.
+
+Do not recreate a feature that already exists and works correctly. Extend or connect the existing implementation instead.
+
+## 3. Action Center
+
+Enhance the existing Action Center as the centralized workspace for task management, tickets, approvals, and directory access.
+
+### 3.1 Internal Tasks
+
+Preserve the existing Internal Tasks functionality and enhance it only where required.
+
+Support:
+- My Tasks — tasks assigned to the logged-in user.
+- Executive-wise Tasks — tasks organized by executive, visible according to permissions.
+- All Tasks — all authorized tasks across the organization.
+- Task creation, assignment, reassignment, and status updates.
+- Task priority, due date, project, related entity, and task type.
+- Pending, In Progress, Escalated, and Completed statuses.
+- Escalation to a co-executive or manager.
+- Task comments, activity history, and ownership tracking.
+- Search, filters, configurable columns, refresh, and export.
+
+Display summary cards for:
+- Total Tasks
+- Pending Tasks
+- Escalated Tasks
+- Completed Tasks
+- Critical / Overdue Tasks
+
+All counts must be calculated from actual database records using the existing data-access methods wherever possible.
+
+### 3.2 Approvals
+
+Retain existing approval functionality and integrate it into Action Center navigation where appropriate.
+
+Support management approvals for:
+- Credit additions and deletions.
+- Account approvals.
+- Discounts.
+- Trial-period changes.
+- Other existing approval workflows.
+
+Preserve existing approval rules, authorization, audit history, and processing logic. Do not invent new approval rules.
+
+### 3.3 Buyers Directory and Sellers Directory
+
+Both directories already exist and are partially implemented.
+
+Do not rebuild or duplicate them. Move their navigation entries under Action Center and reuse the existing modules.
+
+Requirements:
+- Provide convenient access to Buyers Directory and Sellers Directory from Action Center.
+- Remove duplicate sidebar entries only after confirming the new navigation works.
+- Preserve existing routes, deep links, APIs, database records, permissions, and workflows.
+- Preserve all existing buyer and seller information.
+- Support complete communication history for each buyer and seller, using existing capabilities and data sources.
+- Where supported by existing integrations, maintain emails, messages, delivery receipts, communication status, timestamps, and executive-wise interactions.
+- Do not fabricate historical communication records or delivery confirmations.
+- Do not replace working communication integrations with mock functionality.
+
+If communication-history features are incomplete, extend the current implementation with minimal backward-compatible changes.
+
+## 4. Tickets Module — Implement Now
+
+Implement and integrate the Tickets module using the existing Tickets screen in the provided screenshots as the UI reference.
+
+First inspect the current ticket implementation. Reuse existing ticket-related models, APIs, components, services, and methods. Implement only the missing functionality.
+
+### 4.1 Ticket Dashboard
+
+Display summary cards for:
+- Total Tickets
+- Pending Tickets
+- Escalated Tickets
+- Completed Tickets
+- Critical / High-Priority Tickets
+
+Calculate all statistics from actual database records. Ensure that summary cards, ticket tables, and exported reports use consistent filtering and counting rules.
+
+### 4.2 Ticket Data
+
+Support the following fields wherever they exist in the current model, adding only necessary backward-compatible fields when required:
+
+- Ticket ID and status.
+- Subject and issue description.
+- Project and related unit/entity.
+- Customer details and authorized quick-contact information.
+- Ticket category.
+- Priority and Service Level Agreement (SLA).
+- Assigned executive or responsible team.
+- Created date, last-edited date, and ticket age.
+- Due date and escalation information.
+- Comments, attachments, and resolution notes.
+- Created by, assigned by, last edited by, and resolved by.
+
+Preserve existing identifiers and relationships. Do not duplicate customer or project records.
+
+### 4.3 Ticket Workflow
+
+Implement or complete these workflows:
+
+1. Create a ticket.
+2. View ticket details.
+3. Assign or reassign the ticket.
+4. Update its status and priority.
+5. Add comments, attachments, and resolution notes.
+6. Escalate tickets to an authorized manager or responsible team.
+7. Resolve and complete tickets.
+8. Review ticket activity and status history.
+
+Support Pending, In Progress, Escalated, and Completed states, mapping them to existing status values where necessary rather than introducing incompatible duplicates.
+
+Highlight critical, high-priority, and overdue tickets according to existing rules. Apply SLA calculations only where the necessary configuration and data are available.
+
+### 4.4 Ticket UI and Filters
+
+Provide:
+- Search by ticket ID, subject, customer, or other supported identifiers.
+- Status filter.
+- Priority filter.
+- Project and category filters.
+- Date-range filters.
+- Configurable columns.
+- Refresh.
+- Export.
+- Pagination or existing table-navigation functionality.
+- Clear loading, empty, validation, success, and error states.
+
+Ensure the screen follows the existing QUA AI design system and remains responsive.
+
+### 4.5 Future Extensibility
+
+Design the ticket functionality so future phases can support advanced customer support analytics, SLA trend analysis, complaint categorization, and resolution-time reporting.
+
+Do not overbuild these future enhancements now.
+
+## 5. Scorecard Module — Implement Now
+
+Implement the initial Scorecard module using the provided Scorecard screenshot as the UI reference.
+
+The module must support individual and team performance monitoring based on existing business data.
+
+### 5.1 Filters and Navigation
+
+Provide:
+- Individual Executive view.
+- Complete Team / Leaderboard view.
+- Today.
+- This Week.
+- This Month.
+- Last Month.
+- This Quarter.
+- Financial Year.
+- Custom date range.
+- Project filter.
+- Performance pillar filters.
+
+All filters must update the displayed metrics, charts or progress indicators, and scorecard table consistently.
+
+Use the application's existing financial-year configuration rather than assuming that a calendar year is the financial year.
+
+### 5.2 Performance Pillars
+
+A. Operations & Compliance
+- Tasks completed versus tasks assigned.
+- Tickets resolved versus tickets assigned.
+- Registrations completed versus the applicable target.
+- Site visits completed versus planned visits.
+
+B. Revenue & Banking
+- Total dues.
+- Dues collected.
+- Pending dues.
+- Collection percentage.
+- Loans disbursed versus target.
+- Loan amount realized versus target.
+
+Display currency using the application's configured currency and formatting.
+
+C. Sales & Customer Acquisition
+- Leads contacted versus target.
+- Lead-to-visit conversion rate.
+- Visit-to-deal conversion rate.
+- Deals closed versus target.
+
+Use existing lead, visit, deal, loan, registration, task, and ticket records. Do not create duplicate sources of truth.
+
+### 5.3 Scorecard Dashboard UI
+
+For each performance pillar:
+- Display a clear section heading.
+- Show relevant metric cards.
+- Show actual values and targets.
+- Display progress bars and achievement percentages.
+- Highlight meaningful performance states.
+- Provide access to detailed records when a metric is selected, where supported.
+
+The team scorecard table should display:
+- Rank.
+- Executive name.
+- Tasks completed / assigned.
+- Tickets resolved / assigned.
+- Registrations completed / target.
+- Site visits completed / planned.
+- Loans disbursed and amount realized.
+- Dues collected and pending amounts.
+- Leads contacted and deals closed.
+- Conversion rates.
+- Overall score.
+- Performance status.
+- Available detail or drill-down actions.
+
+Support sorting by executive, rank, score, and performance metrics.
+
+The individual view should display the selected executive's performance for the chosen period. Respect the logged-in user's permissions when showing individual or organization-wide information.
+
+### 5.4 Scorecard Calculation Rules
+
+Use the following formulas, subject to existing business definitions and approved configurations:
+
+- Task completion percentage = Completed eligible tasks / Assigned eligible tasks × 100
+- Ticket resolution percentage = Resolved eligible tickets / Assigned eligible tickets × 100
+- Registration achievement percentage = Completed registrations / Target registrations × 100
+- Site visit completion percentage = Completed site visits / Planned site visits × 100
+- Collection percentage = Dues collected / Total dues × 100
+- Loan disbursement percentage = Loans disbursed / Target loans × 100
+- Loan realization percentage = Amount realized / Target loan amount × 100
+- Contact rate = Leads contacted / Total assigned leads × 100
+- Lead-to-visit conversion rate = Site visits from leads / Leads contacted × 100
+- Visit-to-deal conversion rate = Deals closed / Site visits conducted × 100
+- Overall score = Weighted average across the three pillars, according to the application's score calculation rules.
+
+Safely handle zero denominators, missing targets, unconfigured weights, and periods without activity. Avoid division-by-zero errors or invalid percentage values.
+
+### 5.5 Future Extensibility
+
+Structure the Scorecard implementation to accommodate future additions such as KPI weight configuration, executive goal setting, automated periodic snapshots, and advanced export options.
+
+Do not overbuild these future enhancements now.
+
+## 6. Implementation Principles
+
+- Reuse first: Locate and reuse existing models, database tables, schemas, controllers, routes, API endpoints, services, helper functions, React components, hooks, state stores, and utility modules before writing new ones.
+- Minimal changes: Change only what is required to satisfy the requirements.
+- Backward compatibility: Ensure that all existing routes, deep links, APIs, permissions, and database records continue to work.
+- Consistency: Follow the existing architecture, file structure, naming conventions, design patterns, coding standards, and styling.
+- Real data only: Connect new UI components to real data sources. Do not leave placeholder data, hardcoded sample records, or mock responses in production paths.
+- Authorization: Ensure all new endpoints and views respect existing roles and permissions.
+- Robustness: Validate inputs, handle loading and error states, and prevent unhandled exceptions.
+- Tests: Add unit and integration tests for all new or modified code. Verify that existing tests continue to pass.
+```
+
+---
+
+### 2026-10-29T22:30:00+05:30
+
+```text
+raise pr for this
+code
+```
+
+
+---
+
+### 2026-10-30T08:01:06+05:30
+
+```text
+continue
+```
+
+
+---
+
+### 2026-10-30T08:24:45+05:30
+
+```text
+please check and fix this
+```
+
