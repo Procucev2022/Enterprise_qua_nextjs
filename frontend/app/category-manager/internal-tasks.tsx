@@ -113,6 +113,12 @@ export default function InternalTasksDashboard() {
         if (res) setApprovalSummary(res);
       })
       .catch(() => {});
+
+    fetchPaymentDuesSummary()
+      .then((res) => {
+        if (res) setPaymentDuesSummary(res);
+      })
+      .catch(() => {});
   }, []);
 
   const handleSelectTab = useCallback((tab: ActionCenterTabKey) => {
@@ -397,6 +403,7 @@ export default function InternalTasksDashboard() {
         tasksCount={summary.pending || 0}
         ticketsCount={ticketSummary?.pending || 0}
         approvalsCount={approvalSummary?.pending || 0}
+        paymentDuesCount={paymentDuesSummary?.totalLowCreditAccounts || 0}
       />
 
       {activeTab === 'tickets' && <TicketsDashboard />}

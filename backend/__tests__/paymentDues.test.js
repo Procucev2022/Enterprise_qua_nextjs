@@ -472,6 +472,48 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         expect(paymentDuesQueries.parseRaw(obj)).toBe(obj);
       });
 
+      test('getSellerAvailableCredits covers all credit property fallbacks', () => {
+        expect(paymentDuesQueries.getSellerAvailableCredits({ availableCredits: 2 })).toBe(2);
+        expect(paymentDuesQueries.getSellerAvailableCredits({ freeQuotationCredits: 1 })).toBe(1);
+        expect(paymentDuesQueries.getSellerAvailableCredits({ freeRfqDownloadCredits: 0 })).toBe(0);
+        expect(paymentDuesQueries.getSellerAvailableCredits({ freeCreditsRemaining: 2 })).toBe(2);
+        expect(paymentDuesQueries.getSellerAvailableCredits({ credits: 1 })).toBe(1);
+        expect(paymentDuesQueries.getSellerAvailableCredits({})).toBe(0);
+      });
+
+      test('getSellerCreditsUsed covers freeCreditsUsed, rfqDownloadsUsed and calculated fallback', () => {
+        expect(paymentDuesQueries.getSellerCreditsUsed({ freeCreditsUsed: 4 }, 10, 2)).toBe(4);
+        expect(paymentDuesQueries.getSellerCreditsUsed({ rfqDownloadsUsed: 6 }, 10, 2)).toBe(6);
+        expect(paymentDuesQueries.getSellerCreditsUsed({}, 10, 2)).toBe(8);
+        expect(paymentDuesQueries.getSellerCreditsUsed({}, 2, 5)).toBe(0);
+      });
+
+      test('records communication with non-object metadata and handles DB empty rows on update and history', async () => {
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+        jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+
+        const comm = await paymentDuesQueries.recordCommunication({
+          accountId: 'v-str',
+          accountType: 'seller',
+          channel: 'whatsapp',
+          recipient: '9988776655',
+          message: 'Low credits',
+          metadata: 'plain-string-metadata',
+        });
+        expect(comm.accountId).toBe('v-str');
+
+        const updated = await paymentDuesQueries.updateAcknowledgementStatus({
+          accountId: 'v-str',
+          accountType: 'seller',
+          acknowledgementStatus: 'Acknowledged',
+          notes: 'Direct note',
+        });
+        expect(updated.acknowledgementStatus).toBe('Acknowledged');
+
+        const history = await paymentDuesQueries.getCommunicationHistory('v-str');
+        expect(Array.isArray(history)).toBe(true);
+      });
+
       test('seller with undefined totalCredits defaults to 10', async () => {
         jest.spyOn(paymentDuesQueries, 'fetchRawBuyers').mockResolvedValue([]);
         jest.spyOn(paymentDuesQueries, 'fetchRawVendors').mockResolvedValue([
