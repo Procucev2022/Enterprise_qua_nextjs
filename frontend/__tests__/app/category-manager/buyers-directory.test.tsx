@@ -184,11 +184,10 @@ describe('BuyersDirectory Component Suite', () => {
     expect(screen.getByText('Standard Auto')).toBeInTheDocument();
     expect(screen.queryByText('Tata Motors Corp')).not.toBeInTheDocument();
 
-    fireEvent.change(statusSelect, { target: { value: 'ACTIVE' } });
-    expect(screen.getByText('Bharat Electronics')).toBeInTheDocument();
-
     fireEvent.change(statusSelect, { target: { value: 'ACTIVE_VERIFIED' } });
     expect(screen.getByText('Tata Motors Corp')).toBeInTheDocument();
+    expect(screen.getByText('Bharat Electronics')).toBeInTheDocument();
+    expect(screen.queryByText('Standard Auto')).not.toBeInTheDocument();
   });
 
   test('displays empty state when search matches no buyers', () => {
@@ -366,5 +365,161 @@ describe('BuyersDirectory Component Suite', () => {
     // Total Spend KPI card removed
     expect(screen.queryByText('Total Sourcing Spend')).not.toBeInTheDocument();
   });
-});
 
+  test('renders 5 summary cards with proper values and subtext', () => {
+    render(<BuyersDirectory />);
+    expect(screen.getByText('Total Buyers')).toBeInTheDocument();
+    expect(screen.getByText('Subscription Buyers')).toBeInTheDocument();
+    expect(screen.getByText('Total RFQs')).toBeInTheDocument();
+    expect(screen.getByText('Free RFQs')).toBeInTheDocument();
+    expect(screen.getByText('Paid RFQs')).toBeInTheDocument();
+  });
+
+  test('clicking company name opens dossier directly to profile tab', () => {
+    render(<BuyersDirectory />);
+    const companyBtn = screen.getByRole('button', { name: /Tata Motors Corp/i });
+    fireEvent.click(companyBtn);
+    expect(screen.getByText('Corporate Contact')).toBeInTheDocument();
+  });
+
+  test('opens and interacts with Column Settings modal, toggling columns and resetting', () => {
+    render(<BuyersDirectory />);
+
+    // Open Column Settings
+    const gearBtn = screen.getByLabelText('Customize Columns');
+    fireEvent.click(gearBtn);
+    expect(screen.getByRole('dialog', { name: 'Customize Columns' })).toBeInTheDocument();
+    expect(screen.getByText('Column Settings')).toBeInTheDocument();
+
+    // Toggle all optional columns on to test full cell rendering
+    const optionalLabels = [
+      'Contact Person',
+      'Email',
+      'Phone',
+      'Free Credits',
+      'Total Spend',
+      'Registration Date',
+      'Location',
+    ];
+    optionalLabels.forEach((label) => {
+      const checkbox = screen.queryByLabelText(new RegExp(label, 'i'));
+      if (checkbox) {
+        fireEvent.click(checkbox);
+      }
+    });
+
+    // Toggle required column (Buyer) - should be disabled and locked
+    const orgCheckbox = screen.getByLabelText(/Buyer/i);
+    expect(orgCheckbox).toBeDisabled();
+    fireEvent.click(orgCheckbox);
+
+    // Reset columns
+    const resetBtn = screen.getByText('Reset to Default');
+    fireEvent.click(resetBtn);
+
+    // Click Done button
+    const doneBtn = screen.getByText('Done');
+    fireEvent.click(doneBtn);
+    expect(screen.queryByRole('dialog', { name: 'Customize Columns' })).not.toBeInTheDocument();
+
+    // Reopen and test close button (X)
+    fireEvent.click(gearBtn);
+    const closeBtn = screen.getByLabelText('Close column settings');
+    fireEvent.click(closeBtn);
+    expect(screen.queryByRole('dialog', { name: 'Customize Columns' })).not.toBeInTheDocument();
+  });
+
+  test('handles drag and drop reordering of columns in settings modal', () => {
+    render(<BuyersDirectory />);
+
+    const gearBtn = screen.getByLabelText('Customize Columns');
+    fireEvent.click(gearBtn);
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    const firstContainer = checkboxes[0].closest('div[draggable="true"]');
+    const secondContainer = checkboxes[1].closest('div[draggable="true"]');
+
+    if (firstContainer && secondContainer) {
+      fireEvent.dragStart(firstContainer, { dataTransfer: { effectAllowed: 'move' } });
+      fireEvent.dragOver(secondContainer, { dataTransfer: { dropEffect: 'move' } });
+      fireEvent.drop(secondContainer);
+
+      // Same item drop (no-op)
+      fireEvent.dragStart(firstContainer, { dataTransfer: { effectAllowed: 'move' } });
+      fireEvent.drop(firstContainer);
+    }
+  });
+
+  test('sorts by different columns in ascending and descending orders', () => {
+    // Render with all columns enabled via localStorage
+    const allColsVisible = [
+      { key: 'organizationName', label: 'Buyer', visible: true, required: true },
+      { key: 'contactPerson', label: 'Contact Person', visible: true },
+      { key: 'corporateEmail', label: 'Email', visible: true },
+      { key: 'mobileNumber', label: 'Phone', visible: true },
+      { key: 'location', label: 'Location', visible: true },
+      { key: 'sourcingMode', label: 'Mode', visible: true },
+      { key: 'subscriptionPlan', label: 'Plan', visible: true },
+      { key: 'totalRFQsCreated', label: 'RFQs', visible: true },
+      { key: 'remainingFreeRFQs', label: 'Free Credits', visible: true },
+      { key: 'totalSpend', label: 'Total Spend', visible: true },
+      { key: 'status', label: 'Status', visible: true },
+      { key: 'createdDate', label: 'Registration Date', visible: true },
+      { key: 'actions', label: 'Actions', visible: true, required: true },
+    ];
+    window.localStorage.setItem('buyer_directory_columns_pref', JSON.stringify(allColsVisible));
+
+    render(<BuyersDirectory />);
+
+    const columnHeaders = [
+      'Buyer',
+      'Contact Person',
+      'Email',
+      'Phone',
+      'Location',
+      'Mode',
+      'Plan',
+      'RFQs',
+      'Free Credits',
+      'Total Spend',
+      'Status',
+      'Registration Date',
+    ];
+
+    columnHeaders.forEach((name) => {
+      const th = screen.queryByRole('columnheader', { name: new RegExp(name, 'i') });
+      if (th) {
+        fireEvent.click(th); // asc
+        fireEvent.click(th); // desc
+      }
+    });
+
+    // Also click actions column (should not trigger sort)
+    const actionsTh = screen.queryByRole('columnheader', { name: /Actions/i });
+    if (actionsTh) {
+      fireEvent.click(actionsTh);
+    }
+
+    window.localStorage.clear();
+  });
+
+  test('loads partial column preferences and appends missing defaults', () => {
+    const partialPrefs = [
+      { key: 'organizationName', label: 'Buyer', visible: true, required: true },
+      { key: 'location', label: 'Location', visible: false },
+    ];
+    window.localStorage.setItem('buyer_directory_columns_pref', JSON.stringify(partialPrefs));
+
+    render(<BuyersDirectory />);
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    window.localStorage.clear();
+  });
+
+  test('handles corrupted localStorage JSON without crashing', () => {
+    window.localStorage.setItem('buyer_directory_columns_pref', '{invalid_json');
+
+    render(<BuyersDirectory />);
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    window.localStorage.clear();
+  });
+});

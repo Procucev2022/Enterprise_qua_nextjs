@@ -83,10 +83,10 @@ describe('BuyersDirectory with no store data', () => {
 
     expect(valueBelow('Total Buyers')).toBe('0');
     expect(screen.getByText('0 Active Verified')).toBeInTheDocument();
-    expect(valueBelow('RFQs Sourced')).toBe('0');
-    expect(screen.getByText('M1: 0')).toBeInTheDocument();
-    expect(screen.getByText('M2: 0')).toBeInTheDocument();
-    expect(screen.getByText('M3: 0')).toBeInTheDocument();
+    expect(valueBelow('Subscription Buyers')).toBe('0');
+    expect(valueBelow('Total RFQs')).toBe('0');
+    expect(valueBelow('Free RFQs')).toBe('0');
+    expect(valueBelow('Paid RFQs')).toBe('0');
     expect(screen.getByText(NO_RESULTS_TEXT)).toBeInTheDocument();
     expect(screen.queryByLabelText('Rows per page')).not.toBeInTheDocument();
   });
@@ -124,10 +124,10 @@ describe('BuyersDirectory summary cards', () => {
 
     expect(valueBelow('Total Buyers')).toBe('5');
     expect(screen.getByText('4 Active Verified')).toBeInTheDocument();
-    expect(valueBelow('RFQs Sourced')).toBe('2');
-    expect(screen.getByText('M1: 2')).toBeInTheDocument();
-    expect(screen.getByText('M2: 1')).toBeInTheDocument();
-    expect(screen.getByText('M3: 1')).toBeInTheDocument();
+    expect(valueBelow('Subscription Buyers')).toBe('0');
+    expect(valueBelow('Total RFQs')).toBe('2');
+    expect(valueBelow('Free RFQs')).toBe('2');
+    expect(valueBelow('Paid RFQs')).toBe('0');
   });
 });
 
