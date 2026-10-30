@@ -1842,13 +1842,8 @@ export const UI_STRINGS = {
       scorecard: 'Scorecard',
       buyersDirectory: 'Buyers Directory',
       sellersDirectory: 'Sellers Directory',
-      documentTracker: 'Document Tracker',
-      loans: 'Loans',
       registrations: 'Registrations',
       paymentDues: 'Payment Dues',
-      expiringHolds: 'Expiring Holds',
-      leads: 'Leads',
-      siteVisits: 'Site Visits',
     },
     tasks: {
       total: 'Total Tasks',

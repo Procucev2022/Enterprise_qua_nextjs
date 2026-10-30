@@ -9,29 +9,13 @@ import {
   Award,
   Building2,
   Truck,
-  FileText,
-  Banknote,
   Users,
-  Calendar,
-  MapPin,
   TrendingUp,
 } from 'lucide-react';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import type { ActionCenterTabKey } from '@/lib/types';
 
-export type ActionCenterTabKey =
-  | 'tasks'
-  | 'tickets'
-  | 'approvals'
-  | 'scorecard'
-  | 'buyers'
-  | 'sellers'
-  | 'document_tracker'
-  | 'loans'
-  | 'registrations'
-  | 'payment_dues'
-  | 'expiring_holds'
-  | 'leads'
-  | 'site_visits';
+export type { ActionCenterTabKey };
 
 interface ActionCenterSubNavProps {
   activeTab: ActionCenterTabKey;
@@ -94,20 +78,6 @@ export default function ActionCenterSubNav({
       icon: Truck,
     },
     {
-      id: 'document_tracker',
-      label: tabs.documentTracker,
-      icon: FileText,
-      badge: '99+',
-      badgeColor: 'bg-rose-500 text-white',
-    },
-    {
-      id: 'loans',
-      label: tabs.loans,
-      icon: Banknote,
-      badge: '17',
-      badgeColor: 'bg-blue-600 text-white',
-    },
-    {
       id: 'registrations',
       label: tabs.registrations,
       icon: Users,
@@ -118,23 +88,6 @@ export default function ActionCenterSubNav({
       icon: TrendingUp,
       badge: '99+',
       badgeColor: 'bg-amber-600 text-white',
-    },
-    {
-      id: 'expiring_holds',
-      label: tabs.expiringHolds,
-      icon: Calendar,
-    },
-    {
-      id: 'leads',
-      label: tabs.leads,
-      icon: Users,
-      badge: '6',
-      badgeColor: 'bg-rose-500 text-white',
-    },
-    {
-      id: 'site_visits',
-      label: tabs.siteVisits,
-      icon: MapPin,
     },
   ];
 

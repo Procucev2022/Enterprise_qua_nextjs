@@ -2318,6 +2318,16 @@ export interface VendorDirectoryAuthResult {
 // ACTION CENTER: TICKETS, APPROVALS, SCORECARD TYPES
 // ==============================================================================
 
+export type ActionCenterTabKey =
+  | 'tasks'
+  | 'tickets'
+  | 'approvals'
+  | 'scorecard'
+  | 'buyers'
+  | 'sellers'
+  | 'registrations'
+  | 'payment_dues';
+
 export type TicketPriority = 'Critical' | 'High' | 'Medium' | 'Low';
 export type TicketStatus = 'Pending' | 'In Progress' | 'Escalated' | 'Completed';
 
