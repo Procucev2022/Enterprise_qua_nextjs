@@ -8,6 +8,7 @@ const {
   IDENTITY_OTP_CONFIG,
   PASSWORD_MIN_LENGTH,
   VENDOR_DIRECTORY_AUTH_CONFIG,
+  VENDOR_FREE_CREDITS_LIMIT,
 } = require('../config/constants');
 const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueries');
 const pool = require('../db/pool');
@@ -1268,7 +1269,7 @@ async function registerUser(payload, ipAddress) {
           source: 'self_registration',
           status: 'PREFERRED ENTERPRISE SUPPLIER',
           subscriptionPlan: 'premium',
-          freeQuotationCredits: 3,
+          freeQuotationCredits: VENDOR_FREE_CREDITS_LIMIT,
           majorCategory: 'Mechanical & Fluid Equipment',
           minorCategories: [],
           vendorSelectedCategories: [],

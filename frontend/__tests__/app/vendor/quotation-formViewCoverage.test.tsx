@@ -1266,7 +1266,7 @@ describe('upgrade and payment modals', () => {
     const connectTitle = `Connect Model (${RUPEE}2 / 3 mo)`;
     const selectTitle = `Select Model (${RUPEE}5 / 3 mo)`;
     expect(
-      within(modal).getByText(/5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits/),
+      within(modal).getByText(/No Free Quotation Credits: Free quotation credits are not available/),
     ).toBeInTheDocument();
     expect(
       within(planCard(modal, connectTitle)).getByText('Quote and download up to 50 RFQs in 3 months from Marketplace.'),

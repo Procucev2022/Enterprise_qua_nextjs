@@ -676,7 +676,7 @@ describe('Header Session Timer and Auto Logout', () => {
       vendorFreeCreditsRemaining: undefined,
     });
     rerender(<Header />);
-    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getByText('0')).toBeInTheDocument();
 
     // 4. Admin role opening account modal and closing via backdrop click
     (storeModule.useApp as jest.Mock).mockReturnValue({
