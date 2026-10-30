@@ -2295,3 +2295,204 @@ export interface VendorDirectoryAuthResult {
   token?: string;
 }
 
+
+
+// ==============================================================================
+// ACTION CENTER: TICKETS, APPROVALS, SCORECARD TYPES
+// ==============================================================================
+
+export type TicketPriority = 'Critical' | 'High' | 'Medium' | 'Low';
+export type TicketStatus = 'Pending' | 'In Progress' | 'Escalated' | 'Completed';
+
+export interface TicketActivity {
+  id: string;
+  ticket_id: string;
+  action_type: string;
+  actor_id?: string | null;
+  actor_name?: string | null;
+  from_value?: string | null;
+  to_value?: string | null;
+  comment?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface Ticket {
+  id: string;
+  ticket_number: string;
+  subject: string;
+  description?: string;
+  status: TicketStatus;
+  priority: TicketPriority;
+  category: string;
+  project?: string;
+  customer_id?: string;
+  customer_name?: string;
+  customer_email?: string;
+  customer_phone?: string;
+  assigned_to_user_id?: string;
+  assigned_to_name?: string;
+  assigned_team?: string;
+  created_by_user_id?: string;
+  created_by_name?: string;
+  last_edited_by_name?: string;
+  resolved_by_name?: string;
+  sla_hours?: number;
+  due_date?: string;
+  resolved_at?: string;
+  resolution_notes?: string;
+  escalation_level?: number;
+  escalated_to?: string;
+  escalation_reason?: string;
+  attachments?: Array<{ name: string; url?: string; size?: number }>;
+  activities?: TicketActivity[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TicketSummary {
+  total: number;
+  pending: number;
+  inProgress: number;
+  escalated: number;
+  completed: number;
+  criticalCount: number;
+}
+
+export interface TicketFilterParams {
+  search?: string;
+  status?: string;
+  priority?: string;
+  category?: string;
+  project?: string;
+  assignedTo?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ApprovalRequest {
+  id: string;
+  request_number: string;
+  module: string;
+  project: string;
+  applicant_name: string;
+  applicant_email: string;
+  value_impact: string;
+  maker_name: string;
+  maker_role: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  details?: string;
+  approver_name?: string;
+  approver_remarks?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApprovalSummary {
+  pending: number;
+  approved: number;
+  rejected: number;
+  total: number;
+}
+
+export interface ScorecardOperationsPillar {
+  tasksCompleted: number;
+  tasksAssigned: number;
+  taskCompletionRate: number | null;
+  ticketsCompleted: number;
+  ticketsAssigned: number;
+  ticketResolutionRate: number | null;
+  registrations: number;
+  registrationsTarget: number;
+  registrationRate: number | null;
+  siteVisits: number;
+  siteVisitsPlanned: number;
+  siteVisitRate: number | null;
+}
+
+export interface ScorecardRevenuePillar {
+  duesCollected: number;
+  totalDues: number;
+  pendingDues: number;
+  collectionPercentage: number | null;
+  loansDisbursed: number;
+  loansTarget: number;
+  loanDisbursementRate: number | null;
+  loanRealized: number;
+  loanRealizedTarget: number;
+  loanRealizationRate: number | null;
+}
+
+export interface ScorecardSalesPillar {
+  leadsContacted: number;
+  leadsTarget: number;
+  leadContactRate: number | null;
+  leadToVisitRate: number | null;
+  visitToDealRate: number | null;
+  dealsClosed: number;
+  dealsTarget: number;
+  dealAchievementRate: number | null;
+}
+
+export interface TeamScorecardRow {
+  rank: number;
+  id: string;
+  name: string;
+  role: string;
+  email: string;
+  project: string;
+  operations: {
+    tasksCompleted: number;
+    tasksAssigned: number;
+    taskCompletionRate: number | null;
+    ticketsResolved: number;
+    ticketsAssigned: number;
+    ticketResolutionRate: number | null;
+    registrationsCompleted: number;
+    registrationsTarget: number;
+    registrationAchievementRate: number | null;
+    siteVisitsCompleted: number;
+    siteVisitsPlanned: number;
+    siteVisitAchievementRate: number | null;
+  };
+  revenue: {
+    totalDues: number;
+    duesCollected: number;
+    pendingDues: number;
+    collectionPercentage: number | null;
+    loansDisbursed: number;
+    loansTarget: number;
+    loanDisbursementRate: number | null;
+    loanAmountRealized: number;
+    loanRealizedTarget: number;
+    loanRealizationRate: number | null;
+  };
+  sales: {
+    leadsContacted: number;
+    leadsTarget: number;
+    leadContactRate: number | null;
+    leadToVisitRate: number | null;
+    visitToDealRate: number | null;
+    dealsClosed: number;
+    dealsTarget: number;
+    dealAchievementRate: number | null;
+  };
+  score: number;
+  performanceStatus: 'On Track' | 'Average' | 'Needs Focus';
+}
+
+export interface ScorecardData {
+  dateRange: { startDate: string; endDate: string; label: string };
+  period: string;
+  project: string;
+  pillar: string;
+  executiveId?: string | null;
+  pillarSummary: {
+    operations: ScorecardOperationsPillar;
+    revenue: ScorecardRevenuePillar;
+    sales: ScorecardSalesPillar;
+  };
+  teamScores: TeamScorecardRow[];
+}
