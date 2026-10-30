@@ -82,7 +82,17 @@ export default function InternalTasksDashboard() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const tabParam = new URLSearchParams(window.location.search).get('tab') as ActionCenterTabKey;
-      if (tabParam) {
+      const validTabs: ActionCenterTabKey[] = [
+        'tasks',
+        'tickets',
+        'approvals',
+        'scorecard',
+        'buyers',
+        'sellers',
+        'registrations',
+        'payment_dues',
+      ];
+      if (tabParam && validTabs.includes(tabParam)) {
         setActiveTab(tabParam);
       }
     }

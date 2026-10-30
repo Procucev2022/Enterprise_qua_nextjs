@@ -1018,3 +1018,28 @@ PASS __tests__/supportChat.test.js
 PASS __tests__/types.test.js
 A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
 
+
+
+---
+
+### 2026-10-30T10:37:56+05:30
+
+```text
+Remove the Document Tracker, Loans ,Expiring Holes , Leads and  site visites i dont want this features in Action centers
+```
+
+---
+
+### 2026-10-30T11:02:00+05:30
+
+```text
+Remove the Buyer and seller directory from the category govarance because it is already there in Action center 
+```
+
+---
+
+### 2026-10-30T11:19:40+05:30
+
+```text
+raise the pr for this code
+```

@@ -660,7 +660,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
   });
 
   
-  test('switches across Action Center sub-navigation tabs (tickets, approvals, scorecard, buyers, sellers, loans, tasks)', async () => {
+  test('switches across Action Center sub-navigation tabs (tickets, approvals, scorecard, buyers, sellers, registrations, tasks)', async () => {
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
@@ -692,10 +692,10 @@ describe('Action Center & Internal Tasks Redesign', () => {
     fireEvent.click(sellersTab);
     expect(screen.getByTestId('sellers-directory')).toBeInTheDocument();
 
-    // 6. Switch to Loans tab (generic module placeholder)
-    const loansTab = screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.loans, 'i') });
-    fireEvent.click(loansTab);
-    expect(screen.getByText(/Integrated Action Center governance module for loans/i)).toBeInTheDocument();
+    // 6. Switch to Registrations tab (generic module placeholder)
+    const registrationsTab = screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.registrations, 'i') });
+    fireEvent.click(registrationsTab);
+    expect(screen.getByText(/Integrated Action Center governance module for registrations/i)).toBeInTheDocument();
 
     // 7. Switch back to Internal tasks tab
     const tasksTab = screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.internalTasks, 'i') });

@@ -10,7 +10,7 @@ describe('ActionCenterSubNav', () => {
     jest.clearAllMocks();
   });
 
-  it('renders all action center tabs with correct labels and badges', () => {
+  it('renders all active action center tabs with correct labels and badges while excluding removed features', () => {
     render(
       <ActionCenterSubNav
         activeTab="tasks"
@@ -21,24 +21,28 @@ describe('ActionCenterSubNav', () => {
       />
     );
 
-    // Verify presence of main tabs
+    // Verify presence of retained main tabs
     expect(screen.getByText(UI_STRINGS.actionCenter.tabs.internalTasks)).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.actionCenter.tabs.tickets)).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.actionCenter.tabs.approvals)).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.actionCenter.tabs.scorecard)).toBeInTheDocument();
-    expect(screen.getByText(UI_STRINGS.actionCenter.tabs.documentTracker)).toBeInTheDocument();
-    expect(screen.getByText(UI_STRINGS.actionCenter.tabs.loans)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.actionCenter.tabs.buyersDirectory)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.actionCenter.tabs.sellersDirectory)).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.actionCenter.tabs.registrations)).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.actionCenter.tabs.paymentDues)).toBeInTheDocument();
-    expect(screen.getByText(UI_STRINGS.actionCenter.tabs.expiringHolds)).toBeInTheDocument();
-    expect(screen.getByText(UI_STRINGS.actionCenter.tabs.leads)).toBeInTheDocument();
-    expect(screen.getByText(UI_STRINGS.actionCenter.tabs.siteVisits)).toBeInTheDocument();
+
+    // Verify removed features are explicitly NOT present in the Action Center navigation
+    expect(screen.queryByText('Document Tracker')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loans')).not.toBeInTheDocument();
+    expect(screen.queryByText('Expiring Holds')).not.toBeInTheDocument();
+    expect(screen.queryByText('Leads')).not.toBeInTheDocument();
+    expect(screen.queryByText('Site Visits')).not.toBeInTheDocument();
 
     // Verify badges
     expect(screen.getByText('5')).toBeInTheDocument(); // tasksCount
     expect(screen.getByText('2')).toBeInTheDocument(); // ticketsCount
     expect(screen.getByText('4')).toBeInTheDocument(); // approvalsCount
-    expect(screen.getAllByText('99+').length).toBeGreaterThanOrEqual(1); // documentTracker / paymentDues
+    expect(screen.getByText('99+')).toBeInTheDocument(); // paymentDues badge
   });
 
   it('triggers onSelectTab callback when a tab is clicked', () => {
@@ -61,9 +65,13 @@ describe('ActionCenterSubNav', () => {
     fireEvent.click(approvalsTab);
     expect(mockOnSelectTab).toHaveBeenCalledWith('approvals');
 
-    const loansTab = screen.getByText(UI_STRINGS.actionCenter.tabs.loans);
-    fireEvent.click(loansTab);
-    expect(mockOnSelectTab).toHaveBeenCalledWith('loans');
+    const registrationsTab = screen.getByText(UI_STRINGS.actionCenter.tabs.registrations);
+    fireEvent.click(registrationsTab);
+    expect(mockOnSelectTab).toHaveBeenCalledWith('registrations');
+
+    const paymentDuesTab = screen.getByText(UI_STRINGS.actionCenter.tabs.paymentDues);
+    fireEvent.click(paymentDuesTab);
+    expect(mockOnSelectTab).toHaveBeenCalledWith('payment_dues');
   });
 
   it('applies active styling to the currently active tab', () => {
