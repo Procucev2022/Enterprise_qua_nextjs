@@ -43,6 +43,9 @@ const INDIAN_MOBILE_MESSAGE = 'Enter a valid 10-digit Indian mobile number, for 
 const OTP_CODE_REGEX = /^\d{6}$/;
 const OTP_CODE_MESSAGE = 'Enter the 6-digit verification code sent to your registered email address.';
 
+const PROCUCEV_EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@procucev\.com$/i;
+const PROCUCEV_EMAIL_MESSAGE = 'Enter a valid corporate Procucev email address ending in @procucev.com.';
+
 // Shortest password accepted when an account holder changes their own password.
 // Mirrors PASSWORD_MIN_LENGTH in frontend/lib/constants.ts, which also drives the
 // `minLength` attribute on the field, so the browser hint and this boundary
@@ -375,6 +378,31 @@ const VALIDATION_SCHEMAS = {
       required: true,
       pattern: INDIAN_MOBILE_REGEX,
       message: INDIAN_MOBILE_MESSAGE,
+    },
+  },
+
+  // Dedicated Category Manager Vendor Directory Email-OTP Schemas
+  vendorDirectoryOtpRequest: {
+    email: {
+      type: 'string',
+      required: true,
+      pattern: PROCUCEV_EMAIL_REGEX,
+      message: PROCUCEV_EMAIL_MESSAGE,
+    },
+  },
+
+  vendorDirectoryOtpVerify: {
+    email: {
+      type: 'string',
+      required: true,
+      pattern: PROCUCEV_EMAIL_REGEX,
+      message: PROCUCEV_EMAIL_MESSAGE,
+    },
+    code: {
+      type: 'string',
+      required: true,
+      pattern: OTP_CODE_REGEX,
+      message: OTP_CODE_MESSAGE,
     },
   },
 
@@ -774,6 +802,8 @@ function validatePayload(schema, data = {}) {
 
 module.exports = {
   EMAIL_REGEX,
+  PROCUCEV_EMAIL_REGEX,
+  PROCUCEV_EMAIL_MESSAGE,
   PINCODE_REGEX,
   DUMMY_PINCODES,
   isDummyPincode,

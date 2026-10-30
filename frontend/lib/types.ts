@@ -2282,17 +2282,34 @@ export interface PublicVendorFilterOptions {
 }
 
 /** Session record stored in client storage for authorized vendor directory access */
+/** Authorized user details for a Vendor Directory session */
+export interface VendorDirectoryUser {
+  id?: string;
+  uuid?: string;
+  email: string;
+  name?: string;
+  role: string;
+}
+
+/** Session record stored in client storage for authorized vendor directory access */
 export interface VendorDirectoryAuthSession {
   token: string;
+  sessionId?: string;
   expiresAt: number;
+  lastActivityAt?: number;
   authenticated: boolean;
+  user?: VendorDirectoryUser;
 }
 
 /** Result returned by the vendor directory authentication client */
 export interface VendorDirectoryAuthResult {
   success: boolean;
   error?: string;
+  message?: string;
   token?: string;
+  sessionId?: string;
+  expiresAt?: number | string;
+  user?: VendorDirectoryUser;
 }
 
 

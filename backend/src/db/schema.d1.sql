@@ -667,6 +667,29 @@ CREATE TABLE IF NOT EXISTS vendor_credit_transactions (
 CREATE INDEX IF NOT EXISTS idx_vendor_credit_transactions_vendor ON vendor_credit_transactions (vendor_id, created_at DESC);
 
 -- =============================================================================
+-- VENDOR DIRECTORY SESSIONS (Dedicated Category Manager Access Audit & Inactivity)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS vendor_directory_sessions (
+  id TEXT PRIMARY KEY,
+  user_uuid TEXT NOT NULL,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'category_manager',
+  auth_method TEXT NOT NULL DEFAULT 'EMAIL_OTP',
+  login_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_activity_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  logout_at TEXT,
+  duration_seconds INTEGER DEFAULT 0,
+  logout_reason TEXT,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  ip_address TEXT,
+  user_agent TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_user_login ON vendor_directory_sessions (user_uuid, login_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email_login ON vendor_directory_sessions (email, login_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status_act ON vendor_directory_sessions (status, last_activity_at DESC);
+
 -- RELATIONAL DYNAMIC INTERNAL TASKS & ACTION CENTER
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS internal_task_types (

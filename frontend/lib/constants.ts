@@ -1247,6 +1247,11 @@ export const QUA_AI_EMAIL_SUPPORT = {
 export const DEFAULT_VENDOR_DIRECTORY_PASSKEY = 'Procucev@Vendors2026';
 export const VENDOR_DIRECTORY_AUTH_STORAGE_KEY = 'procucev_vendor_directory_auth';
 
+export const VENDOR_DIRECTORY_AUTH_CONFIG = {
+  OTP_TTL_SECONDS: 300,
+  INACTIVITY_TIMEOUT_SECONDS: 300,
+  MAX_OTP_ATTEMPTS: 5,
+} as const;
 
 
 

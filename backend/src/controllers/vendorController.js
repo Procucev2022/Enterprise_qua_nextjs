@@ -1140,7 +1140,9 @@ async function getPublicVendors(req, res, next) {
       verifiedOnly: isVerifiedOnly,
     }, 'PUBLIC_VENDOR_CONTROLLER');
     if (typeof res.setHeader === 'function') {
-      res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
     }
     res.json({
       success: true,
@@ -1171,7 +1173,9 @@ async function getPublicVendorFilters(req, res, next) {
       statesCount: states.length,
     }, 'PUBLIC_VENDOR_CONTROLLER');
     if (typeof res.setHeader === 'function') {
-      res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=7200, stale-while-revalidate=86400');
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
     }
     res.json({
       success: true,
@@ -1210,7 +1214,9 @@ async function getPublicVendorById(req, res, next) {
       return res.status(404).json({ success: false, error: 'Vendor not found.' });
     }
     if (typeof res.setHeader === 'function') {
-      res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=600, stale-while-revalidate=1200');
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
     }
     res.json({ success: true, data: sanitized });
   } catch (err) {

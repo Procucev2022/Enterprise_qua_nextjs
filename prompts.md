@@ -786,9 +786,183 @@ to access vendor page add one kind of login client has said other wise any one c
 ### 2026-10-29T14:04:14+05:30
 
 ```text
-govardhan.kilari@procucev.com, veerababu.v@procucev.com, nilesh.murme@procucev.com, chandan.behera@procucev.com, prerna.shrivastava@procucev.com, prajwal.karakoon@procucev.com, sudheer.kangala@procucev.com, reshma.menon@procucev.com, srinivas.mukku@procucev.com, suneel.koneru@procucev.com
-i give like this in search bar it should give all that vendor if they exist 
-please check this issue and fix it
+```
+---
+
+### 2026-10-29T16:23:20+05:30
+
+```text
+This vendor directrory should only be shown Category Manager only after when Category Manager  is login and also when category manager click on vendor directly on login page need only Procucev mail Id login  with otp on their mail and when they enter the vendor page after 5 min of inactivity  they will be auto logout and also store all the login detail who login and how much time they have spend first login and lout otu time all these and also when category manager upload any new vendor that will be visible by default what I belive these are thing need to done 
+
+for these these their is a plan just need to execute plan_to_implement\plan.md check all these and start implement ing by phases start with phase 1 
+```
+---
+
+### 2026-10-29T16:39:50+05:30
+
+```text
+yes proceed to phase 2 
+```
+
+---
+
+### 2026-10-29T17:11:06+05:30
+
+```text
+okay phase 2 complete now work on phase 3 
+```
+
+---
+
+### 2026-10-29T18:05:06+05:30
+
+```text
+okay priority change only otp verification and vendor directory will only be show in after login cateogry manager should be visible complete this first and then move to other part
+like in phase 4 otp will be complete take study other phase also check complete these part only as of now  
+```
+
+---
+
+### 2026-10-29T18:48:04+05:30
+
+```text
+why I am seeing Vendor Directory on login page ?? it should only be access after login in category manager page 
+```
+
+---
+
+### 2026-10-29T18:59:49+05:30
+
+```text
+abc@procucev.com  check for an active procucev account getitig theis 
+SrinivasM@procucev.com
+ user_id = $1 and category is not null and category <> '' order by division, category","durationMs":223,"table":"org_division_category"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'org_division_category': 337ms {"query":"select division, category from org_division_category where organization_id = $1 and category is not null and category <> '' order by division, category","durationMs":337,"table":"org_division_category"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'vendors': 785ms {"query":"SELECT id, created_at, updated_at, raw FROM vendors WHERE source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump') ORDER BY created_at DESC LIMIT $1 OFFSET $2","durationMs":785,"table":"vendors"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'buyer_accounts': 259ms {"query":"SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1","durationMs":259,"table":"buyer_accounts"} 
+[BACKEND] GET /api/buyer-accounts/active 304 (1395ms)      
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/buyer-accounts/active -> 304 (1395ms) {"method":"GET","url":"/api/buyer-accounts/active","statusCode":304,"durationMs":1395,"requestId":"req-1793280385006-xzktt","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}       
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'vendors': 4629ms {"query":"SELECT raw FROM vendors WHERE lower(email) = lower($1) OR lower(json_extract(raw,'$.corporateEmail')) = lower($1) LIMIT 1","durationMs":4629,"table":"vendors"}
+[BACKEND] GET /api/bootstrap 200 (6148ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 200 (6148ms) {"method":"GET","url":"/api/bootstrap","statusCode":200,"durationMs":6148,"requestId":"req-1793280384868-tx3fe","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [INFO] [BOOTSTRAP_CONTROLLER] Fetching application bootstrap data payload
+[BACKEND] GET /api/bootstrap 304 (57ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 304 (57ms) {"method":"GET","url":"/api/bootstrap","statusCode":304,"durationMs":57,"requestId":"req-1793280391041-1u46f","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [INFO] [BOOTSTRAP_CONTROLLER] Fetching application bootstrap data payload
+[BACKEND] GET /api/bootstrap 304 (44ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 304 (44ms) {"method":"GET","url":"/api/bootstrap","statusCode":304,"durationMs":44,"requestId":"req-1793280391103-2gszh","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [INFO] [BOOTSTRAP_CONTROLLER] Fetching application bootstrap data payload
+[BACKEND] GET /api/bootstrap 304 (30ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 304 (30ms) {"method":"GET","url":"/api/bootstrap","statusCode":304,"durationMs":30,"requestId":"req-1793280391161-zwaod","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[FRONTEND]  ✓ Compiled in 3.2s (823 modules)
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'role': 715ms {"query":"select u.uuid, u.username, u.email, u.password, u.full_name, u.first_name, u.phone, u.is_active, u.is_approved, u.self_client, u.reset_password, u.verification_status, u.org_uuid, r.role_name, o.organ","durationMs":715,"table":"role"}
+[BACKEND] POST /api/auth/vendor-directory/request-otp 403 (741ms)
+[BACKEND] [WARN] [AUTH_SERVICE] Vendor directory OTP denied for unauthorized or non-CM account: abc@procucev.com {"ipAddress":"::1"}
+[BACKEND] [WARN] [AUTH_CONTROLLER] Vendor directory OTP request failure in authController {"error":"Access to the Vendor Directory is restricted to Category Managers with an active @procucev.com account.","email":"abc@procucev.com"}    
+[BACKEND] [WARN] [HTTP_REQUEST] POST /api/auth/vendor-directory/request-otp -> 403 (741ms) {"method":"POST","url":"/api/auth/vendor-directory/request-otp","statusCode":403,"durationMs":741,"requestId":"req-1793280481425-0fbrz","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'payment_links': 579ms {"query":"SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT $1","durationMs":579,"table":"payment_links"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'role': 330ms {"query":"select u.uuid, u.username, u.email, u.password, u.full_name, u.first_name, u.phone, u.is_active, u.is_approved, u.self_client, u.reset_password, u.verification_status, u.org_uuid, r.role_name, o.organ","durationMs":330,"table":"role"}
+[BACKEND] POST /api/auth/vendor-directory/request-otp 403 (348ms)
+[BACKEND] [WARN] [AUTH_SERVICE] Vendor directory OTP denied for unauthorized or non-CM account: srinivasm@procucev.com {"ipAddress":"::1"}
+[BACKEND] [WARN] [AUTH_CONTROLLER] Vendor directory OTP request failure in authController {"error":"Access to the Vendor Directory is restricted to Category Managers with an active @procucev.com account.","email":"srinivasm@procucev.com"}
+[BACKEND] [WARN] [HTTP_REQUEST] POST /api/auth/vendor-directory/request-otp -> 403 (348ms) {"method":"POST","url":"/api/auth/vendor-directory/request-otp","statusCode":403,"durationMs":348,"requestId":"req-1793280527374-9dqns","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+```
+
+
+---
+
+### 2026-10-29T19:14:03+05:30
+
+```text
+339556 otp
+```
+
+
+---
+
+### 2026-10-29T21:01:05+05:30
+
+```text
+it just have to accept any mail with  @procucev.com that neccessary have role of category manger It has common account to access every but to access vendor only company employee can access by writting their mail Id of the company with otp
+```
+
+
+---
+
+### 2026-10-29T21:02:39+05:30
+
+```text
+Access to the Vendor Directory is restricted to Category Managers with an active @procucev.com account.
+Procucev Corporate Email
+mukul.rai@procucev.com
+Must end in @procucev.com
+
+
+ it just have to accept any mail with  @procucev.com that neccessary have role of category manger It has common account to access every but to access vendor only company employee can access by writting their mail Id of the company with otp 
+```
+
+
+---
+
+### 2026-10-29T21:24:59+05:30
+
+```text
+why I am seeing verification code on verify otp it shoudn't be their 
+```
+
+
+---
+
+### 2026-10-29T21:52:33+05:30
+
+```text
+backend\check_db_users.js
+backend\check_procucev_users.js
+backend\check_srinivas.js why are these file nned now check extra file and remove latest create files only 
+```
+
+
+---
+
+### 2026-10-29T22:05:24+05:30
+
+```text
+|           ^
+      22 | }
+      23 |
+      24 | /**
+
+      at warn (src/db/vendorDirectorySessionQueries.js:21:11)
+      at logWarn (src/db/vendorDirectorySessionQueries.js:162:5)
+      at Object.closeSession (src/db/vendorDirectorySessionQueries.js:232:19)
+      at Object.<anonymous> (__tests__/vendorDirectorySessionQueries.test.js:294:7)
+
+(node:13820) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ PASS  __tests__/ciSummary.test.js (7.081 s)
+ PASS  __tests__/buyerAccountResolver.test.js (6.127 s)
+ PASS  __tests__/vendorControllerBranches.test.js (16.692 s)
+ PASS  __tests__/unlimitedAccessAccounts.test.js (26.385 s)
+ PASS  __tests__/v0RfqWorkflow.test.js (19.456 s)
+ PASS  __tests__/vendorIngestionDispatchCoverage.test.js (19.926 s)
+ PASS  __tests__/constantsConfig.test.js (8.459 s)
+ PASS  __tests__/invoiceService.test.js (11.792 s)
+ PASS  __tests__/zohoWebhookController.test.js (18.122 s)
+ PASS  __tests__/storeServiceAutoClosure.test.js (8.736 s)
+ PASS  __tests__/types.test.js (10.311 s)
+ PASS  __tests__/servicesDeep.test.js (5.533 s)
+ PASS  __tests__/ppoClosureFix.test.js (6.589 s)
+ PASS  __tests__/vendorIngestionQueries.test.js (19.076 s)
+ PASS  __tests__/vendorPresenceService.test.js (10.052 s)
+ PASS  __tests__/evaluationService.test.js (5.896 s)
+ PASS  __tests__/identityQueries.test.js (10.319 s)
+ PASS  __tests__/validationSchemas.test.js
+ PASS  __tests__/emailService.test.js (5.995 s)
+A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
+
+
+```text
+okay just need to fix timmer we show the otp expire in 5 min but we are showing 30 sec need too update in frontend 
 ```
 
 ---
@@ -819,310 +993,28 @@ continue
 
 ---
 
-### 2026-10-29T19:50:00+05:30
+### 2026-10-29T23:58:46+05:30
 
 ```text
-# Master Prompt: Action Center, Tickets, Scorecard & Directory Integration — QUA AI
-
-## 1. Objective
-
-Act as a senior full-stack developer working on the existing QUA AI platform.
-
-Enhance the existing application by organizing the Action Center, integrating the existing Buyers Directory and Sellers Directory into it, implementing the Tickets module, and implementing the initial Scorecard module for individual and team performance tracking.
-
-Critical priority: Reuse existing functionality, methods, components, APIs, database models, and business logic wherever possible. Do not break, remove, or unnecessarily change any existing functionality.
-
-This is an enhancement to an existing production application, not a rebuild.
-
-Use the provided screenshots as UI and layout references.
-
-## 2. Mandatory Pre-Implementation Analysis
-
-Before modifying any code:
-
-1. Inspect the existing repository structure and identify the frontend, backend, database, authentication, authorization, and API architecture.
-2. Review the current Action Center, Internal Tasks, Tickets, Scorecard, Buyers Directory, and Sellers Directory implementations.
-3. Identify existing reusable components, functions, methods, hooks, services, database models, API endpoints, and shared utilities.
-4. Determine which features are fully implemented, partially implemented, or missing.
-5. Understand existing roles, permissions, relationships, workflows, database constraints, and integrations.
-6. Check existing tests and establish baseline build and test results.
-7. Prepare a minimal implementation plan that reuses existing code and limits changes to the requested scope.
-
-Do not recreate a feature that already exists and works correctly. Extend or connect the existing implementation instead.
-
-## 3. Action Center
-
-Enhance the existing Action Center as the centralized workspace for task management, tickets, approvals, and directory access.
-
-### 3.1 Internal Tasks
-
-Preserve the existing Internal Tasks functionality and enhance it only where required.
-
-Support:
-- My Tasks — tasks assigned to the logged-in user.
-- Executive-wise Tasks — tasks organized by executive, visible according to permissions.
-- All Tasks — all authorized tasks across the organization.
-- Task creation, assignment, reassignment, and status updates.
-- Task priority, due date, project, related entity, and task type.
-- Pending, In Progress, Escalated, and Completed statuses.
-- Escalation to a co-executive or manager.
-- Task comments, activity history, and ownership tracking.
-- Search, filters, configurable columns, refresh, and export.
-
-Display summary cards for:
-- Total Tasks
-- Pending Tasks
-- Escalated Tasks
-- Completed Tasks
-- Critical / Overdue Tasks
-
-All counts must be calculated from actual database records using the existing data-access methods wherever possible.
-
-### 3.2 Approvals
-
-Retain existing approval functionality and integrate it into Action Center navigation where appropriate.
-
-Support management approvals for:
-- Credit additions and deletions.
-- Account approvals.
-- Discounts.
-- Trial-period changes.
-- Other existing approval workflows.
-
-Preserve existing approval rules, authorization, audit history, and processing logic. Do not invent new approval rules.
-
-### 3.3 Buyers Directory and Sellers Directory
-
-Both directories already exist and are partially implemented.
-
-Do not rebuild or duplicate them. Move their navigation entries under Action Center and reuse the existing modules.
-
-Requirements:
-- Provide convenient access to Buyers Directory and Sellers Directory from Action Center.
-- Remove duplicate sidebar entries only after confirming the new navigation works.
-- Preserve existing routes, deep links, APIs, database records, permissions, and workflows.
-- Preserve all existing buyer and seller information.
-- Support complete communication history for each buyer and seller, using existing capabilities and data sources.
-- Where supported by existing integrations, maintain emails, messages, delivery receipts, communication status, timestamps, and executive-wise interactions.
-- Do not fabricate historical communication records or delivery confirmations.
-- Do not replace working communication integrations with mock functionality.
-
-If communication-history features are incomplete, extend the current implementation with minimal backward-compatible changes.
-
-## 4. Tickets Module — Implement Now
-
-Implement and integrate the Tickets module using the existing Tickets screen in the provided screenshots as the UI reference.
-
-First inspect the current ticket implementation. Reuse existing ticket-related models, APIs, components, services, and methods. Implement only the missing functionality.
-
-### 4.1 Ticket Dashboard
-
-Display summary cards for:
-- Total Tickets
-- Pending Tickets
-- Escalated Tickets
-- Completed Tickets
-- Critical / High-Priority Tickets
-
-Calculate all statistics from actual database records. Ensure that summary cards, ticket tables, and exported reports use consistent filtering and counting rules.
-
-### 4.2 Ticket Data
-
-Support the following fields wherever they exist in the current model, adding only necessary backward-compatible fields when required:
-
-- Ticket ID and status.
-- Subject and issue description.
-- Project and related unit/entity.
-- Customer details and authorized quick-contact information.
-- Ticket category.
-- Priority and Service Level Agreement (SLA).
-- Assigned executive or responsible team.
-- Created date, last-edited date, and ticket age.
-- Due date and escalation information.
-- Comments, attachments, and resolution notes.
-- Created by, assigned by, last edited by, and resolved by.
-
-Preserve existing identifiers and relationships. Do not duplicate customer or project records.
-
-### 4.3 Ticket Workflow
-
-Implement or complete these workflows:
-
-1. Create a ticket.
-2. View ticket details.
-3. Assign or reassign the ticket.
-4. Update its status and priority.
-5. Add comments, attachments, and resolution notes.
-6. Escalate tickets to an authorized manager or responsible team.
-7. Resolve and complete tickets.
-8. Review ticket activity and status history.
-
-Support Pending, In Progress, Escalated, and Completed states, mapping them to existing status values where necessary rather than introducing incompatible duplicates.
-
-Highlight critical, high-priority, and overdue tickets according to existing rules. Apply SLA calculations only where the necessary configuration and data are available.
-
-### 4.4 Ticket UI and Filters
-
-Provide:
-- Search by ticket ID, subject, customer, or other supported identifiers.
-- Status filter.
-- Priority filter.
-- Project and category filters.
-- Date-range filters.
-- Configurable columns.
-- Refresh.
-- Export.
-- Pagination or existing table-navigation functionality.
-- Clear loading, empty, validation, success, and error states.
-
-Ensure the screen follows the existing QUA AI design system and remains responsive.
-
-### 4.5 Future Extensibility
-
-Design the ticket functionality so future phases can support advanced customer support analytics, SLA trend analysis, complaint categorization, and resolution-time reporting.
-
-Do not overbuild these future enhancements now.
-
-## 5. Scorecard Module — Implement Now
-
-Implement the initial Scorecard module using the provided Scorecard screenshot as the UI reference.
-
-The module must support individual and team performance monitoring based on existing business data.
-
-### 5.1 Filters and Navigation
-
-Provide:
-- Individual Executive view.
-- Complete Team / Leaderboard view.
-- Today.
-- This Week.
-- This Month.
-- Last Month.
-- This Quarter.
-- Financial Year.
-- Custom date range.
-- Project filter.
-- Performance pillar filters.
-
-All filters must update the displayed metrics, charts or progress indicators, and scorecard table consistently.
-
-Use the application's existing financial-year configuration rather than assuming that a calendar year is the financial year.
-
-### 5.2 Performance Pillars
-
-A. Operations & Compliance
-- Tasks completed versus tasks assigned.
-- Tickets resolved versus tickets assigned.
-- Registrations completed versus the applicable target.
-- Site visits completed versus planned visits.
-
-B. Revenue & Banking
-- Total dues.
-- Dues collected.
-- Pending dues.
-- Collection percentage.
-- Loans disbursed versus target.
-- Loan amount realized versus target.
-
-Display currency using the application's configured currency and formatting.
-
-C. Sales & Customer Acquisition
-- Leads contacted versus target.
-- Lead-to-visit conversion rate.
-- Visit-to-deal conversion rate.
-- Deals closed versus target.
-
-Use existing lead, visit, deal, loan, registration, task, and ticket records. Do not create duplicate sources of truth.
-
-### 5.3 Scorecard Dashboard UI
-
-For each performance pillar:
-- Display a clear section heading.
-- Show relevant metric cards.
-- Show actual values and targets.
-- Display progress bars and achievement percentages.
-- Highlight meaningful performance states.
-- Provide access to detailed records when a metric is selected, where supported.
-
-The team scorecard table should display:
-- Rank.
-- Executive name.
-- Tasks completed / assigned.
-- Tickets resolved / assigned.
-- Registrations completed / target.
-- Site visits completed / planned.
-- Loans disbursed and amount realized.
-- Dues collected and pending amounts.
-- Leads contacted and deals closed.
-- Conversion rates.
-- Overall score.
-- Performance status.
-- Available detail or drill-down actions.
-
-Support sorting by executive, rank, score, and performance metrics.
-
-The individual view should display the selected executive's performance for the chosen period. Respect the logged-in user's permissions when showing individual or organization-wide information.
-
-### 5.4 Scorecard Calculation Rules
-
-Use the following formulas, subject to existing business definitions and approved configurations:
-
-- Task completion percentage = Completed eligible tasks / Assigned eligible tasks × 100
-- Ticket resolution percentage = Resolved eligible tickets / Assigned eligible tickets × 100
-- Registration achievement percentage = Completed registrations / Target registrations × 100
-- Site visit completion percentage = Completed site visits / Planned site visits × 100
-- Collection percentage = Dues collected / Total dues × 100
-- Loan disbursement percentage = Loans disbursed / Target loans × 100
-- Loan realization percentage = Amount realized / Target loan amount × 100
-- Contact rate = Leads contacted / Total assigned leads × 100
-- Lead-to-visit conversion rate = Site visits from leads / Leads contacted × 100
-- Visit-to-deal conversion rate = Deals closed / Site visits conducted × 100
-- Overall score = Weighted average across the three pillars, according to the application's score calculation rules.
-
-Safely handle zero denominators, missing targets, unconfigured weights, and periods without activity. Avoid division-by-zero errors or invalid percentage values.
-
-### 5.5 Future Extensibility
-
-Structure the Scorecard implementation to accommodate future additions such as KPI weight configuration, executive goal setting, automated periodic snapshots, and advanced export options.
-
-Do not overbuild these future enhancements now.
-
-## 6. Implementation Principles
-
-- Reuse first: Locate and reuse existing models, database tables, schemas, controllers, routes, API endpoints, services, helper functions, React components, hooks, state stores, and utility modules before writing new ones.
-- Minimal changes: Change only what is required to satisfy the requirements.
-- Backward compatibility: Ensure that all existing routes, deep links, APIs, permissions, and database records continue to work.
-- Consistency: Follow the existing architecture, file structure, naming conventions, design patterns, coding standards, and styling.
-- Real data only: Connect new UI components to real data sources. Do not leave placeholder data, hardcoded sample records, or mock responses in production paths.
-- Authorization: Ensure all new endpoints and views respect existing roles and permissions.
-- Robustness: Validate inputs, handle loading and error states, and prevent unhandled exceptions.
-- Tests: Add unit and integration tests for all new or modified code. Verify that existing tests continue to pass.
-```
-
----
-
-### 2026-10-29T22:30:00+05:30
-
-```text
-raise pr for this
-code
-```
-
-
----
-
-### 2026-10-30T08:01:06+05:30
-
-```text
-continue
-```
-
-
----
-
-### 2026-10-30T08:24:45+05:30
-
-```text
-please check and fix this
-```
+PASS __tests__/mailTransportAttachments.test.js
+PASS __tests__/pincodeService.test.js
+PASS __tests__/vendorIngestionController.test.js
+PASS __tests__/evaluationService.test.js
+PASS __tests__/vendorPresenceRoutes.test.js
+PASS __tests__/transactionalEmailRoutes.test.js
+PASS __tests__/queryCache.test.js
+PASS __tests__/queryAuditor.test.js
+PASS __tests__/pincodeControllerBranches.test.js
+PASS __tests__/vendorCategories.test.js
+PASS __tests__/passwordChangeGate.test.js
+PASS __tests__/quoteAttachmentService.test.js
+PASS __tests__/auditService.test.js
+PASS __tests__/iconvLiteShim.test.js
+PASS __tests__/historicalData.test.js
+PASS __tests__/invoiceService.test.js
+PASS __tests__/aiChaserService.test.js
+PASS __tests__/localPersistenceIsolation.test.js
+PASS __tests__/supportChat.test.js
+PASS __tests__/types.test.js
+A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
 
