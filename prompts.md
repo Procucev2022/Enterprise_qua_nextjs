@@ -1400,3 +1400,188 @@ Before completing the task, verify:
 raise the pr for the code
 ```
 
+
+---
+
+### 2026-10-30T18:07:00+05:30
+
+```text
+feat: single sheet quote comparison with calculated GST, total, comme… …rcial terms, and clean PO export- #371
+#371
+Open
+[navinprocucev-09](https://github.com/navinprocucev-09)wants to merge 19 commits into[main](https://github.com/Procucev2022/Enterprise_qua_nextjs/tree/main)from[feat/multiple-vendor-delete](https://github.com/Procucev2022/Enterprise_qua_nextjs/tree/feat/multiple-vendor-delete)
++475-283Lines changed: 475 additions & 283 deletions
+[Conversation3 (3)](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371)[Commits19 (19)](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits)[Checks5 (5)](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/checks)[Files changed5 (5)](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/changes)
+Open
+[feat: single sheet quote comparison with calculated GST, total, comme… …rcial terms, and clean PO export](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371#top)#371
+[navinprocucev-09](https://github.com/navinprocucev-09)wants to merge 19 commits into[main](https://github.com/Procucev2022/Enterprise_qua_nextjs/tree/main)from[feat/multiple-vendor-delete](https://github.com/Procucev2022/Enterprise_qua_nextjs/tree/feat/multiple-vendor-delete)
+Conversation
+[navinprocucev-09](https://github.com/navinprocucev-09)commented[2 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371#issue-6116761691)
+No description provided.
+[navinprocucev-09](https://github.com/navinprocucev-09) added 18 commits [3 days ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371#commits-pushed-312de61)
+[feat(buyer): implement multiple vendor delete feature in vendor direc…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/312de619759237d489811d426c55befccd282d7f)
+[312de61](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/312de619759237d489811d426c55befccd282d7f)
+[fix(auth,chaser): fix repeated WhatsApp RFQ alerts and redesign enter…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/7e4b1c98e0c6989537aeaf5bdcb7de6c1d3c0907)
+[7e4b1c9](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/7e4b1c98e0c6989537aeaf5bdcb7de6c1d3c0907)
+[Merge branch 'main' into feat/multiple-vendor-delete](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/c6b0c1bd496028f056fe5e2936c9e8121f9824fb)
+[c6b0c1b](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/c6b0c1bd496028f056fe5e2936c9e8121f9824fb)
+[fix(rfq): resolve vendor category mismatch, location fallback, and ta…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/d4f128f283136003f50f9e579c6cb5a83cf6147f)
+[d4f128f](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/d4f128f283136003f50f9e579c6cb5a83cf6147f)
+[Merge branch 'main' into feat/multiple-vendor-delete](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/62c8bae25c0b6a873b7aa94228e5eab898d906a1)
+[62c8bae](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/62c8bae25c0b6a873b7aa94228e5eab898d906a1)
+[fix: automatic vendor assignment based on RFQ category and delivery l…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/6982097ec8e835c68df40e86057a3e86ec5878dc)
+[6982097](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/6982097ec8e835c68df40e86057a3e86ec5878dc)
+[Merge branch 'main' into feat/multiple-vendor-delete](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/40bdfaea362393ed98d19567bd6b377060759ee3)
+[40bdfae](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/40bdfaea362393ed98d19567bd6b377060759ee3)
+[fix: hydrate category manager rfqs and improve login and footer UI](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/41e62b7d3203c210d4d4a84f16daaca05e545bc3)
+[41e62b7](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/41e62b7d3203c210d4d4a84f16daaca05e545bc3)
+[Merge branch 'main' into feat/multiple-vendor-delete](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/ebe23f321a7ca34f25cb2bacfe6fc1918c33b5a0)
+[ebe23f3](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/ebe23f321a7ca34f25cb2bacfe6fc1918c33b5a0)
+[fix(rfq): auto-assign eligible vendors from DB based on category and …](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/effe1135f027985ff3422cdeaf47831ae3b4d1c2)
+[effe113](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/effe1135f027985ff3422cdeaf47831ae3b4d1c2)
+[Merge branch 'main' into feat/multiple-vendor-delete](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/d3a591716fe857a5f04c3aea6295afe045b79400)
+[d3a5917](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/d3a591716fe857a5f04c3aea6295afe045b79400)
+[feat(category-manager): redesign Action Center with dynamic relationa…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/cb2c7a4e0e2b6cece87fb222ecf6e78759d05a28)
+[cb2c7a4](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/cb2c7a4e0e2b6cece87fb222ecf6e78759d05a28)
+[fix(action-center): remove related entity block from create modal and…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/804e9e9b4f1f0c31e5c9e7a838f3d9059a7f3522)
+[804e9e9](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/804e9e9b4f1f0c31e5c9e7a838f3d9059a7f3522)
+[Merge branch 'main' into feat/multiple-vendor-delete](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/e2a352160316f8232cb35cd259381b84d9a96c45)
+[e2a3521](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/e2a352160316f8232cb35cd259381b84d9a96c45)
+[feat: complete Action Center redesign with internal tasks, approvals,…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/90c13cb529232eb300d58abc0b03436774b9d242)
+[90c13cb](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/90c13cb529232eb300d58abc0b03436774b9d242)
+[feat: complete interactive Approvals and Scorecard modules with >90% …](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/f3425c3968dacfa21e6b1ed410e5063062a680fe)
+[f3425c3](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/f3425c3968dacfa21e6b1ed410e5063062a680fe)
+[feat: single sheet quote comparison with calculated GST, total, comme…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/8e29a3ae4cca2d79217db88a6887d6e822691d6d)
+[8e29a3a](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/8e29a3ae4cca2d79217db88a6887d6e822691d6d)
+[Merge branch 'main' into feat/multiple-vendor-delete](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/d8acca8ae26611d3199b6a64928cb881d297adbc)
+[d8acca8](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/d8acca8ae26611d3199b6a64928cb881d297adbc)
+[Procucev2022](https://github.com/Procucev2022)commented[2 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371#issuecomment-6519861490)
+Here is a concise senior developer review of the PR diff:
+Bugs / Functional Issues
+Destructive API Change in downloadFullQuotesExcel:Previously, downloadFullQuotesExcel generated a comprehensive, multi-tab workbook with three tabs (Quotes Summary, Line Item Matrix, All Itemized Bids).
+This PR completely strips out the multi-tab logic and reduces it to a single sheet (Sheet1) mirroring downloadBidComparisonExcel. If any upstream components or external consumers rely on the multi-tab summary format, this will break their expected export structure.
+Security Risks & Robustness
+Unsanitized Input in numberToIndianWords:The helper function handles standard number conversions, but passing very large numbers, negative values, or floats near upper boundary limits could lead to infinite loops or unexpected string outputs. Ensure edge cases like NaN, Infinity, or extremely large numbers are defensively clamped.
+Code Quality & Maintainability
+Duplicated Formatting Logic:downloadBidComparisonExcel and downloadFullQuotesExcel now share nearly identical code bodies (both call buildBidComparisonWorksheet and output Sheet1). downloadFullQuotesExcel can simply be refactored as a thin wrapper or alias around downloadBidComparisonExcel to reduce redundancy.
+Magic Numbers / Hardcoded Tax Rates:In buildBidComparisonWorksheet, a default fallback tax rate of 18% is hardcoded when quote.taxRate or quote.taxes is missing. While acceptable for the Indian region (GST standard), this should ideally be configurable via environment settings or RFQ metadata to support multi-region deployments.
+Complex JSX/HTML String Interpolation:The purchase order HTML template inside PurchaseOrderModal is exceptionally large and complex to maintain as an inline template string. Moving this out to a separate React component or dedicated print-stylesheet layout would greatly improve readability and testability.
+[github-actions](https://github.com/apps/github-actions) Botcommented[2 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371#issuecomment-6519995570)•
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: FAILED
+280 / 281 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+4128
+4128
+0
+0
+frontend
+3300
+3299
+1
+0
+Workspace
+7428
+7427
+1
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.88%
+92.56%
+99.27%
+99.46%
+127 / 127
+frontend
+98.11%
+93.41%
+98.44%
+98.85%
+153 / 154
+Workspace
+98.50%
+92.96%
+98.75%
+99.16%
+280 / 281
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+PASSED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+FAILED
+Frontend per-file coverage
+FAILED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+Coverage failures
+frontend: lib/bidComparisonExport.ts: branches 83.77% < 90%.
+[Merge branch 'main' into feat/multiple-vendor-delete](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/4543b916e0acf6364d3a0d74cd2c247306ab566c)
+[4543b91](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371/commits/4543b916e0acf6364d3a0d74cd2c247306ab566c)
+[Procucev2022](https://github.com/Procucev2022)commented[1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/371#issuecomment-6521181147)
+Here is a senior developer review of the PR diff:
+🚀 Key Improvements
+Standardized Excel Export Format (bidComparisonExport.ts): Migrated from simple object arrays (json_to_sheet) to custom 2D arrays (aoa_to_sheet) with explicit cell merging (!merges) and column width tuning (!cols). This delivers a polished, multi-column enterprise layout (Rate & Amount per vendor, plus summary rows for Basic, GST, and Total amounts).
+Consolidated Export Behavior: Redefined downloadFullQuotesExcel to leverage the new buildBidComparisonWorksheet structure, shifting away from a 3-tab workbook to a streamlined single-sheet layout (Sheet1).
+Enhanced Purchase Order Precision (Modals.tsx):Removed hardcoded/mock fallback data (e.g., L&T defaults, fake addresses/GSTINs) in favor of strictly processing real records or rendering clean empty states.
+Added numberToIndianWords currency conversion to automatically spell out grand totals in Indian numbering format (Crores, Lakhs, Thousands).
+Added comprehensive, professional Purchase Order Terms & Conditions to the printable/modal template.
+⚠️ Bugs, Risks, and Code Quality Issues
+1. Potential Logic & Typo Bug in PO Line Item Pricing (quote-matrix.tsx)
+Issue: The fallback calculation for unitPrice and totalPrice inside QuoteMatrix uses an inline .find() searching for lineItemId or itemName. However, selectedVendorForPO might contain a blended quote structure where lineItemQuotes is undefined or empty, causing repeated lookups over uninitialized arrays.
+Risk: If selectedVendorForPO.lineItemQuotes is undefined, calling .find() safely with optional chaining ?. prevents runtime crashes, but falling back to selectedVendorForPO.unitPrice multiplied by ent.quantity || 1 for every item can result in all line items duplicating the total blended price instead of prorating correctly.
+2. Hardcoded Tax Assumptions (bidComparisonExport.ts)
+Issue: In buildBidComparisonWorksheet, the tax calculation defaults to an 18% GST rate if quote.taxRate or quote.taxes is absent:const taxRate = typeof (quote as any).taxRate === 'number' && (quote as any).taxRate > 0 ? (quote as any).taxRate : 18;
+Risk: Hardcoding 18% as a fallback across enterprise domains can introduce legal/financial inaccuracies if a procurement category falls under 0%, 5%, 12%, or 28% GST brackets (or international VAT regimes). It would be safer to default to 0 unless an explicit tax policy is defined.
+3. Test Suite Fragility (bidComparisonExport.test.ts)
+Issue: The unit tests were refactored to expect XLSX.utils.aoa_to_sheet instead of json_to_sheet, and multi-tab checks were collapsed down to single-sheet expectations (SheetNames: ['Sheet1']).
+Risk: While the test suite now matches the new implementation, ensure that removing multi-tab exports (Quotes Summary, Line Item Matrix, etc.) was a deliberate product decision, as downstream users or reporting consumers relying on those specific tabs may experience broken expectations.
+💡 Recommendation
+Approve with minor suggestions: The PR successfully delivers a cleaner, enterprise-grade Excel export and fixes mock-data leaks in Purchase Orders. Consider making the default tax rate configurable or defaulting to 0 rather than 18% to avoid incorrect tax assumptions.
+This branch has not been deployed
+No deployments
+Merge info
+Some checks were not successful
+2 failing, 3 successful checks
+failing checks
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41045760150/job/124029325118?pr=371)
+Failing after 4m
+Required
+[Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41045760150/job/124031324610?pr=371)
+Failing after 11s
+successful checks
+[Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41045760153/job/124029325308?pr=371)
+Successful in 12s
+[Request Copilot Review / request-copilot-review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41045760170/job/124029325563?pr=371)
+Successful in 5s
+Required
+[Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41045760150/job/124029325608?pr=371)
+Successful in 4m
+Required
+Loading
+
+
+please check my friend merge and fix that issue
+```
