@@ -217,6 +217,19 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     authTag: { required: true, minLength: 16, message: 'Authentication tag is required' },
   },
 
+  ticketCreateForm: {
+    subject: { required: true, minLength: 3, message: 'Ticket subject must be at least 3 characters.' },
+  },
+
+  ticketEscalateForm: {
+    escalatedTo: { required: true, minLength: 2, message: 'Escalation target or manager name is required.' },
+    reason: { required: true, minLength: 3, message: 'Reason for escalation is required.' },
+  },
+
+  approvalActionForm: {
+    action: { required: true, message: 'Action is required.' },
+  },
+
   extendRFQ: {
     hours: {
       required: true,

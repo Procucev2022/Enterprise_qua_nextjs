@@ -47,6 +47,16 @@ import {
   getExportTasksUrl,
 } from '@/lib/internalTaskClient';
 
+import ActionCenterSubNav, { type ActionCenterTabKey } from './components/ActionCenterSubNav';
+import { TicketsDashboard } from './components/TicketsDashboard';
+import { ApprovalsDashboard } from './components/ApprovalsDashboard';
+import { ScorecardDashboard } from './components/ScorecardDashboard';
+import BuyersDirectory from './buyers-directory';
+import SellersDirectory from './sellers-directory';
+import { fetchTicketSummary } from '@/lib/ticketClient';
+import { fetchApprovalSummary } from '@/lib/approvalClient';
+import type { TicketSummary, ApprovalSummary } from '@/lib/types';
+
 export default function InternalTasksDashboard() {
   // Data state
   const [tasks, setTasks] = useState<InternalTask[]>([]);
@@ -63,6 +73,43 @@ export default function InternalTasksDashboard() {
   });
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Active Action Center tab state
+  const [activeTab, setActiveTab] = useState<ActionCenterTabKey>('tasks');
+  const [ticketSummary, setTicketSummary] = useState<TicketSummary | null>(null);
+  const [approvalSummary, setApprovalSummary] = useState<ApprovalSummary | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const tabParam = new URLSearchParams(window.location.search).get('tab') as ActionCenterTabKey;
+      if (tabParam) {
+        setActiveTab(tabParam);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTicketSummary()
+      .then((res) => {
+        if (res) setTicketSummary(res);
+      })
+      .catch(() => {});
+
+    fetchApprovalSummary()
+      .then((res) => {
+        if (res) setApprovalSummary(res);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleSelectTab = useCallback((tab: ActionCenterTabKey) => {
+    setActiveTab(tab);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', tab);
+      window.history.pushState({}, '', url.toString());
+    }
+  }, []);
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -330,7 +377,40 @@ export default function InternalTasksDashboard() {
         </div>
       )}
 
-      {/* Header & Metric Summary */}
+      {/* Action Center SubNav Header */}
+      <ActionCenterSubNav
+        activeTab={activeTab}
+        onSelectTab={handleSelectTab}
+        tasksCount={summary.pending || 0}
+        ticketsCount={ticketSummary?.pending || 0}
+        approvalsCount={approvalSummary?.pending || 0}
+      />
+
+      {activeTab === 'tickets' && <TicketsDashboard />}
+      {activeTab === 'approvals' && <ApprovalsDashboard />}
+      {activeTab === 'scorecard' && <ScorecardDashboard />}
+      {activeTab === 'buyers' && <BuyersDirectory />}
+      {activeTab === 'sellers' && <SellersDirectory />}
+      {activeTab !== 'tasks' &&
+        activeTab !== 'tickets' &&
+        activeTab !== 'approvals' &&
+        activeTab !== 'scorecard' &&
+        activeTab !== 'buyers' &&
+        activeTab !== 'sellers' && (
+          <div className="bg-white dark:bg-slate-900 p-8 rounded-xl border border-slate-200 dark:border-slate-800 text-center space-y-3">
+            <ClipboardList className="w-10 h-10 text-indigo-500 mx-auto" />
+            <h3 className="text-base font-bold text-slate-900 dark:text-white capitalize">
+              {activeTab.replace(/_/g, ' ')}
+            </h3>
+            <p className="text-xs text-slate-500 max-w-md mx-auto">
+              Integrated Action Center governance module for {activeTab.replace(/_/g, ' ')}. Real-time operational data is synchronized across the enterprise workspace.
+            </p>
+          </div>
+        )}
+
+      {activeTab === 'tasks' && (
+        <>
+          {/* Header & Metric Summary */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Action Center</h1>
@@ -859,7 +939,6 @@ export default function InternalTasksDashboard() {
                 </label>
                 <input
                   type="text"
-                  required
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
                   placeholder="e.g. Verify mechanical spare specifications for Tata Steel RFQ"
@@ -1139,6 +1218,8 @@ export default function InternalTasksDashboard() {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

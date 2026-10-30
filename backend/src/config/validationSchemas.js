@@ -664,6 +664,48 @@ const VALIDATION_SCHEMAS = {
     username: { type: 'string', required: false, maxLength: 100 },
     password: { type: 'string', required: false, maxLength: 100 },
   },
+
+  ticketCreate: {
+    subject: { type: 'string', required: true, minLength: 3, maxLength: 512, message: 'Ticket subject is required (minimum 3 characters).' },
+    description: { type: 'string', required: false, maxLength: 5000 },
+    priority: { type: 'string', required: false, enum: ['Critical', 'High', 'Medium', 'Low'] },
+    status: { type: 'string', required: false, enum: ['Pending', 'In Progress', 'Escalated', 'Completed'] },
+    category: { type: 'string', required: false, maxLength: 100 },
+    project: { type: 'string', required: false, maxLength: 255 },
+    customerName: { type: 'string', required: false, maxLength: 255 },
+    customerEmail: { type: 'string', required: false, maxLength: 255 },
+    customerPhone: { type: 'string', required: false, maxLength: 64 },
+    assignedToName: { type: 'string', required: false, maxLength: 255 },
+    assignedTeam: { type: 'string', required: false, maxLength: 100 },
+    dueDate: { type: 'string', required: false, maxLength: 64 },
+  },
+
+  ticketUpdate: {
+    subject: { type: 'string', required: false, minLength: 3, maxLength: 512 },
+    description: { type: 'string', required: false, maxLength: 5000 },
+    priority: { type: 'string', required: false, enum: ['Critical', 'High', 'Medium', 'Low'] },
+    status: { type: 'string', required: false, enum: ['Pending', 'In Progress', 'Escalated', 'Completed'] },
+    category: { type: 'string', required: false, maxLength: 100 },
+    project: { type: 'string', required: false, maxLength: 255 },
+    assignedToName: { type: 'string', required: false, maxLength: 255 },
+    assignedTeam: { type: 'string', required: false, maxLength: 100 },
+    resolutionNotes: { type: 'string', required: false, maxLength: 5000 },
+    dueDate: { type: 'string', required: false, maxLength: 64 },
+  },
+
+  ticketEscalate: {
+    escalatedTo: { type: 'string', required: true, minLength: 2, maxLength: 255, message: 'Escalation target or manager name is required.' },
+    reason: { type: 'string', required: true, minLength: 3, maxLength: 2000, message: 'A specific reason for escalation is required.' },
+  },
+
+  ticketComment: {
+    comment: { type: 'string', required: true, minLength: 1, maxLength: 5000, message: 'Comment text cannot be empty.' },
+  },
+
+  approvalAction: {
+    action: { type: 'string', required: true, enum: ['APPROVE', 'REJECT', 'Approve', 'Reject', 'approved', 'rejected'], message: 'Action must be APPROVE or REJECT.' },
+    remarks: { type: 'string', required: false, maxLength: 1000 },
+  },
 };
 
 

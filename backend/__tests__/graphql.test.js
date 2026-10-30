@@ -7,6 +7,9 @@ const { handleGraphQL } = require('../src/controllers/graphqlController');
 const { authHeader, TEST_USERS } = require('./testHelpers');
 
 describe('GraphQL API & Controller Integration Tests', () => {
+  beforeAll(async () => {
+    await request(app).post('/graphql').send({ query: '{ __typename }' });
+  });
   // RFQ resolvers are buyer-scoped, so a fixture owned by the test buyer's
   // own account has to exist for the read queries to return anything.
   let seededRfq;

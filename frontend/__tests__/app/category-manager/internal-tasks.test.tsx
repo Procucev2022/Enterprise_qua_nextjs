@@ -4,6 +4,31 @@ import InternalTasksDashboard from '@/app/category-manager/internal-tasks';
 import CategoryManagerInternalTasksPage from '@/app/category-manager/internal-tasks/page';
 import * as internalTaskClient from '@/lib/internalTaskClient';
 
+
+import { UI_STRINGS } from '@/lib/uiStrings';
+
+jest.mock('@/app/category-manager/components/TicketsDashboard', () => ({
+  TicketsDashboard: () => <div data-testid="tickets-dashboard">Tickets Dashboard Mock</div>,
+}));
+jest.mock('@/app/category-manager/components/ApprovalsDashboard', () => ({
+  ApprovalsDashboard: () => <div data-testid="approvals-dashboard">Approvals Dashboard Mock</div>,
+}));
+jest.mock('@/app/category-manager/components/ScorecardDashboard', () => ({
+  ScorecardDashboard: () => <div data-testid="scorecard-dashboard">Scorecard Dashboard Mock</div>,
+}));
+jest.mock('@/app/category-manager/buyers-directory', () => () => (
+  <div data-testid="buyers-directory">Buyers Directory Mock</div>
+));
+jest.mock('@/app/category-manager/sellers-directory', () => () => (
+  <div data-testid="sellers-directory">Sellers Directory Mock</div>
+));
+jest.mock('@/lib/ticketClient', () => ({
+  fetchTicketSummary: jest.fn().mockResolvedValue({ total: 5, pending: 2, inProgress: 1, escalated: 1, completed: 1, criticalCount: 1 }),
+}));
+jest.mock('@/lib/approvalClient', () => ({
+  fetchApprovalSummary: jest.fn().mockResolvedValue({ total: 4, pending: 1, approved: 2, rejected: 1 }),
+}));
+
 jest.mock('@/lib/internalTaskClient', () => {
   const actual = jest.requireActual('@/lib/internalTaskClient');
   return {
@@ -632,5 +657,85 @@ describe('Action Center & Internal Tasks Redesign', () => {
   test('renders page wrapper CategoryManagerInternalTasksPage', () => {
     render(<CategoryManagerInternalTasksPage />);
     expect(screen.getByText('Action Center')).toBeInTheDocument();
+  });
+
+  
+  test('switches across Action Center sub-navigation tabs (tickets, approvals, scorecard, buyers, sellers, loans, tasks)', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    // 1. Switch to Tickets tab
+    const ticketsTab = screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.tickets, 'i') });
+    fireEvent.click(ticketsTab);
+    expect(screen.getByTestId('tickets-dashboard')).toBeInTheDocument();
+
+    // 2. Switch to Approvals tab
+    const approvalsTab = screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.approvals, 'i') });
+    fireEvent.click(approvalsTab);
+    expect(screen.getByTestId('approvals-dashboard')).toBeInTheDocument();
+
+    // 3. Switch to Scorecard tab
+    const scorecardTab = screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.scorecard, 'i') });
+    fireEvent.click(scorecardTab);
+    expect(screen.getByTestId('scorecard-dashboard')).toBeInTheDocument();
+
+    // 4. Switch to Buyers Directory tab
+    const buyersTab = screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.buyersDirectory, 'i') });
+    fireEvent.click(buyersTab);
+    expect(screen.getByTestId('buyers-directory')).toBeInTheDocument();
+
+    // 5. Switch to Sellers Directory tab
+    const sellersTab = screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.sellersDirectory, 'i') });
+    fireEvent.click(sellersTab);
+    expect(screen.getByTestId('sellers-directory')).toBeInTheDocument();
+
+    // 6. Switch to Loans tab (generic module placeholder)
+    const loansTab = screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.loans, 'i') });
+    fireEvent.click(loansTab);
+    expect(screen.getByText(/Integrated Action Center governance module for loans/i)).toBeInTheDocument();
+
+    // 7. Switch back to Internal tasks tab
+    const tasksTab = screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.internalTasks, 'i') });
+    fireEvent.click(tasksTab);
+    expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+  });
+
+  test('reads tab query parameter on mount and switches active tab', async () => {
+    window.history.pushState({}, '', '/category-manager/internal-tasks?tab=tickets');
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tickets-dashboard')).toBeInTheDocument();
+    });
+
+    // Reset url
+    window.history.pushState({}, '', '/category-manager/internal-tasks');
+  });
+
+  test('prevents create task submission when title is empty', async () => {
+    render(<InternalTasksDashboard />);
+
+    const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
+    fireEvent.click(createBtn);
+
+    const submitBtn = screen.getByRole('button', { name: 'Create Task' });
+    fireEvent.click(submitBtn);
+
+    expect(internalTaskClient.createInternalTask).not.toHaveBeenCalled();
+  });
+
+  test('handles loadTaskTypes when fetchTaskTypes returns empty array', async () => {
+    (internalTaskClient.fetchTaskTypes as jest.Mock).mockResolvedValueOnce([]);
+
+    render(<InternalTasksDashboard />);
+
+    const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
+    fireEvent.click(createBtn);
+
+    expect(screen.getByRole('heading', { name: 'Create Internal Task' })).toBeInTheDocument();
   });
 });

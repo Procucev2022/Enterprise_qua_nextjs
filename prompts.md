@@ -1018,39 +1018,3 @@ PASS __tests__/supportChat.test.js
 PASS __tests__/types.test.js
 A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
 
-=============================== Coverage summary ===============================
-Statements   : 98.86% ( 15861/16043 )
-Branches     : 92.56% ( 16280/17588 )
-Functions    : 99.28% ( 2074/2089 )
-Lines        : 99.47% ( 14597/14674 )
-================================================================================
-
-Summary of all failing tests
-FAIL __tests__/vendorDirectoryRoutes.test.js
-  ● Protected Vendor Directory Routes (/api/vendors/public*) › Obsolete passkey endpoint removal (/api/vendors/directory-auth) › returns 404 since /directory-auth is retired
-
-    expect(received).toBe(expected) // Object.is equality
-
-    Expected: 404
-    Received: 200
-
-      206 |         .send({ passcode: 'Procucev@Vendors2026' });
-      207 |
-    > 208 |       expect(res.status).toBe(404);
-          |                          ^
-      209 |     });
-      210 |   });
-      211 | });
-
-      at Object.toBe (__tests__/vendorDirectoryRoutes.test.js:208:26)
-
-
-Test Suites: 1 failed, 131 passed, 132 total
-Tests:       1 failed, 4036 passed, 4037 total
-Snapshots:   0 total
-Time:        187.956 s
-Ran all test suites.
-Test results written to: coverage/test-results.json
-Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
-Error: Process completed with exit code 1.
-```
