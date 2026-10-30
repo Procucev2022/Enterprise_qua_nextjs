@@ -577,6 +577,13 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
               >
                 <Download size={12} /> Download Full Quotes (Excel)
               </button>
+              <button
+                onClick={() => downloadBidComparisonExcel(currentRFQ, quotes)}
+                className="btn btn-secondary btn-sm text-[11px] px-2.5 flex items-center gap-1.5 shadow-sm"
+                title="Download item-by-vendor comparison matrix"
+              >
+                <Download size={12} /> Download Excel
+              </button>
             </div>
           </div>
           <div className="overflow-x-auto">

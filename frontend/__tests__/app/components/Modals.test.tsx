@@ -259,6 +259,41 @@ describe('Modals.tsx', () => {
       expect(mockOnClose).toHaveBeenCalled();
       jest.useRealTimers();
     });
+
+    it('displays grand total in words for various amounts', () => {
+      const { rerender } = render(
+        <PurchaseOrderModal
+          isOpen={true}
+          onClose={jest.fn()}
+          rfqNumber="RFQ-WORDS-01"
+          vendorId="v-words"
+          vendorName="Words Vendor"
+          totalAmount={25000000}
+          unitPrice={25000000}
+          leadTime={10}
+          deliveryDate="2026-12-01"
+          lineItems={[{ description: 'Heavy Turbine', quantity: 1, unit: 'Nos' }]}
+        />
+      );
+
+      expect(screen.getByText(/Rupees Two Crore/)).toBeInTheDocument();
+
+      rerender(
+        <PurchaseOrderModal
+          isOpen={true}
+          onClose={jest.fn()}
+          rfqNumber="RFQ-WORDS-02"
+          vendorId="v-words"
+          vendorName="Words Vendor"
+          totalAmount={1000000000000}
+          unitPrice={1000000000000}
+          leadTime={10}
+          deliveryDate="2026-12-01"
+          lineItems={[{ description: 'Mega Project', quantity: 1, unit: 'Nos' }]}
+        />
+      );
+      expect(screen.queryByText(/Rupees/)).not.toBeInTheDocument();
+    });
   });
 
   describe('MultiChannelChaserModal & WhatsAppChaserModal', () => {

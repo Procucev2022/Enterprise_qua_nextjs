@@ -451,4 +451,108 @@ describe('bidComparisonExport Additional Branch Coverage', () => {
 
     expect(XLSX.utils.json_to_sheet).toHaveBeenCalled();
   });
+
+  test('covers all variations of downloadMultiSheetWorkbook', () => {
+    downloadMultiSheetWorkbook([
+      { name: 'DirectSheet', worksheet: {} as any },
+      { name: 'EmptySheet' },
+      { name: 'RowsNoHeader', rows: [{ col: 'val' }] },
+      { name: 'RowsWithHeader', rows: [{ col: 'val' }], header: ['col'] },
+    ], 'AllSheets.xlsx');
+
+    expect(XLSX.write).toHaveBeenCalled();
+  });
+
+  test('covers all branches of buildBidComparisonWorksheet and format generation', () => {
+    // 1. Null/undefined inputs
+    buildBidComparisonWorksheet(null as any, null as any);
+
+    // 2. Extracted entities variations (mock specs, matching specs, distinct specs, invalid qty)
+    const complexRfq = makeRfq({
+      rfqNumber: '', // test fallback to 'RFQ'
+      extractedEntities: [
+        { id: 'e-1', itemName: 'Industrial Pump', technicalSpecs: 'standard enterprise specification', quantity: 2, unit: 'Nos' } as any,
+        { id: 'e-2', itemName: 'Motor', technicalSpecs: 'industrial grade', quantity: '5' as any, unit: 'Sets' } as any,
+        { id: 'e-3', itemName: 'Valve', technicalSpecs: 'Valve', quantity: 'invalid_qty' as any, unit: '' } as any,
+        { id: 'e-4', itemName: 'Pipe', technicalSpecs: 'Seamless SS316', quantity: 0, unit: 'Meters' } as any,
+        { id: 'e-5', itemName: '', technicalSpecs: '', quantity: 1, unit: 'Nos' } as any,
+      ],
+    });
+
+    // 3. Quotes with varied itemized and blended structures
+    const quote1 = makeQuote({
+      vendorName: '', // test fallback to 'Vendor 1'
+      isBestPrice: true,
+      warrantyYears: 0, // tests 'None' branch
+      paymentTerms: 'Immediate',
+      submittedAt: '2026-06-15T09:00:00Z',
+      remarks: 'Best rate',
+      taxRate: 12, // custom taxRate
+      taxes: 120, // explicit taxes
+      lineItemQuotes: [
+        { lineItemId: 'e-1', itemName: 'Industrial Pump', quantity: 2, unitPrice: '500' as any, totalPrice: '1000' as any } as any, // string prices
+        { lineItemId: 'e-2', itemName: 'Motor', quantity: 5, unitPrice: 'invalid' as any, totalPrice: 'invalid' as any } as any, // invalid strings
+        { lineItemId: 'e-3', itemName: 'Valve', quantity: 1, unitPrice: 80, totalPrice: undefined as any } as any, // rate * qty fallback with invalid qty
+        { lineItemId: 'e-4', itemName: 'Pipe', quantity: 0, unitPrice: 20, totalPrice: undefined as any } as any, // rate * qty with qty = 0
+      ],
+    } as any);
+
+    const quote2 = makeQuote({
+      vendorName: 'Global Supplier',
+      isBestPrice: false, // tests 'No' branch
+      warrantyYears: undefined, // tests 'N/A' branch
+      paymentTerms: undefined, // tests 'N/A' branch
+      submittedAt: undefined, // tests 'N/A' branch
+      remarks: undefined, // tests 'None' branch
+      totalPrice: 0, // basicAmount 0
+      unitPrice: 100, // blended unit price
+      taxes: undefined, // taxes calculation from taxRate
+      lineItemQuotes: undefined, // blended quote, not matched
+    });
+
+    const quote3 = makeQuote({
+      vendorName: 'Super Vendor',
+      warrantyYears: -1, // tests 'N/A' branch
+      unitPrice: 0,
+      totalPrice: 500, // blended totalPrice fallback when qty is 0
+      taxes: undefined,
+      lineItemQuotes: [],
+    });
+
+    downloadBidComparisonExcel(complexRfq, [quote1, quote2, quote3]);
+    downloadFullQuotesExcel(complexRfq, [quote1, quote2, quote3]);
+
+    expect(XLSX.utils.aoa_to_sheet).toHaveBeenCalled();
+    expect(XLSX.write).toHaveBeenCalled();
+  });
+
+  test('covers all branches of downloadSingleVendorQuoteExcel', () => {
+    // 1. Line item quotes with individual leadTime and warranty
+    const detailedQuote = makeQuote({
+      vendorName: 'Alpha_100',
+      leadTimeDays: 15,
+      warrantyYears: 2,
+      lineItemQuotes: [
+        { lineItemId: 'li-1', itemName: 'Item A', quantity: 2, unit: 'Nos', unitPrice: 100, totalPrice: 200, leadTimeDays: 7, warrantyYears: 1 } as any,
+        { lineItemId: '', itemName: 'Item B', quantity: 1, unit: '', unitPrice: 50, totalPrice: 50, leadTimeDays: undefined, warrantyYears: undefined } as any,
+      ],
+    });
+
+    downloadSingleVendorQuoteExcel(makeRfq(), detailedQuote);
+
+    // 2. Line item quotes undefined, empty extracted entities, undefined leadTime/warranty
+    const emptyQuote = makeQuote({
+      vendorName: 'Empty Vendor',
+      leadTimeDays: undefined,
+      warrantyYears: undefined,
+      totalPrice: 0,
+      unitPrice: 0,
+      lineItemQuotes: undefined,
+    });
+
+    downloadSingleVendorQuoteExcel({ rfqNumber: 'RFQ-000', extractedEntities: undefined } as any, emptyQuote);
+
+    expect(XLSX.utils.json_to_sheet).toHaveBeenCalled();
+  });
+
 });

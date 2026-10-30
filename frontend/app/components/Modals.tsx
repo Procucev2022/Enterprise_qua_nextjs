@@ -73,7 +73,7 @@ interface POModalProps {
 
 // Helper to convert numbers into Indian Rupees currency words
 function numberToIndianWords(num: number): string {
-  if (!num || isNaN(num) || num <= 0) return '';
+  if (typeof num !== 'number' || isNaN(num) || !isFinite(num) || num <= 0 || num > 99999999999) return '';
   const a = [
     '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
     'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'
