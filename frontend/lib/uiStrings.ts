@@ -10,6 +10,31 @@ export const UI_STRINGS = {
   engineVersion: 'QUA AI 2.0',
   tagline: 'Autonomous Industrial Procurement & Supplier Telemetry Orchestration',
 
+  buyerDirectory: {
+    title: 'Buyers Directory',
+    searchPlaceholder: 'Search company, contact person, email, city...',
+    allSourcingModes: 'All Sourcing Modes',
+    allStatuses: 'All Statuses',
+    pendingVerification: 'Pending Verification',
+    activeVerified: 'Active & Verified',
+    exportDirectory: 'Export Directory',
+    totalBuyers: 'Total Buyers',
+    subscriptionBuyers: 'Subscription Buyers',
+    totalRfqs: 'Total RFQs',
+    freeRfqs: 'Free RFQs',
+    paidRfqs: 'Paid RFQs',
+    acrossAllEnterprise: 'Across all enterprise accounts',
+    activeVerifiedSubtext: '{count} Active Verified',
+    freeTrialSubtext: '{count} Free Trial',
+    trialPromotionalSubtext: 'Trial & promotional credits',
+    paidSubscriptionSubtext: 'Subscription & enterprise',
+    columnSettingsTitle: 'Column Settings',
+    columnSettingsSubtitle: 'Customize column visibility and order',
+    resetDefault: 'Reset to Default',
+    noBuyersFound: 'No buyer accounts found matching your query.',
+    dossierAction: '360° Dossier',
+  },
+
   screens: {
     commandCenter: {
       title: 'Buyer Dashboard',
