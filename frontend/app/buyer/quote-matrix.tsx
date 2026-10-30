@@ -573,7 +573,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
               <button
                 onClick={() => downloadFullQuotesExcel(currentRFQ, quotes)}
                 className="btn btn-primary btn-sm text-[11px] px-2.5 flex items-center gap-1.5 shadow-sm"
-                title="Download full multi-tab Excel with quotes overview, line item matrix, and granular items"
+                title="Download quote comparison matrix in standard enterprise format"
               >
                 <Download size={12} /> Download Full Quotes (Excel)
               </button>
@@ -764,11 +764,13 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           vendorRecord={buyerVendors?.find((v) => v.id === selectedVendorForPO.vendorId || v.name === selectedVendorForPO.vendorName)}
           onFinalized={handlePOFinalized}
           lineItems={(currentRFQ.extractedEntities || []).map((ent) => ({
+            id: ent.id,
             description: ent.itemName,
+            technicalSpecs: ent.technicalSpecs,
             quantity: ent.quantity,
             unit: ent.unit,
-            unitPrice: selectedVendorForPO.unitPrice,
-            totalPrice: selectedVendorForPO.totalPrice,
+            unitPrice: (selectedVendorForPO.lineItemQuotes || []).find((li) => li.lineItemId === ent.id || (li.itemName || '').trim().toLowerCase() === (ent.itemName || '').trim().toLowerCase())?.unitPrice ?? selectedVendorForPO.unitPrice,
+            totalPrice: (selectedVendorForPO.lineItemQuotes || []).find((li) => li.lineItemId === ent.id || (li.itemName || '').trim().toLowerCase() === (ent.itemName || '').trim().toLowerCase())?.totalPrice ?? (selectedVendorForPO.unitPrice * (ent.quantity || 1)),
           }))}
         />
       )}

@@ -2633,3 +2633,26 @@ export interface PaymentDuesFilterParams {
   page?: number;
   limit?: number;
 }
+
+
+export type BuyerDirectoryColumnKey =
+  | 'organizationName'
+  | 'contactPerson'
+  | 'corporateEmail'
+  | 'mobileNumber'
+  | 'location'
+  | 'sourcingMode'
+  | 'subscriptionPlan'
+  | 'totalRFQsCreated'
+  | 'remainingFreeRFQs'
+  | 'totalSpend'
+  | 'status'
+  | 'createdDate'
+  | 'actions';
+
+export interface BuyerDirectoryColumnConfig {
+  key: BuyerDirectoryColumnKey;
+  label: string;
+  visible: boolean;
+  required?: boolean;
+}

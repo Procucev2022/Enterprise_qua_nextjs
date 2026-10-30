@@ -1,4 +1,6 @@
 import type {
+  BuyerDirectoryColumnConfig,
+  BuyerDirectoryColumnKey,
   SourcingModeDetail,
   SystemConfig,
   AzureServiceHealth,
@@ -1318,3 +1320,22 @@ export function parseSearchTokens(search?: string | null): string[] {
 
   return [raw];
 }
+
+
+export const BUYER_DIRECTORY_COLUMN_PREF_KEY = 'buyer_directory_columns_pref';
+
+export const DEFAULT_BUYER_DIRECTORY_COLUMNS: BuyerDirectoryColumnConfig[] = [
+  { key: 'organizationName', label: 'Buyer', visible: true, required: true },
+  { key: 'contactPerson', label: 'Contact Person', visible: false },
+  { key: 'corporateEmail', label: 'Email', visible: false },
+  { key: 'mobileNumber', label: 'Phone', visible: false },
+  { key: 'location', label: 'Location', visible: true },
+  { key: 'sourcingMode', label: 'Mode', visible: true },
+  { key: 'subscriptionPlan', label: 'Plan', visible: true },
+  { key: 'totalRFQsCreated', label: 'RFQs', visible: true },
+  { key: 'remainingFreeRFQs', label: 'Free Credits', visible: false },
+  { key: 'totalSpend', label: 'Total Spend', visible: false },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'createdDate', label: 'Registration Date', visible: false },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
