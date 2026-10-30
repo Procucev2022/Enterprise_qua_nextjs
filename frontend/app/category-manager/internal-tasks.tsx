@@ -939,7 +939,6 @@ export default function InternalTasksDashboard() {
                 </label>
                 <input
                   type="text"
-                  required
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
                   placeholder="e.g. Verify mechanical spare specifications for Tata Steel RFQ"
