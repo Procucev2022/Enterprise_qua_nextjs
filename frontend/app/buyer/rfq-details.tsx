@@ -20,7 +20,7 @@ import { getVendorPresence } from '@/lib/vendorPresenceClient';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
 import InviteVendorsModal from '@/app/category-manager/InviteVendorsModal';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
-import { downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
+import { downloadBidComparisonExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
 import type {
   ExtractedEntity,
   QuoteComparison,
@@ -2034,6 +2034,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         toolbar={
           quotes.length > 0 && activeRfq && (!isV0 || currentRole !== 'buyer') ? (
             <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => downloadBidComparisonExcel(activeRfq, quotes)}
+                className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1.5 shadow-sm"
+                title="Download quote comparison matrix in standard enterprise format"
+              >
+                <Download size={12} /> Download Comparison (Excel)
+              </button>
               <button
                 type="button"
                 onClick={() => downloadFullQuotesExcel(activeRfq, quotes)}

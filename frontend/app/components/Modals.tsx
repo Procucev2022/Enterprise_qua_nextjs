@@ -22,7 +22,6 @@ import {
   Lock,
   UserCheck,
   Sliders,
-  Hash,
   CreditCard,
   FileText,
   Clock,
@@ -72,6 +71,48 @@ interface POModalProps {
   vendorRecord?: any;
 }
 
+// Helper to convert numbers into Indian Rupees currency words
+function numberToIndianWords(num: number): string {
+  if (!num || isNaN(num) || num <= 0) return '';
+  const a = [
+    '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+    'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'
+  ];
+  const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+  function convertTwoDigits(n: number): string {
+    if (n < 20) return a[n];
+    return b[Math.floor(n / 10)] + (n % 10 !== 0 ? ' ' + a[n % 10] : '');
+  }
+
+  function convertThreeDigits(n: number): string {
+    let str = '';
+    if (Math.floor(n / 100) > 0) {
+      str += a[Math.floor(n / 100)] + ' Hundred';
+      if (n % 100 !== 0) str += ' and ';
+    }
+    if (n % 100 !== 0) {
+      str += convertTwoDigits(n % 100);
+    }
+    return str;
+  }
+
+  const rounded = Math.round(num);
+  const crore = Math.floor(rounded / 10000000);
+  const lakh = Math.floor((rounded % 10000000) / 100000);
+  const thousand = Math.floor((rounded % 100000) / 1000);
+  const remainder = rounded % 1000;
+
+  let words = '';
+  if (crore > 0) words += convertTwoDigits(crore) + ' Crore ';
+  if (lakh > 0) words += convertTwoDigits(lakh) + ' Lakh ';
+  if (thousand > 0) words += convertTwoDigits(thousand) + ' Thousand ';
+  if (remainder > 0) words += convertThreeDigits(remainder);
+
+  words = words.trim();
+  return words ? `Rupees ${words} Only` : '';
+}
+
 export function PurchaseOrderModal({
   isOpen,
   onClose,
@@ -102,82 +143,107 @@ export function PurchaseOrderModal({
   const [approverNotes, setApproverNotes] = useState('Approved based on AI Evaluation Matrix >94% match score & lowest compliant price.');
   const [approvedPo, setApprovedPo] = useState<{ poNumber: string; issueDate: string; shaSignature: string } | null>(null);
 
-  // Buyer Details Mapping (with proper non-NIL fallbacks)
-  const buyerOrg = buyerAccount?.organizationName || rfq?.buyerAccountName || rfq?.buyerCompany || 'Larsen & Toubro Limited';
-  const buyerContactPerson = buyerAccount?.contactPerson || rfq?.buyerName || (rfq as any)?.buyerContactPerson || 'Rajesh Sharma (CPO)';
-  const buyerEmail = buyerAccount?.corporateEmail || rfq?.buyerEmail || rfq?.sourceEmail || 'buyer@procucev.com';
-  const buyerPhone = buyerAccount?.contactPhone || buyerAccount?.phone || rfq?.buyerContact || (rfq as any)?.buyerPhone || '+91 22 6752 5656';
-  const buyerAddress = [
-    buyerAccount?.address || rfq?.deliveryLocation,
-    buyerAccount?.city || 'Navi Mumbai',
-    buyerAccount?.state || 'Maharashtra',
-    buyerAccount?.pincode || rfq?.deliveryPincode || '400703',
-  ].filter(Boolean).join(', ');
-  const buyerGstin = buyerAccount?.taxId || (buyerAccount as any)?.gstin || '27AAACL1234F1Z8';
+  // Buyer Details Mapping (strictly real content, no mock fallbacks)
+  const buyerOrg = buyerAccount?.organizationName || (buyerAccount as any)?.name || rfq?.buyerAccountName || rfq?.buyerCompany || '';
+  const buyerContactPerson = buyerAccount?.contactPerson || rfq?.buyerName || (rfq as any)?.buyerContactPerson || '';
+  const buyerEmail = buyerAccount?.corporateEmail || (buyerAccount as any)?.email || rfq?.buyerEmail || rfq?.sourceEmail || '';
+  const buyerPhone = buyerAccount?.contactPhone || buyerAccount?.phone || rfq?.buyerContact || (rfq as any)?.buyerPhone || '';
+  const addressParts = [
+    buyerAccount?.address,
+    buyerAccount?.city,
+    buyerAccount?.state,
+    buyerAccount?.pincode,
+  ].filter(Boolean);
+  const buyerAddress = addressParts.length > 0 ? addressParts.join(', ') : (rfq?.deliveryLocation || '');
+  const buyerGstin = buyerAccount?.taxId || (buyerAccount as any)?.gstin || (rfq as any)?.buyerGstin || '';
 
-  // Vendor Details Mapping (with proper non-NIL fallbacks)
-  const awardedVendorName = vendorName || quote?.vendorName || 'Apex Supplies Ltd.';
-  const awardedVendorContact = vendorRecord?.contactPerson || 'Sales Coordinator';
-  const awardedVendorEmail = vendorRecord?.email || (quote as any)?.vendorEmail || (vendorId ? `${vendorId}@supplier.procucev.com` : 'sales@apexsupplies.in');
-  const awardedVendorPhone = vendorRecord?.phone || (vendorRecord as any)?.contactPhone || '+91 98765 43210';
-  const awardedVendorAddress = [
-    vendorRecord?.address || 'Plot C-14, Industrial Area',
-    vendorRecord?.city || 'Navi Mumbai',
-    vendorRecord?.state || 'Maharashtra',
-    vendorRecord?.pincode || '400705',
-  ].filter(Boolean).join(', ');
-  const awardedVendorGstin = vendorRecord?.gstin || vendorRecord?.taxId || '27AABCS1429B1Z2';
+  // Vendor Details Mapping (strictly real content, no mock fallbacks)
+  const awardedVendorName = vendorName || quote?.vendorName || vendorRecord?.name || '';
+  const awardedVendorContact = vendorRecord?.contactPerson || (quote as any)?.contactPerson || (quote as any)?.vendorContact || '';
+  const awardedVendorEmail = vendorRecord?.email || (quote as any)?.vendorEmail || (quote as any)?.email || '';
+  const awardedVendorPhone = vendorRecord?.phone || (vendorRecord as any)?.contactPhone || (quote as any)?.vendorPhone || '';
+  const vendorAddressParts = [
+    vendorRecord?.address,
+    vendorRecord?.city,
+    vendorRecord?.state,
+    vendorRecord?.pincode,
+  ].filter(Boolean);
+  const awardedVendorAddress = vendorAddressParts.length > 0
+    ? vendorAddressParts.join(', ')
+    : (vendorRecord?.location || (quote as any)?.vendorAddress || (quote as any)?.location || '');
+  const awardedVendorGstin = vendorRecord?.gstin || vendorRecord?.taxId || (quote as any)?.gstin || '';
 
   // RFQ & Commercial Terms
-  const rfqTitle = rfq?.title || 'Industrial Equipment & Spares Procurement';
-  const rfqCategory = rfq?.category || 'Industrial Machinery';
-  const paymentTerms = quote?.paymentTerms || 'Net 30 Days (Pre-negotiated)';
-  const warranty = quote?.warrantyYears ? `${quote.warrantyYears} Year(s) Manufacturer Warranty` : '1 Year Standard Enterprise Warranty';
-  const deliveryLocation = rfq?.deliveryLocation || 'Enterprise Logistics Hub, Navi Mumbai';
-  const targetDeliveryDate = deliveryDate || rfq?.targetDeliveryDate || 'Within 30 Days of PO Receipt';
-  const effectiveLeadTime = leadTime || quote?.leadTimeDays || 14;
+  const rfqTitle = rfq?.title || 'Procurement';
+  const rfqCategory = rfq?.category || '';
+  const paymentTerms = quote?.paymentTerms || 'Net 30 Days';
+  const warranty = quote?.warrantyYears ? `${quote.warrantyYears} Year(s) Manufacturer Warranty` : '';
+  const deliveryLocation = rfq?.deliveryLocation || buyerAddress || '';
+  const targetDeliveryDate = deliveryDate || rfq?.targetDeliveryDate || '';
+  const effectiveLeadTime = leadTime || quote?.leadTimeDays || '';
 
-  // Taxes and totals calculation
-  const subTotal = totalAmount || (unitPrice * (lineItems[0]?.quantity || 1));
-  const gstRate = 18;
-  const gstAmount = Math.round(subTotal * (gstRate / 100));
-  const grandTotal = subTotal + gstAmount;
+  // Helper to filter out placeholder / mock specification labels
+  const isMockSpec = (s: string) => {
+    const lower = (s || '').trim().toLowerCase();
+    return (
+      !lower ||
+      lower === 'standard specification' ||
+      lower === 'standard enterprise specification' ||
+      lower === 'industrial grade'
+    );
+  };
 
   // Items breakdown: support multi-item line quotes or single line fallback
   const itemsWithPricing = useMemo(() => {
     if (quote?.lineItemQuotes && quote.lineItemQuotes.length > 0) {
-      return quote.lineItemQuotes.map((lq, idx) => ({
-        id: lq.lineItemId || `item-${idx + 1}`,
-        description: lq.itemName || lineItems[idx]?.description || `Procurement Item #${idx + 1}`,
-        quantity: lq.quantity || lineItems[idx]?.quantity || 1,
-        unit: lineItems[idx]?.unit || 'Units',
-        unitPrice: lq.unitPrice || 0,
-        totalPrice: lq.totalPrice || ((lq.unitPrice || 0) * (lq.quantity || 1)),
-        specs: lineItems[idx]?.technicalSpecs || 'Industrial Grade',
-      }));
+      return quote.lineItemQuotes.map((lq, idx) => {
+        const rawSpecs = lineItems[idx]?.technicalSpecs || (lq as any).technicalSpecs || '';
+        const specs = isMockSpec(rawSpecs) ? '' : rawSpecs.trim();
+        return {
+          id: lq.lineItemId || `item-${idx + 1}`,
+          description: lq.itemName || lineItems[idx]?.description || `Procurement Item #${idx + 1}`,
+          quantity: lq.quantity || lineItems[idx]?.quantity || 1,
+          unit: lineItems[idx]?.unit || lq.unit || 'Units',
+          unitPrice: lq.unitPrice || 0,
+          totalPrice: lq.totalPrice || ((lq.unitPrice || 0) * (lq.quantity || 1)),
+          specs,
+        };
+      });
     }
-    if (lineItems.length > 1) {
-      const avgPrice = lineItems.length > 0 ? Math.round(subTotal / lineItems.length) : subTotal;
-      return lineItems.map((li, idx) => ({
-        id: `item-${idx + 1}`,
-        description: li.description || `Item #${idx + 1}`,
-        quantity: li.quantity || 1,
-        unit: li.unit || 'Units',
-        unitPrice: Math.round(avgPrice / (li.quantity || 1)),
-        totalPrice: avgPrice,
-        specs: li.technicalSpecs || 'Standard Specification',
-      }));
+    if (lineItems.length > 0) {
+      return lineItems.map((li, idx) => {
+        const rawSpecs = li.technicalSpecs || '';
+        const specs = isMockSpec(rawSpecs) ? '' : rawSpecs.trim();
+        const price = li.unitPrice || (li.quantity ? Math.round((totalAmount || 0) / (li.quantity || 1)) : (unitPrice || totalAmount || 0));
+        const total = li.totalPrice || (price * (li.quantity || 1));
+        return {
+          id: (li as any).id || `item-${idx + 1}`,
+          description: li.description || `Item #${idx + 1}`,
+          quantity: li.quantity || 1,
+          unit: li.unit || 'Units',
+          unitPrice: price,
+          totalPrice: total,
+          specs,
+        };
+      });
     }
     return [{
       id: 'item-1',
-      description: lineItems[0]?.description || rfqTitle,
-      quantity: lineItems[0]?.quantity || 1,
-      unit: lineItems[0]?.unit || 'Units',
-      unitPrice: unitPrice || subTotal,
-      totalPrice: subTotal,
-      specs: lineItems[0]?.technicalSpecs || 'Standard Enterprise Specification',
+      description: rfqTitle,
+      quantity: 1,
+      unit: 'Lot',
+      unitPrice: unitPrice || totalAmount || 0,
+      totalPrice: totalAmount || unitPrice || 0,
+      specs: '',
     }];
-  }, [quote, lineItems, subTotal, unitPrice, rfqTitle]);
+  }, [quote, lineItems, totalAmount, unitPrice, rfqTitle]);
+
+  // Taxes and totals calculation
+  const subTotal = totalAmount || itemsWithPricing.reduce((sum, item) => sum + (item.totalPrice || 0), 0) || 0;
+  const gstRate = (quote as any)?.taxRate || (quote?.taxes && subTotal > 0 ? Math.round((quote.taxes / subTotal) * 100) : 18);
+  const gstAmount = quote?.taxes && quote.taxes > 0 ? quote.taxes : Math.round(subTotal * (gstRate / 100));
+  const grandTotal = subTotal + gstAmount;
+  const grandTotalInWords = numberToIndianWords(grandTotal);
 
   if (!isOpen) return null;
 
@@ -238,16 +304,18 @@ export function PurchaseOrderModal({
     .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
     .card-title { font-size: 11px; text-transform: uppercase; font-weight: 700; color: #64748b; margin-bottom: 8px; }
     .card-text { font-size: 12px; margin: 3px 0; color: #1e293b; }
-    .table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+    .table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
     .table th { background: #f1f5f9; color: #475569; font-weight: 700; font-size: 11px; text-transform: uppercase; padding: 10px 12px; border: 1px solid #cbd5e1; text-align: left; }
     .table td { padding: 10px 12px; border: 1px solid #e2e8f0; font-size: 12px; }
     .table td.right, .table th.right { text-align: right; }
     .table td.center, .table th.center { text-align: center; }
-    .totals-table { width: 340px; margin-left: auto; border-collapse: collapse; margin-bottom: 24px; }
+    .totals-table { width: 380px; margin-left: auto; border-collapse: collapse; margin-bottom: 24px; }
     .totals-table td { padding: 6px 12px; font-size: 12px; }
     .totals-table tr.grand-total td { font-size: 14px; font-weight: 800; color: #0369a1; border-top: 2px solid #cbd5e1; }
-    .terms-card { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin-bottom: 24px; font-size: 11px; }
-    .seal-box { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; font-size: 11px; word-break: break-all; }
+    .terms-card { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px 16px; margin-bottom: 20px; font-size: 11px; }
+    .terms-conditions-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px; margin-bottom: 24px; }
+    .terms-conditions-card ol { margin: 0; padding-left: 18px; color: #334155; font-size: 10.5px; line-height: 1.6; }
+    .terms-conditions-card li { margin-bottom: 4px; }
     .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 36px; padding-top: 16px; }
     .sig-line { border-top: 1px solid #94a3b8; padding-top: 8px; font-size: 11px; color: #475569; }
     @media print { body { padding: 0; } }
@@ -270,21 +338,21 @@ export function PurchaseOrderModal({
   <div class="grid-2">
     <div class="card">
       <div class="card-title">BUYER / ISSUING ENTITY</div>
-      <div class="card-text" style="font-weight: 700; font-size: 13px;">${buyerOrg}</div>
-      <div class="card-text">Attn: ${buyerContactPerson}</div>
-      <div class="card-text">Email: ${buyerEmail}</div>
-      <div class="card-text">Phone: ${buyerPhone}</div>
-      <div class="card-text">Address: ${buyerAddress}</div>
-      <div class="card-text">GSTIN: <strong>${buyerGstin}</strong></div>
+      <div class="card-text" style="font-weight: 700; font-size: 13px;">${buyerOrg || 'Purchasing Entity'}</div>
+      ${buyerContactPerson ? `<div class="card-text">Attn: ${buyerContactPerson}</div>` : ''}
+      ${buyerEmail ? `<div class="card-text">Email: ${buyerEmail}</div>` : ''}
+      ${buyerPhone ? `<div class="card-text">Phone: ${buyerPhone}</div>` : ''}
+      ${buyerAddress ? `<div class="card-text">Address: ${buyerAddress}</div>` : ''}
+      ${buyerGstin ? `<div class="card-text">GSTIN: <strong>${buyerGstin}</strong></div>` : ''}
     </div>
     <div class="card">
       <div class="card-title">VENDOR / CONTRACTOR</div>
-      <div class="card-text" style="font-weight: 700; font-size: 13px;">${awardedVendorName}</div>
-      <div class="card-text">Contact: ${awardedVendorContact}</div>
-      <div class="card-text">Email: ${awardedVendorEmail}</div>
-      <div class="card-text">Phone: ${awardedVendorPhone}</div>
-      <div class="card-text">Address: ${awardedVendorAddress}</div>
-      <div class="card-text">GSTIN: <strong>${awardedVendorGstin}</strong></div>
+      <div class="card-text" style="font-weight: 700; font-size: 13px;">${awardedVendorName || 'Vendor'}</div>
+      ${awardedVendorContact ? `<div class="card-text">Contact: ${awardedVendorContact}</div>` : ''}
+      ${awardedVendorEmail ? `<div class="card-text">Email: ${awardedVendorEmail}</div>` : ''}
+      ${awardedVendorPhone ? `<div class="card-text">Phone: ${awardedVendorPhone}</div>` : ''}
+      ${awardedVendorAddress ? `<div class="card-text">Address: ${awardedVendorAddress}</div>` : ''}
+      ${awardedVendorGstin ? `<div class="card-text">GSTIN: <strong>${awardedVendorGstin}</strong></div>` : ''}
     </div>
   </div>
 
@@ -305,7 +373,7 @@ export function PurchaseOrderModal({
           <td class="center">${idx + 1}</td>
           <td>
             <strong>${item.description}</strong>
-            <div style="font-size: 10px; color: #64748b; margin-top: 2px;">Specs: ${item.specs}</div>
+            ${item.specs ? `<div style="font-size: 10px; color: #64748b; margin-top: 2px;">Specs: ${item.specs}</div>` : ''}
           </td>
           <td class="center font-mono">${item.quantity}</td>
           <td class="center">${item.unit}</td>
@@ -329,37 +397,51 @@ export function PurchaseOrderModal({
       <td>Grand Total (INR):</td>
       <td class="right font-mono">₹${grandTotal.toLocaleString('en-IN')}</td>
     </tr>
+    ${grandTotalInWords ? `
+    <tr>
+      <td colspan="2" style="font-size: 11px; color: #334155; padding-top: 8px; text-align: right;">
+        <strong>Amount in Words:</strong> <em>${grandTotalInWords}</em>
+      </td>
+    </tr>` : ''}
   </table>
 
   <div class="terms-card">
     <div style="font-weight: 700; color: #166534; margin-bottom: 6px;">COMMERCIAL TERMS & LOGISTICS CONDITIONS</div>
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
       <div>• <strong>Payment Terms:</strong> ${paymentTerms}</div>
-      <div>• <strong>Delivery Lead Time:</strong> ${effectiveLeadTime} Days from PO Acceptance</div>
-      <div>• <strong>Delivery Location:</strong> ${deliveryLocation}</div>
-      <div>• <strong>Warranty / Guarantee:</strong> ${warranty}</div>
+      <div>• <strong>Delivery Lead Time:</strong> ${effectiveLeadTime ? `${effectiveLeadTime} Days from PO Acceptance` : 'As agreed'}</div>
+      ${deliveryLocation ? `<div>• <strong>Delivery Location:</strong> ${deliveryLocation}</div>` : ''}
+      ${warranty ? `<div>• <strong>Warranty / Guarantee:</strong> ${warranty}</div>` : ''}
+      ${targetDeliveryDate ? `<div>• <strong>Target Delivery Date:</strong> ${targetDeliveryDate}</div>` : ''}
     </div>
   </div>
 
-  <div class="seal-box">
-    <strong>CRYPTOGRAPHIC AUDIT SEAL (SHA-256):</strong><br />
-    <span style="font-family: monospace; font-size: 10px; color: #4338ca;">${approvedPo?.shaSignature || '3f7a1c8b9d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a'}</span>
-    <div style="font-size: 10px; color: #64748b; margin-top: 4px;">Digitally notarised and sealed via Procucev Autonomous SCM Protocol 2.0.</div>
+  <div class="terms-conditions-card">
+    <div style="font-weight: 700; color: #0f172a; margin-bottom: 8px; font-size: 11px; text-transform: uppercase;">Standard Purchase Order Terms & Conditions</div>
+    <ol>
+      <li><strong>Order Acceptance:</strong> This Purchase Order (PO) constitutes a binding commercial agreement upon vendor acknowledgement or commencement of fulfillment.</li>
+      <li><strong>Quality & Inspection:</strong> Goods and services supplied must strictly conform to the approved specifications, quantities, and quality requirements. The buyer reserves the right to inspect and reject defective or non-conforming items.</li>
+      <li><strong>Delivery Schedule:</strong> Deliveries must be made to the designated site on or before the agreed delivery lead time. Timely delivery is of the essence.</li>
+      <li><strong>Invoicing & Documentation:</strong> Invoices, delivery challans, and e-way bills must clearly quote this Purchase Order number, line items, and statutory GSTIN details.</li>
+      <li><strong>Payment Terms:</strong> Payments shall be processed as per agreed commercial terms upon satisfactory delivery, physical inspection, and verification of invoice.</li>
+      <li><strong>Tax & Statutory Compliance:</strong> Vendor shall ensure timely filing of GST returns (GSTR-1) and compliance with all statutory regulations to ensure input tax credit eligibility for the buyer.</li>
+      <li><strong>Warranty & Defect Liability:</strong> Vendor warrants all supplies against defects in material, design, and workmanship for the specified warranty period and agrees to replace or repair any defective items without additional cost.</li>
+    </ol>
   </div>
 
   <div class="signatures">
     <div>
       <div class="sig-line">
         <strong>Authorized Signatory — Buyer</strong><br />
-        ${buyerContactPerson}<br />
-        ${buyerOrg}
+        ${buyerContactPerson ? `${buyerContactPerson}<br />` : ''}
+        ${buyerOrg || 'Purchasing Entity'}
       </div>
     </div>
     <div>
       <div class="sig-line" style="text-align: right;">
         <strong>Accepted & Acknowledged — Vendor</strong><br />
-        ${awardedVendorContact}<br />
-        ${awardedVendorName}
+        ${awardedVendorContact ? `${awardedVendorContact}<br />` : ''}
+        ${awardedVendorName || 'Vendor Entity'}
       </div>
     </div>
   </div>
@@ -412,18 +494,21 @@ export function PurchaseOrderModal({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2 border-b border-slate-200 dark:border-gray-800/80">
             <div className="space-y-1">
               <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Issuing Buyer Entity:</p>
-              <p className="font-bold text-slate-900 dark:text-white text-xs">{buyerOrg}</p>
-              <p className="text-[11px] text-slate-600 dark:text-gray-300">Attn: <strong>{buyerContactPerson}</strong></p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Email: {buyerEmail} · Phone: {buyerPhone}</p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Location: {buyerAddress}</p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">GSTIN: <span className="mono font-semibold">{buyerGstin}</span></p>
+              <p className="font-bold text-slate-900 dark:text-white text-xs">{buyerOrg || 'Purchasing Entity'}</p>
+              {buyerContactPerson && <p className="text-[11px] text-slate-600 dark:text-gray-300">Attn: <strong>{buyerContactPerson}</strong></p>}
+              {buyerEmail && <p className="text-[11px] text-slate-500 dark:text-gray-400">Email: {buyerEmail}</p>}
+              {buyerPhone && <p className="text-[11px] text-slate-500 dark:text-gray-400">Phone: {buyerPhone}</p>}
+              {buyerAddress && <p className="text-[11px] text-slate-500 dark:text-gray-400">Location: {buyerAddress}</p>}
+              {buyerGstin && <p className="text-[11px] text-slate-500 dark:text-gray-400">GSTIN: <span className="mono font-semibold">{buyerGstin}</span></p>}
             </div>
             <div className="space-y-1">
               <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Contract Awarded To:</p>
-              <p className="font-bold text-slate-900 dark:text-white text-xs">{awardedVendorName}</p>
-              <p className="text-[11px] text-slate-600 dark:text-gray-300">Contact: <strong>{awardedVendorContact}</strong></p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Email: {awardedVendorEmail} · Phone: {awardedVendorPhone}</p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Vendor ID: <span className="mono font-semibold">{vendorId || '—'}</span> · GSTIN: <span className="mono font-semibold">{awardedVendorGstin}</span></p>
+              <p className="font-bold text-slate-900 dark:text-white text-xs">{awardedVendorName || 'Vendor'}</p>
+              {awardedVendorContact && <p className="text-[11px] text-slate-600 dark:text-gray-300">Contact: <strong>{awardedVendorContact}</strong></p>}
+              {awardedVendorEmail && <p className="text-[11px] text-slate-500 dark:text-gray-400">Email: {awardedVendorEmail}</p>}
+              {awardedVendorPhone && <p className="text-[11px] text-slate-500 dark:text-gray-400">Phone: {awardedVendorPhone}</p>}
+              {awardedVendorAddress && <p className="text-[11px] text-slate-500 dark:text-gray-400">Address: {awardedVendorAddress}</p>}
+              {awardedVendorGstin && <p className="text-[11px] text-slate-500 dark:text-gray-400">GSTIN: <span className="mono font-semibold">{awardedVendorGstin}</span></p>}
               <p className="text-[11px] text-slate-500 dark:text-gray-400">Payment Terms: <strong>{paymentTerms}</strong></p>
             </div>
           </div>
@@ -431,14 +516,18 @@ export function PurchaseOrderModal({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2 border-b border-slate-200 dark:border-gray-800/80">
             <div>
               <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Delivery & Logistics:</p>
-              <p className="font-semibold text-slate-800 dark:text-gray-200 mt-0.5">{deliveryLocation}</p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Target Delivery: <strong>{targetDeliveryDate}</strong></p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Lead Time Commitment: <span className="text-emerald-600 dark:text-emerald-400 font-bold">{effectiveLeadTime} Days</span></p>
+              {deliveryLocation && <p className="font-semibold text-slate-800 dark:text-gray-200 mt-0.5">{deliveryLocation}</p>}
+              {targetDeliveryDate && <p className="text-[11px] text-slate-500 dark:text-gray-400">Target Delivery: <strong>{targetDeliveryDate}</strong></p>}
+              {effectiveLeadTime && (
+                <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                  Lead Time Commitment: <span className="text-emerald-600 dark:text-emerald-400 font-bold">{effectiveLeadTime} Days</span>
+                </p>
+              )}
             </div>
             <div>
               <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Commercial & Warranty:</p>
-              <p className="font-semibold text-slate-800 dark:text-gray-200 mt-0.5">{warranty}</p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Category: {rfqCategory}</p>
+              {warranty && <p className="font-semibold text-slate-800 dark:text-gray-200 mt-0.5">{warranty}</p>}
+              {rfqCategory && <p className="text-[11px] text-slate-500 dark:text-gray-400">Category: {rfqCategory}</p>}
             </div>
           </div>
 
@@ -461,7 +550,7 @@ export function PurchaseOrderModal({
                     <tr key={idx}>
                       <td className="p-2">
                         <div className="font-semibold text-slate-800 dark:text-gray-100">{item.description}</div>
-                        <div className="text-[10px] text-slate-400">{item.specs}</div>
+                        {item.specs ? <div className="text-[10px] text-slate-400">{item.specs}</div> : null}
                       </td>
                       <td className="p-2 text-center mono">{item.quantity}</td>
                       <td className="p-2 text-center">{item.unit}</td>
@@ -485,20 +574,23 @@ export function PurchaseOrderModal({
                 <span>Grand Total:</span>
                 <span className="font-mono">₹{grandTotal.toLocaleString('en-IN')}</span>
               </div>
+              {grandTotalInWords && (
+                <div className="text-[10px] text-slate-500 dark:text-gray-400 italic text-right mt-0.5">
+                  {grandTotalInWords}
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Cryptographic Audit Seal */}
-          <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 flex items-start gap-2 text-[10px] text-slate-500 dark:text-gray-400 shadow-sm">
-            <Hash size={14} className="text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
-            <div>
-              <span className="text-slate-800 dark:text-gray-300 font-semibold">Cryptographic Audit Seal (SHA-256):</span>
-              {approvedPo?.shaSignature ? (
-                <p className="mono text-indigo-700 dark:text-indigo-300 break-all select-all font-semibold">{approvedPo.shaSignature}</p>
-              ) : (
-                <p className="italic text-slate-400">Generated by the audit ledger once this Pre-Purchase Order is finalised.</p>
-              )}
-            </div>
+          {/* Standard PO Terms & Conditions preview */}
+          <div className="p-3 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 text-[10px] text-slate-600 dark:text-gray-400 shadow-sm space-y-1">
+            <span className="text-slate-800 dark:text-gray-300 font-semibold uppercase tracking-wider text-[9px]">Standard Terms & Conditions:</span>
+            <ul className="list-disc pl-4 space-y-0.5 text-[10px]">
+              <li>Binding contract upon acknowledgement or delivery commencement.</li>
+              <li>Goods must strictly conform to specifications and approved quality standards.</li>
+              <li>Delivery to designated site within agreed lead time; invoices must quote PO number & GSTIN.</li>
+              <li>Payments processed strictly as per agreed credit terms after inspection and 3-way matching.</li>
+            </ul>
           </div>
         </div>
 

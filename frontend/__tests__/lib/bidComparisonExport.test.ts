@@ -1,10 +1,11 @@
 import * as XLSX from 'xlsx';
-import { downloadBidComparisonExcel, downloadVendorQuotationExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel, downloadMultiSheetWorkbook } from '@/lib/bidComparisonExport';
+import { downloadBidComparisonExcel, downloadVendorQuotationExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel, downloadMultiSheetWorkbook, buildBidComparisonWorksheet } from '@/lib/bidComparisonExport';
 import type { RFQItem, QuoteComparison, LineItemBid } from '@/lib/types';
 
 jest.mock('xlsx', () => ({
   utils: {
     json_to_sheet: jest.fn(() => ({})),
+    aoa_to_sheet: jest.fn(() => ({})),
   },
   write: jest.fn(() => new Uint8Array([1, 2, 3])),
 }));
@@ -75,7 +76,7 @@ describe('downloadMultiSheetWorkbook', () => {
   });
 });
 
-describe('downloadBidComparisonExcel', () => {
+describe('downloadBidComparisonExcel and buildBidComparisonWorksheet', () => {
   let createObjectURLSpy: jest.SpyInstance;
   let revokeObjectURLSpy: jest.SpyInstance;
   let clickSpy: jest.SpyInstance;
@@ -93,7 +94,7 @@ describe('downloadBidComparisonExcel', () => {
     clickSpy.mockRestore();
   });
 
-  test('builds one row per RFQ line item with a real per-vendor price when the vendor itemized it', () => {
+  test('builds enterprise format with 2 header rows, Rate & Amount columns, and BasicAmount summary', () => {
     const quote = makeQuote({
       lineItemQuotes: [
         { lineItemId: 'li-1', itemName: 'Pump', quantity: 2, unitPrice: 500, totalPrice: 1000 },
@@ -103,25 +104,45 @@ describe('downloadBidComparisonExcel', () => {
 
     downloadBidComparisonExcel(makeRfq(), [quote]);
 
-    expect(XLSX.utils.json_to_sheet).toHaveBeenCalledWith(
-      [
-        { Item: 'Pump', Quantity: 2, 'Acme Co — Unit Price': 500, 'Acme Co — Total': 1000 },
-        { Item: 'Valve', Quantity: 5, 'Acme Co — Unit Price': 50, 'Acme Co — Total': 250 },
-      ],
-      { header: ['Item', 'Quantity', 'Acme Co — Unit Price', 'Acme Co — Total'] },
+    expect(XLSX.utils.aoa_to_sheet).toHaveBeenCalledWith([
+      ['s.no', 'Item/Vendor', 'Qty', 'UOM', 'Acme Co', ''],
+      ['', '', '', '', 'Rate', 'Amount'],
+      [1, 'Pump', 2, 'Nos', 500, 1000],
+      [2, 'Valve', 5, 'Nos', 50, 250],
+      ['', 'BasicAmount', '', '', '', 1250],
+      ['', 'GSTAmount', '', '', '', 225],
+      ['', 'TotalAmount', '', '', '', 1475],
+      ['', 'Warranty', '', '', '1 Year(s)', ''],
+      ['', 'Best Price', '', '', 'No', ''],
+      ['', 'Payment Terms', '', '', 'Net 30', ''],
+      ['', 'Submitted', '', '', 'N/A', ''],
+      ['', 'Remarks', '', '', 'None', ''],
+    ]);
+
+    expect(XLSX.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SheetNames: ['Sheet1'],
+      }),
+      { bookType: 'xlsx', type: 'array' }
     );
   });
 
-  test('falls back to the vendor\'s single blended price, marked "(not itemized)", when it never submitted a per-item breakdown', () => {
-    const quote = makeQuote({ unitPrice: 999, totalPrice: 9990 }); // no lineItemQuotes
+  test('handles blended quotes and populates GSTAmount and TotalAmount when taxes are present', () => {
+    const quoteWithTaxes = makeQuote({
+      vendorName: 'Beta Industrial',
+      unitPrice: 200,
+      totalPrice: 1400,
+      taxes: 252,
+    });
 
-    downloadBidComparisonExcel(makeRfq(), [quote]);
+    downloadBidComparisonExcel(makeRfq(), [quoteWithTaxes]);
 
-    expect(XLSX.utils.json_to_sheet).toHaveBeenCalledWith(
+    expect(XLSX.utils.aoa_to_sheet).toHaveBeenCalledWith(
       expect.arrayContaining([
-        expect.objectContaining({ 'Acme Co — Unit Price': '999 (not itemized)' }),
-      ]),
-      expect.anything(),
+        ['', 'BasicAmount', '', '', '', 1400],
+        ['', 'GSTAmount', '', '', '', 252],
+        ['', 'TotalAmount', '', '', '', 1652],
+      ])
     );
   });
 
@@ -141,12 +162,11 @@ describe('downloadBidComparisonExcel', () => {
 
     downloadBidComparisonExcel(rfq, [quote]);
 
-    expect(XLSX.utils.json_to_sheet).toHaveBeenCalledWith(
-      [
-        { Item: ' Pump ', Quantity: 2, 'Acme Co — Unit Price': 520, 'Acme Co — Total': 1040 },
-        { Item: '', Quantity: 1, 'Acme Co — Unit Price': '100 (not itemized)', 'Acme Co — Total': '1000 (not itemized)' },
-      ],
-      expect.anything()
+    expect(XLSX.utils.aoa_to_sheet).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        [1, ' Pump ', 2, 'Nos', 520, 1040],
+        [2, '', 1, 'Nos', 100, 100],
+      ])
     );
   });
 
@@ -254,10 +274,9 @@ describe('downloadFullQuotesExcel', () => {
 
     downloadFullQuotesExcel(makeRfq(), [itemizedQuote, nonItemizedQuote]);
 
-    expect(XLSX.utils.json_to_sheet).toHaveBeenCalled();
     expect(XLSX.write).toHaveBeenCalledWith(
       expect.objectContaining({
-        SheetNames: expect.arrayContaining(['Quotes Summary', 'Line Item Matrix', 'All Itemized Bids']),
+        SheetNames: ['Sheet1'],
       }),
       { bookType: 'xlsx', type: 'array' }
     );
@@ -416,7 +435,7 @@ describe('bidComparisonExport Additional Branch Coverage', () => {
     } as any;
 
     downloadFullQuotesExcel(rfqWithEmptyFields, [fullScoreQuote, fallbackQuote]);
-    expect(XLSX.utils.json_to_sheet).toHaveBeenCalled();
+    expect(XLSX.write).toHaveBeenCalled();
   });
 
   test('downloadBidComparisonExcel and downloadVendorQuotationExcel handle empty and unpriced lines', () => {
@@ -433,4 +452,3 @@ describe('bidComparisonExport Additional Branch Coverage', () => {
     expect(XLSX.utils.json_to_sheet).toHaveBeenCalled();
   });
 });
-
