@@ -108,4 +108,26 @@ describe('ActionCenterSubNav', () => {
 
     expect(screen.getByRole('tablist')).toBeInTheDocument();
   });
+
+  it('renders custom payment dues count badges accurately', () => {
+    const { rerender } = render(
+      <ActionCenterSubNav
+        activeTab="payment_dues"
+        onSelectTab={mockOnSelectTab}
+        paymentDuesCount={15}
+      />
+    );
+
+    expect(screen.getByText('15')).toBeInTheDocument();
+
+    rerender(
+      <ActionCenterSubNav
+        activeTab="payment_dues"
+        onSelectTab={mockOnSelectTab}
+        paymentDuesCount={150}
+      />
+    );
+
+    expect(screen.getByText('99+')).toBeInTheDocument();
+  });
 });

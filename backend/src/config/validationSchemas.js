@@ -113,6 +113,48 @@ const ORGANIZATION_TYPES = [
 ];
 
 const VALIDATION_SCHEMAS = {
+  sendPaymentDuesEmail: {
+    accountId: { type: 'string', required: true, minLength: 1 },
+    accountType: { type: 'string', required: true, enum: ['buyer', 'seller'] },
+    recipientEmail: { type: 'string', required: true, pattern: EMAIL_REGEX, message: 'Valid recipient email address is required.' },
+    subject: { type: 'string', required: true, minLength: 3, maxLength: 255, message: 'Email subject is required (3 to 255 characters).' },
+    message: { type: 'string', required: true, minLength: 5, maxLength: 5000, message: 'Email message is required (5 to 5000 characters).' },
+  },
+
+  sendPaymentDuesMessage: {
+    accountId: { type: 'string', required: true, minLength: 1 },
+    accountType: { type: 'string', required: true, enum: ['buyer', 'seller'] },
+    title: { type: 'string', required: false, maxLength: 255 },
+    message: { type: 'string', required: true, minLength: 5, maxLength: 5000, message: 'Notification message is required (5 to 5000 characters).' },
+  },
+
+  sendPaymentDuesWhatsApp: {
+    accountId: { type: 'string', required: true, minLength: 1 },
+    accountType: { type: 'string', required: true, enum: ['buyer', 'seller'] },
+    phone: { type: 'string', required: true, minLength: 8, message: 'Valid recipient phone number is required.' },
+    message: { type: 'string', required: true, minLength: 5, maxLength: 5000, message: 'WhatsApp message is required (5 to 5000 characters).' },
+  },
+
+  updatePaymentDuesAcknowledgement: {
+    accountId: { type: 'string', required: true, minLength: 1 },
+    accountType: { type: 'string', required: true, enum: ['buyer', 'seller'] },
+    acknowledgementStatus: {
+      type: 'string',
+      required: true,
+      enum: [
+        'Not Notified',
+        'Notification Sent',
+        'Delivery Pending',
+        'Delivered',
+        'Acknowledgement Pending',
+        'Acknowledged',
+        'Failed',
+      ],
+      message: 'Valid acknowledgement status is required.',
+    },
+    notes: { type: 'string', required: false, maxLength: 2000 },
+  },
+
   createRFQ: {
     title: { type: 'string', required: true, minLength: 3, maxLength: 200 },
     // A buyer may not know the exact taxonomy slot for every line item up
@@ -718,11 +760,12 @@ function validatePayload(schema, data = {}) {
   const errors = {};
   const sanitized = {};
 
-  if (!schema || typeof schema !== 'object') {
+  const targetSchema = typeof schema === 'string' ? VALIDATION_SCHEMAS[schema] : schema;
+  if (!targetSchema || typeof targetSchema !== 'object') {
     return { isValid: true, errors: {}, sanitizedData: data };
   }
 
-  for (const [field, rules] of Object.entries(schema)) {
+  for (const [field, rules] of Object.entries(targetSchema)) {
     const value = data[field];
 
     // Required check

@@ -559,3 +559,34 @@ export const INDIAN_STATES: readonly string[] = [
 export const VENDOR_DIRECTORY_AUTH_SCHEMA = {
   passkey: { minLength: 1, maxLength: 100 },
 } as const;
+
+
+/** Payment dues communication validation schemas */
+export const PAYMENT_DUES_COMMUNICATION_SCHEMA = {
+  email: {
+    recipientEmail: { minLength: 5, maxLength: 255, pattern: EMAIL_PATTERN },
+    subject: { minLength: 3, maxLength: 255 },
+    message: { minLength: 5, maxLength: 5000 },
+  },
+  message: {
+    message: { minLength: 5, maxLength: 5000 },
+  },
+  whatsapp: {
+    phone: { minLength: 8, maxLength: 20 },
+    message: { minLength: 5, maxLength: 5000 },
+  },
+  acknowledgement: {
+    acknowledgementStatus: {
+      allowed: [
+        'Not Notified',
+        'Notification Sent',
+        'Delivery Pending',
+        'Delivered',
+        'Acknowledgement Pending',
+        'Acknowledged',
+        'Failed',
+      ],
+    },
+    notes: { maxLength: 2000 },
+  },
+} as const;

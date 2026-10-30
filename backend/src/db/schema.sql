@@ -921,3 +921,33 @@ CREATE INDEX IF NOT EXISTS idx_internal_tasks_assigned_to ON internal_tasks (ass
 CREATE INDEX IF NOT EXISTS idx_internal_tasks_task_type ON internal_tasks (task_type_id);
 CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_at ON internal_tasks (created_at DESC);
 
+
+
+-- ==============================================================================
+-- PAYMENT DUES - LOW CREDIT MONITORING & COMMUNICATION
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS payment_dues_communications (
+  id VARCHAR(64) PRIMARY KEY,
+  account_id VARCHAR(64) NOT NULL,
+  account_type VARCHAR(20) NOT NULL,
+  channel VARCHAR(20) NOT NULL,
+  recipient VARCHAR(255) NOT NULL,
+  subject VARCHAR(255),
+  message TEXT NOT NULL,
+  notification_status VARCHAR(50) NOT NULL DEFAULT 'Notification Sent',
+  delivery_status VARCHAR(50) NOT NULL DEFAULT 'Delivered',
+  acknowledgement_status VARCHAR(50) NOT NULL DEFAULT 'Acknowledgement Pending',
+  communicated_by VARCHAR(255) DEFAULT 'Category Manager',
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  acknowledged_at TIMESTAMPTZ,
+  acknowledged_by VARCHAR(255),
+  notes TEXT,
+  metadata JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_account_id ON payment_dues_communications (account_id);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_account_type ON payment_dues_communications (account_type);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_ack_status ON payment_dues_communications (acknowledgement_status);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_sent_at ON payment_dues_communications (sent_at DESC);

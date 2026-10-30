@@ -23,6 +23,7 @@ interface ActionCenterSubNavProps {
   tasksCount?: number;
   ticketsCount?: number;
   approvalsCount?: number;
+  paymentDuesCount?: number;
 }
 
 export default function ActionCenterSubNav({
@@ -31,6 +32,7 @@ export default function ActionCenterSubNav({
   tasksCount = 0,
   ticketsCount = 0,
   approvalsCount = 0,
+  paymentDuesCount,
 }: ActionCenterSubNavProps) {
   const tabs = UI_STRINGS.actionCenter.tabs;
 
@@ -86,7 +88,7 @@ export default function ActionCenterSubNav({
       id: 'payment_dues',
       label: tabs.paymentDues,
       icon: TrendingUp,
-      badge: '99+',
+      badge: paymentDuesCount !== undefined ? (paymentDuesCount > 99 ? '99+' : paymentDuesCount) : '99+',
       badgeColor: 'bg-amber-600 text-white',
     },
   ];

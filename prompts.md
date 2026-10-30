@@ -1043,3 +1043,351 @@ Remove the Buyer and seller directory from the category govarance because it is 
 ```text
 raise the pr for this code
 ```
+
+
+---
+
+### 2026-10-30T12:13:14+05:30
+
+```text
+# MASTER DEVELOPMENT PROMPT: PAYMENT DUES – LOW CREDIT MONITORING & COMMUNICATION MODULE
+
+Act as a senior full-stack developer working on the existing QUA AI platform.
+
+Implement a fully functional Payment Dues module inside the existing Action Center.
+
+Use the provided Payment Dues screenshot as the UI reference.
+
+## 1. Main Objective
+
+The Payment Dues module must identify and display all Buyers and Sellers whose available credit balance is less than or equal to 2 credits.
+
+The module must:
+- Fetch all relevant buyer and seller information directly from the existing database (BD).
+- Display complete account information.
+- Allow users to open the existing Buyer or Seller profile by clicking the company or account name.
+- Provide Email, Message, and WhatsApp communication options.
+- Track notification delivery and acknowledgement.
+- Support column-level filtering and ascending/descending sorting.
+- Provide a Gear icon to customize column visibility and column order using drag-and-drop.
+- Save individual user column preferences.
+
+**Important:** Reuse all existing functionality, database models, APIs, methods, services, and business logic wherever possible.
+
+## 2. Database Integration – Critical Requirement
+
+Fetch actual records from the existing database.
+
+### Buyer Records
+Retrieve all registered buyers whose available credits are:
+- 0 credits.
+- 1 credit.
+- 2 credits.
+
+### Seller Records
+Retrieve all registered sellers whose available credits are:
+- 0 credits.
+- 1 credit.
+- 2 credits.
+
+### Data Requirements
+- Include every eligible buyer and seller.
+- Use the actual available credit balance from the existing database.
+- Identify the existing credit calculation and consumption methods.
+- Do not calculate credits using a separate or duplicate implementation.
+- Reuse existing database models, queries, APIs, services, and relationships.
+- Do not use dummy records, hardcoded statistics, or mock responses.
+- Do not create duplicate buyer or seller records.
+- Exclude accounts with more than 2 available credits.
+- Ensure all eligible records are included, with proper pagination.
+
+## 3. Payment Dues Dashboard – Summary Cards
+
+Display dynamic summary cards at the top:
+
+1. Total Low-Credit Accounts.
+2. Total Buyers.
+3. Total Sellers.
+4. Accounts with 0 Credits.
+5. Accounts with 1–2 Credits.
+6. Acknowledgement Pending.
+
+All counts must come from actual database records and update when account credit balances or acknowledgement statuses change.
+
+Ensure that summary counts match the underlying filtered data and avoid double-counting.
+
+## 4. Payment Dues Table – All Relevant Database Fields
+
+Create a structured table containing all relevant available buyer and seller information.
+
+Include the following columns wherever the corresponding database fields exist:
+
+| Column | Information |
+|---|---|
+| Account ID | Existing buyer/seller identifier |
+| Account Type | Buyer / Seller |
+| Company Name | Registered company name |
+| Contact Person | Primary contact person |
+| Email | Registered email address |
+| Phone Number | Registered contact number |
+| Available Credits | Actual remaining credits |
+| Total Credits | Total allocated credits |
+| Credits Used | Consumed credits |
+| Account Status | Active / Inactive / Suspended |
+| Registration Date | Account creation date |
+| Last Activity | Last relevant account activity |
+| Assigned Executive | Responsible executive |
+| Last Notification | Last notification date |
+| Notification Channel | Email / Message / WhatsApp |
+| Acknowledgement Status | Current acknowledgement status |
+| Actions | Communication and profile actions |
+
+Requirements:
+- Fetch all applicable fields from the existing database.
+- Include other relevant existing fields where useful.
+- Do not expose sensitive internal fields unnecessarily.
+- Handle missing or null values properly.
+- Display consistent information for Buyers and Sellers.
+
+## 5. Buyer and Seller Profile Integration
+
+When a user clicks a company name or account name:
+
+### Buyer
+- Open the existing Buyer Profile.
+- Display complete buyer information from the existing Buyers Directory.
+- Include company information, contact information, account details, credit balance, and other existing profile fields.
+- Preserve all existing buyer profile operations.
+
+### Seller
+- Open the existing Seller Profile.
+- Display complete seller information from the existing Sellers Directory.
+- Include company information, contact information, account details, credit balance, and other existing profile fields.
+- Preserve all existing seller profile operations.
+
+**Do not create new Buyer or Seller profile pages. Reuse the existing profile components, APIs, routes, and database relationships.**
+
+## 6. Actions Column – Email, Message and WhatsApp
+
+Add an Actions column for each buyer and seller record.
+
+Provide the following options:
+
+### A. Send Email
+
+- Add a Send Email action.
+- Automatically fetch the registered email address from the database.
+- Open an email composition window.
+- Allow the executive to review and edit the message before sending.
+- Include the account name and actual available credit balance.
+- Maintain notification history.
+- Record sending status, timestamp, and delivery information where available.
+
+### B. Send Message
+
+- Add a Message action.
+- Reuse the existing in-app messaging functionality or integration.
+- Allow executives to send low-credit notifications.
+- Maintain communication history against the corresponding buyer or seller.
+- Track message status wherever supported.
+
+### C. WhatsApp Notification
+
+- Add a WhatsApp action.
+- Fetch the registered mobile or WhatsApp number from the existing profile.
+- Integrate with the existing WhatsApp API or messaging service.
+- Prepare a dynamic low-credit notification message.
+- Allow the executive to review and send the message.
+- Track notification attempts and acknowledgement where supported.
+
+Do not claim a notification was delivered simply because the Send button was clicked or WhatsApp was opened.
+
+## 7. Low-Credit Notification Template
+
+Use a professional default notification.
+
+**Subject: Low Credit Balance Notification – QUA AI**
+
+Dear [Contact Person],
+
+This is to inform you that your QUA AI account currently has only [Available Credits] credits remaining.
+
+Please review your credit balance and take the necessary action to continue using the platform without interruption.
+
+Kindly acknowledge receipt of this notification.
+
+Regards,  
+QUA AI Team  
+Procucev Enterprises Solutions Pvt Ltd.
+
+Requirements:
+- Dynamically populate account name, contact person, and available credits.
+- Support both buyer and seller notifications.
+- Allow executives to edit messages before sending.
+- Reuse existing email and WhatsApp templates and integrations where available.
+
+## 8. Acknowledgement Tracking
+
+Maintain notification and acknowledgement history separately for each account.
+
+Track:
+- Notification sent date and time.
+- Communication channel.
+- Notification status.
+- Delivery status, where supported.
+- Acknowledgement status.
+- Acknowledgement date and time.
+- Last communication by.
+- Communication history.
+- Follow-up history.
+
+Support these statuses:
+
+- Not Notified.
+- Notification Sent.
+- Delivery Pending.
+- Delivered.
+- Acknowledgement Pending.
+- Acknowledged.
+- Failed.
+
+Important business rules:
+- Sending a notification must not automatically mark it as acknowledged.
+- Record acknowledgement only after a verified recipient response or authorized manual confirmation.
+- Preserve a complete audit trail.
+- Allow executives to identify accounts that require follow-up.
+- Prevent duplicate notification submissions where appropriate.
+
+## 9. Column-Level Filtering and Sorting
+
+Every applicable data column must support sorting and filtering.
+
+### Sorting
+Support:
+- Ascending order.
+- Descending order.
+
+Examples:
+- Company Name: A–Z / Z–A.
+- Available Credits: Lowest–Highest / Highest–Lowest.
+- Registration Date: Oldest–Newest / Newest–Oldest.
+- Last Activity: Oldest–Newest / Newest–Oldest.
+- Last Notification: Oldest–Newest / Newest–Oldest.
+
+### Filtering
+Provide appropriate filters for:
+- Account Type.
+- Company Name.
+- Contact Person.
+- Email.
+- Phone Number.
+- Available Credits.
+- Account Status.
+- Registration Date.
+- Assigned Executive.
+- Acknowledgement Status.
+- Notification Channel.
+- Last Notification Date.
+
+Also provide:
+- Global search.
+- Reset Filters.
+- Refresh.
+- Pagination.
+- Export to Excel/CSV.
+
+All sorting and filtering must work with actual database records and across paginated results, not just the currently visible rows.
+
+## 10. Gear Icon – Dynamic Column Settings
+
+Add a **Gear (⚙️) icon** in the Payment Dues toolbar, preferably beside the Export button.
+
+When clicked, open a Column Settings dropdown or popover.
+
+### A. Available Columns
+
+Display all available Payment Dues table columns inside the settings panel.
+
+Each column must have:
+- Column name.
+- Visibility checkbox or toggle.
+- Drag-and-drop handle.
+
+### B. Show and Hide Columns
+
+Allow users to:
+- Select individual columns to display.
+- Hide unwanted columns.
+- Show previously hidden columns.
+- Select All.
+- Hide All optional columns.
+- Reset to Default.
+
+The table must immediately update when a column is enabled or disabled.
+
+Hiding a column must not delete or modify the underlying database information.
+
+### C. Drag-and-Drop Column Reordering
+
+Allow users to drag and drop columns directly inside the Gear icon settings panel.
+
+For example, the default order may be:
+
+1. Account ID.
+2. Account Type.
+3. Company Name.
+4. Contact Person.
+5. Email.
+6. Phone Number.
+7. Available Credits.
+8. Total Credits.
+9. Credits Used.
+10. Account Status.
+11. Registration Date.
+12. Last Activity.
+13. Assigned Executive.
+14. Last Notification.
+15. Notification Channel.
+16. Acknowledgement Status.
+17. Actions.
+
+Users can reorder columns (for example, move Available Credits next to Company Name).
+
+The table header and data rows must immediately reflect the updated column order.
+
+### D. Per-User Column Preferences Persistence
+
+Save column preferences per user.
+
+Persist:
+- Visible and hidden columns.
+- Custom column order.
+- Table density (if supported).
+
+Use local storage, browser cache, or database user preferences.
+
+Load preferences automatically on subsequent visits.
+
+Provide a Reset to Default option in the Column Settings panel.
+
+## 11. Security and Permissions
+
+- Accessible to authorized Category Managers, Admins, and Operations Executives.
+- Do not expose sensitive billing or system data to unauthorized users.
+- Log executive communication actions with user details and timestamps.
+
+## 12. Verification and Acceptance Criteria
+
+Before completing the task, verify:
+- Accurate low-credit account detection ($\le 2$ credits).
+- Reliable database fetching.
+- Functional summary cards with accurate counts.
+- Opening existing Buyer and Seller profiles when clicking names.
+- Working Email, Message, and WhatsApp actions with editable prefilled messages.
+- Proper acknowledgement tracking.
+- Accurate column sorting and filtering across pages.
+- Functional Gear icon with show/hide and drag-and-drop reordering.
+- Persistent column preferences.
+- Excel/CSV export functionality.
+- Professional error handling and zero console errors.
+```
