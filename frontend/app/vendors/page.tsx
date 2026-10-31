@@ -42,6 +42,7 @@ const S = UI_STRINGS.publicVendorDirectory;
 export default function PublicVendorDirectoryPage() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authChecked, setAuthChecked] = useState<boolean>(false);
+  const [sessionExpired, setSessionExpired] = useState<boolean>(false);
   const [filter, setFilter] = useState<PublicVendorFilterState>(DEFAULT_FILTER);
   const [filterOptions, setFilterOptions] = useState<{ categories: string[]; states: string[] }>({
     categories: [],
@@ -66,11 +67,19 @@ export default function PublicVendorDirectoryPage() {
     async function loadFilterOptions() {
       try {
         const res = await fetchPublicVendorFilters();
-        if (isMounted && res.success) {
-          setFilterOptions({
-            categories: res.categories,
-            states: res.states,
-          });
+        if (isMounted) {
+          if (res.sessionExpired) {
+            logoutVendorDirectory('EXPIRED');
+            setIsAuthenticated(false);
+            setSessionExpired(true);
+            return;
+          }
+          if (res.success) {
+            setFilterOptions({
+              categories: res.categories,
+              states: res.states,
+            });
+          }
         }
       } catch {
         // graceful fallback to static defaults
@@ -91,6 +100,12 @@ export default function PublicVendorDirectoryPage() {
         setVendors(result.data);
         setPagination(result.pagination);
       } else {
+        if (result.sessionExpired) {
+          logoutVendorDirectory('EXPIRED');
+          setIsAuthenticated(false);
+          setSessionExpired(true);
+          return;
+        }
         setError(result.error || S.errorText);
         setVendors([]);
       }
@@ -128,6 +143,7 @@ export default function PublicVendorDirectoryPage() {
 
   function handleLogout() {
     logoutVendorDirectory();
+    setSessionExpired(false);
     setIsAuthenticated(false);
   }
 
@@ -157,7 +173,10 @@ export default function PublicVendorDirectoryPage() {
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-[#04060b]">
-        <VendorDirectoryLoginGate onAuthenticated={() => setIsAuthenticated(true)} />
+        <VendorDirectoryLoginGate onAuthenticated={() => {
+          setSessionExpired(false);
+          setIsAuthenticated(true);
+        }} sessionExpired={sessionExpired} />
       </div>
     );
   }

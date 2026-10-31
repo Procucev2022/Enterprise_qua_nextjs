@@ -2766,3 +2766,96 @@ Test results written to: coverage/test-results.json
 Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
 Error: Process completed with exit code 1.
 ```
+
+
+---
+
+### 2026-10-31T13:19:51+05:30
+
+```text
+{
+    "success": false,
+    "sessionExpired": true,
+    "error": "Vendor directory session has expired or is closed. Please log in again."
+} Getting this on login with otp in production 
+```
+
+
+---
+
+### 2026-10-31T14:04:16+05:30
+
+```text
+is this issue come in future ??
+```
+
+
+---
+
+### 2026-10-31T14:06:51+05:30
+
+```text
+I want to update the branch give me all rebase steps
+```
+
+---
+
+### 2026-10-31T14:12:32+05:30
+
+```text
+backend\__tests__\vendorPublicController.test.js
+ solve merge conflic to this page onl only
+```
+
+---
+
+### 2026-10-31T14:17:21+05:30
+
+```text
+ git status 
+interactive rebase in progress; onto 43162e1
+Last command done (1 command done):
+   pick 86daea5 # commit changes for vendor page
+Next commands to do (3 remaining commands):
+   pick 33db226 # feature complete with login
+   pick 0d6689d # Otp Login added in vendor page
+  (use "git rebase --edit-todo" to view and edit)
+You are currently rebasing branch 'sample/vendor-page' on '43162e1'.
+  (fix conflicts and then run "git rebase --continue")
+  (use "git rebase --skip" to skip this patch)
+  (use "git rebase --abort" to check out the original branch)
+
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+        modified:   backend/src/config/validationSchemas.js
+        modified:   frontend/lib/uiStrings.ts
+        modified:   prompts.md
+
+Unmerged paths:
+  (use "git restore --staged <file>..." to unstage)
+  (use "git add/rm <file>..." as appropriate to mark resolution)
+        both added:      backend/__tests__/vendorPublicController.test.js
+        both modified:   backend/src/controllers/vendorController.js
+        both modified:   backend/src/db/domainQueries.js
+        both modified:   backend/src/routes/vendors.js
+        deleted by us:   frontend/.env.development
+        both added:      frontend/__tests__/app/vendors/page.test.tsx
+        both added:      frontend/__tests__/lib/vendorDirectoryClient.test.ts
+        both added:      frontend/app/vendors/VendorFilterSidebar.tsx
+        both added:      frontend/app/vendors/page.tsx
+        both modified:   frontend/lib/types.ts
+        both modified:   frontend/lib/validationSchemas.ts
+        both added:      frontend/lib/vendorDirectoryClient.ts
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   prompts.md
+
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
+
+resolve every conflict and put changes in stage and complete the rebase
+```
+
+
+---
