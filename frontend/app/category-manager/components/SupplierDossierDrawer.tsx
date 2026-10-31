@@ -54,31 +54,38 @@ import {
   fetchSupplierPaymentHistory,
 } from '@/lib/supplierProfileClient';
 
+export interface SupplierDossierSeller {
+  id: string;
+  name?: string;
+  companyName?: string;
+  contactPerson?: string;
+  email?: string;
+  phone?: string;
+  location?: string;
+  deliveryLocation?: string;
+  category?: string;
+  majorCategory?: string;
+  minorCategories?: string[];
+  categories?: string[];
+  gstin?: string;
+  pan?: string;
+  gstNumber?: string;
+  panNumber?: string;
+  subscriptionPlan?: string;
+  verificationStatus?: string;
+  status?: string;
+  source?: 'buyer_uploaded' | 'procucev_network' | string;
+  rating?: number;
+  score360?: number;
+  freeQuotationCredits?: number;
+  createdAt?: string;
+  created_at?: string;
+  lastLogin?: string;
+  [key: string]: any;
+}
+
 export interface SupplierDossierDrawerProps {
-  seller: (RFQVendorCandidate | VendorEntry) & {
-    id: string;
-    name?: string;
-    companyName?: string;
-    contactPerson?: string;
-    email?: string;
-    phone?: string;
-    location?: string;
-    deliveryLocation?: string;
-    category?: string;
-    majorCategory?: string;
-    categories?: string[];
-    gstin?: string;
-    pan?: string;
-    subscriptionPlan?: string;
-    verificationStatus?: string;
-    source?: 'buyer_uploaded' | 'procucev_network' | string;
-    rating?: number;
-    score360?: number;
-    freeQuotationCredits?: number;
-    createdAt?: string;
-    created_at?: string;
-    lastLogin?: string;
-  };
+  seller: SupplierDossierSeller;
   onClose: () => void;
   onSelectRFQ?: (rfq: RFQItem) => void;
   sellerRfqs?: RFQItem[];

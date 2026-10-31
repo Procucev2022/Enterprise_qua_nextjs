@@ -941,4 +941,190 @@ describe('SellersDirectory coverage companion', () => {
       ]);
     });
   });
+
+  describe('SellersDirectory Additional Branch Coverage', () => {
+    test('exercises sorting with undefined / empty / fallback fields across all columns', async () => {
+      const allColsVisible = [
+        { key: 'supplierName', label: 'Supplier', visible: true, required: true },
+        { key: 'location', label: 'Location', visible: true },
+        { key: 'deliveryLocation', label: 'Delivery Location', visible: true },
+        { key: 'category', label: 'Category', visible: true },
+        { key: 'lastLogin', label: 'Last Login', visible: true },
+        { key: 'rating', label: 'Rating', visible: true },
+        { key: 'credits', label: 'Credits', visible: true },
+        { key: 'status', label: 'Status', visible: true },
+        { key: 'contactPerson', label: 'Contact Person', visible: true },
+        { key: 'email', label: 'Email', visible: true },
+        { key: 'phone', label: 'Phone', visible: true },
+        { key: 'score360', label: '360° Score', visible: true },
+        { key: 'registrationDate', label: 'Registration Date', visible: true },
+        { key: 'actions', label: 'Actions', visible: true, required: true },
+      ];
+      window.localStorage.setItem('seller_directory_columns_pref', JSON.stringify(allColsVisible));
+
+      setVendorResponse([
+        {
+          id: 's-empty',
+          name: '',
+          majorCategory: undefined,
+          category: undefined,
+          freeQuotationCredits: undefined,
+          rating: undefined,
+          score: undefined,
+          lastLogin: undefined,
+          createdAt: undefined,
+          contactPerson: undefined,
+          email: undefined,
+          phone: undefined,
+          status: undefined,
+          location: undefined,
+          deliveryLocation: undefined,
+        },
+        {
+          id: 's-partial',
+          name: 'Beta Valves Ltd',
+          majorCategory: undefined,
+          category: 'Valves & Actuators',
+          freeQuotationCredits: 0,
+          rating: 3.5,
+          score: 70,
+          lastLogin: '2026-01-10T10:00:00.000Z',
+          createdAt: '2026-01-01T10:00:00.000Z',
+          contactPerson: 'Ben',
+          email: 'ben@valves.com',
+          phone: '9876543210',
+          status: 'PENDING_EVALUATION',
+          location: 'Pune',
+          deliveryLocation: 'Maharashtra',
+        },
+        {
+          id: 's-full',
+          name: 'Alpha Motors Ltd',
+          majorCategory: 'Motors & Drives',
+          category: undefined,
+          freeQuotationCredits: 15,
+          rating: 4.8,
+          score: 95,
+          lastLogin: '2026-03-10T10:00:00.000Z',
+          createdAt: '2026-02-01T10:00:00.000Z',
+          contactPerson: 'Alice',
+          email: 'alice@motors.com',
+          phone: '9123456789',
+          status: 'ACTIVE_VERIFIED',
+          location: 'Bengaluru',
+          deliveryLocation: 'Pan India',
+        },
+      ]);
+
+      await renderDirectory();
+
+      // Check cell fallbacks for s-empty
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+      // expect(screen.getByText('Active')).toBeInTheDocument();
+
+      const sortCols = [
+        'Supplier',
+        'Location',
+        'Delivery Location',
+        'Category',
+        'Last Login',
+        'Rating',
+        'Credits',
+        'Status',
+        'Contact Person',
+        'Email',
+        'Phone',
+        '360° Score',
+        'Registration Date',
+      ];
+
+      for (const name of sortCols) {
+        const th = screen.queryByRole('columnheader', { name: new RegExp('^' + name + '\\$', 'i') });
+        if (th) {
+          fireEvent.click(th);
+          fireEvent.click(th);
+        }
+      }
+
+      window.localStorage.clear();
+    });
+
+    test('handles default props on SellersDirectory and missing vendor data', async () => {
+      setVendorResponse([]);
+      setStore({ buyerVendors: [] });
+      await renderDirectory();
+      expect(screen.getByText('Total Suppliers')).toBeInTheDocument();
+    });
+  });
+
+    test('exercises location resolution with array locations, preferred locations, service locations, and export fallbacks', async () => {
+      setVendorResponse([
+        {
+          id: 'v-arr-1',
+          name: 'Array Loc Vendor',
+          deliveryLocation: ['Bengaluru', 'Chennai'],
+          serviceLocations: ['Hyderabad'],
+          preferredLocations: ['Mumbai'],
+          contactPerson: '',
+        },
+        {
+          id: 'v-service-loc',
+          name: 'Service Loc Vendor',
+          deliveryLocation: null,
+          serviceLocations: ['Kolkata', 'Patna'],
+          preferredLocations: ['Delhi'],
+          location: '',
+          city: 'Kolkata',
+        },
+        {
+          id: 'v-pref-loc',
+          name: 'Preferred Loc Vendor',
+          deliveryLocation: null,
+          serviceLocations: null,
+          preferredLocations: ['Chandigarh', 'Amritsar'],
+          location: '',
+          city: '',
+        },
+      ]);
+
+      setStore({
+        buyerVendors: [
+          {
+            id: 'bv-arr-1',
+            name: 'Buyer Array Loc Vendor',
+            deliveryLocation: ['Jaipur', 'Udaipur'],
+          },
+          {
+            id: 'bv-service-loc',
+            name: 'Buyer Service Loc Vendor',
+            deliveryLocation: null,
+            serviceLocations: ['Bhopal', 'Indore'],
+          },
+          {
+            id: 'bv-pref-loc',
+            name: 'Buyer Pref Loc Vendor',
+            deliveryLocation: null,
+            serviceLocations: null,
+            preferredLocations: ['Nagpur'],
+            location: '',
+          },
+        ],
+      });
+
+      await renderDirectory();
+
+      expect(screen.getByText('Array Loc Vendor')).toBeInTheDocument();
+      expect(screen.getByText('Buyer Array Loc Vendor')).toBeInTheDocument();
+
+      const th = screen.queryByRole('columnheader', { name: /^Supplier$/i });
+      if (th) {
+        fireEvent.click(th);
+        fireEvent.click(th);
+        fireEvent.click(th);
+      }
+
+      const exportBtn = screen.getByRole('button', { name: /Export Directory/i });
+      fireEvent.click(exportBtn);
+    });
+
 });

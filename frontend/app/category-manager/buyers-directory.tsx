@@ -774,7 +774,7 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
                                   className="flex items-center gap-2.5 text-left group cursor-pointer focus:outline-none"
                                 >
                                   <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 font-bold flex items-center justify-center text-xs shrink-0 group-hover:scale-105 transition-transform">
-                                    {buyer.organizationName.charAt(0)}
+                                    {(buyer.organizationName || 'B').charAt(0)}
                                   </div>
                                   <span className="font-semibold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">
                                     {buyer.organizationName}

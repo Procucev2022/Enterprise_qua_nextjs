@@ -2684,6 +2684,7 @@ export interface BuyerCreditTransaction {
   paymentReference?: string | null;
   status: string;
   description: string;
+  notes?: string;
 }
 
 export interface BuyerCommunicationItem {
@@ -2782,6 +2783,7 @@ export interface SupplierCreditTransaction {
   paymentReference?: string | null;
   status: string;
   description: string;
+  notes?: string;
 }
 
 export interface SupplierCommunicationItem {

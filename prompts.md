@@ -2211,3 +2211,156 @@ The Gear icon must support column visibility, drag-and-drop ordering, and indivi
 
 **Most importantly, reuse existing functionality, methods, APIs, database models, and integrations. Preserve all existing business logic and working functionality. Make only the minimum necessary backward-compatible changes. Do not rebuild, overwrite, or break the existing application.**
 ```
+
+
+---
+
+### 2026-10-31T03:00:00+05:30
+
+```text
+why that much time it is  running since 2 hours not raise the pr first raise the pr
+```
+
+---
+
+### 2026-10-31T08:45:00+05:30
+
+```text
+check the error fix it
+```
+
+---
+
+### 2026-10-31T10:12:59+05:30
+
+```text
+commit the changes
+```
+
+
+---
+
+### 2026-10-31T10:35:42+05:30
+
+```text
+merge the commit changes and see the outoput
+
+
+[Master Quality & PR Summary summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408#summary-124425598443)
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: FAILED
+283 / 285 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+4204
+4204
+0
+0
+frontend
+3367
+3365
+2
+0
+Workspace
+7571
+7569
+2
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.93%
+92.59%
+99.29%
+99.54%
+128 / 128
+frontend
+97.98%
+93.07%
+98.24%
+98.73%
+155 / 157
+Workspace
+98.45%
+92.82%
+98.61%
+99.13%
+283 / 285
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+PASSED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+FAILED
+Frontend per-file coverage
+FAILED
+Production build
+FAILED
+TypeScript typecheck
+FAILED
+Lint
+PASSED
+Database migrations
+PASSED
+Coverage failures
+frontend: app/category-manager/buyers-directory.tsx: branches 88.59% < 90%.
+frontend: app/category-manager/sellers-directory.tsx: branches 79.43% < 90%.
+frontend: app/category-manager/sellers-directory.tsx: lines 89.79% < 90%.
+[Job summary generated at run-time](https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions#adding-a-job-summary)
+Annotations
+15 errors, 3 warnings, and 3 notices
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:400)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:374)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:333)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:288)Type '{ categories: never[]; id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:249)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:226)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:97)Property 'name' is missing in type '{ id: string; email: string; }' but required in type 'RFQAssignedVendor'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:89)Type '"PENDING"' is not assignable to type '"Parsing" | "In Evaluation" | "AI Recommended" | "PO Generated" | "Quotes Pending" | "Quotes Received" | "Closed" | "Expired"'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:70)Type '"Buyer Uploaded"' is not assignable to type '"Client List" | "Procucev - AI Rec" | "Procucev Network"'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:46)Type '"QUOTED"' is not assignable to type '"Parsing" | "In Evaluation" | "AI Recommended" | "PO Generated" | "Quotes Pending" | "Quotes Received" | "Closed" | "Expired"'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:7:20)Process completed with exit code 1.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:6:78838)Process completed with exit code 1.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:5:60)Process completed with exit code 1.
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443#step:9:22)Process completed with exit code 1.
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443#step:8:37)Process completed with exit code 1.
+[Backend Tests, Migrations & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443582#step:19:6)Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:21:8)Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443#step:19:2)Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/download-artifact@v4, actions/github-script@v7, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+[Backend Tests, Migrations & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443582)"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754)"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443)"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+Artifacts
+
+how much time doo it very fast i what do so many chnages
+```
+
+---
+
+### 2026-10-31T11:02:36+05:30
+
+```text
+how much time do it
+```
+
+---
+
+### 2026-10-31T11:26:22+05:30
+
+```text
+continue
+```

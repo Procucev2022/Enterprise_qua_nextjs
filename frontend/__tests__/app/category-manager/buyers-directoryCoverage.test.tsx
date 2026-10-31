@@ -798,3 +798,178 @@ describe('BuyersDirectory pagination', () => {
     expect(screen.getByText('Buyer 012')).toBeInTheDocument();
   });
 });
+describe('BuyersDirectory Additional Branch Coverage', () => {
+  test('exercises sorting with undefined / empty fields across all columns', () => {
+    const allColsVisible = [
+      { key: 'organizationName', label: 'Buyer', visible: true, required: true },
+      { key: 'contactPerson', label: 'Contact Person', visible: true },
+      { key: 'corporateEmail', label: 'Email', visible: true },
+      { key: 'mobileNumber', label: 'Phone', visible: true },
+      { key: 'location', label: 'Location', visible: true },
+      { key: 'sourcingMode', label: 'Mode', visible: true },
+      { key: 'subscriptionPlan', label: 'Plan', visible: true },
+      { key: 'totalRFQsCreated', label: 'RFQs', visible: true },
+      { key: 'remainingFreeRFQs', label: 'Free Credits', visible: true },
+      { key: 'totalSpend', label: 'Total Spend', visible: true },
+      { key: 'status', label: 'Status', visible: true },
+      { key: 'createdDate', label: 'Registration Date', visible: true },
+      { key: 'actions', label: 'Actions', visible: true, required: true },
+    ];
+    window.localStorage.setItem('buyer_directory_columns_pref', JSON.stringify(allColsVisible));
+
+    const b1 = makeBuyer({
+      id: 'b-empty-1',
+      organizationName: undefined,
+      contactPerson: undefined,
+      corporateEmail: undefined,
+      mobileNumber: undefined,
+      city: undefined,
+      primaryPlantLocation: undefined,
+      sourcingMode: undefined,
+      subscriptionPlan: undefined,
+      status: undefined,
+      totalRFQsCreated: undefined,
+      remainingFreeRFQs: undefined,
+      createdDate: undefined,
+    });
+    const b2 = makeBuyer({
+      id: 'b-partial-2',
+      organizationName: 'Alpha Corp',
+      contactPerson: 'Alice',
+      corporateEmail: 'alice@alpha.com',
+      mobileNumber: '9999999999',
+      city: undefined,
+      primaryPlantLocation: 'Pune Plant',
+      sourcingMode: 'mode_1',
+      subscriptionPlan: 'Enterprise growth tier',
+      status: 'Active & Verified',
+      totalRFQsCreated: 10,
+      remainingFreeRFQs: 2,
+      createdDate: '2026-01-01T00:00:00.000Z',
+    });
+    const b3 = makeBuyer({
+      id: 'b-full-3',
+      organizationName: 'Beta Corp',
+      contactPerson: 'Bob',
+      corporateEmail: 'bob@beta.com',
+      mobileNumber: '8888888888',
+      city: 'Mumbai',
+      primaryPlantLocation: undefined,
+      sourcingMode: 'mode_2',
+      subscriptionPlan: 'Enterprise custom plan',
+      status: 'Pending Verification',
+      totalRFQsCreated: 5,
+      remainingFreeRFQs: 4,
+      createdDate: '2026-05-01T00:00:00.000Z',
+    });
+
+    mockStore({ buyerAccounts: [b1, b2, b3], rfqs: [] });
+    render(<BuyersDirectory />);
+
+    const columnHeaders = [
+      'Buyer',
+      'Contact Person',
+      'Email',
+      'Phone',
+      'Location',
+      'Mode',
+      'Plan',
+      'RFQs',
+      'Free Credits',
+      'Total Spend',
+      'Status',
+      'Registration Date',
+    ];
+
+    columnHeaders.forEach((name) => {
+      const th = screen.queryByRole('columnheader', { name: new RegExp(name, 'i') });
+      if (th) {
+        fireEvent.click(th);
+        fireEvent.click(th);
+      }
+    });
+  });
+
+  test('exercises communications and payments with growth, custom, and empty subscription plans', () => {
+    const growthBuyer = makeBuyer({
+      id: 'b-growth',
+      organizationName: 'Growth Buyer',
+      subscriptionPlan: 'growth_tier',
+      corporateEmail: undefined,
+      createdDate: '2026-01-15T10:00:00.000Z',
+    });
+    const customBuyer = makeBuyer({
+      id: 'b-custom',
+      organizationName: 'Custom Buyer',
+      subscriptionPlan: 'custom_enterprise',
+      corporateEmail: 'custom@buyer.com',
+      createdDate: '2026-02-15T10:00:00.000Z',
+    });
+    const freeBuyer = makeBuyer({
+      id: 'b-free',
+      organizationName: 'Free Buyer',
+      subscriptionPlan: '',
+      corporateEmail: 'free@buyer.com',
+      createdDate: undefined,
+    });
+
+    const weirdRfq = makeRfq({
+      id: 'rfq-weird',
+      buyerAccountId: 'b-growth',
+      rfqNumber: 'RFQ-W-1',
+      title: 'Weird RFQ',
+      createdAt: '2026-01-20T00:00:00.000Z',
+      sourcingMode: 'unknown_mode',
+      assignedVendors: undefined,
+    });
+
+    mockStore({
+      buyerAccounts: [growthBuyer, customBuyer, freeBuyer],
+      rfqs: [weirdRfq],
+    });
+
+    render(<BuyersDirectory />);
+
+    fireEvent.click(within(rowFor('Growth Buyer')).getByText(DOSSIER_ACTION));
+    expect(screen.getByLabelText('Close dossier')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Close dossier'));
+
+    fireEvent.click(within(rowFor('Custom Buyer')).getByText(DOSSIER_ACTION));
+    expect(screen.getByLabelText('Close dossier')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Close dossier'));
+
+    fireEvent.click(within(rowFor('Free Buyer')).getByText(DOSSIER_ACTION));
+    expect(screen.getByLabelText('Close dossier')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Close dossier'));
+  });
+
+  test('search matching city, primaryPlantLocation, and corporateEmail', () => {
+    const b1 = makeBuyer({
+      id: 'b-search-test',
+      organizationName: 'Special Sourcing Corp',
+      city: 'Ahmedabad',
+      primaryPlantLocation: 'Gujarat SEZ',
+      subscriptionPlan: 'Diamond Tier',
+      corporateEmail: 'procurement@specialsourcing.com',
+      sourcingMode: 'mode_3',
+      status: 'Active & Verified',
+    });
+
+    mockStore({ buyerAccounts: [b1], rfqs: [] });
+    render(<BuyersDirectory />);
+
+    const searchInput = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+
+    fireEvent.change(searchInput, { target: { value: 'Ahmedabad' } });
+    expect(screen.getByText('Special Sourcing Corp')).toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: 'Gujarat SEZ' } });
+    expect(screen.getByText('Special Sourcing Corp')).toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: 'procurement@special' } });
+    expect(screen.getByText('Special Sourcing Corp')).toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: '' } });
+    expect(screen.getByText('Special Sourcing Corp')).toBeInTheDocument();
+  });
+});

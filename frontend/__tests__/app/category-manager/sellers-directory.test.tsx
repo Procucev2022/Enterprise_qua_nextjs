@@ -449,7 +449,7 @@ describe('SellersDirectory Component Suite', () => {
       'Location',
     ];
     optionalLabels.forEach((label) => {
-      const checkbox = screen.queryByLabelText(new RegExp(label, 'i'));
+      const checkbox = screen.queryByLabelText(new RegExp('^' + label, 'i'));
       if (checkbox) {
         fireEvent.click(checkbox);
       }
@@ -572,7 +572,7 @@ describe('SellersDirectory Component Suite', () => {
     ];
 
     columnHeaders.forEach((name) => {
-      const th = screen.queryByRole('columnheader', { name: new RegExp(name, 'i') });
+      const th = screen.queryByRole('columnheader', { name: new RegExp('^' + name + '\$', 'i') });
       if (th) {
         fireEvent.click(th); // asc
         fireEvent.click(th); // desc

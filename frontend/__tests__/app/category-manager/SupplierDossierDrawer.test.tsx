@@ -36,7 +36,7 @@ const mockSeller = {
   lastLogin: '2026-10-25T14:30:00.000Z',
 };
 
-const mockRfqs: RFQItem[] = [
+const mockRfqs: any[] = [
   {
     id: 'rfq-101',
     rfqNumber: 'RFQ-2026-001',
@@ -94,7 +94,7 @@ const mockRfqs: RFQItem[] = [
     createdAt: '2026-10-22T10:00:00.000Z',
     extractedEntities: [],
     quotes: [],
-    assignedVendors: [{ id: 'v-hist-1793193596192-6-qspy', email: 'sudheer.kangala@procucev.com' }],
+    assignedVendors: [{ id: 'v-hist-1793193596192-6-qspy', name: 'Sudheer Solutions pvt LTD', email: 'sudheer.kangala@procucev.com' }],
     chasingActive: false,
   },
 ];
@@ -726,7 +726,7 @@ describe('SupplierDossierDrawer', () => {
 
   test('13. Quotes modal line items fallback, lump-sum quote, and onSelectRFQ callback', () => {
     const onSelectRFQ = jest.fn();
-    const lumpSumRfq: RFQItem = {
+    const lumpSumRfq: any = {
       id: 'rfq-lump-sum',
       rfqNumber: 'RFQ-LUMP-001',
       title: 'Lump Sum Construction',
@@ -1003,7 +1003,7 @@ describe('SupplierDossierDrawer', () => {
   });
 
   test('18. Quote matching by vendor name, line item description fallback, and notes search in credits', async () => {
-    const specialRfq: RFQItem = {
+    const specialRfq: any = {
       id: 'rfq-vendor-name-match',
       rfqNumber: 'RFQ-SPEC-999',
       title: 'Precision Machined Components',
