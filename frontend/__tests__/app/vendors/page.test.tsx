@@ -750,6 +750,48 @@ describe('Public Vendor Directory (/vendors)', () => {
     expect(fetchPublicVendors).not.toHaveBeenCalled();
   });
 
+
+  test('handles sessionExpired from fetchPublicVendors by returning to login gate with sessionExpired flag', async () => {
+    (fetchPublicVendors as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      sessionExpired: true,
+      data: [],
+      pagination: { page: 1, pageSize: 24, total: 0, totalPages: 1 },
+      error: 'Vendor directory session has expired or is closed. Please log in again.',
+    });
+
+    render(<PublicVendorDirectoryPage />);
+
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('vendor-directory-login-gate')).toBeInTheDocument();
+      expect(screen.getByTestId('gate-error-banner')).toHaveTextContent(UI_STRINGS.vendorDirectoryLogin.sessionExpiredNotice);
+    });
+  });
+
+  test('handles sessionExpired from fetchPublicVendorFilters by returning to login gate with sessionExpired flag', async () => {
+    (fetchPublicVendorFilters as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      sessionExpired: true,
+      categories: [],
+      states: [],
+    });
+
+    render(<PublicVendorDirectoryPage />);
+
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('vendor-directory-login-gate')).toBeInTheDocument();
+      expect(screen.getByTestId('gate-error-banner')).toHaveTextContent(UI_STRINGS.vendorDirectoryLogin.sessionExpiredNotice);
+    });
+  });
+
   test('unlocks directory when user logs in through the gate and locks when clicking exit directory', async () => {
     window.sessionStorage.clear();
     (fetchPublicVendors as jest.Mock).mockResolvedValue(MOCK_PAGE_RESULT);

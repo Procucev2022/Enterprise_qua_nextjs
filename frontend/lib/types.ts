@@ -2262,6 +2262,7 @@ export interface PublicVendorPageResult {
     totalPages: number;
   };
   error?: string;
+  sessionExpired?: boolean;
 }
 
 /** Search & filter state for the Public Vendor Directory page */
