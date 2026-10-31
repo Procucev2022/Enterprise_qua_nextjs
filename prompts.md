@@ -2372,3 +2372,49 @@ continue
 ```text
 once you solve copilot comments then you are able to merge pr .
 ```
+
+
+---
+
+### 2026-10-31T12:47:49+05:30
+
+```text
+### Payment Dues – Toolbar & Summary Cards UI Fix
+
+Update the existing Payment Dues page based on the attached Seller Directory screenshot.
+
+**1. Toolbar Layout**
+- Follow the Seller Directory toolbar design.
+- Arrange Search, Account Type (All Types), Credit Filter (All Low Credits ≤ 2), Acknowledgement Status, Refresh, Export CSV, and Gear icon in one horizontal row.
+- Give Search maximum available width.
+- Keep all dropdowns and action buttons compact.
+- Keep Refresh, Export CSV, and Gear as separate buttons aligned at the right.
+- Prevent toolbar movement, horizontal scrolling, overflow, or controls crossing the parent container.
+- Keep the toolbar and table aligned to the same content width.
+
+**2. Rename Summary Cards**
+
+Remove the word "Total" from the first three card headings:
+
+- Total Low-Credit Accounts → **Low-Credit Accounts**
+- Total Buyers → **Buyers**
+- Total Sellers → **Sellers**
+
+Keep the remaining cards unchanged:
+- 0 Credits (Critical)
+- 1–2 Credits (Attention)
+- Acknowledgement Pending
+
+**3. Reduce Summary Card Sizes**
+- Reduce card height, padding, and unnecessary gaps.
+- Use smaller, compact cards similar to the Seller Directory summary cards.
+- Maintain equal card heights and proper horizontal alignment.
+- Keep numbers clearly visible but avoid oversized cards.
+
+**4. Database and Functionality**
+- Preserve all existing database queries, credit calculations, filters, export functionality, and column settings.
+- Do not change existing business logic.
+- Make only targeted UI/CSS changes.
+
+**Acceptance Criteria:** Payment Dues should follow the same compact layout and toolbar alignment as Seller Directory, with a wider Search field, smaller individual filters, properly aligned action buttons, and compact summary cards. Nothing should overflow or shift at the current screen resolution.
+```
