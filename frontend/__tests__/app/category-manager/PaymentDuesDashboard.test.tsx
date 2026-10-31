@@ -193,7 +193,7 @@ describe('PaymentDuesDashboard', () => {
     });
 
     // Check KPI counts
-    expect(screen.getByText('Total Low-Credit Accounts')).toBeInTheDocument();
+    expect(screen.getByText('Low-Credit Accounts')).toBeInTheDocument();
     expect(screen.getAllByText('0 Credits · Critical')[0]).toBeInTheDocument();
     expect(screen.getAllByText('1 Credit · Attention')[0]).toBeInTheDocument();
     expect(screen.getAllByText('2 Credits · Low')[0]).toBeInTheDocument();
@@ -291,7 +291,7 @@ describe('PaymentDuesDashboard', () => {
     });
 
     // Click Total Buyers card
-    const buyersCard = screen.getByText('Total Buyers').closest('div');
+    const buyersCard = screen.getAllByText('Buyers')[0].closest('div');
     if (buyersCard) fireEvent.click(buyersCard);
 
     await waitFor(() => {
@@ -649,11 +649,11 @@ describe('PaymentDuesDashboard', () => {
     });
 
     // Total Low-Credit Accounts
-    const totalCard = screen.getByText('Total Low-Credit Accounts').closest('div');
+    const totalCard = screen.getByText('Low-Credit Accounts').closest('div');
     if (totalCard) fireEvent.click(totalCard);
 
     // Total Sellers
-    const sellersCard = screen.getByText('Total Sellers').closest('div');
+    const sellersCard = screen.getAllByText('Sellers')[0].closest('div');
     if (sellersCard) fireEvent.click(sellersCard);
 
     // 1-2 Credits
