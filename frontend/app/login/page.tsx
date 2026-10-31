@@ -630,6 +630,15 @@ function LoginPageContent() {
         html, body, .login-root, .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
         html::-webkit-scrollbar, body::-webkit-scrollbar,
         .login-root::-webkit-scrollbar, .no-scrollbar::-webkit-scrollbar { display: none; width: 0; height: 0; }
+        .register-form-scroll { scrollbar-width: thin !important; scrollbar-color: #94a3b8 #f1f5f9 !important; }
+        .dark .register-form-scroll { scrollbar-color: #64748b #1e293b !important; }
+        .register-form-scroll::-webkit-scrollbar { display: block !important; width: 6px !important; }
+        .register-form-scroll::-webkit-scrollbar-track { background: #f1f5f9 !important; border-radius: 9999px; }
+        .dark .register-form-scroll::-webkit-scrollbar-track { background: #1e293b !important; }
+        .register-form-scroll::-webkit-scrollbar-thumb { background: #94a3b8 !important; border-radius: 9999px; }
+        .register-form-scroll::-webkit-scrollbar-thumb:hover { background: #64748b !important; }
+        .dark .register-form-scroll::-webkit-scrollbar-thumb { background: #64748b !important; }
+        .dark .register-form-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8 !important; }
       `}</style>
 
       {/* ── Main Hero Section: takes the free space, content vertically centred, modest padding ── */}
@@ -718,7 +727,7 @@ function LoginPageContent() {
           </div>
 
           {/* ── Right Column: Auth Card (first on phones/tablets, right on desktop) ── */}
-          <div className="order-1 lg:order-2 w-full max-w-[460px] mx-auto lg:mx-0 lg:w-[360px] xl:w-[400px] lg:shrink-0 lg:self-stretch bg-white dark:bg-slate-900 rounded-[22px] shadow-[0_20px_45px_-15px_rgba(30,64,175,0.18)] dark:shadow-none border border-slate-200/80 dark:border-slate-800 px-5 pt-3 pb-6 sm:px-7 sm:pt-3 sm:pb-7 flex flex-col">
+          <div className={`order-1 lg:order-2 w-full max-w-[460px] mx-auto lg:mx-0 lg:w-[360px] xl:w-[400px] lg:shrink-0 lg:self-stretch bg-white dark:bg-slate-900 rounded-[22px] shadow-[0_20px_45px_-15px_rgba(30,64,175,0.18)] dark:shadow-none border border-slate-200/80 dark:border-slate-800 px-5 pt-3 pb-6 sm:px-7 sm:pt-3 sm:pb-7 flex flex-col ${authTab === 'register' ? 'max-h-[min(90vh,620px)]' : ''}`}>
             <div className="flex-1 min-h-0 flex flex-col">
               {/* Tabs */}
               <div className="flex items-center gap-6 border-b border-slate-200 dark:border-gray-800">
@@ -814,7 +823,7 @@ function LoginPageContent() {
                           inputClassName={`${inputBase} pl-3.5 pr-10 py-[clamp(6px,1.2dvh,10px)]`}
                         />
 
-                        <div className="pt-1">
+                        <div className="pt-1 pb-2">
                           <button type="submit" disabled={submitting} className={primaryBtn}>
                             {submitting ? 'Verifying...' : 'Sign In'} <ArrowRight size={14} />
                           </button>
@@ -856,7 +865,7 @@ function LoginPageContent() {
                           </span>
                         </div>
 
-                        <div className="pt-1">
+                        <div className="pt-1 pb-2">
                           <button type="submit" disabled={submitting} className={primaryBtn}>
                             {submitting ? 'Sending...' : 'Request Login OTP'} <ArrowRight size={14} />
                           </button>
@@ -964,7 +973,7 @@ function LoginPageContent() {
                     {regStep === 'form' ? (
                       <form
                         onSubmit={handleInitiateRegister}
-                        className="fluid-stack-sm flex-1 min-h-0 overflow-y-auto no-scrollbar pr-1"
+                        className="fluid-stack-sm flex-1 min-h-0 max-h-[clamp(280px,44dvh,400px)] overflow-y-auto register-form-scroll pr-2 overscroll-contain"
                       >
                         <div>
                           <label htmlFor="reg-name" className={fieldLabel}>
@@ -976,7 +985,7 @@ function LoginPageContent() {
                               id="reg-name"
                               type="text"
                               autoComplete="name"
-                              placeholder={selectedRegRole === 'buyer' ? 'e.g. Navin Chaudhary' : 'e.g. Rajesh Kumar'}
+                              placeholder={selectedRegRole === 'buyer' ? 'e.g. John Doe' : 'e.g. Jane Smith'}
                               value={regName}
                               onChange={(e) => setRegName(e.target.value)}
                               className={iconFieldInput}
@@ -998,8 +1007,8 @@ function LoginPageContent() {
                               autoComplete="organization"
                               placeholder={
                                 selectedRegRole === 'buyer'
-                                  ? 'e.g. Larsen & Toubro Procurement'
-                                  : 'e.g. Precision Engineering Works Pvt Ltd'
+                                  ? 'e.g. Acme Enterprises'
+                                  : 'e.g. Apex Industrial Solutions Pvt Ltd'
                               }
                               value={regOrgName}
                               onChange={(e) => setRegOrgName(e.target.value)}
@@ -1153,7 +1162,7 @@ function LoginPageContent() {
                           required
                         />
 
-                        <div className="pt-1">
+                        <div className="pt-1 pb-2">
                           <button type="submit" disabled={submitting} className={primaryBtn} aria-label="Create Account">
                             <span>Create Account</span> <ArrowRight size={14} />
                           </button>
@@ -1161,7 +1170,7 @@ function LoginPageContent() {
                       </form>
                     ) : (
                       /* ── Dual Email & Mobile OTP Verification Step ── */
-                      <form onSubmit={handleVerifyAndCompleteRegistration} className="fluid-stack animate-fade-in">
+                      <form onSubmit={handleVerifyAndCompleteRegistration} className="fluid-stack animate-fade-in flex-1 min-h-0 max-h-[clamp(280px,44dvh,400px)] overflow-y-auto register-form-scroll pr-2 pb-2 overscroll-contain">
                         <div className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/60 dark:border-indigo-800/60 space-y-1">
                           <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300">
                             <ShieldCheck size={14} />
