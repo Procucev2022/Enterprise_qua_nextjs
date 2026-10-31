@@ -2418,3 +2418,40 @@ Keep the remaining cards unchanged:
 
 **Acceptance Criteria:** Payment Dues should follow the same compact layout and toolbar alignment as Seller Directory, with a wider Search field, smaller individual filters, properly aligned action buttons, and compact summary cards. Nothing should overflow or shift at the current screen resolution.
 ```
+
+
+### User Prompt - 2026-10-31T14:46:23+05:30
+
+```text
+### Payment Dues – UI Fixes
+
+Please fix the following issues in the Payment Dues section based on the attached screenshots:
+
+1. **Column Settings (Gear Icon)**
+   - Currently, the Column Settings panel opens below the toolbar and gets clipped, making its contents invisible.
+   - Change it to a properly visible, centered popup/modal.
+   - Display all column names, checkboxes, drag-and-drop handles, and action buttons clearly.
+   - Add a background overlay and ensure the popup has a higher z-index than the toolbar and table.
+   - Support closing through the close icon, outside click, and Escape key.
+   - Ensure the popup is responsive and does not get cut off by parent containers or screen boundaries.
+
+2. **Payment Dues Notification Count**
+   - Remove the hardcoded static `99+` badge.
+   - Display the actual dynamic count from the database/API.
+   - Update the count whenever the underlying Payment Dues records change.
+   - If the count is zero, display `0` or hide the badge.
+
+3. **Remove Excessive Left and Right Spacing**
+   - The Payment Dues content currently has too much empty space on both sides.
+   - Reduce unnecessary left and right margins and padding.
+   - Use the available viewport width effectively.
+   - Align the summary cards, toolbar, and table consistently.
+   - Ensure the table uses the available width without unnecessary blank areas or horizontal layout shifting.
+
+4. **Preserve Existing Functionality**
+   - Do not modify existing database logic, APIs, filters, sorting, CSV export, or column preferences.
+   - Reuse existing components and methods wherever possible.
+   - Ensure the changes do not affect Buyer Directory, Seller Directory, or other Action Center modules.
+
+**Expected Result:** Column Settings should open as a fully visible centered popup, the Payment Dues badge should show a real dynamic count, and the entire page should use available screen space without excessive side gaps.
+```
