@@ -121,6 +121,19 @@ export default function InternalTasksDashboard() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    const handlePaymentDuesUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<PaymentDuesSummary>;
+      if (customEvent.detail) {
+        setPaymentDuesSummary(customEvent.detail);
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('qua_payment_dues_updated', handlePaymentDuesUpdate);
+      return () => window.removeEventListener('qua_payment_dues_updated', handlePaymentDuesUpdate);
+    }
+  }, []);
+
   const handleSelectTab = useCallback((tab: ActionCenterTabKey) => {
     setActiveTab(tab);
     if (typeof window !== 'undefined') {
@@ -387,7 +400,9 @@ export default function InternalTasksDashboard() {
   }, [searchQuery, activeFilters]);
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-4 md:p-6 space-y-6">
+    <div className={`min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 ${
+        activeTab === 'payment_dues' ? 'p-2 sm:p-3 md:p-4 space-y-4' : 'p-4 md:p-6 space-y-6'
+      }`}>
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-5 right-5 z-50 bg-slate-900 dark:bg-white text-white dark:text-slate-900 px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 border border-slate-700 animate-in fade-in slide-in-from-top-2">
@@ -411,7 +426,7 @@ export default function InternalTasksDashboard() {
       {activeTab === 'scorecard' && <ScorecardDashboard />}
       {activeTab === 'buyers' && <BuyersDirectory />}
       {activeTab === 'sellers' && <SellersDirectory />}
-      {activeTab === 'payment_dues' && <PaymentDuesDashboard />}
+      {activeTab === 'payment_dues' && <PaymentDuesDashboard onSummaryChange={setPaymentDuesSummary} />}
       {activeTab !== 'tasks' &&
         activeTab !== 'tickets' &&
         activeTab !== 'approvals' &&
