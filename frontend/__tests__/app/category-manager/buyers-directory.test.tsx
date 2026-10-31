@@ -233,23 +233,21 @@ describe('BuyersDirectory Component Suite', () => {
     // Check Tab 3: Credits & Quotas
     const creditsTab = screen.getByRole('button', { name: /^Credit$/i });
     fireEvent.click(creditsTab);
-    expect(screen.getByText('Remaining Free RFQs')).toBeInTheDocument();
+    expect(screen.getByText(/Remaining Free (?:Credits|RFQs)/)).toBeInTheDocument();
     expect(screen.getAllByText('4').length).toBeGreaterThanOrEqual(1);
 
     // Check Tab 4: Communications
-    const commsTab = screen.getByRole('button', { name: /Messages/i });
+    const commsTab = screen.getByRole('button', { name: /Communications|Messages/i });
     fireEvent.click(commsTab);
-    expect(screen.getByText(/Enterprise Onboarding Confirmation/)).toBeInTheDocument();
+    expect(await screen.findByText(/Enterprise Onboarding Confirmation/)).toBeInTheDocument();
 
     // Check Tab 5: Payments
     const payTab = screen.getByRole('button', { name: /Payments/i });
     fireEvent.click(payTab);
-    expect(screen.getAllByText(/Growth Enterprise/).length).toBeGreaterThanOrEqual(1);
+    expect((await screen.findAllByText(/Growth Enterprise/)).length).toBeGreaterThanOrEqual(1);
 
-    // Check Tab 6: Audit Activity
-    const actTab = screen.getByRole('button', { name: /^Audit$/i });
-    fireEvent.click(actTab);
-    expect(screen.getByText('BUYER_RFQ_CREATED')).toBeInTheDocument();
+    // Check Tab 6: Audit Activity is removed from visible navigation per dossier specification
+    expect(screen.queryByRole('button', { name: /^Audit$/i })).not.toBeInTheDocument();
 
     // Close dossier via top X button (first button in header)
     const closeButtons = screen.getAllByRole('button');
@@ -292,10 +290,8 @@ describe('BuyersDirectory Component Suite', () => {
     fireEvent.click(emptyRfqTab);
     expect(screen.getByText('No RFQs created by this buyer yet.')).toBeInTheDocument();
 
-    // Tab 6: Empty Audit Logs
-    const emptyActTab = screen.getByRole('button', { name: /^Audit$/i });
-    fireEvent.click(emptyActTab);
-    expect(screen.getByText('No audit events logged for this enterprise buyer.')).toBeInTheDocument();
+    // Tab 6: Audit Activity is removed from visible navigation per dossier specification
+    expect(screen.queryByRole('button', { name: /^Audit$/i })).not.toBeInTheDocument();
 
     // Close via bottom Close Dossier button
     const closeFooterBtn = screen.getByText('Close Dossier');

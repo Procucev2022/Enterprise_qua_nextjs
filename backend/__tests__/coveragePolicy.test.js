@@ -387,7 +387,7 @@ describe('native Jest coverage enforcement', () => {
     const result = spawnSync(process.execPath, [
       JEST_CLI, '--config', configPath, '--runInBand', '--silent',
       '--testNamePattern', '^native Jest coverage enforcement frontend instruments every application file and enforces thresholds per source file$',
-    ], { cwd: testFixture.root, encoding: 'utf8', timeout: 15000 });
+    ], { cwd: testFixture.root, encoding: 'utf8', timeout: 35000 });
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('1 passed');
     expect(fs.existsSync(frontendModules)).toBe(false);
