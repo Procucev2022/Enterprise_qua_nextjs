@@ -1889,15 +1889,18 @@ const RFQ_NOT_CREATED_NOTIFICATION = {
   },
 };
 
-/** Default free RFQ quotation credits granted to each vendor */
-const VENDOR_FREE_CREDITS_LIMIT = 5;
+/**
+ * Default free RFQ quotation credits granted to each vendor. Vendors receive
+ * none: quoting needs a subscription, a buyer mapping or unlimited access.
+ */
+const VENDOR_FREE_CREDITS_LIMIT = 0;
 
 /** Notification email content for vendor credit exhaustion */
 const VENDOR_CREDITS_EXHAUSTED_NOTIFICATION = {
-  SUBJECT: 'Action Required – 5 Free Quotation Credits Exhausted for RFQ #{rfqNumber}',
+  SUBJECT: 'Action Required – Subscription Required to Quote on RFQ #{rfqNumber}',
   HEADLINE: 'PROCUCEV ENTERPRISE',
   SUBLINE: 'Free Quotation Credits Exhausted',
-  EXHAUSTION_MESSAGE: 'Your 5 free RFQ quotation credits have been fully utilized.',
+  EXHAUSTION_MESSAGE: 'You have no free RFQ quotation credits available.',
   UPGRADE_BUTTON_LABEL: 'Click Here to Go to Portal and Upgrade Plan',
   REASSURANCE: 'Your quotation has not been submitted yet. To continue submitting quotations and have your bids evaluated by buyers, please upgrade your subscription plan on the vendor portal.',
 };

@@ -1593,7 +1593,7 @@ class StoreService {
       });
       return {
         success: false,
-        error: 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.',
+        error: 'You have no free RFQ download credits available. Please upgrade your subscription to download this RFQ.',
         creditsExhausted: true,
         freeCreditsRemaining: 0,
       };

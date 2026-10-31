@@ -470,7 +470,7 @@ describe('SellersDirectory coverage companion', () => {
       expect(row.getByText('Industrial Supplies')).toBeInTheDocument();
       expect(row.getByText('Never')).toBeInTheDocument();
       expect(row.getByText('4.5')).toBeInTheDocument();
-      expect(row.getByText('15 Credits')).toBeInTheDocument();
+      expect(row.getByText('0 Credits')).toBeInTheDocument();
       expect(row.getByText('ACTIVE')).toBeInTheDocument();
       expect(within(cardOf('Network Suppliers')).getByText('1')).toBeInTheDocument();
 
@@ -902,7 +902,7 @@ describe('SellersDirectory coverage companion', () => {
           MajorCategory: 'Industrial Supplies',
           AIScore: 88,
           StarRating: 4.5,
-          FreeQuotationCredits: 15,
+          FreeQuotationCredits: 0,
           RFQDownloadsUsed: 4,
           Status: 'ACTIVE',
         },

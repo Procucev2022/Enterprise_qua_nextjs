@@ -642,8 +642,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const res = await fetchVendorRfqCredits();
       if (res.success && res.data) {
         const isUnlimited = hasUnlimitedAccess(currentUserSession) || res.data.subscriptionPlan === 'unlimited';
-        setVendorFreeCreditsRemaining(isUnlimited ? 999999 : (res.data.freeCreditsRemaining ?? 5));
-        setVendorFreeCreditsAllocated(isUnlimited ? 999999 : (res.data.freeCreditsAllocated ?? 5));
+        setVendorFreeCreditsRemaining(isUnlimited ? 999999 : (res.data.freeCreditsRemaining ?? 0));
+        setVendorFreeCreditsAllocated(isUnlimited ? 999999 : (res.data.freeCreditsAllocated ?? 0));
         setVendorFreeCreditsUsed(res.data.freeCreditsUsed ?? 0);
         setVendorUnlockedRfqIds(res.data.unlockedRfqIds || []);
       }
