@@ -1758,9 +1758,9 @@ describe('rfqController Comprehensive Branch Coverage', () => {
 
       // downloadRFQ vendor profile not found -> 400
       jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue(existing);
-      jest.spyOn(storeService, 'getVendorById')
-        .mockReturnValueOnce({ id: 'v-temp', email: 'missing@v.com', unlimitedRfqDownloads: true })
-        .mockReturnValueOnce(null);
+      jest.spyOn(storeService, 'ensureVendorProfileForUser')
+        .mockResolvedValueOnce({ id: 'v-temp', email: 'missing@v.com', unlimitedRfqDownloads: true })
+        .mockResolvedValueOnce(null);
       const resNoVend = mockRes();
       await rfqController.downloadRFQ(
         { params: { id: 'rfq-del-1' }, user: { role: 'vendor', email: 'missing@v.com', unlimitedRfqDownloads: true } },
@@ -1789,7 +1789,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       storeService.getRFQById.mockRestore();
       storeService.deleteRFQ.mockRestore();
       storeService.getRFQByIdAsync.mockRestore();
-      storeService.getVendorById.mockRestore();
+      storeService.ensureVendorProfileForUser.mockRestore();
       storeService.triggerBatchChaser.mockRestore();
       storeService.approvePurchaseOrder.mockRestore();
     });

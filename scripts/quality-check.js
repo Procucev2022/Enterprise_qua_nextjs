@@ -40,14 +40,21 @@ console.log('\n🚀 Starting Procucev Enterprise Workspace Quality Check Pipelin
 // 1. Build Verification
 // Built into a dedicated directory so the gate never contends with a running
 // `next dev` server over `.next` (concurrent access causes EPERM on Windows).
+// NODE_ENV is pinned: a shell left on NODE_ENV=development makes `next build`
+// mix dev and prod React runtimes, failing every prerender with
+// "Cannot read properties of null (reading 'useContext')".
 runStep('Step 1: Production Build Verification', 'npm run build --prefix frontend', rootDir, {
   NEXT_DIST_DIR: '.next-qc',
+  NODE_ENV: 'production',
 });
 
 // 2. Unit Test & Per-File Coverage (Backend + Frontend)
-runStep('Step 2A: Backend Test Suite & 90% Per-File Coverage Enforcement', 'npm run test:coverage --prefix backend');
-runStep('Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement', 'npm run test:coverage --prefix frontend');
-runStep('Step 2C: Master Workspace Coverage Verification Gate', 'npm run check:coverage');
+// Pinned for the same reason as Step 1: Jest only defaults NODE_ENV to 'test'
+// when it is unset, and under 'development' real mail/ports get used.
+const TEST_ENV = { NODE_ENV: 'test' };
+runStep('Step 2A: Backend Test Suite & 90% Per-File Coverage Enforcement', 'npm run test:coverage --prefix backend', rootDir, TEST_ENV);
+runStep('Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement', 'npm run test:coverage --prefix frontend', rootDir, TEST_ENV);
+runStep('Step 2C: Master Workspace Coverage Verification Gate', 'npm run check:coverage', rootDir, TEST_ENV);
 
 // 3. TypeScript Typecheck
 runStep('Step 3: TypeScript Static Typecheck Verification', 'npm run typecheck --prefix frontend');
