@@ -838,6 +838,24 @@ CREATE TABLE IF NOT EXISTS vendor_credit_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_vendor_credit_transactions_vendor ON vendor_credit_transactions (vendor_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS buyer_credit_transactions (
+  id VARCHAR(64) PRIMARY KEY,
+  buyer_id VARCHAR(64) NOT NULL,
+  rfq_id VARCHAR(64),
+  transaction_type VARCHAR(64) NOT NULL,
+  credit_source VARCHAR(100),
+  credits_added INTEGER NOT NULL DEFAULT 0,
+  credits_consumed INTEGER NOT NULL DEFAULT 0,
+  previous_balance INTEGER NOT NULL DEFAULT 0,
+  updated_balance INTEGER NOT NULL DEFAULT 0,
+  payment_reference VARCHAR(128),
+  status VARCHAR(40) NOT NULL DEFAULT 'COMPLETED',
+  description TEXT,
+  idempotency_key VARCHAR(512) UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_buyer_credit_transactions_buyer ON buyer_credit_transactions (buyer_id, created_at DESC);
+
 -- ============================================================================
 -- VENDOR DIRECTORY SESSIONS (Dedicated Category Manager Access Audit & Inactivity)
 -- ============================================================================

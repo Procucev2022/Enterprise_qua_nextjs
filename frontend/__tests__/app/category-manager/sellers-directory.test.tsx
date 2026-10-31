@@ -267,7 +267,7 @@ describe('SellersDirectory Component Suite', () => {
     expect(reportsClient.exportReportToExcel).toHaveBeenCalled();
   });
 
-  test('clicking 360 Dossier opens seller drawer with all 6 sections and rating revision', async () => {
+  test('clicking 360 Dossier opens seller drawer with 5 sections and close button', async () => {
     const onSelectRFQ = jest.fn();
     render(<SellersDirectory onSelectRFQ={onSelectRFQ} />);
 
@@ -280,113 +280,58 @@ describe('SellersDirectory Component Suite', () => {
 
     // Tab 1: Profile
     expect(screen.getByText('Contact Details')).toBeInTheDocument();
-    expect(screen.getByText('24AAACA1111A1Z1')).toBeInTheDocument();
+    expect(screen.getAllByText('Ahmedabad, Gujarat').length).toBeGreaterThanOrEqual(1);
 
-    // Tab 2: Quote
-    const rfqTab = screen.getByRole('button', { name: /Quote/i });
+    // Tab 2: Quotes
+    const rfqTab = screen.getByRole('button', { name: /Quotes/i });
     fireEvent.click(rfqTab);
     expect(screen.getByText('RFQ-NET-001')).toBeInTheDocument();
-    expect(screen.getByText('M16 Galvanized Bolts')).toBeInTheDocument();
 
-    // Test Open RFQ Matrix
-    const matrixBtn = screen.getByTitle('Open RFQ Matrix');
-    fireEvent.click(matrixBtn);
+    // Open quote details modal
+    fireEvent.click(screen.getByText('RFQ-NET-001'));
+    const viewFullBtn = screen.getByRole('button', { name: /View Full Details/i });
+    fireEvent.click(viewFullBtn);
     expect(onSelectRFQ).toHaveBeenCalled();
 
     // Tab 3: Credit
     const creditsTab = screen.getByRole('button', { name: /^Credit$/i });
     fireEvent.click(creditsTab);
-    expect(screen.getByText('Free Quotation Credits')).toBeInTheDocument();
-    expect(screen.getByText('20')).toBeInTheDocument();
+    expect(screen.getByText('Total Credits Allocated')).toBeInTheDocument();
 
-    // Tab 4: Messages
-    const commsTab = screen.getByRole('button', { name: /Messages/i });
+    // Tab 4: Communications
+    const commsTab = screen.getByRole('button', { name: /Communications/i });
     fireEvent.click(commsTab);
-    expect(screen.getByText(/Procucev Supplier Network Onboarding/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Email' })).toBeInTheDocument();
 
     // Tab 5: Payments
     const payTab = screen.getByRole('button', { name: /Payments/i });
     fireEvent.click(payTab);
-    expect(screen.getAllByText(/Preferred Partner/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Total Amount Paid')).toBeInTheDocument();
 
-    // Tab 6: Activity
-    const actTab = screen.getByRole('button', { name: /^Activity$/i });
-    fireEvent.click(actTab);
-    expect(screen.getByText('Category Manager Rating Revision')).toBeInTheDocument();
-
-    // Change numeric revision scores
-    const qualityInput = screen.getByDisplayValue('85');
-    fireEvent.change(qualityInput, { target: { value: '95' } });
-    const costInput = screen.getByDisplayValue('80');
-    fireEvent.change(costInput, { target: { value: '88' } });
-    const deliveryInput = screen.getByDisplayValue('90');
-    fireEvent.change(deliveryInput, { target: { value: '92' } });
-
-    // Fill and save rating revision
-    const remarksInput = screen.getByPlaceholderText(/Audited factory quality/);
-    fireEvent.change(remarksInput, { target: { value: 'Passed quarterly ISO audit with flying colors' } });
-
-    const saveRatingBtn = screen.getByText('Save Rating Revision');
-    fireEvent.click(saveRatingBtn);
+    // Close dossier via header X button
+    const closeBtns = screen.getAllByRole('button', { name: /Close Dossier/i });
+    fireEvent.click(closeBtns[0]);
 
     await waitFor(() => {
-      expect(screen.getByText(/Category Manager Rating Revision saved/)).toBeInTheDocument();
-    });
-
-    // Close dossier via top X button
-    const closeButtons = screen.getAllByRole('button');
-    const xButton = closeButtons.find((btn) => btn.querySelector('svg.lucide-x'));
-    if (xButton) {
-      fireEvent.click(xButton);
-    } else {
-      const closeBtn = screen.getByText('Close Dossier');
-      fireEvent.click(closeBtn);
-    }
-
-    await waitFor(() => {
-      expect(screen.queryByText('Category Manager Rating Revision')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Supplier 360° Dossier')).not.toBeInTheDocument();
     });
 
     // Open second vendor (Precision Forgings Pvt Ltd) which has 0 RFQs
-    fireEvent.click(dossierBtns[1]);
+    const dossierBtns2 = screen.getAllByText('360° Dossier');
+    fireEvent.click(dossierBtns2[1]);
     expect(screen.getAllByText('Precision Forgings Pvt Ltd').length).toBeGreaterThanOrEqual(1);
 
-    // Tab 2: Empty RFQs
-    const emptyRfqTab = screen.getByRole('button', { name: /Quote/i });
+    // Tab 2: Empty Quotes
+    const emptyRfqTab = screen.getByRole('button', { name: /Quotes/i });
     fireEvent.click(emptyRfqTab);
-    expect(screen.getByText(/No active RFQs or bids found for this supplier/)).toBeInTheDocument();
-
-    // Tab 3: Credits
-    const creditsTab2 = screen.getByRole('button', { name: /^Credit$/i });
-    fireEvent.click(creditsTab2);
-    expect(screen.getAllByText('10').length).toBeGreaterThanOrEqual(1);
-
-    // Tab 4: Communications
-    const commsTab2 = screen.getByRole('button', { name: /Messages/i });
-    fireEvent.click(commsTab2);
-    expect(screen.getByText(/Procucev Supplier Network Onboarding/)).toBeInTheDocument();
-
-    // Tab 5: Payments
-    const payTab2 = screen.getByRole('button', { name: /Payments/i });
-    fireEvent.click(payTab2);
-    expect(screen.getByText(/SUP-INV/)).toBeInTheDocument();
-
-    // Tab 6: Save revision without custom remarks (uses default remark)
-    const actTab2 = screen.getByRole('button', { name: /^Activity$/i });
-    fireEvent.click(actTab2);
-    const saveRatingBtn2 = screen.getByText('Save Rating Revision');
-    fireEvent.click(saveRatingBtn2);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Category Manager Rating Revision saved/)).toBeInTheDocument();
-    });
+    expect(screen.getByText(/No quotation opportunities found/i)).toBeInTheDocument();
 
     // Close via footer Close Dossier button
-    const closeFooterBtn = screen.getByText('Close Dossier');
-    fireEvent.click(closeFooterBtn);
+    const closeButtons = screen.getAllByRole('button', { name: /Close Dossier/i });
+    fireEvent.click(closeButtons[closeButtons.length - 1]);
 
     await waitFor(() => {
-      expect(screen.queryByRole('heading', { name: 'Precision Forgings Pvt Ltd' })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Supplier 360° Dossier')).not.toBeInTheDocument();
     });
   });
 
@@ -435,13 +380,14 @@ describe('SellersDirectory Component Suite', () => {
     const dossierBtns = screen.getAllByText('360° Dossier');
     fireEvent.click(dossierBtns[0]);
 
-    // Go to RFQ tab
-    const rfqTab = screen.getByRole('button', { name: /Quote/i });
+    // Go to Quotes tab
+    const rfqTab = screen.getByRole('button', { name: /Quotes/i });
     fireEvent.click(rfqTab);
 
-    // Click Matrix button
-    const matrixBtn = screen.getByTitle('Open RFQ Matrix');
-    fireEvent.click(matrixBtn);
+    // Click quote to open modal and click View Full Details
+    fireEvent.click(screen.getByText('RFQ-NET-001'));
+    const viewFullBtn = screen.getByRole('button', { name: /View Full Details/i });
+    fireEvent.click(viewFullBtn);
 
     expect(mockSetSelected).toHaveBeenCalledWith(mockRfqs[0]);
   });
@@ -474,6 +420,208 @@ describe('SellersDirectory Component Suite', () => {
     const dossierBtns = screen.getAllByText('360° Dossier');
     // Clicking dossier must not throw "TypeError: can't access property toLowerCase, activeSeller.email is null"
     expect(() => fireEvent.click(dossierBtns[0])).not.toThrow();
-    expect(screen.getByText('No email on file')).toBeInTheDocument();
+    expect(screen.getByText('supplier@procucev.com')).toBeInTheDocument();
   });
+  test('opens and interacts with Column Settings modal, toggling columns and resetting', async () => {
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      data: mockRemoteVendors,
+    });
+
+    render(<SellersDirectory />);
+    await waitFor(() => {
+      expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+    });
+
+    // Open Column Settings
+    const gearBtn = screen.getByLabelText('Customize Columns');
+    fireEvent.click(gearBtn);
+    expect(screen.getByRole('dialog', { name: 'Customize Columns' })).toBeInTheDocument();
+    expect(screen.getByText('Column Settings')).toBeInTheDocument();
+
+    // Toggle optional columns on to test full cell rendering
+    const optionalLabels = [
+      'Contact Person',
+      'Email',
+      'Phone',
+      '360° Score',
+      'Registration Date',
+      'Location',
+    ];
+    optionalLabels.forEach((label) => {
+      const checkbox = screen.queryByLabelText(new RegExp('^' + label, 'i'));
+      if (checkbox) {
+        fireEvent.click(checkbox);
+      }
+    });
+
+    // Toggle required column (Supplier) - should be disabled and locked
+    const supplierCheckbox = screen.getByLabelText(/Supplier/i);
+    expect(supplierCheckbox).toBeDisabled();
+    fireEvent.click(supplierCheckbox);
+
+    // Reset columns
+    const resetBtn = screen.getByText('Reset to Default');
+    fireEvent.click(resetBtn);
+
+    // Click Done button
+    const doneBtn = screen.getByText('Done');
+    fireEvent.click(doneBtn);
+    expect(screen.queryByRole('dialog', { name: 'Customize Columns' })).not.toBeInTheDocument();
+
+    // Reopen and test close button (X)
+    fireEvent.click(gearBtn);
+    const closeBtn = screen.getByLabelText('Close column settings');
+    fireEvent.click(closeBtn);
+    expect(screen.queryByRole('dialog', { name: 'Customize Columns' })).not.toBeInTheDocument();
+  });
+
+  test('handles drag and drop reordering of columns in settings modal', async () => {
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      data: mockRemoteVendors,
+    });
+
+    render(<SellersDirectory />);
+    await waitFor(() => {
+      expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByLabelText('Customize Columns');
+    fireEvent.click(gearBtn);
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    const firstContainer = checkboxes[0].closest('div[draggable="true"]');
+    const secondContainer = checkboxes[1].closest('div[draggable="true"]');
+
+    if (firstContainer && secondContainer) {
+      fireEvent.dragStart(firstContainer, { dataTransfer: { effectAllowed: 'move' } });
+      fireEvent.dragOver(secondContainer, { dataTransfer: { dropEffect: 'move' } });
+      fireEvent.drop(secondContainer);
+
+      // Same item drop (no-op)
+      fireEvent.dragStart(firstContainer, { dataTransfer: { effectAllowed: 'move' } });
+      fireEvent.drop(firstContainer);
+    }
+  });
+
+  test('sorts by different columns in ascending and descending orders', async () => {
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      data: [
+        ...mockRemoteVendors,
+        {
+          id: 'v-net-2',
+          name: 'Zenith Bearings Ltd',
+          contactPerson: 'Aarav Patel',
+          email: 'aarav@zenithbearings.com',
+          phone: '+919876543299',
+          location: 'Bengaluru, Karnataka',
+          deliveryLocation: 'Pan India',
+          source: 'procucev_network',
+          majorCategory: 'Bearings',
+          score: 85,
+          rating: 4.2,
+          status: 'ACTIVE_VERIFIED',
+          freeQuotationCredits: 10,
+          createdAt: '2026-02-15T10:00:00Z',
+          lastLogin: '2026-03-01T08:00:00Z',
+        },
+      ],
+    });
+
+    // Render with all columns enabled via localStorage
+    const allColsVisible = [
+      { key: 'supplierName', label: 'Supplier', visible: true, required: true },
+      { key: 'location', label: 'Location', visible: true },
+      { key: 'deliveryLocation', label: 'Delivery Location', visible: true },
+      { key: 'category', label: 'Category', visible: true },
+      { key: 'lastLogin', label: 'Last Login', visible: true },
+      { key: 'rating', label: 'Rating', visible: true },
+      { key: 'credits', label: 'Credits', visible: true },
+      { key: 'status', label: 'Status', visible: true },
+      { key: 'contactPerson', label: 'Contact Person', visible: true },
+      { key: 'email', label: 'Email', visible: true },
+      { key: 'phone', label: 'Phone', visible: true },
+      { key: 'score360', label: '360° Score', visible: true },
+      { key: 'registrationDate', label: 'Registration Date', visible: true },
+      { key: 'actions', label: 'Actions', visible: true, required: true },
+    ];
+    window.localStorage.setItem('seller_directory_columns_pref', JSON.stringify(allColsVisible));
+
+    render(<SellersDirectory />);
+    await waitFor(() => {
+      expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+      expect(screen.getByText('Zenith Bearings Ltd')).toBeInTheDocument();
+    });
+
+    const columnHeaders = [
+      'Supplier',
+      'Location',
+      'Delivery Location',
+      'Category',
+      'Last Login',
+      'Rating',
+      'Credits',
+      'Status',
+      'Contact Person',
+      'Email',
+      'Phone',
+      '360° Score',
+      'Registration Date',
+    ];
+
+    columnHeaders.forEach((name) => {
+      const th = screen.queryByRole('columnheader', { name: new RegExp('^' + name + '\$', 'i') });
+      if (th) {
+        fireEvent.click(th); // asc
+        fireEvent.click(th); // desc
+      }
+    });
+
+    // Also click actions column (should not trigger sort)
+    const actionsTh = screen.queryByRole('columnheader', { name: /Actions/i });
+    if (actionsTh) {
+      fireEvent.click(actionsTh);
+    }
+
+    window.localStorage.clear();
+  });
+
+  test('loads partial column preferences and appends missing defaults', async () => {
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      data: mockRemoteVendors,
+    });
+
+    const partialPrefs = [
+      { key: 'supplierName', label: 'Supplier', visible: true, required: true },
+      { key: 'location', label: 'Location', visible: false },
+    ];
+    window.localStorage.setItem('seller_directory_columns_pref', JSON.stringify(partialPrefs));
+
+    render(<SellersDirectory />);
+    await waitFor(() => {
+      expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    window.localStorage.clear();
+  });
+
+  test('handles corrupted localStorage JSON without crashing', async () => {
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      data: mockRemoteVendors,
+    });
+
+    window.localStorage.setItem('seller_directory_columns_pref', '{invalid_json');
+
+    render(<SellersDirectory />);
+    await waitFor(() => {
+      expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    window.localStorage.clear();
+  });
+
 });

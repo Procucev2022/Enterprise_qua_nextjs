@@ -1,5 +1,7 @@
 import type {
   BuyerDirectoryColumnConfig,
+  SellerDirectoryColumnConfig,
+  SellerDirectoryColumnKey,
   BuyerDirectoryColumnKey,
   SourcingModeDetail,
   SystemConfig,
@@ -1337,5 +1339,25 @@ export const DEFAULT_BUYER_DIRECTORY_COLUMNS: BuyerDirectoryColumnConfig[] = [
   { key: 'totalSpend', label: 'Total Spend', visible: false },
   { key: 'status', label: 'Status', visible: true },
   { key: 'createdDate', label: 'Registration Date', visible: false },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+
+export const SELLER_DIRECTORY_COLUMN_PREF_KEY = 'seller_directory_columns_pref';
+
+export const DEFAULT_SELLER_DIRECTORY_COLUMNS: SellerDirectoryColumnConfig[] = [
+  { key: 'supplierName', label: 'Supplier', visible: true, required: true },
+  { key: 'location', label: 'Location', visible: true },
+  { key: 'deliveryLocation', label: 'Delivery Location', visible: true },
+  { key: 'category', label: 'Category', visible: true },
+  { key: 'lastLogin', label: 'Last Login', visible: true },
+  { key: 'rating', label: 'Rating', visible: true },
+  { key: 'credits', label: 'Credits', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'contactPerson', label: 'Contact Person', visible: false },
+  { key: 'email', label: 'Email', visible: false },
+  { key: 'phone', label: 'Phone', visible: false },
+  { key: 'score360', label: '360° Score', visible: false },
+  { key: 'registrationDate', label: 'Registration Date', visible: false },
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
