@@ -49,8 +49,10 @@ router.post('/:id/quote-attachments', authenticate, rfqController.uploadQuoteAtt
 router.get('/:id/quote-attachments/:attachmentId', authenticate, rfqController.downloadQuoteAttachment);
 router.get('/:id', authenticate, rfqController.getRFQById);
 router.put('/:id', authenticate, rfqController.updateRFQ);
-router.post('/:id/extend', authenticate, rfqController.extendRFQ);
-router.delete('/:id', authenticate, rfqController.deleteRFQ);
+// Vendors can view RFQs in their categories (and all V0/V2/V3 RFQs when they
+// have none), so read access alone must never be enough to extend or delete.
+router.post('/:id/extend', authenticate, requireRole('buyer', 'category_manager', 'admin'), rfqController.extendRFQ);
+router.delete('/:id', authenticate, requireRole('buyer', 'category_manager', 'admin'), rfqController.deleteRFQ);
 router.post('/:id/quotes', authenticate, rfqController.addQuote);
 router.post('/:id/inquiries', authenticate, rfqController.addInquiry);
 router.post('/:id/inquiries/:inquiryId/reply', authenticate, rfqController.replyInquiry);

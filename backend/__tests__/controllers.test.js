@@ -450,6 +450,8 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     expect(quoteForbiddenRes.status).toHaveBeenCalledWith(403);
 
     const quoteNoProfileRes = mockRes();
+    // The profile is normally auto-created; simulate that creation failing.
+    jest.spyOn(storeService, 'ensureVendorProfileForUser').mockResolvedValueOnce(null);
     await rfqController.addQuote(
       { params: { id: 'rfq-001' }, body: { unitPrice: 100 }, user: { role: 'vendor', email: 'no-profile-vendor@test.com' } },
       quoteNoProfileRes,
@@ -630,6 +632,9 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     // direct controller call, since the real routes always attach req.user through
     // the authenticate middleware first.
     const ownedRes = mockRes();
+    // Earlier vendor-role calls for this email auto-created a profile; drop it
+    // so createVendor exercises a fresh registration rather than a 409.
+    storeService.vendors = storeService.vendors.filter((v) => v.email !== 'rajesh@apexindustrial.in');
     await vendorController.createVendor(
       {
         body: {
