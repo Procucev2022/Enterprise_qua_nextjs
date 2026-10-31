@@ -88,7 +88,13 @@ function CategoryManagerRFQDetailsView() {
     void load(rfqNumber);
   }, [rfqNumber, load]);
 
-  const onBack = () => router.push('/category-manager/all-rfqs');
+  const onBack = () => {
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      router.back();
+    } else {
+      router.push('/category-manager/all-rfqs');
+    }
+  };
 
   if (!rfqNumber) {
     return (

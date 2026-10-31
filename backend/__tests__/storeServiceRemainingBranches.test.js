@@ -511,7 +511,7 @@ describe('Store Service — remaining branch coverage', () => {
         upsertBuyerAccountInDB: jest.fn().mockRejectedValue(new Error('boom')),
       });
 
-      freshStore.addBuyerAccount({ corporateEmail: 'buyer-persist-test@x.com', organizationName: 'Buyer Co' });
+      freshStore._persistBuyerAccount({ corporateEmail: 'buyer-persist-test@x.com', organizationName: 'Buyer Co' });
       await flush();
 
       expect(errorSpy).toHaveBeenCalledWith('Failed to persist buyer account', expect.any(Error), 'STORE_SERVICE');

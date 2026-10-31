@@ -3,8 +3,13 @@ const router = express.Router();
 const internalTaskController = require('../controllers/internalTaskController');
 const { optionalAuthenticate } = require('../middleware/auth');
 
+// Registered Clients (Action Center Registrations Module)
+router.get('/registrations', optionalAuthenticate, internalTaskController.getRegistrations);
+router.post('/registrations/:id/action', optionalAuthenticate, internalTaskController.handleRegistrationAction);
+
 // Task summary counts
 router.get('/summary', optionalAuthenticate, internalTaskController.getSummary);
+router.get('/assignees', optionalAuthenticate, internalTaskController.getAssignees);
 
 // Task types (dynamic extensible types)
 router.get('/task-types', optionalAuthenticate, internalTaskController.getTaskTypes);
