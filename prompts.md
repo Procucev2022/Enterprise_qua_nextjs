@@ -2225,9 +2225,14 @@ why that much time it is  running since 2 hours not raise the pr first raise the
 
 ### 2026-10-31T08:45:00+05:30
 
+<<<<<<< HEAD
 ```text
 check the error fix it
 ```
+=======
+<<<<<<< Updated upstream
+## 2026-10-17
+>>>>>>> 86daea5 (commit changes for vendor page)
 
 ---
 
@@ -2246,6 +2251,7 @@ commit the changes
 merge the commit changes and see the outoput
 
 
+<<<<<<< HEAD
 [Master Quality & PR Summary summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408#summary-124425598443)
 Procucev Enterprise CI Quality & Coverage Summary
 Strict 90% per-file coverage gate: FAILED
@@ -2417,4 +2423,119 @@ Keep the remaining cards unchanged:
 - Make only targeted UI/CSS changes.
 
 **Acceptance Criteria:** Payment Dues should follow the same compact layout and toolbar alignment as Seller Directory, with a wider Search field, smaller individual filters, properly aligned action buttons, and compact summary cards. Nothing should overflow or shift at the current screen resolution.
+```
+=======
+The rate limit is per day, i hope we are refreshing this active model index every day?
+=======
+## 2026-10-14 — Public Vendor Directory Page with Search and Filter
+
+docs in docs file I have create a page where we have list down all the vendor's and have search and filter option give me how can we do that and also we need to show all vendor information and this page does not required authentication and need to go and view all the data give proper format we can do that
+
+docs\PUBLIC_VENDOR_DIRECTORY_GUIDE.md take referenve from this docs and build this page
+
+complete the rest task
+
+docs\PUBLIC_VENDOR_DIRECTORY_GUIDE.md take referenve from this docs and build this page  what I have said
+
+[FRONTEND] 
+[FRONTEND] > procucev-enterprise-frontend@2.1.0 dev
+[FRONTEND] > next dev -p 3000
+[FRONTEND]
+[BACKEND] 
+[BACKEND] > procucev-enterprise-node@2.1.0 dev
+[BACKEND] > nodemon src/server.js
+[BACKEND]
+[BACKEND] [nodemon] 3.1.14
+[BACKEND] [nodemon] to restart at any time, enter `rs`
+[BACKEND] [nodemon] watching path(s): *.*
+[BACKEND] [nodemon] watching extensions: js,mjs,cjs,json
+[BACKEND] [nodemon] starting `node src/server.js`
+[FRONTEND]   ▲ Next.js 14.2.35
+[FRONTEND]   - Local:        http://localhost:3000
+[FRONTEND]   - Environments: .env.local, .env.development
+[FRONTEND]   - Experiments (use with caution):
+[FRONTEND]     · staleTimes
+[FRONTEND]
+[BACKEND] [INFO] [STORE_SERVICE] Domain records loaded from PostgreSQL {"vendors":500,"vendorsTotal":20097,"rfqs":246,"evaluations":1,"vendorCatalogue":2,"buyerAccounts":13,"aiFeed":100,"auditLogs":5548,"notifications":2456,"paymentLinks":57}
+[BACKEND] [INFO] [SERVER] Email ingestion gateway not started: undefined
+[BACKEND] [INFO] [ZOHO_RECONCILIATION] Zoho payment-link reconciliation polling every 600s
+[FRONTEND]  ✓ Compiled /vendors in 17.2s (651 modules)
+[FRONTEND]  ✓ Compiled in 2.6s (330 modules)
+[FRONTEND]  GET /vendors 200 in 19960ms
+[FRONTEND]  GET /vendors 200 in 740ms
+[FRONTEND]  ○ Compiling /_not-found ...
+[FRONTEND]  ✓ Compiled /_not-found in 4.6s (640 modules)
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 7125ms
+[FRONTEND]  GET /vendors 200 in 661ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 164ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 335ms
+[FRONTEND]    Reload env: .env.development
+[FRONTEND]  ✓ Compiled in 7.5s (651 modules)
+[FRONTEND]    Reload env: .env.development
+[FRONTEND]  ✓ Compiled in 1736ms (637 modules)
+[FRONTEND]  GET /vendors 200 in 2880ms
+[FRONTEND]  ○ Compiling /_not-found ...
+[FRONTEND]  ✓ Compiled /_not-found in 8s (654 modules)
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 10030ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 381ms
+
+
+---
+
+### 2026-10-31T14:12:32+05:30
+
+```text
+backend\__tests__\vendorPublicController.test.js
+ solve merge conflic to this page onl only
+```
+
+
+---
+
+### 2026-10-31T14:17:21+05:30
+
+```text
+ git status 
+interactive rebase in progress; onto 43162e1
+Last command done (1 command done):
+   pick 86daea5 # commit changes for vendor page
+Next commands to do (3 remaining commands):
+   pick 33db226 # feature complete with login
+   pick 0d6689d # Otp Login added in vendor page
+  (use "git rebase --edit-todo" to view and edit)
+You are currently rebasing branch 'sample/vendor-page' on '43162e1'.
+  (fix conflicts and then run "git rebase --continue")
+  (use "git rebase --skip" to skip this patch)
+  (use "git rebase --abort" to check out the original branch)
+
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+        modified:   backend/src/config/validationSchemas.js
+        modified:   frontend/lib/uiStrings.ts
+        modified:   prompts.md
+
+Unmerged paths:
+  (use "git restore --staged <file>..." to unstage)
+  (use "git add/rm <file>..." as appropriate to mark resolution)
+        both added:      backend/__tests__/vendorPublicController.test.js
+        both modified:   backend/src/controllers/vendorController.js
+        both modified:   backend/src/db/domainQueries.js
+        both modified:   backend/src/routes/vendors.js
+        deleted by us:   frontend/.env.development
+        both added:      frontend/__tests__/app/vendors/page.test.tsx
+        both added:      frontend/__tests__/lib/vendorDirectoryClient.test.ts
+        both added:      frontend/app/vendors/VendorFilterSidebar.tsx
+        both added:      frontend/app/vendors/page.tsx
+        both modified:   frontend/lib/types.ts
+        both modified:   frontend/lib/validationSchemas.ts
+        both added:      frontend/lib/vendorDirectoryClient.ts
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   prompts.md
+
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
+
+resolve every conflict and put changes in stage and complete the rebase
 ```
