@@ -40,8 +40,12 @@ console.log('\n🚀 Starting Procucev Enterprise Workspace Quality Check Pipelin
 // 1. Build Verification
 // Built into a dedicated directory so the gate never contends with a running
 // `next dev` server over `.next` (concurrent access causes EPERM on Windows).
+// NODE_ENV is pinned: a shell left on NODE_ENV=development makes `next build`
+// mix dev and prod React runtimes, failing every prerender with
+// "Cannot read properties of null (reading 'useContext')".
 runStep('Step 1: Production Build Verification', 'npm run build --prefix frontend', rootDir, {
   NEXT_DIST_DIR: '.next-qc',
+  NODE_ENV: 'production',
 });
 
 // 2. Unit Test & Per-File Coverage (Backend + Frontend)
