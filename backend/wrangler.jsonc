@@ -350,7 +350,7 @@
         "LOG_LEVEL": "INFO",
         "LOG_RETENTION_DAYS": "30",
         "LOG_MAX_SIZE_BYTES": "10485760",
-        "PUBLIC_FRONTEND_URL": "https://procucev-enterprise-frontend.anshul-goel.workers.dev",
+        "PUBLIC_FRONTEND_URL": "https://procucev-enterprise-frontend.anshul-goel.workers.dev/",
         "ZOHO_MODE": "sandbox",
         "ZOHO_PAYMENTS_ACCOUNT_ID": "60045604493",
         "ZOHO_PAYMENTS_BASE_URL": "https://payments.zoho.in/api/v1",
