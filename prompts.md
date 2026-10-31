@@ -2225,14 +2225,10 @@ why that much time it is  running since 2 hours not raise the pr first raise the
 
 ### 2026-10-31T08:45:00+05:30
 
-<<<<<<< HEAD
 ```text
 check the error fix it
 ```
-=======
-<<<<<<< Updated upstream
 ## 2026-10-17
->>>>>>> 86daea5 (commit changes for vendor page)
 
 ---
 
@@ -2251,7 +2247,6 @@ commit the changes
 merge the commit changes and see the outoput
 
 
-<<<<<<< HEAD
 [Master Quality & PR Summary summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408#summary-124425598443)
 Procucev Enterprise CI Quality & Coverage Summary
 Strict 90% per-file coverage gate: FAILED
@@ -2424,9 +2419,7 @@ Keep the remaining cards unchanged:
 
 **Acceptance Criteria:** Payment Dues should follow the same compact layout and toolbar alignment as Seller Directory, with a wider Search field, smaller individual filters, properly aligned action buttons, and compact summary cards. Nothing should overflow or shift at the current screen resolution.
 ```
-=======
 The rate limit is per day, i hope we are refreshing this active model index every day?
-=======
 ## 2026-10-14 — Public Vendor Directory Page with Search and Filter
 
 docs in docs file I have create a page where we have list down all the vendor's and have search and filter option give me how can we do that and also we need to show all vendor information and this page does not required authentication and need to go and view all the data give proper format we can do that
@@ -2712,12 +2705,10 @@ backend\check_srinivas.js why are these file nned now check extra file and remov
  PASS  __tests__/emailService.test.js (5.995 s)
 A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
 
-=============================== Coverage summary ===============================
 Statements   : 98.86% ( 15308/15484 )
 Branches     : 92.61% ( 15660/16909 )
 Functions    : 99.21% ( 2013/2029 )
 Lines        : 99.46% ( 14080/14156 )
-================================================================================
 Jest: "S:\procucev\Precucev-github\Enterprise_qua_nextjs\backend\src\services\authService.js" coverage threshold for functions (90%) not met: 89.74%
 
 Test Suites: 128 passed, 128 total
@@ -2741,4 +2732,37 @@ PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>
 
 ```text
 okay just need to fix timmer we show the otp expire in 5 min but we are showing 30 sec need too update in frontend 
+Statements   : 98.86% ( 15861/16043 )
+Branches     : 92.56% ( 16280/17588 )
+Functions    : 99.28% ( 2074/2089 )
+Lines        : 99.47% ( 14597/14674 )
+
+Summary of all failing tests
+FAIL __tests__/vendorDirectoryRoutes.test.js
+  ● Protected Vendor Directory Routes (/api/vendors/public*) › Obsolete passkey endpoint removal (/api/vendors/directory-auth) › returns 404 since /directory-auth is retired
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 404
+    Received: 200
+
+      206 |         .send({ passcode: 'Procucev@Vendors2026' });
+      207 |
+    > 208 |       expect(res.status).toBe(404);
+          |                          ^
+      209 |     });
+      210 |   });
+      211 | });
+
+      at Object.toBe (__tests__/vendorDirectoryRoutes.test.js:208:26)
+
+
+Test Suites: 1 failed, 131 passed, 132 total
+Tests:       1 failed, 4036 passed, 4037 total
+Snapshots:   0 total
+Time:        187.956 s
+Ran all test suites.
+Test results written to: coverage/test-results.json
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+Error: Process completed with exit code 1.
 ```
