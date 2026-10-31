@@ -2656,3 +2656,179 @@ export interface BuyerDirectoryColumnConfig {
   visible: boolean;
   required?: boolean;
 }
+
+
+// --- Buyer Profile 360° Dossier Types ------------------------------------------
+
+export interface BuyerCreditSummary {
+  totalCreditsAllocated: number;
+  totalCreditsConsumed: number;
+  remainingFreeCredits: number;
+  purchasedCredits: number;
+  adjustedCredits: number;
+  currentEntitlementMode: string;
+  currentSubscriptionPlan: string;
+}
+
+export interface BuyerCreditTransaction {
+  id: string;
+  transactionId: string;
+  transactionDate: string;
+  transactionType: string;
+  creditSource: string;
+  creditsAdded: number;
+  creditsConsumed: number;
+  previousBalance: number;
+  updatedBalance: number;
+  relatedRfqId?: string | null;
+  paymentReference?: string | null;
+  status: string;
+  description: string;
+  notes?: string;
+}
+
+export interface BuyerCommunicationItem {
+  id: string;
+  accountId: string;
+  accountType?: string;
+  channel: 'EMAIL' | 'SMS' | 'WHATSAPP' | 'CALL' | 'SYSTEM_NOTIFICATION';
+  subject?: string | null;
+  sender?: string | null;
+  recipient: string;
+  message: string;
+  preview?: string;
+  deliveryStatus: string;
+  notificationStatus?: string;
+  acknowledgementStatus?: string;
+  sentAt: string;
+  direction?: 'INCOMING' | 'OUTGOING';
+  attachments?: Array<{ name: string; url: string; size?: number }>;
+  duration?: string;
+  notes?: string;
+}
+
+export interface BuyerPaymentSummary {
+  totalAmountPaid: number;
+  totalSuccessfulPayments: number;
+  pendingPayments: number;
+  failedPayments: number;
+  totalRefundedAmount: number;
+}
+
+export interface BuyerPaymentTransaction {
+  id: string;
+  paymentId: string;
+  invoiceNo: string;
+  invoiceNumber?: string;
+  transactionDate: string;
+  date?: string;
+  description: string;
+  subscriptionPlan: string;
+  amount: number;
+  currency: string;
+  gateway: string;
+  paymentMethod: string;
+  status: string;
+  gatewayRef?: string;
+  receiptUrl?: string;
+}
+
+// --- Seller Directory & Supplier 360° Dossier Types -----------------------------
+
+export type SellerDirectoryColumnKey =
+  | 'supplierName'
+  | 'contactPerson'
+  | 'email'
+  | 'phone'
+  | 'location'
+  | 'deliveryLocation'
+  | 'category'
+  | 'lastLogin'
+  | 'rating'
+  | 'score360'
+  | 'credits'
+  | 'status'
+  | 'registrationDate'
+  | 'actions';
+
+export interface SellerDirectoryColumnConfig {
+  key: SellerDirectoryColumnKey;
+  label: string;
+  visible: boolean;
+  required?: boolean;
+}
+
+export interface SupplierCreditSummary {
+  totalCreditsAllocated: number;
+  totalCreditsConsumed: number;
+  remainingFreeCredits: number;
+  purchasedCredits: number;
+  adjustedCredits: number;
+  currentCreditBalance: number;
+  isSubscribed: boolean;
+  subscriptionPlan: string;
+}
+
+export interface SupplierCreditTransaction {
+  id: string;
+  transactionId: string;
+  transactionDate: string;
+  transactionType: string;
+  creditSource: string;
+  creditsAdded: number;
+  creditsConsumed: number;
+  previousBalance: number;
+  updatedBalance: number;
+  relatedRfqId?: string | null;
+  paymentReference?: string | null;
+  status: string;
+  description: string;
+  notes?: string;
+}
+
+export interface SupplierCommunicationItem {
+  id: string;
+  accountId: string;
+  accountType?: string;
+  channel: 'EMAIL' | 'SMS' | 'WHATSAPP' | 'CALL' | 'SYSTEM_NOTIFICATION';
+  subject?: string | null;
+  sender?: string | null;
+  recipient: string;
+  message: string;
+  preview?: string;
+  deliveryStatus: string;
+  notificationStatus?: string;
+  acknowledgementStatus?: string;
+  sentAt: string;
+  direction?: 'INCOMING' | 'OUTGOING';
+  attachments?: Array<{ name: string; url: string; size?: number }>;
+  duration?: string;
+  notes?: string;
+}
+
+export interface SupplierPaymentSummary {
+  totalAmountPaid: number;
+  totalSuccessfulPayments: number;
+  pendingPayments: number;
+  failedPayments: number;
+  totalRefundedAmount: number;
+}
+
+export interface SupplierPaymentTransaction {
+  id: string;
+  paymentId: string;
+  invoiceNo: string;
+  invoiceNumber?: string;
+  transactionDate: string;
+  date?: string;
+  description: string;
+  subscriptionPlan: string;
+  amount: number;
+  currency: string;
+  gateway: string;
+  paymentMethod: string;
+  status: string;
+  gatewayRef?: string;
+  receiptUrl?: string;
+}
+

@@ -1,3 +1,5 @@
+const vendorDossierExtensions = require('./vendorDossierExtensions');
+
 const storeService = require('../services/storeService');
 const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
@@ -1313,4 +1315,5 @@ module.exports = {
   getPublicVendorById,
   authenticateVendorDirectory,
   getSubscriptionPricing,
+  ...vendorDossierExtensions,
 };

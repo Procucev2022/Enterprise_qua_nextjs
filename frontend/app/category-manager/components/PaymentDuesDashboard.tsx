@@ -671,7 +671,7 @@ export default function PaymentDuesDashboard() {
   const totalPages = Math.ceil(totalAccounts / pageSize) || 1;
 
   return (
-    <div className="space-y-5 animate-in fade-in duration-200">
+    <div className="space-y-4 animate-in fade-in duration-200">
       {/* Toast alert */}
       {toastMessage && (
         <div
@@ -689,75 +689,75 @@ export default function PaymentDuesDashboard() {
 
       {/* 6 Dynamic Summary KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        {/* Total Low-Credit Accounts */}
+        {/* Low-Credit Accounts */}
         <div
           onClick={() => {
             setAccountTypeFilter('all');
             setCreditsFilter('all');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-400 transition cursor-pointer"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-400 transition cursor-pointer flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
               {strings.kpi.totalLowCreditAccounts}
             </span>
-            <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400">
-              <CreditCard size={16} />
+            <div className="p-1.5 rounded-md bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 shrink-0">
+              <CreditCard className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-slate-900 dark:text-white">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">
             {summary.totalLowCreditAccounts}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.totalLowCreditSubtitle}
           </div>
         </div>
 
-        {/* Total Buyers */}
+        {/* Buyers */}
         <div
           onClick={() => {
             setAccountTypeFilter('buyer');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-sky-400 transition cursor-pointer"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-sky-400 transition cursor-pointer flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
               {strings.kpi.totalBuyers}
             </span>
-            <div className="p-2 rounded-lg bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400">
-              <Building2 size={16} />
+            <div className="p-1.5 rounded-md bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400 shrink-0">
+              <Building2 className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-sky-700 dark:text-sky-300">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-sky-700 dark:text-sky-300">
             {summary.totalBuyers}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.totalBuyersSubtitle}
           </div>
         </div>
 
-        {/* Total Sellers */}
+        {/* Sellers */}
         <div
           onClick={() => {
             setAccountTypeFilter('seller');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-purple-400 transition cursor-pointer"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-purple-400 transition cursor-pointer flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
               {strings.kpi.totalSellers}
             </span>
-            <div className="p-2 rounded-lg bg-purple-50 text-purple-600 dark:bg-purple-950/40 dark:text-purple-400">
-              <Truck size={16} />
+            <div className="p-1.5 rounded-md bg-purple-50 text-purple-600 dark:bg-purple-950/40 dark:text-purple-400 shrink-0">
+              <Truck className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-purple-700 dark:text-purple-300">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-purple-700 dark:text-purple-300">
             {summary.totalSellers}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.totalSellersSubtitle}
           </div>
         </div>
@@ -768,20 +768,20 @@ export default function PaymentDuesDashboard() {
             setCreditsFilter('0');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-rose-200 dark:border-rose-900/60 shadow-sm hover:border-rose-400 transition cursor-pointer bg-rose-50/20"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/60 shadow-sm hover:border-rose-400 transition cursor-pointer bg-rose-50/20 flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 uppercase tracking-wider truncate">
               {strings.kpi.zeroCredits}
             </span>
-            <div className="p-2 rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400">
-              <AlertTriangle size={16} />
+            <div className="p-1.5 rounded-md bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400 shrink-0">
+              <AlertTriangle className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-rose-600 dark:text-rose-400">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-rose-600 dark:text-rose-400">
             {summary.zeroCredits}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.zeroCreditsSubtitle}
           </div>
         </div>
@@ -792,20 +792,20 @@ export default function PaymentDuesDashboard() {
             setCreditsFilter('1-2');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-amber-200 dark:border-amber-900/60 shadow-sm hover:border-amber-400 transition cursor-pointer bg-amber-50/20"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-amber-200 dark:border-amber-900/60 shadow-sm hover:border-amber-400 transition cursor-pointer bg-amber-50/20 flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider truncate">
               {strings.kpi.oneToTwoCredits}
             </span>
-            <div className="p-2 rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400">
-              <Clock size={16} />
+            <div className="p-1.5 rounded-md bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400 shrink-0">
+              <Clock className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-amber-600 dark:text-amber-400">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-amber-600 dark:text-amber-400">
             {summary.oneToTwoCredits}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.oneToTwoCreditsSubtitle}
           </div>
         </div>
@@ -816,117 +816,128 @@ export default function PaymentDuesDashboard() {
             setStatusFilter('Acknowledgement Pending');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-400 transition cursor-pointer"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-400 transition cursor-pointer flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
               {strings.kpi.acknowledgementPending}
             </span>
-            <div className="p-2 rounded-lg bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400">
-              <HelpCircle size={16} />
+            <div className="p-1.5 rounded-md bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400 shrink-0">
+              <HelpCircle className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-orange-600 dark:text-orange-400">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-orange-600 dark:text-orange-400">
             {summary.acknowledgementPending}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.acknowledgementPendingSubtitle}
           </div>
         </div>
       </div>
 
-      {/* Horizontal Toolbar */}
-      <div className="bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
-        {/* Left: Search & Filter Controls */}
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          {/* Global Search */}
-          <div className="relative min-w-[180px] max-w-xs flex-1">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
+      {/* TOOLBAR: SEARCH, ACCOUNT TYPE, CREDIT FILTER, ACKNOWLEDGEMENT STATUS, REFRESH, EXPORT CSV & GEAR ICON IN ONE HORIZONTAL ROW */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto no-scrollbar">
+        {/* Search input with maximum available width */}
+        <div className="relative flex-1 min-w-[180px]">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+            placeholder={strings.toolbar.searchPlaceholder}
+            className="w-full pl-8 pr-7 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+          {search && (
+            <button
+              onClick={() => {
+                setSearch('');
                 setPage(1);
               }}
-              placeholder={strings.toolbar.searchPlaceholder}
-              className="w-full pl-9 pr-3 h-8 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-          </div>
-
-          {/* Account Type Filter */}
-          <select
-            value={accountTypeFilter}
-            onChange={(e) => {
-              setAccountTypeFilter(e.target.value as 'all' | 'buyer' | 'seller');
-              setPage(1);
-            }}
-            aria-label={strings.toolbar.accountTypeFilter}
-            className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none shrink-0"
-          >
-            <option value="all">{strings.toolbar.allTypes}</option>
-            <option value="buyer">{strings.toolbar.buyersOnly}</option>
-            <option value="seller">{strings.toolbar.sellersOnly}</option>
-          </select>
-
-          {/* Credits Filter */}
-          <select
-            value={creditsFilter}
-            onChange={(e) => {
-              setCreditsFilter(e.target.value as 'all' | '0' | '1-2');
-              setPage(1);
-            }}
-            aria-label={strings.toolbar.creditsFilter}
-            className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none shrink-0"
-          >
-            <option value="all">{strings.toolbar.allCredits}</option>
-            <option value="0">{strings.toolbar.zeroCreditsOnly}</option>
-            <option value="1-2">{strings.toolbar.oneToTwoCreditsOnly}</option>
-          </select>
-
-          {/* Status Filter */}
-          <select
-            value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value);
-              setPage(1);
-            }}
-            aria-label={strings.toolbar.statusFilter}
-            className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none shrink-0"
-          >
-            <option value="all">{strings.toolbar.allStatuses}</option>
-            <option value="Not Notified">Not Notified</option>
-            <option value="Notification Sent">Notification Sent</option>
-            <option value="Delivery Pending">Delivery Pending</option>
-            <option value="Delivered">Delivered</option>
-            <option value="Acknowledgement Pending">Acknowledgement Pending</option>
-            <option value="Acknowledged">Acknowledged</option>
-            <option value="Failed">Failed</option>
-          </select>
-
-          {/* Reset Filters */}
-          <button
-            type="button"
-            onClick={handleResetFilters}
-            title={strings.toolbar.resetFilters}
-            className="h-8 flex items-center gap-1 px-2.5 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition shrink-0 cursor-pointer"
-          >
-            <RotateCcw size={13} />
-            <span className="hidden xl:inline">{strings.toolbar.resetFilters}</span>
-          </button>
+              className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              title="Clear search"
+              aria-label="Clear search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
-        {/* Right: Refresh, Export & Gear Icon */}
-        <div className="flex items-center gap-2 shrink-0">
+        {/* Account Type Filter */}
+        <select
+          value={accountTypeFilter}
+          onChange={(e) => {
+            setAccountTypeFilter(e.target.value as 'all' | 'buyer' | 'seller');
+            setPage(1);
+          }}
+          aria-label={strings.toolbar.accountTypeFilter}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">{strings.toolbar.allTypes}</option>
+          <option value="buyer">{strings.toolbar.buyersOnly}</option>
+          <option value="seller">{strings.toolbar.sellersOnly}</option>
+        </select>
+
+        {/* Credit Filter */}
+        <select
+          value={creditsFilter}
+          onChange={(e) => {
+            setCreditsFilter(e.target.value as 'all' | '0' | '1-2');
+            setPage(1);
+          }}
+          aria-label={strings.toolbar.creditsFilter}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">{strings.toolbar.allCredits}</option>
+          <option value="0">{strings.toolbar.zeroCreditsOnly}</option>
+          <option value="1-2">{strings.toolbar.oneToTwoCreditsOnly}</option>
+        </select>
+
+        {/* Acknowledgement Status Filter */}
+        <select
+          value={statusFilter}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setPage(1);
+          }}
+          aria-label={strings.toolbar.statusFilter}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 max-w-[190px] focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer truncate"
+        >
+          <option value="all">{strings.toolbar.allStatuses}</option>
+          <option value="Not Notified">Not Notified</option>
+          <option value="Notification Sent">Notification Sent</option>
+          <option value="Delivery Pending">Delivery Pending</option>
+          <option value="Delivered">Delivered</option>
+          <option value="Acknowledgement Pending">Acknowledgement Pending</option>
+          <option value="Acknowledged">Acknowledged</option>
+          <option value="Failed">Failed</option>
+        </select>
+
+        {/* Reset Filters button */}
+        <button
+          type="button"
+          onClick={handleResetFilters}
+          title={strings.toolbar.resetFilters}
+          aria-label={strings.toolbar.resetFilters}
+          className="h-8.5 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+        </button>
+
+        {/* Action Buttons Aligned at Right: Refresh, Export CSV, and Gear Icon */}
+        <div className="ml-auto flex items-center gap-2 shrink-0">
           {/* Refresh */}
           <button
             type="button"
             onClick={() => loadData()}
             disabled={isLoading}
             title={strings.toolbar.refresh}
-            className="h-8 w-8 flex items-center justify-center text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition disabled:opacity-50 cursor-pointer"
+            aria-label={strings.toolbar.refresh}
+            className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer disabled:opacity-50"
           >
-            <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
 
           {/* Export CSV */}
@@ -940,25 +951,26 @@ export default function PaymentDuesDashboard() {
               sortOrder,
             })}
             download="payment_dues_report.csv"
-            className="h-8 flex items-center gap-1.5 px-3 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-xs transition shrink-0 cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-1.5 h-8.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all shrink-0 cursor-pointer"
           >
-            <Download size={13} />
+            <Download className="w-3.5 h-3.5" />
             <span>{strings.toolbar.exportCsv}</span>
           </a>
 
-          {/* Gear Icon - Dynamic Column Settings */}
+          {/* Gear Icon - Customize Columns */}
           <div className="relative">
             <button
               type="button"
               onClick={() => setIsColumnSettingsOpen((prev) => !prev)}
               title={strings.toolbar.columnSettings}
-              className={`h-8 w-8 flex items-center justify-center rounded-lg border transition cursor-pointer ${
+              aria-label={strings.toolbar.columnSettings}
+              className={`p-2 h-8.5 w-8.5 rounded-lg border transition-colors flex items-center justify-center shrink-0 cursor-pointer ${
                 isColumnSettingsOpen
-                  ? 'bg-indigo-50 border-indigo-400 text-indigo-600 dark:bg-indigo-950/40 dark:border-indigo-700 dark:text-indigo-400'
-                  : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-600 dark:text-emerald-400'
+                  : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
               }`}
             >
-              <Settings size={15} />
+              <Settings className="w-3.5 h-3.5" />
             </button>
 
             {/* Column Settings Popover */}
@@ -966,7 +978,7 @@ export default function PaymentDuesDashboard() {
               <div className="absolute right-0 top-full mt-2 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl z-40 p-3.5 space-y-3">
                 <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
                   <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
-                    <Settings size={13} className="text-indigo-600" />
+                    <Settings className="w-3.5 h-3.5 text-emerald-600" />
                     <span>{strings.columnSettings.title}</span>
                   </div>
                   <button
@@ -974,9 +986,9 @@ export default function PaymentDuesDashboard() {
                     onClick={() => setIsColumnSettingsOpen(false)}
                     aria-label="Close"
                     title="Close"
-                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
                   >
-                    <X size={14} />
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
 
@@ -989,21 +1001,21 @@ export default function PaymentDuesDashboard() {
                   <button
                     type="button"
                     onClick={handleSelectAllColumns}
-                    className="text-indigo-600 dark:text-indigo-400 hover:underline font-medium"
+                    className="text-emerald-600 dark:text-emerald-400 hover:underline font-medium cursor-pointer"
                   >
                     {strings.columnSettings.selectAll}
                   </button>
                   <button
                     type="button"
                     onClick={handleHideAllOptionalColumns}
-                    className="text-slate-500 hover:underline font-medium"
+                    className="text-slate-500 hover:underline font-medium cursor-pointer"
                   >
                     {strings.columnSettings.hideAll}
                   </button>
                   <button
                     type="button"
                     onClick={handleResetColumns}
-                    className="text-rose-600 hover:underline font-medium"
+                    className="text-rose-600 hover:underline font-medium cursor-pointer"
                   >
                     {strings.columnSettings.resetToDefault}
                   </button>
@@ -1020,7 +1032,7 @@ export default function PaymentDuesDashboard() {
                       onDrop={() => handleDrop(index)}
                       className={`flex items-center justify-between px-2 py-1.5 rounded-lg border text-xs cursor-move transition select-none ${
                         draggedColumnIndex === index
-                          ? 'opacity-40 border-indigo-400 bg-indigo-50/50'
+                          ? 'opacity-40 border-emerald-400 bg-emerald-50/50'
                           : 'border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60'
                       }`}
                     >
@@ -1030,13 +1042,13 @@ export default function PaymentDuesDashboard() {
                           checked={col.visible}
                           disabled={col.required}
                           onChange={() => handleToggleColumnVisibility(col.key)}
-                          className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 disabled:opacity-40"
+                          className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 disabled:opacity-40"
                         />
                         <span className={`text-[12px] ${col.visible ? 'text-slate-900 dark:text-white font-medium' : 'text-slate-400'}`}>
                           {col.label}
                         </span>
                       </label>
-                      <GripVertical size={13} className="text-slate-400 hover:text-slate-600 cursor-grab" />
+                      <GripVertical className="w-3.5 h-3.5 text-slate-400 hover:text-slate-600 cursor-grab" />
                     </div>
                   ))}
                 </div>

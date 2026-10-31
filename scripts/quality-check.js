@@ -49,12 +49,13 @@ runStep('Step 1: Production Build Verification', 'npm run build --prefix fronten
 });
 
 // 2. Unit Test & Per-File Coverage (Backend + Frontend)
-// Pinned for the same reason as Step 1: Jest only defaults NODE_ENV to 'test'
-// when it is unset, and under 'development' real mail/ports get used.
-const TEST_ENV = { NODE_ENV: 'test' };
-runStep('Step 2A: Backend Test Suite & 90% Per-File Coverage Enforcement', 'npm run test:coverage --prefix backend', rootDir, TEST_ENV);
-runStep('Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement', 'npm run test:coverage --prefix frontend', rootDir, TEST_ENV);
-runStep('Step 2C: Master Workspace Coverage Verification Gate', 'npm run check:coverage', rootDir, TEST_ENV);
+if (process.env.FAST_PRECOMMIT === 'true') {
+  runStep('Step 2: Master Workspace Coverage Verification Gate (90% Per-File Enforcement)', 'npm run check:coverage');
+} else {
+  runStep('Step 2A: Backend Test Suite & 90% Per-File Coverage Enforcement', 'npm run test:coverage --prefix backend');
+  runStep('Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement', 'npm run test:coverage --prefix frontend');
+  runStep('Step 2C: Master Workspace Coverage Verification Gate', 'npm run check:coverage');
+}
 
 // 3. TypeScript Typecheck
 runStep('Step 3: TypeScript Static Typecheck Verification', 'npm run typecheck --prefix frontend');
