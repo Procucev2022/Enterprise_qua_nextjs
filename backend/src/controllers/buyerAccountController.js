@@ -23,13 +23,36 @@ const identityQueries = require('../db/identityQueries');
  * RFQs correctly; that's a separate, already-solved concern from the
  * buyer-account-record ownership gap this comment is about.)
  */
-function assertCategoryManagerOrBuyer(req, res) {
+function assertCategoryManagerOrAdmin(req, res) {
   const user = req.user;
   if (!user) {
     res.status(401).json({ success: false, error: 'Authentication required.' });
     return false;
   }
-  if (user.role === 'buyer' || user.role === 'admin' || user.role === 'category_manager') return true;
+  if (user.role === 'category_manager' || user.role === 'admin') return true;
+  res.status(403).json({ success: false, error: 'Only administrators and category managers can perform this operation.' });
+  return false;
+}
+
+function assertCategoryManagerOrBuyer(req, res, targetBuyer = null) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  if (user.role === 'category_manager' || user.role === 'admin') return true;
+  if (user.role === 'buyer') {
+    if (!targetBuyer) return true;
+    const buyerEmail = targetBuyer.corporateEmail || targetBuyer.email;
+    const isOwner =
+      (user.email && buyerEmail && user.email.toLowerCase() === buyerEmail.toLowerCase()) ||
+      (user.buyerAccountId && user.buyerAccountId === targetBuyer.id) ||
+      (user.orgId && user.orgId === targetBuyer.id) ||
+      (user.organizationId && user.organizationId === targetBuyer.id) ||
+      (targetBuyer.userId && targetBuyer.userId === user.id) ||
+      (targetBuyer.id === user.id);
+    if (isOwner) return true;
+  }
   res.status(403).json({ success: false, error: 'You do not have permission to access buyer profile dossier.' });
   return false;
 }
@@ -494,6 +517,7 @@ async function getCreditHistory(req, res, next) {
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
     const remainingFree = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 5;
     const sourcingMode = buyer.sourcingMode || 'mode_0';
@@ -620,7 +644,7 @@ async function getCreditHistory(req, res, next) {
 
 async function addCredit(req, res, next) {
   try {
-    if (!assertCategoryManagerOrBuyer(req, res)) return;
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
     const { id } = req.params;
     const { amount, reason, source } = req.body || {};
     const creditAmount = parseInt(amount, 10);
@@ -697,6 +721,7 @@ async function updateSupportedCategories(req, res, next) {
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
     const cleanCategories = Array.from(new Set(categories.map((c) => String(c).trim()).filter(Boolean)));
     const updated = storeService.updateBuyerAccount(id, {
@@ -729,6 +754,7 @@ async function getBuyerCommunications(req, res, next) {
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
     const comms = await paymentDuesQueries.getCommunicationHistory(id);
 
@@ -802,6 +828,7 @@ async function recordBuyerCommunication(req, res, next) {
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
     const record = await paymentDuesQueries.recordCommunication({
       accountId: id,
@@ -836,6 +863,7 @@ async function getBuyerPaymentHistory(req, res, next) {
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
     let links = await storeService.getPaymentLinksForBuyer(buyer.id);
     const reconciled = await zohoReconciliationService.reconcilePendingLinks(links);
@@ -954,4 +982,6 @@ module.exports = {
   getBuyerCommunications,
   recordBuyerCommunication,
   getBuyerPaymentHistory,
+  assertCategoryManagerOrAdmin,
+  assertCategoryManagerOrBuyer,
 };

@@ -79,6 +79,21 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
       expect(res.status).toHaveBeenCalledWith(403);
     });
 
+    test('assertCategoryManagerOrVendor exercises ID and sub matching branches', () => {
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const { assertCategoryManagerOrVendor } = vendorDossierExtensions;
+
+      expect(assertCategoryManagerOrVendor({ user: null }, res)).toBe(false);
+      expect(assertCategoryManagerOrVendor({ user: { role: 'vendor' } }, res)).toBe(true);
+
+      const vendorObj = { id: 'v-100', email: 'v100@test.com' };
+      expect(assertCategoryManagerOrVendor({ user: { role: 'vendor', vendorId: 'v-100' } }, res, vendorObj)).toBe(true);
+      expect(assertCategoryManagerOrVendor({ user: { role: 'vendor', id: 'v-100' } }, res, vendorObj)).toBe(true);
+      expect(assertCategoryManagerOrVendor({ user: { role: 'vendor', sub: 'v-100' } }, res, vendorObj)).toBe(true);
+      expect(assertCategoryManagerOrVendor({ user: { role: 'vendor', vendorId: 'v-100' } }, res, 'v-100')).toBe(true);
+      expect(assertCategoryManagerOrVendor({ user: { role: 'vendor', email: 'diff@test.com' } }, res, vendorObj)).toBe(false);
+    });
+
     test('allows category manager or admin', async () => {
       jest.spyOn(domainQueries, 'getVendorCreditTransactionsFromDB').mockResolvedValue([
         { id: 'vtx-1', transaction_type: 'INITIAL_ALLOCATION', amount: 15, balance_after: 15 },

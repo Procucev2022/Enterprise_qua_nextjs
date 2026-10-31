@@ -3,7 +3,7 @@ const domainQueries = require('../db/domainQueries');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
 
-function assertCategoryManagerOrVendor(req, res, vendorOrEmail) {
+function assertCategoryManagerOrVendor(req, res, vendorOrEmail = null) {
   const user = req.user;
   if (!user) {
     res.status(401).json({ success: false, error: 'Authentication required.' });
@@ -11,8 +11,13 @@ function assertCategoryManagerOrVendor(req, res, vendorOrEmail) {
   }
   if (user.role === 'category_manager' || user.role === 'admin') return true;
   if (user.role === 'vendor') {
-    const vendorEmail = (typeof vendorOrEmail === 'string' ? vendorOrEmail : vendorOrEmail?.email) || '';
-    if (user.email && vendorEmail.toLowerCase() === user.email.toLowerCase()) {
+    if (!vendorOrEmail) return true;
+    const vendorEmail = (typeof vendorOrEmail === 'string' && vendorOrEmail.includes('@') ? vendorOrEmail : vendorOrEmail?.email) || '';
+    const vendorId = typeof vendorOrEmail === 'object' ? vendorOrEmail?.id : (typeof vendorOrEmail === 'string' && !vendorOrEmail.includes('@') ? vendorOrEmail : null);
+    if (user.email && vendorEmail && vendorEmail.toLowerCase() === user.email.toLowerCase()) {
+      return true;
+    }
+    if (vendorId && (user.vendorId === vendorId || user.id === vendorId || user.sub === vendorId)) {
       return true;
     }
   }
@@ -37,6 +42,7 @@ async function resolveVendor(id, user) {
 async function getCreditHistory(req, res, next) {
   try {
     const { id } = req.params;
+    if (!assertCategoryManagerOrVendor(req, res)) return;
     const vendor = await resolveVendor(id, req.user);
     if (!vendor) {
       return res.status(404).json({ success: false, error: `Vendor ${id} not found.` });
@@ -156,6 +162,7 @@ async function getCreditHistory(req, res, next) {
 async function getVendorCommunications(req, res, next) {
   try {
     const { id } = req.params;
+    if (!assertCategoryManagerOrVendor(req, res)) return;
     const vendor = await resolveVendor(id, req.user);
     if (!vendor) {
       return res.status(404).json({ success: false, error: `Vendor ${id} not found.` });
@@ -230,6 +237,7 @@ async function getVendorCommunications(req, res, next) {
 async function recordVendorCommunication(req, res, next) {
   try {
     const { id } = req.params;
+    if (!assertCategoryManagerOrVendor(req, res)) return;
     const vendor = await resolveVendor(id, req.user);
     if (!vendor) {
       return res.status(404).json({ success: false, error: `Vendor ${id} not found.` });
@@ -264,6 +272,7 @@ async function recordVendorCommunication(req, res, next) {
 async function getVendorPaymentHistory(req, res, next) {
   try {
     const { id } = req.params;
+    if (!assertCategoryManagerOrVendor(req, res)) return;
     const vendor = await resolveVendor(id, req.user);
     if (!vendor) {
       return res.status(404).json({ success: false, error: `Vendor ${id} not found.` });

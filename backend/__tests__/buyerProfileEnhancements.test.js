@@ -48,12 +48,30 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
   });
 
   describe('addCredit', () => {
-    test('rejects non-category manager / non-buyer users', async () => {
-      const req = { user: vendorUser, params: { id: 'buyer-test-1' }, body: { amount: 5 } };
-      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
-      const next = jest.fn();
+    test('rejects buyer and non-admin/non-category-manager users', async () => {
+      const reqVendor = { user: vendorUser, params: { id: 'buyer-test-1' }, body: { amount: 5 } };
+      const resVendor = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.addCredit(reqVendor, resVendor, jest.fn());
+      expect(resVendor.status).toHaveBeenCalledWith(403);
 
-      await buyerAccountController.addCredit(req, res, next);
+      const reqBuyer = { user: buyerUser, params: { id: 'buyer-test-1' }, body: { amount: 5 } };
+      const resBuyer = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.addCredit(reqBuyer, resBuyer, jest.fn());
+      expect(resBuyer.status).toHaveBeenCalledWith(403);
+    });
+
+    test('rejects unauthenticated users in addCredit', async () => {
+      const reqNoUser = { params: { id: 'buyer-test-1' }, body: { amount: 5 } };
+      const resNoUser = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.addCredit(reqNoUser, resNoUser, jest.fn());
+      expect(resNoUser.status).toHaveBeenCalledWith(401);
+    });
+
+    test('rejects buyer accessing another buyer account (BOLA prevention)', async () => {
+      const otherBuyer = { email: 'other@buyer.com', role: 'buyer', sub: 'other-sub' };
+      const req = { user: otherBuyer, params: { id: 'buyer-test-1' } };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.getCreditHistory(req, res, jest.fn());
       expect(res.status).toHaveBeenCalledWith(403);
     });
 
@@ -984,6 +1002,139 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       const next = jest.fn();
       await buyerAccountController.aiCrossMatch(req, res, next);
       expect(next).toHaveBeenCalledWith(expect.any(Error));
+    });
+
+    test('deleteBuyerAccount and setActiveAccount success paths', () => {
+      jest.spyOn(storeService, 'deleteBuyerAccount').mockReturnValue(true);
+      const reqDel = { user: adminUser, params: { id: 'buyer-test-1' } };
+      const resDel = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      buyerAccountController.deleteBuyerAccount(reqDel, resDel, jest.fn());
+      expect(resDel.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      jest.spyOn(storeService, 'alignActiveBuyerAccount').mockReturnValue(mockBuyer);
+      const reqActive = { user: adminUser, params: { id: 'buyer-test-1' } };
+      const resActive = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      buyerAccountController.setActiveAccount(reqActive, resActive, jest.fn());
+      expect(resActive.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: mockBuyer }));
+    });
+
+    test('aiCrossMatch exercises all category branches (mechanical, electrical, civil, IT)', async () => {
+      const vendors = [
+        { companyName: 'Mech Vendor', vendorCode: 'V-MECH' },
+        { companyName: 'Elec Vendor', vendorCode: 'V-ELEC' },
+        { companyName: 'Civil Vendor', vendorCode: 'V-CIVIL' },
+        { companyName: 'IT Data Vendor', vendorCode: 'V-DATA' },
+        { companyName: 'Datacenter Server Vendor', vendorCode: 'V-DC' },
+        { companyName: 'SaaS General Vendor', vendorCode: 'V-SAAS' },
+        { companyName: 'Gen Vendor', vendorCode: 'V-GEN' },
+        { companyName: 'Empty Vendor', vendorCode: '' },
+      ];
+      const poLineItems = [
+        { vendorIdentifier: 'Mech Vendor', itemName: 'Centrifugal pump with valve and rubber hose and compressor and motor', totalSpend: 1500 },
+        { vendorIdentifier: 'Elec Vendor', itemName: 'Electrical switchgear panel and mccb breaker cable', totalSpend: 2500 },
+        { vendorIdentifier: 'Civil Vendor', itemName: 'Civil PEB structure and TMT steel rebar', totalSpend: 3500 },
+        { vendorIdentifier: 'IT Data Vendor', itemName: 'Cloud bigquery data analytics platform with microsoft software', totalSpend: 4500 },
+        { vendorIdentifier: 'Datacenter Server Vendor', itemName: 'datacenter server infrastructure', totalSpend: 5500 },
+        { vendorIdentifier: 'SaaS General Vendor', itemName: 'generic saas tool', totalSpend: 800 },
+        { vendorIdentifier: 'Gen Vendor', itemName: 'unclassified miscellaneous part', totalSpend: 6500 },
+      ];
+
+      const req = {
+        user: adminUser,
+        body: { vendors, poLineItems },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.aiCrossMatch(req, res, jest.fn());
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          totalMatched: 7,
+          totalUnmatched: 1,
+        })
+      );
+    });
+    test('assertCategoryManagerOrBuyer exercises all ownership branches', () => {
+      const { assertCategoryManagerOrBuyer, assertCategoryManagerOrAdmin } = buyerAccountController;
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      // unauthenticated
+      expect(assertCategoryManagerOrBuyer({ user: null }, res)).toBe(false);
+      expect(assertCategoryManagerOrAdmin({ user: null }, res)).toBe(false);
+
+      // other roles
+      expect(assertCategoryManagerOrBuyer({ user: { role: 'vendor' } }, res)).toBe(false);
+      expect(assertCategoryManagerOrAdmin({ user: { role: 'buyer' } }, res)).toBe(false);
+
+      // admin / category_manager
+      expect(assertCategoryManagerOrBuyer({ user: { role: 'admin' } }, res)).toBe(true);
+      expect(assertCategoryManagerOrBuyer({ user: { role: 'category_manager' } }, res)).toBe(true);
+      expect(assertCategoryManagerOrAdmin({ user: { role: 'admin' } }, res)).toBe(true);
+      expect(assertCategoryManagerOrAdmin({ user: { role: 'category_manager' } }, res)).toBe(true);
+
+      // buyer without targetBuyer
+      expect(assertCategoryManagerOrBuyer({ user: { role: 'buyer' } }, res)).toBe(true);
+
+      // buyer ownership branches
+      const target = { id: 'b-1', corporateEmail: 'org@buyer.com', userId: 'u-1' };
+      expect(assertCategoryManagerOrBuyer({ user: { role: 'buyer', email: 'ORG@BUYER.COM' } }, res, target)).toBe(true);
+      expect(assertCategoryManagerOrBuyer({ user: { role: 'buyer', buyerAccountId: 'b-1' } }, res, target)).toBe(true);
+      expect(assertCategoryManagerOrBuyer({ user: { role: 'buyer', orgId: 'b-1' } }, res, target)).toBe(true);
+      expect(assertCategoryManagerOrBuyer({ user: { role: 'buyer', organizationId: 'b-1' } }, res, target)).toBe(true);
+      expect(assertCategoryManagerOrBuyer({ user: { role: 'buyer', id: 'u-1' } }, res, target)).toBe(true);
+      expect(assertCategoryManagerOrBuyer({ user: { role: 'buyer', id: 'b-1' } }, res, { id: 'b-1' })).toBe(true);
+      expect(assertCategoryManagerOrBuyer({ user: { role: 'buyer', email: 'stranger@buyer.com' } }, res, target)).toBe(false);
+    });
+    test('getPaymentLinks with reconciled links and downloadInvoice fallback branches', async () => {
+      const bAcc = { id: 'b-rec', corporateEmail: 'rec@buyer.com', organizationName: '' };
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(bAcc);
+      jest.spyOn(storeService, 'getPaymentLinksForBuyer').mockResolvedValue([
+        { id: 'pl-rec-1', status: 'PENDING' },
+      ]);
+      const zohoReconciliationService = require('../src/services/zohoReconciliationService');
+      jest.spyOn(zohoReconciliationService, 'reconcilePendingLinks').mockResolvedValue(1);
+
+      const reqLinks = { user: buyerUser, params: { id: 'b-rec' } };
+      const resLinks = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.getPaymentLinks(reqLinks, resLinks, jest.fn());
+      expect(resLinks.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // downloadInvoice with unknown planId and empty org name
+      const invoiceService = require('../src/services/invoiceService');
+      jest.spyOn(storeService, 'getPaymentLinkById').mockResolvedValue({
+        id: 'pl-rec-1',
+        payerType: 'buyer',
+        buyerAccountId: 'b-rec',
+        planId: 'unknown_custom_plan',
+      });
+      jest.spyOn(invoiceService, 'generateReceiptPdf').mockResolvedValue(Buffer.from('PDF_CONTENT'));
+
+      const reqInv = { user: buyerUser, params: { linkId: 'pl-rec-1' } };
+      const resInv = {
+        setHeader: jest.fn(),
+        send: jest.fn(),
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+      await buyerAccountController.downloadInvoice(reqInv, resInv, jest.fn());
+      expect(resInv.setHeader).toHaveBeenCalledWith('Content-Type', 'application/pdf');
+
+      // createSubscriptionPaymentLink with duration 6_months and unknown plan
+      const zohoPaymentService = require('../src/services/zohoPaymentService');
+      jest.spyOn(zohoPaymentService, 'createPaymentLink').mockResolvedValue({
+        payment_link_id: 'z-link-1',
+        url: 'https://zoho.test/link',
+      });
+      jest.spyOn(storeService, 'createPaymentLinkRecord').mockReturnValue({ id: 'pl-rec-new' });
+
+      bAcc.mobileNumber = '9876543210';
+      const reqSub = {
+        user: buyerUser,
+        params: { id: 'b-rec' },
+        body: { plan: 'unknown_tier', duration: '6_months' },
+      };
+      const resSub = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.createSubscriptionPaymentLink(reqSub, resSub, jest.fn());
+      expect(resSub.status).toHaveBeenCalledWith(400); // unknown plan returns 400
     });
   });
 });
