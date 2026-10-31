@@ -1585,3 +1585,790 @@ Loading
 
 please check my friend merge and fix that issue
 ```
+
+---
+
+### 2026-10-30T22:51:15+05:30
+
+```text
+raise the pr
+```
+
+---
+
+### 2026-10-30T23:11:45+05:30
+
+```text
+# MASTER DEVELOPMENT PROMPT: SELLER DIRECTORY & SUPPLIER 360° DOSSIER – QUA AI
+
+Act as a senior full-stack developer working on the existing QUA AI platform.
+
+Enhance the existing Seller Directory and Supplier 360° Dossier using the provided screenshots as UI references.
+
+The Seller Directory must have the same level of functionality, database integration, column customization, sorting, filtering, and user experience as the existing Buyer Directory.
+
+**Critical requirement: Reuse existing database models, APIs, components, methods, services, and business logic. Do not rebuild existing functionality or break any working features.**
+
+## 1. Seller Directory Dashboard
+
+Preserve and enhance the existing summary cards:
+
+1. Total Suppliers.
+2. Network Suppliers.
+3. Buyer Uploaded.
+4. Average 360° Score.
+5. Quoted Opportunities.
+
+All summary values must be dynamically fetched from the existing database.
+
+Ensure counts and statistics are accurate and consistent with actual supplier records.
+
+## 2. Toolbar and Export Directory
+
+Arrange the following controls in one horizontal row:
+
+- Search.
+- Source Filter.
+- Category Filter.
+- Rating Filter.
+- Export Directory button.
+- Gear icon.
+
+### UI Requirements
+- Give the Search field more width.
+- Keep other filters compact.
+- Place Export Directory and Gear icon at the right end, below the Average 360° Score card, following the reference layout.
+- Maintain consistent button heights, spacing, and alignment.
+- Avoid unnecessary padding, gaps, and horizontal overflow.
+- Ensure responsive behavior at different screen resolutions.
+
+### Export
+- Export actual supplier records from the database.
+- Respect currently applied search and filters.
+- Ensure the downloaded file contains the selected relevant supplier fields.
+- Fix any existing download issues without introducing mock data.
+
+## 3. Complete Seller Database Integration
+
+**Fetch all relevant seller information directly from the existing database, following the same approach as Buyer Directory.**
+
+Do not display only a limited set of supplier fields.
+
+Retrieve and display all relevant existing fields, wherever available:
+
+- Supplier ID.
+- Supplier Name / Company Name.
+- Contact Person.
+- Email.
+- Phone Number.
+- Company Location.
+- Delivery Location.
+- Procurement Categories.
+- Supplier Source (Network Supplier / Buyer Uploaded).
+- Sourcing Mode, if applicable.
+- Subscription Plan.
+- Available Quote Credits.
+- Total Credits.
+- Credits Consumed.
+- RFQ Count.
+- Quotation Count.
+- Quoted Opportunities.
+- 360° AI Score.
+- Supplier Rating.
+- Verification Status.
+- Account Status.
+- Registration Date.
+- Last Login.
+- Last Activity.
+- Assigned Executive, if available.
+- Other relevant existing supplier fields.
+
+### Database Requirements
+- Fetch all registered supplier records.
+- Reuse existing database models and relationships.
+- Verify backend API responses and frontend field mappings.
+- Ensure no relevant existing supplier fields are unnecessarily omitted.
+- Handle null and missing values correctly.
+- Use actual database records, not hardcoded or dummy data.
+- Avoid duplicate queries and duplicate sources of truth.
+- Use appropriate pagination and database-level filtering.
+
+## 4. Seller Directory Table
+
+Display supplier information in a clean, structured table.
+
+- Supplier Name.
+- Location.
+- Delivery Location.
+- Category.
+- Last Login.
+- 360° Rating.
+- Available Quote Credits.
+- Supplier Status.
+- Actions.
+
+Include additional relevant database-backed fields through configurable column settings.
+
+### Available Quote Credits
+Display available quotation credits similarly to the Available Credits field in Buyer Directory.
+
+Fetch the actual credit balance from the existing database.
+
+Reuse existing credit allocation, consumption, and calculation methods. Do not create a separate credit calculation mechanism.
+
+## 5. Supplier Name Click Functionality
+
+Make every supplier/company name clickable.
+
+When the user clicks a supplier name:
+
+- Open the existing Supplier 360° Dossier.
+- Display the complete supplier profile.
+- Do not redirect to RFQ details.
+- Preserve the existing supplier profile navigation and functionality.
+
+Reuse the existing Supplier Dossier component, routes, APIs, and database relationships.
+
+## 6. Supplier 360° Dossier – Header
+
+Update the existing Supplier Dossier header.
+
+- Remove the Seller ID from the visible UI.
+- Retain Seller ID internally for database relationships and backend operations.
+- Display Supplier Name.
+- Display Supplier Source (Buyer Uploaded / Network Supplier).
+- Display 360° AI Score.
+- Display Supplier Rating.
+- Preserve the existing close button and layout.
+
+## 7. Supplier Profile Tab
+
+Preserve and display all existing supplier profile information.
+
+Include:
+- Company Information.
+- Contact Details.
+- Email.
+- Phone Number.
+- Company Location.
+- Delivery Location.
+- GSTIN, where available.
+- PAN, where available.
+- Subscription Tier.
+- Verification Status.
+- Account Status.
+- Procurement Categories.
+- Other existing supplier details.
+
+Reuse existing profile components and database methods.
+
+## 8. Quotes Tab – Complete Quotation History
+
+Display the complete quotation history submitted by the selected supplier.
+
+Include:
+- RFQ ID.
+- RFQ Title.
+- Quoted Amount.
+- Submission Date.
+- RFQ Category.
+- Sourcing Mode.
+- Supplier's Quotation Status.
+- Assigned Buyer, where permitted.
+- Available Actions.
+
+### Quote Popup Functionality
+
+- Make RFQ IDs and quotation references clickable.
+- Clicking them should open a popup/modal displaying the complete quotation and associated RFQ details.
+- Display quotation items, quantities, specifications, pricing, attachments, delivery details, and status wherever available.
+- Reuse existing quotation and RFQ detail components and APIs.
+- Clicking outside the popup should close it.
+- Pressing Escape should also close it.
+- After closing, preserve the Supplier Dossier, selected tab, filters, and scroll position.
+- Provide a View Full Details option.
+
+Do not redirect users to an unrelated RFQ page when they expect quotation details.
+
+## 9. Credit Tab – Complete Supplier Credit History
+
+Display the complete quotation credit history of the selected supplier.
+
+### Credit Summary
+- Total Credits Allocated.
+- Credits Consumed.
+- Remaining Free Credits.
+- Purchased Credits, where applicable.
+- Adjusted Credits.
+- Current Credit Balance.
+- Subscription or Entitlement Information.
+
+### Credit Transaction History
+
+Display:
+- Transaction ID.
+- Transaction Date and Time.
+- Transaction Type.
+- Credit Source.
+- Credits Added.
+- Credits Consumed.
+- Previous Balance.
+- Updated Balance.
+- Related RFQ ID.
+- Payment or Subscription Reference.
+- Transaction Status.
+- Description / Remarks.
+
+Support filters by transaction type and date range, search, ascending/descending sorting, pagination, and export.
+
+Use actual historical database transactions. Do not fabricate previous balances or reconstruct transaction history using only the current balance.
+
+Preserve existing supplier credit calculation and consumption rules.
+
+## 10. Communications Tab – Replace Messages
+
+Rename the existing **Messages** tab to **Communications**, following the same structure as Buyer Directory.
+
+Inside Communications, provide four compact buttons in one horizontal row:
+
+1. Email.
+2. SMS.
+3. WhatsApp.
+4. Call Logs.
+
+When the user clicks each button, display all relevant communication history for the selected supplier.
+
+### A. Email
+Display:
+- Email Subject.
+- Message Content / Preview.
+- Sender.
+- Recipient.
+- Date and Time.
+- Delivery Status.
+- Read Status, where available.
+- Attachments, where available.
+
+Allow users to open and view complete email content.
+
+### B. SMS
+Display:
+- Message Content.
+- Sender.
+- Recipient Phone Number.
+- Date and Time.
+- Message Direction (Sent / Received).
+- Delivery Status.
+
+### C. WhatsApp
+Display:
+- Message Content.
+- Sender and Recipient.
+- Date and Time.
+- Message Direction.
+- Delivery Status.
+- Read / Acknowledgement Status, where supported.
+- Attachments, where available.
+
+### D. Call Logs
+Display:
+- Contact Number.
+- Call Direction (Incoming / Outgoing).
+- Call Date and Time.
+- Call Duration.
+- Call Status (Answered / Missed / Failed).
+- Executive / User.
+- Call Notes or Remarks.
+
+### Communication Rules
+- Fetch all available communication history from existing database records and integrations.
+- Show latest communications first by default.
+- Support date filtering and searching.
+- Clearly distinguish incoming and outgoing communications.
+- Display actual delivery and read statuses.
+- Do not generate dummy communication records.
+- Do not mark communications as delivered or read without actual confirmation.
+
+Reuse existing email, SMS, WhatsApp, and calling integrations.
+
+## 11. Payments Tab – Complete Payment History
+
+Display the complete payment transaction history of the selected supplier.
+
+### Payment Summary
+- Total Amount Paid.
+- Successful Payments.
+- Pending Payments.
+- Failed Payments.
+- Refunded Amount, where applicable.
+
+### Payment History Table
+
+Include:
+- Payment ID.
+- Invoice / Reference Number.
+- Transaction Date and Time.
+- Description.
+- Subscription Plan.
+- Payment Amount.
+- Currency.
+- Payment Gateway.
+- Payment Method / Channel.
+- Gateway Transaction Reference.
+- Transaction Status.
+- Invoice / Receipt.
+- Actions.
+
+Include successful, pending, failed, cancelled, and refunded transactions wherever available.
+
+### Payment Functionality
+- Fetch all payment records from the existing database.
+- Display latest payments first.
+- Provide date and status filters.
+- Support ascending and descending sorting.
+- Allow users to open payment details.
+- Provide invoice or receipt access where available.
+- Support pagination and export.
+
+Do not display only the latest payment or a single subscription record.
+
+## 12. Remove Activity Tab
+
+Remove the visible Activity tab from the Supplier Dossier navigation.
+
+Final navigation must be:
+
+1. Profile.
+2. Quotes.
+3. Credit.
+4. Communications.
+5. Payments.
+
+Important:
+- Remove only the visible Activity tab.
+- Do not delete audit records, activity history, database tables, backend APIs, or internal logging functionality.
+- Preserve existing security and audit mechanisms.
+
+## 13. Gear Icon – Dynamic Column Settings
+
+Implement the same Gear icon and Column Settings functionality as Buyer Directory, following the attached Column Settings screenshot.
+
+Place the Gear icon beside Export Directory.
+
+When clicked, open a Column Settings popup.
+
+### A. Column Settings Interface
+
+Display:
+- Column Settings heading.
+- Description: Show, hide, and drag handles to reorder columns.
+- All available Seller Directory columns.
+- Checkbox against each column.
+- Drag-and-drop handle.
+- Column position number.
+- Reset to Default button.
+- Done button.
+- Close button.
+
+### B. Show / Hide Columns
+
+Allow users to:
+- Show individual columns.
+- Hide individual columns.
+- Select All.
+- Hide All optional columns.
+- Reset to Default.
+
+Keep Supplier Name and Actions locked and visible.
+
+The Actions column must always remain at the end.
+
+### C. Drag-and-Drop Column Reordering
+
+Allow users to drag and drop columns inside the settings popup.
+
+For example, users should be able to change:
+
+Default:
+1. Supplier Name.
+2. Contact Person.
+3. Email.
+4. Phone.
+5. Source.
+6. Category.
+7. Location.
+8. Delivery Location.
+9. Available Quote Credits.
+10. Rating.
+11. Status.
+12. Registration Date.
+13. Actions.
+
+Customized:
+1. Supplier Name.
+2. Available Quote Credits.
+3. Rating.
+4. Category.
+5. Contact Person.
+6. Location.
+7. Email.
+8. Status.
+9. Registration Date.
+10. Actions.
+
+The table must immediately reflect the new order.
+
+### D. Table Synchronization
+
+- Show only selected columns.
+- Maintain the exact order configured by the user.
+- Update headers and data cells together.
+- Keep column alignment correct.
+- Maintain sorting and filtering after reordering.
+- Support horizontal scrolling when required.
+- Do not remove or modify database information when hiding columns.
+
+### E. Save User Preferences
+
+Persist:
+- Visible columns.
+- Hidden columns.
+- Column order.
+- Default configuration.
+
+Requirements:
+- Save preferences separately for each logged-in user.
+- Restore preferences after page refresh and re-login.
+- Do not affect other users' configurations.
+- Use existing user-preference storage if available.
+- Otherwise, implement a minimal user-specific preference mechanism.
+
+### F. Reset and Default
+
+Provide:
+- Reset to Default.
+- Select All.
+- Hide All optional columns.
+- Done.
+
+Reset to Default must restore the original column visibility and order without changing supplier data.
+
+## 14. Sorting and Filtering
+
+Every applicable Seller Directory column must support ascending and descending sorting.
+
+Examples:
+- Supplier Name: A–Z / Z–A.
+- Available Quote Credits: Lowest–Highest / Highest–Lowest.
+- Rating: Lowest–Highest / Highest–Lowest.
+- Registration Date: Oldest–Newest / Newest–Oldest.
+- Last Login: Oldest–Newest / Newest–Oldest.
+- Last Activity: Oldest–Newest / Newest–Oldest.
+- Status: Status-based sorting.
+- Category: Alphabetical sorting.
+
+All date columns must sort chronologically using actual date values, not formatted display strings.
+
+Preserve existing:
+- Search.
+- Source Filter.
+- Category Filter.
+- Rating Filter.
+
+Ensure sorting and filtering work with all database records, including paginated results and after column customization.
+
+## 15. Technical and Database Requirements
+
+### Database Integration
+- Fetch complete seller records from existing database tables.
+- Reuse existing supplier, quotation, credit, payment, communication, and profile models.
+- Maintain correct relationships between sellers, buyers, RFQs, quotations, and transactions.
+- Avoid duplicate sources of truth.
+- Add database fields or tables only when necessary.
+
+### Frontend
+- Reuse existing components, hooks, table utilities, routes, and styling.
+- Follow the existing QUA AI design system.
+- Avoid unnecessary dependencies.
+- Ensure responsive layout.
+
+### Backend
+- Reuse existing controllers, services, repositories, APIs, and methods.
+- Implement database-level pagination, filtering, and sorting where applicable.
+- Validate requests.
+- Enforce authorization server-side.
+- Handle errors properly.
+
+### Security
+- Preserve existing authentication and role-based permissions.
+- Do not expose confidential supplier or buyer information to unauthorized users.
+- Maintain existing audit logging.
+
+## 16. Strict No-Breaking-Changes Policy
+
+**This is an enhancement to the existing production application, not a rebuild.**
+
+1. Inspect the existing Seller Directory before modifying anything.
+2. Reuse existing database models, APIs, methods, components, and integrations.
+3. Do not recreate existing Supplier Directory or Supplier Dossier functionality.
+4. Do not change existing credit allocation or consumption rules.
+5. Do not change quotation, RFQ, subscription, or payment business logic.
+6. Do not delete historical supplier, quotation, credit, communication, or payment records.
+7. Do not unnecessarily rename existing APIs, functions, methods, routes, or database fields.
+8. Do not modify unrelated application modules.
+9. Preserve existing routes and API compatibility.
+10. Do not replace working integrations with dummy implementations.
+11. Make only minimal, targeted, backward-compatible changes.
+12. Preserve internal audit and activity logging even after removing the visible Activity tab.
+
+If any requirement conflicts with existing business logic, identify the conflict before changing it.
+
+## 17. Testing and Acceptance Criteria
+
+Verify the following:
+
+1. All relevant seller records are fetched from the actual database.
+2. All available relevant seller fields are displayed.
+3. Summary cards show correct database-backed values.
+4. Supplier name opens the correct Supplier 360° Dossier.
+5. Seller ID is hidden from the visible header.
+6. Available Quote Credits display the correct balance.
+7. Quotes tab displays complete quotation history.
+8. Clicking a quotation opens the correct details popup.
+9. Credit tab displays complete credit transaction history.
+10. Communications contains Email, SMS, WhatsApp, and Call Logs.
+11. Each communication button displays its relevant historical records.
+12. Payments displays complete supplier payment history.
+13. Activity tab is removed from visible navigation.
+14. Export Directory downloads actual filtered supplier data.
+15. Gear icon opens Column Settings.
+16. Users can show and hide columns.
+17. Users can drag and drop columns.
+18. Supplier Name and Actions remain locked.
+19. Column preferences persist across sessions.
+20. Every applicable column supports ascending and descending sorting.
+21. Date columns sort chronologically.
+22. Search and filters work correctly after reordering columns.
+23. Existing supplier workflows remain functional.
+24. Run relevant unit tests, integration tests, regression tests, linting, type checks, and production builds.
+
+## 18. Implementation Order
+
+**Phase 1 – Inspection**
+- Inspect existing Seller Directory and Supplier Dossier.
+- Identify existing database fields, methods, APIs, and reusable components.
+- Identify missing functionality.
+- Prepare a minimal change plan.
+
+**Phase 2 – Directory Enhancement**
+- Integrate all available seller database fields.
+- Update summary cards and table.
+- Implement Search, Source, Category, and Rating filters.
+- Fix Export Directory.
+
+**Phase 3 – Column Settings**
+- Implement Gear icon.
+- Implement show/hide checkboxes.
+- Implement drag-and-drop column ordering.
+- Save user-specific preferences.
+- Implement sorting and filtering compatibility.
+
+**Phase 4 – Supplier Dossier**
+- Update header.
+- Implement complete Quotes, Credit, Communications, and Payments history.
+- Remove visible Activity tab while retaining internal logging.
+- Implement quotation details popup.
+
+**Phase 5 – Testing**
+- Verify database accuracy.
+- Test all tabs and interactions.
+- Verify column settings and export.
+- Run regression tests.
+- Review the final code diff for unintended changes.
+
+## 19. Final Deliverables
+
+After implementation, provide:
+
+- Summary of completed functionality.
+- Modified and newly added files.
+- Existing components, methods, and APIs reused.
+- Database tables and fields used.
+- New or modified APIs, if any.
+- Database migrations, if any.
+- Column preference storage implementation.
+- Communication and payment integration details.
+- Testing performed and actual results.
+- Remaining limitations or pending requirements.
+
+# FINAL DEVELOPMENT INSTRUCTION
+
+Make the Seller Directory fully consistent with Buyer Directory in database integration, UI, search, filters, dynamic column settings, drag-and-drop ordering, sorting, and export.
+
+The Supplier 360° Dossier must provide complete Profile, Quotes, Credit, Communications, and Payments information using actual database records.
+
+The Gear icon must support column visibility, drag-and-drop ordering, and individual user preference persistence.
+
+**Most importantly, reuse existing functionality, methods, APIs, database models, and integrations. Preserve all existing business logic and working functionality. Make only the minimum necessary backward-compatible changes. Do not rebuild, overwrite, or break the existing application.**
+```
+
+
+---
+
+### 2026-10-31T03:00:00+05:30
+
+```text
+why that much time it is  running since 2 hours not raise the pr first raise the pr
+```
+
+---
+
+### 2026-10-31T08:45:00+05:30
+
+```text
+check the error fix it
+```
+
+---
+
+### 2026-10-31T10:12:59+05:30
+
+```text
+commit the changes
+```
+
+
+---
+
+### 2026-10-31T10:35:42+05:30
+
+```text
+merge the commit changes and see the outoput
+
+
+[Master Quality & PR Summary summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408#summary-124425598443)
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: FAILED
+283 / 285 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+4204
+4204
+0
+0
+frontend
+3367
+3365
+2
+0
+Workspace
+7571
+7569
+2
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.93%
+92.59%
+99.29%
+99.54%
+128 / 128
+frontend
+97.98%
+93.07%
+98.24%
+98.73%
+155 / 157
+Workspace
+98.45%
+92.82%
+98.61%
+99.13%
+283 / 285
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+PASSED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+FAILED
+Frontend per-file coverage
+FAILED
+Production build
+FAILED
+TypeScript typecheck
+FAILED
+Lint
+PASSED
+Database migrations
+PASSED
+Coverage failures
+frontend: app/category-manager/buyers-directory.tsx: branches 88.59% < 90%.
+frontend: app/category-manager/sellers-directory.tsx: branches 79.43% < 90%.
+frontend: app/category-manager/sellers-directory.tsx: lines 89.79% < 90%.
+[Job summary generated at run-time](https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions#adding-a-job-summary)
+Annotations
+15 errors, 3 warnings, and 3 notices
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:400)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:374)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:333)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:288)Type '{ categories: never[]; id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:249)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:226)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:97)Property 'name' is missing in type '{ id: string; email: string; }' but required in type 'RFQAssignedVendor'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:89)Type '"PENDING"' is not assignable to type '"Parsing" | "In Evaluation" | "AI Recommended" | "PO Generated" | "Quotes Pending" | "Quotes Received" | "Closed" | "Expired"'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:70)Type '"Buyer Uploaded"' is not assignable to type '"Client List" | "Procucev - AI Rec" | "Procucev Network"'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:46)Type '"QUOTED"' is not assignable to type '"Parsing" | "In Evaluation" | "AI Recommended" | "PO Generated" | "Quotes Pending" | "Quotes Received" | "Closed" | "Expired"'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:7:20)Process completed with exit code 1.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:6:78838)Process completed with exit code 1.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:5:60)Process completed with exit code 1.
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443#step:9:22)Process completed with exit code 1.
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443#step:8:37)Process completed with exit code 1.
+[Backend Tests, Migrations & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443582#step:19:6)Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:21:8)Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443#step:19:2)Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/download-artifact@v4, actions/github-script@v7, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+[Backend Tests, Migrations & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443582)"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754)"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443)"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+Artifacts
+
+how much time doo it very fast i what do so many chnages
+```
+
+---
+
+### 2026-10-31T11:02:36+05:30
+
+```text
+how much time do it
+```
+
+---
+
+### 2026-10-31T11:26:22+05:30
+
+```text
+continue
+```
+
+---
+
+### 2026-10-31T12:15:30+05:30
+
+```text
+once you solve copilot comments then you are able to merge pr .
+```
