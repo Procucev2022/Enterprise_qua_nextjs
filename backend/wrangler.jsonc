@@ -33,7 +33,7 @@
     ]
   },
   "env": {
-    "development": {
+    "dev": {
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "development",
@@ -102,7 +102,7 @@
         }
       ]
     },
-    "production": {
+    "prod": {
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "production",
