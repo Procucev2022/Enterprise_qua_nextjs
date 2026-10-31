@@ -2728,7 +2728,16 @@ const VENDOR_DIRECTORY_AUTH_CONFIG = Object.freeze({
   SESSION_SCOPE: 'vendor_directory',
 });
 
+const DEFAULT_INTERNAL_MEMBERS = Object.freeze([
+  { id: 'exec-1', name: 'Pavani', role: 'CRM Executive', email: 'pavani@procucev.com', project: 'Hyderabad Hub' },
+  { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist', email: 'navin@procucev.com', project: 'Mechanical Spares' },
+  { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead', email: 'prajwal.karakoon@procucev.com', project: 'Supplier Network' },
+  { id: 'exec-4', name: 'Veerababu V', role: 'Sourcing Manager', email: 'veerababu.v@procucev.com', project: 'Electrical Engineering' },
+  { id: 'exec-5', name: 'Srinivas Mukku', role: 'Commercial Director', email: 'srinivas.mukku@procucev.com', project: 'Industrial Capital' },
+]);
+
 module.exports = {
+  DEFAULT_INTERNAL_MEMBERS,
   VENDOR_DIRECTORY_SESSION_STATUS,
   VENDOR_DIRECTORY_LOGOUT_REASONS,
   VENDOR_DIRECTORY_AUTH_CONFIG,

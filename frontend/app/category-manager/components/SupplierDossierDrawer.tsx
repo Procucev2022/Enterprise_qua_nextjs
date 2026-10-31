@@ -30,6 +30,7 @@ import {
   Star,
   Sparkles,
   ShieldCheck,
+  Calendar,
 } from 'lucide-react';
 import type {
   RFQItem,
@@ -44,6 +45,9 @@ import type {
 import {
   formatCurrency,
   formatIndianDateTime,
+  DEFAULT_INTERNAL_MEMBERS,
+  CALL_OUTCOMES,
+  FOLLOWUP_PRIORITIES,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
@@ -363,9 +367,29 @@ export default function SupplierDossierDrawer({
   // New Communication Message State
   const [isComposeOpen, setIsComposeOpen] = useState<boolean>(false);
   const [composeChannel, setComposeChannel] = useState<'EMAIL' | 'SMS' | 'WHATSAPP' | 'CALL'>('EMAIL');
+  const [composeRecipient, setComposeRecipient] = useState<string>(seller.email || seller.phone || '');
   const [composeSubject, setComposeSubject] = useState<string>('');
   const [composeMessage, setComposeMessage] = useState<string>('');
+  const [composeCallOutcome, setComposeCallOutcome] = useState<string>('Connected');
+  const [composeDuration, setComposeDuration] = useState<string>('');
+  const [composeNextFollowupDate, setComposeNextFollowupDate] = useState<string>('');
+  const [composeFollowupPriority, setComposeFollowupPriority] = useState<'Low' | 'Medium' | 'High' | 'Critical'>('Medium');
+  const [composeFollowupAssigneeId, setComposeFollowupAssigneeId] = useState<string>(DEFAULT_INTERNAL_MEMBERS[0].id);
+  const [composeFollowupAssigneeName, setComposeFollowupAssigneeName] = useState<string>(DEFAULT_INTERNAL_MEMBERS[0].name);
+  const [composeFollowupNotes, setComposeFollowupNotes] = useState<string>('');
   const [isSendingComm, setIsSendingComm] = useState<boolean>(false);
+
+  // Esc key listener to close compose modal or comm details modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isComposeOpen) setIsComposeOpen(false);
+        if (selectedCommForModal) setSelectedCommForModal(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isComposeOpen, selectedCommForModal]);
 
   const loadCommunications = useCallback(async () => {
     setLoadingComms(true);
@@ -412,21 +436,36 @@ export default function SupplierDossierDrawer({
     try {
       const res = await recordSupplierCommunication(seller.id, {
         channel: composeChannel,
-        recipient: seller.email || seller.phone || '',
+        recipient: composeRecipient || seller.email || '',
         subject: composeSubject || `Supplier Communication: ${composeChannel}`,
         message: composeMessage,
+        callOutcome: composeChannel === 'CALL' ? composeCallOutcome : undefined,
+        duration: composeChannel === 'CALL' ? composeDuration : undefined,
+        nextFollowupDate: composeNextFollowupDate || undefined,
+        followupPriority: composeFollowupPriority,
+        followupAssigneeId: composeFollowupAssigneeId,
+        followupAssigneeName: composeFollowupAssigneeName,
+        followupNotes: composeFollowupNotes || undefined,
       });
       if (res.success) {
-        showToast('Communication recorded and dispatched successfully.', 'success');
+        showToast(
+          composeNextFollowupDate
+            ? (strings.compose?.successToast || 'Communication recorded, completed task created, and follow-up scheduled.')
+            : (strings.compose?.successToast || 'Communication recorded and completed task created.'),
+          'success'
+        );
         setIsComposeOpen(false);
         setComposeSubject('');
         setComposeMessage('');
+        setComposeDuration('');
+        setComposeNextFollowupDate('');
+        setComposeFollowupNotes('');
         loadCommunications();
       } else {
-        showToast(res.error || 'Failed to dispatch communication', 'error');
+        showToast(res.error || strings.compose?.errorToast || 'Failed to dispatch communication', 'error');
       }
     } catch {
-      showToast('Error recording communication', 'error');
+      showToast(strings.compose?.errorToast || 'Error recording communication', 'error');
     } finally {
       setIsSendingComm(false);
     }
@@ -1707,31 +1746,43 @@ export default function SupplierDossierDrawer({
           onClick={() => setIsComposeOpen(false)}
         >
           <div
-            className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4"
+            className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4 max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <MessageSquare className="w-4 h-4 text-emerald-600" />
-                Record Supplier Communication
+                <MessageSquare className="w-4.5 h-4.5 text-emerald-600" />
+                <span>{strings.compose.title}</span>
               </h3>
               <button
                 type="button"
                 onClick={() => setIsComposeOpen(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSendCommunication} className="space-y-3">
+            <p className="text-xs text-slate-500 dark:text-slate-400 -mt-2">
+              {strings.compose.subtitle}
+            </p>
+
+            <form onSubmit={handleSendCommunication} className="space-y-3.5">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Communication Channel
+                  {strings.compose.channelLabel}
                 </label>
                 <select
                   value={composeChannel}
-                  onChange={(e) => setComposeChannel(e.target.value as any)}
+                  onChange={(e) => {
+                    const ch = e.target.value as any;
+                    setComposeChannel(ch);
+                    if (ch === 'CALL' || ch === 'SMS' || ch === 'WHATSAPP') {
+                      setComposeRecipient(seller.phone || seller.email || '');
+                    } else {
+                      setComposeRecipient(seller.email || seller.phone || '');
+                    }
+                  }}
                   className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
                 >
                   <option value="EMAIL">Email</option>
@@ -1743,11 +1794,55 @@ export default function SupplierDossierDrawer({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Subject / Summary
+                  {strings.compose.recipientLabel}
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. RFQ Quotation Deadline Follow-up"
+                  value={composeRecipient}
+                  onChange={(e) => setComposeRecipient(e.target.value)}
+                  placeholder="e.g. supplier@company.com or +91 9876543210"
+                  className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                />
+              </div>
+
+              {composeChannel === 'CALL' && (
+                <div className="grid grid-cols-2 gap-2 p-3 bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {strings.compose.callOutcomeLabel}
+                    </label>
+                    <select
+                      value={composeCallOutcome}
+                      onChange={(e) => setComposeCallOutcome(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                    >
+                      {CALL_OUTCOMES.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {strings.compose.callDurationLabel}
+                    </label>
+                    <input
+                      type="text"
+                      value={composeDuration}
+                      onChange={(e) => setComposeDuration(e.target.value)}
+                      placeholder={strings.compose.callDurationPlaceholder}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {strings.compose.subjectLabel}
+                </label>
+                <input
+                  type="text"
+                  placeholder={strings.compose.subjectPlaceholder}
                   value={composeSubject}
                   onChange={(e) => setComposeSubject(e.target.value)}
                   className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
@@ -1756,33 +1851,108 @@ export default function SupplierDossierDrawer({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Message Content / Call Notes
+                  {strings.compose.messageLabel}
                 </label>
                 <textarea
-                  rows={4}
+                  rows={3}
                   required
-                  placeholder="Type message content or summary of call..."
+                  placeholder={strings.compose.messagePlaceholder}
                   value={composeMessage}
                   onChange={(e) => setComposeMessage(e.target.value)}
                   className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
               </div>
 
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                    <Calendar size={13} className="text-emerald-600" />
+                    <span>{strings.compose.nextFollowupLabel}</span>
+                  </span>
+                  {composeNextFollowupDate && (
+                    <button
+                      type="button"
+                      onClick={() => setComposeNextFollowupDate('')}
+                      className="text-[10px] text-slate-400 hover:text-rose-500 underline cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <input
+                      type="datetime-local"
+                      value={composeNextFollowupDate}
+                      onChange={(e) => setComposeNextFollowupDate(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                    />
+                  </div>
+                  <div>
+                    <select
+                      value={composeFollowupPriority}
+                      onChange={(e) => setComposeFollowupPriority(e.target.value as any)}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                    >
+                      {FOLLOWUP_PRIORITIES.map((p) => (
+                        <option key={p.value} value={p.value}>Priority: {p.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {composeNextFollowupDate && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
+                        {strings.compose.followupAssigneeLabel}
+                      </label>
+                      <select
+                        value={composeFollowupAssigneeId}
+                        onChange={(e) => {
+                          setComposeFollowupAssigneeId(e.target.value);
+                          const m = DEFAULT_INTERNAL_MEMBERS.find((mem) => mem.id === e.target.value);
+                          if (m) setComposeFollowupAssigneeName(m.name);
+                        }}
+                        className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                      >
+                        {DEFAULT_INTERNAL_MEMBERS.map((m) => (
+                          <option key={m.id} value={m.id}>{m.name} ({m.role})</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
+                        {strings.compose.followupNotesLabel}
+                      </label>
+                      <input
+                        type="text"
+                        value={composeFollowupNotes}
+                        onChange={(e) => setComposeFollowupNotes(e.target.value)}
+                        placeholder={strings.compose.followupNotesPlaceholder}
+                        className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setIsComposeOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
                 >
-                  Cancel
+                  {strings.compose.cancelBtn}
                 </button>
                 <button
                   type="submit"
                   disabled={isSendingComm}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors flex items-center gap-1.5"
+                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
                   {isSendingComm && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  Dispatch & Record
+                  <span>{strings.compose.sendBtn}</span>
                 </button>
               </div>
             </form>

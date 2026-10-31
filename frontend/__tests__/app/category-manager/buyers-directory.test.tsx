@@ -123,6 +123,8 @@ describe('BuyersDirectory Component Suite', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    window.sessionStorage.clear();
+    window.localStorage.clear();
     (useApp as jest.Mock).mockReturnValue({
       buyerAccounts: mockBuyerAccounts,
       rfqs: mockRfqs,
@@ -518,4 +520,161 @@ describe('BuyersDirectory Component Suite', () => {
     expect(screen.getByText('Export Directory')).toBeInTheDocument();
     window.localStorage.clear();
   });
+  test('filters buyers by Source Type (Web App, WhatsApp, Email, All)', () => {
+    const buyersWithSources = [
+      {
+        ...mockBuyerAccounts[0],
+        id: 'b-web',
+        organizationName: 'Web Enterprises',
+        sourceType: 'Web App',
+        status: 'ACTIVE_VERIFIED',
+      },
+      {
+        ...mockBuyerAccounts[1],
+        id: 'b-wa',
+        organizationName: 'WhatsApp Buyers Corp',
+        sourceType: 'WhatsApp',
+        status: 'ACTIVE_VERIFIED',
+      },
+      {
+        ...mockBuyerAccounts[2],
+        id: 'b-email',
+        organizationName: 'Email Sourcing Group',
+        sourceType: 'Email',
+        status: 'ACTIVE_VERIFIED',
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      buyerAccounts: buyersWithSources,
+      rfqs: mockRfqs,
+      auditLogs: mockAuditLogs,
+      setSelectedRFQForMatrix: jest.fn(),
+    });
+
+    render(<BuyersDirectory />);
+
+    expect(screen.getByText('Web Enterprises')).toBeInTheDocument();
+    expect(screen.getByText('WhatsApp Buyers Corp')).toBeInTheDocument();
+    expect(screen.getByText('Email Sourcing Group')).toBeInTheDocument();
+
+    const sourceSelect = screen.getByDisplayValue('All Sources');
+
+    // Filter by WhatsApp
+    fireEvent.change(sourceSelect, { target: { value: 'WhatsApp' } });
+    expect(screen.queryByText('Web Enterprises')).not.toBeInTheDocument();
+    expect(screen.getByText('WhatsApp Buyers Corp')).toBeInTheDocument();
+    expect(screen.queryByText('Email Sourcing Group')).not.toBeInTheDocument();
+
+    // Filter by Email
+    fireEvent.change(sourceSelect, { target: { value: 'Email' } });
+    expect(screen.queryByText('Web Enterprises')).not.toBeInTheDocument();
+    expect(screen.queryByText('WhatsApp Buyers Corp')).not.toBeInTheDocument();
+    expect(screen.getByText('Email Sourcing Group')).toBeInTheDocument();
+
+    // Filter by Web App
+    fireEvent.change(sourceSelect, { target: { value: 'Web App' } });
+    expect(screen.getByText('Web Enterprises')).toBeInTheDocument();
+    expect(screen.queryByText('WhatsApp Buyers Corp')).not.toBeInTheDocument();
+    expect(screen.queryByText('Email Sourcing Group')).not.toBeInTheDocument();
+
+    // Reset to All Sources
+    fireEvent.change(sourceSelect, { target: { value: 'all' } });
+    expect(screen.getByText('Web Enterprises')).toBeInTheDocument();
+    expect(screen.getByText('WhatsApp Buyers Corp')).toBeInTheDocument();
+    expect(screen.getByText('Email Sourcing Group')).toBeInTheDocument();
+  });
+
+  test('displays all pending verification buyer variations correctly', () => {
+    const variedPendingBuyers = [
+      {
+        ...mockBuyerAccounts[0],
+        id: 'b-pend-1',
+        organizationName: 'Onboarding Pending Ltd',
+        status: 'PENDING_ONBOARDING',
+      },
+      {
+        ...mockBuyerAccounts[1],
+        id: 'b-pend-2',
+        organizationName: 'Email Pending Corp',
+        status: 'PENDING_EMAIL_VERIFICATION',
+      },
+      {
+        ...mockBuyerAccounts[2],
+        id: 'b-pend-3',
+        organizationName: 'Alignment Pending Co',
+        status: 'PENDING_ALIGNMENT',
+      },
+      {
+        ...mockBuyerAccounts[3],
+        id: 'b-pend-4',
+        organizationName: 'New Client Awaiting Approval',
+        status: 'AWAITING_APPROVAL',
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      buyerAccounts: variedPendingBuyers,
+      rfqs: mockRfqs,
+      auditLogs: mockAuditLogs,
+      setSelectedRFQForMatrix: jest.fn(),
+    });
+
+    render(<BuyersDirectory />);
+
+    const statusSelect = screen.getByDisplayValue('All Statuses');
+    fireEvent.change(statusSelect, { target: { value: 'PENDING_VERIFICATION' } });
+
+    expect(screen.getByText('Onboarding Pending Ltd')).toBeInTheDocument();
+    expect(screen.getByText('Email Pending Corp')).toBeInTheDocument();
+    expect(screen.getByText('Alignment Pending Co')).toBeInTheDocument();
+    expect(screen.getByText('New Client Awaiting Approval')).toBeInTheDocument();
+
+    fireEvent.change(statusSelect, { target: { value: 'ACTIVE_VERIFIED' } });
+    expect(screen.queryByText('Onboarding Pending Ltd')).not.toBeInTheDocument();
+    expect(screen.queryByText('Email Pending Corp')).not.toBeInTheDocument();
+    expect(screen.queryByText('Alignment Pending Co')).not.toBeInTheDocument();
+    expect(screen.queryByText('New Client Awaiting Approval')).not.toBeInTheDocument();
+  });
+
+  test('restores saved state from sessionStorage on mount', () => {
+    const savedState = {
+      searchTerm: 'Tata',
+      selectedMode: RFQ_MODES.MODE_1,
+      selectedStatus: 'ACTIVE_VERIFIED',
+      selectedSource: 'Web App',
+      sortColumn: 'organizationName',
+      sortOrder: 'asc',
+      currentPage: 1,
+      pageSize: 10,
+    };
+    window.sessionStorage.setItem('buyer_directory_state', JSON.stringify(savedState));
+
+    render(<BuyersDirectory />);
+
+    expect(screen.getByDisplayValue('Tata')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Web App')).toBeInTheDocument();
+    expect(screen.getByText('Tata Motors Corp')).toBeInTheDocument();
+
+    window.sessionStorage.clear();
+  });
+
+  test('handles corrupted sessionStorage JSON gracefully', () => {
+    window.sessionStorage.setItem('buyer_directory_state', '{corrupted_json');
+
+    render(<BuyersDirectory />);
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+
+    window.sessionStorage.clear();
+  });
+  test('initialBuyerId opens drawer on matching buyer with initialTab', () => {
+    render(<BuyersDirectory initialBuyerId="b-1" initialTab="rfqs" />);
+    expect(screen.getByText('Close Dossier')).toBeInTheDocument();
+  });
+
+  test('initialBuyerId with non-matching buyer does not open drawer', () => {
+    render(<BuyersDirectory initialBuyerId="non-matching-id" />);
+    expect(screen.queryByText('Close Dossier')).toBeNull();
+  });
 });
+

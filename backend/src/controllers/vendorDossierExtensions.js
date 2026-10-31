@@ -244,25 +244,99 @@ async function recordVendorCommunication(req, res, next) {
     }
     if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
 
-    const { channel, recipient, subject, message, notes, metadata } = req.body || {};
+    const {
+      channel,
+      recipient,
+      subject,
+      message,
+      notes,
+      metadata,
+      callOutcome,
+      duration,
+      nextFollowupDate,
+      followupPriority,
+      followupAssigneeId,
+      followupAssigneeName,
+      followupNotes,
+    } = req.body || {};
     const paymentDuesQueries = require('../db/paymentDuesQueries');
+    const internalTaskQueries = require('../db/internalTaskQueries');
+
+    const normalizedChannel = (channel || 'EMAIL').toUpperCase();
+    const commNotes = [
+      callOutcome ? `Call Outcome: ${callOutcome}` : null,
+      duration ? `Duration: ${duration}` : null,
+      notes || null,
+    ].filter(Boolean).join(' | ');
 
     const record = await paymentDuesQueries.recordCommunication({
       accountId: vendor.id,
       accountType: 'vendor',
-      channel: channel || 'EMAIL',
+      channel: normalizedChannel,
       recipient: recipient || vendor.email || vendor.phone || '',
       subject: subject || null,
       message: message || '',
       notificationStatus: 'Delivered',
       deliveryStatus: 'Delivered',
       acknowledgementStatus: 'Acknowledgement Pending',
-      communicatedBy: req.user?.email || 'Category Manager',
-      notes: notes || null,
-      metadata: metadata || {},
+      communicatedBy: req.user?.fullName || req.user?.name || req.user?.email || 'Category Manager',
+      notes: commNotes || null,
+      metadata: {
+        ...(metadata || {}),
+        callOutcome: callOutcome || null,
+        duration: duration || null,
+        nextFollowupDate: nextFollowupDate || null,
+      },
     });
 
-    return res.status(201).json({ success: true, data: record });
+    const vendorLabel = vendor.companyName || vendor.name || vendor.businessName || 'Supplier';
+
+    let completedTask = null;
+    try {
+      const channelLabel = normalizedChannel === 'CALL' ? 'Call' : normalizedChannel === 'WHATSAPP' ? 'WhatsApp' : normalizedChannel === 'SMS' ? 'SMS' : 'Email';
+      const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+      completedTask = await internalTaskQueries.createInternalTask({
+        title: `[${channelLabel} Log / Completed] ${subject || vendorLabel}`,
+        description: message || commNotes || 'Vendor communication activity recorded.',
+        taskTypeId: 'itt_vendor_followup',
+        priority: 'Medium',
+        status: 'Completed',
+        relatedEntityType: 'VENDOR',
+        relatedEntityId: vendor.id,
+        relatedEntityLabel: vendorLabel,
+        assignedToUserId: actor.uuid || actor.id || null,
+        assignedToName: actor.fullName || actor.name || actor.email || 'Category Manager',
+        dueDate: new Date().toISOString(),
+        notes: commNotes || '',
+      }, actor);
+    } catch (taskErr) {
+      logger.warn('Failed to create completed internal task for vendor communication', { error: taskErr.message }, 'VENDOR_CONTROLLER');
+    }
+
+    let followupTask = null;
+    if (nextFollowupDate) {
+      try {
+        const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+        followupTask = await internalTaskQueries.createInternalTask({
+          title: `[Follow-up] ${vendorLabel} - ${subject || 'Vendor Follow-up'}`,
+          description: followupNotes || `Follow-up needed following ${normalizedChannel} outreach: ${message || ''}`,
+          taskTypeId: 'itt_vendor_followup',
+          priority: followupPriority || 'Medium',
+          status: 'Pending',
+          relatedEntityType: 'VENDOR',
+          relatedEntityId: vendor.id,
+          relatedEntityLabel: vendorLabel,
+          assignedToUserId: followupAssigneeId || actor.uuid || actor.id || null,
+          assignedToName: followupAssigneeName || actor.fullName || actor.name || actor.email || 'Category Manager',
+          dueDate: nextFollowupDate,
+          notes: followupNotes || '',
+        }, actor);
+      } catch (followupErr) {
+        logger.warn('Failed to create pending follow-up internal task for vendor communication', { error: followupErr.message }, 'VENDOR_CONTROLLER');
+      }
+    }
+
+    return res.status(201).json({ success: true, data: record, completedTask, followupTask });
   } catch (err) {
     logger.error('Error recording vendor communication', err, 'VENDOR_CONTROLLER');
     next(err);

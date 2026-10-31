@@ -6,6 +6,7 @@ import type {
   BuyerCreditSummary,
   BuyerCreditTransaction,
   BuyerCommunicationItem,
+  RecordCommunicationPayload,
   BuyerPaymentSummary,
   BuyerPaymentTransaction,
   BuyerProfile,
@@ -407,11 +408,13 @@ export async function fetchBuyerCommunications(
 
 export async function recordBuyerCommunication(
   buyerId: string,
-  payload: { channel: string; recipient?: string; subject?: string; message: string; notes?: string; metadata?: any }
+  payload: RecordCommunicationPayload
 ): Promise<{
   success: boolean;
   error?: string;
   data?: any;
+  completedTask?: any;
+  followupTask?: any;
 }> {
   try {
     const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/communications`, {

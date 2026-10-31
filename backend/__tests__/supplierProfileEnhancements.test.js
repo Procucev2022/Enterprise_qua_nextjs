@@ -557,5 +557,97 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
         })
       );
     });
+
+    test('recordVendorCommunication handles nextFollowupDate and task creation failure branches', async () => {
+      const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({ id: 'comm-v-followup-1' });
+
+      const vendor = {
+        id: 'v-followup',
+        companyName: 'Vendor Followup Inc',
+        email: 'supplier@followup.com',
+      };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(vendor);
+
+      // 1. Success with nextFollowupDate and full fields
+      const taskSpy = jest.spyOn(internalTaskQueries, 'createInternalTask')
+        .mockResolvedValueOnce({ id: 'vtask-completed-1', status: 'Completed' })
+        .mockResolvedValueOnce({ id: 'vtask-followup-1', status: 'Pending' });
+
+      const req = {
+        user: { ...adminUser, uuid: 'u-2', fullName: 'Vendor CM' },
+        params: { id: 'v-followup' },
+        body: {
+          channel: 'CALL',
+          recipient: '9876543210',
+          subject: 'Delivery Timeline',
+          message: 'Discussed expedited delivery',
+          callOutcome: 'Connected',
+          duration: '15 mins',
+          nextFollowupDate: '2026-11-12T10:00:00.000Z',
+          followupPriority: 'High',
+          followupAssigneeId: 'exec-2',
+          followupAssigneeName: 'Navin Chaudhary',
+          followupNotes: 'Check shipping manifest',
+        },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.recordVendorCommunication(req, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        completedTask: expect.objectContaining({ id: 'vtask-completed-1' }),
+        followupTask: expect.objectContaining({ id: 'vtask-followup-1' }),
+      }));
+
+      // 2. Exception in completed task creation and followup task creation handled gracefully
+      taskSpy
+        .mockRejectedValueOnce(new Error('Vendor task DB failure 1'))
+        .mockRejectedValueOnce(new Error('Vendor task DB failure 2'));
+
+      const resErr = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.recordVendorCommunication(req, resErr, jest.fn());
+      expect(resErr.status).toHaveBeenCalledWith(201);
+      expect(resErr.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        completedTask: null,
+        followupTask: null,
+      }));
+
+      // 3. Cover WHATSAPP, SMS, and fallback actor/vendor labels
+      const fallbackVendor = { id: 'v-fallback', name: 'Fallback Name Vendor' };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(fallbackVendor);
+      taskSpy
+        .mockResolvedValueOnce({ id: 'vtask-wa-comp' })
+        .mockResolvedValueOnce({ id: 'vtask-wa-fol' })
+        .mockResolvedValueOnce({ id: 'vtask-sms-comp' })
+        .mockResolvedValueOnce({ id: 'vtask-sms-fol' });
+
+      const reqWA = {
+        user: { role: 'admin', id: 'actor-id-only', email: 'cm.actor@procucev.com' },
+        params: { id: 'v-fallback' },
+        body: {
+          channel: 'WHATSAPP',
+          nextFollowupDate: '2026-11-20T10:00:00.000Z',
+        },
+      };
+      const resWA = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.recordVendorCommunication(reqWA, resWA, jest.fn());
+      expect(resWA.status).toHaveBeenCalledWith(201);
+
+      const reqSMS = {
+        user: { role: 'admin', id: 'actor-id-only', name: 'CM Person' },
+        params: { id: 'v-fallback' },
+        body: {
+          channel: 'SMS',
+          nextFollowupDate: '2026-11-20T10:00:00.000Z',
+        },
+      };
+      const resSMS = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.recordVendorCommunication(reqSMS, resSMS, jest.fn());
+      expect(resSMS.status).toHaveBeenCalledWith(201);
+    });
   });
 });

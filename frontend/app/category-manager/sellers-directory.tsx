@@ -58,6 +58,7 @@ import SupplierDossierDrawer from './components/SupplierDossierDrawer';
 
 interface SellersDirectoryProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
+  initialSellerId?: string;
 }
 
 /**
@@ -76,8 +77,8 @@ function getSellerActualLastLogin(
     createdAt?: string;
     created_at?: string;
   },
-  _rfqs: RFQItem[] = [],
-  _auditLogs: unknown[] = []
+  _rfqs?: RFQItem[],
+  _auditLogs?: unknown[]
 ): string {
   const rawLogin =
     seller.lastLogin ||
@@ -97,7 +98,7 @@ function getSellerActualLastLogin(
   return '';
 }
 
-export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps) {
+export default function SellersDirectory({ onSelectRFQ, initialSellerId }: SellersDirectoryProps) {
   const { buyerVendors = [], rfqs = [], auditLogs = [], categoryTaxonomy = [] } = useApp();
   const strings = UI_STRINGS.sellerDirectory;
 
@@ -328,6 +329,15 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
 
     return Array.from(map.values());
   }, [remoteVendors, buyerVendors, rfqs, auditLogs]);
+
+  useEffect(() => {
+    if (initialSellerId && allSellers.length > 0) {
+      const match = allSellers.find((s: any) => s.id === initialSellerId);
+      if (match) {
+        setActiveSeller(match);
+      }
+    }
+  }, [initialSellerId, allSellers]);
 
   // KPI Metrics Calculation
   const totalSellersCount = allSellers.length;
@@ -759,7 +769,14 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
                   return (
                     <tr
                       key={seller.id}
-                      className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.closest('button') || target.closest('a') || target.closest('input') || target.closest('select')) {
+                          return;
+                        }
+                        setActiveSeller(seller);
+                      }}
+                      className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors cursor-pointer"
                     >
                       {visibleColumns.map((col) => {
                         switch (col.key) {
