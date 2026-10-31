@@ -438,8 +438,16 @@ async function createVendor(req, res, next) {
     // silently overwrite that account's real password/phone on every retried
     // duplicate submission, even though the vendor record itself never
     // persisted — a real account got its login clobbered this way.
-    if (body.email && storeService.getVendorById(body.email, 'all')) {
-      return res.status(409).json({ success: false, error: `A vendor with the email ${body.email} already exists.` });
+    if (body.email) {
+      // A migrated vendor who signed in first already has an auto-created,
+      // unowned profile; this add takes it over rather than 409ing.
+      const claimed = await storeService.claimMigratedVendorProfile(body.email, body, buyerId, req.user && req.user.email);
+      if (claimed) {
+        return res.status(201).json({ success: true, data: withoutTemporaryPassword(claimed) });
+      }
+      if (storeService.getVendorById(body.email, 'all')) {
+        return res.status(409).json({ success: false, error: `A vendor with the email ${body.email} already exists.` });
+      }
     }
     const phone = body.contactPhone || body.phone;
     if (phone && Array.isArray(storeService.vendors)) {
@@ -1026,7 +1034,9 @@ async function getVendorRfqCredits(req, res, next) {
       vendor = storeService.getVendorById(id, 'all') || (await storeService.getVendorByIdWithDBFallback(id, 'all'));
     }
     if (!vendor && user.email) {
-      vendor = storeService.getVendorById(user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(user.email, 'all'));
+      vendor = user.role === 'vendor'
+        ? await storeService.ensureVendorProfileForUser(user)
+        : storeService.getVendorById(user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(user.email, 'all'));
     }
 
     if (!vendor) {
