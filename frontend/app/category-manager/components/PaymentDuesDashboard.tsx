@@ -840,7 +840,7 @@ export default function PaymentDuesDashboard() {
         {/* Left: Search & Filter Controls */}
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {/* Global Search */}
-          <div className="relative min-w-[180px] max-w-xs flex-1">
+          <div className="relative flex-grow min-w-[200px] flex-1">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"

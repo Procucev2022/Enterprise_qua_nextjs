@@ -1725,6 +1725,82 @@ async function getVendorCreditTransactionsFromDB(vendorId, limit = 50) {
  * idx_vendors_major_category_trgm, idx_vendors_minor_categories_trgm)
  * so substring ILIKE across 600k+ rows never forces a sequential scan.
  */
+
+async function recordBuyerCreditTransactionInDB({
+  id,
+  buyerId,
+  rfqId,
+  transactionType,
+  creditSource,
+  creditsAdded = 0,
+  creditsConsumed = 0,
+  previousBalance = 0,
+  updatedBalance = 0,
+  paymentReference,
+  status = 'COMPLETED',
+  description,
+  idempotencyKey,
+  createdAt,
+}) {
+  if (!pool.hasStorage()) return null;
+  const result = await pool.query(
+    `INSERT INTO buyer_credit_transactions (
+      id, buyer_id, rfq_id, transaction_type, credit_source,
+      credits_added, credits_consumed, previous_balance, updated_balance,
+      payment_reference, status, description, idempotency_key, created_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14::timestamptz, now()))
+    ON CONFLICT (idempotency_key) DO UPDATE SET updated_balance = EXCLUDED.updated_balance
+    RETURNING *`,
+    [
+      id,
+      buyerId,
+      rfqId || null,
+      transactionType,
+      creditSource || 'Enterprise System',
+      creditsAdded,
+      creditsConsumed,
+      previousBalance,
+      updatedBalance,
+      paymentReference || null,
+      status,
+      description || null,
+      idempotencyKey || null,
+      createdAt || null,
+    ],
+    {
+      d1: true,
+      d1Text: `INSERT INTO buyer_credit_transactions (
+        id, buyer_id, rfq_id, transaction_type, credit_source,
+        credits_added, credits_consumed, previous_balance, updated_balance,
+        payment_reference, status, description, idempotency_key, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
+      ON CONFLICT (idempotency_key) DO UPDATE SET updated_balance = EXCLUDED.updated_balance
+      RETURNING *`,
+    }
+  );
+  queryCache.invalidate('buyer_credits');
+  return result && result.rows ? result.rows[0] : null;
+}
+
+async function getBuyerCreditTransactionsFromDB(buyerId, limit = 50) {
+  if (!pool.hasStorage() || !buyerId) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const sql = hasLimit
+    ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2`
+    : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000`;
+  const params = hasLimit ? [buyerId, Math.min(Number(limit), 1000)] : [buyerId];
+  const result = await pool.query(sql, params, {
+    d1: true,
+    d1Text: hasLimit
+      ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2`
+      : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000`,
+    useCache: true,
+    tag: 'buyer_credits',
+    ttlMs: 60000,
+  });
+  return result && result.rows ? result.rows : [];
+}
+
 async function getPublicVendorsPageFromDB({
   limit = 24,
   offset = 0,
@@ -1988,6 +2064,8 @@ module.exports = {
   getVendorUnlocksFromDB,
   recordCreditTransactionInDB,
   getVendorCreditTransactionsFromDB,
+  recordBuyerCreditTransactionInDB,
+  getBuyerCreditTransactionsFromDB,
   getPublicVendorsPageFromDB,
   getPublicVendorFiltersFromDB,
 };

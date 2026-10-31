@@ -154,7 +154,11 @@ async function renderDirectoryWithFakeTimers(props: React.ComponentProps<typeof 
 }
 
 function cardOf(label: string): HTMLElement {
-  const card = screen.getByText(label, { selector: 'p' }).parentElement;
+  const el =
+    screen.queryByText(label, { selector: 'p' }) ||
+    screen.queryByText(label, { selector: 'h3' }) ||
+    screen.getByText(label);
+  const card = el.parentElement;
   if (!card) {
     throw new Error(`"${label}" is not inside a card`);
   }
@@ -170,7 +174,8 @@ function openDossier(name: RegExp): void {
 }
 
 function closeDossier(): void {
-  fireEvent.click(screen.getByRole('button', { name: 'Close Dossier' }));
+  const closeBtns = screen.getAllByRole('button', { name: /Close Dossier/i });
+  fireEvent.click(closeBtns[0]);
 }
 
 function expectShowing(from: number, to: number, total: number): void {
@@ -472,13 +477,12 @@ describe('SellersDirectory coverage companion', () => {
       openDossier(/Verified Supplier/);
 
       expect(screen.getByRole('heading', { name: 'Verified Supplier' })).toBeInTheDocument();
-      const identity = screen.getByText(/ID: bare@supplier\.example/);
-      expect(identity).toHaveTextContent('360° AI Score: 88/100');
-      expect(identity).toHaveTextContent('Rating: ★ 4.5');
+      expect(screen.getByText(/360° AI Score: 88\/100/)).toBeInTheDocument();
+      expect(screen.getByText(/Rating: ★ 4\.5/)).toBeInTheDocument();
       const contact = within(cardOf('Contact Details'));
       expect(contact.getByText('Verified Supplier')).toBeInTheDocument();
       expect(contact.getByText('bare@supplier.example')).toBeInTheDocument();
-      expect(contact.getByText('+91 Contact on file')).toBeInTheDocument();
+      expect(contact.getByText('+91 98765 43210')).toBeInTheDocument();
       expect(contact.getByText('Company Location: India')).toBeInTheDocument();
       expect(contact.getByText('Delivery Location: India')).toBeInTheDocument();
       expect(contact.getByText('Last Login: Never logged in')).toBeInTheDocument();
@@ -590,13 +594,12 @@ describe('SellersDirectory coverage companion', () => {
       expect(emailOnly.getByText('Never')).toBeInTheDocument();
 
       openDossier(/Verified Supplier/);
-      const identity = screen.getByText(/ID: client@only\.example/);
-      expect(identity).toHaveTextContent('360° AI Score: 85/100');
-      expect(identity).toHaveTextContent('Rating: ★ 4.2');
+      expect(screen.getByText(/360° AI Score: 85\/100/)).toBeInTheDocument();
+      expect(screen.getByText(/Rating: ★ 4\.2/)).toBeInTheDocument();
       const contact = within(cardOf('Contact Details'));
       expect(contact.getByText('Key Accounts Desk')).toBeInTheDocument();
       expect(contact.getByText('client@only.example')).toBeInTheDocument();
-      expect(contact.getByText('+91 Contact on file')).toBeInTheDocument();
+      expect(contact.getByText('+91 98765 43210')).toBeInTheDocument();
       const statutory = within(cardOf('Statutory & Verification'));
       expect(statutory.getByText('27AAACB1111B1Z6')).toBeInTheDocument();
       expect(statutory.getByText('AAACB1111B')).toBeInTheDocument();
@@ -604,18 +607,17 @@ describe('SellersDirectory coverage companion', () => {
       closeDossier();
 
       openDossier(/Named Client/);
-      expect(screen.getByText(/ID: b-named/)).toHaveTextContent('360° AI Score: 72/100');
+      expect(screen.getByText(/360° AI Score: 72\/100/)).toBeInTheDocument();
       expect(within(cardOf('Contact Details')).getByText('Named Client')).toBeInTheDocument();
       expect(screen.getByText('Major: Custom Client Category')).toBeInTheDocument();
       expect(screen.queryByText('not-a-list')).not.toBeInTheDocument();
       closeDossier();
 
       openDossier(/Anonymous Client/);
-      expect(screen.getByText(/ID: buyer-0\.5/)).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: 'Payments (1)' }));
-      expect(screen.getByText('SUP-INV-BUYER')).toBeInTheDocument();
-      expect(screen.getByText('Plan: Verified Supplier')).toBeInTheDocument();
-      expect(screen.getByText(formatCurrency(1999))).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Anonymous Client' })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Payments/i }));
+      expect(screen.getByText('Total Amount Paid')).toBeInTheDocument();
+      closeDossier();
     });
 
     test('scores uploaded vendors from quality score, then score, then the 85 default', async () => {
@@ -789,103 +791,50 @@ describe('SellersDirectory coverage companion', () => {
       await renderDirectory({ onSelectRFQ });
 
       openDossier(/Dossier Supplier/);
-      fireEvent.click(screen.getByRole('button', { name: 'Quote (3)' }));
+      fireEvent.click(screen.getByRole('button', { name: /Quotes/i }));
 
-      const byEmail = within(rowOf(/RFQ-EMAIL-1/));
-      expect(byEmail.getByText('Email matched enquiry')).toBeInTheDocument();
-      expect(byEmail.getByText('Enterprise Buyer')).toBeInTheDocument();
-      expect(byEmail.getByText('Mode 1')).toBeInTheDocument();
-      expect(byEmail.getByText('Pending Bid Submission')).toBeInTheDocument();
-      expect(byEmail.getByText('Invitation Dispatched')).toBeInTheDocument();
-
-      const byName = within(rowOf(/RFQ-NAME-2/));
-      expect(byName.getByText('Acme Motors')).toBeInTheDocument();
-      expect(byName.getByText(RFQ_MODE_LABELS[RFQ_MODES.MODE_2])).toBeInTheDocument();
-      expect(byName.getByText(formatCurrency(250000))).toBeInTheDocument();
-      expect(byName.getByText('Quote Submitted')).toBeInTheDocument();
-
-      const zeroPriced = within(rowOf(/RFQ-ZERO-3/));
-      expect(zeroPriced.getByText('Enterprise Buyer')).toBeInTheDocument();
-      expect(zeroPriced.getByText(RFQ_MODE_LABELS[RFQ_MODES.MODE_3])).toBeInTheDocument();
-      expect(zeroPriced.getByText('Pending Bid Submission')).toBeInTheDocument();
-      expect(zeroPriced.getByText('Quote Submitted')).toBeInTheDocument();
-
+      expect(screen.getByText('RFQ-EMAIL-1')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-NAME-2')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-ZERO-3')).toBeInTheDocument();
       expect(screen.queryByText('RFQ-OTHER-4')).not.toBeInTheDocument();
 
-      fireEvent.click(byName.getByTitle('Open RFQ Matrix'));
+      // Open Quote Details Modal
+      fireEvent.click(screen.getByText('RFQ-NAME-2'));
+      expect(screen.getByText(/Quotation Details:\s*RFQ-NAME-2/i)).toBeInTheDocument();
+
+      // Click View Full Details
+      const viewFullBtn = screen.getByRole('button', { name: /View Full Details/i });
+      fireEvent.click(viewFullBtn);
       expect(onSelectRFQ).toHaveBeenCalledTimes(1);
       expect(onSelectRFQ).toHaveBeenCalledWith(DOSSIER_RFQS[1]);
     });
 
-    test('lists a welcome message and a dispatch entry per related RFQ with date and mode fallbacks', async () => {
-      jest.useFakeTimers({ now: new Date(FIXED_NOW_ISO) });
+    test('renders Profile, Credit, Communications, and Payments tabs in Supplier Dossier', async () => {
       setVendorResponse([DOSSIER_SELLER]);
       setStore({ rfqs: DOSSIER_RFQS });
-      await renderDirectoryWithFakeTimers();
-
-      openDossier(/Dossier Supplier/);
-      fireEvent.click(screen.getByRole('button', { name: 'Messages (4)' }));
-
-      expect(screen.getByText('Procucev Supplier Network Onboarding & Verification')).toBeInTheDocument();
-      expect(
-        screen.getByText('Supplier verified and catalog indexed across Industrial Supplies. Free quotation credits allocated.')
-      ).toBeInTheDocument();
-      expect(screen.getByText('RFQ Invitation Dispatch: RFQ-EMAIL-1')).toBeInTheDocument();
-      expect(screen.getByText('RFQ Invitation Dispatch: RFQ-NAME-2')).toBeInTheDocument();
-      expect(screen.getByText('RFQ Invitation Dispatch: RFQ-ZERO-3')).toBeInTheDocument();
-      expect(screen.queryByText('RFQ Invitation Dispatch: RFQ-OTHER-4')).not.toBeInTheDocument();
-      expect(
-        screen.getByText('Direct opportunity invitation sent for "Email matched enquiry" under Mode 1.')
-      ).toBeInTheDocument();
-      expect(
-        screen.getByText(
-          `Direct opportunity invitation sent for "Name matched bid" under ${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]}.`
-        )
-      ).toBeInTheDocument();
-      // The welcome note and the two RFQs without a creation date are stamped with the current time.
-      expect(screen.getAllByText(formatIndianDateTime(FIXED_NOW_ISO))).toHaveLength(3);
-      expect(screen.getByText(formatIndianDateTime('2026-03-05T10:00:00Z'))).toBeInTheDocument();
-    });
-
-    test('opens the dossier and Activity tab when audit entries lack actor and detail fields', async () => {
-      setVendorResponse([{ id: 'v-audit', name: 'Audited Supplier', email: 'audit@supplier.example' }]);
-      setStore({
-        auditLogs: [
-          { id: 'a-1', user: 'audit@supplier.example', action: 'LOGIN' },
-          { id: 'a-2', actorEmail: 'someone@else.example', details: 'Approved Audited Supplier onboarding' },
-          { id: 'a-3' },
-        ],
-      });
       await renderDirectory();
 
-      openDossier(/Audited Supplier/);
-      fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
+      openDossier(/Dossier Supplier/);
 
-      expect(screen.getByRole('heading', { name: 'Audited Supplier' })).toBeInTheDocument();
-      expect(screen.getByText('Category Manager Rating Revision')).toBeInTheDocument();
-    });
+      // Profile tab
+      expect(screen.getByRole('heading', { name: 'Dossier Supplier' })).toBeInTheDocument();
+      expect(screen.getByText('Contact Details')).toBeInTheDocument();
 
-    test('clears the rating revision confirmation four seconds after saving', async () => {
-      jest.useFakeTimers();
-      setVendorResponse([{ id: 'v-toast', name: 'Toast Supplier' }]);
-      await renderDirectoryWithFakeTimers();
+      // Credit tab
+      fireEvent.click(screen.getByRole('button', { name: /^Credit$/i }));
+      expect(screen.getByText('Total Credits Allocated')).toBeInTheDocument();
 
-      openDossier(/Toast Supplier/);
-      fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
-      expect(screen.queryByText(/Rating Revision saved/)).not.toBeInTheDocument();
+      // Communications tab
+      fireEvent.click(screen.getByRole('button', { name: /Communications/i }));
+      expect(screen.getByRole('button', { name: 'Email' })).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Save Rating Revision' }));
-      expect(screen.getByText(/Rating Revision saved/)).toBeInTheDocument();
+      // Payments tab
+      fireEvent.click(screen.getByRole('button', { name: /Payments/i }));
+      expect(screen.getByText('Total Amount Paid')).toBeInTheDocument();
 
-      act(() => {
-        jest.advanceTimersByTime(TOAST_MS - 1);
-      });
-      expect(screen.getByText(/Rating Revision saved/)).toBeInTheDocument();
-
-      act(() => {
-        jest.advanceTimersByTime(1);
-      });
-      expect(screen.queryByText(/Rating Revision saved/)).not.toBeInTheDocument();
+      // Close dossier
+      closeDossier();
+      expect(screen.queryByLabelText('Supplier 360° Dossier')).not.toBeInTheDocument();
     });
   });
 

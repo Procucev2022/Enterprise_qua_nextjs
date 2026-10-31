@@ -1,0 +1,366 @@
+const storeService = require('../services/storeService');
+const domainQueries = require('../db/domainQueries');
+const zohoReconciliationService = require('../services/zohoReconciliationService');
+const { logger } = require('../services/loggerService');
+
+function assertCategoryManagerOrVendor(req, res, vendorOrEmail) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  if (user.role === 'category_manager' || user.role === 'admin') return true;
+  if (user.role === 'vendor') {
+    const vendorEmail = (typeof vendorOrEmail === 'string' ? vendorOrEmail : vendorOrEmail?.email) || '';
+    if (user.email && vendorEmail.toLowerCase() === user.email.toLowerCase()) {
+      return true;
+    }
+  }
+  res.status(403).json({ success: false, error: 'You do not have permission to access supplier dossier.' });
+  return false;
+}
+
+async function resolveVendor(id, user) {
+  let vendor = storeService.getVendorById(id, 'all');
+  if (!vendor) {
+    vendor = await storeService.getVendorByIdWithDBFallback(id, 'all');
+  }
+  if (!vendor && user?.role === 'vendor' && user.email) {
+    vendor = storeService.getVendorById(user.email, 'all');
+    if (!vendor) {
+      vendor = await storeService.getVendorByIdWithDBFallback(user.email, 'all');
+    }
+  }
+  return vendor;
+}
+
+async function getCreditHistory(req, res, next) {
+  try {
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: `Vendor ${id} not found.` });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
+    const creditInfo = storeService.getVendorRfqCredits(vendor.id);
+    let transactions = await domainQueries.getVendorCreditTransactionsFromDB(vendor.id, 100);
+
+    const alloc = creditInfo.freeCreditsAllocated || 5;
+    if (!transactions || transactions.length === 0) {
+      await domainQueries.recordCreditTransactionInDB({
+        id: `vtx-init-${vendor.id.slice(0, 8)}`,
+        vendorId: vendor.id,
+        rfqId: null,
+        transactionType: 'INITIAL_ALLOCATION',
+        amount: alloc,
+        balanceAfter: alloc,
+        idempotencyKey: `init-${vendor.id}`,
+      });
+
+      const unlockedIds = creditInfo.unlockedRfqIds || [];
+      let runningBal = alloc;
+      for (const rfqId of unlockedIds) {
+        if (runningBal > 0) {
+          runningBal = Math.max(0, runningBal - 1);
+          await domainQueries.recordCreditTransactionInDB({
+            id: `vtx-rfq-${vendor.id.slice(0, 5)}-${String(rfqId).slice(0, 8)}`,
+            vendorId: vendor.id,
+            rfqId: String(rfqId),
+            transactionType: 'RFQ_UNLOCK',
+            amount: -1,
+            balanceAfter: runningBal,
+            idempotencyKey: `unlock-${vendor.id}-${rfqId}`,
+          });
+        }
+      }
+
+      transactions = await domainQueries.getVendorCreditTransactionsFromDB(vendor.id, 100);
+    }
+
+    let totalAllocated = 0;
+    let totalConsumed = 0;
+    let purchasedCredits = 0;
+    let adjustedCredits = 0;
+
+    for (const t of transactions) {
+      const type = String(t.transaction_type || '').toUpperCase();
+      const amt = Number(t.amount || 0);
+      if (type.includes('INITIAL') || type.includes('ALLOCATION') || type.includes('ADDITION')) {
+        totalAllocated += Math.abs(amt);
+      } else if (type.includes('PURCHASE') || type.includes('UPGRADE')) {
+        purchasedCredits += Math.abs(amt);
+        totalAllocated += Math.abs(amt);
+      } else if (type.includes('ADJUSTMENT') || type.includes('REFUND')) {
+        adjustedCredits += Math.abs(amt);
+      } else if (amt < 0 || type.includes('UNLOCK')) {
+        totalConsumed += Math.abs(amt);
+      }
+    }
+
+    if (totalAllocated === 0) {
+      totalAllocated = alloc;
+    }
+
+    if (totalConsumed === 0 && creditInfo.freeCreditsUsed > 0) {
+      totalConsumed = creditInfo.freeCreditsUsed;
+    }
+
+    const summary = {
+      totalCreditsAllocated: totalAllocated,
+      totalCreditsConsumed: totalConsumed,
+      remainingFreeCredits: creditInfo.freeCreditsRemaining ?? Math.max(0, totalAllocated - totalConsumed),
+      purchasedCredits,
+      adjustedCredits,
+      currentCreditBalance: creditInfo.freeCreditsRemaining ?? Math.max(0, totalAllocated - totalConsumed),
+      isSubscribed: Boolean(creditInfo.isSubscribed),
+      subscriptionPlan: creditInfo.subscriptionPlan || vendor.subscriptionPlan || 'Free Tier',
+    };
+
+    const formattedTransactions = (transactions || []).map((t) => {
+      const amt = Number(t.amount || 0);
+      const isDeduction = amt < 0 || String(t.transaction_type).includes('UNLOCK');
+      const txType = t.transaction_type || (isDeduction ? 'Credits Consumed' : 'Credits Added');
+      let creditSource = 'Qua Quotation Engine';
+      if (String(txType).includes('INITIAL')) {
+        creditSource = 'Free Tier Allocation';
+      } else if (String(txType).includes('UPGRADE')) {
+        creditSource = 'Subscription Upgrade';
+      }
+
+      const balAfter = Number(t.balance_after ?? 0);
+      return {
+        id: t.id,
+        transactionId: t.id,
+        transactionDate: t.created_at || new Date().toISOString(),
+        transactionType: txType,
+        creditSource,
+        creditsAdded: isDeduction ? 0 : Math.abs(amt),
+        creditsConsumed: isDeduction ? Math.abs(amt) : 0,
+        previousBalance: balAfter + (isDeduction ? Math.abs(amt) : -Math.abs(amt)),
+        updatedBalance: balAfter,
+        relatedRfqId: t.rfq_id || null,
+        paymentReference: t.idempotency_key || null,
+        status: 'COMPLETED',
+        description: t.description || (isDeduction ? `Quotation submission unlock for RFQ ${t.rfq_id || 'Direct'}` : 'Quotation credit allocation'),
+      };
+    });
+
+    return res.json({ success: true, summary, transactions: formattedTransactions });
+  } catch (err) {
+    logger.error('Error fetching vendor credit history', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+async function getVendorCommunications(req, res, next) {
+  try {
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: `Vendor ${id} not found.` });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
+    const paymentDuesQueries = require('../db/paymentDuesQueries');
+    const comms = await paymentDuesQueries.getCommunicationHistory(vendor.id);
+    const combined = [...comms];
+
+    const hasOnboarding = combined.some((c) => c.subject && c.subject.includes('Onboarding'));
+    if (!hasOnboarding) {
+      combined.push({
+        id: `comm-vendor-reg-${vendor.id}`,
+        accountId: vendor.id,
+        accountType: 'vendor',
+        channel: 'EMAIL',
+        subject: 'Supplier Network Onboarding & Verification Confirmation',
+        sender: 'Procucev Supplier Operations',
+        recipient: vendor.email || '',
+        message: `Welcome ${vendor.contactPerson || vendor.name} to the Procucev Supplier Network. Catalog indexed across ${vendor.majorCategory || 'Industrial Supplies'}. Free quotation credits allocated.`,
+        deliveryStatus: 'Delivered',
+        notificationStatus: 'Delivered',
+        acknowledgementStatus: 'Acknowledged',
+        sentAt: vendor.createdAt || new Date().toISOString(),
+        direction: 'OUTGOING',
+      });
+    }
+
+    const allRfqs = storeService.getRFQs ? storeService.getRFQs() : [];
+    const vendorEmail = (vendor.email || '').toLowerCase();
+    const vendorName = (vendor.name || '').toLowerCase();
+    const relatedRfqs = allRfqs.filter((r) => {
+      const isAssigned = (r.assignedVendors || []).some(
+        (v) => (v.id && v.id === vendor.id) || (v.email && v.email.toLowerCase() === vendorEmail)
+      );
+      const hasQuote = (r.quotes || []).some(
+        (q) => (q.vendorId && q.vendorId === vendor.id) || (q.vendorName && q.vendorName.toLowerCase() === vendorName)
+      );
+      return isAssigned || hasQuote;
+    });
+
+    relatedRfqs.forEach((rfq, idx) => {
+      const commId = `comm-vrfq-${rfq.id}-${idx}`;
+      if (!combined.some((c) => c.id === commId)) {
+        combined.push({
+          id: commId,
+          accountId: vendor.id,
+          accountType: 'vendor',
+          channel: 'EMAIL',
+          subject: `Opportunity Invitation: RFQ ${rfq.rfqNumber || rfq.id}`,
+          sender: 'Qua AI Matchmaking Dispatcher',
+          recipient: vendor.email || '',
+          message: `Direct opportunity invitation sent for "${rfq.title || 'Procurement'}" under ${rfq.sourcingMode || 'Mode 1'}. Target submission deadline active.`,
+          deliveryStatus: 'Delivered',
+          notificationStatus: 'Dispatched',
+          acknowledgementStatus: 'Acknowledged',
+          sentAt: rfq.createdAt || new Date().toISOString(),
+          direction: 'OUTGOING',
+        });
+      }
+    });
+
+    combined.sort((a, b) => new Date(b.sentAt || 0).getTime() - new Date(a.sentAt || 0).getTime());
+    return res.json({ success: true, data: combined });
+  } catch (err) {
+    logger.error('Error fetching vendor communications', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+async function recordVendorCommunication(req, res, next) {
+  try {
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: `Vendor ${id} not found.` });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
+    const { channel, recipient, subject, message, notes, metadata } = req.body || {};
+    const paymentDuesQueries = require('../db/paymentDuesQueries');
+
+    const record = await paymentDuesQueries.recordCommunication({
+      accountId: vendor.id,
+      accountType: 'vendor',
+      channel: channel || 'EMAIL',
+      recipient: recipient || vendor.email || vendor.phone || '',
+      subject: subject || null,
+      message: message || '',
+      notificationStatus: 'Delivered',
+      deliveryStatus: 'Delivered',
+      acknowledgementStatus: 'Acknowledgement Pending',
+      communicatedBy: req.user?.email || 'Category Manager',
+      notes: notes || null,
+      metadata: metadata || {},
+    });
+
+    return res.status(201).json({ success: true, data: record });
+  } catch (err) {
+    logger.error('Error recording vendor communication', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+async function getVendorPaymentHistory(req, res, next) {
+  try {
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: `Vendor ${id} not found.` });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
+    let links = await storeService.getPaymentLinksForVendor(vendor.id);
+    const reconciled = await zohoReconciliationService.reconcilePendingLinks(links);
+    if (reconciled > 0) {
+      links = await storeService.getPaymentLinksForVendor(vendor.id);
+    }
+
+    const payments = [];
+    const planName = vendor.subscriptionPlan || 'Preferred Partner';
+    const planLower = planName.toLowerCase();
+    const baseAmount = planLower.includes('connect') ? 1999 : (planLower.includes('select') ? 9999 : 5999);
+    const regDate = vendor.createdAt || new Date().toISOString();
+
+    payments.push({
+      id: `vpay-init-${vendor.id}`,
+      paymentId: `vpay-init-${vendor.id}`,
+      invoiceNo: `SUP-INV-2026-${vendor.id.slice(0, 5).toUpperCase()}`,
+      invoiceNumber: `SUP-INV-2026-${vendor.id.slice(0, 5).toUpperCase()}`,
+      description: `Plan: ${planName}`,
+      subscriptionPlan: planName,
+      amount: baseAmount,
+      currency: 'INR',
+      gateway: 'Zoho Corporate Payments',
+      paymentMethod: 'UPI / NetBanking / Corporate Card',
+      status: 'PAID',
+      gatewayRef: `ZOHO-VINIT-${vendor.id.slice(0, 8)}`,
+      date: regDate,
+      transactionDate: regDate,
+      receiptUrl: `/api/vendors/${vendor.id}/payment-links/vpay-init-${vendor.id}/invoice`,
+    });
+
+    for (const link of links) {
+      const linkDate = link.createdAt || new Date().toISOString();
+      payments.push({
+        id: link.id,
+        paymentId: link.id,
+        invoiceNo: link.invoiceNumber || `SUP-INV-2026-${link.id.slice(0, 6).toUpperCase()}`,
+        invoiceNumber: link.invoiceNumber || `SUP-INV-2026-${link.id.slice(0, 6).toUpperCase()}`,
+        description: `Subscription Renewal: ${link.planId || planName}`,
+        subscriptionPlan: link.planId || planName,
+        amount: Number(link.amount || 0),
+        currency: link.currency || 'INR',
+        gateway: 'Zoho Payments',
+        paymentMethod: 'Credit Card / NetBanking / UPI',
+        status: String(link.status || 'CREATED').toUpperCase(),
+        gatewayRef: link.zohoPaymentLinkId || link.id,
+        date: linkDate,
+        transactionDate: linkDate,
+        receiptUrl: `/api/vendors/${vendor.id}/payment-links/${link.id}/invoice`,
+      });
+    }
+
+    let totalPaid = 0;
+    let totalSuccessful = 0;
+    let pending = 0;
+    let failed = 0;
+    let refunded = 0;
+
+    for (const p of payments) {
+      const st = String(p.status).toUpperCase();
+      if (st === 'PAID' || st === 'SUCCESS' || st === 'COMPLETED') {
+        totalPaid += p.amount;
+        totalSuccessful += 1;
+      } else if (st === 'PENDING' || st === 'CREATED' || st === 'IN_PROGRESS') {
+        pending += 1;
+      } else if (st === 'FAILED' || st === 'EXPIRED') {
+        failed += 1;
+      } else if (st === 'REFUNDED') {
+        refunded += p.amount;
+      }
+    }
+
+    const summary = {
+      totalAmountPaid: totalPaid,
+      totalSuccessfulPayments: totalSuccessful,
+      pendingPayments: pending,
+      failedPayments: failed,
+      totalRefundedAmount: refunded,
+    };
+
+    return res.json({ success: true, summary, payments });
+  } catch (err) {
+    logger.error('Error fetching vendor payment history', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+module.exports = {
+  assertCategoryManagerOrVendor,
+  resolveVendor,
+  getCreditHistory,
+  getVendorCommunications,
+  recordVendorCommunication,
+  getVendorPaymentHistory,
+};

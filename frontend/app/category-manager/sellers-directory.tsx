@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Truck,
   Search,
@@ -30,23 +30,36 @@ import {
   Zap,
   Building2,
   Loader2,
+  Settings,
+  GripVertical,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  RotateCcw,
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
-import { RFQItem, RFQVendorCandidate, VendorEntry } from '@/lib/types';
+import type {
+  RFQItem,
+  RFQVendorCandidate,
+  VendorEntry,
+  SellerDirectoryColumnKey,
+  SellerDirectoryColumnConfig,
+} from '@/lib/types';
 import {
-  RFQ_MODES,
-  RFQ_MODE_LABELS,
   formatCurrency,
   formatIndianDateTime,
+  SELLER_DIRECTORY_COLUMN_PREF_KEY,
+  DEFAULT_SELLER_DIRECTORY_COLUMNS,
 } from '@/lib/constants';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { exportReportToExcel } from '@/lib/reportsClient';
 import { fetchAllVendors } from '@/lib/rfqClient';
+import SupplierDossierDrawer from './components/SupplierDossierDrawer';
 
 interface SellersDirectoryProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
 }
 
-/**
 /**
  * Returns authentic last login timestamp for a seller if available.
  * If no genuine authentication timestamp exists, returns '' so the UI renders 'Never'.
@@ -64,7 +77,7 @@ function getSellerActualLastLogin(
     created_at?: string;
   },
   _rfqs: RFQItem[] = [],
-  _auditLogs: any[] = []
+  _auditLogs: unknown[] = []
 ): string {
   const rawLogin =
     seller.lastLogin ||
@@ -86,6 +99,7 @@ function getSellerActualLastLogin(
 
 export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps) {
   const { buyerVendors = [], rfqs = [], auditLogs = [], categoryTaxonomy = [] } = useApp();
+  const strings = UI_STRINGS.sellerDirectory;
 
   // Remote vendors from backend + local buyer vendors
   const [remoteVendors, setRemoteVendors] = useState<RFQVendorCandidate[]>([]);
@@ -98,25 +112,96 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedRating, setSelectedRating] = useState<string>('all');
 
+  // Sorting state
+  const [sortColumn, setSortColumn] = useState<SellerDirectoryColumnKey | null>(null);
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  // Column Customization state
+  const [columns, setColumns] = useState<SellerDirectoryColumnConfig[]>(DEFAULT_SELLER_DIRECTORY_COLUMNS);
+  const [showColumnSettings, setShowColumnSettings] = useState<boolean>(false);
+  const [draggedColIndex, setDraggedColIndex] = useState<number | null>(null);
+
   // Pagination state
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
+
+  // Active Dossier Seller
+  const [activeSeller, setActiveSeller] = useState<any | null>(null);
+
+  // Load column preferences from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(SELLER_DIRECTORY_COLUMN_PREF_KEY);
+      if (saved) {
+        const parsed: SellerDirectoryColumnConfig[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const validKeys = new Set(DEFAULT_SELLER_DIRECTORY_COLUMNS.map((c) => c.key));
+          const validated = parsed.filter((c) => validKeys.has(c.key));
+          const presentKeys = new Set(validated.map((c) => c.key));
+          DEFAULT_SELLER_DIRECTORY_COLUMNS.forEach((defCol) => {
+            if (!presentKeys.has(defCol.key)) {
+              validated.push(defCol);
+            }
+          });
+          setColumns(validated);
+        }
+      }
+    } catch {
+      // use defaults on parse error
+    }
+  }, []);
+
+  const saveColumns = useCallback((newCols: SellerDirectoryColumnConfig[]) => {
+    setColumns(newCols);
+    try {
+      localStorage.setItem(SELLER_DIRECTORY_COLUMN_PREF_KEY, JSON.stringify(newCols));
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  const handleToggleColumn = useCallback(
+    (key: SellerDirectoryColumnKey) => {
+      const newCols = columns.map((col) => {
+        if (col.key === key) {
+          if (col.required) return col;
+          return { ...col, visible: !col.visible };
+        }
+        return col;
+      });
+      saveColumns(newCols);
+    },
+    [columns, saveColumns]
+  );
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedColIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = (e: React.DragEvent, dropIndex: number) => {
+    e.preventDefault();
+    if (draggedColIndex === null || draggedColIndex === dropIndex) return;
+    const reordered = [...columns];
+    const [moved] = reordered.splice(draggedColIndex, 1);
+    reordered.splice(dropIndex, 0, moved);
+    setDraggedColIndex(null);
+    saveColumns(reordered);
+  };
+
+  const handleResetColumns = () => {
+    saveColumns(DEFAULT_SELLER_DIRECTORY_COLUMNS);
+  };
 
   // Reset to first page when search or filters change
   useEffect(() => {
     setCurrentPage(1);
   }, [searchTerm, selectedSource, selectedCategory, selectedRating]);
-
-  // Dossier Drawer / Modal state
-  const [activeSeller, setActiveSeller] = useState<any | null>(null);
-  const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'activity'>('profile');
-
-  // Rating revision inline form in dossier
-  const [ratingRevisionQuality, setRatingRevisionQuality] = useState<number>(85);
-  const [ratingRevisionCost, setRatingRevisionCost] = useState<number>(80);
-  const [ratingRevisionDelivery, setRatingRevisionDelivery] = useState<number>(90);
-  const [ratingRevisionRemarks, setRatingRevisionRemarks] = useState<string>('');
-  const [ratingSuccessToast, setRatingSuccessToast] = useState<string | null>(null);
 
   // Debounce search input for backend querying
   useEffect(() => {
@@ -166,9 +251,10 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
     remoteVendors.forEach((v) => {
       const id = String(v.id || v.email);
       const deliveryLocation =
-        (v as any).deliveryLocation ||
-        (v as any).serviceLocations ||
-        (v as any).preferredLocations ||
+        (typeof (v as any).deliveryLocation === 'string' && (v as any).deliveryLocation.trim()) ||
+        (Array.isArray((v as any).deliveryLocation) && (v as any).deliveryLocation.length > 0 && (v as any).deliveryLocation.join(', ')) ||
+        (Array.isArray((v as any).serviceLocations) && (v as any).serviceLocations.length > 0 && (v as any).serviceLocations.join(', ')) ||
+        (Array.isArray((v as any).preferredLocations) && (v as any).preferredLocations.length > 0 && (v as any).preferredLocations.join(', ')) ||
         (v as any).location ||
         (v as any).city ||
         'India';
@@ -180,12 +266,14 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
         email: v.email || '',
         phone: (v as any).phone || '',
         location: (v as any).location || (v as any).city || 'India',
-        deliveryLocation: typeof deliveryLocation === 'string' ? deliveryLocation : (Array.isArray(deliveryLocation) ? deliveryLocation.join(', ') : 'India'),
+        deliveryLocation: typeof deliveryLocation === 'string' ? deliveryLocation : 'India',
         lastLogin,
         source: (v as any).source || 'procucev_network',
         majorCategory: (v as any).majorCategory || (v as any).category || 'Industrial Supplies',
+        category: (v as any).majorCategory || (v as any).category || 'Industrial Supplies',
         minorCategories: Array.isArray((v as any).minorCategories) ? (v as any).minorCategories : [],
         score: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : 88,
+        score360: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : 88,
         rating: typeof (v as any).rating === 'number' ? (v as any).rating : 4.5,
         status: (v as any).status || 'ACTIVE',
         subscriptionPlan: (v as any).subscriptionPlan || 'Preferred Partner',
@@ -194,6 +282,7 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
         gstNumber: (v as any).gstNumber || '27AAACG0000A1Z5',
         panNumber: (v as any).panNumber || 'AAACG0000A',
         isNetwork: true,
+        createdAt: (v as any).createdAt || (v as any).created_at || '2026-03-01T10:00:00.000Z',
       });
     });
 
@@ -202,9 +291,10 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
       const id = String(bv.id || bv.email || 'buyer-' + Math.random());
       if (!map.has(id)) {
         const deliveryLocation =
-          (bv as any).deliveryLocation ||
-          (bv as any).serviceLocations ||
-          (bv as any).preferredLocations ||
+          (typeof (bv as any).deliveryLocation === 'string' && (bv as any).deliveryLocation.trim()) ||
+          (Array.isArray((bv as any).deliveryLocation) && (bv as any).deliveryLocation.length > 0 && (bv as any).deliveryLocation.join(', ')) ||
+          (Array.isArray((bv as any).serviceLocations) && (bv as any).serviceLocations.length > 0 && (bv as any).serviceLocations.join(', ')) ||
+          (Array.isArray((bv as any).preferredLocations) && (bv as any).preferredLocations.length > 0 && (bv as any).preferredLocations.join(', ')) ||
           bv.location ||
           'India';
         const lastLogin = getSellerActualLastLogin(bv, rfqs, auditLogs);
@@ -215,12 +305,14 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
           email: bv.email || '',
           phone: bv.phone || '',
           location: bv.location || 'India',
-          deliveryLocation: typeof deliveryLocation === 'string' ? deliveryLocation : (Array.isArray(deliveryLocation) ? deliveryLocation.join(', ') : 'India'),
+          deliveryLocation: typeof deliveryLocation === 'string' ? deliveryLocation : 'India',
           lastLogin,
           source: 'buyer_uploaded',
           majorCategory: bv.majorCategory || 'Custom Client Category',
+          category: bv.majorCategory || 'Custom Client Category',
           minorCategories: Array.isArray(bv.minorCategories) ? bv.minorCategories : [],
           score: Math.round(Number((bv as any).qualityScore || bv.score || 85)),
+          score360: Math.round(Number((bv as any).qualityScore || bv.score || 85)),
           rating: Number(bv.rating || 4.2),
           status: 'VERIFIED_CLIENT_LIST',
           subscriptionPlan: 'Verified Supplier',
@@ -229,6 +321,7 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
           gstNumber: (bv as any).gstNumber || '27AAACB1111B1Z6',
           panNumber: (bv as any).panNumber || 'AAACB1111B',
           isNetwork: false,
+          createdAt: (bv as any).createdAt || (bv as any).created_at || '2026-03-01T10:00:00.000Z',
         });
       }
     });
@@ -303,95 +396,68 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
     });
   }, [allSellers, searchTerm, selectedSource, selectedCategory, selectedRating]);
 
+  // Sorting Handler
+  const handleSort = (columnKey: SellerDirectoryColumnKey) => {
+    if (sortColumn === columnKey) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortColumn(columnKey);
+      setSortOrder('asc');
+    }
+  };
+
+  // Sorted Sellers
+  const sortedSellers = useMemo(() => {
+    if (!sortColumn) return filteredSellers;
+
+    return [...filteredSellers].sort((a, b) => {
+      let valA: any = a[sortColumn];
+      let valB: any = b[sortColumn];
+
+      if (sortColumn === 'supplierName') {
+        valA = a.name || '';
+        valB = b.name || '';
+      } else if (sortColumn === 'category') {
+        valA = a.majorCategory || a.category || '';
+        valB = b.majorCategory || b.category || '';
+      } else if (sortColumn === 'credits') {
+        valA = Number(a.freeQuotationCredits || 0);
+        valB = Number(b.freeQuotationCredits || 0);
+      } else if (sortColumn === 'rating') {
+        valA = Number(a.rating || 0);
+        valB = Number(b.rating || 0);
+      } else if (sortColumn === 'score360') {
+        valA = Number(a.score || 0);
+        valB = Number(b.score || 0);
+      } else if (sortColumn === 'lastLogin') {
+        valA = a.lastLogin ? new Date(a.lastLogin).getTime() : 0;
+        valB = b.lastLogin ? new Date(b.lastLogin).getTime() : 0;
+      } else if (sortColumn === 'registrationDate') {
+        valA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        valB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      }
+
+      if (typeof valA === 'number' && typeof valB === 'number') {
+        return sortOrder === 'asc' ? valA - valB : valB - valA;
+      }
+
+      const strA = String(valA || '').toLowerCase();
+      const strB = String(valB || '').toLowerCase();
+      return sortOrder === 'asc' ? strA.localeCompare(strB) : strB.localeCompare(strA);
+    });
+  }, [filteredSellers, sortColumn, sortOrder]);
+
   // Paginated Sellers slice
-  const totalItems = filteredSellers.length;
+  const totalItems = sortedSellers.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const effectivePage = Math.min(currentPage, totalPages);
   const startIndex = (effectivePage - 1) * pageSize;
   const paginatedSellers = useMemo(() => {
-    return filteredSellers.slice(startIndex, startIndex + pageSize);
-  }, [filteredSellers, startIndex, pageSize]);
-
-  // Derived seller-specific RFQs, Audit Logs, and communications for dossier
-  const sellerRfqs = useMemo(() => {
-    if (!activeSeller) return [];
-    const sellerId = activeSeller.id;
-    const sellerEmail = (activeSeller.email || '').toLowerCase();
-    const sellerName = (activeSeller.name || '').toLowerCase();
-    return rfqs.filter((r) => {
-      const assigned = (r.assignedVendors || []).some(
-        (v) =>
-          (v.id && v.id === sellerId) ||
-          (sellerEmail && v.email && v.email.toLowerCase() === sellerEmail) ||
-          (sellerName && v.name && v.name.toLowerCase() === sellerName)
-      );
-      const quoted = (r.quotes || []).some(
-        (q) =>
-          (q.vendorId && q.vendorId === sellerId) ||
-          (sellerName && q.vendorName && q.vendorName.toLowerCase() === sellerName)
-      );
-      return assigned || quoted;
-    });
-  }, [activeSeller, rfqs]);
-
-  const sellerAuditLogs = useMemo(() => {
-    if (!activeSeller) return [];
-    const sellerEmail = (activeSeller.email || '').toLowerCase();
-    const sellerName = (activeSeller.name || '').toLowerCase();
-    return auditLogs.filter((log) => {
-      const actor = ((log as any).actorEmail || log.user || '').toLowerCase();
-      const details = ((log as any).details || log.action || '').toLowerCase();
-      return (
-        (sellerEmail && actor && actor === sellerEmail) ||
-        (sellerName && details && details.includes(sellerName))
-      );
-    });
-  }, [activeSeller, auditLogs]);
-
-  const sellerCommunications = useMemo(() => {
-    if (!activeSeller) return [];
-    const logs = [];
-    const sellerEmail = activeSeller.email || 'supplier@procucev.com';
-    logs.push({
-      id: `comm-welcome-${activeSeller.id}`,
-      channel: 'WHATSAPP & EMAIL',
-      subject: 'Procucev Supplier Network Onboarding & Verification',
-      recipient: sellerEmail,
-      timestamp: new Date().toISOString(),
-      status: 'VERIFIED_DELIVERED',
-      preview: `Supplier verified and catalog indexed across ${activeSeller.majorCategory || 'Industrial Supplies'}. Free quotation credits allocated.`,
-    });
-    sellerRfqs.forEach((rfq, idx) => {
-      logs.push({
-        id: `comm-quote-${rfq.id}-${idx}`,
-        channel: 'EMAIL_INVITATION',
-        subject: `RFQ Invitation Dispatch: ${rfq.rfqNumber}`,
-        recipient: sellerEmail,
-        timestamp: rfq.createdAt || new Date().toISOString(),
-        status: 'DISPATCHED',
-        preview: `Direct opportunity invitation sent for "${rfq.title}" under ${RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}.`,
-      });
-    });
-    return logs;
-  }, [activeSeller, sellerRfqs]);
-
-  const sellerPayments = useMemo(() => {
-    if (!activeSeller) return [];
-    return [
-      {
-        id: `pay-sub-${activeSeller.id}`,
-        invoiceNo: `SUP-INV-${activeSeller.id.slice(0, 5).toUpperCase()}`,
-        description: `Plan: ${activeSeller.subscriptionPlan || 'Preferred Partner Tier'}`,
-        amount: activeSeller.subscriptionPlan?.includes('Preferred') ? 5999 : 1999,
-        status: 'PAID',
-        gateway: 'Zoho Corporate Payments',
-        date: new Date().toISOString(),
-      },
-    ];
-  }, [activeSeller]);
+    return sortedSellers.slice(startIndex, startIndex + pageSize);
+  }, [sortedSellers, startIndex, pageSize]);
 
   const handleExportDirectory = () => {
-    const rows = filteredSellers.map((s) => ({
+    const rows = sortedSellers.map((s) => ({
       CompanyName: s.name,
       ContactPerson: s.contactPerson || '',
       Email: s.email,
@@ -410,74 +476,67 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
     exportReportToExcel(rows, `Sellers_Directory_${new Date().toISOString().split('T')[0]}`, 'SellersDirectory');
   };
 
-  const handleSaveRatingRevision = () => {
-    if (!activeSeller) return;
-    setRatingSuccessToast('Category Manager Rating Revision saved & synced across evaluations!');
-    setTimeout(() => setRatingSuccessToast(null), 4000);
-  };
+  const visibleColumns = useMemo(() => {
+    return columns.filter((c) => c.visible);
+  }, [columns]);
 
   return (
-    <div className="space-y-6">
-      {/* Top Actions */}
-      <div className="flex items-center justify-end gap-2.5 pb-1">
-        <button
-          onClick={handleExportDirectory}
-          className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-sm transition-all"
-        >
-          <Download className="w-4 h-4" />
-          <span>Export Directory</span>
-        </button>
-      </div>
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3.5">
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Total Suppliers</p>
-          <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{totalSellersCount}</p>
-          <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+    <div className="space-y-4">
+      {/* 5 SUMMARY CARDS IN ONE HORIZONTAL ROW: TOTAL SUPPLIERS, NETWORK SUPPLIERS, BUYER UPLOADED, AVG SCORE, QUOTED OPPORTUNITIES */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {/* Card 1: Total Suppliers */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{strings.totalSuppliers}</p>
+          <p className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white mt-1">{totalSellersCount}</p>
+          <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-1">
             {verifiedCount} Verified active
           </span>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Network Suppliers</p>
-          <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">{networkSellersCount}</p>
-          <span className="text-[11px] text-slate-500">Procucev Marketplace</span>
+        {/* Card 2: Network Suppliers */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{strings.networkSuppliers}</p>
+          <p className="text-xl sm:text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">{networkSellersCount}</p>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{strings.procucevMarketplace}</span>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Buyer Uploaded</p>
-          <p className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">{buyerUploadedCount}</p>
-          <span className="text-[11px] text-slate-500">Private enterprise roster</span>
+        {/* Card 3: Buyer Uploaded */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{strings.buyerUploadedCard}</p>
+          <p className="text-xl sm:text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">{buyerUploadedCount}</p>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{strings.privateEnterpriseRoster}</span>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Average 360° Score</p>
+        {/* Card 4: Average 360° Score */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{strings.avgScore}</p>
           <div className="flex items-center gap-1.5 mt-1">
-            <span className="text-2xl font-bold text-slate-900 dark:text-white">{avgScore}</span>
+            <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">{avgScore}</span>
             <span className="text-xs font-semibold text-amber-500 flex items-center">
               <Star className="w-3.5 h-3.5 fill-current" /> 4.5
             </span>
           </div>
-          <span className="text-[11px] text-slate-500">AI evaluation benchmark</span>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{strings.aiEvaluationBenchmark}</span>
         </div>
 
-        <div className="col-span-2 sm:col-span-4 lg:col-span-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl shadow-sm">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Quoted Opportunities</p>
-          <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+        {/* Card 5: Quoted Opportunities */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between col-span-2 sm:col-span-1">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{strings.quotedOpportunities}</p>
+          <p className="text-xl sm:text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
             {rfqs.reduce((acc, r) => acc + (r.quotes || []).length, 0)}
           </p>
-          <span className="text-[11px] text-slate-500">Total bids delivered</span>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{strings.totalBidsDelivered}</span>
         </div>
       </div>
 
-      {/* Toolbar / Search & Filter Controls */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto">
-        <div className="relative flex-1 min-w-[240px] max-w-md">
+      {/* TOOLBAR: SEARCH, SOURCE FILTER, CATEGORY FILTER, RATING FILTER, EXPORT DIRECTORY & GEAR ICON IN ONE HORIZONTAL ROW */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto no-scrollbar">
+        {/* Search input with flexible width */}
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
           <input
             type="text"
-            placeholder="Search company, contact, email, category, city..."
+            placeholder={strings.searchPlaceholder}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-8 pr-7 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
@@ -508,9 +567,9 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
           onChange={(e) => setSelectedSource(e.target.value)}
           className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer"
         >
-          <option value="all">All Sources</option>
-          <option value="network">Procucev Network</option>
-          <option value="buyer">Buyer Uploaded</option>
+          <option value="all">{strings.allSources}</option>
+          <option value="network">{strings.procucevNetwork}</option>
+          <option value="buyer">{strings.buyerUploaded}</option>
         </select>
 
         {/* Category Filter */}
@@ -518,15 +577,16 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
           aria-label="Filter by category"
           value={selectedCategory}
           onChange={(e) => setSelectedCategory(e.target.value)}
-          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 max-w-[200px] focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer"
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 max-w-[180px] focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer truncate"
         >
-          <option value="all">All Categories</option>
+          <option value="all">{strings.allCategories}</option>
           {categoryOptions.map((cat) => (
             <option key={cat} value={cat}>
               {cat}
             </option>
           ))}
         </select>
+
         {/* Rating Filter */}
         <select
           aria-label="Filter by rating"
@@ -534,35 +594,160 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
           onChange={(e) => setSelectedRating(e.target.value)}
           className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer"
         >
-          <option value="all">All Ratings</option>
+          <option value="all">{strings.allRatings}</option>
           <option value="4plus">★ 4.0+ Stars</option>
           <option value="4.5plus">★ 4.5+ Stars</option>
         </select>
+
+        {/* Export Directory and Gear icon aligned to right */}
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          <button
+            onClick={handleExportDirectory}
+            className="flex items-center gap-1.5 px-3 py-1.5 h-8.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all shrink-0 cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>{strings.exportDirectory}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowColumnSettings(true)}
+            title="Customize Columns"
+            aria-label="Customize Columns"
+            className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
-      {/* Sellers Data Table */}
+      {/* DYNAMIC COLUMN SETTINGS MODAL */}
+      {showColumnSettings && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Customize Columns"
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">{strings.columnSettingsTitle}</h3>
+                  <p className="text-[11px] text-slate-500">{strings.columnSettingsSubtitle}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowColumnSettings(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                aria-label="Close column settings"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto space-y-1 divide-y divide-slate-100 dark:divide-slate-800/60 flex-1">
+              {columns.map((col, idx) => (
+                <div
+                  key={col.key}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, idx)}
+                  onDragOver={(e) => handleDragOver(e, idx)}
+                  onDrop={(e) => handleDrop(e, idx)}
+                  className={`pt-2 pb-2 first:pt-0 flex items-center justify-between gap-3 px-2 rounded-lg transition-colors cursor-move ${
+                    draggedColIndex === idx
+                      ? 'bg-emerald-50 dark:bg-emerald-950/30 opacity-50'
+                      : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <GripVertical className="w-4 h-4 text-slate-400 shrink-0 cursor-grab active:cursor-grabbing" />
+                    <label className="flex items-center gap-2.5 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer select-none truncate">
+                      <input
+                        type="checkbox"
+                        checked={col.visible}
+                        disabled={col.required}
+                        onChange={() => handleToggleColumn(col.key)}
+                        className="rounded border-slate-300 dark:border-slate-700 text-emerald-600 focus:ring-emerald-500 disabled:opacity-50"
+                      />
+                      <span className={col.required ? 'font-semibold text-slate-900 dark:text-slate-100' : ''}>
+                        {col.label}
+                      </span>
+                    </label>
+                  </div>
+                  <span className="text-[11px] text-slate-400 font-mono shrink-0">#{idx + 1}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={handleResetColumns}
+                className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 font-medium transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>{strings.resetDefault}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowColumnSettings(false)}
+                className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SELLERS DATA TABLE */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
             <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
               <tr>
-                <th className="px-4 py-2.5 font-semibold">Supplier</th>
-                <th className="px-4 py-2.5 font-semibold">Location</th>
-                <th className="px-4 py-2.5 font-semibold">Delivery Location</th>
-                <th className="px-4 py-2.5 font-semibold">Category</th>
-                <th className="px-4 py-2.5 font-semibold">Last Login</th>
-                <th className="px-4 py-2.5 font-semibold">Rating</th>
-                <th className="px-4 py-2.5 font-semibold">Credits</th>
-                <th className="px-4 py-2.5 font-semibold">Status</th>
-                <th className="px-4 py-2.5 font-semibold text-right">Actions</th>
+                {visibleColumns.map((col) => {
+                  if (col.key === 'actions') {
+                    return (
+                      <th key={col.key} className="px-4 py-2.5 font-semibold text-right">
+                        {col.label}
+                      </th>
+                    );
+                  }
+
+                  const isSorted = sortColumn === col.key;
+                  return (
+                    <th
+                      key={col.key}
+                      onClick={() => handleSort(col.key)}
+                      className="px-4 py-2.5 font-semibold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors select-none"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>{col.label}</span>
+                        {isSorted ? (
+                          sortOrder === 'asc' ? (
+                            <ArrowUp className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                          ) : (
+                            <ArrowDown className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />
+                        )}
+                      </div>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-800 dark:text-slate-200">
-              {filteredSellers.length === 0 ? (
+              {paginatedSellers.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-12 text-center text-slate-500">
-                    <Filter className="w-8 h-8 text-slate-300 dark:text-slate-700 mx-auto mb-2" />
-                    <p className="font-medium">No suppliers found matching your query.</p>
+                  <td colSpan={visibleColumns.length} className="px-4 py-12 text-center text-slate-400">
+                    <p className="text-sm font-medium">{strings.noSellersFound}</p>
+                    <p className="text-xs mt-1">Try adjusting search criteria or filter selections.</p>
                   </td>
                 </tr>
               ) : (
@@ -574,92 +759,140 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
                   return (
                     <tr
                       key={seller.id}
-                      className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
+                      className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
                     >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2.5">
-                          <div
-                            className={`w-8 h-8 rounded-lg font-bold flex items-center justify-center text-xs shrink-0 ${
-                              seller.source === 'procucev_network'
-                                ? 'bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/50'
-                                : 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/50'
-                            }`}
-                          >
-                            {seller.name.charAt(0).toUpperCase()}
-                          </div>
-                          <span className="font-semibold text-slate-900 dark:text-white truncate">
-                            {seller.name}
-                          </span>
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">
-                        {seller.location || 'India'}
-                      </td>
-
-                      <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">
-                        <span className="inline-flex items-center gap-1">
-                          <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                          <span className="truncate max-w-[140px]" title={seller.deliveryLocation || seller.location || 'All India'}>
-                            {seller.deliveryLocation || seller.location || 'All India'}
-                          </span>
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200 max-w-[160px] truncate" title={seller.majorCategory}>
-                        {seller.majorCategory || 'General'}
-                      </td>
-
-                      <td className="px-4 py-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                        {seller.lastLogin ? (
-                          <span className="inline-flex items-center gap-1 text-[11px]">
-                            <Clock className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span>{formatIndianDateTime(seller.lastLogin)}</span>
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 text-[11px]">Never</span>
-                        )}
-                      </td>
-
-                      <td className="px-4 py-3">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40">
-                          <Star className="w-3 h-3 fill-current text-amber-500" />
-                          {seller.rating}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">
-                        {seller.freeQuotationCredits} Credits
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${
-                            isVerified
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60'
-                              : 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
-                          }`}
-                        >
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              isVerified ? 'bg-emerald-500' : 'bg-slate-400'
-                            }`}
-                          />
-                          <span>{seller.status || 'Active'}</span>
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => {
-                            setActiveSeller(seller);
-                            setDossierTab('profile');
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors inline-flex items-center gap-1 border border-emerald-200/60 dark:border-emerald-800/50 shadow-xs"
-                        >
-                          <span>360° Dossier</span>
-                          <ChevronRight className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
+                      {visibleColumns.map((col) => {
+                        switch (col.key) {
+                          case 'supplierName':
+                            return (
+                              <td key={col.key} className="px-4 py-3 font-semibold text-slate-900 dark:text-white">
+                                <div
+                                  className="flex items-center gap-2.5 cursor-pointer group"
+                                  onClick={() => setActiveSeller(seller)}
+                                >
+                                  <div className="w-7 h-7 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold text-xs flex items-center justify-center shrink-0 group-hover:bg-emerald-100 transition-colors border border-emerald-200/60 dark:border-emerald-800/50">
+                                    {seller.name.charAt(0).toUpperCase()}
+                                  </div>
+                                  <span className="font-semibold text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                                    {seller.name}
+                                  </span>
+                                </div>
+                              </td>
+                            );
+                          case 'location':
+                            return (
+                              <td key={col.key} className="px-4 py-3 text-slate-600 dark:text-slate-400">
+                                {seller.location}
+                              </td>
+                            );
+                          case 'deliveryLocation':
+                            return (
+                              <td key={col.key} className="px-4 py-3 text-slate-600 dark:text-slate-400">
+                                <span className="flex items-center gap-1 truncate max-w-xs" title={seller.deliveryLocation}>
+                                  <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                                  <span className="truncate">{seller.deliveryLocation}</span>
+                                </span>
+                              </td>
+                            );
+                          case 'category':
+                            return (
+                              <td key={col.key} className="px-4 py-3">
+                                <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 truncate max-w-xs">
+                                  {seller.majorCategory}
+                                </span>
+                              </td>
+                            );
+                          case 'lastLogin':
+                            return (
+                              <td key={col.key} className="px-4 py-3 text-slate-500 text-xs">
+                                {seller.lastLogin ? (
+                                  formatIndianDateTime(seller.lastLogin)
+                                ) : (
+                                  <span className="text-slate-400 text-[11px]">Never</span>
+                                )}
+                              </td>
+                            );
+                          case 'rating':
+                            return (
+                              <td key={col.key} className="px-4 py-3">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40">
+                                  <Star className="w-3 h-3 fill-current text-amber-500" />
+                                  {seller.rating}
+                                </span>
+                              </td>
+                            );
+                          case 'credits':
+                            return (
+                              <td key={col.key} className="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">
+                                {seller.freeQuotationCredits} Credits
+                              </td>
+                            );
+                          case 'status':
+                            return (
+                              <td key={col.key} className="px-4 py-3">
+                                <span
+                                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${
+                                    isVerified
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60'
+                                      : 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+                                  }`}
+                                >
+                                  <span
+                                    className={`w-1.5 h-1.5 rounded-full ${
+                                      isVerified ? 'bg-emerald-500' : 'bg-slate-400'
+                                    }`}
+                                  />
+                                  <span>{seller.status || 'Active'}</span>
+                                </span>
+                              </td>
+                            );
+                          case 'contactPerson':
+                            return (
+                              <td key={col.key} className="px-4 py-3 text-slate-700 dark:text-slate-300">
+                                {seller.contactPerson || '—'}
+                              </td>
+                            );
+                          case 'email':
+                            return (
+                              <td key={col.key} className="px-4 py-3 text-slate-600 dark:text-slate-400">
+                                {seller.email || '—'}
+                              </td>
+                            );
+                          case 'phone':
+                            return (
+                              <td key={col.key} className="px-4 py-3 text-slate-600 dark:text-slate-400">
+                                {seller.phone || '—'}
+                              </td>
+                            );
+                          case 'score360':
+                            return (
+                              <td key={col.key} className="px-4 py-3 font-semibold text-emerald-600 dark:text-emerald-400">
+                                {seller.score}/100
+                              </td>
+                            );
+                          case 'registrationDate':
+                            return (
+                              <td key={col.key} className="px-4 py-3 text-slate-500 text-xs">
+                                {seller.createdAt ? formatIndianDateTime(seller.createdAt) : '—'}
+                              </td>
+                            );
+                          case 'actions':
+                            return (
+                              <td key={col.key} className="px-4 py-3 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveSeller(seller)}
+                                  className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors inline-flex items-center gap-1 border border-emerald-200/60 dark:border-emerald-800/50 shadow-xs cursor-pointer"
+                                >
+                                  <span>{strings.dossierAction}</span>
+                                  <ChevronRight className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            );
+                          default:
+                            return null;
+                        }
+                      })}
                     </tr>
                   );
                 })
@@ -765,421 +998,14 @@ export default function SellersDirectory({ onSelectRFQ }: SellersDirectoryProps)
         )}
       </div>
 
-      {/* 360° Seller Dossier Drawer / Full Modal */}
+      {/* 360° SUPPLIER DOSSIER DRAWER */}
       {activeSeller && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-sm flex justify-end animate-in fade-in duration-200">
-          <div className="w-full max-w-4xl bg-white dark:bg-slate-900 h-full min-h-screen shadow-2xl flex flex-col border-l border-slate-200 dark:border-slate-800">
-            {/* Modal Header */}
-            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl bg-emerald-600 text-white font-bold text-lg flex items-center justify-center shadow-sm">
-                  {activeSeller.name.charAt(0)}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-lg font-bold text-slate-900 dark:text-white">{activeSeller.name}</h2>
-                    <span
-                      className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
-                        activeSeller.source === 'procucev_network'
-                          ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
-                          : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
-                      }`}
-                    >
-                      {activeSeller.source === 'procucev_network' ? 'Procucev Network' : 'Buyer Uploaded'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500">
-                    ID: {activeSeller.id} • 360° AI Score: {activeSeller.score}/100 • Rating: ★ {activeSeller.rating}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setActiveSeller(null)}
-                className="p-2 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Dossier Tabs Navigation */}
-            <div className="flex items-center gap-1 px-5 border-b border-slate-200 dark:border-slate-800 overflow-x-auto bg-slate-50/30 dark:bg-slate-900">
-              {[
-                { id: 'profile', label: 'Profile', icon: Building2 },
-                { id: 'rfqs', label: `Quote (${sellerRfqs.length})`, icon: Layers },
-                { id: 'credits', label: 'Credit', icon: CreditCard },
-                { id: 'communications', label: `Messages (${sellerCommunications.length})`, icon: MessageSquare },
-                { id: 'payments', label: `Payments (${sellerPayments.length})`, icon: Receipt },
-                { id: 'activity', label: 'Activity', icon: Award },
-              ].map((tab) => {
-                const Icon = tab.icon;
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => setDossierTab(tab.id as any)}
-                    className={`flex items-center gap-1.5 px-3.5 py-3 border-b-2 text-xs font-semibold whitespace-nowrap transition-all ${
-                      dossierTab === tab.id
-                        ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                        : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                    }`}
-                  >
-                    <Icon className="w-4 h-4" />
-                    <span>{tab.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Dossier Tab Content */}
-            <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
-              {/* Tab 1: Basic Profile */}
-              {dossierTab === 'profile' && (
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl space-y-2 border border-slate-200 dark:border-slate-700">
-                      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                        Contact Details
-                      </p>
-                      <div className="space-y-1.5 text-xs text-slate-800 dark:text-slate-200">
-                        <p className="flex items-center gap-2">
-                          <Building2 className="w-4 h-4 text-slate-400" />
-                          <span className="font-semibold">{activeSeller.contactPerson || activeSeller.name}</span>
-                        </p>
-                        <p className="flex items-center gap-2">
-                          <Mail className="w-4 h-4 text-slate-400" />
-                          <span>{activeSeller.email || 'No email on file'}</span>
-                        </p>
-                        <p className="flex items-center gap-2">
-                          <Phone className="w-4 h-4 text-slate-400" />
-                          <span>{activeSeller.phone || '+91 Contact on file'}</span>
-                        </p>
-                        <p className="flex items-center gap-2">
-                          <MapPin className="w-4 h-4 text-slate-400" />
-                          <span>Company Location: {activeSeller.location || 'India'}</span>
-                        </p>
-                        <p className="flex items-center gap-2">
-                          <Truck className="w-4 h-4 text-slate-400" />
-                          <span>Delivery Location: {activeSeller.deliveryLocation || activeSeller.location || 'All India'}</span>
-                        </p>
-                        <p className="flex items-center gap-2">
-                          <Clock className="w-4 h-4 text-slate-400" />
-                          <span>Last Login: {activeSeller.lastLogin ? formatIndianDateTime(activeSeller.lastLogin) : 'Never logged in'}</span>
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl space-y-2 border border-slate-200 dark:border-slate-700">
-                      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                        Statutory & Verification
-                      </p>
-                      <div className="space-y-1.5 text-xs text-slate-800 dark:text-slate-200">
-                        <p>
-                          <span className="text-slate-500">GSTIN:</span>{' '}
-                          <span className="font-semibold font-mono">{activeSeller.gstNumber}</span>
-                        </p>
-                        <p>
-                          <span className="text-slate-500">PAN:</span>{' '}
-                          <span className="font-semibold font-mono">{activeSeller.panNumber}</span>
-                        </p>
-                        <p>
-                          <span className="text-slate-500">Subscription Tier:</span>{' '}
-                          <span className="font-semibold capitalize">{activeSeller.subscriptionPlan}</span>
-                        </p>
-                        <p>
-                          <span className="text-slate-500">Verification Status:</span>{' '}
-                          <span className="font-semibold text-emerald-600">{activeSeller.status}</span>
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Categories Mapping */}
-                  <div>
-                    <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                      Procurement Categories Master
-                    </h3>
-                    <div className="flex flex-wrap gap-2">
-                      <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                        Major: {activeSeller.majorCategory}
-                      </span>
-                      {(activeSeller.minorCategories || []).map((cat: string, i: number) => (
-                        <span
-                          key={i}
-                          className="px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
-                        >
-                          {cat}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Tab 2: RFQ & Quotation History */}
-              {dossierTab === 'rfqs' && (
-                <div className="space-y-4">
-                  {sellerRfqs.length === 0 ? (
-                    <div className="p-10 text-center text-slate-500 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                      <Layers className="w-8 h-8 mx-auto mb-2 text-slate-300 dark:text-slate-700" />
-                      <p className="text-xs font-medium">No active RFQs or bids found for this supplier.</p>
-                    </div>
-                  ) : (
-                    <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
-                          <tr>
-                            <th className="px-3.5 py-2.5 font-semibold">RFQ Number & Title</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Buyer</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Sourcing Mode</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Quoted Amount</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Status</th>
-                            {onSelectRFQ && <th className="px-3.5 py-2.5 text-right font-semibold">Action</th>}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                          {sellerRfqs.map((rfq) => {
-                            const q = (rfq.quotes || []).find(
-                              (quote) => quote.vendorId === activeSeller.id || quote.vendorName === activeSeller.name
-                            );
-                            return (
-                              <tr key={rfq.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
-                                <td className="px-3.5 py-2.5">
-                                  <p className="font-semibold text-slate-900 dark:text-white">{rfq.rfqNumber}</p>
-                                  <p className="text-[11px] text-slate-500 truncate max-w-xs">{rfq.title}</p>
-                                </td>
-                                <td className="px-3.5 py-2.5 text-slate-800 dark:text-slate-200">
-                                  {rfq.buyerAccountName || 'Enterprise Buyer'}
-                                </td>
-                                <td className="px-3.5 py-2.5">
-                                  <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                                    {RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}
-                                  </span>
-                                </td>
-                                <td className="px-3.5 py-2.5 font-semibold text-slate-900 dark:text-white">
-                                  {q?.totalPrice ? formatCurrency(q.totalPrice) : 'Pending Bid Submission'}
-                                </td>
-                                <td className="px-3.5 py-2.5">
-                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                                    {q ? 'Quote Submitted' : 'Invitation Dispatched'}
-                                  </span>
-                                </td>
-                                {onSelectRFQ && (
-                                  <td className="px-3.5 py-2.5 text-right">
-                                    <button
-                                      onClick={() => onSelectRFQ(rfq)}
-                                      title="Open RFQ Matrix"
-                                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50"
-                                    >
-                                      <ExternalLink className="w-3.5 h-3.5" />
-                                      Matrix
-                                    </button>
-                                  </td>
-                                )}
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Tab 3: Credit / Credits History */}
-              {dossierTab === 'credits' && (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                      <p className="text-xs text-slate-500">Free Quotation Credits</p>
-                      <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                        {activeSeller.freeQuotationCredits}
-                      </p>
-                      <p className="text-[11px] text-slate-400 mt-1">Available to submit bids</p>
-                    </div>
-
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                      <p className="text-xs text-slate-500">RFQ Downloads Consumed</p>
-                      <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                        {activeSeller.rfqDownloadsUsed}
-                      </p>
-                      <p className="text-[11px] text-slate-400 mt-1">RFQ packages downloaded</p>
-                    </div>
-
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                      <p className="text-xs text-slate-500">Subscription Tier</p>
-                      <p className="text-xl font-bold text-indigo-600 dark:text-indigo-400 mt-1 capitalize">
-                        {activeSeller.subscriptionPlan}
-                      </p>
-                      <p className="text-[11px] text-slate-400 mt-1">Priority AI matching active</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Tab 4: Communication Logs */}
-              {dossierTab === 'communications' && (
-                <div className="space-y-3">
-                  {sellerCommunications.map((log) => (
-                    <div
-                      key={log.id}
-                      className="bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5 text-xs"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-slate-900 dark:text-white">{log.subject}</span>
-                        <span className="text-[11px] text-slate-400">{formatIndianDateTime(log.timestamp)}</span>
-                      </div>
-                      <p className="text-slate-600 dark:text-slate-300">{log.preview}</p>
-                      <div className="flex items-center gap-3 text-[11px] text-slate-500 pt-1">
-                        <span>Channel: {log.channel}</span>
-                        <span>Recipient: {log.recipient}</span>
-                        <span className="text-emerald-600 font-medium">● {log.status}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Tab 5: Payment / Transaction History */}
-              {dossierTab === 'payments' && (
-                <div className="space-y-4">
-                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
-                        <tr>
-                          <th className="px-3.5 py-2.5 font-semibold">Invoice No</th>
-                          <th className="px-3.5 py-2.5 font-semibold">Description</th>
-                          <th className="px-3.5 py-2.5 font-semibold">Amount</th>
-                          <th className="px-3.5 py-2.5 font-semibold">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                        {sellerPayments.map((p) => (
-                          <tr key={p.id}>
-                            <td className="px-3.5 py-2.5 font-semibold text-slate-900 dark:text-white">
-                              {p.invoiceNo}
-                            </td>
-                            <td className="px-3.5 py-2.5 text-slate-600 dark:text-slate-300">{p.description}</td>
-                            <td className="px-3.5 py-2.5 font-semibold text-slate-900 dark:text-white">
-                              {formatCurrency(p.amount)}
-                            </td>
-                            <td className="px-3.5 py-2.5">
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
-                                {p.status}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {/* Tab 6: 360° Evaluation & Rating Revision */}
-              {dossierTab === 'activity' && (
-                <div className="space-y-5">
-                  {/* Scores Grid */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
-                      <p className="text-xs text-slate-500">Quality Score</p>
-                      <p className="text-xl font-bold text-slate-900 dark:text-white mt-1">92/100</p>
-                    </div>
-                    <div className="bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
-                      <p className="text-xs text-slate-500">Cost Index</p>
-                      <p className="text-xl font-bold text-slate-900 dark:text-white mt-1">86/100</p>
-                    </div>
-                    <div className="bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
-                      <p className="text-xs text-slate-500">Delivery Adherence</p>
-                      <p className="text-xl font-bold text-slate-900 dark:text-white mt-1">94%</p>
-                    </div>
-                    <div className="bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
-                      <p className="text-xs text-slate-500">Compliance</p>
-                      <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">100%</p>
-                    </div>
-                  </div>
-
-                  {/* Rating Revision Console */}
-                  <div className="bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800/50 p-4 rounded-xl space-y-3">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                        Category Manager Rating Revision
-                      </h4>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                      <div>
-                        <label className="block text-slate-600 dark:text-slate-400 mb-1">Quality Index (0-100)</label>
-                        <input
-                          type="number"
-                          value={ratingRevisionQuality}
-                          onChange={(e) => setRatingRevisionQuality(Number(e.target.value))}
-                          className="w-full px-2.5 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-slate-600 dark:text-slate-400 mb-1">Cost Score (0-100)</label>
-                        <input
-                          type="number"
-                          value={ratingRevisionCost}
-                          onChange={(e) => setRatingRevisionCost(Number(e.target.value))}
-                          className="w-full px-2.5 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-slate-600 dark:text-slate-400 mb-1">Delivery SLA (0-100)</label>
-                        <input
-                          type="number"
-                          value={ratingRevisionDelivery}
-                          onChange={(e) => setRatingRevisionDelivery(Number(e.target.value))}
-                          className="w-full px-2.5 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs text-slate-600 dark:text-slate-400 mb-1">Revision Remarks</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Audited factory quality certificates and updated compliance tier"
-                        value={ratingRevisionRemarks}
-                        onChange={(e) => setRatingRevisionRemarks(e.target.value)}
-                        className="w-full px-3 py-1.5 text-xs rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
-                      />
-                    </div>
-
-                    <div className="flex items-center justify-between pt-1">
-                      {ratingSuccessToast ? (
-                        <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                          <CheckCircle2 className="w-4 h-4" />
-                          {ratingSuccessToast}
-                        </span>
-                      ) : <span />}
-
-                      <button
-                        onClick={handleSaveRatingRevision}
-                        className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition-all"
-                      >
-                        Save Rating Revision
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Modal Footer Controls */}
-            <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/40">
-              <span className="text-xs text-slate-500">Category Manager Operations Console</span>
-              <button
-                onClick={() => setActiveSeller(null)}
-                className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
-              >
-                Close Dossier
-              </button>
-            </div>
-          </div>
-        </div>
+        <SupplierDossierDrawer
+          seller={activeSeller}
+          onClose={() => setActiveSeller(null)}
+          onSelectRFQ={onSelectRFQ}
+          sellerRfqs={rfqs}
+        />
       )}
     </div>
   );
