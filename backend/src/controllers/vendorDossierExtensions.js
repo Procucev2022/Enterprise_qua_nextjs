@@ -289,11 +289,13 @@ async function recordVendorCommunication(req, res, next) {
       },
     });
 
-    // External Live Dispatch for Email and SMS
-    if (normalizedChannel === 'EMAIL' && (recipient || vendor.email)) {
+    // External Live Dispatch for Email and SMS (Restricted to staff and channel-verified destinations)
+    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
+    const emailTo = (recipient && recipient.includes('@')) ? recipient : vendor.email;
+    const smsTo = (recipient && /^\d{10}$/.test(recipient.replace(/\D/g, ''))) ? recipient : vendor.phone;
+    if (isStaff && normalizedChannel === 'EMAIL' && emailTo) {
       try {
         const mailerService = require('../services/mailerService');
-        const emailTo = recipient || vendor.email;
         if (typeof mailerService.deliver === 'function') {
           mailerService.deliver({
             to: emailTo,
@@ -305,11 +307,11 @@ async function recordVendorCommunication(req, res, next) {
       } catch (mailErr) {
         logger.warn('Failed to dispatch external email for vendor communication', { error: mailErr.message });
       }
-    } else if (normalizedChannel === 'SMS' && (recipient || vendor.phone)) {
+    } else if (isStaff && normalizedChannel === 'SMS' && smsTo) {
       try {
         const smsService = require('../services/smsService');
         smsService.sendActionCenterSms({
-          mobile: recipient || vendor.phone,
+          mobile: smsTo,
           recipientName: vendor.companyName || vendor.name || 'Supplier',
           message: message || subject || 'Supplier notification',
           entityType: 'supplier_dossier',

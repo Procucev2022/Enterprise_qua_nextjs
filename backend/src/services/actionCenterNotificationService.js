@@ -361,7 +361,7 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
 async function getActionCenterCommunications(filter = {}) {
   const { entityId, entityType, channel, page = 1, pageSize = 20 } = filter;
 
-  const records = await paymentDuesQueries.getCommunicationHistory(entityId || '');
+  const records = await paymentDuesQueries.getCommunicationHistory(entityId || '', { limit: 500, offset: 0 });
 
   let filtered = Array.isArray(records) ? records : [];
 

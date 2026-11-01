@@ -67,6 +67,7 @@ export default function ActionCenterComposeModal({
   const [isSending, setIsSending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [followupErrorNotice, setFollowupErrorNotice] = useState<string | null>(null);
 
   // Sync default props when modal opens
   useEffect(() => {
@@ -79,6 +80,7 @@ export default function ActionCenterComposeModal({
       setMessage(defaultMessage);
       setFormError(null);
       setToastMessage(null);
+      setFollowupErrorNotice(null);
       setScheduleFollowup(false);
       setFollowupDueDate('');
       setFollowupNotes('');
@@ -133,6 +135,7 @@ export default function ActionCenterComposeModal({
 
     setIsSending(true);
     setFormError(null);
+    setFollowupErrorNotice(null);
 
     try {
       const result = await dispatchActionCenterCommunication({
@@ -156,6 +159,17 @@ export default function ActionCenterComposeModal({
       });
 
       if (result.success) {
+        if (result.followupError) {
+          const warningText = formatString(strings.followupSchedulingWarning, {
+            error: result.followupError,
+          });
+          setFollowupErrorNotice(warningText);
+          if (onSuccess) {
+            onSuccess(result);
+          }
+          return;
+        }
+
         const channelLabel =
           channel === 'BOTH'
             ? strings.channelBoth
@@ -177,7 +191,8 @@ export default function ActionCenterComposeModal({
           const smsStatus = result.smsResult?.success ? 'SMS: Sent' : `SMS: Failed (${result.smsResult?.error || 'Unsent'})`;
           setFormError(`Partial delivery: ${emailStatus} | ${smsStatus}`);
         } else {
-          setFormError(result.error || strings.errorToast);
+          const channelErrors = [result.emailResult?.error, result.smsResult?.error].filter(Boolean).join(' | ');
+          setFormError(result.error || channelErrors || strings.errorToast);
         }
       }
     } catch {
@@ -243,6 +258,17 @@ export default function ActionCenterComposeModal({
             >
               <AlertCircle size={16} className="shrink-0 text-rose-600" />
               <span>{formError}</span>
+            </div>
+          )}
+
+          {/* Follow-up Scheduling Warning Banner */}
+          {followupErrorNotice && (
+            <div
+              role="alert"
+              className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-lg text-amber-800 dark:text-amber-300 text-xs flex items-center gap-2 font-medium"
+            >
+              <AlertCircle size={16} className="shrink-0 text-amber-600" />
+              <span>{followupErrorNotice}</span>
             </div>
           )}
 

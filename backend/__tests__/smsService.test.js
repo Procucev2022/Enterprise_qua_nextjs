@@ -454,6 +454,10 @@ describe('smsService Unit Tests', () => {
       });
       expect(res.success).toBe(true);
       expect(res.response).toContain('ACT123');
+      const sentPayload = JSON.parse(global.fetch.mock.calls[0][1].body);
+      expect(sentPayload.smstosend[0].smstext).toContain('Acme Admin');
+      expect(sentPayload.smstosend[0].smstext).toContain('Action needed on task');
+      expect(sentPayload.smstosend[0].smstext).not.toMatch(/\{#[a-z0-9_]+#\}/i);
 
       const throttled = await smsService.sendActionCenterSms({
         mobile: '9157154504',

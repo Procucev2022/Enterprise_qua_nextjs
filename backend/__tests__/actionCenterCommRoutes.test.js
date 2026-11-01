@@ -6,6 +6,7 @@ const paymentDuesQueries = require('../src/db/paymentDuesQueries');
 
 describe('Action Center Communications API Routes', () => {
   beforeEach(() => {
+    process.env.ACTION_CENTER_COMM_WEBHOOK_SECRET = 'procucev-dlt-webhook-secret';
     jest.restoreAllMocks();
     jest.spyOn(authService, 'assertSessionActive').mockResolvedValue({
       valid: true,

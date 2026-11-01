@@ -2399,6 +2399,7 @@ export interface ActionCenterCommunicationResult {
   smsResult?: { success: boolean; messageId?: string; recipient?: string; throttled?: boolean; error?: string };
   completedTask?: { id: string; [key: string]: unknown } | null;
   followupTask?: { id: string; [key: string]: unknown } | null;
+  followupError?: string | null;
 }
 
 export type TicketPriority = 'Critical' | 'High' | 'Medium' | 'Low';

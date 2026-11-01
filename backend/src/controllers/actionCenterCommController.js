@@ -40,8 +40,11 @@ function verifyWebhookAuthenticity(req) {
   const expectedSecret =
     process.env.ACTION_CENTER_COMM_WEBHOOK_SECRET ||
     process.env.ACTION_CENTER_WEBHOOK_SECRET ||
-    process.env.WEBHOOK_SECRET ||
-    'procucev-dlt-webhook-secret';
+    process.env.WEBHOOK_SECRET;
+
+  if (!expectedSecret) {
+    return { valid: false, error: 'Webhook authentication is not configured.' };
+  }
 
   const providedSecret =
     req?.headers?.['x-webhook-secret'] ||
@@ -107,6 +110,7 @@ async function dispatchCommunication(req, res) {
 
     logger.audit(
       `[ACTION_CENTER_COMM] Dispatched ${channel} communication for ${validation.sanitizedData.entityType} ${validation.sanitizedData.entityId} by ${actor.email}`,
+      actor.email,
       {
         actor: actor.email,
         channel,
@@ -118,7 +122,9 @@ async function dispatchCommunication(req, res) {
 
     return res.status(200).json({
       success: result.success,
-      message: result.success
+      message: result.followupError
+        ? 'Communication dispatched, but scheduling follow-up task failed.'
+        : result.success
         ? 'Communication dispatched and recorded successfully.'
         : 'Communication dispatch partially failed, but record was stored.',
       communication: result.communication,
@@ -126,6 +132,7 @@ async function dispatchCommunication(req, res) {
       smsResult: result.smsResult,
       completedTask: result.completedTask,
       followupTask: result.followupTask,
+      followupError: result.followupError || null,
     });
   } catch (err) {
     logger.error('Error dispatching Action Center communication', err, 'ACTION_CENTER_CONTROLLER');
@@ -219,6 +226,7 @@ async function handleDeliveryWebhook(req, res) {
 
     logger.audit(
       `[ACTION_CENTER_WEBHOOK] Updated status for communication ${targetId}: ack=${finalAcknowledgement}`,
+      null,
       { communicationId, accountId, finalAcknowledgement }
     );
 

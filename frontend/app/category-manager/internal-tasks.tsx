@@ -1553,9 +1553,9 @@ export default function InternalTasksDashboard() {
           isOpen={isComposeModalOpen}
           onClose={() => setIsComposeModalOpen(false)}
           entityType="internal_task"
-          entityId="general-task"
-          defaultSubject="Task Notification"
-          defaultRecipientName={sessionUser?.name || 'Category Manager'}
+          entityId={selectedTaskDetails?.id || 'general-task'}
+          defaultSubject={selectedTaskDetails ? `Task Update: ${selectedTaskDetails.title}` : 'Task Notification'}
+          defaultRecipientName={selectedTaskDetails?.assigned_to_name || sessionUser?.name || 'Category Manager'}
           defaultRecipientEmail={sessionUser?.email || ''}
         />
       )}

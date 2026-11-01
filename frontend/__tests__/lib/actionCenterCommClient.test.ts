@@ -59,6 +59,28 @@ describe('actionCenterCommClient', () => {
       expect(res.completedTask?.id).toBe('task-1');
     });
 
+    it('returns followupError when returned in API response', async () => {
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          message: 'Communication dispatched, but scheduling follow-up task failed.',
+          followupError: 'Assignee not found',
+        }),
+      });
+
+      const res = await dispatchActionCenterCommunication({
+        entityType: 'internal_task',
+        entityId: 'tsk-fol',
+        channel: 'EMAIL',
+        recipientEmail: 'admin@example.com',
+        message: 'Follow-up test',
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.followupError).toBe('Assignee not found');
+    });
+
     it('handles dispatches without auth token correctly', async () => {
       jest.spyOn(authClient, 'getToken').mockReturnValueOnce(null);
 

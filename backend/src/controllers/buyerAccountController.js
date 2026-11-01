@@ -872,10 +872,11 @@ async function recordBuyerCommunication(req, res, next) {
       },
     });
 
-    // External Live Dispatch for Email and SMS
-    const buyerEmail = recipient || buyer.corporateEmail || buyer.email;
-    const buyerPhone = recipient || buyer.phone || buyer.mobileNumber;
-    if (normalizedChannel === 'EMAIL' && buyerEmail) {
+    // External Live Dispatch for Email and SMS (Restricted to staff and channel-verified destinations)
+    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
+    const buyerEmail = (recipient && recipient.includes('@')) ? recipient : (buyer.corporateEmail || buyer.email);
+    const buyerPhone = (recipient && /^\d{10}$/.test(recipient.replace(/\D/g, ''))) ? recipient : (buyer.phone || buyer.mobileNumber);
+    if (isStaff && normalizedChannel === 'EMAIL' && buyerEmail) {
       try {
         const mailerService = require('../services/mailerService');
         if (typeof mailerService.deliver === 'function') {
@@ -889,7 +890,7 @@ async function recordBuyerCommunication(req, res, next) {
       } catch (mailErr) {
         logger.warn('Failed to dispatch external email for buyer communication', { error: mailErr.message });
       }
-    } else if (normalizedChannel === 'SMS' && buyerPhone) {
+    } else if (isStaff && normalizedChannel === 'SMS' && buyerPhone) {
       try {
         const smsService = require('../services/smsService');
         smsService.sendActionCenterSms({

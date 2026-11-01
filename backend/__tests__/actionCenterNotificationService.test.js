@@ -360,7 +360,7 @@ describe('actionCenterNotificationService', () => {
         pageSize: 10,
       });
 
-      expect(getHistorySpy).toHaveBeenCalledWith('ent-1');
+      expect(getHistorySpy).toHaveBeenCalledWith('ent-1', expect.anything());
       expect(res.items).toHaveLength(1);
       expect(res.items[0].id).toBe('1');
       expect(res.pagination.total).toBe(1);
@@ -379,7 +379,7 @@ describe('actionCenterNotificationService', () => {
         channel: 'ALL',
       });
 
-      expect(getHistorySpy).toHaveBeenCalledWith('');
+      expect(getHistorySpy).toHaveBeenCalledWith('', expect.anything());
       expect(res.items).toHaveLength(2);
       expect(res.pagination.page).toBe(1);
 

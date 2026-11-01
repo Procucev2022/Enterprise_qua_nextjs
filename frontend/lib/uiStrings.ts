@@ -2088,6 +2088,7 @@ sellerDirectory: {
       validationFollowupDueDateRequired: 'A due date is required when scheduling a follow-up task.',
       successToast: 'Communication successfully dispatched via {channel} and logged in Action Center.',
       partialSuccessToast: 'Communication recorded, but external gateway reported a delivery delay.',
+      followupSchedulingWarning: 'Notification was dispatched successfully, but scheduling the follow-up task failed: {error}.',
       errorToast: 'Failed to dispatch communication. Please try again or check recipient details.',
     },
 

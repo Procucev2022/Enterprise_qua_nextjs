@@ -515,6 +515,35 @@ describe('ActionCenterComposeModal', () => {
     });
   });
 
+  it('displays per-channel error message when all channels fail', async () => {
+    mockDispatch.mockResolvedValueOnce({
+      success: false,
+      emailResult: { success: false, error: 'SMTP connection failed' },
+      smsResult: { success: false, error: 'Recipient rate limited' },
+    });
+
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="ticket"
+        entityId="tkt-all-fail"
+        defaultChannel="BOTH"
+        defaultRecipientEmail="fail@example.com"
+        defaultRecipientPhone="9876543210"
+        defaultMessage="Fail test message"
+      />
+    );
+
+    const form = container.querySelector('form')!;
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/SMTP connection failed \| Recipient rate limited/i)).toBeInTheDocument();
+    });
+  });
+
   it('submits form with EMAIL channel and calls onSuccess and triggers onClose after delay', async () => {
     jest.useFakeTimers();
     mockDispatch.mockResolvedValueOnce({
@@ -570,5 +599,38 @@ describe('ActionCenterComposeModal', () => {
     const notesInput = container.querySelector('#compose-followup-notes') as HTMLInputElement;
     fireEvent.change(notesInput, { target: { value: 'Urgent follow-up note' } });
     expect(notesInput.value).toBe('Urgent follow-up note');
+  });
+
+  it('displays warning notice and retains modal open when followupError is returned', async () => {
+    mockDispatch.mockResolvedValueOnce({
+      success: true,
+      communication: { id: 'comm-fol-err', channel: 'EMAIL' },
+      followupError: 'Assignee queue unavailable',
+    });
+
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        onSuccess={mockOnSuccess}
+        entityType="internal_task"
+        entityId="tsk-fol-err"
+        defaultChannel="EMAIL"
+        defaultRecipientEmail="email@example.com"
+        defaultMessage="Email message"
+      />
+    );
+
+    const form = container.querySelector('form')!;
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(
+        screen.getByText(/Notification was dispatched successfully, but scheduling the follow-up task failed/i)
+      ).toBeInTheDocument();
+      expect(mockOnSuccess).toHaveBeenCalled();
+      expect(mockOnClose).not.toHaveBeenCalled();
+    });
   });
 });

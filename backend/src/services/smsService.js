@@ -740,15 +740,14 @@ async function sendActionCenterSms({
     TEMPLATE: 'Procucev Alert for {#alp#}: {#alp#}. Details: {#urg#} - Team Procucev.',
   };
   const rawTemplate = templateConfig.TEMPLATE;
-  const renderedMessage = rawTemplate.includes('{#alp#}')
-    ? rawTemplate
-        .replace('{#alp#}', cleanRecipient)
-        .replace('{#alp#}', cleanMessage)
-        .replace('{#urg#}', resolvedLink)
-    : rawTemplate
-        .replace('{#var#}', cleanRecipient)
-        .replace('{#var#}', cleanMessage)
-        .replace('{#var#}', resolvedLink);
+  const values = [cleanRecipient, cleanMessage, resolvedLink];
+  let valIdx = 0;
+  const renderedMessage = rawTemplate.replace(/\{#[a-z0-9_]+#\}/gi, () => {
+    if (valIdx < values.length) {
+      return values[valIdx++];
+    }
+    return '';
+  });
 
   const smsgid = SMS_GATEWAY_CONFIG.ACTION_CENTER_SMSGID;
   const payload = {
@@ -779,7 +778,15 @@ async function sendActionCenterSms({
       });
 
       const responseText = await res.text();
-      const messageId = 'sms-ac-' + Date.now();
+      let gatewayMsgId = null;
+      try {
+        const parsed = JSON.parse(responseText);
+        gatewayMsgId = parsed.msgid || parsed.messageId || parsed.id || null;
+      } catch {
+        const msgIdMatch = responseText.match(/msgid[=:]\s*([a-zA-Z0-9_-]+)/i);
+        if (msgIdMatch) gatewayMsgId = msgIdMatch[1];
+      }
+      const messageId = gatewayMsgId || ('sms-ac-' + Date.now());
       const isGatewayError =
         !res.ok ||
         /^(ERR|ERROR|FAIL|INVALID|REJECTED)/i.test(responseText.trim()) ||

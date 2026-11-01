@@ -54,6 +54,7 @@ export async function dispatchActionCenterCommunication(
       smsResult: json.smsResult,
       completedTask: json.completedTask,
       followupTask: json.followupTask,
+      followupError: json.followupError,
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Network error';

@@ -7,6 +7,7 @@ describe('actionCenterCommController', () => {
   let res;
 
   beforeEach(() => {
+    process.env.ACTION_CENTER_COMM_WEBHOOK_SECRET = 'procucev-dlt-webhook-secret';
     req = {
       body: {},
       query: {},
@@ -268,6 +269,37 @@ describe('actionCenterCommController', () => {
       dispatchSpy.mockRestore();
     });
 
+    it('returns 200 with followup warning message when followup task creation fails', async () => {
+      req.body = {
+        entityType: 'internal_task',
+        entityId: 'tsk-fol-err',
+        channel: 'EMAIL',
+        recipientEmail: 'someone@example.com',
+        message: 'Notification with follow-up',
+      };
+
+      const dispatchSpy = jest
+        .spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication')
+        .mockResolvedValueOnce({
+          success: true,
+          communication: { id: 'comm-fol-err' },
+          followupError: 'Failed to assign follow-up task',
+        });
+
+      await actionCenterCommController.dispatchCommunication(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          message: 'Communication dispatched, but scheduling follow-up task failed.',
+          followupError: 'Failed to assign follow-up task',
+        })
+      );
+
+      dispatchSpy.mockRestore();
+    });
+
     it('returns 500 when service throws error', async () => {
       req.body = {
         entityType: 'internal_task',
@@ -376,6 +408,26 @@ describe('actionCenterCommController', () => {
           error: 'Invalid webhook authentication signature.',
         })
       );
+    });
+
+    it('returns 401 when webhook authentication is not configured on server', async () => {
+      const orig = process.env.ACTION_CENTER_COMM_WEBHOOK_SECRET;
+      delete process.env.ACTION_CENTER_COMM_WEBHOOK_SECRET;
+      delete process.env.ACTION_CENTER_WEBHOOK_SECRET;
+      delete process.env.WEBHOOK_SECRET;
+
+      req.headers = { 'x-webhook-secret': 'some-secret' };
+      await actionCenterCommController.handleDeliveryWebhook(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Webhook authentication is not configured.',
+        })
+      );
+
+      process.env.ACTION_CENTER_COMM_WEBHOOK_SECRET = orig;
     });
 
     it('returns 400 when req.body is undefined or null', async () => {
