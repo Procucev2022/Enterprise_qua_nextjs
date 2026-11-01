@@ -8,7 +8,7 @@ import VendorFilterSidebar from '@/app/vendors/VendorFilterSidebar';
 import { fetchPublicVendors, fetchPublicVendorFilters } from '@/lib/vendorDirectoryClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { PublicVendor, PublicVendorPageResult, PublicVendorFilterState } from '@/lib/types';
-import { avatarForName, getInitials, renderStars } from '@/app/vendors/vendorUtils';
+import { avatarForName, getInitials, renderStars, maskPublicEmail, maskPublicPhone } from '@/app/vendors/vendorUtils';
 
 jest.mock('@/lib/vendorDirectoryClient', () => ({
   fetchPublicVendors: jest.fn(),
@@ -303,8 +303,8 @@ describe('Public Vendor Directory (/vendors)', () => {
     // Tab 1: Overview
     expect(screen.getByText('Rajesh Sharma')).toBeInTheDocument();
     expect(screen.getByText('(Director of Operations)')).toBeInTheDocument();
-    expect(screen.getByText('contact@bharateng.example.com')).toBeInTheDocument();
-    expect(screen.getByText('+91 98765 43210')).toBeInTheDocument();
+    expect(screen.getByText('cXXXX@bharateng.example.com')).toBeInTheDocument();
+    expect(screen.getByText('+91 9XXXXXXX10')).toBeInTheDocument();
     expect(screen.getByText('https://bharateng.example.com')).toBeInTheDocument();
     expect(screen.getByText('Plot 42, MIDC Bhosari, Pune')).toBeInTheDocument();
     expect(screen.getByText('411018')).toBeInTheDocument();
@@ -314,7 +314,7 @@ describe('Public Vendor Directory (/vendors)', () => {
     await act(async () => {
       fireEvent.click(copyEmailBtn);
     });
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('contact@bharateng.example.com');
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('cXXXX@bharateng.example.com');
 
     // Tab 2: Categories & Products
     const catTab = screen.getByRole('tab', { name: new RegExp(S.tabs.categories, 'i') });
@@ -385,14 +385,54 @@ describe('Public Vendor Directory (/vendors)', () => {
 
   test('covers vendorUtils helpers (avatarForName, getInitials, renderStars)', () => {
     expect(avatarForName('Acme Corp').bg).toBeDefined();
+    expect(avatarForName('').bg).toBeDefined();
     expect(getInitials('')).toBe('??');
+    expect(getInitials('   ')).toBe('??');
+    expect(getInitials(null as unknown as string)).toBe('??');
     expect(getInitials('Tata')).toBe('TA');
     expect(getInitials('Tata Steel Ltd')).toBe('TS');
+    expect(getInitials('Singleword')).toBe('SI');
 
-    const stars = renderStars(4.5);
-    expect(stars).toBeDefined();
+    const stars5 = renderStars(5);
+    expect(stars5).toBeDefined();
+    const stars4Half = renderStars(4.5);
+    expect(stars4Half).toBeDefined();
+    const stars3 = renderStars(3);
+    expect(stars3).toBeDefined();
     const noStars = renderStars(null);
     expect(noStars).toBeDefined();
+    const zeroStars = renderStars(0);
+    expect(zeroStars).toBeDefined();
+    const undefStars = renderStars(undefined);
+    expect(undefStars).toBeDefined();
+  });
+
+  test('covers vendorUtils maskPublicEmail across all branches', () => {
+    expect(maskPublicEmail('')).toBe('');
+    expect(maskPublicEmail(null)).toBe('');
+    expect(maskPublicEmail(undefined)).toBe('');
+    expect(maskPublicEmail(12345 as unknown as string)).toBe('');
+    expect(maskPublicEmail('sXXXX@gmail.com')).toBe('sXXXX@gmail.com');
+    expect(maskPublicEmail('plainaddress')).toBe('plainaddress');
+    expect(maskPublicEmail('@nodomain.com')).toBe('@nodomain.com');
+    expect(maskPublicEmail('devang@example.com')).toBe('dXXXX@example.com');
+    expect(maskPublicEmail('   mumbai@japl.org   ')).toBe('mXXXX@japl.org');
+    expect(maskPublicEmail('a@b.com')).toBe('aXXXX@b.com');
+  });
+
+  test('covers vendorUtils maskPublicPhone across all branches', () => {
+    expect(maskPublicPhone('')).toBe('');
+    expect(maskPublicPhone(null)).toBe('');
+    expect(maskPublicPhone(undefined)).toBe('');
+    expect(maskPublicPhone(12345 as unknown as string)).toBe('');
+    expect(maskPublicPhone('9XXXXXXX09')).toBe('9XXXXXXX09');
+    expect(maskPublicPhone('123')).toBe('123');
+    expect(maskPublicPhone('+91 9876543210')).toBe('+91 9XXXXXXX10');
+    expect(maskPublicPhone('919876543210')).toBe('+91 9XXXXXXX10');
+    expect(maskPublicPhone('+1 4155552671')).toBe('+ 4XXXXXXX71');
+    expect(maskPublicPhone('02212345678')).toBe('2XXXXXXX78');
+    expect(maskPublicPhone('9876543210')).toBe('9XXXXXXX10');
+    expect(maskPublicPhone('1234')).toBe('1X34');
   });
 
   test('covers vendor modal tabs with sparse data fallback', async () => {
@@ -748,6 +788,48 @@ describe('Public Vendor Directory (/vendors)', () => {
     expect(screen.getByTestId('vendor-directory-login-gate')).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.vendorDirectoryLogin.title)).toBeInTheDocument();
     expect(fetchPublicVendors).not.toHaveBeenCalled();
+  });
+
+
+  test('handles sessionExpired from fetchPublicVendors by returning to login gate with sessionExpired flag', async () => {
+    (fetchPublicVendors as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      sessionExpired: true,
+      data: [],
+      pagination: { page: 1, pageSize: 24, total: 0, totalPages: 1 },
+      error: 'Vendor directory session has expired or is closed. Please log in again.',
+    });
+
+    render(<PublicVendorDirectoryPage />);
+
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('vendor-directory-login-gate')).toBeInTheDocument();
+      expect(screen.getByTestId('gate-error-banner')).toHaveTextContent(UI_STRINGS.vendorDirectoryLogin.sessionExpiredNotice);
+    });
+  });
+
+  test('handles sessionExpired from fetchPublicVendorFilters by returning to login gate with sessionExpired flag', async () => {
+    (fetchPublicVendorFilters as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      sessionExpired: true,
+      categories: [],
+      states: [],
+    });
+
+    render(<PublicVendorDirectoryPage />);
+
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('vendor-directory-login-gate')).toBeInTheDocument();
+      expect(screen.getByTestId('gate-error-banner')).toHaveTextContent(UI_STRINGS.vendorDirectoryLogin.sessionExpiredNotice);
+    });
   });
 
   test('unlocks directory when user logs in through the gate and locks when clicking exit directory', async () => {

@@ -22,6 +22,62 @@ function logWarn(msg, err) {
 }
 
 /**
+ * Checks whether an error is due to a missing vendor_directory_sessions table.
+ */
+function isTableMissingError(err) {
+  if (!err) return false;
+  const msg = String(err.message || err).toLowerCase();
+  return (
+    msg.includes('no such table') ||
+    msg.includes('does not exist') ||
+    msg.includes('not found') ||
+    msg.includes('undefined table')
+  );
+}
+
+let isEnsuringTable = false;
+
+/**
+ * Automatically creates the vendor_directory_sessions table and its indexes if missing in D1/Postgres.
+ */
+async function ensureVendorDirectorySessionsTable() {
+  if (isEnsuringTable) return;
+  isEnsuringTable = true;
+  try {
+    const tableSql = `
+      CREATE TABLE IF NOT EXISTS vendor_directory_sessions (
+        id TEXT PRIMARY KEY,
+        user_uuid TEXT NOT NULL,
+        email TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'category_manager',
+        auth_method TEXT NOT NULL DEFAULT 'EMAIL_OTP',
+        login_at TEXT NOT NULL,
+        last_activity_at TEXT NOT NULL,
+        logout_at TEXT,
+        duration_seconds INTEGER DEFAULT 0,
+        logout_reason TEXT,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        ip_address TEXT,
+        user_agent TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    await pool.query(tableSql, [], { d1: true });
+    try {
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_vdir_sessions_user ON vendor_directory_sessions(user_uuid)', [], { d1: true });
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email ON vendor_directory_sessions(email)', [], { d1: true });
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status ON vendor_directory_sessions(status)', [], { d1: true });
+    } catch {
+      // Index creation errors can be ignored
+    }
+  } catch (ddlErr) {
+    logWarn('ensureVendorDirectorySessionsTable DDL failed', ddlErr);
+  } finally {
+    isEnsuringTable = false;
+  }
+}
+
+/**
  * Format a Date or timestamp to ISO string, with safe fallback.
  */
 function toIsoString(val) {
@@ -135,7 +191,16 @@ async function createSession(params = {}) {
   try {
     await pool.query(query, values, { d1: true });
   } catch (err) {
-    logWarn('createSession DB write fallback to memory', err);
+    if (isTableMissingError(err)) {
+      await ensureVendorDirectorySessionsTable();
+      try {
+        await pool.query(query, values, { d1: true });
+      } catch (retryErr) {
+        logWarn('createSession retry DB write failed', retryErr);
+      }
+    } else {
+      logWarn('createSession DB write fallback to memory', err);
+    }
   }
 
   return { ...sessionObj };
@@ -159,7 +224,25 @@ async function findSessionById(id) {
       return session;
     }
   } catch (err) {
-    logWarn('findSessionById DB read failed, using memory fallback', err);
+    if (isTableMissingError(err)) {
+      await ensureVendorDirectorySessionsTable();
+      try {
+        const rows = await pool.rows(
+          'SELECT * FROM vendor_directory_sessions WHERE id = $1 LIMIT 1',
+          [id],
+          { d1: true }
+        );
+        if (rows && rows.length > 0) {
+          const session = mapRowToSession(rows[0]);
+          memoryDirectorySessions.set(id, { ...session });
+          return session;
+        }
+      } catch (retryErr) {
+        logWarn('findSessionById retry DB read failed', retryErr);
+      }
+    } else {
+      logWarn('findSessionById DB read failed, using memory fallback', err);
+    }
   }
 
   const mem = memoryDirectorySessions.get(id);
@@ -184,7 +267,25 @@ async function findActiveSession(id) {
       return session;
     }
   } catch (err) {
-    logWarn('findActiveSession DB read failed, using memory fallback', err);
+    if (isTableMissingError(err)) {
+      await ensureVendorDirectorySessionsTable();
+      try {
+        const rows = await pool.rows(
+          'SELECT * FROM vendor_directory_sessions WHERE id = $1 AND status = $2 LIMIT 1',
+          [id, VENDOR_DIRECTORY_SESSION_STATUS.ACTIVE],
+          { d1: true }
+        );
+        if (rows && rows.length > 0) {
+          const session = mapRowToSession(rows[0]);
+          memoryDirectorySessions.set(id, { ...session });
+          return session;
+        }
+      } catch (retryErr) {
+        logWarn('findActiveSession retry DB read failed', retryErr);
+      }
+    } else {
+      logWarn('findActiveSession DB read failed, using memory fallback', err);
+    }
   }
 
   const mem = memoryDirectorySessions.get(id);
@@ -492,4 +593,6 @@ module.exports = {
   getMemoryStoreForTesting,
   toIsoString,
   mapRowToSession,
+  ensureVendorDirectorySessionsTable,
+  isTableMissingError,
 };

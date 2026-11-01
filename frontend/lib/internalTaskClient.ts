@@ -1,4 +1,7 @@
 import { authClient } from './authClient';
+import { DEFAULT_INTERNAL_MEMBERS, type InternalTeamMember } from './constants';
+
+export type { InternalTeamMember };
 
 export interface TaskType {
   id: string;
@@ -215,7 +218,21 @@ export async function fetchInternalTasks(filters: TaskFilterParams = {}): Promis
   }
 }
 
-export async function fetchTaskSummary(): Promise<TaskSummary> {
+export async function fetchInternalAssignees(): Promise<InternalTeamMember[]> {
+  try {
+    const res = await fetch('/api/internal-tasks/assignees', { headers: authHeaders() });
+    if (!res.ok) return DEFAULT_INTERNAL_MEMBERS;
+    const data = await res.json();
+    if (Array.isArray(data.assignees) && data.assignees.length > 0) {
+      return data.assignees;
+    }
+    return DEFAULT_INTERNAL_MEMBERS;
+  } catch {
+    return DEFAULT_INTERNAL_MEMBERS;
+  }
+}
+
+export async function fetchTaskSummary(params?: { assignedTo?: string }): Promise<TaskSummary> {
   const fallback: TaskSummary = {
     total: 0,
     pending: 0,
@@ -226,7 +243,13 @@ export async function fetchTaskSummary(): Promise<TaskSummary> {
     criticalCount: 0,
   };
   try {
-    const res = await fetch('/api/internal-tasks/summary', { headers: authHeaders() });
+    const query = new URLSearchParams();
+    if (params?.assignedTo && params.assignedTo !== 'all') {
+      query.set('assignedTo', params.assignedTo);
+    }
+    const queryString = query.toString();
+    const url = `/api/internal-tasks/summary${queryString ? `?${queryString}` : ''}`;
+    const res = await fetch(url, { headers: authHeaders() });
     if (!res.ok) return fallback;
     const data = await res.json();
     return data.summary || fallback;
@@ -331,4 +354,16 @@ export function getExportTasksUrl(filters: TaskFilterParams = {}): string {
   if (filters.dueFrom) params.set('dueFrom', filters.dueFrom);
   if (filters.dueTo) params.set('dueTo', filters.dueTo);
   return `/api/internal-tasks/export?${params.toString()}`;
+}
+
+
+export async function completeInternalTask(
+  id: string,
+  resolutionRemarks?: string
+): Promise<InternalTask | null> {
+  return updateInternalTask(id, {
+    status: 'Completed',
+    activityComment: resolutionRemarks ? `Completed: ${resolutionRemarks}` : 'Task marked as completed',
+    notes: resolutionRemarks || undefined,
+  });
 }

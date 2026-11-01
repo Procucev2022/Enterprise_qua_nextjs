@@ -282,7 +282,7 @@ give me the architecture for this application
 
 **Timestamp**: 2026-09-15T11:19:12Z
 
-```text
+````text
 Act as a Senior Full-Stack Engineer and QA Engineer.
 
 I need to implement the Email-to-RFQ flow in the NEW Enterprise QUA application.
@@ -295,7 +295,7 @@ The required behavior should be similar to the previous rfq@procucev.com email R
 
 ```text
 raise the pr
-```
+````
 
 ---
 
@@ -339,6 +339,7 @@ Error: Process completed with exit code 1.
 ```
 
 ---
+
 ### 2026-10-28T16:31:54+05:30
 
 ```text
@@ -460,6 +461,7 @@ After implementation, provide:
 ```
 
 ---
+
 ### 2026-10-28T17:48:54+05:30
 
 ```text
@@ -467,6 +469,7 @@ pull the latest code and raise the pr
 ```
 
 ---
+
 ### 2026-10-28T17:57:40+05:30
 
 ```text
@@ -474,6 +477,7 @@ check once not take email subject as a rfq title it can anlasize and take the it
 ```
 
 ---
+
 ### 2026-10-28T18:12:35+05:30
 
 ```text
@@ -481,6 +485,7 @@ B
 ```
 
 ---
+
 ### 2026-10-28T18:58:09+05:30
 
 `	ext
@@ -506,7 +511,7 @@ docs\PUBLIC_VENDOR_DIRECTORY_GUIDE.md take referenve from this docs and build th
 ### 2026-10-28T22:32:04+05:30
 
 ```text
-I am on sample/vendor-page created this feature a week or 2 week ago now want to update this branch with latest code so I will able to merge give me command I will run the commant one by one step write down all process 
+I am on sample/vendor-page created this feature a week or 2 week ago now want to update this branch with latest code so I will able to merge give me command I will run the commant one by one step write down all process
 ```
 
 ---
@@ -522,7 +527,7 @@ resole all conflict
 ### 2026-10-28T23:18:40+05:30
 
 ```text
-without daming any feature pass the test 
+without daming any feature pass the test
 ```
 
 ---
@@ -530,7 +535,7 @@ without daming any feature pass the test
 ### 2026-10-29T00:00:16+05:30
 
 ```text
-all the filter and search should be coming from the api not from the frontend them them in vendor page 
+all the filter and search should be coming from the api not from the frontend them them in vendor page
 ```
 
 ---
@@ -769,7 +774,7 @@ create a vandoe page redirect button on top navbar of login and also one thing f
 ### 2026-10-29T11:00:41+05:30
 
 ```text
-implemetation of cache in this page so our DB don;t get oveload 
+implemetation of cache in this page so our DB don;t get oveload
 ```
 
 ---
@@ -777,31 +782,33 @@ implemetation of cache in this page so our DB don;t get oveload
 ### 2026-10-29T11:31:26+05:30
 
 ```text
-to access vendor page add one kind of login client has said other wise any one can access it will be different from the main login 
+to access vendor page add one kind of login client has said other wise any one can access it will be different from the main login
 ```
-
 
 ---
 
 ### 2026-10-29T14:04:14+05:30
 
 ```text
+
 ```
+
 ---
 
 ### 2026-10-29T16:23:20+05:30
 
 ```text
-This vendor directrory should only be shown Category Manager only after when Category Manager  is login and also when category manager click on vendor directly on login page need only Procucev mail Id login  with otp on their mail and when they enter the vendor page after 5 min of inactivity  they will be auto logout and also store all the login detail who login and how much time they have spend first login and lout otu time all these and also when category manager upload any new vendor that will be visible by default what I belive these are thing need to done 
+This vendor directrory should only be shown Category Manager only after when Category Manager  is login and also when category manager click on vendor directly on login page need only Procucev mail Id login  with otp on their mail and when they enter the vendor page after 5 min of inactivity  they will be auto logout and also store all the login detail who login and how much time they have spend first login and lout otu time all these and also when category manager upload any new vendor that will be visible by default what I belive these are thing need to done
 
-for these these their is a plan just need to execute plan_to_implement\plan.md check all these and start implement ing by phases start with phase 1 
+for these these their is a plan just need to execute plan_to_implement\plan.md check all these and start implement ing by phases start with phase 1
 ```
+
 ---
 
 ### 2026-10-29T16:39:50+05:30
 
 ```text
-yes proceed to phase 2 
+yes proceed to phase 2
 ```
 
 ---
@@ -809,7 +816,7 @@ yes proceed to phase 2
 ### 2026-10-29T17:11:06+05:30
 
 ```text
-okay phase 2 complete now work on phase 3 
+okay phase 2 complete now work on phase 3
 ```
 
 ---
@@ -818,7 +825,7 @@ okay phase 2 complete now work on phase 3
 
 ```text
 okay priority change only otp verification and vendor directory will only be show in after login cateogry manager should be visible complete this first and then move to other part
-like in phase 4 otp will be complete take study other phase also check complete these part only as of now  
+like in phase 4 otp will be complete take study other phase also check complete these part only as of now
 ```
 
 ---
@@ -826,7 +833,7 @@ like in phase 4 otp will be complete take study other phase also check complete 
 ### 2026-10-29T18:48:04+05:30
 
 ```text
-why I am seeing Vendor Directory on login page ?? it should only be access after login in category manager page 
+why I am seeing Vendor Directory on login page ?? it should only be access after login in category manager page
 ```
 
 ---
@@ -834,14 +841,14 @@ why I am seeing Vendor Directory on login page ?? it should only be access after
 ### 2026-10-29T18:59:49+05:30
 
 ```text
-abc@procucev.com  check for an active procucev account getitig theis 
+abc@procucev.com  check for an active procucev account getitig theis
 SrinivasM@procucev.com
  user_id = $1 and category is not null and category <> '' order by division, category","durationMs":223,"table":"org_division_category"}
 [BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'org_division_category': 337ms {"query":"select division, category from org_division_category where organization_id = $1 and category is not null and category <> '' order by division, category","durationMs":337,"table":"org_division_category"}
 [BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'vendors': 785ms {"query":"SELECT id, created_at, updated_at, raw FROM vendors WHERE source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump') ORDER BY created_at DESC LIMIT $1 OFFSET $2","durationMs":785,"table":"vendors"}
-[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'buyer_accounts': 259ms {"query":"SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1","durationMs":259,"table":"buyer_accounts"} 
-[BACKEND] GET /api/buyer-accounts/active 304 (1395ms)      
-[BACKEND] [INFO] [HTTP_REQUEST] GET /api/buyer-accounts/active -> 304 (1395ms) {"method":"GET","url":"/api/buyer-accounts/active","statusCode":304,"durationMs":1395,"requestId":"req-1793280385006-xzktt","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}       
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'buyer_accounts': 259ms {"query":"SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1","durationMs":259,"table":"buyer_accounts"}
+[BACKEND] GET /api/buyer-accounts/active 304 (1395ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/buyer-accounts/active -> 304 (1395ms) {"method":"GET","url":"/api/buyer-accounts/active","statusCode":304,"durationMs":1395,"requestId":"req-1793280385006-xzktt","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
 [BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'vendors': 4629ms {"query":"SELECT raw FROM vendors WHERE lower(email) = lower($1) OR lower(json_extract(raw,'$.corporateEmail')) = lower($1) LIMIT 1","durationMs":4629,"table":"vendors"}
 [BACKEND] GET /api/bootstrap 200 (6148ms)
 [BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 200 (6148ms) {"method":"GET","url":"/api/bootstrap","statusCode":200,"durationMs":6148,"requestId":"req-1793280384868-tx3fe","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
@@ -858,7 +865,7 @@ SrinivasM@procucev.com
 [BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'role': 715ms {"query":"select u.uuid, u.username, u.email, u.password, u.full_name, u.first_name, u.phone, u.is_active, u.is_approved, u.self_client, u.reset_password, u.verification_status, u.org_uuid, r.role_name, o.organ","durationMs":715,"table":"role"}
 [BACKEND] POST /api/auth/vendor-directory/request-otp 403 (741ms)
 [BACKEND] [WARN] [AUTH_SERVICE] Vendor directory OTP denied for unauthorized or non-CM account: abc@procucev.com {"ipAddress":"::1"}
-[BACKEND] [WARN] [AUTH_CONTROLLER] Vendor directory OTP request failure in authController {"error":"Access to the Vendor Directory is restricted to Category Managers with an active @procucev.com account.","email":"abc@procucev.com"}    
+[BACKEND] [WARN] [AUTH_CONTROLLER] Vendor directory OTP request failure in authController {"error":"Access to the Vendor Directory is restricted to Category Managers with an active @procucev.com account.","email":"abc@procucev.com"}
 [BACKEND] [WARN] [HTTP_REQUEST] POST /api/auth/vendor-directory/request-otp -> 403 (741ms) {"method":"POST","url":"/api/auth/vendor-directory/request-otp","statusCode":403,"durationMs":741,"requestId":"req-1793280481425-0fbrz","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
 [BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'payment_links': 579ms {"query":"SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT $1","durationMs":579,"table":"payment_links"}
 [BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'role': 330ms {"query":"select u.uuid, u.username, u.email, u.password, u.full_name, u.first_name, u.phone, u.is_active, u.is_approved, u.self_client, u.reset_password, u.verification_status, u.org_uuid, r.role_name, o.organ","durationMs":330,"table":"role"}
@@ -868,7 +875,6 @@ SrinivasM@procucev.com
 [BACKEND] [WARN] [HTTP_REQUEST] POST /api/auth/vendor-directory/request-otp -> 403 (348ms) {"method":"POST","url":"/api/auth/vendor-directory/request-otp","statusCode":403,"durationMs":348,"requestId":"req-1793280527374-9dqns","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
 ```
 
-
 ---
 
 ### 2026-10-29T19:14:03+05:30
@@ -877,7 +883,6 @@ SrinivasM@procucev.com
 339556 otp
 ```
 
-
 ---
 
 ### 2026-10-29T21:01:05+05:30
@@ -885,7 +890,6 @@ SrinivasM@procucev.com
 ```text
 it just have to accept any mail with  @procucev.com that neccessary have role of category manger It has common account to access every but to access vendor only company employee can access by writting their mail Id of the company with otp
 ```
-
 
 ---
 
@@ -898,18 +902,16 @@ mukul.rai@procucev.com
 Must end in @procucev.com
 
 
- it just have to accept any mail with  @procucev.com that neccessary have role of category manger It has common account to access every but to access vendor only company employee can access by writting their mail Id of the company with otp 
+ it just have to accept any mail with  @procucev.com that neccessary have role of category manger It has common account to access every but to access vendor only company employee can access by writting their mail Id of the company with otp
 ```
-
 
 ---
 
 ### 2026-10-29T21:24:59+05:30
 
 ```text
-why I am seeing verification code on verify otp it shoudn't be their 
+why I am seeing verification code on verify otp it shoudn't be their
 ```
-
 
 ---
 
@@ -918,15 +920,14 @@ why I am seeing verification code on verify otp it shoudn't be their
 ```text
 backend\check_db_users.js
 backend\check_procucev_users.js
-backend\check_srinivas.js why are these file nned now check extra file and remove latest create files only 
+backend\check_srinivas.js why are these file nned now check extra file and remove latest create files only
 ```
-
 
 ---
 
 ### 2026-10-29T22:05:24+05:30
 
-```text
+````text
 |           ^
       22 | }
       23 |
@@ -962,15 +963,15 @@ A worker process has failed to exit gracefully and has been force exited. This i
 
 
 ```text
-okay just need to fix timmer we show the otp expire in 5 min but we are showing 30 sec need too update in frontend 
-```
+okay just need to fix timmer we show the otp expire in 5 min but we are showing 30 sec need too update in frontend
+````
 
 ---
 
 ### 2026-10-29T15:28:40+05:30
 
 ```text
-i give 5 email only but it is showing time limit 
+i give 5 email only but it is showing time limit
 please check the issue first and then fix this issue
 ```
 
@@ -990,12 +991,11 @@ raise the pr for this code
 continue
 ```
 
-
 ---
 
 ### 2026-10-29T23:58:46+05:30
 
-```text
+````text
 PASS __tests__/mailTransportAttachments.test.js
 PASS __tests__/pincodeService.test.js
 PASS __tests__/vendorIngestionController.test.js
@@ -1026,14 +1026,14 @@ A worker process has failed to exit gracefully and has been force exited. This i
 
 ```text
 Remove the Document Tracker, Loans ,Expiring Holes , Leads and  site visites i dont want this features in Action centers
-```
+````
 
 ---
 
 ### 2026-10-30T11:02:00+05:30
 
 ```text
-Remove the Buyer and seller directory from the category govarance because it is already there in Action center 
+Remove the Buyer and seller directory from the category govarance because it is already there in Action center
 ```
 
 ---
@@ -1043,7 +1043,6 @@ Remove the Buyer and seller directory from the category govarance because it is 
 ```text
 raise the pr for this code
 ```
-
 
 ---
 
@@ -1216,8 +1215,8 @@ Please review your credit balance and take the necessary action to continue usin
 
 Kindly acknowledge receipt of this notification.
 
-Regards,  
-QUA AI Team  
+Regards,
+QUA AI Team
 Procucev Enterprises Solutions Pvt Ltd.
 
 Requirements:
@@ -1399,7 +1398,6 @@ Before completing the task, verify:
 ```text
 raise the pr for the code
 ```
-
 
 ---
 
@@ -1584,4 +1582,1706 @@ Loading
 
 
 please check my friend merge and fix that issue
+```
+
+---
+
+### 2026-10-30T22:51:15+05:30
+
+```text
+raise the pr
+```
+
+---
+
+### 2026-10-30T23:11:45+05:30
+
+```text
+# MASTER DEVELOPMENT PROMPT: SELLER DIRECTORY & SUPPLIER 360° DOSSIER – QUA AI
+
+Act as a senior full-stack developer working on the existing QUA AI platform.
+
+Enhance the existing Seller Directory and Supplier 360° Dossier using the provided screenshots as UI references.
+
+The Seller Directory must have the same level of functionality, database integration, column customization, sorting, filtering, and user experience as the existing Buyer Directory.
+
+**Critical requirement: Reuse existing database models, APIs, components, methods, services, and business logic. Do not rebuild existing functionality or break any working features.**
+
+## 1. Seller Directory Dashboard
+
+Preserve and enhance the existing summary cards:
+
+1. Total Suppliers.
+2. Network Suppliers.
+3. Buyer Uploaded.
+4. Average 360° Score.
+5. Quoted Opportunities.
+
+All summary values must be dynamically fetched from the existing database.
+
+Ensure counts and statistics are accurate and consistent with actual supplier records.
+
+## 2. Toolbar and Export Directory
+
+Arrange the following controls in one horizontal row:
+
+- Search.
+- Source Filter.
+- Category Filter.
+- Rating Filter.
+- Export Directory button.
+- Gear icon.
+
+### UI Requirements
+- Give the Search field more width.
+- Keep other filters compact.
+- Place Export Directory and Gear icon at the right end, below the Average 360° Score card, following the reference layout.
+- Maintain consistent button heights, spacing, and alignment.
+- Avoid unnecessary padding, gaps, and horizontal overflow.
+- Ensure responsive behavior at different screen resolutions.
+
+### Export
+- Export actual supplier records from the database.
+- Respect currently applied search and filters.
+- Ensure the downloaded file contains the selected relevant supplier fields.
+- Fix any existing download issues without introducing mock data.
+
+## 3. Complete Seller Database Integration
+
+**Fetch all relevant seller information directly from the existing database, following the same approach as Buyer Directory.**
+
+Do not display only a limited set of supplier fields.
+
+Retrieve and display all relevant existing fields, wherever available:
+
+- Supplier ID.
+- Supplier Name / Company Name.
+- Contact Person.
+- Email.
+- Phone Number.
+- Company Location.
+- Delivery Location.
+- Procurement Categories.
+- Supplier Source (Network Supplier / Buyer Uploaded).
+- Sourcing Mode, if applicable.
+- Subscription Plan.
+- Available Quote Credits.
+- Total Credits.
+- Credits Consumed.
+- RFQ Count.
+- Quotation Count.
+- Quoted Opportunities.
+- 360° AI Score.
+- Supplier Rating.
+- Verification Status.
+- Account Status.
+- Registration Date.
+- Last Login.
+- Last Activity.
+- Assigned Executive, if available.
+- Other relevant existing supplier fields.
+
+### Database Requirements
+- Fetch all registered supplier records.
+- Reuse existing database models and relationships.
+- Verify backend API responses and frontend field mappings.
+- Ensure no relevant existing supplier fields are unnecessarily omitted.
+- Handle null and missing values correctly.
+- Use actual database records, not hardcoded or dummy data.
+- Avoid duplicate queries and duplicate sources of truth.
+- Use appropriate pagination and database-level filtering.
+
+## 4. Seller Directory Table
+
+Display supplier information in a clean, structured table.
+
+- Supplier Name.
+- Location.
+- Delivery Location.
+- Category.
+- Last Login.
+- 360° Rating.
+- Available Quote Credits.
+- Supplier Status.
+- Actions.
+
+Include additional relevant database-backed fields through configurable column settings.
+
+### Available Quote Credits
+Display available quotation credits similarly to the Available Credits field in Buyer Directory.
+
+Fetch the actual credit balance from the existing database.
+
+Reuse existing credit allocation, consumption, and calculation methods. Do not create a separate credit calculation mechanism.
+
+## 5. Supplier Name Click Functionality
+
+Make every supplier/company name clickable.
+
+When the user clicks a supplier name:
+
+- Open the existing Supplier 360° Dossier.
+- Display the complete supplier profile.
+- Do not redirect to RFQ details.
+- Preserve the existing supplier profile navigation and functionality.
+
+Reuse the existing Supplier Dossier component, routes, APIs, and database relationships.
+
+## 6. Supplier 360° Dossier – Header
+
+Update the existing Supplier Dossier header.
+
+- Remove the Seller ID from the visible UI.
+- Retain Seller ID internally for database relationships and backend operations.
+- Display Supplier Name.
+- Display Supplier Source (Buyer Uploaded / Network Supplier).
+- Display 360° AI Score.
+- Display Supplier Rating.
+- Preserve the existing close button and layout.
+
+## 7. Supplier Profile Tab
+
+Preserve and display all existing supplier profile information.
+
+Include:
+- Company Information.
+- Contact Details.
+- Email.
+- Phone Number.
+- Company Location.
+- Delivery Location.
+- GSTIN, where available.
+- PAN, where available.
+- Subscription Tier.
+- Verification Status.
+- Account Status.
+- Procurement Categories.
+- Other existing supplier details.
+
+Reuse existing profile components and database methods.
+
+## 8. Quotes Tab – Complete Quotation History
+
+Display the complete quotation history submitted by the selected supplier.
+
+Include:
+- RFQ ID.
+- RFQ Title.
+- Quoted Amount.
+- Submission Date.
+- RFQ Category.
+- Sourcing Mode.
+- Supplier's Quotation Status.
+- Assigned Buyer, where permitted.
+- Available Actions.
+
+### Quote Popup Functionality
+
+- Make RFQ IDs and quotation references clickable.
+- Clicking them should open a popup/modal displaying the complete quotation and associated RFQ details.
+- Display quotation items, quantities, specifications, pricing, attachments, delivery details, and status wherever available.
+- Reuse existing quotation and RFQ detail components and APIs.
+- Clicking outside the popup should close it.
+- Pressing Escape should also close it.
+- After closing, preserve the Supplier Dossier, selected tab, filters, and scroll position.
+- Provide a View Full Details option.
+
+Do not redirect users to an unrelated RFQ page when they expect quotation details.
+
+## 9. Credit Tab – Complete Supplier Credit History
+
+Display the complete quotation credit history of the selected supplier.
+
+### Credit Summary
+- Total Credits Allocated.
+- Credits Consumed.
+- Remaining Free Credits.
+- Purchased Credits, where applicable.
+- Adjusted Credits.
+- Current Credit Balance.
+- Subscription or Entitlement Information.
+
+### Credit Transaction History
+
+Display:
+- Transaction ID.
+- Transaction Date and Time.
+- Transaction Type.
+- Credit Source.
+- Credits Added.
+- Credits Consumed.
+- Previous Balance.
+- Updated Balance.
+- Related RFQ ID.
+- Payment or Subscription Reference.
+- Transaction Status.
+- Description / Remarks.
+
+Support filters by transaction type and date range, search, ascending/descending sorting, pagination, and export.
+
+Use actual historical database transactions. Do not fabricate previous balances or reconstruct transaction history using only the current balance.
+
+Preserve existing supplier credit calculation and consumption rules.
+
+## 10. Communications Tab – Replace Messages
+
+Rename the existing **Messages** tab to **Communications**, following the same structure as Buyer Directory.
+
+Inside Communications, provide four compact buttons in one horizontal row:
+
+1. Email.
+2. SMS.
+3. WhatsApp.
+4. Call Logs.
+
+When the user clicks each button, display all relevant communication history for the selected supplier.
+
+### A. Email
+Display:
+- Email Subject.
+- Message Content / Preview.
+- Sender.
+- Recipient.
+- Date and Time.
+- Delivery Status.
+- Read Status, where available.
+- Attachments, where available.
+
+Allow users to open and view complete email content.
+
+### B. SMS
+Display:
+- Message Content.
+- Sender.
+- Recipient Phone Number.
+- Date and Time.
+- Message Direction (Sent / Received).
+- Delivery Status.
+
+### C. WhatsApp
+Display:
+- Message Content.
+- Sender and Recipient.
+- Date and Time.
+- Message Direction.
+- Delivery Status.
+- Read / Acknowledgement Status, where supported.
+- Attachments, where available.
+
+### D. Call Logs
+Display:
+- Contact Number.
+- Call Direction (Incoming / Outgoing).
+- Call Date and Time.
+- Call Duration.
+- Call Status (Answered / Missed / Failed).
+- Executive / User.
+- Call Notes or Remarks.
+
+### Communication Rules
+- Fetch all available communication history from existing database records and integrations.
+- Show latest communications first by default.
+- Support date filtering and searching.
+- Clearly distinguish incoming and outgoing communications.
+- Display actual delivery and read statuses.
+- Do not generate dummy communication records.
+- Do not mark communications as delivered or read without actual confirmation.
+
+Reuse existing email, SMS, WhatsApp, and calling integrations.
+
+## 11. Payments Tab – Complete Payment History
+
+Display the complete payment transaction history of the selected supplier.
+
+### Payment Summary
+- Total Amount Paid.
+- Successful Payments.
+- Pending Payments.
+- Failed Payments.
+- Refunded Amount, where applicable.
+
+### Payment History Table
+
+Include:
+- Payment ID.
+- Invoice / Reference Number.
+- Transaction Date and Time.
+- Description.
+- Subscription Plan.
+- Payment Amount.
+- Currency.
+- Payment Gateway.
+- Payment Method / Channel.
+- Gateway Transaction Reference.
+- Transaction Status.
+- Invoice / Receipt.
+- Actions.
+
+Include successful, pending, failed, cancelled, and refunded transactions wherever available.
+
+### Payment Functionality
+- Fetch all payment records from the existing database.
+- Display latest payments first.
+- Provide date and status filters.
+- Support ascending and descending sorting.
+- Allow users to open payment details.
+- Provide invoice or receipt access where available.
+- Support pagination and export.
+
+Do not display only the latest payment or a single subscription record.
+
+## 12. Remove Activity Tab
+
+Remove the visible Activity tab from the Supplier Dossier navigation.
+
+Final navigation must be:
+
+1. Profile.
+2. Quotes.
+3. Credit.
+4. Communications.
+5. Payments.
+
+Important:
+- Remove only the visible Activity tab.
+- Do not delete audit records, activity history, database tables, backend APIs, or internal logging functionality.
+- Preserve existing security and audit mechanisms.
+
+## 13. Gear Icon – Dynamic Column Settings
+
+Implement the same Gear icon and Column Settings functionality as Buyer Directory, following the attached Column Settings screenshot.
+
+Place the Gear icon beside Export Directory.
+
+When clicked, open a Column Settings popup.
+
+### A. Column Settings Interface
+
+Display:
+- Column Settings heading.
+- Description: Show, hide, and drag handles to reorder columns.
+- All available Seller Directory columns.
+- Checkbox against each column.
+- Drag-and-drop handle.
+- Column position number.
+- Reset to Default button.
+- Done button.
+- Close button.
+
+### B. Show / Hide Columns
+
+Allow users to:
+- Show individual columns.
+- Hide individual columns.
+- Select All.
+- Hide All optional columns.
+- Reset to Default.
+
+Keep Supplier Name and Actions locked and visible.
+
+The Actions column must always remain at the end.
+
+### C. Drag-and-Drop Column Reordering
+
+Allow users to drag and drop columns inside the settings popup.
+
+For example, users should be able to change:
+
+Default:
+1. Supplier Name.
+2. Contact Person.
+3. Email.
+4. Phone.
+5. Source.
+6. Category.
+7. Location.
+8. Delivery Location.
+9. Available Quote Credits.
+10. Rating.
+11. Status.
+12. Registration Date.
+13. Actions.
+
+Customized:
+1. Supplier Name.
+2. Available Quote Credits.
+3. Rating.
+4. Category.
+5. Contact Person.
+6. Location.
+7. Email.
+8. Status.
+9. Registration Date.
+10. Actions.
+
+The table must immediately reflect the new order.
+
+### D. Table Synchronization
+
+- Show only selected columns.
+- Maintain the exact order configured by the user.
+- Update headers and data cells together.
+- Keep column alignment correct.
+- Maintain sorting and filtering after reordering.
+- Support horizontal scrolling when required.
+- Do not remove or modify database information when hiding columns.
+
+### E. Save User Preferences
+
+Persist:
+- Visible columns.
+- Hidden columns.
+- Column order.
+- Default configuration.
+
+Requirements:
+- Save preferences separately for each logged-in user.
+- Restore preferences after page refresh and re-login.
+- Do not affect other users' configurations.
+- Use existing user-preference storage if available.
+- Otherwise, implement a minimal user-specific preference mechanism.
+
+### F. Reset and Default
+
+Provide:
+- Reset to Default.
+- Select All.
+- Hide All optional columns.
+- Done.
+
+Reset to Default must restore the original column visibility and order without changing supplier data.
+
+## 14. Sorting and Filtering
+
+Every applicable Seller Directory column must support ascending and descending sorting.
+
+Examples:
+- Supplier Name: A–Z / Z–A.
+- Available Quote Credits: Lowest–Highest / Highest–Lowest.
+- Rating: Lowest–Highest / Highest–Lowest.
+- Registration Date: Oldest–Newest / Newest–Oldest.
+- Last Login: Oldest–Newest / Newest–Oldest.
+- Last Activity: Oldest–Newest / Newest–Oldest.
+- Status: Status-based sorting.
+- Category: Alphabetical sorting.
+
+All date columns must sort chronologically using actual date values, not formatted display strings.
+
+Preserve existing:
+- Search.
+- Source Filter.
+- Category Filter.
+- Rating Filter.
+
+Ensure sorting and filtering work with all database records, including paginated results and after column customization.
+
+## 15. Technical and Database Requirements
+
+### Database Integration
+- Fetch complete seller records from existing database tables.
+- Reuse existing supplier, quotation, credit, payment, communication, and profile models.
+- Maintain correct relationships between sellers, buyers, RFQs, quotations, and transactions.
+- Avoid duplicate sources of truth.
+- Add database fields or tables only when necessary.
+
+### Frontend
+- Reuse existing components, hooks, table utilities, routes, and styling.
+- Follow the existing QUA AI design system.
+- Avoid unnecessary dependencies.
+- Ensure responsive layout.
+
+### Backend
+- Reuse existing controllers, services, repositories, APIs, and methods.
+- Implement database-level pagination, filtering, and sorting where applicable.
+- Validate requests.
+- Enforce authorization server-side.
+- Handle errors properly.
+
+### Security
+- Preserve existing authentication and role-based permissions.
+- Do not expose confidential supplier or buyer information to unauthorized users.
+- Maintain existing audit logging.
+
+## 16. Strict No-Breaking-Changes Policy
+
+**This is an enhancement to the existing production application, not a rebuild.**
+
+1. Inspect the existing Seller Directory before modifying anything.
+2. Reuse existing database models, APIs, methods, components, and integrations.
+3. Do not recreate existing Supplier Directory or Supplier Dossier functionality.
+4. Do not change existing credit allocation or consumption rules.
+5. Do not change quotation, RFQ, subscription, or payment business logic.
+6. Do not delete historical supplier, quotation, credit, communication, or payment records.
+7. Do not unnecessarily rename existing APIs, functions, methods, routes, or database fields.
+8. Do not modify unrelated application modules.
+9. Preserve existing routes and API compatibility.
+10. Do not replace working integrations with dummy implementations.
+11. Make only minimal, targeted, backward-compatible changes.
+12. Preserve internal audit and activity logging even after removing the visible Activity tab.
+
+If any requirement conflicts with existing business logic, identify the conflict before changing it.
+
+## 17. Testing and Acceptance Criteria
+
+Verify the following:
+
+1. All relevant seller records are fetched from the actual database.
+2. All available relevant seller fields are displayed.
+3. Summary cards show correct database-backed values.
+4. Supplier name opens the correct Supplier 360° Dossier.
+5. Seller ID is hidden from the visible header.
+6. Available Quote Credits display the correct balance.
+7. Quotes tab displays complete quotation history.
+8. Clicking a quotation opens the correct details popup.
+9. Credit tab displays complete credit transaction history.
+10. Communications contains Email, SMS, WhatsApp, and Call Logs.
+11. Each communication button displays its relevant historical records.
+12. Payments displays complete supplier payment history.
+13. Activity tab is removed from visible navigation.
+14. Export Directory downloads actual filtered supplier data.
+15. Gear icon opens Column Settings.
+16. Users can show and hide columns.
+17. Users can drag and drop columns.
+18. Supplier Name and Actions remain locked.
+19. Column preferences persist across sessions.
+20. Every applicable column supports ascending and descending sorting.
+21. Date columns sort chronologically.
+22. Search and filters work correctly after reordering columns.
+23. Existing supplier workflows remain functional.
+24. Run relevant unit tests, integration tests, regression tests, linting, type checks, and production builds.
+
+## 18. Implementation Order
+
+**Phase 1 – Inspection**
+- Inspect existing Seller Directory and Supplier Dossier.
+- Identify existing database fields, methods, APIs, and reusable components.
+- Identify missing functionality.
+- Prepare a minimal change plan.
+
+**Phase 2 – Directory Enhancement**
+- Integrate all available seller database fields.
+- Update summary cards and table.
+- Implement Search, Source, Category, and Rating filters.
+- Fix Export Directory.
+
+**Phase 3 – Column Settings**
+- Implement Gear icon.
+- Implement show/hide checkboxes.
+- Implement drag-and-drop column ordering.
+- Save user-specific preferences.
+- Implement sorting and filtering compatibility.
+
+**Phase 4 – Supplier Dossier**
+- Update header.
+- Implement complete Quotes, Credit, Communications, and Payments history.
+- Remove visible Activity tab while retaining internal logging.
+- Implement quotation details popup.
+
+**Phase 5 – Testing**
+- Verify database accuracy.
+- Test all tabs and interactions.
+- Verify column settings and export.
+- Run regression tests.
+- Review the final code diff for unintended changes.
+
+## 19. Final Deliverables
+
+After implementation, provide:
+
+- Summary of completed functionality.
+- Modified and newly added files.
+- Existing components, methods, and APIs reused.
+- Database tables and fields used.
+- New or modified APIs, if any.
+- Database migrations, if any.
+- Column preference storage implementation.
+- Communication and payment integration details.
+- Testing performed and actual results.
+- Remaining limitations or pending requirements.
+
+# FINAL DEVELOPMENT INSTRUCTION
+
+Make the Seller Directory fully consistent with Buyer Directory in database integration, UI, search, filters, dynamic column settings, drag-and-drop ordering, sorting, and export.
+
+The Supplier 360° Dossier must provide complete Profile, Quotes, Credit, Communications, and Payments information using actual database records.
+
+The Gear icon must support column visibility, drag-and-drop ordering, and individual user preference persistence.
+
+**Most importantly, reuse existing functionality, methods, APIs, database models, and integrations. Preserve all existing business logic and working functionality. Make only the minimum necessary backward-compatible changes. Do not rebuild, overwrite, or break the existing application.**
+```
+
+---
+
+### 2026-10-31T03:00:00+05:30
+
+```text
+why that much time it is  running since 2 hours not raise the pr first raise the pr
+```
+
+---
+
+### 2026-10-31T08:45:00+05:30
+
+```text
+check the error fix it
+```
+## 2026-10-17
+
+---
+
+### 2026-10-31T10:12:59+05:30
+
+```text
+commit the changes
+```
+
+---
+
+### 2026-10-31T10:35:42+05:30
+
+```text
+merge the commit changes and see the outoput
+
+
+[Master Quality & PR Summary summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408#summary-124425598443)
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: FAILED
+283 / 285 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+4204
+4204
+0
+0
+frontend
+3367
+3365
+2
+0
+Workspace
+7571
+7569
+2
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.93%
+92.59%
+99.29%
+99.54%
+128 / 128
+frontend
+97.98%
+93.07%
+98.24%
+98.73%
+155 / 157
+Workspace
+98.45%
+92.82%
+98.61%
+99.13%
+283 / 285
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+PASSED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+FAILED
+Frontend per-file coverage
+FAILED
+Production build
+FAILED
+TypeScript typecheck
+FAILED
+Lint
+PASSED
+Database migrations
+PASSED
+Coverage failures
+frontend: app/category-manager/buyers-directory.tsx: branches 88.59% < 90%.
+frontend: app/category-manager/sellers-directory.tsx: branches 79.43% < 90%.
+frontend: app/category-manager/sellers-directory.tsx: lines 89.79% < 90%.
+[Job summary generated at run-time](https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions#adding-a-job-summary)
+Annotations
+15 errors, 3 warnings, and 3 notices
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:400)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:374)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:333)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:288)Type '{ categories: never[]; id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:249)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:226)Type '{ id: string; name: string; companyName: string; contactPerson: string; email: string; phone: string; location: string; deliveryLocation: string; majorCategory: string; category: string; categories: string[]; ... 9 more ...; lastLogin: string; }' is not assignable to type '(RFQVendorCandidate | VendorEntry) & { id: string; name?: string | undefined; companyName?: string | undefined; contactPerson?: string | undefined; ... 17 more ...; lastLogin?: string | undefined; }'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:97)Property 'name' is missing in type '{ id: string; email: string; }' but required in type 'RFQAssignedVendor'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:89)Type '"PENDING"' is not assignable to type '"Parsing" | "In Evaluation" | "AI Recommended" | "PO Generated" | "Quotes Pending" | "Quotes Received" | "Closed" | "Expired"'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:70)Type '"Buyer Uploaded"' is not assignable to type '"Client List" | "Procucev - AI Rec" | "Procucev Network"'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:8:46)Type '"QUOTED"' is not assignable to type '"Parsing" | "In Evaluation" | "AI Recommended" | "PO Generated" | "Quotes Pending" | "Quotes Received" | "Closed" | "Expired"'.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:7:20)Process completed with exit code 1.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:6:78838)Process completed with exit code 1.
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:5:60)Process completed with exit code 1.
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443#step:9:22)Process completed with exit code 1.
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443#step:8:37)Process completed with exit code 1.
+[Backend Tests, Migrations & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443582#step:19:6)Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754#step:21:8)Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443#step:19:2)Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/download-artifact@v4, actions/github-script@v7, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+[Backend Tests, Migrations & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443582)"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+[Frontend Build, Lint, Typecheck & Coverage](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124424443754)"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+[Master Quality & PR Summary](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41162871408/job/124425598443)"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+Artifacts
+
+how much time doo it very fast i what do so many chnages
+```
+
+---
+
+### 2026-10-31T11:02:36+05:30
+
+```text
+how much time do it
+```
+
+---
+
+### 2026-10-31T11:26:22+05:30
+
+```text
+continue
+```
+
+---
+
+### 2026-10-31T12:15:30+05:30
+
+```text
+once you solve copilot comments then you are able to merge pr .
+```
+
+---
+
+### 2026-10-31T12:47:49+05:30
+
+```text
+### Payment Dues – Toolbar & Summary Cards UI Fix
+
+Update the existing Payment Dues page based on the attached Seller Directory screenshot.
+
+**1. Toolbar Layout**
+- Follow the Seller Directory toolbar design.
+- Arrange Search, Account Type (All Types), Credit Filter (All Low Credits ≤ 2), Acknowledgement Status, Refresh, Export CSV, and Gear icon in one horizontal row.
+- Give Search maximum available width.
+- Keep all dropdowns and action buttons compact.
+- Keep Refresh, Export CSV, and Gear as separate buttons aligned at the right.
+- Prevent toolbar movement, horizontal scrolling, overflow, or controls crossing the parent container.
+- Keep the toolbar and table aligned to the same content width.
+
+**2. Rename Summary Cards**
+
+Remove the word "Total" from the first three card headings:
+
+- Total Low-Credit Accounts → **Low-Credit Accounts**
+- Total Buyers → **Buyers**
+- Total Sellers → **Sellers**
+
+Keep the remaining cards unchanged:
+- 0 Credits (Critical)
+- 1–2 Credits (Attention)
+- Acknowledgement Pending
+
+**3. Reduce Summary Card Sizes**
+- Reduce card height, padding, and unnecessary gaps.
+- Use smaller, compact cards similar to the Seller Directory summary cards.
+- Maintain equal card heights and proper horizontal alignment.
+- Keep numbers clearly visible but avoid oversized cards.
+
+**4. Database and Functionality**
+- Preserve all existing database queries, credit calculations, filters, export functionality, and column settings.
+- Do not change existing business logic.
+- Make only targeted UI/CSS changes.
+
+**Acceptance Criteria:** Payment Dues should follow the same compact layout and toolbar alignment as Seller Directory, with a wider Search field, smaller individual filters, properly aligned action buttons, and compact summary cards. Nothing should overflow or shift at the current screen resolution.
+```
+The rate limit is per day, i hope we are refreshing this active model index every day?
+## 2026-10-14 — Public Vendor Directory Page with Search and Filter
+
+docs in docs file I have create a page where we have list down all the vendor's and have search and filter option give me how can we do that and also we need to show all vendor information and this page does not required authentication and need to go and view all the data give proper format we can do that
+
+docs\PUBLIC_VENDOR_DIRECTORY_GUIDE.md take referenve from this docs and build this page
+
+complete the rest task
+
+docs\PUBLIC_VENDOR_DIRECTORY_GUIDE.md take referenve from this docs and build this page  what I have said
+
+[FRONTEND] 
+[FRONTEND] > procucev-enterprise-frontend@2.1.0 dev
+[FRONTEND] > next dev -p 3000
+[FRONTEND]
+[BACKEND] 
+[BACKEND] > procucev-enterprise-node@2.1.0 dev
+[BACKEND] > nodemon src/server.js
+[BACKEND]
+[BACKEND] [nodemon] 3.1.14
+[BACKEND] [nodemon] to restart at any time, enter `rs`
+[BACKEND] [nodemon] watching path(s): *.*
+[BACKEND] [nodemon] watching extensions: js,mjs,cjs,json
+[BACKEND] [nodemon] starting `node src/server.js`
+[FRONTEND]   ▲ Next.js 14.2.35
+[FRONTEND]   - Local:        http://localhost:3000
+[FRONTEND]   - Environments: .env.local, .env.development
+[FRONTEND]   - Experiments (use with caution):
+[FRONTEND]     · staleTimes
+[FRONTEND]
+[BACKEND] [INFO] [STORE_SERVICE] Domain records loaded from PostgreSQL {"vendors":500,"vendorsTotal":20097,"rfqs":246,"evaluations":1,"vendorCatalogue":2,"buyerAccounts":13,"aiFeed":100,"auditLogs":5548,"notifications":2456,"paymentLinks":57}
+[BACKEND] [INFO] [SERVER] Email ingestion gateway not started: undefined
+[BACKEND] [INFO] [ZOHO_RECONCILIATION] Zoho payment-link reconciliation polling every 600s
+[FRONTEND]  ✓ Compiled /vendors in 17.2s (651 modules)
+[FRONTEND]  ✓ Compiled in 2.6s (330 modules)
+[FRONTEND]  GET /vendors 200 in 19960ms
+[FRONTEND]  GET /vendors 200 in 740ms
+[FRONTEND]  ○ Compiling /_not-found ...
+[FRONTEND]  ✓ Compiled /_not-found in 4.6s (640 modules)
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 7125ms
+[FRONTEND]  GET /vendors 200 in 661ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 164ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 335ms
+[FRONTEND]    Reload env: .env.development
+[FRONTEND]  ✓ Compiled in 7.5s (651 modules)
+[FRONTEND]    Reload env: .env.development
+[FRONTEND]  ✓ Compiled in 1736ms (637 modules)
+[FRONTEND]  GET /vendors 200 in 2880ms
+[FRONTEND]  ○ Compiling /_not-found ...
+[FRONTEND]  ✓ Compiled /_not-found in 8s (654 modules)
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 10030ms
+[FRONTEND]  GET /.well-known/appspecific/com.chrome.devtools.json 404 in 381ms
+
+
+---
+
+### 2026-10-31T14:12:32+05:30
+
+```text
+backend\__tests__\vendorPublicController.test.js
+ solve merge conflic to this page onl only
+```
+
+
+---
+
+### 2026-10-31T14:17:21+05:30
+
+```text
+ git status 
+interactive rebase in progress; onto 43162e1
+Last command done (1 command done):
+   pick 86daea5 # commit changes for vendor page
+Next commands to do (3 remaining commands):
+   pick 33db226 # feature complete with login
+   pick 0d6689d # Otp Login added in vendor page
+  (use "git rebase --edit-todo" to view and edit)
+You are currently rebasing branch 'sample/vendor-page' on '43162e1'.
+  (fix conflicts and then run "git rebase --continue")
+  (use "git rebase --skip" to skip this patch)
+  (use "git rebase --abort" to check out the original branch)
+
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+        modified:   backend/src/config/validationSchemas.js
+        modified:   frontend/lib/uiStrings.ts
+        modified:   prompts.md
+
+Unmerged paths:
+  (use "git restore --staged <file>..." to unstage)
+  (use "git add/rm <file>..." as appropriate to mark resolution)
+        both added:      backend/__tests__/vendorPublicController.test.js
+        both modified:   backend/src/controllers/vendorController.js
+        both modified:   backend/src/db/domainQueries.js
+        both modified:   backend/src/routes/vendors.js
+        deleted by us:   frontend/.env.development
+        both added:      frontend/__tests__/app/vendors/page.test.tsx
+        both added:      frontend/__tests__/lib/vendorDirectoryClient.test.ts
+        both added:      frontend/app/vendors/VendorFilterSidebar.tsx
+        both added:      frontend/app/vendors/page.tsx
+        both modified:   frontend/lib/types.ts
+        both modified:   frontend/lib/validationSchemas.ts
+        both added:      frontend/lib/vendorDirectoryClient.ts
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   prompts.md
+
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
+
+resolve every conflict and put changes in stage and complete the rebase
+```
+---
+
+### 2026-10-29T16:23:20+05:30
+
+```text
+This vendor directrory should only be shown Category Manager only after when Category Manager  is login and also when category manager click on vendor directly on login page need only Procucev mail Id login  with otp on their mail and when they enter the vendor page after 5 min of inactivity  they will be auto logout and also store all the login detail who login and how much time they have spend first login and lout otu time all these and also when category manager upload any new vendor that will be visible by default what I belive these are thing need to done 
+
+for these these their is a plan just need to execute plan_to_implement\plan.md check all these and start implement ing by phases start with phase 1 
+```
+---
+
+### 2026-10-29T16:39:50+05:30
+
+```text
+yes proceed to phase 2 
+```
+
+---
+
+### 2026-10-29T17:11:06+05:30
+
+```text
+okay phase 2 complete now work on phase 3 
+```
+
+---
+
+### 2026-10-29T18:05:06+05:30
+
+```text
+okay priority change only otp verification and vendor directory will only be show in after login cateogry manager should be visible complete this first and then move to other part
+like in phase 4 otp will be complete take study other phase also check complete these part only as of now  
+```
+
+---
+
+### 2026-10-29T18:48:04+05:30
+
+```text
+why I am seeing Vendor Directory on login page ?? it should only be access after login in category manager page 
+```
+
+---
+
+### 2026-10-29T18:59:49+05:30
+
+```text
+abc@procucev.com  check for an active procucev account getitig theis 
+SrinivasM@procucev.com
+ user_id = $1 and category is not null and category <> '' order by division, category","durationMs":223,"table":"org_division_category"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'org_division_category': 337ms {"query":"select division, category from org_division_category where organization_id = $1 and category is not null and category <> '' order by division, category","durationMs":337,"table":"org_division_category"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'vendors': 785ms {"query":"SELECT id, created_at, updated_at, raw FROM vendors WHERE source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump') ORDER BY created_at DESC LIMIT $1 OFFSET $2","durationMs":785,"table":"vendors"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'buyer_accounts': 259ms {"query":"SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1","durationMs":259,"table":"buyer_accounts"} 
+[BACKEND] GET /api/buyer-accounts/active 304 (1395ms)      
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/buyer-accounts/active -> 304 (1395ms) {"method":"GET","url":"/api/buyer-accounts/active","statusCode":304,"durationMs":1395,"requestId":"req-1793280385006-xzktt","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}       
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'vendors': 4629ms {"query":"SELECT raw FROM vendors WHERE lower(email) = lower($1) OR lower(json_extract(raw,'$.corporateEmail')) = lower($1) LIMIT 1","durationMs":4629,"table":"vendors"}
+[BACKEND] GET /api/bootstrap 200 (6148ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 200 (6148ms) {"method":"GET","url":"/api/bootstrap","statusCode":200,"durationMs":6148,"requestId":"req-1793280384868-tx3fe","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [INFO] [BOOTSTRAP_CONTROLLER] Fetching application bootstrap data payload
+[BACKEND] GET /api/bootstrap 304 (57ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 304 (57ms) {"method":"GET","url":"/api/bootstrap","statusCode":304,"durationMs":57,"requestId":"req-1793280391041-1u46f","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [INFO] [BOOTSTRAP_CONTROLLER] Fetching application bootstrap data payload
+[BACKEND] GET /api/bootstrap 304 (44ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 304 (44ms) {"method":"GET","url":"/api/bootstrap","statusCode":304,"durationMs":44,"requestId":"req-1793280391103-2gszh","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [INFO] [BOOTSTRAP_CONTROLLER] Fetching application bootstrap data payload
+[BACKEND] GET /api/bootstrap 304 (30ms)
+[BACKEND] [INFO] [HTTP_REQUEST] GET /api/bootstrap -> 304 (30ms) {"method":"GET","url":"/api/bootstrap","statusCode":304,"durationMs":30,"requestId":"req-1793280391161-zwaod","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[FRONTEND]  ✓ Compiled in 3.2s (823 modules)
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'role': 715ms {"query":"select u.uuid, u.username, u.email, u.password, u.full_name, u.first_name, u.phone, u.is_active, u.is_approved, u.self_client, u.reset_password, u.verification_status, u.org_uuid, r.role_name, o.organ","durationMs":715,"table":"role"}
+[BACKEND] POST /api/auth/vendor-directory/request-otp 403 (741ms)
+[BACKEND] [WARN] [AUTH_SERVICE] Vendor directory OTP denied for unauthorized or non-CM account: abc@procucev.com {"ipAddress":"::1"}
+[BACKEND] [WARN] [AUTH_CONTROLLER] Vendor directory OTP request failure in authController {"error":"Access to the Vendor Directory is restricted to Category Managers with an active @procucev.com account.","email":"abc@procucev.com"}    
+[BACKEND] [WARN] [HTTP_REQUEST] POST /api/auth/vendor-directory/request-otp -> 403 (741ms) {"method":"POST","url":"/api/auth/vendor-directory/request-otp","statusCode":403,"durationMs":741,"requestId":"req-1793280481425-0fbrz","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'payment_links': 579ms {"query":"SELECT raw FROM payment_links ORDER BY created_at DESC LIMIT $1","durationMs":579,"table":"payment_links"}
+[BACKEND] [WARN] [DATABASE_PERFORMANCE] Slow database query detected on table 'role': 330ms {"query":"select u.uuid, u.username, u.email, u.password, u.full_name, u.first_name, u.phone, u.is_active, u.is_approved, u.self_client, u.reset_password, u.verification_status, u.org_uuid, r.role_name, o.organ","durationMs":330,"table":"role"}
+[BACKEND] POST /api/auth/vendor-directory/request-otp 403 (348ms)
+[BACKEND] [WARN] [AUTH_SERVICE] Vendor directory OTP denied for unauthorized or non-CM account: srinivasm@procucev.com {"ipAddress":"::1"}
+[BACKEND] [WARN] [AUTH_CONTROLLER] Vendor directory OTP request failure in authController {"error":"Access to the Vendor Directory is restricted to Category Managers with an active @procucev.com account.","email":"srinivasm@procucev.com"}
+[BACKEND] [WARN] [HTTP_REQUEST] POST /api/auth/vendor-directory/request-otp -> 403 (348ms) {"method":"POST","url":"/api/auth/vendor-directory/request-otp","statusCode":403,"durationMs":348,"requestId":"req-1793280527374-9dqns","ipAddress":"::1","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"}
+```
+
+
+---
+
+### 2026-10-29T19:14:03+05:30
+
+```text
+339556 otp
+```
+
+
+---
+
+### 2026-10-29T21:01:05+05:30
+
+```text
+it just have to accept any mail with  @procucev.com that neccessary have role of category manger It has common account to access every but to access vendor only company employee can access by writting their mail Id of the company with otp
+```
+
+
+---
+
+### 2026-10-29T21:02:39+05:30
+
+```text
+Access to the Vendor Directory is restricted to Category Managers with an active @procucev.com account.
+Procucev Corporate Email
+mukul.rai@procucev.com
+Must end in @procucev.com
+
+
+ it just have to accept any mail with  @procucev.com that neccessary have role of category manger It has common account to access every but to access vendor only company employee can access by writting their mail Id of the company with otp 
+```
+
+
+---
+
+### 2026-10-29T21:24:59+05:30
+
+```text
+why I am seeing verification code on verify otp it shoudn't be their 
+```
+
+
+---
+
+### 2026-10-29T21:52:33+05:30
+
+```text
+backend\check_db_users.js
+backend\check_procucev_users.js
+backend\check_srinivas.js why are these file nned now check extra file and remove latest create files only 
+```
+
+
+---
+
+### 2026-10-29T22:05:24+05:30
+
+```text
+|           ^
+      22 | }
+      23 |
+      24 | /**
+
+      at warn (src/db/vendorDirectorySessionQueries.js:21:11)
+      at logWarn (src/db/vendorDirectorySessionQueries.js:162:5)
+      at Object.closeSession (src/db/vendorDirectorySessionQueries.js:232:19)
+      at Object.<anonymous> (__tests__/vendorDirectorySessionQueries.test.js:294:7)
+
+(node:13820) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ PASS  __tests__/ciSummary.test.js (7.081 s)
+ PASS  __tests__/buyerAccountResolver.test.js (6.127 s)
+ PASS  __tests__/vendorControllerBranches.test.js (16.692 s)
+ PASS  __tests__/unlimitedAccessAccounts.test.js (26.385 s)
+ PASS  __tests__/v0RfqWorkflow.test.js (19.456 s)
+ PASS  __tests__/vendorIngestionDispatchCoverage.test.js (19.926 s)
+ PASS  __tests__/constantsConfig.test.js (8.459 s)
+ PASS  __tests__/invoiceService.test.js (11.792 s)
+ PASS  __tests__/zohoWebhookController.test.js (18.122 s)
+ PASS  __tests__/storeServiceAutoClosure.test.js (8.736 s)
+ PASS  __tests__/types.test.js (10.311 s)
+ PASS  __tests__/servicesDeep.test.js (5.533 s)
+ PASS  __tests__/ppoClosureFix.test.js (6.589 s)
+ PASS  __tests__/vendorIngestionQueries.test.js (19.076 s)
+ PASS  __tests__/vendorPresenceService.test.js (10.052 s)
+ PASS  __tests__/evaluationService.test.js (5.896 s)
+ PASS  __tests__/identityQueries.test.js (10.319 s)
+ PASS  __tests__/validationSchemas.test.js
+ PASS  __tests__/emailService.test.js (5.995 s)
+A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
+
+Statements   : 98.86% ( 15308/15484 )
+Branches     : 92.61% ( 15660/16909 )
+Functions    : 99.21% ( 2013/2029 )
+Lines        : 99.46% ( 14080/14156 )
+Jest: "S:\procucev\Precucev-github\Enterprise_qua_nextjs\backend\src\services\authService.js" coverage threshold for functions (90%) not met: 89.74%
+
+Test Suites: 128 passed, 128 total
+Tests:       3944 passed, 3944 total
+Snapshots:   0 total
+Time:        478.688 s, estimated 704 s
+Ran all test suites.
+Test results written to: coverage\test-results.json
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+
+✖ [FAILED] Step 2A: Backend Test Suite & 90% Per-File Coverage Enforcement encountered an error.     
+
+❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
+```
+
+
+---
+
+### 2026-10-29T22:19:11+05:30
+
+```text
+okay just need to fix timmer we show the otp expire in 5 min but we are showing 30 sec need too update in frontend 
+Statements   : 98.86% ( 15861/16043 )
+Branches     : 92.56% ( 16280/17588 )
+Functions    : 99.28% ( 2074/2089 )
+Lines        : 99.47% ( 14597/14674 )
+
+Summary of all failing tests
+FAIL __tests__/vendorDirectoryRoutes.test.js
+  ● Protected Vendor Directory Routes (/api/vendors/public*) › Obsolete passkey endpoint removal (/api/vendors/directory-auth) › returns 404 since /directory-auth is retired
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 404
+    Received: 200
+
+      206 |         .send({ passcode: 'Procucev@Vendors2026' });
+      207 |
+    > 208 |       expect(res.status).toBe(404);
+          |                          ^
+      209 |     });
+      210 |   });
+      211 | });
+
+      at Object.toBe (__tests__/vendorDirectoryRoutes.test.js:208:26)
+
+
+Test Suites: 1 failed, 131 passed, 132 total
+Tests:       1 failed, 4036 passed, 4037 total
+Snapshots:   0 total
+Time:        187.956 s
+Ran all test suites.
+Test results written to: coverage/test-results.json
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+Error: Process completed with exit code 1.
+```
+
+
+---
+
+### 2026-10-31T13:19:51+05:30
+
+```text
+{
+    "success": false,
+    "sessionExpired": true,
+    "error": "Vendor directory session has expired or is closed. Please log in again."
+} Getting this on login with otp in production 
+```
+
+
+---
+
+### 2026-10-31T14:04:16+05:30
+
+```text
+is this issue come in future ??
+```
+
+
+---
+
+### 2026-10-31T14:06:51+05:30
+
+```text
+I want to update the branch give me all rebase steps
+```
+
+---
+
+### 2026-10-31T14:12:32+05:30
+
+```text
+backend\__tests__\vendorPublicController.test.js
+ solve merge conflic to this page onl only
+```
+
+---
+
+### 2026-10-31T14:17:21+05:30
+
+```text
+ git status 
+interactive rebase in progress; onto 43162e1
+Last command done (1 command done):
+   pick 86daea5 # commit changes for vendor page
+Next commands to do (3 remaining commands):
+   pick 33db226 # feature complete with login
+   pick 0d6689d # Otp Login added in vendor page
+  (use "git rebase --edit-todo" to view and edit)
+You are currently rebasing branch 'sample/vendor-page' on '43162e1'.
+  (fix conflicts and then run "git rebase --continue")
+  (use "git rebase --skip" to skip this patch)
+  (use "git rebase --abort" to check out the original branch)
+
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+        modified:   backend/src/config/validationSchemas.js
+        modified:   frontend/lib/uiStrings.ts
+        modified:   prompts.md
+
+Unmerged paths:
+  (use "git restore --staged <file>..." to unstage)
+  (use "git add/rm <file>..." as appropriate to mark resolution)
+        both added:      backend/__tests__/vendorPublicController.test.js
+        both modified:   backend/src/controllers/vendorController.js
+        both modified:   backend/src/db/domainQueries.js
+        both modified:   backend/src/routes/vendors.js
+        deleted by us:   frontend/.env.development
+        both added:      frontend/__tests__/app/vendors/page.test.tsx
+        both added:      frontend/__tests__/lib/vendorDirectoryClient.test.ts
+        both added:      frontend/app/vendors/VendorFilterSidebar.tsx
+        both added:      frontend/app/vendors/page.tsx
+        both modified:   frontend/lib/types.ts
+        both modified:   frontend/lib/validationSchemas.ts
+        both added:      frontend/lib/vendorDirectoryClient.ts
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   prompts.md
+
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
+
+resolve every conflict and put changes in stage and complete the rebase
+```
+
+
+---
+
+### User Prompt - 2026-10-31T14:46:23+05:30
+
+```text
+### Payment Dues – UI Fixes
+
+Please fix the following issues in the Payment Dues section based on the attached screenshots:
+
+1. **Column Settings (Gear Icon)**
+   - Currently, the Column Settings panel opens below the toolbar and gets clipped, making its contents invisible.
+   - Change it to a properly visible, centered popup/modal.
+   - Display all column names, checkboxes, drag-and-drop handles, and action buttons clearly.
+   - Add a background overlay and ensure the popup has a higher z-index than the toolbar and table.
+   - Support closing through the close icon, outside click, and Escape key.
+   - Ensure the popup is responsive and does not get cut off by parent containers or screen boundaries.
+
+2. **Payment Dues Notification Count**
+   - Remove the hardcoded static `99+` badge.
+   - Display the actual dynamic count from the database/API.
+   - Update the count whenever the underlying Payment Dues records change.
+   - If the count is zero, display `0` or hide the badge.
+
+3. **Remove Excessive Left and Right Spacing**
+   - The Payment Dues content currently has too much empty space on both sides.
+   - Reduce unnecessary left and right margins and padding.
+   - Use the available viewport width effectively.
+   - Align the summary cards, toolbar, and table consistently.
+   - Ensure the table uses the available width without unnecessary blank areas or horizontal layout shifting.
+
+4. **Preserve Existing Functionality**
+   - Do not modify existing database logic, APIs, filters, sorting, CSV export, or column preferences.
+   - Reuse existing components and methods wherever possible.
+   - Ensure the changes do not affect Buyer Directory, Seller Directory, or other Action Center modules.
+
+**Expected Result:** Column Settings should open as a fully visible centered popup, the Payment Dues badge should show a real dynamic count, and the entire page should use available screen space without excessive side gaps.
+```
+
+### User Prompt - 2026-10-31T15:35:19+05:30
+
+```text
+### Buyer Directory & Buyer 360° Dossier – Required Fixes
+
+Please fix the following issues based on the attached screenshots.
+
+**1. Pending Verification Filter – Data Not Displaying**
+- When selecting **Pending Verification**, no buyer records are displayed, even though multiple pending verification accounts exist.
+- Check the database query, API response, status mapping, and frontend filter logic.
+- Ensure all buyers with Pending Verification status are displayed correctly.
+- Verify that Active & Verified filtering also works correctly.
+- Ensure summary counts and filtered records remain consistent with database data.
+
+**2. Preserve Previous Page When Closing Buyer Profile / RFQ**
+- When opening a Buyer 360° Dossier or an RFQ details popup, closing it using the **X button or Close button** currently redirects to the main Buyer Directory.
+- Instead, return the user to the exact previous page and context from which the profile or RFQ was opened.
+- Preserve the selected tab, search keyword, filters, sorting, pagination, and scroll position.
+- If an RFQ popup was opened from the buyer's RFQ tab, closing it must return to that same buyer's RFQ tab.
+- Do not reset or reload the entire Buyer Directory unnecessarily.
+
+**3. Payments Tab – Remove Refund Summary**
+- Remove the **Total Refunded Amount** summary card.
+- Keep the remaining four cards:
+  - Total Amount Paid
+  - Total Successful Payments
+  - Pending Payments
+  - Failed Payments
+- Maintain proper alignment and equal card sizing.
+
+**4. Payments Tab – Fix Status Filter Layout**
+- The **All Statuses** dropdown is currently cut off.
+- Adjust its width and responsive layout so the complete dropdown and selected value are visible.
+- Align the search, status filter, sorting option, and Export CSV button properly in one row.
+- Ensure the controls do not overlap or get clipped on different screen sizes.
+
+**5. Communications – Integrate WhatsApp and SMS**
+- Add **WhatsApp** and **SMS** communication options alongside the existing Email and Call Logs sections.
+- Display the complete communication history for the selected buyer in each section.
+- Show available details such as date/time, message content, sender/receiver, delivery status, and acknowledgement status.
+- Fetch communication records from the existing database and integrate with the existing WhatsApp and SMS services/APIs.
+- Ensure new communications are recorded and reflected in the respective history.
+- Display a proper empty state when no communication history exists.
+
+**Important Implementation Rules**
+- Reuse existing components, APIs, database tables, services, and communication integrations wherever possible.
+- Do not create duplicate communication records or dummy/static data.
+- Do not break existing Buyer Directory, Buyer Dossier, RFQ, Credit, Payments, or Communications functionality.
+- Verify all changes with actual database records in both development and production environments.
+
+**Expected Result:** Pending Verification must display the correct buyers, closing a profile or RFQ must preserve the previous page context, the Payments tab must have a clean layout, and WhatsApp/SMS histories must be accessible under Communications.
+
+### Buyer Directory & Action Center Registrations – Enhancements
+
+Please implement the following changes using the attached screenshots as references.
+
+**1. Action Center – Registrations Module**
+
+Currently, the Registrations tab displays only a placeholder message. Replace it with a fully functional Registered Clients table.
+
+- Fetch all registered client records dynamically from the database.
+- Display the total registered client count beside the Registered Clients heading.
+- Add a search field to search by username, company name, phone number, or email.
+- Add a **Source Type** dropdown with these options:
+  - All
+  - Web App
+  - WhatsApp
+  - Email
+- Display the following columns:
+  - User Name
+  - Company Name
+  - Phone Number
+  - User Email
+  - Registration Date
+  - Status
+  - Source Type
+  - Actions
+- Display the correct source type with suitable icons or labels.
+- Provide Accept and Reject actions for registrations that are awaiting approval.
+- Update registration status immediately after an action and persist it in the database.
+- Add pagination and page-size selection.
+- Ensure search and Source Type filters work together correctly.
+
+**2. Buyer Directory – Source Type Filter**
+
+Update the existing Buyer Directory toolbar by adding a **Source Type** filter with:
+- All
+- Web App
+- WhatsApp
+- Email
+
+Requirements:
+- Identify the buyer's registration source from the existing database fields.
+- Filter buyer records based on the selected source.
+- Allow Source Type filtering together with existing search, Sourcing Mode, and Status filters.
+- Ensure summary cards, table records, and Export Directory reflect the selected filters.
+- Do not display incorrect or hardcoded source information.
+
+**3. UI and Functionality**
+- Follow the existing Buyer Directory design and styling for the Registrations table.
+- Keep the search field, filters, and action buttons properly aligned in one toolbar.
+- Use compact table rows, readable column widths, and responsive layouts.
+- Show proper loading, empty, and error states.
+- Ensure the Registration tab displays actual records instead of placeholder content.
+
+**Important:**
+- Reuse existing database tables, APIs, registration workflows, and authentication logic.
+- Do not create duplicate registration records or dummy data.
+- Preserve existing Buyer Directory functionality, filters, sorting, pagination, and export.
+- Do not break existing registration, WhatsApp, email, or Web App onboarding flows.
+- Verify the implementation with actual records from all three registration sources.
+
+**Expected Result:** Registrations should become a fully functional Registered Clients management page with Web App, WhatsApp, and Email source filters. The same Source Type filtering capability should also be available in Buyer Directory.
+```
+
+### User Prompt - 2026-10-31T16:29:28+05:30
+
+```
+For the category managger portal, in the action center, we have an internal tasks tab, this is a tab where the internal team can create and complete tasks. These tasks can be checked internal user wise too. Did you understand? Please tell me the scope.
+
+Donot make any changes yet
+```
+
+### User Prompt - 2026-10-31T16:38:45+05:30
+
+```
+any further questions or clarifications needed? Donot make any changes yet
+```
+
+### User Prompt - 2026-10-31T16:42:16+05:30
+
+```
+1. Option A
+2. Option C
+3. Option B
+
+Will clicking on any task opens the task details drawer?
+```
+
+### User Prompt - 2026-10-31T16:42:59+05:30
+
+```
+any further questions?
+```
+
+### User Prompt - 2026-10-31T16:47:09+05:30
+
+```
+For the category manager portal, in the action center, in the buyers and sellers directory tabs, when clicked on any row opens the buyers details drawer and sellers detailes drawer respectively. In the I want to have an option where i can record any call log, email log, sms log or whatsapp log. All these activities will be recorded in the communication tab in the details drawer. Also any such log is added should be shown in the internal task tab as a completed task. Also in case at the time of recording a log, if I added a next followup date, then it should be added as a new task in the internal task.
+
+Did you undestand? Please explain
+```
+
+### User Prompt - 2026-10-31T16:54:51+05:30
+
+```
+Any further questions or clarifications needed? Donot make any changes yet
+```
+
+
+### User Prompt - 2026-10-31T16:57:41+05:30
+
+```
+1. Option A
+2. Option A
+3. Option A
+4. Option A
+
+Any further questions or clarifications needed?
+```
+
+### User Prompt - 2026-10-31T16:58:37+05:30
+
+```
+okay please  proceesed
+```
+
+### User Prompt - 2026-10-31T17:16:05+05:30
+
+```
+Ok please proceed
+```
+
+### User Prompt - 2026-10-31T18:09:51+05:30
+
+```
+All done?
+```
+
+### User Prompt - 2026-10-31T18:11:00+05:30
+
+```
+Any errors?
+```
+
+
+### User Prompt - 2026-10-31T18:13:00+05:30
+
+```
+Any validation failed error or internal server or 310 error or react error?
+```
+
+### User Prompt - 2026-10-31T18:13:58+05:30
+
+```
+All done?
+```
+
+
+
+---
+
+### User Prompt - 2026-10-31T18:33:24+05:30
+
+```text
+continue
+```
+
+
+---
+
+### User Prompt - 2026-10-31T18:37:06+05:30
+
+```text
+create the branch from main and raise the pr
+```
+
+
+---
+
+### User Prompt - 2026-10-31T18:37:06+05:30
+
+```text
+create the branch from main and raise the pr
+```
+
+---
+
+### User Prompt - 2026-11-01T14:33:03+05:30
+
+```text
+I want to update my latest branch with main branch
+```
+
+---
+
+### User Prompt - 2026-11-01T14:39:09+05:30
+
+```text
+git rebase origin/main
+error: cannot rebase: Your index contains uncommitted changes.
+error: Please commit or stash them.
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> git stash 
+Saved working directory and index state WIP on sample/vendor-page: 8e1c53b fix(vendor-directory): add D1 session self-healing, edge persistence, and graceful expiry
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> git rebase origin/main
+Auto-merging frontend/lib/uiStrings.ts
+CONFLICT (content): Merge conflict in frontend/lib/uiStrings.ts
+Auto-merging prompts.md
+CONFLICT (content): Merge conflict in prompts.md
+error: could not apply d47c6ce... commit changes for vendor page
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+Could not apply d47c6ce... # commit changes for vendor page
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> git rebase continue  commit take a lot time please use some other method such as rebase and suggest way like threw github
+```
+
+---
+
+### User Prompt - 2026-11-01T14:51:03+05:30
+
+```text
+Only the products and categories to be visible
+Location city or state should be visible
+show email as sXXXX@gmail.com will be fine and number as 9XXXXXXX09 will be fine ??
+no email should be visible in api also threw network tab by insect check and completed
+```
+
+---
+
+### User Prompt - 2026-11-01T15:31:43+05:30
+
+```text
+blur vendor name also
+```
+
+---
+
+### User Prompt - 2026-11-01T15:36:59+05:30
+
+```text
+                         stroke-width="2"
+                          viewBox="0 0 24 24"
+                          width="13"
+                          xmlns="http://www.w3.org/2000/svg"
+                        >
+                          <path
+                            d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                          />
+                        </svg>
+                        Attach Documents
+                      </button>
+                      <button
+                        class="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+                        data-testid="manual-extract"
+                        disabled=""
+                      >
+                        <svg
+                          class="lucide lucide-sparkles"
+                          fill="none"
+                          height="13"
+                          stroke="currentColor"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                 ...
+
+      543 |     clickSave();
+      544 |
+    > 545 |     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+          |                                                     ^
+      546 |     const payload = rfqClient.createRFQ.mock.calls[0][0];
+      547 |     expect(payload.title).toBe('Monsoon Pump Overhaul');
+      548 |     expect(payload.budget).toBe(250000);
+
+      at toHaveBeenCalled (__tests__/app/buyer/ManualRFQModal.test.tsx:545:53)
+      at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/config.js:47:12)
+      at checkCallback (node_modules/@testing-library/dom/dist/wait-for.js:124:77)
+      at checkRealTimersCallback (node_modules/@testing-library/dom/dist/wait-for.js:118:16)
+      at Timeout.task [as _onTimeout] (node_modules/jsdom/lib/jsdom/browser/Window.js:579:19)
+
+
+Test Suites: 1 failed, 132 passed, 133 total
+Tests:       1 failed, 3427 passed, 3428 total
+Snapshots:   0 total
+Time:        332.983 s
+Ran all test suites.
+Test results written to: coverage/test-results.json just check this test had just now fail in the github right now 
+```
+
+
+---
+
+### User Prompt - 2026-11-01T16:12:47+05:30
+
+```text
+ogger.ts:107:17)
+      at Object.warn (__tests__/lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/__tests__/lib/logger.test.ts:89:16)
+
+    console.error
+      [2026-11-01 10:42:16.738 UTC] [ERROR] [UI_ACTION] Error test {}
+
+      at ClientLogger.error [as log] (lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/lib/logger.ts:69:17)
+      at ClientLogger.log [as error] (lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/lib/logger.ts:111:17)
+      at Object.error (__tests__/lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/__tests__/lib/logger.test.ts:90:16)
+
+ PASS  __tests__/lib/uiStrings.test.ts
+ PASS  __tests__/lib/errorUtils.test.ts
+ PASS  __tests__/app/category-manager/ActionCenterSubNav.test.tsx
+ PASS  __tests__/lib/accountIdentity.test.ts
+ PASS  __tests__/app/components/Footer.test.tsx
+ PASS  __tests__/apiFetchPatch.test.ts
+ PASS  __tests__/lib/types.test.ts
+ PASS  __tests__/app/components/NotificationToast.test.tsx
+ PASS  __tests__/lib/pincodeClient.test.ts
+ PASS  __tests__/lib/supplierProfileClient.test.ts
+ PASS  __tests__/lib/ticketClient.test.ts
+ PASS  __tests__/lib/paymentDuesClient.test.ts
+ PASS  __tests__/lib/scorecardClient.test.ts
+ PASS  __tests__/lib/approvalClient.test.ts
+
+=============================== Coverage summary ===============================
+Statements   : 98.01% ( 17520/17874 )
+Branches     : 93.27% ( 16544/17736 )
+Functions    : 98.38% ( 4014/4080 )
+Lines        : 98.75% ( 15971/16173 )
+================================================================================
+Jest: Coverage for statements (80.64%) does not meet "S:\procucev\Precucev-github\Enterprise_qua_nextjs\frontend\app\vendors\vendorUtils.tsx" threshold (90%)
+Jest: Coverage for branches (65%) does not meet "S:\procucev\Precucev-github\Enterprise_qua_nextjs\frontend\app\vendors\vendorUtils.tsx" threshold (90%)
+
+Test Suites: 133 passed, 133 total
+Tests:       3428 passed, 3428 total
+Snapshots:   0 total
+Time:        575.479 s
+Ran all test suites.
+Test results written to: coverage\test-results.json
+
+✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
+
+❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
 ```

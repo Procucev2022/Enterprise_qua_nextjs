@@ -1798,7 +1798,9 @@ export interface BuyerAccount {
   unlimitedRfqAccess?: boolean;
   unlimitedAccess?: boolean;
   accountSource: 'public_system' | 'web_registration' | 'enterprise_sso';
-  status: 'ACTIVE_VERIFIED' | 'PENDING_ALIGNMENT' | 'SYNCED_LEGACY';
+  sourceType?: 'Web App' | 'WhatsApp' | 'Email' | string;
+  status: 'ACTIVE_VERIFIED' | 'PENDING_ALIGNMENT' | 'SYNCED_LEGACY' | 'PENDING_VERIFICATION' | 'PENDING_ONBOARDING' | 'PENDING' | 'REJECTED' | string;
+  verificationStatus?: string;
   primaryPlantLocation: string;
   street?: string;
   address1?: string;
@@ -2262,6 +2264,7 @@ export interface PublicVendorPageResult {
     totalPages: number;
   };
   error?: string;
+  sessionExpired?: boolean;
 }
 
 /** Search & filter state for the Public Vendor Directory page */
@@ -2648,6 +2651,7 @@ export type BuyerDirectoryColumnKey =
   | 'totalSpend'
   | 'status'
   | 'createdDate'
+  | 'sourceType'
   | 'actions';
 
 export interface BuyerDirectoryColumnConfig {
@@ -2655,4 +2659,227 @@ export interface BuyerDirectoryColumnConfig {
   label: string;
   visible: boolean;
   required?: boolean;
+}
+
+
+// --- Buyer Profile 360° Dossier Types ------------------------------------------
+
+export interface BuyerCreditSummary {
+  totalCreditsAllocated: number;
+  totalCreditsConsumed: number;
+  remainingFreeCredits: number;
+  purchasedCredits: number;
+  adjustedCredits: number;
+  currentEntitlementMode: string;
+  currentSubscriptionPlan: string;
+}
+
+export interface BuyerCreditTransaction {
+  id: string;
+  transactionId: string;
+  transactionDate: string;
+  transactionType: string;
+  creditSource: string;
+  creditsAdded: number;
+  creditsConsumed: number;
+  previousBalance: number;
+  updatedBalance: number;
+  relatedRfqId?: string | null;
+  paymentReference?: string | null;
+  status: string;
+  description: string;
+  notes?: string;
+}
+
+export interface BuyerCommunicationItem {
+  id: string;
+  accountId: string;
+  accountType?: string;
+  channel: 'EMAIL' | 'SMS' | 'WHATSAPP' | 'CALL' | 'SYSTEM_NOTIFICATION';
+  subject?: string | null;
+  sender?: string | null;
+  recipient: string;
+  message: string;
+  preview?: string;
+  deliveryStatus: string;
+  notificationStatus?: string;
+  acknowledgementStatus?: string;
+  sentAt: string;
+  direction?: 'INCOMING' | 'OUTGOING';
+  attachments?: Array<{ name: string; url: string; size?: number }>;
+  duration?: string;
+  notes?: string;
+  callOutcome?: string;
+  nextFollowupDate?: string;
+  followupPriority?: string;
+  followupNotes?: string;
+}
+
+export interface RecordCommunicationPayload {
+  channel: 'EMAIL' | 'SMS' | 'WHATSAPP' | 'CALL' | string;
+  recipient?: string;
+  subject?: string;
+  message: string;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+  callOutcome?: string;
+  duration?: string;
+  nextFollowupDate?: string;
+  followupPriority?: 'Low' | 'Medium' | 'High' | 'Critical';
+  followupAssigneeId?: string;
+  followupAssigneeName?: string;
+  followupNotes?: string;
+}
+
+export interface BuyerPaymentSummary {
+  totalAmountPaid: number;
+  totalSuccessfulPayments: number;
+  pendingPayments: number;
+  failedPayments: number;
+  totalRefundedAmount: number;
+}
+
+export interface BuyerPaymentTransaction {
+  id: string;
+  paymentId: string;
+  invoiceNo: string;
+  invoiceNumber?: string;
+  transactionDate: string;
+  date?: string;
+  description: string;
+  subscriptionPlan: string;
+  amount: number;
+  currency: string;
+  gateway: string;
+  paymentMethod: string;
+  status: string;
+  gatewayRef?: string;
+  receiptUrl?: string;
+}
+
+// --- Seller Directory & Supplier 360° Dossier Types -----------------------------
+
+export type SellerDirectoryColumnKey =
+  | 'supplierName'
+  | 'contactPerson'
+  | 'email'
+  | 'phone'
+  | 'location'
+  | 'deliveryLocation'
+  | 'category'
+  | 'lastLogin'
+  | 'rating'
+  | 'score360'
+  | 'credits'
+  | 'status'
+  | 'registrationDate'
+  | 'actions';
+
+export interface SellerDirectoryColumnConfig {
+  key: SellerDirectoryColumnKey;
+  label: string;
+  visible: boolean;
+  required?: boolean;
+}
+
+export interface SupplierCreditSummary {
+  totalCreditsAllocated: number;
+  totalCreditsConsumed: number;
+  remainingFreeCredits: number;
+  purchasedCredits: number;
+  adjustedCredits: number;
+  currentCreditBalance: number;
+  isSubscribed: boolean;
+  subscriptionPlan: string;
+}
+
+export interface SupplierCreditTransaction {
+  id: string;
+  transactionId: string;
+  transactionDate: string;
+  transactionType: string;
+  creditSource: string;
+  creditsAdded: number;
+  creditsConsumed: number;
+  previousBalance: number;
+  updatedBalance: number;
+  relatedRfqId?: string | null;
+  paymentReference?: string | null;
+  status: string;
+  description: string;
+  notes?: string;
+}
+
+export interface SupplierCommunicationItem {
+  id: string;
+  accountId: string;
+  accountType?: string;
+  channel: 'EMAIL' | 'SMS' | 'WHATSAPP' | 'CALL' | 'SYSTEM_NOTIFICATION';
+  subject?: string | null;
+  sender?: string | null;
+  recipient: string;
+  message: string;
+  preview?: string;
+  deliveryStatus: string;
+  notificationStatus?: string;
+  acknowledgementStatus?: string;
+  sentAt: string;
+  direction?: 'INCOMING' | 'OUTGOING';
+  attachments?: Array<{ name: string; url: string; size?: number }>;
+  duration?: string;
+  notes?: string;
+  callOutcome?: string;
+  nextFollowupDate?: string;
+  followupPriority?: string;
+  followupNotes?: string;
+}
+
+export interface SupplierPaymentSummary {
+  totalAmountPaid: number;
+  totalSuccessfulPayments: number;
+  pendingPayments: number;
+  failedPayments: number;
+  totalRefundedAmount: number;
+}
+
+export interface SupplierPaymentTransaction {
+  id: string;
+  paymentId: string;
+  invoiceNo: string;
+  invoiceNumber?: string;
+  transactionDate: string;
+  date?: string;
+  description: string;
+  subscriptionPlan: string;
+  amount: number;
+  currency: string;
+  gateway: string;
+  paymentMethod: string;
+  status: string;
+  gatewayRef?: string;
+  receiptUrl?: string;
+}
+
+
+
+export interface RegisteredClient {
+  id: string;
+  userName: string;
+  companyName: string;
+  phoneNumber: string;
+  userEmail: string;
+  regDate: string;
+  status: 'Accepted' | 'New' | 'Rejected' | 'Pending';
+  sourceType: 'Web App' | 'WhatsApp' | 'Email';
+  isApproved?: boolean;
+  remarks?: string;
+}
+
+
+export interface InternalTeamMember {
+  id: string;
+  name: string;
+  role: string;
+  email: string;
+  project?: string;
 }

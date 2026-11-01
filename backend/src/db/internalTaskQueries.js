@@ -256,7 +256,7 @@ async function getInternalTasks({
 /**
  * Summary metrics of internal tasks.
  */
-async function getInternalTaskSummary() {
+async function getInternalTaskSummary({ assignedTo = '' } = {}) {
   if (!pool.hasStorage()) {
     return {
       total: 0,
@@ -268,6 +268,13 @@ async function getInternalTaskSummary() {
       criticalCount: 0,
     };
   }
+  let whereClause = '';
+  const params = [];
+  if (assignedTo && assignedTo !== 'all') {
+    whereClause = 'WHERE (assigned_to_user_id = $1 OR assigned_to_name ILIKE $2)';
+    params.push(assignedTo);
+    params.push(`%${assignedTo}%`);
+  }
   const sql = `
     SELECT
       count(*) as total,
@@ -278,8 +285,10 @@ async function getInternalTaskSummary() {
       sum(case when status = 'Escalated' then 1 else 0 end) as escalated,
       sum(case when priority = 'Critical' and status != 'Completed' then 1 else 0 end) as critical_count
     FROM internal_tasks
+    ${whereClause}
   `;
-  const result = await pool.query(sql, [], { d1: true, d1Text: sql });
+  const d1Sql = sql.replace(/ILIKE/g, 'LIKE');
+  const result = await pool.query(sql, params, { d1: true, d1Text: d1Sql });
   const row = result && result.rows && result.rows[0] ? result.rows[0] : {};
   return {
     total: Number(row.total || 0),
@@ -644,7 +653,49 @@ async function searchRelatedEntities(entityType, query = '') {
   return [];
 }
 
+
+/**
+ * Fetch available internal team members and assignees.
+ */
+async function getInternalAssignees() {
+  const { DEFAULT_INTERNAL_MEMBERS } = require('../config/constants');
+  const assigneesMap = new Map();
+  (DEFAULT_INTERNAL_MEMBERS || []).forEach((m) => {
+    assigneesMap.set(m.name.toLowerCase(), { ...m });
+  });
+
+  if (pool.hasStorage()) {
+    try {
+      const taskRes = await pool.query(
+        "SELECT DISTINCT assigned_to_user_id, assigned_to_name FROM internal_tasks WHERE assigned_to_name IS NOT NULL AND assigned_to_name != '' AND assigned_to_name != 'Unassigned'",
+        [],
+        {
+          d1: true,
+          d1Text: "SELECT DISTINCT assigned_to_user_id, assigned_to_name FROM internal_tasks WHERE assigned_to_name IS NOT NULL AND assigned_to_name != '' AND assigned_to_name != 'Unassigned'",
+        }
+      );
+      if (taskRes && Array.isArray(taskRes.rows)) {
+        taskRes.rows.forEach((r) => {
+          if (r.assigned_to_name && !assigneesMap.has(r.assigned_to_name.toLowerCase())) {
+            assigneesMap.set(r.assigned_to_name.toLowerCase(), {
+              id: r.assigned_to_user_id || `user-${Date.now().toString(36)}`,
+              name: r.assigned_to_name,
+              role: 'Team Member',
+              email: '',
+            });
+          }
+        });
+      }
+    } catch {
+      // Return defaults on error
+    }
+  }
+
+  return Array.from(assigneesMap.values());
+}
+
 module.exports = {
+  getInternalAssignees,
   DEFAULT_TASK_TYPES,
   getTaskTypes,
   createTaskType,

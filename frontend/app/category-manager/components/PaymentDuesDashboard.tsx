@@ -77,7 +77,11 @@ const DEFAULT_COLUMNS: PaymentDuesColumnConfig[] = [
 
 const LOCAL_STORAGE_KEY = 'qua_payment_dues_column_prefs';
 
-export default function PaymentDuesDashboard() {
+export interface PaymentDuesDashboardProps {
+  onSummaryChange?: (summary: PaymentDuesSummary) => void;
+}
+
+export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDashboardProps = {}) {
   const strings = UI_STRINGS.actionCenter.paymentDues;
 
   // Account Data & Summary
@@ -109,6 +113,18 @@ export default function PaymentDuesDashboard() {
   const [columns, setColumns] = useState<PaymentDuesColumnConfig[]>(DEFAULT_COLUMNS);
   const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState<boolean>(false);
   const [draggedColumnIndex, setDraggedColumnIndex] = useState<number | null>(null);
+
+  // Close column settings modal on Escape key
+  useEffect(() => {
+    if (!isColumnSettingsOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsColumnSettingsOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isColumnSettingsOpen]);
 
   // Profile Modals
   const [selectedBuyerId, setSelectedBuyerId] = useState<string | null>(null);
@@ -202,6 +218,10 @@ export default function PaymentDuesDashboard() {
         setAccounts(res.accounts);
         setTotalAccounts(res.total);
         setSummary(res.summary);
+        onSummaryChange?.(res.summary);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('qua_payment_dues_updated', { detail: res.summary }));
+        }
         setLoadError(null);
       }
     } catch (err) {
@@ -211,7 +231,7 @@ export default function PaymentDuesDashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [search, accountTypeFilter, creditsFilter, statusFilter, sortBy, sortOrder, page, pageSize, showToast]);
+  }, [search, accountTypeFilter, creditsFilter, statusFilter, sortBy, sortOrder, page, pageSize, showToast, onSummaryChange]);
 
   useEffect(() => {
     loadData();
@@ -671,7 +691,7 @@ export default function PaymentDuesDashboard() {
   const totalPages = Math.ceil(totalAccounts / pageSize) || 1;
 
   return (
-    <div className="space-y-5 animate-in fade-in duration-200">
+    <div className="w-full space-y-4 animate-in fade-in duration-200">
       {/* Toast alert */}
       {toastMessage && (
         <div
@@ -688,76 +708,76 @@ export default function PaymentDuesDashboard() {
       )}
 
       {/* 6 Dynamic Summary KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        {/* Total Low-Credit Accounts */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3 w-full">
+        {/* Low-Credit Accounts */}
         <div
           onClick={() => {
             setAccountTypeFilter('all');
             setCreditsFilter('all');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-400 transition cursor-pointer"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-400 transition cursor-pointer flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
               {strings.kpi.totalLowCreditAccounts}
             </span>
-            <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400">
-              <CreditCard size={16} />
+            <div className="p-1.5 rounded-md bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 shrink-0">
+              <CreditCard className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-slate-900 dark:text-white">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">
             {summary.totalLowCreditAccounts}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.totalLowCreditSubtitle}
           </div>
         </div>
 
-        {/* Total Buyers */}
+        {/* Buyers */}
         <div
           onClick={() => {
             setAccountTypeFilter('buyer');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-sky-400 transition cursor-pointer"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-sky-400 transition cursor-pointer flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
               {strings.kpi.totalBuyers}
             </span>
-            <div className="p-2 rounded-lg bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400">
-              <Building2 size={16} />
+            <div className="p-1.5 rounded-md bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400 shrink-0">
+              <Building2 className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-sky-700 dark:text-sky-300">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-sky-700 dark:text-sky-300">
             {summary.totalBuyers}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.totalBuyersSubtitle}
           </div>
         </div>
 
-        {/* Total Sellers */}
+        {/* Sellers */}
         <div
           onClick={() => {
             setAccountTypeFilter('seller');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-purple-400 transition cursor-pointer"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-purple-400 transition cursor-pointer flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
               {strings.kpi.totalSellers}
             </span>
-            <div className="p-2 rounded-lg bg-purple-50 text-purple-600 dark:bg-purple-950/40 dark:text-purple-400">
-              <Truck size={16} />
+            <div className="p-1.5 rounded-md bg-purple-50 text-purple-600 dark:bg-purple-950/40 dark:text-purple-400 shrink-0">
+              <Truck className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-purple-700 dark:text-purple-300">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-purple-700 dark:text-purple-300">
             {summary.totalSellers}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.totalSellersSubtitle}
           </div>
         </div>
@@ -768,20 +788,20 @@ export default function PaymentDuesDashboard() {
             setCreditsFilter('0');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-rose-200 dark:border-rose-900/60 shadow-sm hover:border-rose-400 transition cursor-pointer bg-rose-50/20"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/60 shadow-sm hover:border-rose-400 transition cursor-pointer bg-rose-50/20 flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 uppercase tracking-wider truncate">
               {strings.kpi.zeroCredits}
             </span>
-            <div className="p-2 rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400">
-              <AlertTriangle size={16} />
+            <div className="p-1.5 rounded-md bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400 shrink-0">
+              <AlertTriangle className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-rose-600 dark:text-rose-400">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-rose-600 dark:text-rose-400">
             {summary.zeroCredits}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.zeroCreditsSubtitle}
           </div>
         </div>
@@ -792,20 +812,20 @@ export default function PaymentDuesDashboard() {
             setCreditsFilter('1-2');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-amber-200 dark:border-amber-900/60 shadow-sm hover:border-amber-400 transition cursor-pointer bg-amber-50/20"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-amber-200 dark:border-amber-900/60 shadow-sm hover:border-amber-400 transition cursor-pointer bg-amber-50/20 flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider truncate">
               {strings.kpi.oneToTwoCredits}
             </span>
-            <div className="p-2 rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400">
-              <Clock size={16} />
+            <div className="p-1.5 rounded-md bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400 shrink-0">
+              <Clock className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-amber-600 dark:text-amber-400">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-amber-600 dark:text-amber-400">
             {summary.oneToTwoCredits}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.oneToTwoCreditsSubtitle}
           </div>
         </div>
@@ -816,117 +836,128 @@ export default function PaymentDuesDashboard() {
             setStatusFilter('Acknowledgement Pending');
             setPage(1);
           }}
-          className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-400 transition cursor-pointer"
+          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-400 transition cursor-pointer flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
               {strings.kpi.acknowledgementPending}
             </span>
-            <div className="p-2 rounded-lg bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400">
-              <HelpCircle size={16} />
+            <div className="p-1.5 rounded-md bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400 shrink-0">
+              <HelpCircle className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-2xl font-black text-orange-600 dark:text-orange-400">
+          <div className="mt-1 text-xl sm:text-2xl font-bold text-orange-600 dark:text-orange-400">
             {summary.acknowledgementPending}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
             {strings.kpi.acknowledgementPendingSubtitle}
           </div>
         </div>
       </div>
 
-      {/* Horizontal Toolbar */}
-      <div className="bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
-        {/* Left: Search & Filter Controls */}
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          {/* Global Search */}
-          <div className="relative min-w-[180px] max-w-xs flex-1">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
+      {/* TOOLBAR: SEARCH, ACCOUNT TYPE, CREDIT FILTER, ACKNOWLEDGEMENT STATUS, REFRESH, EXPORT CSV & GEAR ICON IN ONE HORIZONTAL ROW */}
+      <div className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto no-scrollbar">
+        {/* Search input with maximum available width */}
+        <div className="relative flex-1 min-w-[180px]">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+            placeholder={strings.toolbar.searchPlaceholder}
+            className="w-full pl-8 pr-7 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+          {search && (
+            <button
+              onClick={() => {
+                setSearch('');
                 setPage(1);
               }}
-              placeholder={strings.toolbar.searchPlaceholder}
-              className="w-full pl-9 pr-3 h-8 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-          </div>
-
-          {/* Account Type Filter */}
-          <select
-            value={accountTypeFilter}
-            onChange={(e) => {
-              setAccountTypeFilter(e.target.value as 'all' | 'buyer' | 'seller');
-              setPage(1);
-            }}
-            aria-label={strings.toolbar.accountTypeFilter}
-            className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none shrink-0"
-          >
-            <option value="all">{strings.toolbar.allTypes}</option>
-            <option value="buyer">{strings.toolbar.buyersOnly}</option>
-            <option value="seller">{strings.toolbar.sellersOnly}</option>
-          </select>
-
-          {/* Credits Filter */}
-          <select
-            value={creditsFilter}
-            onChange={(e) => {
-              setCreditsFilter(e.target.value as 'all' | '0' | '1-2');
-              setPage(1);
-            }}
-            aria-label={strings.toolbar.creditsFilter}
-            className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none shrink-0"
-          >
-            <option value="all">{strings.toolbar.allCredits}</option>
-            <option value="0">{strings.toolbar.zeroCreditsOnly}</option>
-            <option value="1-2">{strings.toolbar.oneToTwoCreditsOnly}</option>
-          </select>
-
-          {/* Status Filter */}
-          <select
-            value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value);
-              setPage(1);
-            }}
-            aria-label={strings.toolbar.statusFilter}
-            className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none shrink-0"
-          >
-            <option value="all">{strings.toolbar.allStatuses}</option>
-            <option value="Not Notified">Not Notified</option>
-            <option value="Notification Sent">Notification Sent</option>
-            <option value="Delivery Pending">Delivery Pending</option>
-            <option value="Delivered">Delivered</option>
-            <option value="Acknowledgement Pending">Acknowledgement Pending</option>
-            <option value="Acknowledged">Acknowledged</option>
-            <option value="Failed">Failed</option>
-          </select>
-
-          {/* Reset Filters */}
-          <button
-            type="button"
-            onClick={handleResetFilters}
-            title={strings.toolbar.resetFilters}
-            className="h-8 flex items-center gap-1 px-2.5 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition shrink-0 cursor-pointer"
-          >
-            <RotateCcw size={13} />
-            <span className="hidden xl:inline">{strings.toolbar.resetFilters}</span>
-          </button>
+              className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              title="Clear search"
+              aria-label="Clear search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
-        {/* Right: Refresh, Export & Gear Icon */}
-        <div className="flex items-center gap-2 shrink-0">
+        {/* Account Type Filter */}
+        <select
+          value={accountTypeFilter}
+          onChange={(e) => {
+            setAccountTypeFilter(e.target.value as 'all' | 'buyer' | 'seller');
+            setPage(1);
+          }}
+          aria-label={strings.toolbar.accountTypeFilter}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">{strings.toolbar.allTypes}</option>
+          <option value="buyer">{strings.toolbar.buyersOnly}</option>
+          <option value="seller">{strings.toolbar.sellersOnly}</option>
+        </select>
+
+        {/* Credit Filter */}
+        <select
+          value={creditsFilter}
+          onChange={(e) => {
+            setCreditsFilter(e.target.value as 'all' | '0' | '1-2');
+            setPage(1);
+          }}
+          aria-label={strings.toolbar.creditsFilter}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">{strings.toolbar.allCredits}</option>
+          <option value="0">{strings.toolbar.zeroCreditsOnly}</option>
+          <option value="1-2">{strings.toolbar.oneToTwoCreditsOnly}</option>
+        </select>
+
+        {/* Acknowledgement Status Filter */}
+        <select
+          value={statusFilter}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setPage(1);
+          }}
+          aria-label={strings.toolbar.statusFilter}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 max-w-[190px] focus:outline-none focus:ring-1 focus:ring-emerald-500 whitespace-nowrap cursor-pointer truncate"
+        >
+          <option value="all">{strings.toolbar.allStatuses}</option>
+          <option value="Not Notified">Not Notified</option>
+          <option value="Notification Sent">Notification Sent</option>
+          <option value="Delivery Pending">Delivery Pending</option>
+          <option value="Delivered">Delivered</option>
+          <option value="Acknowledgement Pending">Acknowledgement Pending</option>
+          <option value="Acknowledged">Acknowledged</option>
+          <option value="Failed">Failed</option>
+        </select>
+
+        {/* Reset Filters button */}
+        <button
+          type="button"
+          onClick={handleResetFilters}
+          title={strings.toolbar.resetFilters}
+          aria-label={strings.toolbar.resetFilters}
+          className="h-8.5 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+        </button>
+
+        {/* Action Buttons Aligned at Right: Refresh, Export CSV, and Gear Icon */}
+        <div className="ml-auto flex items-center gap-2 shrink-0">
           {/* Refresh */}
           <button
             type="button"
             onClick={() => loadData()}
             disabled={isLoading}
             title={strings.toolbar.refresh}
-            className="h-8 w-8 flex items-center justify-center text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition disabled:opacity-50 cursor-pointer"
+            aria-label={strings.toolbar.refresh}
+            className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer disabled:opacity-50"
           >
-            <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
 
           {/* Export CSV */}
@@ -940,115 +971,146 @@ export default function PaymentDuesDashboard() {
               sortOrder,
             })}
             download="payment_dues_report.csv"
-            className="h-8 flex items-center gap-1.5 px-3 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-xs transition shrink-0 cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-1.5 h-8.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all shrink-0 cursor-pointer"
           >
-            <Download size={13} />
+            <Download className="w-3.5 h-3.5" />
             <span>{strings.toolbar.exportCsv}</span>
           </a>
 
-          {/* Gear Icon - Dynamic Column Settings */}
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setIsColumnSettingsOpen((prev) => !prev)}
-              title={strings.toolbar.columnSettings}
-              className={`h-8 w-8 flex items-center justify-center rounded-lg border transition cursor-pointer ${
-                isColumnSettingsOpen
-                  ? 'bg-indigo-50 border-indigo-400 text-indigo-600 dark:bg-indigo-950/40 dark:border-indigo-700 dark:text-indigo-400'
-                  : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-              }`}
-            >
-              <Settings size={15} />
-            </button>
-
-            {/* Column Settings Popover */}
-            {isColumnSettingsOpen && (
-              <div className="absolute right-0 top-full mt-2 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl z-40 p-3.5 space-y-3">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-                  <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
-                    <Settings size={13} className="text-indigo-600" />
-                    <span>{strings.columnSettings.title}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsColumnSettingsOpen(false)}
-                    aria-label="Close"
-                    title="Close"
-                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-
-                <p className="text-[11px] text-slate-500 leading-tight">
-                  {strings.columnSettings.description}
-                </p>
-
-                {/* Quick Selection Buttons */}
-                <div className="flex items-center justify-between gap-1 text-[11px] pt-1">
-                  <button
-                    type="button"
-                    onClick={handleSelectAllColumns}
-                    className="text-indigo-600 dark:text-indigo-400 hover:underline font-medium"
-                  >
-                    {strings.columnSettings.selectAll}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleHideAllOptionalColumns}
-                    className="text-slate-500 hover:underline font-medium"
-                  >
-                    {strings.columnSettings.hideAll}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleResetColumns}
-                    className="text-rose-600 hover:underline font-medium"
-                  >
-                    {strings.columnSettings.resetToDefault}
-                  </button>
-                </div>
-
-                {/* Draggable & Toggleable Columns List */}
-                <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1 no-scrollbar border-t border-slate-100 dark:border-slate-800 pt-2">
-                  {columns.map((col, index) => (
-                    <div
-                      key={col.key}
-                      draggable
-                      onDragStart={() => handleDragStart(index)}
-                      onDragOver={(e) => handleDragOver(e, index)}
-                      onDrop={() => handleDrop(index)}
-                      className={`flex items-center justify-between px-2 py-1.5 rounded-lg border text-xs cursor-move transition select-none ${
-                        draggedColumnIndex === index
-                          ? 'opacity-40 border-indigo-400 bg-indigo-50/50'
-                          : 'border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60'
-                      }`}
-                    >
-                      <label className="flex items-center gap-2 cursor-pointer flex-1">
-                        <input
-                          type="checkbox"
-                          checked={col.visible}
-                          disabled={col.required}
-                          onChange={() => handleToggleColumnVisibility(col.key)}
-                          className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 disabled:opacity-40"
-                        />
-                        <span className={`text-[12px] ${col.visible ? 'text-slate-900 dark:text-white font-medium' : 'text-slate-400'}`}>
-                          {col.label}
-                        </span>
-                      </label>
-                      <GripVertical size={13} className="text-slate-400 hover:text-slate-600 cursor-grab" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          {/* Gear Icon - Customize Columns */}
+          <button
+            type="button"
+            onClick={() => setIsColumnSettingsOpen((prev) => !prev)}
+            title={strings.toolbar.columnSettings}
+            aria-label={strings.toolbar.columnSettings}
+            className={`p-2 h-8.5 w-8.5 rounded-lg border transition-colors flex items-center justify-center shrink-0 cursor-pointer ${
+              isColumnSettingsOpen
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-600 dark:text-emerald-400'
+                : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
+            }`}
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 
+      {/* Column Customization Modal - Centered Popup with Background Overlay */}
+      {isColumnSettingsOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Customize Columns"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsColumnSettingsOpen(false);
+            }
+          }}
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+            {/* Modal Header */}
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">Column Settings</h3>
+                  <p className="text-[11px] text-slate-500">Show, hide, and drag handles to reorder columns</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsColumnSettingsOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                aria-label="Close"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick Actions (Select All, Hide Optional) */}
+            <div className="px-4 py-2 bg-slate-50/80 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+              <button
+                type="button"
+                onClick={handleSelectAllColumns}
+                className="text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                onClick={handleHideAllOptionalColumns}
+                className="text-xs font-medium text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 cursor-pointer"
+              >
+                Hide All Optional
+              </button>
+            </div>
+
+            {/* Column List with Drag-and-Drop */}
+            <div className="p-4 overflow-y-auto space-y-1 divide-y divide-slate-100 dark:divide-slate-800/60 flex-1">
+              {columns.map((col, idx) => (
+                <div
+                  key={col.key}
+                  draggable
+                  onDragStart={() => handleDragStart(idx)}
+                  onDragOver={(e) => handleDragOver(e, idx)}
+                  onDrop={() => handleDrop(idx)}
+                  className={`pt-2 pb-2 first:pt-0 flex items-center justify-between gap-3 px-2 rounded-lg transition-colors cursor-move ${
+                    draggedColumnIndex === idx
+                      ? 'bg-emerald-50 dark:bg-emerald-950/30 opacity-50'
+                      : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <GripVertical className="w-4 h-4 text-slate-400 shrink-0 cursor-grab active:cursor-grabbing" />
+                    <label
+                      htmlFor={`col-toggle-${col.key}`}
+                      className="flex items-center gap-2.5 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer select-none truncate"
+                    >
+                      <input
+                        type="checkbox"
+                        id={`col-toggle-${col.key}`}
+                        checked={col.visible}
+                        disabled={col.required}
+                        onChange={() => handleToggleColumnVisibility(col.key)}
+                        className="rounded border-slate-300 dark:border-slate-700 text-emerald-600 focus:ring-emerald-500 disabled:opacity-50 cursor-pointer"
+                      />
+                      <span className={col.required ? 'font-semibold text-slate-900 dark:text-slate-100' : ''}>
+                        {col.label}
+                      </span>
+                      {col.required && <span className="ml-1 text-[10px] text-slate-400 font-normal">(locked)</span>}
+                    </label>
+                  </div>
+                  <span className="text-[11px] text-slate-400 font-mono shrink-0">#{idx + 1}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Modal Footer with Reset and Done */}
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={handleResetColumns}
+                className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 font-medium transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset to Default</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsColumnSettingsOpen(false)}
+                className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Structured Table */}
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto no-scrollbar">
+      <div className="w-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+        <div className="w-full overflow-x-auto no-scrollbar">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 select-none">

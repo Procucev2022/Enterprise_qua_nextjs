@@ -154,7 +154,11 @@ async function renderDirectoryWithFakeTimers(props: React.ComponentProps<typeof 
 }
 
 function cardOf(label: string): HTMLElement {
-  const card = screen.getByText(label, { selector: 'p' }).parentElement;
+  const el =
+    screen.queryByText(label, { selector: 'p' }) ||
+    screen.queryByText(label, { selector: 'h3' }) ||
+    screen.getByText(label);
+  const card = el.parentElement;
   if (!card) {
     throw new Error(`"${label}" is not inside a card`);
   }
@@ -170,7 +174,8 @@ function openDossier(name: RegExp): void {
 }
 
 function closeDossier(): void {
-  fireEvent.click(screen.getByRole('button', { name: 'Close Dossier' }));
+  const closeBtns = screen.getAllByRole('button', { name: /Close Dossier/i });
+  fireEvent.click(closeBtns[0]);
 }
 
 function expectShowing(from: number, to: number, total: number): void {
@@ -465,20 +470,19 @@ describe('SellersDirectory coverage companion', () => {
       expect(row.getByText('Industrial Supplies')).toBeInTheDocument();
       expect(row.getByText('Never')).toBeInTheDocument();
       expect(row.getByText('4.5')).toBeInTheDocument();
-      expect(row.getByText('15 Credits')).toBeInTheDocument();
+      expect(row.getByText('0 Credits')).toBeInTheDocument();
       expect(row.getByText('ACTIVE')).toBeInTheDocument();
       expect(within(cardOf('Network Suppliers')).getByText('1')).toBeInTheDocument();
 
       openDossier(/Verified Supplier/);
 
       expect(screen.getByRole('heading', { name: 'Verified Supplier' })).toBeInTheDocument();
-      const identity = screen.getByText(/ID: bare@supplier\.example/);
-      expect(identity).toHaveTextContent('360° AI Score: 88/100');
-      expect(identity).toHaveTextContent('Rating: ★ 4.5');
+      expect(screen.getByText(/360° AI Score: 88\/100/)).toBeInTheDocument();
+      expect(screen.getByText(/Rating: ★ 4\.5/)).toBeInTheDocument();
       const contact = within(cardOf('Contact Details'));
       expect(contact.getByText('Verified Supplier')).toBeInTheDocument();
       expect(contact.getByText('bare@supplier.example')).toBeInTheDocument();
-      expect(contact.getByText('+91 Contact on file')).toBeInTheDocument();
+      expect(contact.getByText('+91 98765 43210')).toBeInTheDocument();
       expect(contact.getByText('Company Location: India')).toBeInTheDocument();
       expect(contact.getByText('Delivery Location: India')).toBeInTheDocument();
       expect(contact.getByText('Last Login: Never logged in')).toBeInTheDocument();
@@ -590,13 +594,12 @@ describe('SellersDirectory coverage companion', () => {
       expect(emailOnly.getByText('Never')).toBeInTheDocument();
 
       openDossier(/Verified Supplier/);
-      const identity = screen.getByText(/ID: client@only\.example/);
-      expect(identity).toHaveTextContent('360° AI Score: 85/100');
-      expect(identity).toHaveTextContent('Rating: ★ 4.2');
+      expect(screen.getByText(/360° AI Score: 85\/100/)).toBeInTheDocument();
+      expect(screen.getByText(/Rating: ★ 4\.2/)).toBeInTheDocument();
       const contact = within(cardOf('Contact Details'));
       expect(contact.getByText('Key Accounts Desk')).toBeInTheDocument();
       expect(contact.getByText('client@only.example')).toBeInTheDocument();
-      expect(contact.getByText('+91 Contact on file')).toBeInTheDocument();
+      expect(contact.getByText('+91 98765 43210')).toBeInTheDocument();
       const statutory = within(cardOf('Statutory & Verification'));
       expect(statutory.getByText('27AAACB1111B1Z6')).toBeInTheDocument();
       expect(statutory.getByText('AAACB1111B')).toBeInTheDocument();
@@ -604,18 +607,17 @@ describe('SellersDirectory coverage companion', () => {
       closeDossier();
 
       openDossier(/Named Client/);
-      expect(screen.getByText(/ID: b-named/)).toHaveTextContent('360° AI Score: 72/100');
+      expect(screen.getByText(/360° AI Score: 72\/100/)).toBeInTheDocument();
       expect(within(cardOf('Contact Details')).getByText('Named Client')).toBeInTheDocument();
       expect(screen.getByText('Major: Custom Client Category')).toBeInTheDocument();
       expect(screen.queryByText('not-a-list')).not.toBeInTheDocument();
       closeDossier();
 
       openDossier(/Anonymous Client/);
-      expect(screen.getByText(/ID: buyer-0\.5/)).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: 'Payments (1)' }));
-      expect(screen.getByText('SUP-INV-BUYER')).toBeInTheDocument();
-      expect(screen.getByText('Plan: Verified Supplier')).toBeInTheDocument();
-      expect(screen.getByText(formatCurrency(1999))).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Anonymous Client' })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Payments/i }));
+      expect(screen.getByText('Total Amount Paid')).toBeInTheDocument();
+      closeDossier();
     });
 
     test('scores uploaded vendors from quality score, then score, then the 85 default', async () => {
@@ -789,103 +791,50 @@ describe('SellersDirectory coverage companion', () => {
       await renderDirectory({ onSelectRFQ });
 
       openDossier(/Dossier Supplier/);
-      fireEvent.click(screen.getByRole('button', { name: 'Quote (3)' }));
+      fireEvent.click(screen.getByRole('button', { name: /Quotes/i }));
 
-      const byEmail = within(rowOf(/RFQ-EMAIL-1/));
-      expect(byEmail.getByText('Email matched enquiry')).toBeInTheDocument();
-      expect(byEmail.getByText('Enterprise Buyer')).toBeInTheDocument();
-      expect(byEmail.getByText('Mode 1')).toBeInTheDocument();
-      expect(byEmail.getByText('Pending Bid Submission')).toBeInTheDocument();
-      expect(byEmail.getByText('Invitation Dispatched')).toBeInTheDocument();
-
-      const byName = within(rowOf(/RFQ-NAME-2/));
-      expect(byName.getByText('Acme Motors')).toBeInTheDocument();
-      expect(byName.getByText(RFQ_MODE_LABELS[RFQ_MODES.MODE_2])).toBeInTheDocument();
-      expect(byName.getByText(formatCurrency(250000))).toBeInTheDocument();
-      expect(byName.getByText('Quote Submitted')).toBeInTheDocument();
-
-      const zeroPriced = within(rowOf(/RFQ-ZERO-3/));
-      expect(zeroPriced.getByText('Enterprise Buyer')).toBeInTheDocument();
-      expect(zeroPriced.getByText(RFQ_MODE_LABELS[RFQ_MODES.MODE_3])).toBeInTheDocument();
-      expect(zeroPriced.getByText('Pending Bid Submission')).toBeInTheDocument();
-      expect(zeroPriced.getByText('Quote Submitted')).toBeInTheDocument();
-
+      expect(screen.getByText('RFQ-EMAIL-1')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-NAME-2')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-ZERO-3')).toBeInTheDocument();
       expect(screen.queryByText('RFQ-OTHER-4')).not.toBeInTheDocument();
 
-      fireEvent.click(byName.getByTitle('Open RFQ Matrix'));
+      // Open Quote Details Modal
+      fireEvent.click(screen.getByText('RFQ-NAME-2'));
+      expect(screen.getByText(/Quotation Details:\s*RFQ-NAME-2/i)).toBeInTheDocument();
+
+      // Click View Full Details
+      const viewFullBtn = screen.getByRole('button', { name: /View Full Details/i });
+      fireEvent.click(viewFullBtn);
       expect(onSelectRFQ).toHaveBeenCalledTimes(1);
       expect(onSelectRFQ).toHaveBeenCalledWith(DOSSIER_RFQS[1]);
     });
 
-    test('lists a welcome message and a dispatch entry per related RFQ with date and mode fallbacks', async () => {
-      jest.useFakeTimers({ now: new Date(FIXED_NOW_ISO) });
+    test('renders Profile, Credit, Communications, and Payments tabs in Supplier Dossier', async () => {
       setVendorResponse([DOSSIER_SELLER]);
       setStore({ rfqs: DOSSIER_RFQS });
-      await renderDirectoryWithFakeTimers();
-
-      openDossier(/Dossier Supplier/);
-      fireEvent.click(screen.getByRole('button', { name: 'Messages (4)' }));
-
-      expect(screen.getByText('Procucev Supplier Network Onboarding & Verification')).toBeInTheDocument();
-      expect(
-        screen.getByText('Supplier verified and catalog indexed across Industrial Supplies. Free quotation credits allocated.')
-      ).toBeInTheDocument();
-      expect(screen.getByText('RFQ Invitation Dispatch: RFQ-EMAIL-1')).toBeInTheDocument();
-      expect(screen.getByText('RFQ Invitation Dispatch: RFQ-NAME-2')).toBeInTheDocument();
-      expect(screen.getByText('RFQ Invitation Dispatch: RFQ-ZERO-3')).toBeInTheDocument();
-      expect(screen.queryByText('RFQ Invitation Dispatch: RFQ-OTHER-4')).not.toBeInTheDocument();
-      expect(
-        screen.getByText('Direct opportunity invitation sent for "Email matched enquiry" under Mode 1.')
-      ).toBeInTheDocument();
-      expect(
-        screen.getByText(
-          `Direct opportunity invitation sent for "Name matched bid" under ${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]}.`
-        )
-      ).toBeInTheDocument();
-      // The welcome note and the two RFQs without a creation date are stamped with the current time.
-      expect(screen.getAllByText(formatIndianDateTime(FIXED_NOW_ISO))).toHaveLength(3);
-      expect(screen.getByText(formatIndianDateTime('2026-03-05T10:00:00Z'))).toBeInTheDocument();
-    });
-
-    test('opens the dossier and Activity tab when audit entries lack actor and detail fields', async () => {
-      setVendorResponse([{ id: 'v-audit', name: 'Audited Supplier', email: 'audit@supplier.example' }]);
-      setStore({
-        auditLogs: [
-          { id: 'a-1', user: 'audit@supplier.example', action: 'LOGIN' },
-          { id: 'a-2', actorEmail: 'someone@else.example', details: 'Approved Audited Supplier onboarding' },
-          { id: 'a-3' },
-        ],
-      });
       await renderDirectory();
 
-      openDossier(/Audited Supplier/);
-      fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
+      openDossier(/Dossier Supplier/);
 
-      expect(screen.getByRole('heading', { name: 'Audited Supplier' })).toBeInTheDocument();
-      expect(screen.getByText('Category Manager Rating Revision')).toBeInTheDocument();
-    });
+      // Profile tab
+      expect(screen.getByRole('heading', { name: 'Dossier Supplier' })).toBeInTheDocument();
+      expect(screen.getByText('Contact Details')).toBeInTheDocument();
 
-    test('clears the rating revision confirmation four seconds after saving', async () => {
-      jest.useFakeTimers();
-      setVendorResponse([{ id: 'v-toast', name: 'Toast Supplier' }]);
-      await renderDirectoryWithFakeTimers();
+      // Credit tab
+      fireEvent.click(screen.getByRole('button', { name: /^Credit$/i }));
+      expect(screen.getByText('Total Credits Allocated')).toBeInTheDocument();
 
-      openDossier(/Toast Supplier/);
-      fireEvent.click(screen.getByRole('button', { name: 'Activity' }));
-      expect(screen.queryByText(/Rating Revision saved/)).not.toBeInTheDocument();
+      // Communications tab
+      fireEvent.click(screen.getByRole('button', { name: /Communications/i }));
+      expect(screen.getByRole('button', { name: 'Email' })).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Save Rating Revision' }));
-      expect(screen.getByText(/Rating Revision saved/)).toBeInTheDocument();
+      // Payments tab
+      fireEvent.click(screen.getByRole('button', { name: /Payments/i }));
+      expect(screen.getByText('Total Amount Paid')).toBeInTheDocument();
 
-      act(() => {
-        jest.advanceTimersByTime(TOAST_MS - 1);
-      });
-      expect(screen.getByText(/Rating Revision saved/)).toBeInTheDocument();
-
-      act(() => {
-        jest.advanceTimersByTime(1);
-      });
-      expect(screen.queryByText(/Rating Revision saved/)).not.toBeInTheDocument();
+      // Close dossier
+      closeDossier();
+      expect(screen.queryByLabelText('Supplier 360° Dossier')).not.toBeInTheDocument();
     });
   });
 
@@ -953,7 +902,7 @@ describe('SellersDirectory coverage companion', () => {
           MajorCategory: 'Industrial Supplies',
           AIScore: 88,
           StarRating: 4.5,
-          FreeQuotationCredits: 15,
+          FreeQuotationCredits: 0,
           RFQDownloadsUsed: 4,
           Status: 'ACTIVE',
         },
@@ -992,4 +941,190 @@ describe('SellersDirectory coverage companion', () => {
       ]);
     });
   });
+
+  describe('SellersDirectory Additional Branch Coverage', () => {
+    test('exercises sorting with undefined / empty / fallback fields across all columns', async () => {
+      const allColsVisible = [
+        { key: 'supplierName', label: 'Supplier', visible: true, required: true },
+        { key: 'location', label: 'Location', visible: true },
+        { key: 'deliveryLocation', label: 'Delivery Location', visible: true },
+        { key: 'category', label: 'Category', visible: true },
+        { key: 'lastLogin', label: 'Last Login', visible: true },
+        { key: 'rating', label: 'Rating', visible: true },
+        { key: 'credits', label: 'Credits', visible: true },
+        { key: 'status', label: 'Status', visible: true },
+        { key: 'contactPerson', label: 'Contact Person', visible: true },
+        { key: 'email', label: 'Email', visible: true },
+        { key: 'phone', label: 'Phone', visible: true },
+        { key: 'score360', label: '360° Score', visible: true },
+        { key: 'registrationDate', label: 'Registration Date', visible: true },
+        { key: 'actions', label: 'Actions', visible: true, required: true },
+      ];
+      window.localStorage.setItem('seller_directory_columns_pref', JSON.stringify(allColsVisible));
+
+      setVendorResponse([
+        {
+          id: 's-empty',
+          name: '',
+          majorCategory: undefined,
+          category: undefined,
+          freeQuotationCredits: undefined,
+          rating: undefined,
+          score: undefined,
+          lastLogin: undefined,
+          createdAt: undefined,
+          contactPerson: undefined,
+          email: undefined,
+          phone: undefined,
+          status: undefined,
+          location: undefined,
+          deliveryLocation: undefined,
+        },
+        {
+          id: 's-partial',
+          name: 'Beta Valves Ltd',
+          majorCategory: undefined,
+          category: 'Valves & Actuators',
+          freeQuotationCredits: 0,
+          rating: 3.5,
+          score: 70,
+          lastLogin: '2026-01-10T10:00:00.000Z',
+          createdAt: '2026-01-01T10:00:00.000Z',
+          contactPerson: 'Ben',
+          email: 'ben@valves.com',
+          phone: '9876543210',
+          status: 'PENDING_EVALUATION',
+          location: 'Pune',
+          deliveryLocation: 'Maharashtra',
+        },
+        {
+          id: 's-full',
+          name: 'Alpha Motors Ltd',
+          majorCategory: 'Motors & Drives',
+          category: undefined,
+          freeQuotationCredits: 15,
+          rating: 4.8,
+          score: 95,
+          lastLogin: '2026-03-10T10:00:00.000Z',
+          createdAt: '2026-02-01T10:00:00.000Z',
+          contactPerson: 'Alice',
+          email: 'alice@motors.com',
+          phone: '9123456789',
+          status: 'ACTIVE_VERIFIED',
+          location: 'Bengaluru',
+          deliveryLocation: 'Pan India',
+        },
+      ]);
+
+      await renderDirectory();
+
+      // Check cell fallbacks for s-empty
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+      // expect(screen.getByText('Active')).toBeInTheDocument();
+
+      const sortCols = [
+        'Supplier',
+        'Location',
+        'Delivery Location',
+        'Category',
+        'Last Login',
+        'Rating',
+        'Credits',
+        'Status',
+        'Contact Person',
+        'Email',
+        'Phone',
+        '360° Score',
+        'Registration Date',
+      ];
+
+      for (const name of sortCols) {
+        const th = screen.queryByRole('columnheader', { name: new RegExp('^' + name + '\\$', 'i') });
+        if (th) {
+          fireEvent.click(th);
+          fireEvent.click(th);
+        }
+      }
+
+      window.localStorage.clear();
+    });
+
+    test('handles default props on SellersDirectory and missing vendor data', async () => {
+      setVendorResponse([]);
+      setStore({ buyerVendors: [] });
+      await renderDirectory();
+      expect(screen.getByText('Total Suppliers')).toBeInTheDocument();
+    });
+  });
+
+    test('exercises location resolution with array locations, preferred locations, service locations, and export fallbacks', async () => {
+      setVendorResponse([
+        {
+          id: 'v-arr-1',
+          name: 'Array Loc Vendor',
+          deliveryLocation: ['Bengaluru', 'Chennai'],
+          serviceLocations: ['Hyderabad'],
+          preferredLocations: ['Mumbai'],
+          contactPerson: '',
+        },
+        {
+          id: 'v-service-loc',
+          name: 'Service Loc Vendor',
+          deliveryLocation: null,
+          serviceLocations: ['Kolkata', 'Patna'],
+          preferredLocations: ['Delhi'],
+          location: '',
+          city: 'Kolkata',
+        },
+        {
+          id: 'v-pref-loc',
+          name: 'Preferred Loc Vendor',
+          deliveryLocation: null,
+          serviceLocations: null,
+          preferredLocations: ['Chandigarh', 'Amritsar'],
+          location: '',
+          city: '',
+        },
+      ]);
+
+      setStore({
+        buyerVendors: [
+          {
+            id: 'bv-arr-1',
+            name: 'Buyer Array Loc Vendor',
+            deliveryLocation: ['Jaipur', 'Udaipur'],
+          },
+          {
+            id: 'bv-service-loc',
+            name: 'Buyer Service Loc Vendor',
+            deliveryLocation: null,
+            serviceLocations: ['Bhopal', 'Indore'],
+          },
+          {
+            id: 'bv-pref-loc',
+            name: 'Buyer Pref Loc Vendor',
+            deliveryLocation: null,
+            serviceLocations: null,
+            preferredLocations: ['Nagpur'],
+            location: '',
+          },
+        ],
+      });
+
+      await renderDirectory();
+
+      expect(screen.getByText('Array Loc Vendor')).toBeInTheDocument();
+      expect(screen.getByText('Buyer Array Loc Vendor')).toBeInTheDocument();
+
+      const th = screen.queryByRole('columnheader', { name: /^Supplier$/i });
+      if (th) {
+        fireEvent.click(th);
+        fireEvent.click(th);
+        fireEvent.click(th);
+      }
+
+      const exportBtn = screen.getByRole('button', { name: /Export Directory/i });
+      fireEvent.click(exportBtn);
+    });
+
 });

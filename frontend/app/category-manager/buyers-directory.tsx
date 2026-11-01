@@ -33,7 +33,41 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
-import type { BuyerAccount, RFQItem, AuditLogEntry, BuyerDirectoryColumnKey, BuyerDirectoryColumnConfig } from '@/lib/types';
+import BuyerDossierDrawer from './components/BuyerDossierDrawer';
+
+export function isPendingBuyer(buyer?: { status?: string; verificationStatus?: string } | null): boolean {
+  if (!buyer) return false;
+  const s = String(buyer.status || '').toUpperCase().trim();
+  const vs = String(buyer.verificationStatus || '').toUpperCase().trim();
+  return (
+    s === 'PENDING_VERIFICATION' ||
+    s === 'PENDING_ONBOARDING' ||
+    s === 'PENDING' ||
+    s === 'PENDING_ALIGNMENT' ||
+    s === 'PENDING_EMAIL_VERIFICATION' ||
+    s === 'AWAITING_APPROVAL' ||
+    s.includes('AWAITING') ||
+    s === 'NEW' ||
+    s.includes('PENDING') ||
+    vs.includes('PENDING') ||
+    vs.includes('AWAITING')
+  );
+}
+
+export function isVerifiedBuyer(buyer?: { status?: string; verificationStatus?: string } | null): boolean {
+  if (!buyer || isPendingBuyer(buyer)) return false;
+  const s = String(buyer.status || '').toUpperCase().trim();
+  const vs = String(buyer.verificationStatus || '').toUpperCase().trim();
+  return (
+    s === 'ACTIVE_VERIFIED' ||
+    s === 'ACTIVE' ||
+    s === 'VERIFIED' ||
+    vs === 'VERIFIED' ||
+    vs === 'ACTIVE'
+  );
+}
+
+import type { BuyerAccount, RFQItem, AuditLogEntry, BuyerDirectoryColumnKey, BuyerDirectoryColumnConfig, BuyerCommunicationItem, BuyerPaymentTransaction } from '@/lib/types';
 import {
   RFQ_MODES,
   RFQ_MODE_LABELS,
@@ -48,9 +82,11 @@ import { exportReportToExcel } from '@/lib/reportsClient';
 
 interface BuyersDirectoryProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
+  initialBuyerId?: string;
+  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments';
 }
 
-export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
+export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTab }: BuyersDirectoryProps) {
   const { buyerAccounts = [], rfqs = [], auditLogs = [] } = useApp();
 
   // Search & Filters
@@ -58,10 +94,58 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
   const [selectedMode, setSelectedMode] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [selectedPlan, setSelectedPlan] = useState<string>('all');
+  const [selectedSource, setSelectedSource] = useState<string>('all');
 
   // Sorting state
   const [sortColumn, setSortColumn] = useState<BuyerDirectoryColumnKey | null>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
+
+
+
+  // Context preservation: load saved directory state from sessionStorage on mount
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('buyer_directory_state');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.searchTerm !== undefined) setSearchTerm(parsed.searchTerm);
+        if (parsed.selectedMode !== undefined) setSelectedMode(parsed.selectedMode);
+        if (parsed.selectedStatus !== undefined) setSelectedStatus(parsed.selectedStatus);
+        if (parsed.selectedPlan !== undefined) setSelectedPlan(parsed.selectedPlan);
+        if (parsed.selectedSource !== undefined) setSelectedSource(parsed.selectedSource);
+        if (parsed.currentPage !== undefined) setCurrentPage(parsed.currentPage);
+        if (parsed.sortColumn !== undefined) setSortColumn(parsed.sortColumn);
+        if (parsed.sortOrder !== undefined) setSortOrder(parsed.sortOrder);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Context preservation: persist current state on updates
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        'buyer_directory_state',
+        JSON.stringify({
+          searchTerm,
+          selectedMode,
+          selectedStatus,
+          selectedPlan,
+          selectedSource,
+          currentPage,
+          sortColumn,
+          sortOrder,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }, [searchTerm, selectedMode, selectedStatus, selectedPlan, selectedSource, currentPage, sortColumn, sortOrder]);
 
   // Column Customization state
   const [columns, setColumns] = useState<BuyerDirectoryColumnConfig[]>(DEFAULT_BUYER_DIRECTORY_COLUMNS);
@@ -140,21 +224,31 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
   }, [saveColumns]);
 
   // Pagination state
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(10);
 
   // Reset to first page when search, filters, or sorting change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, selectedMode, selectedStatus, selectedPlan, sortColumn, sortOrder]);
+  }, [searchTerm, selectedMode, selectedStatus, selectedPlan, selectedSource, sortColumn, sortOrder]);
 
   // Dossier Drawer / Modal state
   const [activeBuyer, setActiveBuyer] = useState<BuyerAccount | null>(null);
+
+  useEffect(() => {
+    if (initialBuyerId && buyerAccounts.length > 0) {
+      const match = buyerAccounts.find((b) => b.id === initialBuyerId);
+      if (match) {
+        setActiveBuyer(match);
+        if (initialTab) {
+          setDossierTab(initialTab);
+        }
+      }
+    }
+  }, [initialBuyerId, initialTab, buyerAccounts]);
   const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'activity'>('profile');
 
   // Pre-calculate per-buyer RFQ counts and actual spend from the live RFQs collection
   const buyerMetricsMap = useMemo(() => {
-    const map = new Map<string, { rfqCount: number; spendNumeric: number; rfqs: RFQItem[] }>();
+    const map = new Map<string, { rfqCount: number; spendNumeric: number; spendFormatted: string; rfqs: RFQItem[] }>();
 
     buyerAccounts.forEach((buyer) => {
       const bEmail = buyer.corporateEmail?.toLowerCase().trim();
@@ -176,10 +270,12 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
       const parsedHistoricalSpend = parseInt(String(buyer.totalSpend || '0').replace(/[^0-9]/g, ''), 10) || 0;
       const effectiveSpend = rfqsSpend > 0 ? rfqsSpend : parsedHistoricalSpend;
       const effectiveRfqCount = Math.max(buyer.totalRFQsCreated || 0, matchingRfqs.length);
+      const spendDisplay = effectiveSpend > 0 ? formatCurrency(effectiveSpend) : String(buyer.totalSpend || '₹0').replace('$', '₹');
 
       map.set(buyer.id, {
         rfqCount: effectiveRfqCount,
         spendNumeric: effectiveSpend,
+        spendFormatted: spendDisplay,
         rfqs: matchingRfqs,
       });
     });
@@ -221,7 +317,7 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
   // KPI Metrics Calculation (5 Summary Cards)
   const totalBuyers = buyerAccounts.length;
   const verifiedBuyers = useMemo(
-    () => buyerAccounts.filter((b) => b.status === 'ACTIVE_VERIFIED' || (b.status as string) === 'ACTIVE').length,
+    () => buyerAccounts.filter(isVerifiedBuyer).length,
     [buyerAccounts]
   );
   const subscriptionBuyers = useMemo(
@@ -287,20 +383,31 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
 
       const matchesMode = selectedMode === 'all' || buyer.sourcingMode === selectedMode;
 
-            const buyerStatus = (buyer.status as string) || '';
-      const matchesStatus =
+            const matchesStatus =
         selectedStatus === 'all' ||
         (selectedStatus === 'ACTIVE_VERIFIED'
-          ? buyerStatus === 'ACTIVE_VERIFIED' || buyerStatus === 'ACTIVE'
+          ? isVerifiedBuyer(buyer)
           : selectedStatus === 'PENDING_VERIFICATION'
-          ? buyerStatus === 'PENDING_VERIFICATION' || buyerStatus === 'PENDING' || buyerStatus === 'PENDING_ALIGNMENT'
-          : buyerStatus === selectedStatus);;
+          ? isPendingBuyer(buyer)
+          : (buyer.status as string) === selectedStatus);
+
+      const buyerSource = String(buyer.sourceType || buyer.accountSource || '').toLowerCase();
+      let matchesSource = true;
+      if (selectedSource === 'Web App') {
+        matchesSource = !buyerSource || buyerSource.includes('web') || buyerSource === 'public_system';
+      } else if (selectedSource === 'WhatsApp') {
+        matchesSource = buyerSource.includes('whatsapp');
+      } else if (selectedSource === 'Email') {
+        matchesSource = buyerSource.includes('email');
+      } else if (selectedSource !== 'all') {
+        matchesSource = buyerSource === selectedSource.toLowerCase();
+      }
 
       const matchesPlan = selectedPlan === 'all' || buyer.subscriptionPlan === selectedPlan;
 
-      return matchesSearch && matchesMode && matchesStatus && matchesPlan;
+      return matchesSearch && matchesMode && matchesStatus && matchesPlan && matchesSource;
     });
-  }, [buyerAccounts, searchTerm, selectedMode, selectedStatus, selectedPlan]);
+  }, [buyerAccounts, searchTerm, selectedMode, selectedStatus, selectedPlan, selectedSource]);
 
   // Sorted Buyers
   const sortedBuyers = useMemo(() => {
@@ -412,47 +519,56 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
   }, [activeBuyer, auditLogs]);
 
   // Synthetic/Standardized communications & payments derived from buyer state
-  const buyerCommunications = useMemo(() => {
+  const buyerCommunications = useMemo<BuyerCommunicationItem[]>(() => {
     if (!activeBuyer) return [];
-    const logs = [];
+    const logs: BuyerCommunicationItem[] = [];
     if (activeBuyer.createdDate) {
       logs.push({
         id: `comm-reg-${activeBuyer.id}`,
+        accountId: activeBuyer.id,
         channel: 'EMAIL',
         subject: 'Enterprise Onboarding Confirmation & API Key Generation',
-        recipient: activeBuyer.corporateEmail,
-        timestamp: activeBuyer.createdDate,
-        status: 'DELIVERED',
+        recipient: activeBuyer.corporateEmail || '',
+        message: `Welcome ${activeBuyer.contactPerson || activeBuyer.organizationName} to the Procucev Enterprise Network. Initial free trial activated.`,
         preview: `Welcome ${activeBuyer.contactPerson || activeBuyer.organizationName} to the Procucev Enterprise Network. Initial free trial activated.`,
+        deliveryStatus: 'DELIVERED',
+        sentAt: activeBuyer.createdDate,
       });
     }
     buyerRfqs.forEach((rfq, idx) => {
       if (rfq.createdAt) {
         logs.push({
           id: `comm-rfq-${rfq.id}-${idx}`,
+          accountId: activeBuyer.id,
           channel: 'SYSTEM_NOTIFICATION',
           subject: `RFQ Dispatch & Supplier Sourcing Match: ${rfq.rfqNumber}`,
-          recipient: activeBuyer.corporateEmail,
-          timestamp: rfq.createdAt,
-          status: 'DISPATCHED',
+          recipient: activeBuyer.corporateEmail || '',
+          message: `RFQ for "${rfq.title}" dispatched across ${(rfq.assignedVendors || []).length} verified suppliers via ${RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}.`,
           preview: `RFQ for "${rfq.title}" dispatched across ${(rfq.assignedVendors || []).length} verified suppliers via ${RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}.`,
+          deliveryStatus: 'DISPATCHED',
+          sentAt: rfq.createdAt,
         });
       }
     });
     return logs;
   }, [activeBuyer, buyerRfqs]);
 
-  const buyerPayments = useMemo(() => {
+  const buyerPayments = useMemo<BuyerPaymentTransaction[]>(() => {
     if (!activeBuyer) return [];
-    const payments = [];
+    const payments: BuyerPaymentTransaction[] = [];
     if (activeBuyer.createdDate) {
       payments.push({
         id: `pay-init-${activeBuyer.id}`,
+        paymentId: `PAY-${activeBuyer.id.slice(0, 5).toUpperCase()}`,
         invoiceNo: `INV-2026-${activeBuyer.id.slice(0, 5).toUpperCase()}`,
         description: `Plan: ${activeBuyer.subscriptionPlan || 'Free Enterprise Trial'}`,
+        subscriptionPlan: activeBuyer.subscriptionPlan || 'Free Enterprise Trial',
         amount: activeBuyer.subscriptionPlan?.includes('growth') ? 14999 : activeBuyer.subscriptionPlan?.includes('custom') ? 49999 : 0,
+        currency: 'INR',
         status: 'PAID',
         gateway: 'Zoho Payments (India UPI / NetBanking)',
+        paymentMethod: 'Zoho Payments (India UPI / NetBanking)',
+        transactionDate: activeBuyer.createdDate,
         date: activeBuyer.createdDate,
       });
     }
@@ -584,6 +700,19 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
           <option value="all">All Statuses</option>
           <option value="PENDING_VERIFICATION">Pending Verification</option>
           <option value="ACTIVE_VERIFIED">Active & Verified</option>
+        </select>
+
+        {/* Source Type Filter: All Sources, Web App, WhatsApp, Email */}
+        <select
+          value={selectedSource}
+          onChange={(e) => setSelectedSource(e.target.value)}
+          aria-label="Filter by source type"
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">{UI_STRINGS.buyerDirectory.allSources}</option>
+          <option value="Web App">{UI_STRINGS.buyerDirectory.sourceWebApp}</option>
+          <option value="WhatsApp">{UI_STRINGS.buyerDirectory.sourceWhatsApp}</option>
+          <option value="Email">{UI_STRINGS.buyerDirectory.sourceEmail}</option>
         </select>
 
         {/* Export Directory and Gear icon aligned to right */}
@@ -746,7 +875,15 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
                   return (
                     <tr
                       key={buyer.id}
-                      className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.closest('button') || target.closest('a') || target.closest('input') || target.closest('select')) {
+                          return;
+                        }
+                        setActiveBuyer(buyer);
+                        setDossierTab('profile');
+                      }}
+                      className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
                     >
                       {visibleColumns.map((col) => {
                         switch (col.key) {
@@ -762,7 +899,7 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
                                   className="flex items-center gap-2.5 text-left group cursor-pointer focus:outline-none"
                                 >
                                   <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 font-bold flex items-center justify-center text-xs shrink-0 group-hover:scale-105 transition-transform">
-                                    {buyer.organizationName.charAt(0)}
+                                    {(buyer.organizationName || 'B').charAt(0)}
                                   </div>
                                   <span className="font-semibold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">
                                     {buyer.organizationName}
@@ -973,383 +1110,20 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
 
       {/* 360° Buyer Dossier Drawer / Full Modal */}
       {activeBuyer && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-sm flex justify-end animate-in fade-in duration-200">
-          <div className="w-full max-w-4xl bg-white dark:bg-slate-900 h-full min-h-screen shadow-2xl flex flex-col border-l border-slate-200 dark:border-slate-800">
-            {/* Modal Header */}
-            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl bg-indigo-600 text-white font-bold text-lg flex items-center justify-center shadow-sm">
-                  {activeBuyer.organizationName.charAt(0)}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-                      {activeBuyer.organizationName}
-                    </h2>
-                    <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                      {RFQ_MODE_LABELS[activeBuyer.sourcingMode] || 'Mode 0'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500">
-                    ID: {activeBuyer.id} • Registered:{' '}
-                    {formatIndianDateTime(activeBuyer.createdDate) || 'Verified Enterprise'}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setActiveBuyer(null)}
-                className="p-2 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Dossier Tabs Navigation */}
-            <div className="flex items-center gap-1 px-5 border-b border-slate-200 dark:border-slate-800 overflow-x-auto bg-slate-50/30 dark:bg-slate-900">
-              {[
-                { id: 'profile', label: 'Profile', icon: Building2 },
-                { id: 'rfqs', label: `RFQs (${buyerRfqs.length})`, icon: Layers },
-                { id: 'credits', label: 'Credit', icon: CreditCard },
-                { id: 'communications', label: `Messages (${buyerCommunications.length})`, icon: MessageSquare },
-                { id: 'payments', label: `Payments (${buyerPayments.length})`, icon: Receipt },
-                { id: 'activity', label: 'Audit', icon: History },
-              ].map((tab) => {
-                const Icon = tab.icon;
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => setDossierTab(tab.id as any)}
-                    className={`flex items-center gap-1.5 px-3.5 py-3 border-b-2 text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
-                      dossierTab === tab.id
-                        ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-                        : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                    }`}
-                  >
-                    <Icon className="w-4 h-4" />
-                    <span>{tab.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Dossier Tab Content */}
-            <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
-              {/* Tab 1: Basic Profile */}
-              {dossierTab === 'profile' && (
-                <div className="space-y-6">
-                  {/* Spend & RFQ Snapshot */}
-                  {(() => {
-                    const activeMetrics = buyerMetricsMap.get(activeBuyer.id);
-                    const activeRfqCount = activeMetrics?.rfqCount ?? (activeBuyer.totalRFQsCreated || 0);
-                    const activeSpendNumeric = activeMetrics?.spendNumeric ?? 0;
-                    const activeSpendDisplay = activeSpendNumeric > 0 ? formatCurrency(activeSpendNumeric) : String(activeBuyer.totalSpend || '₹0').replace('$', '₹');
-                    return (
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
-                          <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Total Sourced Spend</p>
-                          <p className="text-xl font-bold text-indigo-700 dark:text-indigo-300 mt-0.5">{activeSpendDisplay}</p>
-                          <p className="text-[10px] text-slate-400">Procurement run-rate</p>
-                        </div>
-                        <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                          <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Total RFQs Sourced</p>
-                          <p className="text-xl font-bold text-slate-900 dark:text-white mt-0.5">{activeRfqCount}</p>
-                          <p className="text-[10px] text-slate-400">Active enterprise scope</p>
-                        </div>
-                        <div className="bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
-                          <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Available Quota</p>
-                          <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">{activeBuyer.remainingFreeRFQs ?? 5}</p>
-                          <p className="text-[10px] text-slate-400">Free RFQ credits remaining</p>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl space-y-2 border border-slate-200 dark:border-slate-700">
-                      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                        Corporate Contact
-                      </p>
-                      <div className="space-y-1.5 text-xs text-slate-800 dark:text-slate-200">
-                        <p className="flex items-center gap-2">
-                          <Building2 className="w-4 h-4 text-slate-400" />
-                          <span className="font-semibold">{activeBuyer.contactPerson || 'Procurement Executive'}</span>
-                        </p>
-                        <p className="flex items-center gap-2">
-                          <Mail className="w-4 h-4 text-slate-400" />
-                          <span>{activeBuyer.corporateEmail}</span>
-                        </p>
-                        <p className="flex items-center gap-2">
-                          <Phone className="w-4 h-4 text-slate-400" />
-                          <span>{activeBuyer.mobileNumber || '+91 Not provided'}</span>
-                        </p>
-                        <p className="flex items-center gap-2">
-                          <MapPin className="w-4 h-4 text-slate-400" />
-                          <span>
-                            {activeBuyer.city ? `${activeBuyer.city}, ` : ''}
-                            {activeBuyer.primaryPlantLocation || 'India'}
-                          </span>
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl space-y-2 border border-slate-200 dark:border-slate-700">
-                      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                        Statutory & Governance
-                      </p>
-                      <div className="space-y-1.5 text-xs text-slate-800 dark:text-slate-200">
-                        <p>
-                          <span className="text-slate-500">Sourcing Mode:</span>{' '}
-                          <span className="font-semibold">{RFQ_MODE_LABELS[activeBuyer.sourcingMode] || 'Mode 0'}</span>
-                        </p>
-                        <p>
-                          <span className="text-slate-500">Subscription Tier:</span>{' '}
-                          <span className="font-semibold capitalize">{activeBuyer.subscriptionPlan || 'Enterprise Trial'}</span>
-                        </p>
-                        <p>
-                          <span className="text-slate-500">Status:</span>{' '}
-                          <span className="font-semibold text-emerald-600">{activeBuyer.status || 'ACTIVE'}</span>
-                        </p>
-                        <p>
-                          <span className="text-slate-500">Last Synced:</span>{' '}
-                          <span>{formatIndianDateTime(activeBuyer.syncTimestamp) || 'Real-time'}</span>
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Procurement Categories */}
-                  <div>
-                    <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                      Supported Major Categories
-                    </h3>
-                    <div className="flex flex-wrap gap-2">
-                      {(activeBuyer.supportedMajorCategories || ['General Procurement', 'Raw Materials', 'Spares']).map((cat, i) => (
-                        <span
-                          key={i}
-                          className="px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
-                        >
-                          {cat}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Tab 2: RFQ History */}
-              {dossierTab === 'rfqs' && (
-                <div className="space-y-4">
-                  {buyerRfqs.length === 0 ? (
-                    <div className="p-10 text-center text-slate-500 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                      <Layers className="w-8 h-8 mx-auto mb-2 text-slate-300 dark:text-slate-700" />
-                      <p className="text-xs font-medium">No RFQs created by this buyer yet.</p>
-                    </div>
-                  ) : (
-                    <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
-                          <tr>
-                            <th className="px-3.5 py-2.5 font-semibold">RFQ Number & Title</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Mode</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Budget</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Suppliers & Quotes</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Status</th>
-                            <th className="px-3.5 py-2.5 font-semibold text-right">View</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                          {buyerRfqs.map((rfq) => (
-                            <tr key={rfq.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
-                              <td className="px-3.5 py-2.5">
-                                <p className="font-semibold text-slate-900 dark:text-white">{rfq.rfqNumber}</p>
-                                <p className="text-[11px] text-slate-500 truncate max-w-xs">{rfq.title}</p>
-                              </td>
-                              <td className="px-3.5 py-2.5">
-                                <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                                  {RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}
-                                </span>
-                              </td>
-                              <td className="px-3.5 py-2.5 font-medium">
-                                {rfq.budget > 0 ? formatCurrency(rfq.budget) : 'Open'}
-                              </td>
-                              <td className="px-3.5 py-2.5">
-                                <span className="text-slate-700 dark:text-slate-300">
-                                  {(rfq.assignedVendors || []).length} assigned / {(rfq.quotes || []).length} bids
-                                </span>
-                              </td>
-                              <td className="px-3.5 py-2.5">
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                                  {rfq.status || 'Quotes Pending'}
-                                </span>
-                              </td>
-                              <td className="px-3.5 py-2.5 text-right">
-                                {onSelectRFQ && (
-                                  <button
-                                    onClick={() => onSelectRFQ(rfq)}
-                                    className="p-1 text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 cursor-pointer"
-                                    title="Open RFQ Matrix"
-                                  >
-                                    <ExternalLink className="w-4 h-4" />
-                                  </button>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Tab 3: Credit / Quota History */}
-              {dossierTab === 'credits' && (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                      <p className="text-xs text-slate-500">Remaining Free RFQs</p>
-                      <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                        {activeBuyer.remainingFreeRFQs ?? 5}
-                      </p>
-                      <p className="text-[11px] text-slate-400 mt-1">Refreshed on enterprise cycle</p>
-                    </div>
-
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                      <p className="text-xs text-slate-500">Consumed Credits</p>
-                      <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                        {Math.max(0, 5 - (activeBuyer.remainingFreeRFQs ?? 5))}
-                      </p>
-                      <p className="text-[11px] text-slate-400 mt-1">RFQs created in current window</p>
-                    </div>
-
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                      <p className="text-xs text-slate-500">Entitlement Mode</p>
-                      <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">
-                        {RFQ_MODE_LABELS[activeBuyer.sourcingMode] || 'Mode 0'}
-                      </p>
-                      <p className="text-[11px] text-slate-400 mt-1">Authorized sourcing scope</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Tab 4: Communication Logs */}
-              {dossierTab === 'communications' && (
-                <div className="space-y-3">
-                  {buyerCommunications.length === 0 ? (
-                    <div className="p-10 text-center text-slate-500 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                      <MessageSquare className="w-8 h-8 mx-auto mb-2 text-slate-300 dark:text-slate-700" />
-                      <p className="text-xs font-medium">No recorded communication dispatches.</p>
-                    </div>
-                  ) : (
-                    buyerCommunications.map((log) => (
-                      <div
-                        key={log.id}
-                        className="bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5 text-xs"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-slate-900 dark:text-white">{log.subject}</span>
-                          <span className="text-[11px] text-slate-400">{formatIndianDateTime(log.timestamp)}</span>
-                        </div>
-                        <p className="text-slate-600 dark:text-slate-300">{log.preview}</p>
-                        <div className="flex items-center gap-3 text-[11px] text-slate-500 pt-1">
-                          <span>Channel: {log.channel}</span>
-                          <span>To: {log.recipient}</span>
-                          <span className="text-emerald-600 font-medium">● {log.status}</span>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-
-              {/* Tab 5: Payment / Transaction History */}
-              {dossierTab === 'payments' && (
-                <div className="space-y-4">
-                  {buyerPayments.length === 0 ? (
-                    <div className="p-10 text-center text-slate-500 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                      <Receipt className="w-8 h-8 mx-auto mb-2 text-slate-300 dark:text-slate-700" />
-                      <p className="text-xs font-medium">No transaction records found.</p>
-                    </div>
-                  ) : (
-                    <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
-                          <tr>
-                            <th className="px-3.5 py-2.5 font-semibold">Invoice / Reference</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Description</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Amount</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Gateway / Channel</th>
-                            <th className="px-3.5 py-2.5 font-semibold">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                          {buyerPayments.map((p) => (
-                            <tr key={p.id}>
-                              <td className="px-3.5 py-2.5 font-semibold text-slate-900 dark:text-white">
-                                {p.invoiceNo}
-                              </td>
-                              <td className="px-3.5 py-2.5 text-slate-600 dark:text-slate-300">{p.description}</td>
-                              <td className="px-3.5 py-2.5 font-semibold text-slate-900 dark:text-white">
-                                {formatCurrency(p.amount)}
-                              </td>
-                              <td className="px-3.5 py-2.5 text-slate-500">{p.gateway}</td>
-                              <td className="px-3.5 py-2.5">
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
-                                  {p.status}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Tab 6: Relevant Activity / Audit History */}
-              {dossierTab === 'activity' && (
-                <div className="space-y-3">
-                  {buyerAuditLogs.length === 0 ? (
-                    <div className="p-10 text-center text-slate-500 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                      <History className="w-8 h-8 mx-auto mb-2 text-slate-300 dark:text-slate-700" />
-                      <p className="text-xs font-medium">No audit events logged for this enterprise buyer.</p>
-                    </div>
-                  ) : (
-                    buyerAuditLogs.map((log) => (
-                      <div
-                        key={log.id}
-                        className="bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs flex items-start justify-between"
-                      >
-                        <div>
-                          <p className="font-semibold text-slate-900 dark:text-white">{log.action}</p>
-                          <p className="text-slate-600 dark:text-slate-300 mt-0.5">{(log as any).details || log.action}</p>
-                          <p className="text-[11px] text-slate-400 mt-1">Actor: {(log as any).actorEmail || log.user || 'System'}</p>
-                        </div>
-                        <span className="text-[11px] text-slate-400 whitespace-nowrap ml-4">
-                          {formatIndianDateTime(log.timestamp)}
-                        </span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Modal Footer Controls */}
-            <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/40">
-              <span className="text-xs text-slate-500">Category Manager Operations Console</span>
-              <button
-                onClick={() => setActiveBuyer(null)}
-                className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors cursor-pointer"
-              >
-                Close Dossier
-              </button>
-            </div>
-          </div>
-        </div>
+        <BuyerDossierDrawer
+          buyer={{
+            ...activeBuyer,
+            totalSpend: buyerMetricsMap.get(activeBuyer.id)?.spendFormatted || (activeBuyer.totalSpend ? activeBuyer.totalSpend.split("$").join("₹") : "₹0"),
+            totalRFQsCreated: buyerMetricsMap.get(activeBuyer.id)?.rfqCount ?? activeBuyer.totalRFQsCreated,
+          }}
+          initialTab={dossierTab as any}
+          onTabChange={(t) => setDossierTab(t as any)}
+          onClose={() => setActiveBuyer(null)}
+          onSelectRFQ={onSelectRFQ}
+          buyerRfqs={buyerRfqs}
+          initialCommunications={buyerCommunications}
+          initialPayments={buyerPayments}
+        />
       )}
     </div>
   );

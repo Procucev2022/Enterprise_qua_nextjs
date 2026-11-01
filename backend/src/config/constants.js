@@ -966,7 +966,7 @@ const GEMINI_CONFIG = {
   // Extraction automatically advances through the backup models upon error or 503 overload.
   MODELS: (
     process.env.GEMINI_MODELS ||
-    'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash'
+    'gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash'
   )
     .split(',')
     .map((m) => m.trim().replace(/\s+/g, '-'))
@@ -1889,15 +1889,18 @@ const RFQ_NOT_CREATED_NOTIFICATION = {
   },
 };
 
-/** Default free RFQ quotation credits granted to each vendor */
-const VENDOR_FREE_CREDITS_LIMIT = 5;
+/**
+ * Default free RFQ quotation credits granted to each vendor. Vendors receive
+ * none: quoting needs a subscription, a buyer mapping or unlimited access.
+ */
+const VENDOR_FREE_CREDITS_LIMIT = 0;
 
 /** Notification email content for vendor credit exhaustion */
 const VENDOR_CREDITS_EXHAUSTED_NOTIFICATION = {
-  SUBJECT: 'Action Required – 5 Free Quotation Credits Exhausted for RFQ #{rfqNumber}',
+  SUBJECT: 'Action Required – Subscription Required to Quote on RFQ #{rfqNumber}',
   HEADLINE: 'PROCUCEV ENTERPRISE',
   SUBLINE: 'Free Quotation Credits Exhausted',
-  EXHAUSTION_MESSAGE: 'Your 5 free RFQ quotation credits have been fully utilized.',
+  EXHAUSTION_MESSAGE: 'You have no free RFQ quotation credits available.',
   UPGRADE_BUTTON_LABEL: 'Click Here to Go to Portal and Upgrade Plan',
   REASSURANCE: 'Your quotation has not been submitted yet. To continue submitting quotations and have your bids evaluated by buyers, please upgrade your subscription plan on the vendor portal.',
 };
@@ -2725,7 +2728,16 @@ const VENDOR_DIRECTORY_AUTH_CONFIG = Object.freeze({
   SESSION_SCOPE: 'vendor_directory',
 });
 
+const DEFAULT_INTERNAL_MEMBERS = Object.freeze([
+  { id: 'exec-1', name: 'Pavani', role: 'CRM Executive', email: 'pavani@procucev.com', project: 'Hyderabad Hub' },
+  { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist', email: 'navin@procucev.com', project: 'Mechanical Spares' },
+  { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead', email: 'prajwal.karakoon@procucev.com', project: 'Supplier Network' },
+  { id: 'exec-4', name: 'Veerababu V', role: 'Sourcing Manager', email: 'veerababu.v@procucev.com', project: 'Electrical Engineering' },
+  { id: 'exec-5', name: 'Srinivas Mukku', role: 'Commercial Director', email: 'srinivas.mukku@procucev.com', project: 'Industrial Capital' },
+]);
+
 module.exports = {
+  DEFAULT_INTERNAL_MEMBERS,
   VENDOR_DIRECTORY_SESSION_STATUS,
   VENDOR_DIRECTORY_LOGOUT_REASONS,
   VENDOR_DIRECTORY_AUTH_CONFIG,

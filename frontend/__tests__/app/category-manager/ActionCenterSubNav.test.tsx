@@ -43,7 +43,7 @@ describe('ActionCenterSubNav', () => {
     expect(screen.getByText('5')).toBeInTheDocument(); // tasksCount
     expect(screen.getByText('2')).toBeInTheDocument(); // ticketsCount
     expect(screen.getByText('4')).toBeInTheDocument(); // approvalsCount
-    expect(screen.getByText('99+')).toBeInTheDocument(); // paymentDues badge
+    expect(screen.getByText('120')).toBeInTheDocument(); // paymentDues badge
   });
 
   it('triggers onSelectTab callback when a tab is clicked', () => {
@@ -129,6 +129,17 @@ describe('ActionCenterSubNav', () => {
       />
     );
 
-    expect(screen.getByText('99+')).toBeInTheDocument();
+    expect(screen.getByText('150')).toBeInTheDocument();
+
+    // Zero count hides badge
+    rerender(
+      <ActionCenterSubNav
+        activeTab="payment_dues"
+        onSelectTab={mockOnSelectTab}
+        paymentDuesCount={0}
+      />
+    );
+
+    expect(screen.queryByText('0')).not.toBeInTheDocument();
   });
 });

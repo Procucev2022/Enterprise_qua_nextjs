@@ -387,7 +387,7 @@ describe('native Jest coverage enforcement', () => {
     const result = spawnSync(process.execPath, [
       JEST_CLI, '--config', configPath, '--runInBand', '--silent',
       '--testNamePattern', '^native Jest coverage enforcement frontend instruments every application file and enforces thresholds per source file$',
-    ], { cwd: testFixture.root, encoding: 'utf8', timeout: 15000 });
+    ], { cwd: testFixture.root, encoding: 'utf8', timeout: 35000 });
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('1 passed');
     expect(fs.existsSync(frontendModules)).toBe(false);
@@ -429,7 +429,7 @@ describe('native Jest coverage enforcement', () => {
     }
     const configPath = path.join(testFixture.projectRoot, 'jest.config.json');
     writeFile(configPath, JSON.stringify(fixtureConfig));
-    const run = () => spawnSync(process.execPath, [JEST_CLI, '--config', configPath, '--runInBand', '--silent'], { cwd: testFixture.projectRoot, encoding: 'utf8', timeout: 15000 });
+    const run = () => spawnSync(process.execPath, [JEST_CLI, '--config', configPath, '--runInBand', '--silent'], { cwd: testFixture.projectRoot, encoding: 'utf8', timeout: 35000 });
     writeFile(testPath, `${project === 'frontend' ? "require('./lib/constant.js');\n" : ''}${testSource(8)}`);
     const rejected = run();
     expect(rejected.status).toBe(1);

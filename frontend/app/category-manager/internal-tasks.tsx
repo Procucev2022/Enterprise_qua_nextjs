@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Search,
   Filter,
@@ -45,7 +45,14 @@ import {
   updateInternalTask,
   deleteInternalTask,
   getExportTasksUrl,
+  fetchInternalAssignees,
+  completeInternalTask,
+  type InternalTeamMember,
 } from '@/lib/internalTaskClient';
+import { DEFAULT_INTERNAL_MEMBERS } from '@/lib/constants';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { authClient } from '@/lib/authClient';
+import type { UserSession, PaymentDuesSummary, TicketSummary, ApprovalSummary } from '@/lib/types';
 
 import ActionCenterSubNav, { type ActionCenterTabKey } from './components/ActionCenterSubNav';
 import { TicketsDashboard } from './components/TicketsDashboard';
@@ -53,16 +60,24 @@ import { ApprovalsDashboard } from './components/ApprovalsDashboard';
 import { ScorecardDashboard } from './components/ScorecardDashboard';
 import BuyersDirectory from './buyers-directory';
 import SellersDirectory from './sellers-directory';
+import RegistrationsDashboard from './components/RegistrationsDashboard';
 import { PaymentDuesDashboard } from './components/PaymentDuesDashboard';
 import { fetchPaymentDuesSummary } from '@/lib/paymentDuesClient';
 import { fetchTicketSummary } from '@/lib/ticketClient';
 import { fetchApprovalSummary } from '@/lib/approvalClient';
-import type { PaymentDuesSummary, TicketSummary, ApprovalSummary } from '@/lib/types';
 
 export default function InternalTasksDashboard() {
   // Data state
   const [tasks, setTasks] = useState<InternalTask[]>([]);
   const [totalTasks, setTotalTasks] = useState<number>(0);
+  const [assignees, setAssignees] = useState<InternalTeamMember[]>(DEFAULT_INTERNAL_MEMBERS);
+  const [sessionUser, setSessionUser] = useState<UserSession | null>(null);
+  const [isMyTasksActive, setIsMyTasksActive] = useState<boolean>(false);
+  const [isCustomAssignee, setIsCustomAssignee] = useState<boolean>(false);
+  const [newAssignedToUserId, setNewAssignedToUserId] = useState<string>('');
+  const [showCompleteSection, setShowCompleteSection] = useState<boolean>(false);
+  const [completionRemarks, setCompletionRemarks] = useState<string>('');
+  const [isCompleting, setIsCompleting] = useState<boolean>(false);
   const [taskTypes, setTaskTypes] = useState<TaskType[]>(DEFAULT_TASK_TYPES);
   const [summary, setSummary] = useState<TaskSummary>({
     total: 0,
@@ -78,12 +93,13 @@ export default function InternalTasksDashboard() {
 
   // Active Action Center tab state
   const [activeTab, setActiveTab] = useState<ActionCenterTabKey>('tasks');
+  const [selectedBuyerDossierId, setSelectedBuyerDossierId] = useState<string | undefined>(undefined);
+  const [selectedSellerDossierId, setSelectedSellerDossierId] = useState<string | undefined>(undefined);
   const [ticketSummary, setTicketSummary] = useState<TicketSummary | null>(null);
   const [approvalSummary, setApprovalSummary] = useState<ApprovalSummary | null>(null);
   const [paymentDuesSummary, setPaymentDuesSummary] = useState<PaymentDuesSummary | null>(null);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
       const tabParam = new URLSearchParams(window.location.search).get('tab') as ActionCenterTabKey;
       const validTabs: ActionCenterTabKey[] = [
         'tasks',
@@ -98,7 +114,6 @@ export default function InternalTasksDashboard() {
       if (tabParam && validTabs.includes(tabParam)) {
         setActiveTab(tabParam);
       }
-    }
   }, []);
 
   useEffect(() => {
@@ -119,15 +134,35 @@ export default function InternalTasksDashboard() {
         if (res) setPaymentDuesSummary(res);
       })
       .catch(() => {});
+
+    fetchInternalAssignees()
+      .then((res) => {
+        if (res && res.length > 0) setAssignees(res);
+      })
+      .catch(() => {});
+
+    const currentUser = authClient.getSessionUser();
+    if (currentUser) {
+      setSessionUser(currentUser);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handlePaymentDuesUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<PaymentDuesSummary>;
+      if (customEvent.detail) {
+        setPaymentDuesSummary(customEvent.detail);
+      }
+    };
+    window.addEventListener('qua_payment_dues_updated', handlePaymentDuesUpdate);
+    return () => window.removeEventListener('qua_payment_dues_updated', handlePaymentDuesUpdate);
   }, []);
 
   const handleSelectTab = useCallback((tab: ActionCenterTabKey) => {
     setActiveTab(tab);
-    if (typeof window !== 'undefined') {
-      const url = new URL(window.location.href);
+    const url = new URL(window.location.href);
       url.searchParams.set('tab', tab);
       window.history.pushState({}, '', url.toString());
-    }
   }, []);
 
   // Search & Filter state
@@ -204,10 +239,11 @@ export default function InternalTasksDashboard() {
   }, []);
 
   // Load Task Summary
-  const loadSummary = useCallback(async () => {
-    const sum = await fetchTaskSummary();
+  const loadSummary = useCallback(async (assigneeFilter?: string) => {
+    const filterVal = assigneeFilter !== undefined ? assigneeFilter : activeFilters.assignedTo;
+    const sum = await fetchTaskSummary({ assignedTo: filterVal });
     setSummary(sum);
-  }, []);
+  }, [activeFilters.assignedTo]);
 
   // Load Tasks from Database
   const loadTasks = useCallback(async () => {
@@ -234,9 +270,94 @@ export default function InternalTasksDashboard() {
     loadSummary();
   }, [loadTaskTypes, loadSummary]);
 
+  const prevTabRef = useRef<ActionCenterTabKey>(activeTab);
+  useEffect(() => {
+    if (activeTab === 'tasks' && prevTabRef.current !== 'tasks') {
+      loadTasks();
+      loadSummary();
+    }
+    prevTabRef.current = activeTab;
+  }, [activeTab, loadTasks, loadSummary]);
+
   useEffect(() => {
     loadTasks();
   }, [loadTasks]);
+
+  // Handle Toolbar Assignee change
+  const handleAssigneeChange = (assigneeVal: string) => {
+    const nextVal = assigneeVal === 'all' ? '' : assigneeVal;
+    setActiveFilters((prev) => ({ ...prev, assignedTo: nextVal }));
+    setDraftFilters((prev) => ({ ...prev, assignedTo: nextVal }));
+    setCurrentPage(1);
+    const isMe = Boolean(
+      sessionUser?.name && nextVal.trim().toLowerCase() === sessionUser.name.trim().toLowerCase()
+    );
+    setIsMyTasksActive(isMe);
+    loadSummary(nextVal);
+  };
+
+  // Handle Quick "My Tasks" toggle
+  const handleToggleMyTasks = () => {
+    if (isMyTasksActive) {
+      handleAssigneeChange('all');
+    } else {
+      const myName = sessionUser?.name || 'My Tasks';
+      handleAssigneeChange(myName);
+      setIsMyTasksActive(true);
+    }
+  };
+
+  // Handle Detailed Complete Task from Drawer
+  const handleCompleteTaskWithRemarks = async () => {
+    if (!selectedTaskDetails) return;
+    setIsCompleting(true);
+    try {
+      const updated = await completeInternalTask(selectedTaskDetails.id, completionRemarks.trim());
+      if (updated) {
+        setTasks((prev) => prev.map((t) => (t.id === selectedTaskDetails.id ? updated : t)));
+        setSelectedTaskDetails(updated);
+        loadSummary();
+        setShowCompleteSection(false);
+        setCompletionRemarks('');
+        showToast(
+          formatString(UI_STRINGS.actionCenter.tasks.taskMarkedCompleted, {
+            taskNumber: updated.task_number || updated.id,
+          })
+        );
+      } else {
+        showToast('Failed to complete task.');
+      }
+    } catch {
+      showToast('Error completing task.');
+    } finally {
+      setIsCompleting(false);
+    }
+  };
+
+  const handleReopenTaskFromDrawer = async () => {
+    if (!selectedTaskDetails) return;
+    setIsCompleting(true);
+    try {
+      const updated = await updateInternalTask(selectedTaskDetails.id, {
+        status: 'Pending',
+        activityComment: 'Task reopened as Pending',
+      });
+      if (updated) {
+        setTasks((prev) => prev.map((t) => (t.id === selectedTaskDetails.id ? updated : t)));
+        setSelectedTaskDetails(updated);
+        loadSummary();
+        showToast(
+          formatString(UI_STRINGS.actionCenter.tasks.taskReopened, {
+            taskNumber: updated.task_number || updated.id,
+          })
+        );
+      }
+    } catch {
+      showToast('Error reopening task.');
+    } finally {
+      setIsCompleting(false);
+    }
+  };
 
   // Sync draft filters when drawer opens
   const handleOpenFilterDrawer = () => {
@@ -284,7 +405,10 @@ export default function InternalTasksDashboard() {
     if (updated) {
       setTasks((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
       loadSummary();
-      showToast(`Task ${task.task_number} marked as ${nextStatus}.`);
+      const msg = nextStatus === 'Completed'
+        ? formatString(UI_STRINGS.actionCenter.tasks.taskMarkedCompleted, { taskNumber: task.task_number || task.id })
+        : formatString(UI_STRINGS.actionCenter.tasks.taskReopened, { taskNumber: task.task_number || task.id });
+      showToast(msg);
     }
   };
 
@@ -316,6 +440,7 @@ export default function InternalTasksDashboard() {
         taskTypeId: finalTypeId || undefined,
         priority: newPriority,
         status: newStatus,
+        assignedToUserId: newAssignedToUserId || undefined,
         assignedToName: newAssignedToName.trim() || 'Unassigned',
         dueDate: newDueDate || undefined,
         relatedEntityType: (selectedType?.default_module as TaskEntityType) || 'GENERAL',
@@ -329,6 +454,8 @@ export default function InternalTasksDashboard() {
         setNewDescription('');
         setNewNotes('');
         setNewAssignedToName('');
+        setNewAssignedToUserId('');
+        setIsCustomAssignee(false);
         setNewDueDate('');
         setIsCreatingTypeInline(false);
         setCustomTypeName('');
@@ -387,7 +514,9 @@ export default function InternalTasksDashboard() {
   }, [searchQuery, activeFilters]);
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-4 md:p-6 space-y-6">
+    <div className={`min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 ${
+        activeTab === 'payment_dues' ? 'p-2 sm:p-3 md:p-4 space-y-4' : 'p-4 md:p-6 space-y-6'
+      }`}>
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-5 right-5 z-50 bg-slate-900 dark:bg-white text-white dark:text-slate-900 px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 border border-slate-700 animate-in fade-in slide-in-from-top-2">
@@ -409,28 +538,11 @@ export default function InternalTasksDashboard() {
       {activeTab === 'tickets' && <TicketsDashboard />}
       {activeTab === 'approvals' && <ApprovalsDashboard />}
       {activeTab === 'scorecard' && <ScorecardDashboard />}
-      {activeTab === 'buyers' && <BuyersDirectory />}
-      {activeTab === 'sellers' && <SellersDirectory />}
-      {activeTab === 'payment_dues' && <PaymentDuesDashboard />}
-      {activeTab !== 'tasks' &&
-        activeTab !== 'tickets' &&
-        activeTab !== 'approvals' &&
-        activeTab !== 'scorecard' &&
-        activeTab !== 'buyers' &&
-        activeTab !== 'sellers' &&
-        activeTab !== 'payment_dues' && (
-          <div className="bg-white dark:bg-slate-900 p-8 rounded-xl border border-slate-200 dark:border-slate-800 text-center space-y-3">
-            <ClipboardList className="w-10 h-10 text-indigo-500 mx-auto" />
-            <h3 className="text-base font-bold text-slate-900 dark:text-white capitalize">
-              {activeTab.replace(/_/g, ' ')}
-            </h3>
-            <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Integrated Action Center governance module for {activeTab.replace(/_/g, ' ')}. Real-time operational data is synchronized across the enterprise workspace.
-            </p>
-          </div>
-        )}
-
-      {activeTab === 'tasks' && (
+      {activeTab === 'buyers' && <BuyersDirectory initialBuyerId={selectedBuyerDossierId} />}
+      {activeTab === 'sellers' && <SellersDirectory initialSellerId={selectedSellerDossierId} />}
+      {activeTab === 'registrations' && <RegistrationsDashboard />}
+      {activeTab === 'payment_dues' && <PaymentDuesDashboard onSummaryChange={setPaymentDuesSummary} />}
+{activeTab === 'tasks' && (
         <>
           {/* Header & Metric Summary */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
@@ -486,7 +598,49 @@ export default function InternalTasksDashboard() {
         </div>
 
         {/* Action Controls */}
-        <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+          {/* Quick "My Tasks" Button */}
+          <button
+            type="button"
+            onClick={handleToggleMyTasks}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${
+              isMyTasksActive
+                ? 'bg-blue-600 border-blue-600 text-white shadow-sm shadow-blue-600/20'
+                : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+            }`}
+            title={UI_STRINGS.actionCenter.tasks.myTasks}
+            data-testid="toolbar-my-tasks-btn"
+          >
+            <User className="w-3.5 h-3.5" />
+            <span>{UI_STRINGS.actionCenter.tasks.myTasks}</span>
+          </button>
+
+          {/* Internal User / Assignee Dropdown */}
+          <div className="relative">
+            <select
+              value={activeFilters.assignedTo || 'all'}
+              onChange={(e) => handleAssigneeChange(e.target.value)}
+              className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              aria-label={UI_STRINGS.actionCenter.tasks.selectAssignee}
+              data-testid="toolbar-assignee-select"
+            >
+              <option value="all">{UI_STRINGS.actionCenter.tasks.allUsers}</option>
+              {sessionUser?.name && (
+                <option value={sessionUser.name}>
+                  {UI_STRINGS.actionCenter.tasks.myTasks} ({sessionUser.name})
+                </option>
+              )}
+              <option value="Unassigned">{UI_STRINGS.actionCenter.tasks.unassigned}</option>
+              <optgroup label="Internal Team Members">
+                {assignees.map((m) => (
+                  <option key={m.id || m.name} value={m.name}>
+                    {m.name} {m.role ? `• ${m.role}` : ''}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </div>
+
           {/* Filter Button */}
           <button
             onClick={handleOpenFilterDrawer}
@@ -602,10 +756,12 @@ export default function InternalTasksDashboard() {
                   return (
                     <tr
                       key={task.id}
-                      className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
+                      onClick={() => setSelectedTaskDetails(task)}
+                      className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
+                      data-testid={`task-row-${task.id}`}
                     >
                       {/* Checkbox toggle */}
-                      <td className="py-3 px-3.5 text-center">
+                      <td className="py-3 px-3.5 text-center" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={task.status === 'Completed'}
@@ -617,8 +773,7 @@ export default function InternalTasksDashboard() {
                       {/* Task title, ID & description */}
                       <td className="py-3 px-3.5">
                         <div
-                          onClick={() => setSelectedTaskDetails(task)}
-                          className="font-bold text-slate-900 dark:text-slate-100 hover:text-blue-600 transition-colors cursor-pointer"
+                          className="font-bold text-slate-900 dark:text-slate-100 hover:text-blue-600 transition-colors"
                         >
                           {task.title}
                         </div>
@@ -713,7 +868,7 @@ export default function InternalTasksDashboard() {
                       </td>
 
                       {/* Actions */}
-                      <td className="py-3 px-3.5 text-right">
+                      <td className="py-3 px-3.5 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             onClick={() => setSelectedTaskDetails(task)}
@@ -1054,14 +1209,51 @@ export default function InternalTasksDashboard() {
               {/* Assigned User & Due Date */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">Assign To</label>
-                  <input
-                    type="text"
-                    value={newAssignedToName}
-                    onChange={(e) => setNewAssignedToName(e.target.value)}
-                    placeholder="e.g. Sudheer Kangala"
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">
+                      {UI_STRINGS.actionCenter.tasks.assignedToUser}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setIsCustomAssignee(!isCustomAssignee)}
+                      className="text-[10px] font-semibold text-blue-600 hover:underline"
+                    >
+                      {isCustomAssignee
+                        ? UI_STRINGS.actionCenter.tasks.chooseExistingMember
+                        : UI_STRINGS.actionCenter.tasks.customAssignee}
+                    </button>
+                  </div>
+                  {isCustomAssignee ? (
+                    <input
+                      type="text"
+                      value={newAssignedToName}
+                      onChange={(e) => {
+                        setNewAssignedToName(e.target.value);
+                        setNewAssignedToUserId('');
+                      }}
+                      placeholder="e.g. Sudheer Kangala"
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                      data-testid="custom-assignee-input"
+                    />
+                  ) : (
+                    <select
+                      value={newAssignedToName}
+                      onChange={(e) => {
+                        const member = assignees.find((m) => m.name === e.target.value);
+                        setNewAssignedToName(e.target.value);
+                        setNewAssignedToUserId(member?.id || '');
+                      }}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                      data-testid="select-assignee-dropdown"
+                    >
+                      <option value="">Unassigned</option>
+                      {assignees.map((m) => (
+                        <option key={m.id || m.name} value={m.name}>
+                          {m.name} {m.role ? `• ${m.role}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
 
                 <div>
@@ -1155,6 +1347,84 @@ export default function InternalTasksDashboard() {
                   )}
                 </div>
 
+                {/* Completion Status & Action Section */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-700/80 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] text-slate-400 block font-semibold uppercase">Execution Status</span>
+                      <span className={`font-bold text-xs ${
+                        selectedTaskDetails.status === 'Completed'
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : 'text-amber-600 dark:text-amber-400'
+                      }`}>
+                        {selectedTaskDetails.status}
+                        {selectedTaskDetails.completed_at && ` (Finished ${selectedTaskDetails.completed_at.slice(0, 10)})`}
+                      </span>
+                    </div>
+
+                    {selectedTaskDetails.status === 'Completed' ? (
+                      <button
+                        type="button"
+                        onClick={handleReopenTaskFromDrawer}
+                        disabled={isCompleting}
+                        className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors"
+                        data-testid="drawer-reopen-task-btn"
+                      >
+                        <RefreshCw className="w-3 h-3 text-slate-500" />
+                        <span>{UI_STRINGS.actionCenter.tasks.reopenTaskBtn}</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setShowCompleteSection(!showCompleteSection)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-sm transition-colors"
+                        data-testid="drawer-mark-complete-btn"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>{UI_STRINGS.actionCenter.tasks.completeTaskBtn}</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Optional Resolution Notes Section when completing */}
+                  {showCompleteSection && selectedTaskDetails.status !== 'Completed' && (
+                    <div className="pt-2 border-t border-slate-200 dark:border-slate-700 space-y-2">
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                        {UI_STRINGS.actionCenter.tasks.resolutionRemarksLabel}
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={completionRemarks}
+                        onChange={(e) => setCompletionRemarks(e.target.value)}
+                        placeholder={UI_STRINGS.actionCenter.tasks.resolutionRemarksPlaceholder}
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                        data-testid="completion-remarks-input"
+                      />
+                      <div className="flex items-center justify-end gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowCompleteSection(false);
+                            setCompletionRemarks('');
+                          }}
+                          className="px-2.5 py-1 text-xs border border-slate-200 dark:border-slate-700 rounded-lg text-slate-600 dark:text-slate-300"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isCompleting}
+                          onClick={handleCompleteTaskWithRemarks}
+                          className="px-3 py-1 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-sm"
+                          data-testid="confirm-complete-task-btn"
+                        >
+                          {isCompleting ? 'Saving...' : 'Confirm & Complete'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl">
                   <div>
                     <span className="text-[10px] text-slate-400 block font-semibold uppercase">Module</span>
@@ -1167,6 +1437,26 @@ export default function InternalTasksDashboard() {
                     <span className="font-semibold text-slate-800 dark:text-slate-200 line-clamp-1">
                       {selectedTaskDetails.related_entity_label || 'Direct'}
                     </span>
+                    {selectedTaskDetails.related_entity_id && (selectedTaskDetails.related_entity_type === 'BUYER' || selectedTaskDetails.related_entity_type === 'VENDOR') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedTaskDetails.related_entity_type === 'BUYER') {
+                            setSelectedBuyerDossierId(selectedTaskDetails.related_entity_id);
+                            setActiveTab('buyers');
+                            setSelectedTaskDetails(null);
+                          } else {
+                            setSelectedSellerDossierId(selectedTaskDetails.related_entity_id);
+                            setActiveTab('sellers');
+                            setSelectedTaskDetails(null);
+                          }
+                        }}
+                        className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                      >
+                        <ExternalLink size={12} />
+                        <span>View {selectedTaskDetails.related_entity_type === 'BUYER' ? 'Buyer' : 'Supplier'} Dossier</span>
+                      </button>
+                    )}
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 block font-semibold uppercase">Priority</span>

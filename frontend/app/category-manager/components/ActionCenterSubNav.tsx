@@ -89,10 +89,8 @@ export default function ActionCenterSubNav({
       label: tabs.paymentDues,
       icon: TrendingUp,
       badge:
-        paymentDuesCount && paymentDuesCount > 0
-          ? paymentDuesCount > 99
-            ? '99+'
-            : paymentDuesCount
+        typeof paymentDuesCount === 'number' && paymentDuesCount > 0
+          ? paymentDuesCount
           : undefined,
       badgeColor: 'bg-amber-600 text-white',
     },

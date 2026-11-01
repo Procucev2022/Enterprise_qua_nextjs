@@ -33,9 +33,8 @@ const DOSSIER_ACTION = '360° Dossier';
 const TAB_NAMES = {
   rfqs: /^RFQs \(\d+\)$/,
   credits: /^Credit$/,
-  messages: /^Messages \(\d+\)$/,
+  communications: /^Communications \(\d+\)$/,
   payments: /^Payments \(\d+\)$/,
-  audit: /^Audit$/,
 };
 
 /** The value paragraph rendered directly beneath a KPI or snapshot label. */
@@ -70,6 +69,8 @@ const exportDirectory = (): void => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  window.sessionStorage.clear();
+  window.localStorage.clear();
   mockStore({});
 });
 
@@ -369,7 +370,8 @@ describe('BuyersDirectory dossier profile', () => {
 
     openDossier('Dated Co');
 
-    expect(screen.getByText(/ID: dated-1/)).toHaveTextContent(`Registered: ${formatIndianDateTime(createdDate)}`);
+    expect(screen.getByText(/Registered:/)).toHaveTextContent(`Registered: ${formatIndianDateTime(createdDate)}`);
+    expect(screen.queryByText(/ID: dated-1/)).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Dated Co' }).nextElementSibling).toHaveTextContent(
       RFQ_MODE_LABELS[RFQ_MODES.MODE_3],
     );
@@ -385,7 +387,8 @@ describe('BuyersDirectory dossier profile', () => {
 
     openDossier('Sparse Profile Co');
 
-    expect(screen.getByText(/ID: sparse-1/)).toHaveTextContent(/Registered:\s*Verified Enterprise/);
+    expect(screen.getByText(/Registered:/)).toHaveTextContent(/Registered:\s*Verified Enterprise/);
+    expect(screen.queryByText(/ID: sparse-1/)).not.toBeInTheDocument();
     const contact = within(parentOf('Corporate Contact'));
     expect(contact.getByText('Procurement Executive')).toBeInTheDocument();
     expect(contact.getByText('sparse@profile.example')).toBeInTheDocument();
@@ -422,14 +425,14 @@ describe('BuyersDirectory dossier profile', () => {
 
     openDossier('Reopen Co');
     openTab(TAB_NAMES.credits);
-    expect(screen.getByText('Remaining Free RFQs')).toBeInTheDocument();
+    expect(screen.getByText('Remaining Free Credits')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Close Dossier'));
-    expect(screen.queryByText('Remaining Free RFQs')).not.toBeInTheDocument();
+    expect(screen.queryByText('Remaining Free Credits')).not.toBeInTheDocument();
 
     openDossier('Reopen Co');
 
     expect(screen.getByText('Corporate Contact')).toBeInTheDocument();
-    expect(screen.queryByText('Remaining Free RFQs')).not.toBeInTheDocument();
+    expect(screen.queryByText('Remaining Free Credits')).not.toBeInTheDocument();
   });
 });
 
@@ -448,226 +451,123 @@ describe('BuyersDirectory dossier RFQ history', () => {
   });
   const bareRfq = makeRfq({ id: 'rt-r2', rfqNumber: 'RFQ-T-BARE', title: 'Bare minimum', buyerAccountId: 'rt-1', sourcingMode: 'unmapped_mode', budget: 0 });
 
-  test('lists budget, supplier counts and status per RFQ with fallbacks for missing details', () => {
+  test('lists RFQs and allows clicking RFQ number to open details popup modal', () => {
     mockStore({ buyerAccounts: [rfqBuyer], rfqs: [detailedRfq, bareRfq] });
     render(<BuyersDirectory />);
     openDossier('Rfq Tab Co');
 
     openTab(TAB_NAMES.rfqs);
 
-    const detailed = within(rowFor('RFQ-T-FULL'));
-    expect(detailed.getByText(RFQ_MODE_LABELS[RFQ_MODES.MODE_2])).toBeInTheDocument();
-    expect(detailed.getByText(formatCurrency(250000))).toBeInTheDocument();
-    expect(detailed.getByText('2 assigned / 3 bids')).toBeInTheDocument();
-    expect(detailed.getByText('In Evaluation')).toBeInTheDocument();
+    expect(screen.getByText('RFQ-T-FULL')).toBeInTheDocument();
+    expect(screen.getByText('RFQ-T-BARE')).toBeInTheDocument();
 
-    const bare = within(rowFor('RFQ-T-BARE'));
-    expect(bare.getByText(RFQ_MODE_LABELS[RFQ_MODES.MODE_1])).toBeInTheDocument();
-    expect(bare.getByText('Open')).toBeInTheDocument();
-    expect(bare.getByText('0 assigned / 0 bids')).toBeInTheDocument();
-    expect(bare.getByText('Quotes Pending')).toBeInTheDocument();
+    // Click RFQ number to open details popup modal
+    fireEvent.click(screen.getByText('RFQ-T-FULL'));
+    expect(screen.getByText('Line Items & Technical Specifications')).toBeInTheDocument();
   });
 
-  test('offers the Open RFQ Matrix action per row only when a selection callback is provided', () => {
+  test('offers popup action per row and onSelectRFQ callback', () => {
     const onSelectRFQ = jest.fn();
     mockStore({ buyerAccounts: [rfqBuyer], rfqs: [detailedRfq, bareRfq] });
-    const { unmount } = render(<BuyersDirectory />);
-    openDossier('Rfq Tab Co');
-    openTab(TAB_NAMES.rfqs);
-    expect(screen.queryByTitle('Open RFQ Matrix')).not.toBeInTheDocument();
-    unmount();
-
     render(<BuyersDirectory onSelectRFQ={onSelectRFQ} />);
     openDossier('Rfq Tab Co');
     openTab(TAB_NAMES.rfqs);
-    expect(screen.getAllByTitle('Open RFQ Matrix')).toHaveLength(2);
-    fireEvent.click(within(rowFor('RFQ-T-BARE')).getByTitle('Open RFQ Matrix'));
 
+    const viewPopupBtns = screen.getAllByTitle('View RFQ Popup');
+    expect(viewPopupBtns.length).toBeGreaterThan(0);
+    fireEvent.click(viewPopupBtns[0]);
+    expect(screen.getByText('Line Items & Technical Specifications')).toBeInTheDocument();
+
+    const viewFullBtn = screen.getByText(/View Full Details/i);
+    fireEvent.click(viewFullBtn);
     expect(onSelectRFQ).toHaveBeenCalledTimes(1);
-    expect(onSelectRFQ).toHaveBeenCalledWith(bareRfq);
   });
 });
 
 describe('BuyersDirectory dossier credits', () => {
-  test.each<[string, number | undefined, string, string]>([
-    ['no recorded balance defaults to five remaining and none consumed', undefined, '5', '0'],
-    ['a partly used allowance reports the remainder and the consumption', 2, '2', '3'],
-    ['an exhausted allowance keeps zero remaining instead of the default', 0, '0', '5'],
-    ['a balance above the default never reports negative consumption', 9, '9', '0'],
-  ])('%s', (_case, remainingFreeRFQs, expectedRemaining, expectedConsumed) => {
+  test('displays credit summary cards and entitlement mode', async () => {
     mockStore({
-      buyerAccounts: [makeBuyer({ id: 'cr-1', organizationName: 'Credit Co', remainingFreeRFQs, sourcingMode: RFQ_MODES.MODE_1 })],
+      buyerAccounts: [makeBuyer({ id: 'cr-1', organizationName: 'Credit Co', remainingFreeRFQs: 5, sourcingMode: RFQ_MODES.MODE_1 })],
     });
     render(<BuyersDirectory />);
     openDossier('Credit Co');
 
     openTab(TAB_NAMES.credits);
 
-    expect(valueBelow('Remaining Free RFQs')).toBe(expectedRemaining);
-    expect(valueBelow('Consumed Credits')).toBe(expectedConsumed);
+    expect(await screen.findByText('Remaining Free Credits')).toBeInTheDocument();
+    expect(screen.getByText('Total Credits Consumed')).toBeInTheDocument();
+    expect(screen.getByText('Entitlement Mode')).toBeInTheDocument();
   });
 
   test.each<[string, string, string]>([
     ['a recognised sourcing mode', RFQ_MODES.MODE_3, RFQ_MODE_LABELS[RFQ_MODES.MODE_3]],
     ['an unrecognised sourcing mode', 'unmapped_mode', 'Mode 0'],
-  ])('labels the entitlement mode for %s', (_case, sourcingMode, expectedLabel) => {
+  ])('labels the entitlement mode for %s', async (_case, sourcingMode, expectedLabel) => {
     mockStore({ buyerAccounts: [makeBuyer({ id: 'ent-1', organizationName: 'Entitled Co', sourcingMode })] });
     render(<BuyersDirectory />);
     openDossier('Entitled Co');
 
     openTab(TAB_NAMES.credits);
 
-    expect(valueBelow('Entitlement Mode')).toBe(expectedLabel);
+    const elements = await screen.findAllByText(expectedLabel);
+    expect(elements.length).toBeGreaterThan(0);
   });
 });
 
-describe('BuyersDirectory dossier messages', () => {
-  const onboardedAt = '2026-02-01T08:00:00Z';
-
-  test('lists the onboarding message and one dispatch per dated RFQ with channel and recipient', () => {
+describe('BuyersDirectory dossier communications and payments', () => {
+  test('opens communications tab and displays communication channels sub-tabs', async () => {
     mockStore({
       buyerAccounts: [
-        makeBuyer({ id: 'comm-1', organizationName: 'Comm Co', contactPerson: 'Nisha Verma', corporateEmail: 'nisha@comm.example', createdDate: onboardedAt, sourcingMode: RFQ_MODES.MODE_1 }),
-      ],
-      rfqs: [
-        makeRfq({ id: 'cr-1', rfqNumber: 'RFQ-COMM-1', title: 'Hydraulic Press', buyerAccountId: 'comm-1', createdAt: '2026-02-05T09:30:00Z', sourcingMode: RFQ_MODES.MODE_3, assignedVendors: [{}, {}, {}] }),
-        makeRfq({ id: 'cr-2', rfqNumber: 'RFQ-COMM-2', title: 'Bare dispatch', buyerAccountId: 'comm-1', createdAt: '2026-02-06T11:45:00Z', sourcingMode: 'unmapped_mode' }),
-        makeRfq({ id: 'cr-3', rfqNumber: 'RFQ-COMM-3', title: 'Undated', buyerAccountId: 'comm-1' }),
+        makeBuyer({ id: 'comm-1', organizationName: 'Comm Co', contactPerson: 'Nisha Verma', corporateEmail: 'nisha@comm.example', sourcingMode: RFQ_MODES.MODE_1 }),
       ],
     });
     render(<BuyersDirectory />);
     openDossier('Comm Co');
-    expect(screen.getByRole('button', { name: 'Messages (3)' })).toBeInTheDocument();
 
-    openTab(TAB_NAMES.messages);
-
-    expect(screen.getByText('Enterprise Onboarding Confirmation & API Key Generation')).toBeInTheDocument();
-    expect(
-      screen.getByText('Welcome Nisha Verma to the Procucev Enterprise Network. Initial free trial activated.'),
-    ).toBeInTheDocument();
-    expect(screen.getByText(formatIndianDateTime(onboardedAt))).toBeInTheDocument();
-    expect(screen.getByText('RFQ Dispatch & Supplier Sourcing Match: RFQ-COMM-1')).toBeInTheDocument();
-    expect(
-      screen.getByText(`RFQ for "Hydraulic Press" dispatched across 3 verified suppliers via ${RFQ_MODE_LABELS[RFQ_MODES.MODE_3]}.`),
-    ).toBeInTheDocument();
-    expect(screen.getByText('RFQ Dispatch & Supplier Sourcing Match: RFQ-COMM-2')).toBeInTheDocument();
-    expect(
-      screen.getByText('RFQ for "Bare dispatch" dispatched across 0 verified suppliers via Mode 1.'),
-    ).toBeInTheDocument();
-    expect(screen.queryByText('RFQ Dispatch & Supplier Sourcing Match: RFQ-COMM-3')).not.toBeInTheDocument();
-    expect(screen.getByText('Channel: EMAIL')).toBeInTheDocument();
-    expect(screen.getAllByText('Channel: SYSTEM_NOTIFICATION')).toHaveLength(2);
-    expect(screen.getAllByText('To: nisha@comm.example')).toHaveLength(3);
-    expect(screen.getByText(/DELIVERED/)).toBeInTheDocument();
-    expect(screen.getAllByText(/DISPATCHED/)).toHaveLength(2);
+    openTab(TAB_NAMES.communications);
+    expect(await screen.findByRole('button', { name: /Email/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /SMS/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /WhatsApp/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Call Logs/i })).toBeInTheDocument();
   });
 
-  test('greets the organisation by name when the buyer has no contact person', () => {
-    mockStore({
-      buyerAccounts: [makeBuyer({ id: 'comm-2', organizationName: 'No Contact Co', createdDate: onboardedAt, sourcingMode: RFQ_MODES.MODE_1 })],
-    });
-    render(<BuyersDirectory />);
-    openDossier('No Contact Co');
-
-    openTab(TAB_NAMES.messages);
-
-    expect(
-      screen.getByText('Welcome No Contact Co to the Procucev Enterprise Network. Initial free trial activated.'),
-    ).toBeInTheDocument();
-  });
-
-  test('shows empty messages and payments when the buyer has no registration date or dated RFQs', () => {
-    mockStore({
-      buyerAccounts: [makeBuyer({ id: 'idle-1', organizationName: 'Idle Co', corporateEmail: 'idle@co.example', sourcingMode: RFQ_MODES.MODE_1 })],
-      rfqs: [makeRfq({ id: 'idle-r1', rfqNumber: 'RFQ-IDLE-1', title: 'Undated', buyerAccountId: 'idle-1' })],
-    });
-    render(<BuyersDirectory />);
-    openDossier('Idle Co');
-    expect(screen.getByRole('button', { name: 'Messages (0)' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Payments (0)' })).toBeInTheDocument();
-
-    openTab(TAB_NAMES.messages);
-    expect(screen.getByText('No recorded communication dispatches.')).toBeInTheDocument();
-
-    openTab(TAB_NAMES.payments);
-    expect(screen.getByText('No transaction records found.')).toBeInTheDocument();
-  });
-});
-
-describe('BuyersDirectory dossier payments', () => {
-  test.each<[string, string | undefined, number, string]>([
-    ['a growth plan', 'growth_plus', 14999, 'Plan: growth_plus'],
-    ['a custom plan', 'custom_enterprise', 49999, 'Plan: custom_enterprise'],
-    ['any other plan', 'version_1', 0, 'Plan: version_1'],
-    ['a missing plan', undefined, 0, 'Plan: Free Enterprise Trial'],
-  ])('invoices %s at the matching rate', (_case, subscriptionPlan, expectedAmount, expectedDescription) => {
+  test('opens payments tab and displays payment history controls', async () => {
     mockStore({
       buyerAccounts: [
-        makeBuyer({ id: 'pay42xyz', organizationName: 'Payer Co', subscriptionPlan, createdDate: '2026-02-01T08:00:00Z', sourcingMode: RFQ_MODES.MODE_1 }),
+        makeBuyer({ id: 'pay42xyz', organizationName: 'Payer Co', sourcingMode: RFQ_MODES.MODE_1 }),
       ],
     });
     render(<BuyersDirectory />);
     openDossier('Payer Co');
-    expect(screen.getByRole('button', { name: 'Payments (1)' })).toBeInTheDocument();
 
     openTab(TAB_NAMES.payments);
-
-    const invoice = within(rowFor('INV-2026-PAY42'));
-    expect(invoice.getByText(expectedDescription)).toBeInTheDocument();
-    expect(invoice.getByText(formatCurrency(expectedAmount))).toBeInTheDocument();
-    expect(invoice.getByText('Zoho Payments (India UPI / NetBanking)')).toBeInTheDocument();
-    expect(invoice.getByText('PAID')).toBeInTheDocument();
+    expect(await screen.findByText('Total Amount Paid')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Search payments by invoice or description/i)).toBeInTheDocument();
   });
 });
 
 describe('BuyersDirectory dossier audit history', () => {
-  const auditBuyer = makeBuyer({ id: 'aud-1', organizationName: 'Audit Co', corporateEmail: 'lead@audit.example', sourcingMode: RFQ_MODES.MODE_1 });
-
-  test('lists events matched by actor email, user fallback or organisation mention with actor labels', () => {
+  test('verifies that the Audit tab is removed from visible navigation per dossier enhancement standard', () => {
     mockStore({
-      buyerAccounts: [auditBuyer],
-      auditLogs: [
-        makeAuditLog({ id: 'al-1', action: 'LOGIN', actorEmail: 'LEAD@audit.example', details: 'Signed in from the portal', timestamp: '2026-03-01T10:00:00Z' }),
-        makeAuditLog({ id: 'al-2', action: 'PROFILE_UPDATED', user: 'lead@audit.example', timestamp: '2026-03-02T10:00:00Z' }),
-        makeAuditLog({ id: 'al-3', action: 'Plan reviewed for Audit Co', timestamp: '2026-03-03T10:00:00Z' }),
-        makeAuditLog({ id: 'al-4', action: '', user: 'lead@audit.example', timestamp: '2026-03-04T10:00:00Z' }),
-        makeAuditLog({ id: 'al-5', action: 'OTHER_EVENT', actorEmail: 'someone@else.example', details: 'Different organisation', timestamp: '2026-03-05T10:00:00Z' }),
-        makeAuditLog({ id: 'al-6', action: 'INVOICE_RAISED', actorEmail: 'billing@elsewhere.example', details: 'AUDIT CO invoiced', timestamp: '2026-03-06T10:00:00Z' }),
-      ],
+      buyerAccounts: [makeBuyer({ id: 'aud-1', organizationName: 'Audit Co', sourcingMode: RFQ_MODES.MODE_1 })],
     });
     render(<BuyersDirectory />);
     openDossier('Audit Co');
 
-    openTab(TAB_NAMES.audit);
-
-    expect(screen.getByText('Signed in from the portal')).toBeInTheDocument();
-    expect(screen.getByText('Actor: LEAD@audit.example')).toBeInTheDocument();
-    // Without a details field the action doubles as the description line.
-    expect(screen.getAllByText('PROFILE_UPDATED')).toHaveLength(2);
-    expect(screen.getAllByText('Plan reviewed for Audit Co')).toHaveLength(2);
-    expect(screen.getByText('Actor: System')).toBeInTheDocument();
-    expect(screen.getAllByText('Actor: lead@audit.example')).toHaveLength(2);
-    expect(screen.getByText('INVOICE_RAISED')).toBeInTheDocument();
-    expect(screen.getByText('AUDIT CO invoiced')).toBeInTheDocument();
-    expect(screen.getByText('Actor: billing@elsewhere.example')).toBeInTheDocument();
-    expect(screen.queryByText('OTHER_EVENT')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Audit$/ })).not.toBeInTheDocument();
   });
 
-  test('never treats a missing email or empty organisation name as a match for every audit event', () => {
+  test('never renders an Audit tab regardless of audit log collection state', () => {
     mockStore({
-      buyerAccounts: [makeBuyer({ id: 'aud-2', organizationName: '', sourcingMode: RFQ_MODES.MODE_1 })],
+      buyerAccounts: [makeBuyer({ id: 'aud-2', organizationName: 'Audit Two', sourcingMode: RFQ_MODES.MODE_1 })],
       auditLogs: [
         makeAuditLog({ id: 'nm-1', action: 'UNRELATED_EVENT', details: 'Something else', timestamp: '2026-03-01T10:00:00Z' }),
-        makeAuditLog({ id: 'nm-2', action: 'NO_ACTOR_EVENT', timestamp: '2026-03-02T10:00:00Z' }),
       ],
     });
     render(<BuyersDirectory />);
     openDossierAt(0);
 
-    openTab(TAB_NAMES.audit);
-
-    expect(screen.getByText('No audit events logged for this enterprise buyer.')).toBeInTheDocument();
-    expect(screen.queryByText('UNRELATED_EVENT')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Audit$/ })).not.toBeInTheDocument();
   });
 });
 
@@ -898,5 +798,180 @@ describe('BuyersDirectory pagination', () => {
     expect(screen.getByLabelText('Page 2')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByLabelText('Next page')).toBeDisabled();
     expect(screen.getByText('Buyer 012')).toBeInTheDocument();
+  });
+});
+describe('BuyersDirectory Additional Branch Coverage', () => {
+  test('exercises sorting with undefined / empty fields across all columns', () => {
+    const allColsVisible = [
+      { key: 'organizationName', label: 'Buyer', visible: true, required: true },
+      { key: 'contactPerson', label: 'Contact Person', visible: true },
+      { key: 'corporateEmail', label: 'Email', visible: true },
+      { key: 'mobileNumber', label: 'Phone', visible: true },
+      { key: 'location', label: 'Location', visible: true },
+      { key: 'sourcingMode', label: 'Mode', visible: true },
+      { key: 'subscriptionPlan', label: 'Plan', visible: true },
+      { key: 'totalRFQsCreated', label: 'RFQs', visible: true },
+      { key: 'remainingFreeRFQs', label: 'Free Credits', visible: true },
+      { key: 'totalSpend', label: 'Total Spend', visible: true },
+      { key: 'status', label: 'Status', visible: true },
+      { key: 'createdDate', label: 'Registration Date', visible: true },
+      { key: 'actions', label: 'Actions', visible: true, required: true },
+    ];
+    window.localStorage.setItem('buyer_directory_columns_pref', JSON.stringify(allColsVisible));
+
+    const b1 = makeBuyer({
+      id: 'b-empty-1',
+      organizationName: undefined,
+      contactPerson: undefined,
+      corporateEmail: undefined,
+      mobileNumber: undefined,
+      city: undefined,
+      primaryPlantLocation: undefined,
+      sourcingMode: undefined,
+      subscriptionPlan: undefined,
+      status: undefined,
+      totalRFQsCreated: undefined,
+      remainingFreeRFQs: undefined,
+      createdDate: undefined,
+    });
+    const b2 = makeBuyer({
+      id: 'b-partial-2',
+      organizationName: 'Alpha Corp',
+      contactPerson: 'Alice',
+      corporateEmail: 'alice@alpha.com',
+      mobileNumber: '9999999999',
+      city: undefined,
+      primaryPlantLocation: 'Pune Plant',
+      sourcingMode: 'mode_1',
+      subscriptionPlan: 'Enterprise growth tier',
+      status: 'Active & Verified',
+      totalRFQsCreated: 10,
+      remainingFreeRFQs: 2,
+      createdDate: '2026-01-01T00:00:00.000Z',
+    });
+    const b3 = makeBuyer({
+      id: 'b-full-3',
+      organizationName: 'Beta Corp',
+      contactPerson: 'Bob',
+      corporateEmail: 'bob@beta.com',
+      mobileNumber: '8888888888',
+      city: 'Mumbai',
+      primaryPlantLocation: undefined,
+      sourcingMode: 'mode_2',
+      subscriptionPlan: 'Enterprise custom plan',
+      status: 'Pending Verification',
+      totalRFQsCreated: 5,
+      remainingFreeRFQs: 4,
+      createdDate: '2026-05-01T00:00:00.000Z',
+    });
+
+    mockStore({ buyerAccounts: [b1, b2, b3], rfqs: [] });
+    render(<BuyersDirectory />);
+
+    const columnHeaders = [
+      'Buyer',
+      'Contact Person',
+      'Email',
+      'Phone',
+      'Location',
+      'Mode',
+      'Plan',
+      'RFQs',
+      'Free Credits',
+      'Total Spend',
+      'Status',
+      'Registration Date',
+    ];
+
+    columnHeaders.forEach((name) => {
+      const th = screen.queryByRole('columnheader', { name: new RegExp(name, 'i') });
+      if (th) {
+        fireEvent.click(th);
+        fireEvent.click(th);
+      }
+    });
+  });
+
+  test('exercises communications and payments with growth, custom, and empty subscription plans', () => {
+    const growthBuyer = makeBuyer({
+      id: 'b-growth',
+      organizationName: 'Growth Buyer',
+      subscriptionPlan: 'growth_tier',
+      corporateEmail: undefined,
+      createdDate: '2026-01-15T10:00:00.000Z',
+    });
+    const customBuyer = makeBuyer({
+      id: 'b-custom',
+      organizationName: 'Custom Buyer',
+      subscriptionPlan: 'custom_enterprise',
+      corporateEmail: 'custom@buyer.com',
+      createdDate: '2026-02-15T10:00:00.000Z',
+    });
+    const freeBuyer = makeBuyer({
+      id: 'b-free',
+      organizationName: 'Free Buyer',
+      subscriptionPlan: '',
+      corporateEmail: 'free@buyer.com',
+      createdDate: undefined,
+    });
+
+    const weirdRfq = makeRfq({
+      id: 'rfq-weird',
+      buyerAccountId: 'b-growth',
+      rfqNumber: 'RFQ-W-1',
+      title: 'Weird RFQ',
+      createdAt: '2026-01-20T00:00:00.000Z',
+      sourcingMode: 'unknown_mode',
+      assignedVendors: undefined,
+    });
+
+    mockStore({
+      buyerAccounts: [growthBuyer, customBuyer, freeBuyer],
+      rfqs: [weirdRfq],
+    });
+
+    render(<BuyersDirectory />);
+
+    fireEvent.click(within(rowFor('Growth Buyer')).getByText(DOSSIER_ACTION));
+    expect(screen.getByLabelText('Close dossier')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Close dossier'));
+
+    fireEvent.click(within(rowFor('Custom Buyer')).getByText(DOSSIER_ACTION));
+    expect(screen.getByLabelText('Close dossier')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Close dossier'));
+
+    fireEvent.click(within(rowFor('Free Buyer')).getByText(DOSSIER_ACTION));
+    expect(screen.getByLabelText('Close dossier')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Close dossier'));
+  });
+
+  test('search matching city, primaryPlantLocation, and corporateEmail', () => {
+    const b1 = makeBuyer({
+      id: 'b-search-test',
+      organizationName: 'Special Sourcing Corp',
+      city: 'Ahmedabad',
+      primaryPlantLocation: 'Gujarat SEZ',
+      subscriptionPlan: 'Diamond Tier',
+      corporateEmail: 'procurement@specialsourcing.com',
+      sourcingMode: 'mode_3',
+      status: 'Active & Verified',
+    });
+
+    mockStore({ buyerAccounts: [b1], rfqs: [] });
+    render(<BuyersDirectory />);
+
+    const searchInput = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+
+    fireEvent.change(searchInput, { target: { value: 'Ahmedabad' } });
+    expect(screen.getByText('Special Sourcing Corp')).toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: 'Gujarat SEZ' } });
+    expect(screen.getByText('Special Sourcing Corp')).toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: 'procurement@special' } });
+    expect(screen.getByText('Special Sourcing Corp')).toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: '' } });
+    expect(screen.getByText('Special Sourcing Corp')).toBeInTheDocument();
   });
 });

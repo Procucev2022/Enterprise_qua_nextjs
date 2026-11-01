@@ -216,7 +216,7 @@ export default function OpportunityFeed({
       const data = await res.json();
       if (!res.ok || !data.success) {
         if (data.exhausted || res.status === 403) {
-          showToast('Free Credits Exhausted', data.error || 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.', 'warning');
+          showToast('Free Credits Exhausted', data.error || 'You have no free RFQ download credits available. Please upgrade your subscription to download this RFQ.', 'warning');
           return;
         }
         throw new Error(data.error || 'Could not generate the RFQ specification.');

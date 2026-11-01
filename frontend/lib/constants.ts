@@ -1,5 +1,7 @@
 import type {
   BuyerDirectoryColumnConfig,
+  SellerDirectoryColumnConfig,
+  SellerDirectoryColumnKey,
   BuyerDirectoryColumnKey,
   SourcingModeDetail,
   SystemConfig,
@@ -1337,5 +1339,65 @@ export const DEFAULT_BUYER_DIRECTORY_COLUMNS: BuyerDirectoryColumnConfig[] = [
   { key: 'totalSpend', label: 'Total Spend', visible: false },
   { key: 'status', label: 'Status', visible: true },
   { key: 'createdDate', label: 'Registration Date', visible: false },
+  { key: 'sourceType', label: 'Source Type', visible: true },
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
+
+
+export const SELLER_DIRECTORY_COLUMN_PREF_KEY = 'seller_directory_columns_pref';
+
+export const DEFAULT_SELLER_DIRECTORY_COLUMNS: SellerDirectoryColumnConfig[] = [
+  { key: 'supplierName', label: 'Supplier', visible: true, required: true },
+  { key: 'location', label: 'Location', visible: true },
+  { key: 'deliveryLocation', label: 'Delivery Location', visible: true },
+  { key: 'category', label: 'Category', visible: true },
+  { key: 'lastLogin', label: 'Last Login', visible: true },
+  { key: 'rating', label: 'Rating', visible: true },
+  { key: 'credits', label: 'Credits', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'contactPerson', label: 'Contact Person', visible: false },
+  { key: 'email', label: 'Email', visible: false },
+  { key: 'phone', label: 'Phone', visible: false },
+  { key: 'score360', label: '360° Score', visible: false },
+  { key: 'registrationDate', label: 'Registration Date', visible: false },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+
+export interface InternalTeamMember {
+  id: string;
+  name: string;
+  role: string;
+  email: string;
+  project?: string;
+}
+
+export const DEFAULT_INTERNAL_MEMBERS: InternalTeamMember[] = [
+  { id: 'exec-1', name: 'Pavani', role: 'CRM Executive', email: 'pavani@procucev.com', project: 'Hyderabad Hub' },
+  { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist', email: 'navin@procucev.com', project: 'Mechanical Spares' },
+  { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead', email: 'prajwal.karakoon@procucev.com', project: 'Supplier Network' },
+  { id: 'exec-4', name: 'Veerababu V', role: 'Sourcing Manager', email: 'veerababu.v@procucev.com', project: 'Electrical Engineering' },
+  { id: 'exec-5', name: 'Srinivas Mukku', role: 'Commercial Director', email: 'srinivas.mukku@procucev.com', project: 'Industrial Capital' },
+];
+
+export const COMMUNICATION_CHANNELS = [
+  { value: 'CALL', label: 'Call Log' },
+  { value: 'EMAIL', label: 'Email' },
+  { value: 'SMS', label: 'SMS' },
+  { value: 'WHATSAPP', label: 'WhatsApp' },
+] as const;
+
+export const CALL_OUTCOMES = [
+  { value: 'Connected', label: 'Connected' },
+  { value: 'Left Voicemail', label: 'Left Voicemail' },
+  { value: 'Busy', label: 'Busy' },
+  { value: 'No Answer', label: 'No Answer' },
+  { value: 'Wrong Number', label: 'Wrong Number' },
+] as const;
+
+export const FOLLOWUP_PRIORITIES = [
+  { value: 'Low', label: 'Low' },
+  { value: 'Medium', label: 'Medium' },
+  { value: 'High', label: 'High' },
+  { value: 'Critical', label: 'Critical' },
+] as const;

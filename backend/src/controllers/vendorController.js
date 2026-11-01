@@ -1,3 +1,5 @@
+const vendorDossierExtensions = require('./vendorDossierExtensions');
+
 const storeService = require('../services/storeService');
 const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
@@ -8,7 +10,7 @@ const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
-const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig,parseSearchTokens, DEFAULT_VENDOR_DIRECTORY_PASSKEY } = require('../config/constants');
+const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig,parseSearchTokens, DEFAULT_VENDOR_DIRECTORY_PASSKEY, VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
 /**
@@ -135,6 +137,49 @@ function withoutTemporaryPassword(vendor) {
  * notes. Everything else (category, contacts, compliance creds,
  * rating) is safe to expose in the public directory.
  */
+/**
+ * Masks an email for public directory responses (e.g. "sXXXX@gmail.com" or "mXXXX@japl.org").
+ * Ensures raw email is never exposed in the API response or Network tab inspection.
+ */
+function maskPublicEmail(email) {
+  if (!email || typeof email !== 'string') return null;
+  const trimmed = email.trim();
+  const atIndex = trimmed.indexOf('@');
+  if (atIndex <= 0) return null;
+  const username = trimmed.slice(0, atIndex);
+  const domain = trimmed.slice(atIndex);
+  return `${username.charAt(0)}XXXX${domain}`;
+}
+
+/**
+ * Masks a phone number for public directory responses (e.g. "9XXXXXXX09").
+ * Ensures raw phone is never exposed in the API response or Network tab inspection.
+ */
+function maskPublicPhone(phone) {
+  if (!phone || typeof phone !== 'string') return null;
+  const trimmed = phone.trim();
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length < 4) return null;
+
+  let prefix = '';
+  let nationalNumber = digits;
+  if (trimmed.startsWith('+91') || (digits.length === 12 && digits.startsWith('91'))) {
+    prefix = '+91 ';
+    nationalNumber = digits.slice(-10);
+  } else if (trimmed.startsWith('+')) {
+    prefix = '+ ';
+    nationalNumber = digits.slice(-10);
+  } else if (digits.length > 10) {
+    nationalNumber = digits.slice(-10);
+  }
+
+  const firstDigit = nationalNumber.charAt(0);
+  const lastTwo = nationalNumber.slice(-2);
+  const maskLength = Math.max(1, nationalNumber.length - 3);
+  const maskedMiddle = 'X'.repeat(maskLength);
+  return `${prefix}${firstDigit}${maskedMiddle}${lastTwo}`;
+}
+
 function sanitizePublicVendor(vendor) {
   if (!vendor || typeof vendor !== 'object') return null;
   const rawObj = vendor.raw && typeof vendor.raw === 'object' ? vendor.raw : {};
@@ -142,21 +187,24 @@ function sanitizePublicVendor(vendor) {
   const majorCategory = v._majorCategory || v.major_category || v.majorCategory || rawObj.majorCategory || 'General Industrial';
   const rating = typeof v.rating === 'number' ? v.rating :
     (typeof v.score === 'number' ? Math.round((v.score / 20) * 10) / 10 : null);
+  const city = v.city || null;
+  const state = v.state || null;
+  const location = [city, state].filter(Boolean).join(', ') || v.location || city || state || 'India';
   return {
     id: v.id || null,
     name: v.name || 'Unnamed Supplier',
     brandName: v.brandName || null,
-    email: v.email || null,
-    phone: v.phone || null,
+    email: maskPublicEmail(v.email),
+    phone: maskPublicPhone(v.phone),
     contactPerson: v.contactPerson || null,
     contactDesignation: v.contactDesignation || null,
     website: v.website || null,
     majorCategory,
     minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
     products: Array.isArray(v.products) ? v.products : [],
-    location: v.location || v.city || null,
-    city: v.city || null,
-    state: v.state || null,
+    location,
+    city,
+    state,
     pincode: v.pincode || null,
     country: v.country || 'India',
     factoryAddress: v.factoryAddress || null,
@@ -436,8 +484,16 @@ async function createVendor(req, res, next) {
     // silently overwrite that account's real password/phone on every retried
     // duplicate submission, even though the vendor record itself never
     // persisted — a real account got its login clobbered this way.
-    if (body.email && storeService.getVendorById(body.email, 'all')) {
-      return res.status(409).json({ success: false, error: `A vendor with the email ${body.email} already exists.` });
+    if (body.email) {
+      // A migrated vendor who signed in first already has an auto-created,
+      // unowned profile; this add takes it over rather than 409ing.
+      const claimed = await storeService.claimMigratedVendorProfile(body.email, body, buyerId, req.user && req.user.email);
+      if (claimed) {
+        return res.status(201).json({ success: true, data: withoutTemporaryPassword(claimed) });
+      }
+      if (storeService.getVendorById(body.email, 'all')) {
+        return res.status(409).json({ success: false, error: `A vendor with the email ${body.email} already exists.` });
+      }
     }
     const phone = body.contactPhone || body.phone;
     if (phone && Array.isArray(storeService.vendors)) {
@@ -1024,7 +1080,9 @@ async function getVendorRfqCredits(req, res, next) {
       vendor = storeService.getVendorById(id, 'all') || (await storeService.getVendorByIdWithDBFallback(id, 'all'));
     }
     if (!vendor && user.email) {
-      vendor = storeService.getVendorById(user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(user.email, 'all'));
+      vendor = user.role === 'vendor'
+        ? await storeService.ensureVendorProfileForUser(user)
+        : storeService.getVendorById(user.email, 'all') || (await storeService.getVendorByIdWithDBFallback(user.email, 'all'));
     }
 
     if (!vendor) {
@@ -1033,9 +1091,9 @@ async function getVendorRfqCredits(req, res, next) {
         success: true,
         data: {
           vendorId: user.email,
-          freeCreditsAllocated: 5,
+          freeCreditsAllocated: VENDOR_FREE_CREDITS_LIMIT,
           freeCreditsUsed: 0,
-          freeCreditsRemaining: 5,
+          freeCreditsRemaining: VENDOR_FREE_CREDITS_LIMIT,
           isSubscribed: false,
           subscriptionPlan: 'free',
           unlockedRfqIds: [],
@@ -1303,4 +1361,5 @@ module.exports = {
   getPublicVendorById,
   authenticateVendorDirectory,
   getSubscriptionPricing,
+  ...vendorDossierExtensions,
 };
