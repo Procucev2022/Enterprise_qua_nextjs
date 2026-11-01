@@ -3,6 +3,7 @@
  * HTTP handler for dispatching, retrieving, and tracking SMS and Email communications.
  */
 
+const crypto = require('crypto');
 const { logger } = require('../services/loggerService');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const actionCenterNotificationService = require('../services/actionCenterNotificationService');
@@ -18,6 +19,18 @@ function resolveActor(req) {
     name: user?.fullName || user?.name || user?.email || 'Category Manager',
     email: user?.email || null,
   };
+}
+
+/**
+ * Timing-safe string comparison to prevent side-channel timing attacks.
+ */
+function timingSafeCompare(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') {
+    return false;
+  }
+  const hashA = crypto.createHash('sha256').update(a).digest();
+  const hashB = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(hashA, hashB);
 }
 
 /**
@@ -41,7 +54,8 @@ function verifyWebhookAuthenticity(req) {
     return { valid: false, error: 'Missing webhook authentication signature.' };
   }
 
-  if (providedSecret !== expectedSecret) {
+  const providedSecretStr = String(providedSecret);
+  if (!timingSafeCompare(providedSecretStr, expectedSecret)) {
     return { valid: false, error: 'Invalid webhook authentication signature.' };
   }
 
@@ -228,5 +242,6 @@ module.exports = {
   getCommunications,
   handleDeliveryWebhook,
   resolveActor,
+  timingSafeCompare,
   verifyWebhookAuthenticity,
 };

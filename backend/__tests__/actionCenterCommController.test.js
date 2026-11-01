@@ -501,4 +501,20 @@ describe('actionCenterCommController', () => {
       updateSpy.mockRestore();
     });
   });
+
+  describe('timingSafeCompare', () => {
+    it('returns true for matching strings', () => {
+      expect(actionCenterCommController.timingSafeCompare('secret-123', 'secret-123')).toBe(true);
+    });
+
+    it('returns false for non-matching strings', () => {
+      expect(actionCenterCommController.timingSafeCompare('secret-123', 'secret-456')).toBe(false);
+    });
+
+    it('returns false when first or second argument is not a string', () => {
+      expect(actionCenterCommController.timingSafeCompare(null, 'secret')).toBe(false);
+      expect(actionCenterCommController.timingSafeCompare('secret', undefined)).toBe(false);
+      expect(actionCenterCommController.timingSafeCompare(123, 123)).toBe(false);
+    });
+  });
 });
