@@ -3194,4 +3194,157 @@ All done?
 ```text
 raise the pr
 Check is there any error and pass all the testt cases and coverages in that pr?
+---
+
+### User Prompt - 2026-11-01T14:33:03+05:30
+
+```text
+I want to update my latest branch with main branch
 ```
+
+---
+
+### User Prompt - 2026-11-01T14:39:09+05:30
+
+```text
+git rebase origin/main
+error: cannot rebase: Your index contains uncommitted changes.
+error: Please commit or stash them.
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> git stash 
+Saved working directory and index state WIP on sample/vendor-page: 8e1c53b fix(vendor-directory): add D1 session self-healing, edge persistence, and graceful expiry
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> git rebase origin/main
+Auto-merging frontend/lib/uiStrings.ts
+CONFLICT (content): Merge conflict in frontend/lib/uiStrings.ts
+Auto-merging prompts.md
+CONFLICT (content): Merge conflict in prompts.md
+error: could not apply d47c6ce... commit changes for vendor page
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+Could not apply d47c6ce... # commit changes for vendor page
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> git rebase continue  commit take a lot time please use some other method such as rebase and suggest way like threw github
+```
+
+---
+
+### User Prompt - 2026-11-01T14:51:03+05:30
+
+```text
+Only the products and categories to be visible
+Location city or state should be visible
+show email as sXXXX@gmail.com will be fine and number as 9XXXXXXX09 will be fine ??
+no email should be visible in api also threw network tab by insect check and completed
+```
+
+---
+
+### User Prompt - 2026-11-01T15:31:43+05:30
+
+```text
+blur vendor name also
+```
+
+---
+
+### User Prompt - 2026-11-01T15:36:59+05:30
+
+                         stroke-width="2"
+                          viewBox="0 0 24 24"
+                          width="13"
+                          xmlns="http://www.w3.org/2000/svg"
+                        >
+                          <path
+                            d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                          />
+                        </svg>
+                        Attach Documents
+                      </button>
+                      <button
+                        class="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+                        data-testid="manual-extract"
+                        disabled=""
+                      >
+                        <svg
+                          class="lucide lucide-sparkles"
+                          fill="none"
+                          height="13"
+                          stroke="currentColor"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                 ...
+
+      543 |     clickSave();
+      544 |
+    > 545 |     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+          |                                                     ^
+      546 |     const payload = rfqClient.createRFQ.mock.calls[0][0];
+      547 |     expect(payload.title).toBe('Monsoon Pump Overhaul');
+      548 |     expect(payload.budget).toBe(250000);
+
+      at toHaveBeenCalled (__tests__/app/buyer/ManualRFQModal.test.tsx:545:53)
+      at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/config.js:47:12)
+      at checkCallback (node_modules/@testing-library/dom/dist/wait-for.js:124:77)
+      at checkRealTimersCallback (node_modules/@testing-library/dom/dist/wait-for.js:118:16)
+      at Timeout.task [as _onTimeout] (node_modules/jsdom/lib/jsdom/browser/Window.js:579:19)
+
+
+Test Suites: 1 failed, 132 passed, 133 total
+Tests:       1 failed, 3427 passed, 3428 total
+Snapshots:   0 total
+Time:        332.983 s
+Ran all test suites.
+Test results written to: coverage/test-results.json just check this test had just now fail in the github right now 
+```
+
+
+---
+
+### User Prompt - 2026-11-01T16:12:47+05:30
+
+```text
+ogger.ts:107:17)
+      at Object.warn (__tests__/lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/__tests__/lib/logger.test.ts:89:16)
+
+    console.error
+      [2026-11-01 10:42:16.738 UTC] [ERROR] [UI_ACTION] Error test {}
+
+      at ClientLogger.error [as log] (lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/lib/logger.ts:69:17)
+      at ClientLogger.log [as error] (lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/lib/logger.ts:111:17)
+      at Object.error (__tests__/lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/__tests__/lib/logger.test.ts:90:16)
+
+ PASS  __tests__/lib/uiStrings.test.ts
+ PASS  __tests__/lib/errorUtils.test.ts
+ PASS  __tests__/app/category-manager/ActionCenterSubNav.test.tsx
+ PASS  __tests__/lib/accountIdentity.test.ts
+ PASS  __tests__/app/components/Footer.test.tsx
+ PASS  __tests__/apiFetchPatch.test.ts
+ PASS  __tests__/lib/types.test.ts
+ PASS  __tests__/app/components/NotificationToast.test.tsx
+ PASS  __tests__/lib/pincodeClient.test.ts
+ PASS  __tests__/lib/supplierProfileClient.test.ts
+ PASS  __tests__/lib/ticketClient.test.ts
+ PASS  __tests__/lib/paymentDuesClient.test.ts
+ PASS  __tests__/lib/scorecardClient.test.ts
+ PASS  __tests__/lib/approvalClient.test.ts
+
+Statements   : 98.01% ( 17520/17874 )
+Branches     : 93.27% ( 16544/17736 )
+Functions    : 98.38% ( 4014/4080 )
+Lines        : 98.75% ( 15971/16173 )
+Jest: Coverage for statements (80.64%) does not meet "S:\procucev\Precucev-github\Enterprise_qua_nextjs\frontend\app\vendors\vendorUtils.tsx" threshold (90%)
+Jest: Coverage for branches (65%) does not meet "S:\procucev\Precucev-github\Enterprise_qua_nextjs\frontend\app\vendors\vendorUtils.tsx" threshold (90%)
+
+Test Suites: 133 passed, 133 total
+Tests:       3428 passed, 3428 total
+Snapshots:   0 total
+Time:        575.479 s
+Ran all test suites.
+Test results written to: coverage\test-results.json
+
+✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
+
+❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 

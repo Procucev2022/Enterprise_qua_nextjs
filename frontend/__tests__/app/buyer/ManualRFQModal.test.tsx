@@ -535,8 +535,10 @@ describe('ManualRFQModal: header and item fields', () => {
       target: { value: 'Monsoon Pump Overhaul' },
     });
     fireEvent.change(screen.getByLabelText(/Estimated Budget/i), { target: { value: '250000' } });
+    const futureDate = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
     fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
       target: { value: '2026-12-31' },
+      target: { value: futureDate },
     });
     fillRow();
     fillDelivery();
@@ -547,6 +549,7 @@ describe('ManualRFQModal: header and item fields', () => {
     expect(payload.title).toBe('Monsoon Pump Overhaul');
     expect(payload.budget).toBe(250000);
     expect(payload.targetDeliveryDate).toBe('2026-12-31');
+    expect(payload.targetDeliveryDate).toBe(futureDate);
   });
 
   it('records the per-item specs on the payload', async () => {
