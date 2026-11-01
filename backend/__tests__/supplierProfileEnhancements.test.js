@@ -649,5 +649,59 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
       await vendorDossierExtensions.recordVendorCommunication(reqSMS, resSMS, jest.fn());
       expect(resSMS.status).toHaveBeenCalledWith(201);
     });
+
+    test('recordVendorCommunication dispatches external EMAIL and SMS with error handling', async () => {
+      const mailerService = require('../src/services/mailerService');
+      const smsService = require('../src/services/smsService');
+      const testVendor = { id: 'v-comm-dispatch', name: 'Comm Vendor', email: 'vcomm@example.com', phone: '9157154504' };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(testVendor);
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({ id: 'comm-db-1' });
+      jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'task-comp-1' });
+
+      // EMAIL success & catch
+      const deliverSpy = jest.spyOn(mailerService, 'deliver').mockImplementation(() => Promise.reject(new Error('SMTP down')));
+      const reqEmail = {
+        user: { role: 'admin', id: 'admin-1', email: 'admin@procucev.com' },
+        params: { id: 'v-comm-dispatch' },
+        body: {
+          channel: 'EMAIL',
+          recipient: 'vcomm@example.com',
+          subject: 'Test Subject',
+          message: 'Test message body',
+        },
+      };
+      const resEmail = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.recordVendorCommunication(reqEmail, resEmail, jest.fn());
+      expect(deliverSpy).toHaveBeenCalled();
+      expect(resEmail.status).toHaveBeenCalledWith(201);
+
+      // SMS success & catch
+      const smsSpy = jest.spyOn(smsService, 'sendActionCenterSms').mockImplementation(() => Promise.reject(new Error('SMS gateway down')));
+      const reqSms = {
+        user: { role: 'admin', id: 'admin-1', email: 'admin@procucev.com' },
+        params: { id: 'v-comm-dispatch' },
+        body: {
+          channel: 'SMS',
+          recipient: '9157154504',
+          message: 'Action needed immediately',
+        },
+      };
+      const resSms = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.recordVendorCommunication(reqSms, resSms, jest.fn());
+      expect(smsSpy).toHaveBeenCalled();
+      expect(resSms.status).toHaveBeenCalledWith(201);
+
+      // EMAIL synchronous throw catch
+      deliverSpy.mockImplementationOnce(() => { throw new Error('Synchronous mailer failure'); });
+      await vendorDossierExtensions.recordVendorCommunication(reqEmail, resEmail, jest.fn());
+
+      // SMS synchronous throw catch
+      smsSpy.mockImplementationOnce(() => { throw new Error('Synchronous SMS failure'); });
+      await vendorDossierExtensions.recordVendorCommunication(reqSms, resSms, jest.fn());
+
+      deliverSpy.mockRestore();
+      smsSpy.mockRestore();
+    });
   });
 });

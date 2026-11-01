@@ -872,6 +872,37 @@ async function recordBuyerCommunication(req, res, next) {
       },
     });
 
+    // External Live Dispatch for Email and SMS
+    const buyerEmail = recipient || buyer.corporateEmail || buyer.email;
+    const buyerPhone = recipient || buyer.phone || buyer.mobileNumber;
+    if (normalizedChannel === 'EMAIL' && buyerEmail) {
+      try {
+        const mailerService = require('../services/mailerService');
+        if (typeof mailerService.deliver === 'function') {
+          mailerService.deliver({
+            to: buyerEmail,
+            subject: '[Procucev] ' + (subject || 'Buyer Account Update'),
+            text: message || commNotes || '',
+            replyTo: req.user?.email || undefined,
+          }, 'BUYER_DOSSIER_COMM').catch((err) => logger.warn('Async buyer email dispatch error', { error: err.message }));
+        }
+      } catch (mailErr) {
+        logger.warn('Failed to dispatch external email for buyer communication', { error: mailErr.message });
+      }
+    } else if (normalizedChannel === 'SMS' && buyerPhone) {
+      try {
+        const smsService = require('../services/smsService');
+        smsService.sendActionCenterSms({
+          mobile: buyerPhone,
+          recipientName: buyer.organizationName || 'Buyer',
+          message: message || subject || 'Buyer account notification',
+          entityType: 'buyer_dossier',
+        }).catch((err) => logger.warn('Async buyer SMS dispatch error', { error: err.message }));
+      } catch (smsErr) {
+        logger.warn('Failed to dispatch external SMS for buyer communication', { error: smsErr.message });
+      }
+    }
+
     let completedTask = null;
     try {
       const channelLabel = normalizedChannel === 'CALL' ? 'Call' : normalizedChannel === 'WHATSAPP' ? 'WhatsApp' : normalizedChannel === 'SMS' ? 'SMS' : 'Email';

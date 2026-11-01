@@ -55,7 +55,32 @@
  * @property {string} timestamp
  */
 
+/**
+ * @typedef {Object} ActionCenterCommunicationEntity
+ * @property {string} id
+ * @property {'internal_task'|'ticket'|'approval'|'buyer_dossier'|'supplier_dossier'|'payment_due'|'registration'} entityType
+ * @property {string} entityId
+ * @property {'EMAIL'|'SMS'|'BOTH'} channel
+ * @property {string} recipient
+ * @property {string} recipientName
+ * @property {string} subject
+ * @property {string} message
+ * @property {'Pending'|'Dispatched'|'Delivered'|'Failed'|'Acknowledged'} deliveryStatus
+ * @property {string} communicatedBy
+ * @property {string} createdAt
+ */
+
 const DOMAIN_TYPES = {
+  ACTION_CENTER_CHANNELS: ['EMAIL', 'SMS', 'BOTH'],
+  ACTION_CENTER_ENTITY_TYPES: [
+    'internal_task',
+    'ticket',
+    'approval',
+    'buyer_dossier',
+    'supplier_dossier',
+    'payment_due',
+    'registration',
+  ],
   RFQ_STATUSES: ['Ingested', 'Dispatched', 'In Evaluation', 'Quotes Pending', 'PO Awarded'],
   SOURCING_MODES: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
   SEVERITY_LEVELS: ['INFO', 'WARN', 'ERROR', 'CRITICAL'],

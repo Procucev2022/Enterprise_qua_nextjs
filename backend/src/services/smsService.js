@@ -125,6 +125,13 @@ const SMS_GATEWAY_CONFIG = {
       SMS_DLT_TEMPLATES.BUYER_BIDS_UNLOCKED.SMSGID
     );
   },
+
+  get ACTION_CENTER_SMSGID() {
+    return getEnv(
+      'SMS_GATEWAY_ACTION_CENTER_SMSGID',
+      (SMS_DLT_TEMPLATES.ACTION_CENTER_COMM && SMS_DLT_TEMPLATES.ACTION_CENTER_COMM.SMSGID) || '1777179138668879299'
+    );
+  },
 };
 
 // In-memory cooldown throttle cache to prevent infinite / spam loop SMS dispatches
@@ -665,6 +672,152 @@ async function sendBuyerComparisonSms({
   }
 }
 
+/**
+ * Dispatch an Action Center SMS notification using the DLT-compliant template.
+ * @param {Object} params
+ * @param {string} params.mobile - Recipient mobile number
+ * @param {string} [params.recipientName] - Recipient name
+ * @param {string} [params.message] - Notification text
+ * @param {string} [params.linkUrl] - Link URL
+ * @param {string} [params.entityType] - Entity category
+ * @returns {Promise<{ success: boolean, messageId?: string, error?: string, throttled?: boolean }>}
+ */
+async function sendActionCenterSms({
+  mobile,
+  recipientName = 'Valued Partner',
+  message: alertText = 'Important update regarding your procurement activity',
+  linkUrl = '',
+  entityType = 'action_center',
+}) {
+  const formattedNumber = formatMobileNumber(mobile);
+
+  if (!formattedNumber || formattedNumber.length !== 10) {
+    logger.warn(
+      'SMS dispatch skipped: Invalid mobile number format for Action Center SMS',
+      { mobile, entityType },
+      'SMS_SERVICE'
+    );
+    return {
+      success: false,
+      error: 'Invalid mobile number format. A 10-digit Indian mobile number is required.',
+    };
+  }
+
+  const now = Date.now();
+  const lastSent = recentSmsDispatches.get(formattedNumber) || 0;
+
+  if (
+    process.env.NODE_ENV !== 'test' &&
+    now - lastSent < SMS_THROTTLE_WINDOW_MS
+  ) {
+    return {
+      success: true,
+      throttled: true,
+      messageId: 'sms-throttled',
+    };
+  }
+
+  recentSmsDispatches.set(formattedNumber, now);
+
+  if (process.env.NODE_ENV === 'test') {
+    return {
+      success: true,
+      messageId: 'mock-test-sms-ac-' + Date.now(),
+    };
+  }
+
+  const defaultFrontend =
+    process.env.PUBLIC_FRONTEND_URL ||
+    'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
+
+  const resolvedLink = linkUrl || (defaultFrontend + '/category-manager/internal-tasks');
+  const cleanRecipient = String(recipientName || 'Partner').replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 30);
+  const cleanMessage = String(alertText || 'Action required on Procucev').replace(/[^a-zA-Z0-9\s.,-]/g, '').slice(0, 70);
+
+  const templateConfig = SMS_DLT_TEMPLATES.ACTION_CENTER_COMM || {
+    TEMPLATE: 'Procucev Alert for {#alp#}: {#alp#}. Details: {#urg#} - Team Procucev.',
+  };
+  const rawTemplate = templateConfig.TEMPLATE;
+  const renderedMessage = rawTemplate.includes('{#alp#}')
+    ? rawTemplate
+        .replace('{#alp#}', cleanRecipient)
+        .replace('{#alp#}', cleanMessage)
+        .replace('{#urg#}', resolvedLink)
+    : rawTemplate
+        .replace('{#var#}', cleanRecipient)
+        .replace('{#var#}', cleanMessage)
+        .replace('{#var#}', resolvedLink);
+
+  const smsgid = SMS_GATEWAY_CONFIG.ACTION_CENTER_SMSGID;
+  const payload = {
+    user: SMS_GATEWAY_CONFIG.USER,
+    pass: SMS_GATEWAY_CONFIG.PASS,
+    smstosend: [
+      {
+        to: '91' + formattedNumber,
+        from: SMS_GATEWAY_CONFIG.SENDER || 'PROCUC',
+        smstext: renderedMessage,
+        smsgid,
+      },
+    ],
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    try {
+      const res = await fetch(SMS_GATEWAY_CONFIG.URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/plain, */*',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      const responseText = await res.text();
+      const messageId = 'sms-ac-' + Date.now();
+      const isGatewayError =
+        !res.ok ||
+        /^(ERR|ERROR|FAIL|INVALID|REJECTED)/i.test(responseText.trim()) ||
+        /"status"\s*:\s*"(?:error|failed|failure|invalid|rejected)"/i.test(responseText);
+
+      if (isGatewayError) {
+        logger.warn(
+          'Action Center SMS gateway error for 91' + formattedNumber + ' — HTTP ' + res.status + ': ' + responseText,
+          { formattedNumber, entityType, smsgid },
+          'SMS_SERVICE'
+        );
+      } else {
+        logger.info(
+          'Action Center SMS dispatched to 91' + formattedNumber,
+          { messageId, response: responseText, entityType },
+          'SMS_SERVICE'
+        );
+      }
+
+      return {
+        success: !isGatewayError,
+        messageId,
+        response: responseText,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (err) {
+    logger.error(
+      'Failed to dispatch Action Center SMS to 91' + formattedNumber,
+      err,
+      'SMS_SERVICE'
+    );
+    return {
+      success: false,
+      error: err.message,
+    };
+  }
+}
+
 module.exports = {
   SMS_GATEWAY_CONFIG,
   formatMobileNumber,
@@ -673,6 +826,7 @@ module.exports = {
   sendOtpSms,
   sendRFQChaserSms,
   sendBuyerComparisonSms,
+  sendActionCenterSms,
   clearSmsThrottleCache,
   clearSmsThrottleForPhone,
 };

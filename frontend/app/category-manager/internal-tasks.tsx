@@ -26,6 +26,7 @@ import {
   Flame,
   Check,
   ChevronDown,
+  Send,
 } from 'lucide-react';
 import {
   InternalTask,
@@ -65,6 +66,7 @@ import { PaymentDuesDashboard } from './components/PaymentDuesDashboard';
 import { fetchPaymentDuesSummary } from '@/lib/paymentDuesClient';
 import { fetchTicketSummary } from '@/lib/ticketClient';
 import { fetchApprovalSummary } from '@/lib/approvalClient';
+import ActionCenterComposeModal from './components/ActionCenterComposeModal';
 
 export default function InternalTasksDashboard() {
   // Data state
@@ -98,6 +100,7 @@ export default function InternalTasksDashboard() {
   const [ticketSummary, setTicketSummary] = useState<TicketSummary | null>(null);
   const [approvalSummary, setApprovalSummary] = useState<ApprovalSummary | null>(null);
   const [paymentDuesSummary, setPaymentDuesSummary] = useState<PaymentDuesSummary | null>(null);
+  const [isComposeModalOpen, setIsComposeModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
       const tabParam = new URLSearchParams(window.location.search).get('tab') as ActionCenterTabKey;
@@ -668,6 +671,17 @@ export default function InternalTasksDashboard() {
             <Download className="w-3.5 h-3.5 text-slate-500" />
             <span>Export</span>
           </a>
+
+          {/* Quick Compose SMS / Email Button */}
+          <button
+            type="button"
+            onClick={() => setIsComposeModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition-all shadow-sm"
+            title="Dispatch SMS or Email Notification"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>Send SMS / Email</span>
+          </button>
 
           {/* Create Internal Task Button */}
           <button
@@ -1532,6 +1546,18 @@ export default function InternalTasksDashboard() {
         </div>
       )}
         </>
+      )}
+
+      {isComposeModalOpen && (
+        <ActionCenterComposeModal
+          isOpen={isComposeModalOpen}
+          onClose={() => setIsComposeModalOpen(false)}
+          entityType="internal_task"
+          entityId="general-task"
+          defaultSubject="Task Notification"
+          defaultRecipientName={sessionUser?.name || 'Category Manager'}
+          defaultRecipientEmail={sessionUser?.email || ''}
+        />
       )}
     </div>
   );

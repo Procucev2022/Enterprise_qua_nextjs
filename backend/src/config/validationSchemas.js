@@ -753,6 +753,90 @@ const VALIDATION_SCHEMAS = {
     action: { type: 'string', required: true, enum: ['accept', 'reject', 'ACCEPT', 'REJECT', 'Accept', 'Reject'], message: 'Action must be accept or reject.' },
     remarks: { type: 'string', required: false, maxLength: 1000 },
   },
+
+  actionCenterCommunicationSend: {
+    entityType: {
+      type: 'string',
+      required: true,
+      enum: [
+        'internal_task',
+        'ticket',
+        'approval',
+        'buyer_dossier',
+        'supplier_dossier',
+        'payment_due',
+        'registration',
+      ],
+      message: 'A valid entityType is required.',
+    },
+    entityId: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 128,
+      message: 'entityId is required.',
+    },
+    channel: {
+      type: 'string',
+      required: true,
+      enum: ['EMAIL', 'SMS', 'BOTH'],
+      message: 'Channel must be EMAIL, SMS, or BOTH.',
+    },
+    recipientEmail: {
+      type: 'string',
+      required: false,
+      maxLength: 255,
+    },
+    recipientPhone: {
+      type: 'string',
+      required: false,
+      maxLength: 32,
+    },
+    recipientName: {
+      type: 'string',
+      required: false,
+      maxLength: 255,
+    },
+    subject: {
+      type: 'string',
+      required: false,
+      maxLength: 512,
+    },
+    message: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 5000,
+      message: 'Message content is required.',
+    },
+    templateId: {
+      type: 'string',
+      required: false,
+      maxLength: 128,
+    },
+    linkUrl: {
+      type: 'string',
+      required: false,
+      maxLength: 2048,
+    },
+    scheduleFollowup: {
+      type: 'object',
+      required: false,
+    },
+    notes: {
+      type: 'string',
+      required: false,
+      maxLength: 2000,
+    },
+  },
+
+  actionCenterCommunicationQuery: {
+    entityType: { type: 'string', required: false, maxLength: 64 },
+    entityId: { type: 'string', required: false, maxLength: 128 },
+    channel: { type: 'string', required: false, maxLength: 32 },
+    page: { type: 'number', required: false, min: 1 },
+    pageSize: { type: 'number', required: false, min: 1, max: 100 },
+  },
 };
 
 

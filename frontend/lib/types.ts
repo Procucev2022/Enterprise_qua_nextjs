@@ -2331,6 +2331,76 @@ export type ActionCenterTabKey =
   | 'registrations'
   | 'payment_dues';
 
+export type ActionCenterCommChannel = 'EMAIL' | 'SMS' | 'BOTH';
+
+export type ActionCenterEntityType =
+  | 'internal_task'
+  | 'ticket'
+  | 'approval'
+  | 'buyer_dossier'
+  | 'supplier_dossier'
+  | 'payment_due'
+  | 'registration';
+
+export type ActionCenterDeliveryStatus =
+  | 'Pending'
+  | 'Dispatched'
+  | 'Delivered'
+  | 'Failed'
+  | 'Acknowledged';
+
+export interface ActionCenterCommunicationPayload {
+  entityType: ActionCenterEntityType;
+  entityId: string;
+  channel: ActionCenterCommChannel;
+  recipientEmail?: string;
+  recipientPhone?: string;
+  recipientName?: string;
+  subject?: string;
+  message: string;
+  linkUrl?: string;
+  notes?: string;
+  scheduleFollowup?: {
+    dueDate: string;
+    priority: 'Critical' | 'High' | 'Medium' | 'Low';
+    assigneeId?: string;
+    assigneeName?: string;
+    notes?: string;
+  };
+}
+
+export interface ActionCenterCommunicationRecord {
+  id: string;
+  accountId: string;
+  accountType: string;
+  channel: string;
+  recipient: string;
+  subject: string;
+  message: string;
+  notificationStatus: string;
+  deliveryStatus: ActionCenterDeliveryStatus;
+  acknowledgementStatus: string;
+  communicatedBy: string;
+  sentAt?: string;
+  acknowledgedAt?: string | null;
+  acknowledgedBy?: string | null;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ActionCenterCommunicationResult {
+  success: boolean;
+  message?: string;
+  error?: string;
+  communication?: ActionCenterCommunicationRecord;
+  emailResult?: { success: boolean; recipient?: string; error?: string };
+  smsResult?: { success: boolean; messageId?: string; recipient?: string; throttled?: boolean; error?: string };
+  completedTask?: { id: string; [key: string]: unknown } | null;
+  followupTask?: { id: string; [key: string]: unknown } | null;
+}
+
 export type TicketPriority = 'Critical' | 'High' | 'Medium' | 'Low';
 export type TicketStatus = 'Pending' | 'In Progress' | 'Escalated' | 'Completed';
 

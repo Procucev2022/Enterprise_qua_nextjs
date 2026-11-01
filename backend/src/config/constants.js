@@ -1591,7 +1591,30 @@ const SMS_DLT_TEMPLATES = {
     VARIABLE_TYPES: ['alp', 'num', 'urg'],
     URL_SHORTENING: false,
   },
+  ACTION_CENTER_COMM: {
+    NAME:     'Action_Center_Alert',
+    REFERENCE_NUMBER: '11-ACCOMM-2026',
+    SMSGID:   process.env.SMS_GATEWAY_ACTION_CENTER_SMSGID || '1777179138668879299',
+    CATEGORY: 'SERVICE_IMPLICIT',
+    HEADER:   'PROCUC',
+    TEMPLATE: 'Procucev Alert for {#alp#}: {#alp#}. Details: {#urg#} - Team Procucev.',
+    VARIABLES: ['recipientName', 'alertMessage', 'linkUrl'],
+    VARIABLE_TYPES: ['alp', 'alp', 'urg'],
+    URL_SHORTENING: false,
+  },
 };
+
+const ACTION_CENTER_CHANNELS = ['EMAIL', 'SMS', 'BOTH'];
+const ACTION_CENTER_ENTITY_TYPES = [
+  'internal_task',
+  'ticket',
+  'approval',
+  'buyer_dossier',
+  'supplier_dossier',
+  'payment_due',
+  'registration',
+];
+const ACTION_CENTER_COMM_STATUSES = ['Pending', 'Dispatched', 'Delivered', 'Failed', 'Acknowledged'];
 
 /**
  * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
@@ -2866,5 +2889,8 @@ module.exports = {
   PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES,
   PAYMENT_DUES_CHANNELS,
   DEFAULT_LOW_CREDIT_NOTIFICATION,
+  ACTION_CENTER_CHANNELS,
+  ACTION_CENTER_ENTITY_TYPES,
+  ACTION_CENTER_COMM_STATUSES,
 };
 

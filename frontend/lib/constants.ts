@@ -1401,3 +1401,11 @@ export const FOLLOWUP_PRIORITIES = [
   { value: 'High', label: 'High' },
   { value: 'Critical', label: 'Critical' },
 ] as const;
+
+export const ACTION_CENTER_COMM_CHANNELS = [
+  { value: 'EMAIL', label: 'Email' },
+  { value: 'SMS', label: 'SMS' },
+  { value: 'BOTH', label: 'Both (Email & SMS)' },
+] as const;
+
+export const ACTION_CENTER_SMS_MAX_CHARS = 160;

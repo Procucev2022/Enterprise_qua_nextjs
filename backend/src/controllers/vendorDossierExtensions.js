@@ -289,6 +289,36 @@ async function recordVendorCommunication(req, res, next) {
       },
     });
 
+    // External Live Dispatch for Email and SMS
+    if (normalizedChannel === 'EMAIL' && (recipient || vendor.email)) {
+      try {
+        const mailerService = require('../services/mailerService');
+        const emailTo = recipient || vendor.email;
+        if (typeof mailerService.deliver === 'function') {
+          mailerService.deliver({
+            to: emailTo,
+            subject: '[Procucev] ' + (subject || 'Supplier Communication'),
+            text: message || commNotes || '',
+            replyTo: req.user?.email || undefined,
+          }, 'SUPPLIER_DOSSIER_COMM').catch((err) => logger.warn('Async vendor email dispatch error', { error: err.message }));
+        }
+      } catch (mailErr) {
+        logger.warn('Failed to dispatch external email for vendor communication', { error: mailErr.message });
+      }
+    } else if (normalizedChannel === 'SMS' && (recipient || vendor.phone)) {
+      try {
+        const smsService = require('../services/smsService');
+        smsService.sendActionCenterSms({
+          mobile: recipient || vendor.phone,
+          recipientName: vendor.companyName || vendor.name || 'Supplier',
+          message: message || subject || 'Supplier notification',
+          entityType: 'supplier_dossier',
+        }).catch((err) => logger.warn('Async vendor SMS dispatch error', { error: err.message }));
+      } catch (smsErr) {
+        logger.warn('Failed to dispatch external SMS for vendor communication', { error: smsErr.message });
+      }
+    }
+
     const vendorLabel = vendor.companyName || vendor.name || vendor.businessName || 'Supplier';
 
     let completedTask = null;
