@@ -119,8 +119,13 @@ export default function ActionCenterComposeModal({
       return false;
     }
 
+    if (scheduleFollowup && !followupDueDate.trim()) {
+      setFormError(strings.validationFollowupDueDateRequired || 'A due date is required when scheduling a follow-up task.');
+      return false;
+    }
+
     return true;
-  }, [channel, message, recipientEmail, recipientPhone, strings]);
+  }, [channel, message, recipientEmail, recipientPhone, scheduleFollowup, followupDueDate, strings]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -167,7 +172,13 @@ export default function ActionCenterComposeModal({
           onClose();
         }, 1200);
       } else {
-        setFormError(result.error || strings.errorToast);
+        if (result.emailResult?.success || result.smsResult?.success) {
+          const emailStatus = result.emailResult?.success ? 'Email: Sent' : `Email: Failed (${result.emailResult?.error || 'Unsent'})`;
+          const smsStatus = result.smsResult?.success ? 'SMS: Sent' : `SMS: Failed (${result.smsResult?.error || 'Unsent'})`;
+          setFormError(`Partial delivery: ${emailStatus} | ${smsStatus}`);
+        } else {
+          setFormError(result.error || strings.errorToast);
+        }
       }
     } catch {
       setFormError(strings.errorToast);
@@ -400,6 +411,7 @@ export default function ActionCenterComposeModal({
                     <input
                       id="compose-followup-date"
                       type="date"
+                      required={scheduleFollowup}
                       value={followupDueDate}
                       onChange={(e) => setFollowupDueDate(e.target.value)}
                       className="w-full text-xs px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"

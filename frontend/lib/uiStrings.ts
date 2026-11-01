@@ -2085,6 +2085,7 @@ sellerDirectory: {
       validationEmailRequired: 'A valid recipient email address is required for Email dispatch.',
       validationPhoneRequired: 'A valid 10-digit Indian mobile number is required for SMS dispatch.',
       validationMessageRequired: 'Message content cannot be blank.',
+      validationFollowupDueDateRequired: 'A due date is required when scheduling a follow-up task.',
       successToast: 'Communication successfully dispatched via {channel} and logged in Action Center.',
       partialSuccessToast: 'Communication recorded, but external gateway reported a delivery delay.',
       errorToast: 'Failed to dispatch communication. Please try again or check recipient details.',

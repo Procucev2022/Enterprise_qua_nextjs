@@ -711,9 +711,10 @@ async function sendActionCenterSms({
     now - lastSent < SMS_THROTTLE_WINDOW_MS
   ) {
     return {
-      success: true,
+      success: false,
       throttled: true,
       messageId: 'sms-throttled',
+      error: 'SMS was not dispatched because this recipient is temporarily rate-limited. Retry after 30 seconds.',
     };
   }
 
@@ -732,7 +733,8 @@ async function sendActionCenterSms({
 
   const resolvedLink = linkUrl || (defaultFrontend + '/category-manager/internal-tasks');
   const cleanRecipient = String(recipientName || 'Partner').replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 30);
-  const cleanMessage = String(alertText || 'Action required on Procucev').replace(/[^a-zA-Z0-9\s.,-]/g, '').slice(0, 70);
+  const rawMessage = String(alertText || 'Action required on Procucev').replace(/[^a-zA-Z0-9\s.,-]/g, '').trim();
+  const cleanMessage = rawMessage.length > 70 ? rawMessage.slice(0, 67) + '...' : rawMessage;
 
   const templateConfig = SMS_DLT_TEMPLATES.ACTION_CENTER_COMM || {
     TEMPLATE: 'Procucev Alert for {#alp#}: {#alp#}. Details: {#urg#} - Team Procucev.',

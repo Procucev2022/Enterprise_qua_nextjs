@@ -1,6 +1,6 @@
 /**
  * Action Center Notification & Communication Service
- * Unified orchestration engine for SMS and Email dispatches across Action Center domains.
+ * Handles unified SMS & Email dispatch, audit logging, and task activity creation.
  */
 
 const { logger } = require('./loggerService');
@@ -8,18 +8,38 @@ const mailerService = require('./mailerService');
 const smsService = require('./smsService');
 const paymentDuesQueries = require('../db/paymentDuesQueries');
 const internalTaskQueries = require('../db/internalTaskQueries');
-const { ACTION_CENTER_CHANNELS, ACTION_CENTER_ENTITY_TYPES } = require('../config/constants');
 
 /**
- * Renders an enterprise-grade HTML email template for Action Center notifications.
- * @param {Object} params
- * @param {string} params.recipientName
- * @param {string} params.subject
- * @param {string} params.message
- * @param {string} [params.linkUrl]
- * @param {string} [params.entityType]
- * @param {string} [params.senderName]
- * @returns {string} HTML markup
+ * Escapes HTML characters in user-provided content to prevent HTML/XSS injection.
+ */
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Validates and sanitizes destination URLs to permitted HTTP/HTTPS protocols.
+ */
+function sanitizeActionUrl(rawUrl, fallbackUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return fallbackUrl;
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      return parsed.toString();
+    }
+  } catch {
+    // Malformed URL, use safe fallback
+  }
+  return fallbackUrl;
+}
+
+/**
+ * Renders standard responsive HTML email template for Action Center alerts.
  */
 function renderActionCenterEmailHtml({
   recipientName = 'Valued Partner',
@@ -35,15 +55,19 @@ function renderActionCenterEmailHtml({
     mailerService.getPublicFrontendUrl
       ? mailerService.getPublicFrontendUrl()
       : 'https://equa.procucev.com';
-  const actionUrl = linkUrl || `${defaultFrontend}/category-manager/internal-tasks`;
-  const formattedEntity = String(entityType).replace(/_/g, ' ').toUpperCase();
+  const safeActionUrl = sanitizeActionUrl(linkUrl, `${defaultFrontend}/category-manager/internal-tasks`);
+  const safeRecipient = escapeHtml(recipientName);
+  const safeSubject = escapeHtml(subject);
+  const safeMessage = escapeHtml(message);
+  const safeSender = escapeHtml(senderName);
+  const safeFormattedEntity = escapeHtml(String(entityType).replace(/_/g, ' ').toUpperCase());
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${subject}</title>
+  <title>${safeSubject}</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 0; color: #1e293b; }
     .container { max-width: 600px; margin: 24px auto; background: #ffffff; border-radius: 8px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.04); }
@@ -61,18 +85,18 @@ function renderActionCenterEmailHtml({
 <body>
   <div class="container">
     <div class="header">
-      <img src="${logoUrl}" alt="Procucev Enterprise" />
+      <img src="${escapeHtml(logoUrl)}" alt="Procucev Enterprise" />
     </div>
     <div class="content">
-      <div class="badge">${formattedEntity} ALERT</div>
-      <h1 class="title">${subject}</h1>
-      <p style="font-size: 14px; color: #334155;">Dear <strong>${recipientName}</strong>,</p>
-      <div class="message-box">${message}</div>
+      <div class="badge">${safeFormattedEntity} ALERT</div>
+      <h1 class="title">${safeSubject}</h1>
+      <p style="font-size: 14px; color: #334155;">Dear <strong>${safeRecipient}</strong>,</p>
+      <div class="message-box">${safeMessage}</div>
       <div class="btn-container">
-        <a href="${actionUrl}" class="btn" target="_blank" rel="noopener noreferrer">View in Action Center</a>
+        <a href="${escapeHtml(safeActionUrl)}" class="btn" target="_blank" rel="noopener noreferrer">View in Action Center</a>
       </div>
       <p style="font-size: 13px; color: #64748b; margin-top: 24px;">
-        Sent by: <strong>${senderName}</strong> &bull; Procucev Enterprise Action Center
+        Sent by: <strong>${safeSender}</strong> &bull; Procucev Enterprise Action Center
       </p>
     </div>
     <div class="footer">
@@ -87,41 +111,25 @@ function renderActionCenterEmailHtml({
 /**
  * Dispatches an Action Center communication across SMS, Email, or both,
  * persisting the record and optional tasks.
- *
- * @param {Object} payload
- * @param {string} payload.entityType - Action center domain ('internal_task', 'ticket', 'approval', etc.)
- * @param {string} payload.entityId - Identifier of the entity/account
- * @param {'EMAIL'|'SMS'|'BOTH'} payload.channel - Target notification channel
- * @param {string} [payload.recipientEmail] - Target email address
- * @param {string} [payload.recipientPhone] - Target phone number
- * @param {string} [payload.recipientName] - Human-readable recipient name
- * @param {string} [payload.subject] - Subject line
- * @param {string} payload.message - Notification message body
- * @param {string} [payload.linkUrl] - Action link
- * @param {string} [payload.notes] - Additional private notes
- * @param {Object} [payload.scheduleFollowup] - Optional follow-up task config
- * @param {Object} [actor] - Initiator user context
- * @returns {Promise<Object>} Dispatch result
  */
 async function dispatchActionCenterCommunication(payload, actor = {}) {
   const {
     entityType = 'internal_task',
     entityId,
     channel = 'EMAIL',
-    recipientEmail = '',
-    recipientPhone = '',
+    recipientEmail,
+    recipientPhone,
     recipientName = 'Partner',
     subject = 'Action Center Notification',
     message = '',
     linkUrl = '',
     notes = '',
-    metadata = {},
     scheduleFollowup = null,
+    metadata = {},
   } = payload;
 
-  const senderName = actor.fullName || actor.name || actor.email || 'Category Manager';
-  const senderEmail = actor.email || '';
-
+  const senderName = actor.name || actor.email || 'Category Manager';
+  const senderEmail = actor.email || 'category.manager@procucev.com';
   const results = {
     email: null,
     sms: null,
@@ -153,8 +161,15 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
 
       if (typeof mailerService.deliver === 'function') {
         const deliverRes = await mailerService.deliver(emailPayload, 'ACTION_CENTER_NOTIFICATION');
+        const isSent = Boolean(
+          deliverRes?.sent === true ||
+          deliverRes?.success === true ||
+          (deliverRes && deliverRes.sent !== false && !deliverRes.reason && !deliverRes.error)
+        );
         results.email = {
-          success: deliverRes !== false,
+          success: isSent,
+          messageId: deliverRes?.messageId || null,
+          error: isSent ? undefined : (deliverRes?.reason || deliverRes?.error || 'Email was not sent.'),
           dispatchedAt: new Date().toISOString(),
           recipient: recipientEmail,
         };
@@ -164,7 +179,7 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
 
       logger.info(
         `[ACTION_CENTER] Dispatched email communication to ${recipientEmail} for ${entityType} ${entityId}`,
-        { entityType, entityId, recipientEmail },
+        { entityType, entityId, recipientEmail, success: results.email.success },
         'ACTION_CENTER_COMM'
       );
     } catch (mailErr) {
@@ -190,9 +205,10 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
 
       results.sms = {
         success: Boolean(smsRes.success),
-        messageId: smsRes.messageId,
+        messageId: smsRes.messageId || null,
         recipient: recipientPhone,
         throttled: Boolean(smsRes.throttled),
+        error: smsRes.error || (smsRes.success ? undefined : 'SMS delivery failed.'),
       };
 
       logger.info(
@@ -211,11 +227,24 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
   }
 
   // 3. Determine overall dispatch status
-  const emailOk = shouldSendEmail ? results.email?.success : true;
-  const smsOk = shouldSendSms ? results.sms?.success : true;
-  const anyRequested = shouldSendEmail || shouldSendSms;
-  const overallSuccess = anyRequested ? (emailOk && smsOk) : true;
-  const deliveryStatus = overallSuccess ? 'Delivered' : 'Failed';
+  const emailOk = shouldSendEmail ? Boolean(results.email?.success) : false;
+  const smsOk = shouldSendSms ? Boolean(results.sms?.success) : false;
+
+  let overallSuccess = false;
+  let partialSuccess = false;
+
+  if (shouldSendEmail && shouldSendSms) {
+    overallSuccess = emailOk && smsOk;
+    partialSuccess = (emailOk || smsOk) && !overallSuccess;
+  } else if (shouldSendEmail) {
+    overallSuccess = emailOk;
+  } else if (shouldSendSms) {
+    overallSuccess = smsOk;
+  } else {
+    overallSuccess = true;
+  }
+
+  const deliveryStatus = overallSuccess ? 'Sent' : partialSuccess ? 'Partial' : 'Failed';
 
   // 4. Persist communication record
   const primaryRecipient = recipientEmail || recipientPhone || recipientName;
@@ -226,7 +255,7 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
     recipient: primaryRecipient,
     subject,
     message,
-    notificationStatus: deliveryStatus === 'Delivered' ? 'Notification Sent' : 'Failed',
+    notificationStatus: overallSuccess ? 'Notification Sent' : 'Failed',
     deliveryStatus,
     acknowledgementStatus: 'Acknowledgement Pending',
     communicatedBy: senderName,
@@ -250,11 +279,12 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
     const channelLabel = channelUpper === 'BOTH' ? 'Email & SMS' : channelUpper;
     completedTask = await internalTaskQueries.createInternalTask(
       {
-        title: `[${channelLabel} Log / Completed] ${subject || recipientName}`,
-        description: message || notes || 'Action Center communication dispatched.',
-        priority: 'Medium',
+        title: `[${channelLabel} Dispatched] ${subject || recipientName}`,
+        description: `Notification dispatched to ${primaryRecipient}.\nMessage: ${message}`,
+        category: 'COMMUNICATION',
+        priority: 'Low',
         status: 'Completed',
-        assignedToUserId: actor.id || actor.uuid || null,
+        assignedToUserId: actor.id || null,
         assignedToName: senderName,
         assignedTeam: 'Category Management',
         dueDate: new Date().toISOString(),
@@ -262,23 +292,32 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
         relatedEntityId: entityId,
         relatedEntityLabel: recipientName || entityId,
         notes: `Recipient: ${primaryRecipient} | Channel: ${channelUpper} | Delivery: ${deliveryStatus}`,
+        metadata: {
+          entityType,
+          entityId,
+          channel: channelUpper,
+          communicationId: record?.id || null,
+          deliveryStatus,
+          emailResult: results.email,
+          smsResult: results.sms,
+        },
       },
       actor
     );
   } catch (taskErr) {
-    logger.warn('Failed to record completed activity task for communication', {
-      error: taskErr.message,
-    });
+    logger.warn('Failed to record completed activity task for communication', { error: taskErr.message }, 'ACTION_CENTER_COMM');
   }
 
-  // 6. Schedule future follow-up task if requested
+  // 6. Optionally schedule follow-up internal task
   let followupTask = null;
+  let followupError = null;
   if (scheduleFollowup && scheduleFollowup.dueDate) {
     try {
       followupTask = await internalTaskQueries.createInternalTask(
         {
-          title: `[Follow-up] ${subject || recipientName}`,
-          description: scheduleFollowup.notes || message || 'Follow up on communication dispatch.',
+          title: scheduleFollowup.title || `[Follow-up] ${subject || recipientName}`,
+          description: scheduleFollowup.notes || (message ? `Follow-up on ${channelUpper} sent to ${primaryRecipient}.\nOriginal message: ${message}` : 'Follow up on communication dispatch.'),
+          category: 'FOLLOW_UP',
           priority: scheduleFollowup.priority || 'Medium',
           status: 'Pending',
           assignedToUserId: scheduleFollowup.assigneeId || actor.id || null,
@@ -288,45 +327,41 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
           relatedEntityType: String(entityType).toUpperCase(),
           relatedEntityId: entityId,
           relatedEntityLabel: recipientName || entityId,
-          notes: scheduleFollowup.notes || `Scheduled follow-up for communication #${record.id}`,
+          notes: scheduleFollowup.notes || `Scheduled follow-up for communication #${record?.id || ''}`,
+          metadata: {
+            entityType,
+            entityId,
+            sourceCommunicationId: record?.id || null,
+            scheduledBy: senderEmail,
+          },
         },
         actor
       );
-    } catch (fuErr) {
-      logger.warn('Failed to schedule follow-up task', { error: fuErr.message });
+    } catch (folErr) {
+      followupError = folErr.message;
+      logger.warn('Failed to schedule follow-up task for communication', { error: folErr.message }, 'ACTION_CENTER_COMM');
     }
   }
 
   return {
     success: overallSuccess,
+    partialSuccess,
     communication: record,
     emailResult: results.email,
     smsResult: results.sms,
     completedTask,
     followupTask,
+    followupError,
   };
 }
 
 /**
- * Retrieves communications history for an entity.
- * @param {Object} filter
- * @param {string} [filter.entityId]
- * @param {string} [filter.entityType]
- * @param {string} [filter.channel]
- * @param {number} [filter.page=1]
- * @param {number} [filter.pageSize=20]
- * @returns {Promise<Object>} List of communication records and pagination metadata
+ * Retrieves communications history for an entity or across all entities.
  */
 async function getActionCenterCommunications(filter = {}) {
   const { entityId, entityType, channel, page = 1, pageSize = 20 } = filter;
 
-  let records = [];
-  if (entityId) {
-    records = await paymentDuesQueries.getCommunicationHistory(entityId);
-  } else {
-    // If no specific entityId, retrieve all recent communications
-    records = await paymentDuesQueries.getCommunicationHistory('');
-  }
+  const records = await paymentDuesQueries.getCommunicationHistory(entityId || '');
 
   let filtered = Array.isArray(records) ? records : [];
 
@@ -363,5 +398,6 @@ module.exports = {
   renderActionCenterEmailHtml,
   dispatchActionCenterCommunication,
   getActionCenterCommunications,
+  escapeHtml,
+  sanitizeActionUrl,
 };
-

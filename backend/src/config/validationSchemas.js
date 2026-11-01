@@ -786,6 +786,8 @@ const VALIDATION_SCHEMAS = {
       type: 'string',
       required: false,
       maxLength: 255,
+      pattern: EMAIL_REGEX,
+      message: 'A valid recipient email address is required.',
     },
     recipientPhone: {
       type: 'string',

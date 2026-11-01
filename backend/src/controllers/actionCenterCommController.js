@@ -9,23 +9,43 @@ const actionCenterNotificationService = require('../services/actionCenterNotific
 const paymentDuesQueries = require('../db/paymentDuesQueries');
 
 /**
- * Resolves current actor from request authentication.
+ * Resolves verified actor strictly from authenticated session.
  */
 function resolveActor(req) {
-  if (req.user) {
-    return {
-      id: req.user.id || req.user.uuid || null,
-      name: req.user.fullName || req.user.name || req.user.email || 'Category Manager',
-      email: req.user.email || null,
-      role: req.user.role || 'category_manager',
-    };
-  }
+  const user = req?.user;
   return {
-    id: null,
-    name: req.headers['x-user-name'] || 'Category Manager',
-    email: req.headers['x-user-email'] || 'category.manager@procucev.com',
-    role: 'category_manager',
+    id: user?.id || user?.uuid || user?.sub || null,
+    name: user?.fullName || user?.name || user?.email || 'Category Manager',
+    email: user?.email || null,
   };
+}
+
+/**
+ * Verifies authenticity of inbound webhook callbacks.
+ */
+function verifyWebhookAuthenticity(req) {
+  const expectedSecret =
+    process.env.ACTION_CENTER_COMM_WEBHOOK_SECRET ||
+    process.env.ACTION_CENTER_WEBHOOK_SECRET ||
+    process.env.WEBHOOK_SECRET ||
+    'procucev-dlt-webhook-secret';
+
+  const providedSecret =
+    req?.headers?.['x-webhook-secret'] ||
+    req?.headers?.['x-signature'] ||
+    req?.headers?.['x-gateway-secret'] ||
+    req?.query?.secret ||
+    req?.body?.secret;
+
+  if (!providedSecret) {
+    return { valid: false, error: 'Missing webhook authentication signature.' };
+  }
+
+  if (providedSecret !== expectedSecret) {
+    return { valid: false, error: 'Invalid webhook authentication signature.' };
+  }
+
+  return { valid: true };
 }
 
 /**
@@ -34,6 +54,8 @@ function resolveActor(req) {
  */
 async function dispatchCommunication(req, res) {
   try {
+    const actor = resolveActor(req);
+
     const validation = validatePayload(
       VALIDATION_SCHEMAS.actionCenterCommunicationSend,
       req.body
@@ -64,16 +86,20 @@ async function dispatchCommunication(req, res) {
       });
     }
 
-    const actor = resolveActor(req);
     const result = await actionCenterNotificationService.dispatchActionCenterCommunication(
       validation.sanitizedData,
       actor
     );
 
-    logger.info(
-      `Action Center communication dispatched for ${validation.sanitizedData.entityType} ${validation.sanitizedData.entityId}`,
-      { actor: actor.email, channel, success: result.success },
-      'ACTION_CENTER_CONTROLLER'
+    logger.audit(
+      `[ACTION_CENTER_COMM] Dispatched ${channel} communication for ${validation.sanitizedData.entityType} ${validation.sanitizedData.entityId} by ${actor.email}`,
+      {
+        actor: actor.email,
+        channel,
+        recipientEmail,
+        recipientPhone,
+        success: result.success,
+      }
     );
 
     return res.status(200).json({
@@ -137,28 +163,49 @@ async function getCommunications(req, res) {
 
 /**
  * POST /api/action-center/communications/webhook
- * Receives delivery status and acknowledgement updates.
+ * Receives delivery status and acknowledgement updates using unique communication ID.
  */
 async function handleDeliveryWebhook(req, res) {
   try {
-    const { accountId, acknowledgementStatus, notes, deliveryStatus } = req.body || {};
-    if (!accountId) {
-      return res.status(400).json({ success: false, error: 'accountId is required.' });
+    const authCheck = verifyWebhookAuthenticity(req);
+    if (!authCheck.valid) {
+      logger.warn(`Rejected unauthorized delivery webhook: ${authCheck.error}`, {}, 'ACTION_CENTER_CONTROLLER');
+      return res.status(401).json({
+        success: false,
+        error: authCheck.error,
+      });
     }
 
-    const actor = resolveActor(req);
-    const finalStatus = acknowledgementStatus || 'Acknowledged';
+    const { communicationId, accountId, acknowledgementStatus, deliveryStatus, notes } = req.body || {};
+    const targetId = communicationId || accountId;
+
+    if (!targetId) {
+      return res.status(400).json({
+        success: false,
+        error: 'accountId is required.',
+      });
+    }
+
+    const finalAcknowledgement = acknowledgementStatus || 'Acknowledged';
+
     const updated = await paymentDuesQueries.updateAcknowledgementStatus({
-      accountId,
-      acknowledgementStatus: finalStatus,
-      notes: notes || `Webhook updated status to ${deliveryStatus || finalStatus}`,
-      updatedBy: actor.name,
+      ...(communicationId ? { communicationId } : {}),
+      ...(accountId ? { accountId } : {}),
+      acknowledgementStatus: finalAcknowledgement,
+      notes: notes || `Webhook updated status to ${finalAcknowledgement}`,
+      updatedBy: 'Category Manager',
     });
 
-    logger.info(
-      `Delivery webhook updated communication for account ${accountId}`,
-      { status: acknowledgementStatus, deliveryStatus },
-      'ACTION_CENTER_CONTROLLER'
+    if (!updated && communicationId) {
+      return res.status(404).json({
+        success: false,
+        error: `Communication record with ID '${communicationId}' was not found.`,
+      });
+    }
+
+    logger.audit(
+      `[ACTION_CENTER_WEBHOOK] Updated status for communication ${targetId}: ack=${finalAcknowledgement}`,
+      { communicationId, accountId, finalAcknowledgement }
     );
 
     return res.status(200).json({
@@ -180,4 +227,6 @@ module.exports = {
   dispatchCommunication,
   getCommunications,
   handleDeliveryWebhook,
+  resolveActor,
+  verifyWebhookAuthenticity,
 };

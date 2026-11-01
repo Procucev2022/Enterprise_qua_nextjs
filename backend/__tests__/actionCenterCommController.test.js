@@ -10,7 +10,9 @@ describe('actionCenterCommController', () => {
     req = {
       body: {},
       query: {},
-      headers: {},
+      headers: {
+        'x-webhook-secret': 'procucev-dlt-webhook-secret',
+      },
       user: null,
     };
     res = {
@@ -206,16 +208,14 @@ describe('actionCenterCommController', () => {
       dispatchSpy.mockRestore();
     });
 
-    it('covers resolveActor with custom headers when user is not present', async () => {
+    it('covers resolveActor with null user falling back to Category Manager', async () => {
       req.user = null;
-      req.headers['x-user-name'] = 'Header Manager';
-      req.headers['x-user-email'] = 'header.cm@procucev.com';
       req.body = {
         entityType: 'internal_task',
-        entityId: 'tsk-headers',
+        entityId: 'tsk-null-user',
         channel: 'EMAIL',
         recipientEmail: 'target@example.com',
-        message: 'Resolving actor headers test',
+        message: 'Resolving actor null test',
       };
 
       const dispatchSpy = jest
@@ -230,8 +230,8 @@ describe('actionCenterCommController', () => {
       expect(dispatchSpy).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
-          name: 'Header Manager',
-          email: 'header.cm@procucev.com',
+          name: 'Category Manager',
+          email: null,
         })
       );
 
@@ -352,6 +352,32 @@ describe('actionCenterCommController', () => {
   });
 
   describe('handleDeliveryWebhook', () => {
+    it('returns 401 when webhook authentication signature is missing', async () => {
+      req.headers = {};
+      await actionCenterCommController.handleDeliveryWebhook(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Missing webhook authentication signature.',
+        })
+      );
+    });
+
+    it('returns 401 when webhook authentication signature is invalid', async () => {
+      req.headers = { 'x-webhook-secret': 'invalid-secret' };
+      await actionCenterCommController.handleDeliveryWebhook(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Invalid webhook authentication signature.',
+        })
+      );
+    });
+
     it('returns 400 when req.body is undefined or null', async () => {
       req.body = undefined;
 
@@ -422,6 +448,32 @@ describe('actionCenterCommController', () => {
         accountId: 'acc-defaults',
         acknowledgementStatus: 'Acknowledged',
         notes: 'Webhook updated status to Acknowledged',
+        updatedBy: 'Category Manager',
+      });
+      expect(res.status).toHaveBeenCalledWith(200);
+
+      updateSpy.mockRestore();
+    });
+
+    it('returns 200 and passes communicationId when provided', async () => {
+      req.body = {
+        communicationId: 'comm-exact-99',
+        accountId: 'acc-101',
+        acknowledgementStatus: 'Delivered',
+        notes: 'Delivered to recipient',
+      };
+
+      const updateSpy = jest
+        .spyOn(paymentDuesQueries, 'updateAcknowledgementStatus')
+        .mockResolvedValueOnce({ id: 'comm-exact-99', acknowledgementStatus: 'Delivered' });
+
+      await actionCenterCommController.handleDeliveryWebhook(req, res);
+
+      expect(updateSpy).toHaveBeenCalledWith({
+        communicationId: 'comm-exact-99',
+        accountId: 'acc-101',
+        acknowledgementStatus: 'Delivered',
+        notes: 'Delivered to recipient',
         updatedBy: 'Category Manager',
       });
       expect(res.status).toHaveBeenCalledWith(200);

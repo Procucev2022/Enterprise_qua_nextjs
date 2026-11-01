@@ -645,6 +645,141 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         expect(updated.acknowledgementStatus).toBe('Acknowledged');
       });
 
+      test('updates acknowledgement status targeting communicationId in-memory and in DB', async () => {
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+        const comm = await paymentDuesQueries.recordCommunication({
+          accountId: 'b-comm-id',
+          accountType: 'buyer',
+          channel: 'email',
+          recipient: 'comm@example.com',
+          message: 'Targeted communication',
+        });
+
+        const updated = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: comm.id,
+          acknowledgementStatus: 'Acknowledged',
+          deliveryStatus: 'Delivered',
+          notes: 'Targeted note update',
+          updatedBy: 'Test Admin',
+        });
+
+        expect(updated).toBeDefined();
+        expect(updated.id).toBe(comm.id);
+        expect(updated.acknowledgementStatus).toBe('Acknowledged');
+        expect(updated.deliveryStatus).toBe('Delivered');
+        expect(updated.notes).toBe('Targeted note update');
+
+        // Target unknown communicationId
+        const notFound = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'non-existent-comm-id',
+          acknowledgementStatus: 'Acknowledged',
+        });
+        expect(notFound).toBeNull();
+
+        // Non-acknowledged status without notes
+        const pendingUpdated = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: comm.id,
+          acknowledgementStatus: 'Delivery Pending',
+          deliveryStatus: '',
+          notes: '',
+        });
+        expect(pendingUpdated.acknowledgementStatus).toBe('Delivery Pending');
+      });
+
+      test('updates acknowledgement status in DB targeting communicationId when pool has storage', async () => {
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+        const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({
+          rows: [
+            {
+              id: 'comm-db-target',
+              account_id: 'b-99',
+              account_type: 'buyer',
+              channel: 'email',
+              recipient: 'target@example.com',
+              subject: 'DB Sub',
+              message: 'DB Msg',
+              acknowledgement_status: 'Delivered',
+              delivery_status: 'Delivered',
+              notes: 'DB Notes',
+              acknowledged_by: null,
+              acknowledged_at: null,
+              sent_at: '2026-02-01T00:00:00Z',
+              created_at: '2026-02-01T00:00:00Z',
+              updated_at: '2026-02-01T00:00:00Z',
+            },
+          ],
+        });
+
+        const updated = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'comm-db-target',
+          acknowledgementStatus: 'Delivered',
+          deliveryStatus: 'Delivered',
+        });
+
+        expect(querySpy).toHaveBeenCalledWith(
+          expect.stringContaining('WHERE id = $'),
+          expect.anything()
+        );
+        expect(updated.id).toBe('comm-db-target');
+        expect(updated.acknowledgementStatus).toBe('Delivered');
+      });
+
+      test('fetches communication history from DB for all accounts when accountId is empty', async () => {
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+        const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({
+          rows: [
+            {
+              id: 'comm-all-db',
+              account_id: 'b-all-db',
+              account_type: 'buyer',
+              channel: 'email',
+              recipient: 'db@example.com',
+              subject: 'DB All',
+              message: 'DB Msg',
+              acknowledgement_status: 'Pending',
+              acknowledged_by: null,
+              acknowledged_at: null,
+              notes: 'Note',
+              metadata: '{}',
+              created_at: '2026-02-01T00:00:00Z',
+              updated_at: '2026-02-01T00:00:00Z',
+            },
+          ],
+        });
+
+        const allDb = await paymentDuesQueries.getCommunicationHistory('', { limit: 10, offset: 0 });
+        expect(querySpy).toHaveBeenCalledWith(
+          expect.stringContaining('ORDER BY sent_at DESC LIMIT $1 OFFSET $2'),
+          [10, 0],
+          expect.anything()
+        );
+        expect(allDb.length).toBe(1);
+      });
+
+      test('retrieves all communications across accounts when accountId is empty or wildcard', async () => {
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'acc-all-1',
+          accountType: 'buyer',
+          channel: 'email',
+          recipient: 'user1@example.com',
+          message: 'All history 1',
+        });
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'acc-all-2',
+          accountType: 'seller',
+          channel: 'sms',
+          recipient: '9876543210',
+          message: 'All history 2',
+        });
+
+        const allHistory = await paymentDuesQueries.getCommunicationHistory('', { limit: 10, offset: 0 });
+        expect(allHistory.length).toBeGreaterThanOrEqual(2);
+
+        const wildcardHistory = await paymentDuesQueries.getCommunicationHistory('*', { limit: 5, offset: 0 });
+        expect(wildcardHistory.length).toBeGreaterThanOrEqual(2);
+      });
+
       test('fetches communication history from DB when pool has storage', async () => {
         jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
         jest.spyOn(pool, 'query').mockResolvedValue({

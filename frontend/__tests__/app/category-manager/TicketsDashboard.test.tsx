@@ -716,5 +716,98 @@ describe('TicketsDashboard', () => {
     await waitFor(() => {
       expect(screen.getByText('Failed to add note.')).toBeInTheDocument();
     });
+
+  });
+  it('opens ActionCenterComposeModal from ticket details drawer, exercises fallbacks, and closes', async () => {
+    const minimalTicket = {
+      id: 't-minimal',
+      ticket_number: 'TCK-MIN-1',
+      subject: 'Minimal Fields Ticket',
+      description: 'Ticket with missing optional fields',
+      status: 'Open',
+      priority: 'Low',
+      category: null,
+      project: null,
+      customer_name: null,
+      customer_email: null,
+      customer_phone: null,
+      assigned_to_name: null,
+      assigned_team: null,
+      due_date: null,
+      sla_hours: 0,
+      activities: [
+        {
+          id: 'act-no-actor',
+          actor_name: null,
+          activity_type: 'SYSTEM',
+          comment: 'Auto-generated note without actor',
+          created_at: '2026-11-01T10:00:00.000Z',
+        },
+      ],
+    };
+
+    (ticketClient.fetchTickets as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: [minimalTicket],
+      total: 1,
+    });
+    (ticketClient.fetchTicketById as jest.Mock).mockResolvedValueOnce(minimalTicket);
+
+    render(<TicketsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('TCK-MIN-1')).toBeInTheDocument();
+    });
+
+    // Open drawer
+    const viewButtons = screen.getAllByTitle('View Details');
+    fireEvent.click(viewButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText('Auto-generated note without actor')).toBeInTheDocument();
+    });
+
+    // Click Send SMS / Email button in drawer
+    const sendCommBtn = screen.getByRole('button', { name: /Send SMS \/ Email/i });
+    fireEvent.click(sendCommBtn);
+
+    // Modal should be visible
+    await waitFor(() => {
+      expect(screen.getByText(/Action Center Communication/i)).toBeInTheDocument();
+    });
+
+    // Close modal via Cancel button
+    const cancelModalBtns = screen.getAllByRole('button', { name: /Cancel/i });
+    fireEvent.click(cancelModalBtns[0]);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Directly dispatch SMS alerts/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('exercises status and priority filter change handlers and fallback rendering', async () => {
+    render(<TicketsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('TCK-1001')).toBeInTheDocument();
+    });
+
+    // Toggle filter panel
+    const filterBtn = screen.getByRole('button', { name: /^Filter$/i });
+    fireEvent.click(filterBtn);
+
+    // Filter by Status dropdown
+    const statusSelect = screen.getByLabelText(/Filter by Status/i);
+    fireEvent.change(statusSelect, { target: { value: 'In_Progress' } });
+    fireEvent.change(statusSelect, { target: { value: 'All' } });
+
+    // Filter by Priority dropdown
+    const prioritySelect = screen.getByLabelText(/Filter by Priority/i);
+    fireEvent.change(prioritySelect, { target: { value: 'Critical' } });
+    fireEvent.change(prioritySelect, { target: { value: 'All' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('TCK-1001')).toBeInTheDocument();
+    });
   });
 });

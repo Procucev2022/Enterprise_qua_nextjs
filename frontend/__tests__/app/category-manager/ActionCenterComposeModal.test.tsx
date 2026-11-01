@@ -435,4 +435,140 @@ describe('ActionCenterComposeModal', () => {
     fireEvent.click(cancelButtons[1]);
     expect(mockOnClose).toHaveBeenCalledTimes(2);
   });
+
+  it('validates empty followupDueDate when scheduleFollowup is enabled', () => {
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="internal_task"
+        entityId="tsk-due"
+        defaultRecipientEmail="test@example.com"
+        defaultMessage="Test message"
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText(strings.scheduleFollowupCheckbox));
+    const form = container.querySelector('form')!;
+    fireEvent.submit(form);
+
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText(strings.validationFollowupDueDateRequired || 'A due date is required when scheduling a follow-up task.')).toBeInTheDocument();
+    expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
+  it('displays partial delivery banner when one channel succeeds and one fails', async () => {
+    mockDispatch.mockResolvedValueOnce({
+      success: false,
+      emailResult: { success: true },
+      smsResult: { success: false, error: 'Network timeout' },
+    });
+
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="ticket"
+        entityId="tkt-partial"
+        defaultChannel="BOTH"
+        defaultRecipientEmail="partial@example.com"
+        defaultRecipientPhone="9876543210"
+        defaultMessage="Partial test message"
+      />
+    );
+
+    const form = container.querySelector('form')!;
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/Partial delivery: Email: Sent \| SMS: Failed \(Network timeout\)/i)).toBeInTheDocument();
+    });
+  });
+
+  it('displays partial delivery banner when SMS succeeds and Email fails without error detail', async () => {
+    mockDispatch.mockResolvedValueOnce({
+      success: false,
+      emailResult: { success: false },
+      smsResult: { success: true },
+    });
+
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="ticket"
+        entityId="tkt-partial-sms"
+        defaultChannel="BOTH"
+        defaultRecipientEmail="partial@example.com"
+        defaultRecipientPhone="9876543210"
+        defaultMessage="Partial test message 2"
+      />
+    );
+
+    const form = container.querySelector('form')!;
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/Partial delivery: Email: Failed \(Unsent\) \| SMS: Sent/i)).toBeInTheDocument();
+    });
+  });
+
+  it('submits form with EMAIL channel and calls onSuccess and triggers onClose after delay', async () => {
+    jest.useFakeTimers();
+    mockDispatch.mockResolvedValueOnce({
+      success: true,
+      communication: { id: 'comm-email', channel: 'EMAIL' },
+    });
+
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        onSuccess={mockOnSuccess}
+        entityType="internal_task"
+        entityId="tsk-email"
+        defaultChannel="EMAIL"
+        defaultRecipientEmail="email@example.com"
+        defaultMessage="Email message"
+      />
+    );
+
+    const form = container.querySelector('form')!;
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(mockOnSuccess).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    });
+
+    act(() => {
+      jest.advanceTimersByTime(1300);
+    });
+
+    expect(mockOnClose).toHaveBeenCalled();
+    jest.useRealTimers();
+  });
+
+  it('allows changing followup priority and adding followup notes', () => {
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="internal_task"
+        entityId="tsk-opts"
+        defaultRecipientEmail="test@example.com"
+        defaultMessage="Test message"
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText(strings.scheduleFollowupCheckbox));
+    const prioritySelect = container.querySelector('#compose-followup-priority') as HTMLSelectElement;
+    fireEvent.change(prioritySelect, { target: { value: 'Critical' } });
+    expect(prioritySelect.value).toBe('Critical');
+
+    const notesInput = container.querySelector('#compose-followup-notes') as HTMLInputElement;
+    fireEvent.change(notesInput, { target: { value: 'Urgent follow-up note' } });
+    expect(notesInput.value).toBe('Urgent follow-up note');
+  });
 });

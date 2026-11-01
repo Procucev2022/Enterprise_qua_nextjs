@@ -537,7 +537,6 @@ describe('ManualRFQModal: header and item fields', () => {
     fireEvent.change(screen.getByLabelText(/Estimated Budget/i), { target: { value: '250000' } });
     const futureDate = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
     fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
-      target: { value: '2026-12-31' },
       target: { value: futureDate },
     });
     fillRow();
@@ -548,7 +547,6 @@ describe('ManualRFQModal: header and item fields', () => {
     const payload = rfqClient.createRFQ.mock.calls[0][0];
     expect(payload.title).toBe('Monsoon Pump Overhaul');
     expect(payload.budget).toBe(250000);
-    expect(payload.targetDeliveryDate).toBe('2026-12-31');
     expect(payload.targetDeliveryDate).toBe(futureDate);
   });
 

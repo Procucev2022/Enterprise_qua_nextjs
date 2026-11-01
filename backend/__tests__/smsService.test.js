@@ -459,7 +459,7 @@ describe('smsService Unit Tests', () => {
         mobile: '9157154504',
         message: 'Duplicate action',
       });
-      expect(throttled.success).toBe(true);
+      expect(throttled.success).toBe(false);
       expect(throttled.throttled).toBe(true);
 
       smsService.clearSmsThrottleCache();

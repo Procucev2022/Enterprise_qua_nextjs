@@ -3348,3 +3348,587 @@ Test results written to: coverage\test-results.json
 
 ❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
 PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
+
+
+---
+
+### User Prompt - 2026-11-01T17:52:48+05:30
+
+```text
+[Procucev2022](https://github.com/Procucev2022)left a comment
+Owner
+🤖 AI Code Review
+Risk level: medium | Findings: 1
+The PR implements multi-channel SMS and Email integration for the Action Center. There is a potential correctness issue with the delivery status webhook updating unrelated communication records due to querying by accountId instead of a unique communication/transaction ID.
+What changedAdded DLT-compliant SMS and multi-transport Email backend services and routes.
+Created Action Center communication REST API controller with dispatch, history, and webhook endpoints.
+Added frontend Compose Modal supporting tabbed channel selection and validation.
+Enforced test coverage gates.
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)
+const actor = resolveActor(req);
+const finalStatus = acknowledgementStatus || 'Acknowledged';
+const updated = await paymentDuesQueries.updateAcknowledgementStatus({
+[Procucev2022](https://github.com/Procucev2022)[41 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435434997)
+Owner
+🟠 HIGH · bug — Webhook updates records using accountId instead of communication ID
+The delivery status webhook uses paymentDuesQueries.updateAcknowledgementStatus passing accountId. In systems where an entity (ticket/task) receives multiple communications over its lifecycle, updating by accountId will modify all communication records associated with that entity rather than the specific dispatched message instance, causing status corruption on historical logs.
+Suggested change
+const updated = await paymentDuesQueries.updateAcknowledgementStatus({
+updateAcknowledgementStatus({ communicationId: accountId, ... })
+Reply...
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [35 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#pullrequestreview-5727893238)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+🟡 Changes recommended
+Unauthenticated communication routes and unsigned webhooks allow unauthorized messaging, access to private data, and tampering with communication records.
+16 open issues [Require authenticated, authorized access to dispatch and history routes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453882) · New
+[Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913) · New
+[Escape email content and validate action URLs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453932) · New
+[Check the mailer result object before reporting success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453938) · New
+[Validate email addresses before dispatch](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453950) · New
+[Write dispatch events at the audit log level](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453963) · New
+[Correlate callbacks and update delivery status separately](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453978) · New
+[Initialize recipients according to the selected channel](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453999) · New
+[Await provider sends and record their actual outcomes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454012) · New
+[Record sends as dispatched until delivery is confirmed](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454024) · New
+[Surface follow-up creation failures as partial success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454035) · New
+[Support history queries without an entity ID](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454050) · New
+[Report cooldown-suppressed notifications as unsent](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454069) · New
+[Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090) · New
+[Show per-channel results for partial dispatch failures](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454098) · New
+[Require a due date when follow-up scheduling is enabled](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454113) · New
+What changed in this PRAdds SMS and email communications to the Action Center, reusing existing mail, SMS, communication-history and internal-task services.
+Changes:
+Adds dispatch, history and delivery-webhook endpoints, plus Action Center SMS template configuration.
+Introduces a compose modal for tasks and tickets, with channel selection and optional follow-up scheduling.
+Adds buyer/supplier dispatch integration and tests for the new communication flows.
+File
+Description
+prompts.md
+Appends implementation request history.
+frontend/​lib/​validationSchemas.ts
+Adds communication-message validation rules.
+frontend/​lib/​uiStrings.ts
+Adds compose-modal labels and messages.
+frontend/​lib/​types.ts
+Defines communication payloads and results.
+frontend/​lib/​constants.ts
+Adds channel options and SMS length constant.
+frontend/​lib/​actionCenterCommClient.ts
+Adds dispatch and history API calls.
+frontend/​app/​category-manager/​internal-tasks.tsx
+Adds the task-dashboard compose action.
+frontend/​app/​category-manager/​components/​TicketsDashboard.tsx
+Adds ticket-specific communication composition.
+frontend/​app/​category-manager/​components/​ActionCenterComposeModal.tsx
+Implements composition and follow-up controls.
+frontend/​__tests__/​lib/​actionCenterCommClient.test.ts
+Tests client responses and errors.
+frontend/​__tests__/​app/​category-manager/​ActionCenterComposeModal.test.tsx
+Tests compose interactions and submission.
+frontend/​__tests__/​app/​buyer/​ManualRFQModal.test.tsx
+Updates a delivery-date fixture.
+backend/​src/​services/​smsService.js
+Adds Action Center SMS rendering and dispatch.
+backend/​src/​services/​actionCenterNotificationService.js
+Orchestrates sending, history and task creation.
+backend/​src/​routes/​index.js
+Mounts the communication router.
+backend/​src/​routes/​actionCenterCommunications.js
+Defines dispatch, history and webhook routes.
+backend/​src/​controllers/​vendorDossierExtensions.js
+Adds supplier email/SMS dispatch calls.
+backend/​src/​controllers/​buyerAccountController.js
+Adds buyer email/SMS dispatch calls.
+backend/​src/​controllers/​actionCenterCommController.js
+Handles communication requests and callbacks.
+backend/​src/​config/​validationSchemas.js
+Adds dispatch and history-query schemas.
+backend/​src/​config/​types.js
+Documents communication types and enums.
+backend/​src/​config/​constants.js
+Adds SMS template and communication constants.
+backend/​.env.example
+Replaces the RFQ template example with Action Center configuration.
+backend/​__tests__/​supplierProfileEnhancements.test.js
+Tests supplier dispatch calls and errors.
+backend/​__tests__/​smsService.test.js
+Tests Action Center gateway handling.
+backend/​__tests__/​actionCenterNotificationService.test.js
+Tests orchestration and history filtering.
+backend/​__tests__/​actionCenterCommRoutes.test.js
+Tests communication endpoints.
+backend/​__tests__/​actionCenterCommController.test.js
+Tests validation, responses and callbacks.
+Review effort: Balanced
+[backend/src/routes/actionCenterCommunications.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-04cc65372508ce081dcdfaff3793a8346e770b0b9ed267654e1a6a2663b744f8)
+const { optionalAuthenticate } = require('../middleware/auth');
+// POST /api/action-center/communications - Dispatch SMS/Email communication
+router.post('/', optionalAuthenticate, actionCenterCommController.dispatchCommunication);
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435453882)
+High
+Require authenticated, authorized access to dispatch and history routes
+Both dispatch and history retrieval allow missing or invalid sessions through optionalAuthenticate, and neither controller checks authorization. Anonymous callers can send platform email/SMS, create tasks under a header-supplied identity, and read an entity's messages, contacts and private notes. Require authenticated staff/entity permissions on both routes (including line 10), and derive the actor only from the verified session.
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/routes/actionCenterCommunications.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-04cc65372508ce081dcdfaff3793a8346e770b0b9ed267654e1a6a2663b744f8)
+router.get('/', optionalAuthenticate, actionCenterCommController.getCommunications);
+// POST /api/action-center/communications/webhook - Delivery status updates
+router.post('/webhook', actionCenterCommController.handleDeliveryWebhook);
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435453913)
+High
+Verify webhook authenticity before processing callbacks
+The webhook accepts unauthenticated, unsigned requests and immediately mutates communication records using the supplied account ID. Anyone can forge callbacks to mark communications delivered or overwrite notes. Require a shared secret (e.g., via an X-Webhook-Secret or signature header) configured through environment variables, and reject any requests failing verification before touching the database.
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-09b6b64d11bb7ce35fa3aa3f4eeb1d12fc66e2c38ce26b0ee693f4585c52e46b)
+const actionUrl = linkUrl || `${defaultFrontend}/category-manager/internal-tasks`;
+const formattedEntity = String(entityType).replace(/_/g, ' ').toUpperCase();
+return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${subject}</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 0; color: #1e293b; }
+.container { max-width: 600px; margin: 24px auto; background: #ffffff; border-radius: 8px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.04); }
+.header { background: #0f172a; padding: 24px; text-align: center; }
+.header img { height: 32px; width: auto; }
+.content { padding: 32px 24px; }
+.badge { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 4px 10px; border-radius: 9999px; background: #eff6ff; color: #2563eb; margin-bottom: 16px; }
+.title { font-size: 20px; font-weight: 700; color: #0f172a; margin: 0 0 16px 0; line-height: 1.3; }
+.message-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 16px; margin: 20px 0; font-size: 14px; line-height: 1.6; color: #334155; }
+.btn-container { text-align: center; margin: 28px 0; }
+.btn { display: inline-block; background: #2563eb; color: #ffffff !important; text-decoration: none; padding: 12px 28px; border-radius: 6px; font-weight: 600; font-size: 14px; }
+.footer { border-top: 1px solid #e2e8f0; padding: 20px 24px; text-align: center; font-size: 12px; color: #94a3b8; background: #f8fafc; }
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<img src="${logoUrl}" alt="Procucev Enterprise" />
+</div>
+<div class="content">
+<div class="badge">${formattedEntity} ALERT</div>
+<h1 class="title">${subject}</h1>
+<p style="font-size: 14px; color: #334155;">Dear <strong>${recipientName}</strong>,</p>
+<div class="message-box">${message}</div>
+<div class="btn-container">
+<a href="${actionUrl}" class="btn" target="_blank" rel="noopener noreferrer">View in Action Center</a>
+</div>
+<p style="font-size: 13px; color: #64748b; margin-top: 24px;">
+Sent by <strong>${senderName}</strong> via Procucev Enterprise Action Center.
+</p>
+</div>
+<div class="footer">
+© ${new Date().getFullYear()} Procucev Inc. All rights reserved. • This is an automated enterprise transaction alert.
+</div>
+</div>
+</body>
+</html>`;
+}
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435453932)
+High
+Escape email content and validate action URLs
+User-provided values (subject, recipientName, message, senderName) and a caller-controlled linkUrl are interpolated directly into the HTML body and href attribute without escaping. An attacker who can dispatch notifications can inject arbitrary HTML or JavaScript via email clients or phish users via javascript: or unvalidated URLs. Escape all dynamic strings before building the template and validate actionUrl to only allow permitted schemes (http:/https:) or platform domains.
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-09b6b64d11bb7ce35fa3aa3f4eeb1d12fc66e2c38ce26b0ee693f4585c52e46b)
+if (mailerService.deliver && typeof mailerService.deliver === 'function') {
+await mailerService.deliver(emailPayload);
+}
+results.email = { success: true, recipient: recipientEmail };
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435453938)
+High
+Check the mailer result object before reporting success
+mailerService.deliver does not throw when sending fails; it catches transport errors and returns { sent: false, reason, error }. Lines 160-163 ignore that return value and unconditionally treat the send as successful, recording delivery as completed even when the message bounced or failed transport. Inspect deliver's result, propagate failures into results.email, and reflect them in the persisted communication and response status.
+Suggested changeset 1 (1)
+backend/src/services/actionCenterNotificationService.js
+Original file line number
+Diff line number
+Diff line change
+if (mailerService.deliver && typeof mailerService.deliver === 'function') {
+const sendResult = await mailerService.deliver(emailPayload);
+if (sendResult && !sendResult.sent) {
+results.email = { success: false, recipient: recipientEmail, error: sendResult.reason || sendResult.error };
+} else {
+results.email = { success: true, recipient: recipientEmail };
+}
+} else {
+results.email = { success: true, recipient: recipientEmail };
+}
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/config/validationSchemas.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-74c1064ae02ce852f87d4692461a5b47a06663f7fe700142fa91ae79685934a3)
+recipientEmail: {
+type: 'string',
+trim: true,
+lowercase: true,
+max: 254,
+},
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435453950)
+Medium
+Validate email addresses before dispatch
+recipientEmail only checks type, trim, and length, so malformed strings pass validation and reach the transport. Add pattern: EMAIL_REGEX to match the other email schemas.
+Suggested changeset 1 (1)
+backend/src/config/validationSchemas.js
+Original file line number
+Diff line number
+Diff line change
+recipientEmail: {
+type: 'string',
+trim: true,
+lowercase: true,
+max: 254,
+pattern: EMAIL_REGEX,
+message: 'A valid recipient email address is required.',
+},
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)
+logger.info(
+`[ACTION_CENTER_COMM] Dispatched ${channel} communication for ${validation.sanitizedData.entityType} ${validation.sanitizedData.entityId} by ${actor.email}`,
+{
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435453963)
+Medium
+Write dispatch events at the audit log level
+Engineering standards require audit logs to capture compliance and security events such as messaging dispatches. These dispatch records are written with logger.info, bypassing audit log capture and retention. Use logger.audit so communication events are routed into audit.log.
+Suggested changeset 1 (1)
+backend/src/controllers/actionCenterCommController.js
+Original file line number
+Diff line number
+Diff line change
+logger.audit(
+`[ACTION_CENTER_COMM] Dispatched ${channel} communication for ${validation.sanitizedData.entityType} ${validation.sanitizedData.entityId} by ${actor.email}`,
+{
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)
+const { accountId, acknowledgementStatus, deliveryStatus, notes } = req.body || {};
+if (!accountId) {
+return res.status(400).json({
+success: false,
+error: 'accountId is required.',
+});
+}
+const actor = resolveActor(req);
+const finalStatus = acknowledgementStatus || 'Acknowledged';
+const updated = await paymentDuesQueries.updateAcknowledgementStatus({
+accountId,
+acknowledgementStatus: finalStatus,
+notes: notes || `Webhook updated status to ${finalStatus}`,
+updatedBy: actor.name || 'Category Manager',
+});
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435453978)
+Medium
+Correlate callbacks and update delivery status separately
+The webhook accepts an incoming deliveryStatus (line 144) but discards it, instead applying only acknowledgementStatus (or defaulting to 'Acknowledged') and leaving deliveryStatus unrecorded. Additionally, it mutates records using accountId instead of correlating to a specific communication ID. Accept a communication/message identifier, update deliveryStatus and acknowledgementStatus appropriately, and avoid applying provider-level status updates across all records for an account.
+Copilot uses AI. Check for mistakes.
+Reply...
+[frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)
+defaultRecipientName = '',
+defaultRecipientEmail = '',
+defaultRecipientPhone = '',
+defaultSubject = '',
+defaultMessage = '',
+defaultChannel = 'EMAIL',
+onSuccess,
+}: ActionCenterComposeModalProps) {
+const strings = UI_STRINGS.actionCenter.communicationModal;
+const [channel, setChannel] = useState<ActionCenterCommChannel>(defaultChannel);
+const [recipientName, setRecipientName] = useState(defaultRecipientName);
+const [recipientEmail, setRecipientEmail] = useState(defaultRecipientEmail);
+const [recipientPhone, setRecipientPhone] = useState(defaultRecipientPhone);
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435453999)
+Medium
+Initialize recipients according to the selected channel
+When defaultChannel is SMS, the compose form pre-populates recipientEmail but leaves recipientPhone empty (and vice versa for EMAIL), requiring the user to re-enter contact information. Determine recipient fields from the selected channel so the relevant recipient contact is loaded.
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/controllers/buyerAccountController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-16cfa557169bb88d8dbf436d65be8e25d29158c56e3ee41cb02c349cb1905c74)
+actionCenterNotificationService
+.dispatchActionCenterCommunication(
+{
+entityType: 'buyer_account',
+entityId: buyerId,
+channel: 'EMAIL',
+recipientEmail: recipientEmail.trim(),
+recipientName: buyer?.name || buyer?.company_name || 'Buyer',
+subject: `Action Required: Buyer Account Update (${buyerId})`,
+message: `An administrative action has taken place on your buyer account. Status is now: ${status}.`,
+notes: 'Dispatched via buyer account update workflow.',
+},
+actor
+)
+.catch((dispatchErr) => {
+logger.warn(
+'Failed to dispatch Action Center notification on buyer account status change',
+{ error: dispatchErr.message, buyerId }
+);
+});
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435454012)
+Medium
+Await provider sends and record their actual outcomes
+The notification dispatch is fired asynchronously (.catch(...)) without awaiting the result, so the caller sends a 200 response and creates audit records before delivery is confirmed. If dispatch fails, the client is unaware and the record cannot reflect the failure. Await dispatchActionCenterCommunication and log/report the outcome accurately.
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-09b6b64d11bb7ce35fa3aa3f4eeb1d12fc66e2c38ce26b0ee693f4585c52e46b)
+deliveryStatus: overallSuccess ? 'Sent' : 'Failed',
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435454024)
+Medium
+Record sends as dispatched until delivery is confirmed
+Communication records are persisted with deliveryStatus: 'Sent' immediately after handover to the provider gateway. For asynchronous channels (SMS carriers, queued email), this misrepresents the message as delivered when it is only submitted. Use 'Dispatched' or 'Submitted' until webhooks/receipts confirm delivery, or differentiate between dispatch and delivery status.
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-09b6b64d11bb7ce35fa3aa3f4eeb1d12fc66e2c38ce26b0ee693f4585c52e46b)
+if (scheduleFollowup && scheduleFollowup.dueDate) {
+try {
+followupTask = await internalTaskQueries.createInternalTask(
+{
+title: `[Follow-up] ${subject || recipientName}`,
+description: scheduleFollowup.notes || message || 'Follow up on communication dispatch.',
+priority: scheduleFollowup.priority || 'Medium',
+status: 'Pending',
+assignedToUserId: scheduleFollowup.assigneeId || actor.id || null,
+assignedToName: scheduleFollowup.assigneeName || senderName,
+assignedTeam: 'Category Management',
+dueDate: scheduleFollowup.dueDate,
+relatedEntityType: String(entityType).toUpperCase(),
+relatedEntityId: entityId,
+relatedEntityLabel: recipientName || entityId,
+notes: scheduleFollowup.notes || `Scheduled follow-up for communication #${record.id}`,
+},
+actor
+);
+} catch (fuErr) {
+logger.warn('Failed to schedule follow-up task', { error: fuErr.message });
+}
+}
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435454035)
+Medium
+Surface follow-up creation failures as partial success
+When follow-up creation fails, the error is caught and logged, but overall success: true is returned with followupTask: null. The caller believes the follow-up was scheduled when it was not. Surface this partial success/warning to the caller so the UI can notify the user.
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-09b6b64d11bb7ce35fa3aa3f4eeb1d12fc66e2c38ce26b0ee693f4585c52e46b)
+if (entityId) {
+records = await paymentDuesQueries.getCommunicationHistory(entityId);
+} else {
+// If no specific entityId, retrieve all recent communications
+records = await paymentDuesQueries.getCommunicationHistory('');
+}
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435454050)
+Medium
+Support history queries without an entity ID
+When entityId is omitted, getCommunicationHistory('') is queried, which in SQL filters WHERE account_id = '' and returns no records rather than all records. Update the query/service so passing no entity retrieves recent history across entities, with appropriate pagination.
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/services/smsService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-75b5b9e0750fc33560b37996c9cae31301bc6c1e3067888dd863b15c7ecfa040)
+if (isRateLimited(cleanPhone)) {
+logger.warn(`[SMS_SERVICE] Action Center SMS throttled: ${cleanPhone} requested within 30s cooldown`);
+return {
+success: true,
+throttled: true,
+message: 'SMS dispatch skipped: 30s cooldown active for this recipient',
+};
+}
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435454069)
+Medium
+Report cooldown-suppressed notifications as unsent
+The cooldown throttle branch returns { success: true, throttled: true, ... }, so callers and downstream records treat the notification as successfully sent even though no SMS was ever transmitted. Set success: false when throttling kicks in so dispatches are accurately logged and callers can retry.
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/services/smsService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-75b5b9e0750fc33560b37996c9cae31301bc6c1e3067888dd863b15c7ecfa040)
+const cleanMessage = String(message).trim().replace(/[\r\n\t]+/g, ' ');
+const smsText = `PROCUCEV: Dear ${recipientName}, ${cleanMessage} View: ${actionUrl}`.slice(0, 160);
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435454090)
+Medium
+Prevent silent truncation of accepted SMS messages
+The outgoing message is silently truncated at 160 characters via .slice(0, 160). For longer messages, recipients receive incomplete sentences and truncated URLs, breaking the call-to-action without notifying the caller. Either reject messages exceeding the DLT single-unit limit, support multi-part concatenation, or warn the caller that truncation occurred.
+Copilot uses AI. Check for mistakes.
+Reply...
+[frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)
+if (result.success) {
+const channelLabel =
+channel === 'BOTH'
+? strings.channelBoth
+: channel === 'SMS'
+? strings.channelSms
+: strings.channelEmail;
+const successText = formatString(strings.successToast, { channel: channelLabel });
+setToastMessage(successText);
+if (onSuccess) {
+onSuccess(result);
+}
+setTimeout(() => {
+onClose();
+}, 1200);
+} else {
+setFormError(result.error || strings.errorToast);
+}
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435454098)
+Medium
+Show per-channel results for partial dispatch failures
+When sending to BOTH channels and one fails, result.success is false and only a generic error banner is shown. The user cannot tell which channel succeeded and which failed. Surface per-channel results so users can distinguish successful sends from failures before retrying.
+Copilot uses AI. Check for mistakes.
+Reply...
+[frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)
+</label>
+<input
+id="compose-followup-date"
+type="date"
+Copilot commented 35 minutes ago
+CopilotAI
+[35m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#discussion_r4435454113)
+Medium
+Require a due date when follow-up scheduling is enabled
+When follow-up scheduling is checked, the due date is still optional. Submitting with it blank silently omits scheduleFollowup and shows success without creating the requested task. Require a due date while the follow-up section is enabled.
+Suggested changeset 1 (1)
+frontend/app/category-manager/components/ActionCenterComposeModal.tsx
+Original file line number
+Diff line number
+Diff line change
+<input
+id="compose-followup-date"
+type="date"
+required
+value={followupDueDate}
+onChange={(e) => setFollowupDueDate(e.target.value)}
+className="w-full text-xs px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+Copilot uses AI. Check for mistakes.
+Reply...
+[github-actions](https://github.com/apps/github-actions) Botcommented[35 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#issuecomment-6557503587)
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: FAILED
+291 / 292 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+4319
+4319
+0
+0
+frontend
+3453
+3453
+0
+0
+Workspace
+7772
+7772
+0
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.82%
+92.56%
+99.17%
+99.47%
+132 / 132
+frontend
+98.06%
+93.31%
+98.27%
+98.76%
+159 / 160
+Workspace
+98.44%
+92.91%
+98.59%
+99.12%
+291 / 292
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+PASSED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+FAILED
+Frontend per-file coverage
+FAILED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+Coverage failures
+frontend: app/category-manager/components/TicketsDashboard.tsx: branches 85.22% < 90%.
+[Merge branch 'main' into feat/action-center-sms-email-integration](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/e0323cf8c137116933f0c9042299660ff004e6ba)
+[e0323cf](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/e0323cf8c137116933f0c9042299660ff004e6ba)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [now](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/#event-34830401447)
+This branch has not been deployed
+No deployments
+Merge info
+Review requested
+Review has been requested on this pull request. It is not required to merge. [Learn more about requesting a pull request review.](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/requesting-a-pull-request-review)
+Some checks haven't completed yet
+3 in progress, 1 successful checks
+in progress checks
+Loading
+[Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41306167541/job/124846873727?pr=390)
+Started now — This check has started...
+Loading
+[Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41306167553/job/124846873780?pr=390)
+Started now — This check has started...
+Required
+Loading
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41306167553/job/124846873999?pr=390)
+Started now — This check has started...
+Required
+successful checks
+[Request Copilot Review / request-copilot-review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41306167577/job/124846873804?pr=390)
+Successful in 4s
+Required
+Merging is blocked
+A conversation must be resolved before this pull request can be merged.
+You can also merge this with the command line.
+
+solve the AI review
+```
