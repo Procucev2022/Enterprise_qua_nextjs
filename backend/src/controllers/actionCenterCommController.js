@@ -66,6 +66,21 @@ function verifyWebhookAuthenticity(req) {
 }
 
 /**
+ * Express middleware enforcing webhook signature authentication before invoking delivery webhook handlers.
+ */
+function verifyWebhookSignature(req, res, next) {
+  const authCheck = verifyWebhookAuthenticity(req);
+  if (!authCheck.valid) {
+    logger.warn(`Rejected unauthorized delivery webhook: ${authCheck.error}`, {}, 'ACTION_CENTER_CONTROLLER');
+    return res.status(401).json({
+      success: false,
+      error: authCheck.error,
+    });
+  }
+  return next();
+}
+
+/**
  * POST /api/action-center/communications
  * Dispatches an SMS, Email, or multi-channel communication from Action Center.
  */
@@ -86,7 +101,8 @@ async function dispatchCommunication(req, res) {
       });
     }
 
-    const { channel, recipientEmail, recipientPhone } = validation.sanitizedData;
+    const channel = (validation.sanitizedData.channel || '').toUpperCase();
+    const { recipientEmail, recipientPhone } = validation.sanitizedData;
 
     // Contact requirement assertions based on selected channel
     if ((channel === 'EMAIL' || channel === 'BOTH') && !recipientEmail) {
@@ -103,8 +119,13 @@ async function dispatchCommunication(req, res) {
       });
     }
 
+    const payload = {
+      ...validation.sanitizedData,
+      channel,
+    };
+
     const result = await actionCenterNotificationService.dispatchActionCenterCommunication(
-      validation.sanitizedData,
+      payload,
       actor
     );
 
@@ -252,4 +273,5 @@ module.exports = {
   resolveActor,
   timingSafeCompare,
   verifyWebhookAuthenticity,
+  verifyWebhookSignature,
 };

@@ -779,7 +779,7 @@ const VALIDATION_SCHEMAS = {
     channel: {
       type: 'string',
       required: true,
-      enum: ['EMAIL', 'SMS', 'BOTH'],
+      enum: ['EMAIL', 'SMS', 'BOTH', 'email', 'sms', 'both'],
       message: 'Channel must be EMAIL, SMS, or BOTH.',
     },
     recipientEmail: {

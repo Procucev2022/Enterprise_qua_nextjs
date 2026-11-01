@@ -112,6 +112,29 @@ describe('actionCenterCommController', () => {
 
       dispatchSpy.mockRestore();
     });
+    it('returns 404 when communicationId was provided but record not found', async () => {
+      req.body = {
+        communicationId: 'comm-nonexistent',
+        acknowledgementStatus: 'Delivered',
+      };
+
+      const updateSpy = jest
+        .spyOn(paymentDuesQueries, 'updateAcknowledgementStatus')
+        .mockResolvedValueOnce(null);
+
+      await actionCenterCommController.handleDeliveryWebhook(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: "Communication record with ID 'comm-nonexistent' was not found.",
+        })
+      );
+
+      updateSpy.mockRestore();
+    });
+
 
     it('covers resolveActor with uuid and name fallback', async () => {
       req.user = { uuid: 'uuid-999', name: 'Agent Smith' };
@@ -567,6 +590,65 @@ describe('actionCenterCommController', () => {
       expect(actionCenterCommController.timingSafeCompare(null, 'secret')).toBe(false);
       expect(actionCenterCommController.timingSafeCompare('secret', undefined)).toBe(false);
       expect(actionCenterCommController.timingSafeCompare(123, 123)).toBe(false);
+    });
+  });
+
+  describe('verifyWebhookSignature middleware', () => {
+    it('calls next() when webhook signature is valid', () => {
+      const next = jest.fn();
+      req.headers['x-webhook-secret'] = 'procucev-dlt-webhook-secret';
+      actionCenterCommController.verifyWebhookSignature(req, res, next);
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 when webhook signature is missing or invalid', () => {
+      const next = jest.fn();
+      req.headers['x-webhook-secret'] = 'wrong-secret';
+      actionCenterCommController.verifyWebhookSignature(req, res, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Invalid webhook authentication signature.',
+        })
+      );
+    });
+  });
+
+  describe('dispatchCommunication channel handling', () => {
+    it('normalizes lowercase channel and dispatches successfully', async () => {
+      req.user = { id: 'u-1', fullName: 'Navin Lead', email: 'navin@procucev.com' };
+      req.body = {
+        entityType: 'ticket',
+        entityId: 'tkt-200',
+        channel: 'email',
+        recipientEmail: 'client@example.com',
+        recipientName: 'Client X',
+        subject: 'Resolution ETA',
+        message: 'We are investigating your issue.',
+      };
+
+      const dispatchSpy = jest
+        .spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication')
+        .mockResolvedValueOnce({
+          success: true,
+          communication: { id: 'comm-123' },
+          emailResult: { success: true },
+        });
+
+      await actionCenterCommController.dispatchCommunication(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(dispatchSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: 'EMAIL',
+        }),
+        expect.any(Object)
+      );
+
+      dispatchSpy.mockRestore();
     });
   });
 });

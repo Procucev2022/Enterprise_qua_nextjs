@@ -10,6 +10,10 @@ router.post('/', authenticate, requireRole('admin', 'category_manager'), actionC
 router.get('/', authenticate, requireRole('admin', 'category_manager'), actionCenterCommController.getCommunications);
 
 // POST /api/action-center/communications/webhook - Signed/Authenticated delivery status updates
-router.post('/webhook', actionCenterCommController.handleDeliveryWebhook);
+router.post(
+  '/webhook',
+  actionCenterCommController.verifyWebhookSignature,
+  actionCenterCommController.handleDeliveryWebhook
+);
 
 module.exports = router;
