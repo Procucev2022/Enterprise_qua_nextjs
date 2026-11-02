@@ -242,6 +242,20 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
       message: 'Extension hours must be 24 or 48.',
     },
   },
+
+  actionCenterCommunicationSend: {
+    message: {
+      required: true,
+      minLength: 1,
+      maxLength: 5000,
+      message: UI_STRINGS.actionCenter.communicationModal.validationMessageRequired,
+    },
+    recipientPhone: {
+      required: false,
+      pattern: INDIAN_MOBILE_PATTERN,
+      message: UI_STRINGS.actionCenter.communicationModal.validationPhoneRequired,
+    },
+  },
 };
 
 

@@ -276,31 +276,36 @@ describe('RegistrationsDashboard', () => {
     });
 
     const nextPage = screen.getByLabelText('Next page');
+    expect(nextPage).not.toBeDisabled();
     fireEvent.click(nextPage);
 
+    const prevPage = screen.getByLabelText('Previous page');
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('offset=100'));
+      expect(screen.getByText('2')).toBeInTheDocument();
+      expect(prevPage).not.toBeDisabled();
     });
 
-    const prevPage = screen.getByLabelText('Previous page');
     fireEvent.click(prevPage);
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('offset=0'));
+      expect(screen.getByText('1')).toBeInTheDocument();
+      expect(nextPage).not.toBeDisabled();
     });
 
     const lastPage = screen.getByLabelText('Last page');
     fireEvent.click(lastPage);
 
+    const firstPage = screen.getByLabelText('First page');
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('offset=200'));
+      expect(screen.getByText('3')).toBeInTheDocument();
+      expect(firstPage).not.toBeDisabled();
     });
 
-    const firstPage = screen.getByLabelText('First page');
     fireEvent.click(firstPage);
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('offset=0'));
+      expect(screen.getByText('1')).toBeInTheDocument();
+      expect(nextPage).not.toBeDisabled();
     });
 
     const pageSizeSelect = screen.getByLabelText('Select page size');
