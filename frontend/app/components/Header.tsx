@@ -131,7 +131,9 @@ export default function Header() {
   // fallback.
   const currentOrgName = resolveSessionOrgName(currentUserSession, activeBuyerAccount);
 
-  // Session timeout state: 3 hours for category manager (10800s), standard 30 minutes for other roles (1800s)
+  // Session duration: 3 hours for Category Manager (10800s); 30 minutes for standard roles (1800s)
+  const isBuyerOrVendorRole = currentRole === 'buyer' || currentRole === 'vendor';
+  const INACTIVITY_LIMIT_SECONDS = 5 * 60; // 5 minutes inactivity limit for Buyer & Vendor
   const SESSION_DURATION_SECONDS = currentRole === 'category_manager' ? 3 * 60 * 60 : 30 * 60;
   const [sessionSecondsLeft, setSessionSecondsLeft] = useState<number>(SESSION_DURATION_SECONDS);
 
@@ -178,6 +180,37 @@ export default function Header() {
     showToast('Session Extended', `Your session has been extended by ${durationLabel}.`, 'info');
   }, [SESSION_DURATION_SECONDS, currentRole, showToast]);
 
+  // User activity tracker: resets the 5-minute inactivity countdown on any interaction for Buyer & Vendor
+  useEffect(() => {
+    if (!isLoggedIn || !isBuyerOrVendorRole) return;
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('procucev_last_user_activity', String(Date.now()));
+    }
+
+    let lastThrottle = Date.now();
+    const handleUserInteraction = () => {
+      const now = Date.now();
+      if (now - lastThrottle > 1000) {
+        lastThrottle = now;
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('procucev_last_user_activity', String(now));
+          // Reset session duration when user is actively working so they never get logged out mid-work
+          const newExpiresAt = now + SESSION_DURATION_SECONDS * 1000;
+          localStorage.setItem('procucev_session_expires_at', String(newExpiresAt));
+        }
+        setSessionSecondsLeft(SESSION_DURATION_SECONDS);
+      }
+    };
+
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart', 'click', 'input'];
+    events.forEach((ev) => window.addEventListener(ev, handleUserInteraction, { passive: true }));
+
+    return () => {
+      events.forEach((ev) => window.removeEventListener(ev, handleUserInteraction));
+    };
+  }, [isLoggedIn, isBuyerOrVendorRole, SESSION_DURATION_SECONDS]);
+
   useEffect(() => {
     if (!isLoggedIn) return;
 
@@ -197,8 +230,21 @@ export default function Header() {
 
     const interval = setInterval(() => {
       if (typeof window === 'undefined') return;
-      const stored = localStorage.getItem('procucev_session_expires_at');
       const now = Date.now();
+
+      // Check 5-minute inactivity specifically for Buyer and Vendor
+      if (isBuyerOrVendorRole) {
+        const lastActivityStored = localStorage.getItem('procucev_last_user_activity');
+        const lastActivity = lastActivityStored ? Number(lastActivityStored) : now;
+        const inactiveSeconds = Math.floor((now - lastActivity) / 1000);
+        if (inactiveSeconds >= INACTIVITY_LIMIT_SECONDS) {
+          clearInterval(interval);
+          handleAutoLogout();
+          return;
+        }
+      }
+
+      const stored = localStorage.getItem('procucev_session_expires_at');
       const expiresAt = stored ? Number(stored) : now + SESSION_DURATION_SECONDS * 1000;
       const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
       setSessionSecondsLeft(remaining);
@@ -372,7 +418,7 @@ export default function Header() {
           <div
             data-testid="header-session-timer"
             onClick={handleExtendSession}
-            title={`Active Session: ${formatSessionCountdown(sessionSecondsLeft)} remaining. Click to extend by ${currentRole === 'category_manager' ? '3 hrs' : '30 mins'}.`}
+            title={`Active Session: ${formatSessionCountdown(sessionSecondsLeft)} remaining. ${isBuyerOrVendorRole ? 'Logs out after 5 mins of inactivity. Active work resets session. Click to extend by 30 mins.' : `Click to extend by ${currentRole === 'category_manager' ? '3 hrs' : '30 mins'}.`}`}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {
