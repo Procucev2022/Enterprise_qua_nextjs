@@ -508,6 +508,10 @@ async function updateAcknowledgementStatus({
               acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
               updated_at = $4
           WHERE id = $6
+             OR metadata->>'gatewayMessageId' = $6
+             OR metadata->>'msgid' = $6
+             OR metadata->'smsResult'->>'messageId' = $6
+             OR metadata->'emailResult'->>'messageId' = $6
           RETURNING *
         `
         : `
@@ -559,7 +563,15 @@ async function updateAcknowledgementStatus({
   // Update in-memory storage
   if (communicationId) {
     for (const list of inMemoryCommunications.values()) {
-      const found = list.find((item) => item.id === communicationId || item.metadata?.gatewayMessageId === communicationId || item.metadata?.msgid === communicationId);
+      const found = list.find(
+        (item) =>
+          item.id === communicationId ||
+          item.metadata?.gatewayMessageId === communicationId ||
+          item.metadata?.msgid === communicationId ||
+          item.metadata?.messageId === communicationId ||
+          item.metadata?.smsResult?.messageId === communicationId ||
+          item.metadata?.emailResult?.messageId === communicationId
+      );
       if (found) {
         if (acknowledgementStatus) found.acknowledgementStatus = acknowledgementStatus;
         if (deliveryStatus) found.deliveryStatus = deliveryStatus;
@@ -691,18 +703,18 @@ async function queryCommunications({
   let paramIdx = 1;
 
   if (accountId && !isCrossAccount) {
-    conditions.push(`account_id = ${paramIdx++}`);
+    conditions.push(`account_id = $${paramIdx++}`);
     params.push(accountId);
   }
 
   if (entityType) {
-    conditions.push(`(LOWER(account_type) = LOWER(${paramIdx}) OR LOWER(metadata->>'entityType') = LOWER(${paramIdx}))`);
+    conditions.push(`(LOWER(account_type) = LOWER($${paramIdx}) OR LOWER(metadata->>'entityType') = LOWER($${paramIdx}))`);
     paramIdx++;
     params.push(entityType);
   }
 
   if (channel && channel !== 'ALL') {
-    conditions.push(`UPPER(channel) = UPPER(${paramIdx++})`);
+    conditions.push(`UPPER(channel) = UPPER($${paramIdx++})`);
     params.push(channel);
   }
 
@@ -714,7 +726,7 @@ async function queryCommunications({
       const countResult = await pool.query(countSql, params, { d1: true, d1Text: countSql });
       const total = Number(countResult?.rows?.[0]?.total || 0);
 
-      const dataSql = `SELECT * FROM payment_dues_communications ${whereClause} ORDER BY sent_at DESC LIMIT ${paramIdx++} OFFSET ${paramIdx++}`;
+      const dataSql = `SELECT * FROM payment_dues_communications ${whereClause} ORDER BY sent_at DESC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
       const dataParams = [...params, pLimit, pOffset];
       const dataResult = await pool.query(dataSql, dataParams, { d1: true, d1Text: dataSql });
       const rows = Array.isArray(dataResult?.rows) ? dataResult.rows : [];

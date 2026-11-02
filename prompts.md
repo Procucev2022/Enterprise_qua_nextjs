@@ -4525,3 +4525,636 @@ A conversation must be resolved before this pull request can be merged.
 
 merge is not done because of Ai review please fix this
 ```
+
+
+---
+
+### Prompt 23
+
+**Timestamp**: 2026-11-02T10:18:45+05:30
+
+```text
+🤖 AI Code Review
+Risk level: medium | Findings: 1
+The PR implements multi-channel SMS and Email integration for the Action Center. There is a potential correctness issue with the delivery status webhook updating unrelated communication records due to querying by accountId instead of a unique communication/transaction ID.
+What changedAdded DLT-compliant SMS and multi-transport Email backend services and routes.
+Created Action Center communication REST API controller with dispatch, history, and webhook endpoints.
+Added frontend Compose Modal supporting tabbed channel selection and validation.
+Enforced test coverage gates.
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)Resolved
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [17 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5727893238)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+🟡 Changes recommended
+Unauthenticated communication routes and unsigned webhooks allow unauthorized messaging, access to private data, and tampering with communication records.
+16 open issues [Require authenticated, authorized access to dispatch and history routes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453882) · New
+[Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913) · New
+[Escape email content and validate action URLs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453932) · New
+[Check the mailer result object before reporting success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453938) · New
+[Validate email addresses before dispatch](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453950) · New
+[Write dispatch events at the audit log level](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453963) · New
+[Correlate callbacks and update delivery status separately](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453978) · New
+[Initialize recipients according to the selected channel](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453999) · New
+[Await provider sends and record their actual outcomes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454012) · New
+[Record sends as dispatched until delivery is confirmed](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454024) · New
+[Surface follow-up creation failures as partial success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454035) · New
+[Support history queries without an entity ID](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454050) · New
+[Report cooldown-suppressed notifications as unsent](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454069) · New
+[Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090) · New
+[Show per-channel results for partial dispatch failures](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454098) · New
+[Require a due date when follow-up scheduling is enabled](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454113) · New
+What changed in this PRAdds SMS and email communications to the Action Center, reusing existing mail, SMS, communication-history and internal-task services.
+Changes:
+Adds dispatch, history and delivery-webhook endpoints, plus Action Center SMS template configuration.
+Introduces a compose modal for tasks and tickets, with channel selection and optional follow-up scheduling.
+Adds buyer/supplier dispatch integration and tests for the new communication flows.
+File
+Description
+prompts.md
+Appends implementation request history.
+frontend/lib/validationSchemas.ts
+Adds communication-message validation rules.
+frontend/lib/uiStrings.ts
+Adds compose-modal labels and messages.
+frontend/lib/types.ts
+Defines communication payloads and results.
+frontend/lib/constants.ts
+Adds channel options and SMS length constant.
+frontend/lib/actionCenterCommClient.ts
+Adds dispatch and history API calls.
+frontend/app/category-manager/internal-tasks.tsx
+Adds the task-dashboard compose action.
+frontend/app/category-manager/components/TicketsDashboard.tsx
+Adds ticket-specific communication composition.
+frontend/app/category-manager/components/ActionCenterComposeModal.tsx
+Implements composition and follow-up controls.
+frontend/__tests__/lib/actionCenterCommClient.test.ts
+Tests client responses and errors.
+frontend/__tests__/app/category-manager/ActionCenterComposeModal.test.tsx
+Tests compose interactions and submission.
+frontend/__tests__/app/buyer/ManualRFQModal.test.tsx
+Updates a delivery-date fixture.
+backend/src/services/smsService.js
+Adds Action Center SMS rendering and dispatch.
+backend/src/services/actionCenterNotificationService.js
+Orchestrates sending, history and task creation.
+backend/src/routes/index.js
+Mounts the communication router.
+backend/src/routes/actionCenterCommunications.js
+Defines dispatch, history and webhook routes.
+backend/src/controllers/vendorDossierExtensions.js
+Adds supplier email/SMS dispatch calls.
+backend/src/controllers/buyerAccountController.js
+Adds buyer email/SMS dispatch calls.
+backend/src/controllers/actionCenterCommController.js
+Handles communication requests and callbacks.
+backend/src/config/validationSchemas.js
+Adds dispatch and history-query schemas.
+backend/src/config/types.js
+Documents communication types and enums.
+backend/src/config/constants.js
+Adds SMS template and communication constants.
+backend/.env.example
+Replaces the RFQ template example with Action Center configuration.
+backend/__tests__/supplierProfileEnhancements.test.js
+Tests supplier dispatch calls and errors.
+backend/__tests__/smsService.test.js
+Tests Action Center gateway handling.
+backend/__tests__/actionCenterNotificationService.test.js
+Tests orchestration and history filtering.
+backend/__tests__/actionCenterCommRoutes.test.js
+Tests communication endpoints.
+backend/__tests__/actionCenterCommController.test.js
+Tests validation, responses and callbacks.
+Review effort: Balanced
+[backend/src/routes/actionCenterCommunications.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-04cc65372508ce081dcdfaff3793a8346e770b0b9ed267654e1a6a2663b744f8)Resolved
+[backend/src/routes/actionCenterCommunications.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-04cc65372508ce081dcdfaff3793a8346e770b0b9ed267654e1a6a2663b744f8)Resolved
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
+[backend/src/config/validationSchemas.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-1ff9332560c5cf5b812e807cfdfca48806ca570b98fa4c22e9802b5b728fd6a9)Resolved
+6 hidden conversationsLoad more…
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
+[backend/src/services/smsService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-2ba83ee0a8830b30d6fac70fd6498c6f665a14bea8008328f8eb79a8fde92fa5)Resolved
+[backend/src/services/smsService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-2ba83ee0a8830b30d6fac70fd6498c6f665a14bea8008328f8eb79a8fde92fa5)Resolved
+[frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
+[frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
+[github-actions](https://github.com/apps/github-actions) Botcommented[17 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#issuecomment-6557503587)•
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: PASSED
+292 / 292 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+4350
+4350
+0
+0
+frontend
+3487
+3487
+0
+0
+Workspace
+7837
+7837
+0
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.81%
+92.53%
+99.17%
+99.45%
+132 / 132
+frontend
+98.10%
+93.41%
+98.37%
+98.79%
+160 / 160
+Workspace
+98.45%
+92.95%
+98.66%
+99.12%
+292 / 292
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+PASSED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+PASSED
+Frontend per-file coverage
+PASSED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+[Merge branch 'main' into feat/action-center-sms-email-integration](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/e0323cf8c137116933f0c9042299660ff004e6ba)
+[e0323cf](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/e0323cf8c137116933f0c9042299660ff004e6ba)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [16 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34830401447)
+[Procucev2022](https://github.com/Procucev2022) reviewed [16 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728005075)
+[Procucev2022](https://github.com/Procucev2022)left a comment
+Owner
+🤖 AI Code Review
+Risk level: medium | Findings: 1
+The PR introduces comprehensive SMS & Email Action Center communication features with DLT integration, controllers, and frontend modal components. One security and correctness issue was identified regarding unauthenticated webhook ingestion.
+What changedAdded Action Center notification services and REST endpoints for multi-channel dispatch.
+Integrated DLT-compliant SMS templates and email dispatch routing.
+Added frontend compose modal components and API client bindings.
+Added comprehensive unit test coverage.
+[backend/src/routes/actionCenterCommunications.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/e0323cf8c137116933f0c9042299660ff004e6ba#diff-04cc65372508ce081dcdfaff3793a8346e770b0b9ed267654e1a6a2663b744f8)Resolved
+Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/da510f74-6ba7-4425-b119-adf5e5286e2a) on behalf of [Procucev2022](https://github.com/Procucev2022) [16 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34830418096)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [16 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728045803)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+🟡 Changes recommended
+Missing authentication and authorization on dispatch and history endpoints, plus unverified webhooks, allow arbitrary messaging, exposure of private communications, and falsification of audit records.
+22 open issues [Authenticate history access and enforce entity-level authorization](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595396) · New
+[Remove conflicting fixed-date test changes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595421) · New
+[Check the mailer result object before reporting success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453938)
+[Escape email content and validate action URLs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453932)
+[Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913)
+[Require authenticated, authorized access to dispatch and history routes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453882)
+[Resolve the dispatch actor ID from the JWT subject](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595438) · New
+[Track transport results and persist actual delivery state](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595452) · New
+[Manage focus while the dialog is open](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595471) · New
+[Associate dispatches with the selected task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595487) · New
+[Require a due date when follow-up scheduling is enabled](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454113)
+[Show per-channel results for partial dispatch failures](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454098)
+[Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090)
+[Report cooldown-suppressed notifications as unsent](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454069)
+[Support history queries without an entity ID](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454050)
+[Surface follow-up creation failures as partial success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454035)
+[Record sends as dispatched until delivery is confirmed](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454024)
+[Await provider sends and record their actual outcomes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454012)
+[Initialize recipients according to the selected channel](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453999)
+[Correlate callbacks and update delivery status separately](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453978)
+And 2 more that still need to be addressed.
+Review effort: Balanced
+[backend/src/routes/actionCenterCommunications.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/e0323cf8c137116933f0c9042299660ff004e6ba#diff-04cc65372508ce081dcdfaff3793a8346e770b0b9ed267654e1a6a2663b744f8)Resolved
+[frontend/__tests__/app/buyer/ManualRFQModal.test.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/e0323cf8c137116933f0c9042299660ff004e6ba#diff-1ec9703df1630919606953c0d63d62ead42c638667f0b14ab5fabc3c22c6dc27)Resolved
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/e0323cf8c137116933f0c9042299660ff004e6ba#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)Resolved
+[backend/src/controllers/buyerAccountController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/e0323cf8c137116933f0c9042299660ff004e6ba#diff-783e9a37f0be97d9bc092d4fb9e9ed77d0d1997a747e2e9cb4b39adae3bc59d6)Resolved
+[frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/e0323cf8c137116933f0c9042299660ff004e6ba#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
+[frontend/app/category-manager/internal-tasks.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/e0323cf8c137116933f0c9042299660ff004e6ba#diff-38a098f4a7e29448aa22e740fb7831ff1100f4d8044e8ba4c8b96a2da166b38e)Resolved
+[fix(action-center): resolve AI code review findings, webhook auth, HT…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9228654bbfde6c881284cc4849b36fae335d30c6)
+[9228654](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9228654bbfde6c881284cc4849b36fae335d30c6)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34833242282)
+Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/08d98445-ee6d-45f8-a2c3-a94944af9670) on behalf of [Procucev2022](https://github.com/Procucev2022) [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34833258660)
+[Procucev2022](https://github.com/Procucev2022) reviewed [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728280765)
+[Procucev2022](https://github.com/Procucev2022)left a comment
+Owner
+🤖 AI Code Review
+Risk level: medium | Findings: 1
+The PR introduces multi-channel SMS and Email communication via a DLT telecom gateway into the Action Center, complete with controllers, notification services, database queries, and a React compose modal. One critical security flaw was identified in the webhook authentication handler.
+What changedAdded backend controllers and services for SMS and Email dispatch
+Implemented DLT-compliant SMS templates and gateway integration
+Added Action Center communication API endpoints and routes
+Added database query extensions for storing and updating communication history
+Added frontend compose modal and tests
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)Resolved
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728318370)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+🟡 Changes recommended
+A public fallback webhook secret and insufficient live-send authorization permit unauthorized updates and sends, while uncorrelated delivery callbacks can modify the wrong communication record.
+19 open issues [Reject webhook requests when no secret is configured](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856744) · New
+[Restrict live sends to authorized staff or approved recipients](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856781) · New
+[Apply filters and pagination before limiting communication history](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856831) · New
+[Authenticate history access and enforce entity-level authorization](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595396)
+[Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913)
+[Pass the audit actor email in the expected argument position](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856891) · New
+[Surface follow-up scheduling failures to the client](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856953) · New
+[Use the selected channel's recipient in the supplier composer](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856994) · New
+[Persist the gateway message ID for receipt correlation](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857034) · New
+[Show per-channel errors when all notification sends fail](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857064) · New
+[Associate dispatches with the selected task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595487)
+[Manage focus while the dialog is open](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595471)
+[Track transport results and persist actual delivery state](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595452)
+[Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090)
+[Support history queries without an entity ID](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454050)
+[Surface follow-up creation failures as partial success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454035)
+[Await provider sends and record their actual outcomes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454012)
+[Initialize recipients according to the selected channel](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453999)
+[Correlate callbacks and update delivery status separately](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453978)
+11 resolved since last review [Remove conflicting fixed-date test changes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595421)
+[Check the mailer result object before reporting success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453938)
+[Escape email content and validate action URLs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453932)
+[Require authenticated, authorized access to dispatch and history routes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453882)
+[Resolve the dispatch actor ID from the JWT subject](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595438)
+[Require a due date when follow-up scheduling is enabled](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454113)
+[Show per-channel results for partial dispatch failures](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454098)
+[Report cooldown-suppressed notifications as unsent](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454069)
+[Record sends as dispatched until delivery is confirmed](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454024)
+[Write dispatch events at the audit log level](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453963)
+[Validate email addresses before dispatch](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453950)
+Review effort: Balanced
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)Resolved
+[backend/src/controllers/vendorDossierExtensions.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-ec93ad7b930accfc234e5389977109ba7bdbc6553199b09dd99eaa65f1eb66e9)Resolved
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)Resolved
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)Resolved
+[backend/src/controllers/vendorDossierExtensions.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-ec93ad7b930accfc234e5389977109ba7bdbc6553199b09dd99eaa65f1eb66e9)Resolved
+[backend/src/services/smsService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-2ba83ee0a8830b30d6fac70fd6498c6f665a14bea8008328f8eb79a8fde92fa5)Resolved
+[frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
+[fix(action-center): use constant-time comparison for webhook secret v…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/1327c8278c6f02a2a4918434dd3d722bdf35b6b8)
+[1327c82](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/1327c8278c6f02a2a4918434dd3d722bdf35b6b8)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34834266062)
+Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/65f8de56-e590-4ab2-8ca9-d3076445d821) on behalf of [Procucev2022](https://github.com/Procucev2022) [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34834283845)
+[Procucev2022](https://github.com/Procucev2022) reviewed [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728384552)
+[Procucev2022](https://github.com/Procucev2022)left a comment
+Owner
+🤖 AI Code Review
+Risk level: medium | Findings: 1
+The PR introduces SMS and Email integration for the Action Center, including DLT gateway compliance, backend controllers, validation, services, and frontend UI modals. Overall the code quality and test coverage are high, but there is one correctness issue with string replacement in the SMS template formatter.
+What changedAdded Action Center communication routes, controllers, and notification services.
+Integrated DLT-compliant SMS templates and email notification rendering.
+Added database query updates for tracking communication history and webhook status.
+Implemented unit and integration tests covering new flows and error states.
+[backend/src/services/smsService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/1327c8278c6f02a2a4918434dd3d722bdf35b6b8#diff-2ba83ee0a8830b30d6fac70fd6498c6f665a14bea8008328f8eb79a8fde92fa5)Resolved
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728404670)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+🔵 Needs a closer look
+Unresolved critical issues permit forged webhook updates and unauthorized messaging, while failed or cancelled sends can still be reported as delivered.
+19 open issues [Apply filters and pagination before limiting communication history](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856831)
+[Restrict live sends to authorized staff or approved recipients](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856781)
+[Reject webhook requests when no secret is configured](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856744)
+[Authenticate history access and enforce entity-level authorization](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595396)
+[Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913)
+[Show per-channel errors when all notification sends fail](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857064)
+[Persist the gateway message ID for receipt correlation](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857034)
+[Use the selected channel's recipient in the supplier composer](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856994)
+[Surface follow-up scheduling failures to the client](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856953)
+[Pass the audit actor email in the expected argument position](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856891)
+[Associate dispatches with the selected task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595487)
+[Manage focus while the dialog is open](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595471)
+[Track transport results and persist actual delivery state](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595452)
+[Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090)
+[Support history queries without an entity ID](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454050)
+[Surface follow-up creation failures as partial success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454035)
+[Await provider sends and record their actual outcomes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454012)
+[Initialize recipients according to the selected channel](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453999)
+[Correlate callbacks and update delivery status separately](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453978)
+Review effort: Balanced
+[fix(action-center): resolve PR review comments, webhook security, and…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/b7d772f528addbea3a829340b399e59505cb4671)
+[b7d772f](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/b7d772f528addbea3a829340b399e59505cb4671)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34836290324)
+Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/44cfb0b4-1a5c-474b-b6dc-6b90f135b8a5) on behalf of [Procucev2022](https://github.com/Procucev2022) [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34836310885)
+[Procucev2022](https://github.com/Procucev2022) reviewed [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728642457)
+[Procucev2022](https://github.com/Procucev2022)left a comment
+Owner
+🤖 AI Code Review
+Risk level: high | Findings: 2
+The PR introduces SMS and Email integration via a DLT telecom gateway, compose modals, and audit trails. Most logic is well-tested, but there is an authentication vulnerability in the webhook endpoint and a missing input validation check for the channel field.
+What changedAdded Action Center communication routes and controller endpoints.
+Created notification service handling email (HTML templates) and DLT-compliant SMS delivery.
+Implemented automated internal task tracking and status logging.
+Added robust unit test suite covering new communications service and controllers.
+[backend/src/routes/actionCenterCommunications.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-04cc65372508ce081dcdfaff3793a8346e770b0b9ed267654e1a6a2663b744f8)Resolved
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)Resolved
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728664038)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+🟡 Changes recommended
+The history endpoint permits anonymous cross-account access to message bodies, contacts, and notes, leaving a critical data-exposure vulnerability unresolved.
+10 open issues [Account-only callbacks can update the wrong communication](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090094) · New
+[Anonymous wildcard history requests expose communications across accounts](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090127) · New
+[History pagination omits records beyond the capped intermediate results](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090160) · New
+[Message truncation and character removal are not disclosed before sending](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090184) · New
+[Delivery-only callbacks incorrectly acknowledge communications](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090205) · New
+[Valid +91 recipients are replaced with the buyer's registered number](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090229) · New
+[Valid +91 supplier numbers are replaced with the registered number](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090250) · New
+[SMS-only composition records the hidden email as its recipient](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090276) · New
+[Retrying follow-up scheduling resends the already delivered message](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090308) · New
+[Task compose flow falls back to a nonexistent general-task entity](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090334) · New
+19 resolved since last review [Apply filters and pagination before limiting communication history](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856831)
+[Restrict live sends to authorized staff or approved recipients](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856781)
+[Reject webhook requests when no secret is configured](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856744)
+[Authenticate history access and enforce entity-level authorization](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595396)
+[Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913)
+[Show per-channel errors when all notification sends fail](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857064)
+[Persist the gateway message ID for receipt correlation](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857034)
+[Use the selected channel's recipient in the supplier composer](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856994)
+[Surface follow-up scheduling failures to the client](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856953)
+[Pass the audit actor email in the expected argument position](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856891)
+[Associate dispatches with the selected task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595487)
+[Manage focus while the dialog is open](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595471)
+[Track transport results and persist actual delivery state](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595452)
+[Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090)
+[Support history queries without an entity ID](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454050)
+[Surface follow-up creation failures as partial success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454035)
+[Await provider sends and record their actual outcomes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454012)
+[Initialize recipients according to the selected channel](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453999)
+[Correlate callbacks and update delivery status separately](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453978)
+Review effort: Balanced
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)Resolved
+[backend/src/db/paymentDuesQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-5ae349b1833dd9283d6c2adcfe979aab866616e05d6a3f0eb2650064ae9c9807)Resolved
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
+[backend/src/services/smsService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-2ba83ee0a8830b30d6fac70fd6498c6f665a14bea8008328f8eb79a8fde92fa5)Resolved
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)Resolved
+[backend/src/controllers/buyerAccountController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-783e9a37f0be97d9bc092d4fb9e9ed77d0d1997a747e2e9cb4b39adae3bc59d6)Resolved
+[backend/src/controllers/vendorDossierExtensions.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-ec93ad7b930accfc234e5389977109ba7bdbc6553199b09dd99eaa65f1eb66e9)Resolved
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
+[frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
+[frontend/app/category-manager/internal-tasks.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-38a098f4a7e29448aa22e740fb7831ff1100f4d8044e8ba4c8b96a2da166b38e)Resolved
+[fix(action-center): attach webhook auth middleware to route and valid…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9c6f534960e07352fd8bcbe2b7e947552e99fcf9)
+[9c6f534](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9c6f534960e07352fd8bcbe2b7e947552e99fcf9)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [13 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34837187450)
+Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/ccf52fa4-6459-4640-a0b0-d9a66d9c47df) on behalf of [Procucev2022](https://github.com/Procucev2022) [13 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34837205906)
+[Procucev2022](https://github.com/Procucev2022) reviewed [13 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728710739)
+[Procucev2022](https://github.com/Procucev2022)left a comment
+Owner
+🤖 AI Code Review
+Risk level: high | Findings: 2
+The PR introduces SMS and Email communication features via the DLT telecom gateway, along with compose modals and audit trails. Most tests and implementation details look solid, but there is a major security flaw in webhook handling where the controller evaluates verifyWebhookAuthenticity but fails to block requests when verifyWebhookSignature middleware isn't used, and a couple of input sanitization or edge-case handling bugs.
+What changedAdded DLT-compliant SMS and multi-transport email dispatch service and controller.
+Added Action Center communication REST API endpoints and routes.
+Updated database queries to support targeting communications by communicationId.
+Enhanced buyer and supplier communication recording with external live dispatch.
+[backend/src/controllers/actionCenterCommController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9c6f534960e07352fd8bcbe2b7e947552e99fcf9#diff-84ed122722f6fdc83bb3f0dfef88be69b494619cdf708f5e85c7c29dbf6ae7ec)Resolved
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9c6f534960e07352fd8bcbe2b7e947552e99fcf9#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [13 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728727237)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+🔵 Needs a closer look
+Unresolved critical flaws expose private cross-account communications to anonymous callers, route SMS to unintended recipients, and apply delivery receipts to the wrong messages.
+10 open issues [Message truncation and character removal are not disclosed before sending](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090184)
+[History pagination omits records beyond the capped intermediate results](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090160)
+[Anonymous wildcard history requests expose communications across accounts](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090127)
+[Account-only callbacks can update the wrong communication](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090094)
+[Task compose flow falls back to a nonexistent general-task entity](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090334)
+[Retrying follow-up scheduling resends the already delivered message](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090308)
+[SMS-only composition records the hidden email as its recipient](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090276)
+[Valid +91 supplier numbers are replaced with the registered number](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090250)
+[Valid +91 recipients are replaced with the buyer's registered number](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090229)
+[Delivery-only callbacks incorrectly acknowledge communications](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090205)
+Review effort: Balanced
+[fix(action-center): resolve all AI Code Review and Copilot review com…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/ad0d61b23f52401d43778a2dedf4a2c65b22fc13)
+[ad0d61b](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/ad0d61b23f52401d43778a2dedf4a2c65b22fc13)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [19 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34874558908)
+Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/798879e6-7042-49ed-af45-db3680515959) on behalf of [Procucev2022](https://github.com/Procucev2022) [19 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34874580408)
+[Procucev2022](https://github.com/Procucev2022) reviewed [17 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5732096549)
+[Procucev2022](https://github.com/Procucev2022)left a comment
+Owner
+🤖 AI Code Review
+Risk level: high | Findings: 1
+The PR introduces SMS and Email integration for Action Center with DLT compliance, validation, audit logs, and controllers. Overall logic and tests look well-structured, but a critical SQL parameterization syntax bug was found in the database query builder.
+What changedAdded Action Center communication service and controller with SMS/Email support.
+Added validation schemas and DLT templates.
+Updated payment dues queries to support communication history and status updates.
+Added comprehensive unit tests across new services and controllers.
+[backend/src/db/paymentDuesQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/ad0d61b23f52401d43778a2dedf4a2c65b22fc13#diff-5ae349b1833dd9283d6c2adcfe979aab866616e05d6a3f0eb2650064ae9c9807)
+let paramIdx = 1;
+if (accountId && !isCrossAccount) {
+conditions.push(`account_id = ${paramIdx++}`);
+[Procucev2022](https://github.com/Procucev2022)[17 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438917231)
+Owner
+🔴 CRITICAL · bug — Invalid SQL parameter placeholder syntax in query filter
+In queryCommunications, SQL placeholders are concatenated directly as account_id = ${paramIdx++} without the standard $ symbol prefix (e.g., $1). This causes syntax errors in database queries and opens the code up to potential SQL injection vectors if input sanitation fails.
+Suggested change
+conditions.push(`account_id = ${paramIdx++}`);
+conditions.push(`account_id = $${paramIdx++}`);
+Reply...
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [11 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5732123307)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+🟡 Changes recommended
+Critical email and SMS dispatches can be cancelled after the response or fail silently while communications remain recorded as Delivered.
+5 open issues [Webhook lookup ignores gateway message IDs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939603) · New
+[Generated SQL placeholders are missing parameter markers](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939628) · New
+[SMS dispatch metadata is dropped from the audit record](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939644) · New
+[Unselected compose action links communication to the first task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939661) · New
+[Task email recipient uses the sender’s address](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939682) · New
+10 resolved since last review [Message truncation and character removal are not disclosed before sending](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090184)
+[History pagination omits records beyond the capped intermediate results](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090160)
+[Anonymous wildcard history requests expose communications across accounts](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090127)
+[Account-only callbacks can update the wrong communication](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090094)
+[Task compose flow falls back to a nonexistent general-task entity](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090334)
+[Retrying follow-up scheduling resends the already delivered message](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090308)
+[SMS-only composition records the hidden email as its recipient](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090276)
+[Valid +91 supplier numbers are replaced with the registered number](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090250)
+[Valid +91 recipients are replaced with the buyer's registered number](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090229)
+[Delivery-only callbacks incorrectly acknowledge communications](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090205)
+Review effort: Balanced
+[backend/src/db/paymentDuesQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/ad0d61b23f52401d43778a2dedf4a2c65b22fc13#diff-5ae349b1833dd9283d6c2adcfe979aab866616e05d6a3f0eb2650064ae9c9807)
+acknowledged_at = CASE WHEN $1 = 'Acknowledged' THEN $4 ELSE acknowledged_at END,
+acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
+updated_at = $4
+WHERE id = $6
+Copilot commented 11 minutes ago
+CopilotAI
+[11m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939603)
+High
+Webhook lookup ignores gateway message IDs
+The webhook accepts gateway messageId/msgid values, but this database update only matches the application's primary key. A callback on another instance therefore returns 404; on the originating instance it can update only memory and leave the persisted status unchanged. Match the stored gateway and per-channel message IDs in the database lookup as well.
+Suggested changeset 1 (1)
+backend/src/db/paymentDuesQueries.js
+Original file line number
+Diff line number
+Diff line change
+acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
+updated_at = $4
+WHERE id = $6
+OR metadata->>'gatewayMessageId' = $6
+OR metadata->>'msgid' = $6
+OR metadata->'smsResult'->>'messageId' = $6
+OR metadata->'emailResult'->>'messageId' = $6
+RETURNING *
+`
+: `
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/db/paymentDuesQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/ad0d61b23f52401d43778a2dedf4a2c65b22fc13#diff-5ae349b1833dd9283d6c2adcfe979aab866616e05d6a3f0eb2650064ae9c9807)
+const countResult = await pool.query(countSql, params, { d1: true, d1Text: countSql });
+const total = Number(countResult?.rows?.[0]?.total || 0);
+const dataSql = `SELECT * FROM payment_dues_communications ${whereClause} ORDER BY sent_at DESC LIMIT ${paramIdx++} OFFSET ${paramIdx++}`;
+Copilot commented 11 minutes ago
+CopilotAI
+[11m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939628)
+High
+Generated SQL placeholders are missing parameter markers
+The filter and pagination templates emit numeric literals such as account_id = 1 and LIMIT 1 OFFSET 2 instead of bound placeholders, so database queries cannot use the supplied parameters. The catch then silently falls back to process-local memory, hiding persisted history. Add $ to every generated placeholder at lines 694, 699, 705, and 717.
+Copilot uses AI. Check for mistakes.
+Reply...
+[backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/ad0d61b23f52401d43778a2dedf4a2c65b22fc13#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)
+messageId: smsRes.messageId || null,
+recipient: recipientPhone,
+throttled: Boolean(smsRes.throttled),
+error: smsRes.error || (smsRes.success ? undefined : 'SMS delivery failed.'),
+Copilot commented 11 minutes ago
+CopilotAI
+[11m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939644)
+Medium
+SMS dispatch metadata is dropped from the audit record
+sendActionCenterSms returns renderedMessage and isTruncated, but this projection drops both fields. Consequently, the metadata assembled below always records dispatchedSmsText: null and isSmsTruncated: false, even when the gateway received a shortened message. Preserve these fields so the audit trail records what was actually sent.
+Suggested changeset 1 (1)
+backend/src/services/actionCenterNotificationService.js
+Original file line number
+Diff line number
+Diff line change
+recipient: recipientPhone,
+throttled: Boolean(smsRes.throttled),
+error: smsRes.error || (smsRes.success ? undefined : 'SMS delivery failed.'),
+renderedMessage: smsRes.renderedMessage,
+isTruncated: Boolean(smsRes.isTruncated),
+};
+logger.info(
+Copilot uses AI. Check for mistakes.
+Reply...
+[frontend/app/category-manager/internal-tasks.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/ad0d61b23f52401d43778a2dedf4a2c65b22fc13#diff-38a098f4a7e29448aa22e740fb7831ff1100f4d8044e8ba4c8b96a2da166b38e)
+)}
+{isComposeModalOpen && (() => {
+const activeTask = selectedTaskDetails || tasks[0] || null;
+Copilot commented 11 minutes ago
+CopilotAI
+[11m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939661)
+Medium
+Unselected compose action links communication to the first task
+Opening the toolbar's general compose action without selecting a task silently associates the communication with tasks[0]. Changing sorting, filters, or pagination changes which unrelated task receives the audit record and any follow-up relationship; with an empty list the association becomes the nonexistent general-task. Require an explicit entity selection for task-linked communications, or represent a genuinely unlinked communication instead of choosing the first row.
+Copilot uses AI. Check for mistakes.
+Reply...
+[frontend/app/category-manager/internal-tasks.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/ad0d61b23f52401d43778a2dedf4a2c65b22fc13#diff-38a098f4a7e29448aa22e740fb7831ff1100f4d8044e8ba4c8b96a2da166b38e)Resolved
+[Update defaultRecipientEmail to use assignees list](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/dc0c61ca69d0c26cd926f6a21e069b23aaf336dd)
+[dc0c61c](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/dc0c61ca69d0c26cd926f6a21e069b23aaf336dd)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [10 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34875015941)
+Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/87e629f5-aa8d-472e-b1b2-43114526f0dd) on behalf of [Procucev2022](https://github.com/Procucev2022) [10 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34875033067)
+[Procucev2022](https://github.com/Procucev2022) reviewed [9 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5732135172)
+[Procucev2022](https://github.com/Procucev2022)left a comment
+Owner
+🤖 AI Code Review
+Risk level: medium | Findings: 3
+The PR introduces SMS and Email integration for the Action Center with DLT telecom support, compose modals, and audit trails. Most code is well-tested and robust, but there are a few SQL parameterization bugs in backend queries.
+What changedAdded actionCenterNotificationService and actionCenterCommController for handling multi-channel communications.
+Added DLT-compliant SMS templates and validators.
+Updated paymentDuesQueries and database logic to support query filtering and acknowledgement updates.
+[backend/src/db/paymentDuesQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/dc0c61ca69d0c26cd926f6a21e069b23aaf336dd#diff-5ae349b1833dd9283d6c2adcfe979aab866616e05d6a3f0eb2650064ae9c9807)
+let paramIdx = 1;
+if (accountId && !isCrossAccount) {
+conditions.push(`account_id = ${paramIdx++}`);
+[Procucev2022](https://github.com/Procucev2022)[9 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438949707)
+Owner
+🔴 CRITICAL · bug — Malformed SQL placeholders in queryCommunications
+When constructing the SQL query, string interpolation is used like account_id = ${paramIdx++} without the required $ prefix for parameterized queries (it produces account_id = 1 instead of account_id = $1). This will either cause a SQL syntax error or leave the query vulnerable to injection if unescaped values reach the database driver.
+Reply...
+[backend/src/db/paymentDuesQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/dc0c61ca69d0c26cd926f6a21e069b23aaf336dd#diff-5ae349b1833dd9283d6c2adcfe979aab866616e05d6a3f0eb2650064ae9c9807)
+}
+if (entityType) {
+conditions.push(`(LOWER(account_type) = LOWER(${paramIdx}) OR LOWER(metadata->>'entityType') = LOWER(${paramIdx}))`);
+[Procucev2022](https://github.com/Procucev2022)[9 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438949713)
+Owner
+🔴 CRITICAL · bug — Malformed SQL parameter placeholder index
+In the entityType condition, ${paramIdx} is used without a $ sign (LOWER(account_type) = LOWER(${paramIdx})), resulting in invalid SQL syntax like LOWER(account_type) = LOWER(2) instead of LOWER(account_type) = LOWER($2).
+Reply...
+[backend/src/db/paymentDuesQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/dc0c61ca69d0c26cd926f6a21e069b23aaf336dd#diff-5ae349b1833dd9283d6c2adcfe979aab866616e05d6a3f0eb2650064ae9c9807)
+}
+if (channel && channel !== 'ALL') {
+conditions.push(`UPPER(channel) = UPPER(${paramIdx++})`);
+[Procucev2022](https://github.com/Procucev2022)[9 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438949718)
+Owner
+🔴 CRITICAL · bug — Malformed SQL parameter placeholder index in channel condition
+Similar to previous conditions, UPPER(channel) = UPPER(${paramIdx++}) lacks the $ symbol, producing invalid SQL syntax (e.g., UPPER(channel) = UPPER(3) instead of UPPER(channel) = UPPER($3)).
+Reply...
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [3 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5732168146)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+🔵 Needs a closer look
+Critical SQL placeholder errors break persisted-history queries and silently trigger an in-memory fallback, causing saved history to disappear from results on fresh instances.
+4 open issues [Generated SQL placeholders are missing parameter markers](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939628)
+[Webhook lookup ignores gateway message IDs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939603)
+[Unselected compose action links communication to the first task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939661)
+[SMS dispatch metadata is dropped from the audit record](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939644)
+1 resolved since last review [Task email recipient uses the sender’s address](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939682)
+Review effort: Balanced
+This branch has not been deployed
+No deployments
+Merge info
+All checks have passed
+5 successful checks
+successful checks
+[Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41389456700/job/125097410038?pr=390)
+Successful in 1m
+[Request Copilot Review / request-copilot-review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41389456754/job/125097410100?pr=390)
+Successful in 5s
+Required
+[Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41389456611/job/125097409340?pr=390)
+Successful in 2m
+Required
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41389456611/job/125097409766?pr=390)
+Successful in 8m
+Required
+[Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41389456611/job/125099849146?pr=390)
+Successful in 8s
+Merging is blocked
+A conversation must be resolved before this pull request can be merged.
+```
+
+
+---
+
+### Prompt 24
+
+**Timestamp**: 2026-11-02T11:11:48+05:30
+
+```text
+merge this into that pr  and solve Ai issue and merge that in main branch
+```

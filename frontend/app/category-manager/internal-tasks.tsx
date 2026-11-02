@@ -675,7 +675,10 @@ export default function InternalTasksDashboard() {
           {/* Quick Compose SMS / Email Button */}
           <button
             type="button"
-            onClick={() => setIsComposeModalOpen(true)}
+            onClick={() => {
+              setSelectedTaskDetails(null);
+              setIsComposeModalOpen(true);
+            }}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition-all shadow-sm"
             title="Dispatch SMS or Email Notification"
           >
@@ -1572,16 +1575,24 @@ export default function InternalTasksDashboard() {
       )}
 
       {isComposeModalOpen && (() => {
-        const activeTask = selectedTaskDetails || tasks[0] || null;
+        const activeTask = selectedTaskDetails;
+        const matchedAssignee = activeTask
+          ? assignees.find(
+              (m) =>
+                (activeTask.assigned_to_user_id && m.id === activeTask.assigned_to_user_id) ||
+                (activeTask.assigned_to_name && m.name.toLowerCase() === activeTask.assigned_to_name.toLowerCase())
+            )
+          : null;
+        const recipientEmail = matchedAssignee?.email || '';
         return (
           <ActionCenterComposeModal
             isOpen={isComposeModalOpen}
             onClose={() => setIsComposeModalOpen(false)}
-            entityType="internal_task"
-            entityId={activeTask?.id || 'general-task'}
-            defaultSubject={activeTask?.title ? `Task Update: ${activeTask.title}` : 'Task Notification'}
-            defaultRecipientName={activeTask?.assigned_to_name || sessionUser?.name || 'Category Manager'}
-            defaultRecipientEmail={assignees.find((member) => member.id === activeTask?.assigned_to_user_id)?.email || ''}
+            entityType={activeTask ? 'internal_task' : 'general'}
+            entityId={activeTask?.id || 'general'}
+            defaultSubject={activeTask?.title ? `Task Update: ${activeTask.title}` : 'Action Center Notification'}
+            defaultRecipientName={activeTask?.assigned_to_name || ''}
+            defaultRecipientEmail={recipientEmail}
           />
         );
       })()}

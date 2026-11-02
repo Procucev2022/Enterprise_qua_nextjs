@@ -766,6 +766,7 @@ const VALIDATION_SCHEMAS = {
         'supplier_dossier',
         'payment_due',
         'registration',
+        'general',
       ],
       message: 'A valid entityType is required.',
     },

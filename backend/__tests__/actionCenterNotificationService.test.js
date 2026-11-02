@@ -156,6 +156,8 @@ describe('actionCenterNotificationService', () => {
         success: true,
         messageId: 'sms-msg-1',
         throttled: false,
+        renderedMessage: 'Rendered SMS message text',
+        isTruncated: false,
       });
       const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValueOnce({ id: 'comm-4' });
 
@@ -181,6 +183,16 @@ describe('actionCenterNotificationService', () => {
       expect(res.success).toBe(true);
       expect(res.smsResult.success).toBe(true);
       expect(res.smsResult.messageId).toBe('sms-msg-1');
+      expect(res.smsResult.renderedMessage).toBe('Rendered SMS message text');
+      expect(res.smsResult.isTruncated).toBe(false);
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            dispatchedSmsText: 'Rendered SMS message text',
+            isSmsTruncated: false,
+          }),
+        })
+      );
 
       smsSpy.mockRestore();
       recordSpy.mockRestore();

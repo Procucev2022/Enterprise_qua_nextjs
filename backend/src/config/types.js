@@ -58,7 +58,7 @@
 /**
  * @typedef {Object} ActionCenterCommunicationEntity
  * @property {string} id
- * @property {'internal_task'|'ticket'|'approval'|'buyer_dossier'|'supplier_dossier'|'payment_due'|'registration'} entityType
+ * @property {'internal_task'|'ticket'|'approval'|'buyer_dossier'|'supplier_dossier'|'payment_due'|'registration'|'general'} entityType
  * @property {string} entityId
  * @property {'EMAIL'|'SMS'|'BOTH'} channel
  * @property {string} recipient
@@ -80,6 +80,7 @@ const DOMAIN_TYPES = {
     'supplier_dossier',
     'payment_due',
     'registration',
+    'general',
   ],
   RFQ_STATUSES: ['Ingested', 'Dispatched', 'In Evaluation', 'Quotes Pending', 'PO Awarded'],
   SOURCING_MODES: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],

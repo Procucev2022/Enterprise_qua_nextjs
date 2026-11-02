@@ -208,6 +208,8 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
         messageId: smsRes.messageId || null,
         recipient: recipientPhone,
         throttled: Boolean(smsRes.throttled),
+        renderedMessage: smsRes.renderedMessage || null,
+        isTruncated: Boolean(smsRes.isTruncated),
         error: smsRes.error || (smsRes.success ? undefined : 'SMS delivery failed.'),
       };
 

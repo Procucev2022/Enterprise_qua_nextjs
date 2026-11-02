@@ -2340,7 +2340,8 @@ export type ActionCenterEntityType =
   | 'buyer_dossier'
   | 'supplier_dossier'
   | 'payment_due'
-  | 'registration';
+  | 'registration'
+  | 'general';
 
 export type ActionCenterDeliveryStatus =
   | 'Pending'

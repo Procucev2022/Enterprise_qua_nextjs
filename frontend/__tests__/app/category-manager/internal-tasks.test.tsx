@@ -1524,4 +1524,67 @@ describe('Action Center & Internal Tasks Redesign', () => {
     require('@/lib/authClient').authClient.getSessionUser = origSessionUser;
   });
 
+  test('covers compose modal when task assignee matches by name without userId or has no match', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [
+        {
+          id: 'tsk_match_name',
+          task_number: 'TSK-9901',
+          title: 'Review supplier NDA',
+          category: 'DOCUMENTATION',
+          priority: 'Medium',
+          status: 'Open',
+          assigned_to_name: 'Priya Sharma',
+          assigned_team: 'Category Management',
+          due_date: '2026-11-20T10:00:00Z',
+          related_entity_type: 'SELLER',
+          related_entity_id: 'v_nda',
+          created_at: '2026-11-01T10:00:00Z',
+          updated_at: '2026-11-01T10:00:00Z',
+        },
+        {
+          id: 'tsk_no_match',
+          task_number: 'TSK-9902',
+          title: 'Unmatched assignee task',
+          category: 'GENERAL',
+          priority: 'Low',
+          status: 'Open',
+          assigned_to_name: 'Unknown Person',
+          assigned_team: 'Category Management',
+          due_date: '2026-11-25T10:00:00Z',
+          related_entity_type: 'BUYER',
+          related_entity_id: 'b_unknown',
+          created_at: '2026-11-01T10:00:00Z',
+          updated_at: '2026-11-01T10:00:00Z',
+        },
+      ],
+      total: 2,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-compose-tsk_match_name')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-compose-tsk_match_name'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    const closeBtns = screen.getAllByRole('button', { name: UI_STRINGS.actionCenter.communicationModal.btnCancel });
+    fireEvent.click(closeBtns[0]);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-compose-tsk_no_match')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-compose-tsk_no_match'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+  });
+
 });

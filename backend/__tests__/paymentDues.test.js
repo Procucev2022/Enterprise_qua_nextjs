@@ -669,6 +669,22 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         expect(updated.deliveryStatus).toBe('Delivered');
         expect(updated.notes).toBe('Targeted note update');
 
+        // Target by gateway message ID in metadata
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'b-gateway-id',
+          accountType: 'buyer',
+          channel: 'sms',
+          recipient: '9876543210',
+          message: 'Gateway test',
+          metadata: { gatewayMessageId: 'gw-msg-webhook-test' },
+        });
+        const gwUpdated = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'gw-msg-webhook-test',
+          deliveryStatus: 'Delivered',
+        });
+        expect(gwUpdated).toBeDefined();
+        expect(gwUpdated.deliveryStatus).toBe('Delivered');
+
         // Target unknown communicationId
         const notFound = await paymentDuesQueries.updateAcknowledgementStatus({
           communicationId: 'non-existent-comm-id',
