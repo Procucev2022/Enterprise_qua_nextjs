@@ -7,6 +7,9 @@ const { authenticate, requireRole } = require('../middleware/auth');
 // events to — any authenticated role, not just admin. Everything else here
 // (reading, purging, diagnosing, auto-remediating, performance tuning) is
 // Admin-only.
+// Public client error beacon for early boot, login, and registration crashes
+router.post('/client-error', logsController.createLog);
+
 router.post('/', authenticate, logsController.createLog);
 
 router.use(authenticate, requireRole('admin'));
