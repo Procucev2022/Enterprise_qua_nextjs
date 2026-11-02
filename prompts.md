@@ -5352,3 +5352,110 @@ Please do a detailed analysis, what all features are pending or missing, & then 
 ```text
 Create the branch from main and raise the pr
 ```
+
+
+---
+
+### Prompt 29
+
+**Timestamp**: 2026-11-02T11:47:00Z
+
+```text
+Run if [ -z "$GEMINI_API_KEY" ]; then
+Attempting review with model: gemini-3.5-flash (diff size: 120053 bytes)...
+=== gemini-3.5-flash: HTTP 200 ===
+Attempting review with model: gemini-3.8-flash (diff size: 120053 bytes)...
+=== gemini-3.8-flash: HTTP 503 ===
+Attempting review with model: gemini-3.5-flash-lite (diff size: 120053 bytes)...
+=== gemini-3.5-flash-lite: HTTP 200 ===
+Error: The endpoint `approveCreditTask` and `rejectCreditTask` rely on `req.user` falling back to an admin role if undefined, but they never verify if the authenticated user actually possesses admin privileges or financial approver permissions. Any authenticated user could potentially approve or reject credit modifications.
+Error: Blocked: 1 critical/high issue(s) found by AI review.
+Error: Process completed with exit code 1.
+
+[feat(action-center): internal task management system with multi-categ…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/commits/3802dc9a8309d057f43327f4b1a1a8b04cf94884)
+[3802dc9](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/commits/3802dc9a8309d057f43327f4b1a1a8b04cf94884)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [22 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#event-34903560858)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [22 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#pullrequestreview-5735812960)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+Copilot was unable to review this pull request because the user who requested the review has insufficient remaining quota. Try requesting a review at a lower effort level.
+[Procucev2022](https://github.com/Procucev2022) reviewed [21 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#pullrequestreview-5735820636)
+[Procucev2022](https://github.com/Procucev2022)left a comment
+Owner
+🤖 AI Code Review
+Risk level: medium | Findings: 2
+The PR implements a comprehensive internal task management system with multi-category workflows, approvals, and reminders. While robustly tested, there is a missing authorization check on credit task approvals, a potential division-by-zero or NaN issue, and missing validation for specific task endpoints.
+What changedAdded internal task categories, dynamic types, and backend query support.
+Introduced credit approval workflows allowing admins to add/delete credits.
+Implemented automated task summaries, filters, and deadline check/reminder endpoints.
+Added comprehensive unit and integration tests covering various success and fallback paths.
+[backend/src/controllers/internalTaskController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/files/3802dc9a8309d057f43327f4b1a1a8b04cf94884#diff-dd7655e7348dfa34ffe8514fae11f20ee4a157fb9f6dbd2df0725f51fc851812)
+/**
+* Approve a Credit Add/Delete task.
+*/
+async function approveCreditTask(req, res) {
+[Procucev2022](https://github.com/Procucev2022)[21 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#discussion_r4441793207)
+Owner
+🔴 CRITICAL · security — Missing Authorization Check for Credit Task Approvals
+The endpoint approveCreditTask and rejectCreditTask rely on req.user falling back to an admin role if undefined, but they never verify if the authenticated user actually possesses admin privileges or financial approver permissions. Any authenticated user could potentially approve or reject credit modifications.
+Reply...
+[backend/src/db/internalTaskQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/files/3802dc9a8309d057f43327f4b1a1a8b04cf94884#diff-d0202b121f9ba9ea3ecb37421c1412b12be624e9f5322db7340dbdd111239271)
+} else if (accountType === 'SELLER' || accountType === 'VENDOR') {
+const vendor = (storeService.getVendorById && storeService.getVendorById(accountId)) || null;
+if (vendor) {
+const prevBal = Number(vendor.freeQuotationCredits || vendor.freeRfqDownloadCredits) || 0;
+[Procucev2022](https://github.com/Procucev2022)[21 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#discussion_r4441793221)
+Owner
+🟡 MEDIUM · bug — Unsafe Balance Calculation with Fallback Fields
+When calculating prevBal for vendors, the code evaluates vendor.freeQuotationCredits || vendor.freeRfqDownloadCredits. If both are undefined or falsy (e.g., zero), it evaluates to 0, but if one field is missing while the other is present or NaN, it could lead to unexpected balance computations or NaNs during credit deductions.
+Suggested change
+const prevBal = Number(vendor.freeQuotationCredits || vendor.freeRfqDownloadCredits) || 0;
+const prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? 0);
+Reply...
+[github-actions](https://github.com/apps/github-actions) Botcommented[13 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#issuecomment-6576099552)
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: PASSED
+292 / 292 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+4379
+4379
+0
+0
+frontend
+3515
+3515
+0
+0
+Workspace
+7894
+7894
+0
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.82%
+92.50%
+99.13%
+```
+
+---
+
+### Prompt 30
+
+**Timestamp**: 2026-11-02T12:24:22Z
+
+```text
+continue
+```

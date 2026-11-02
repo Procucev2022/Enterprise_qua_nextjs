@@ -1007,7 +1007,7 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
   } else if (accountType === 'SELLER' || accountType === 'VENDOR') {
     const vendor = (storeService.getVendorById && storeService.getVendorById(accountId)) || null;
     if (vendor) {
-      const prevBal = Number(vendor.freeQuotationCredits || vendor.freeRfqDownloadCredits) || 0;
+      const prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? 0);
       const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
       if (storeService.updateVendor) {
         storeService.updateVendor(vendor.id, {

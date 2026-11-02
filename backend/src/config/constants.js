@@ -2834,6 +2834,15 @@ const CREDIT_ACCOUNT_TYPES = Object.freeze([
   'SELLER',
 ]);
 
+/**
+ * Roles permitted to approve or reject credit add/delete requests.
+ * Checked in approveCreditTask / rejectCreditTask controller handlers.
+ */
+const CREDIT_APPROVER_ROLES = Object.freeze([
+  'admin',
+  'category_manager',
+]);
+
 const CALL_OUTCOMES = Object.freeze([
   'Connected - Interested',
   'Connected - Follow-up Requested',
@@ -2868,6 +2877,7 @@ module.exports = {
   INTERNAL_TASK_PRIORITIES,
   DEMO_STATUSES,
   CREDIT_ACCOUNT_TYPES,
+  CREDIT_APPROVER_ROLES,
   CALL_OUTCOMES,
   PROPOSAL_STATUSES,
   ONBOARDING_STAGES,

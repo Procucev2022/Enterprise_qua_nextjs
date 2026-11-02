@@ -349,7 +349,33 @@ describe('Internal Tasks API & Controller', () => {
     expect(expRes.status).toBe(500);
   });
 
-  test('POST /api/internal-tasks/:id/approve approves credit request and updates balance', async () => {
+  test('POST /api/internal-tasks/:id/approve rejects unauthenticated and unauthorized users', async () => {
+    // Unauthenticated (no token → req.user undefined via optionalAuthenticate)
+    const noAuthRes = await request(app)
+      .post('/api/internal-tasks/tsk_cred_1/approve')
+      .send({ remarks: 'Attempted approval' });
+    expect(noAuthRes.status).toBe(403);
+    expect(noAuthRes.body.success).toBe(false);
+    expect(noAuthRes.body.error).toMatch(/Insufficient permissions/);
+
+    // Wrong role (buyer cannot approve credits)
+    const internalTaskController = require('../src/controllers/internalTaskController');
+    const mockReq = {
+      params: { id: 'tsk_cred_role_check' },
+      user: { sub: 'buyer-1', name: 'Regular Buyer', role: 'buyer' },
+      body: { remarks: 'Trying to approve' },
+    };
+    const mockRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(mockReq, mockRes);
+    expect(mockRes.status).toHaveBeenCalledWith(403);
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, error: expect.stringContaining('Insufficient permissions') })
+    );
+  });
+
+  test('POST /api/internal-tasks/:id/approve approves credit request when user has admin role', async () => {
+    const internalTaskController = require('../src/controllers/internalTaskController');
+
     jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue({
       id: 'tsk_cred_1',
       task_number: 'TASK-9901',
@@ -362,32 +388,81 @@ describe('Internal Tasks API & Controller', () => {
       status: 'Completed',
     });
 
-    const res = await request(app)
-      .post('/api/internal-tasks/tsk_cred_1/approve')
-      .send({ remarks: 'Approved by Financial Controller' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.task.status).toBe('Completed');
+    // Success path with admin role
+    const mockReq = {
+      params: { id: 'tsk_cred_1' },
+      user: { sub: 'admin-1', name: 'Admin Approver', role: 'admin' },
+      body: { remarks: 'Approved by Financial Controller' },
+    };
+    const mockRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(mockReq, mockRes);
+    expect(mockRes.status).toHaveBeenCalledWith(200);
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, task: expect.objectContaining({ status: 'Completed' }) })
+    );
 
     // 404 branch
     jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue(null);
-    const notFound = await request(app).post('/api/internal-tasks/unknown/approve').send({});
-    expect(notFound.status).toBe(404);
+    const notFoundReq = {
+      params: { id: 'unknown' },
+      user: { sub: 'admin-1', name: 'Admin', role: 'admin' },
+      body: {},
+    };
+    const notFoundRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(notFoundReq, notFoundRes);
+    expect(notFoundRes.status).toHaveBeenCalledWith(404);
 
-    // 500 branch
+    // 500 error branch
     jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockRejectedValue(new Error('Approve error'));
-    const errRes = await request(app).post('/api/internal-tasks/tsk_cred_1/approve').send({});
-    expect(errRes.status).toBe(500);
+    const errReq = {
+      params: { id: 'tsk_cred_1' },
+      user: { sub: 'admin-1', name: 'Admin', role: 'category_manager' },
+      body: {},
+    };
+    const errRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(errReq, errRes);
+    expect(errRes.status).toHaveBeenCalledWith(500);
 
     // Falsy updated branch
     jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue({ id: 'tsk_cred_falsy' });
     jest.spyOn(internalTaskQueries, 'approveCreditTask').mockResolvedValue(null);
-    const falsyRes = await request(app).post('/api/internal-tasks/tsk_cred_falsy/approve').send({});
-    expect(falsyRes.status).toBe(500);
+    const falsyReq = {
+      params: { id: 'tsk_cred_falsy' },
+      user: { sub: 'admin-1', name: 'Admin', role: 'admin' },
+      body: {},
+    };
+    const falsyRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(falsyReq, falsyRes);
+    expect(falsyRes.status).toHaveBeenCalledWith(500);
   });
 
-  test('POST /api/internal-tasks/:id/reject rejects credit request', async () => {
+  test('POST /api/internal-tasks/:id/reject rejects unauthenticated and unauthorized users', async () => {
+    // Unauthenticated (no token → req.user undefined via optionalAuthenticate)
+    const noAuthRes = await request(app)
+      .post('/api/internal-tasks/tsk_cred_2/reject')
+      .send({ remarks: 'Attempted rejection' });
+    expect(noAuthRes.status).toBe(403);
+    expect(noAuthRes.body.success).toBe(false);
+    expect(noAuthRes.body.error).toMatch(/Insufficient permissions/);
+
+    // Wrong role (vendor cannot reject credits)
+    const internalTaskController = require('../src/controllers/internalTaskController');
+    const mockReq = {
+      params: { id: 'tsk_cred_role_check' },
+      user: { sub: 'vendor-1', name: 'Some Vendor', role: 'vendor' },
+      body: { remarks: 'Trying to reject' },
+    };
+    const mockRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(mockReq, mockRes);
+    expect(mockRes.status).toHaveBeenCalledWith(403);
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, error: expect.stringContaining('Insufficient permissions') })
+    );
+  });
+
+  test('POST /api/internal-tasks/:id/reject rejects credit request when user has category_manager role', async () => {
+    const internalTaskController = require('../src/controllers/internalTaskController');
+
     jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue({
       id: 'tsk_cred_2',
       task_number: 'TASK-9902',
@@ -400,29 +475,52 @@ describe('Internal Tasks API & Controller', () => {
       status: 'Rejected',
     });
 
-    const res = await request(app)
-      .post('/api/internal-tasks/tsk_cred_2/reject')
-      .send({ remarks: 'Duplicate request' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.task.status).toBe('Rejected');
+    // Success path with category_manager role
+    const mockReq = {
+      params: { id: 'tsk_cred_2' },
+      user: { sub: 'cm-1', name: 'Category Manager', role: 'category_manager' },
+      body: { remarks: 'Duplicate request' },
+    };
+    const mockRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(mockReq, mockRes);
+    expect(mockRes.status).toHaveBeenCalledWith(200);
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, task: expect.objectContaining({ status: 'Rejected' }) })
+    );
 
     // 404 branch
     jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue(null);
-    const notFound = await request(app).post('/api/internal-tasks/unknown/reject').send({});
-    expect(notFound.status).toBe(404);
+    const notFoundReq = {
+      params: { id: 'unknown' },
+      user: { sub: 'cm-1', name: 'CM', role: 'category_manager' },
+      body: {},
+    };
+    const notFoundRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(notFoundReq, notFoundRes);
+    expect(notFoundRes.status).toHaveBeenCalledWith(404);
 
     // 500 error branch
     jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockRejectedValue(new Error('Reject error'));
-    const errRes = await request(app).post('/api/internal-tasks/tsk_cred_2/reject').send({});
-    expect(errRes.status).toBe(500);
+    const errReq = {
+      params: { id: 'tsk_cred_2' },
+      user: { sub: 'admin-1', name: 'Admin', role: 'admin' },
+      body: {},
+    };
+    const errRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(errReq, errRes);
+    expect(errRes.status).toHaveBeenCalledWith(500);
 
     // Falsy updated branch
     jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue({ id: 'tsk_cred_rej_falsy' });
     jest.spyOn(internalTaskQueries, 'rejectCreditTask').mockResolvedValue(null);
-    const falsyRej = await request(app).post('/api/internal-tasks/tsk_cred_rej_falsy/reject').send({});
-    expect(falsyRej.status).toBe(500);
+    const falsyReq = {
+      params: { id: 'tsk_cred_rej_falsy' },
+      user: { sub: 'admin-1', name: 'Admin', role: 'admin' },
+      body: {},
+    };
+    const falsyRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(falsyReq, falsyRes);
+    expect(falsyRes.status).toHaveBeenCalledWith(500);
   });
 
   test('POST /api/internal-tasks/:id/activities logs remarks and progress', async () => {

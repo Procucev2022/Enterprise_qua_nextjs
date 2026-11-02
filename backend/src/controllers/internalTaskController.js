@@ -10,6 +10,7 @@ const storeService = require('../services/storeService');
 const { validatePayload } = require('../config/validationSchemas');
 const { logger } = require('../services/loggerService');
 const actionCenterNotificationService = require('../services/actionCenterNotificationService');
+const { CREDIT_APPROVER_ROLES } = require('../config/constants');
 
 /**
  * List internal tasks with database-side filtering, searching, and pagination.
@@ -284,7 +285,21 @@ async function updateTask(req, res) {
 async function approveCreditTask(req, res) {
   try {
     const { id } = req.params;
-    const actor = req.user ?? { name: 'Admin Approver', role: 'admin' };
+
+    // Enforce role-based authorization for credit approvals
+    if (!req.user || !CREDIT_APPROVER_ROLES.includes(req.user.role)) {
+      logger.warn('Unauthorized credit approval attempt', {
+        userId: req.user?.sub,
+        role: req.user?.role,
+        taskId: id,
+      }, 'INTERNAL_TASK_CONTROLLER');
+      return res.status(403).json({
+        success: false,
+        error: 'Insufficient permissions. Only admins and category managers can approve credit tasks.',
+      });
+    }
+
+    const actor = req.user;
     const { remarks = '' } = req.body;
 
     const task = await internalTaskQueries.getInternalTaskById(id);
@@ -314,7 +329,21 @@ async function approveCreditTask(req, res) {
 async function rejectCreditTask(req, res) {
   try {
     const { id } = req.params;
-    const actor = req.user ?? { name: 'Admin Approver', role: 'admin' };
+
+    // Enforce role-based authorization for credit rejections
+    if (!req.user || !CREDIT_APPROVER_ROLES.includes(req.user.role)) {
+      logger.warn('Unauthorized credit rejection attempt', {
+        userId: req.user?.sub,
+        role: req.user?.role,
+        taskId: id,
+      }, 'INTERNAL_TASK_CONTROLLER');
+      return res.status(403).json({
+        success: false,
+        error: 'Insufficient permissions. Only admins and category managers can reject credit tasks.',
+      });
+    }
+
+    const actor = req.user;
     const { remarks = '' } = req.body;
 
     const task = await internalTaskQueries.getInternalTaskById(id);
