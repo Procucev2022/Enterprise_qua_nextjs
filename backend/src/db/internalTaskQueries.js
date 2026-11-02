@@ -958,7 +958,8 @@ async function updateInternalTask(id, updates = {}, actor = {}) {
 
 /**
  * Approve a Credit Add/Delete task and update database balance.
- * Executes coordinated atomic updates with automatic rollback on failure to prevent balance drift.
+ * Executes database updates as the authoritative source of truth first,
+ * synchronizing in-memory service caches only after all DB transactions commit.
  */
 async function approveCreditTask(id, actor = {}, remarks = '') {
   if (!pool.hasStorage()) return null;
@@ -981,127 +982,108 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
   const storeService = require('../services/storeService');
   const domainQueries = require('./domainQueries');
 
-  let rollbackFn = null;
+  // 1. Resolve target account and compute new balance
+  let targetBuyer = null;
+  let targetVendor = null;
 
-  try {
-    if (accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT') {
-      const buyers = (storeService.getBuyerAccounts && storeService.getBuyerAccounts()) || [];
-      const buyer = buyers.find(
-        (b) => b.id === accountId || b.corporateEmail === accountId || b.organizationName === task.credit_account_name
-      );
-      if (buyer) {
-        const prevBal = Number(buyer.creditBalance) || 0;
-        const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-        if (storeService.updateBuyerAccount) {
-          await Promise.resolve(storeService.updateBuyerAccount(buyer.id, { creditBalance: updatedBal }));
-          rollbackFn = async () => {
-            if (storeService.updateBuyerAccount) {
-              await Promise.resolve(storeService.updateBuyerAccount(buyer.id, { creditBalance: prevBal }));
-            }
-          };
-        }
-        const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
-        if (domainQueries.recordBuyerCreditTransactionInDB) {
-          await domainQueries.recordBuyerCreditTransactionInDB({
-            id: txId,
-            buyerId: buyer.id,
-            rfqId: null,
-            transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
-            creditSource: 'Action Center Internal Tasks Approval',
-            creditsAdded: isDeduct ? 0 : creditQty,
-            creditsConsumed: isDeduct ? creditQty : 0,
-            previousBalance: prevBal,
-            updatedBalance: updatedBal,
-            status: 'COMPLETED',
-            description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
-            idempotencyKey: `task-approval-${task.id}`,
-          });
-        }
-      }
-    } else if (accountType === 'SELLER' || accountType === 'VENDOR') {
-      const vendor = (storeService.getVendorById && storeService.getVendorById(accountId)) || null;
-      if (vendor) {
-        const prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? 0);
-        const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-        const origQuotationCredits = vendor.freeQuotationCredits;
-        const origDownloadCredits = vendor.freeRfqDownloadCredits;
-        if (storeService.updateVendor) {
-          await Promise.resolve(storeService.updateVendor(vendor.id, {
-            freeQuotationCredits: updatedBal,
-            freeRfqDownloadCredits: updatedBal,
-          }));
-          rollbackFn = async () => {
-            if (storeService.updateVendor) {
-              await Promise.resolve(storeService.updateVendor(vendor.id, {
-                freeQuotationCredits: origQuotationCredits,
-                freeRfqDownloadCredits: origDownloadCredits,
-              }));
-            }
-          };
-        }
-        const txId = `vtx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
-        if (domainQueries.recordCreditTransactionInDB) {
-          await domainQueries.recordCreditTransactionInDB({
-            id: txId,
-            vendorId: vendor.id,
-            rfqId: null,
-            transactionType: isDeduct ? 'CREDIT_DEDUCTION' : 'CREDIT_GRANT',
-            amount: creditQty,
-            balanceAfter: updatedBal,
-            idempotencyKey: `task-approval-${task.id}`,
-          });
-        }
-      }
-    }
-
-    // Update task status and approval details
-    const updateSql = `
-      UPDATE internal_tasks SET
-        status = 'Completed',
-        approval_status = 'APPROVED',
-        approver_id = $1,
-        approver_name = $2,
-        approved_at = CURRENT_TIMESTAMP,
-        approval_remarks = $3,
-        completed_at = CURRENT_TIMESTAMP,
-        completed_by_user_id = $1,
-        completed_by_name = $2,
-        completion_remarks = $3,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $4
-    `;
-    await pool.query(updateSql, [actorId, actorName, approvalRemarks, task.id], { d1: true, d1Text: updateSql });
-
-    // Log activity
-    const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
-    const actSql = `
-      INSERT INTO internal_task_activities (
-        id, task_id, action_type, actor_id, actor_name, from_value, to_value, comment
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `;
-    await pool.query(
-      actSql,
-      [
-        actId,
-        task.id,
-        'APPROVED',
-        actorId,
-        actorName,
-        task.status,
-        'Completed',
-        `Credit request approved by ${actorName}. Remarks: ${approvalRemarks}`,
-      ],
-      { d1: true, d1Text: actSql }
+  if (accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT') {
+    const buyers = (storeService.getBuyerAccounts && storeService.getBuyerAccounts()) || [];
+    const buyer = buyers.find(
+      (b) => b.id === accountId || b.corporateEmail === accountId || b.organizationName === task.credit_account_name
     );
-  } catch (error) {
-    if (rollbackFn) {
-      try {
-        await rollbackFn();
-      } catch {
-        // Rollback failure suppressed to preserve primary error
-      }
+    if (buyer) {
+      const prevBal = Number(buyer.creditBalance) || 0;
+      const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
+      targetBuyer = { buyerId: buyer.id, prevBal, updatedBal };
     }
-    throw error;
+  } else if (accountType === 'SELLER' || accountType === 'VENDOR') {
+    const vendor = (storeService.getVendorById && storeService.getVendorById(accountId)) || null;
+    if (vendor) {
+      const prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? 0);
+      const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
+      targetVendor = { vendorId: vendor.id, prevBal, updatedBal };
+    }
+  }
+
+  // 2. Authoritative Database Transactions First:
+  // Update task status and approval details
+  const updateSql = `
+    UPDATE internal_tasks SET
+      status = 'Completed',
+      approval_status = 'APPROVED',
+      approver_id = $1,
+      approver_name = $2,
+      approved_at = CURRENT_TIMESTAMP,
+      approval_remarks = $3,
+      completed_at = CURRENT_TIMESTAMP,
+      completed_by_user_id = $1,
+      completed_by_name = $2,
+      completion_remarks = $3,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $4
+  `;
+  await pool.query(updateSql, [actorId, actorName, approvalRemarks, task.id], { d1: true, d1Text: updateSql });
+
+  // Log approval activity record in database
+  const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
+  const actSql = `
+    INSERT INTO internal_task_activities (
+      id, task_id, action_type, actor_id, actor_name, from_value, to_value, comment
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+  `;
+  await pool.query(
+    actSql,
+    [
+      actId,
+      task.id,
+      'APPROVED',
+      actorId,
+      actorName,
+      task.status,
+      'Completed',
+      `Credit request approved by ${actorName}. Remarks: ${approvalRemarks}`,
+    ],
+    { d1: true, d1Text: actSql }
+  );
+
+  // Record credit transaction in database ledger
+  if (targetBuyer && domainQueries.recordBuyerCreditTransactionInDB) {
+    const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+    await domainQueries.recordBuyerCreditTransactionInDB({
+      id: txId,
+      buyerId: targetBuyer.buyerId,
+      rfqId: null,
+      transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
+      creditSource: 'Action Center Internal Tasks Approval',
+      creditsAdded: isDeduct ? 0 : creditQty,
+      creditsConsumed: isDeduct ? creditQty : 0,
+      previousBalance: targetBuyer.prevBal,
+      updatedBalance: targetBuyer.updatedBal,
+      status: 'COMPLETED',
+      description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
+      idempotencyKey: `task-approval-${task.id}`,
+    });
+  } else if (targetVendor && domainQueries.recordCreditTransactionInDB) {
+    const txId = `vtx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+    await domainQueries.recordCreditTransactionInDB({
+      id: txId,
+      vendorId: targetVendor.vendorId,
+      rfqId: null,
+      transactionType: isDeduct ? 'CREDIT_DEDUCTION' : 'CREDIT_GRANT',
+      amount: creditQty,
+      balanceAfter: targetVendor.updatedBal,
+      idempotencyKey: `task-approval-${task.id}`,
+    });
+  }
+
+  // 3. Synchronize in-memory cache only AFTER database persistence succeeds
+  if (targetBuyer && storeService.updateBuyerAccount) {
+    await Promise.resolve(storeService.updateBuyerAccount(targetBuyer.buyerId, { creditBalance: targetBuyer.updatedBal }));
+  } else if (targetVendor && storeService.updateVendor) {
+    await Promise.resolve(storeService.updateVendor(targetVendor.vendorId, {
+      freeQuotationCredits: targetVendor.updatedBal,
+      freeRfqDownloadCredits: targetVendor.updatedBal,
+    }));
   }
 
   return getInternalTaskById(task.id);

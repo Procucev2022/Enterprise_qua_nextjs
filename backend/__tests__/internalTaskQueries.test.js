@@ -859,7 +859,7 @@ describe('internalTaskQueries', () => {
       expect(res).toBeDefined();
     });
 
-    test('approveCreditTask rolls back memory balance if database update fails for buyer', async () => {
+    test('approveCreditTask aborts without modifying memory balance if database update fails for buyer', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       const storeService = require('../src/services/storeService');
       const domainQueries = require('../src/db/domainQueries');
@@ -896,10 +896,11 @@ describe('internalTaskQueries', () => {
       });
 
       await expect(queries.approveCreditTask('tsk_roll')).rejects.toThrow('Simulated DB update failure');
-      expect(updateBuyerSpy).toHaveBeenCalledWith('buy_roll', { creditBalance: 100 });
+      // Memory state must remain untouched when DB update fails
+      expect(updateBuyerSpy).not.toHaveBeenCalled();
     });
 
-    test('approveCreditTask rolls back vendor memory balance if database update fails', async () => {
+    test('approveCreditTask aborts without modifying vendor memory balance if database update fails', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       const storeService = require('../src/services/storeService');
       const domainQueries = require('../src/db/domainQueries');
@@ -938,7 +939,8 @@ describe('internalTaskQueries', () => {
       });
 
       await expect(queries.approveCreditTask('tsk_ven_roll')).rejects.toThrow('Simulated DB vendor update failure');
-      expect(updateVendorSpy).toHaveBeenCalledWith('ven_roll', { freeQuotationCredits: 40, freeRfqDownloadCredits: 40 });
+      // Vendor memory state must remain untouched when DB update fails
+      expect(updateVendorSpy).not.toHaveBeenCalled();
     });
 
     test('getInternalTasks safely escapes wildcards in search, assignedTo, and createdBy', async () => {

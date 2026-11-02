@@ -184,8 +184,8 @@ async function createTask(req, res) {
             actor
           );
         }
-      } catch {
-        // Notification failure is non-blocking
+      } catch (err) {
+        logger.warn('Failed to dispatch task assignment notification', { error: err.message }, 'INTERNAL_TASK_CONTROLLER');
       }
     }
 
@@ -204,8 +204,8 @@ async function createTask(req, res) {
           },
           actor
         );
-      } catch {
-        // Safe non-blocking
+      } catch (err) {
+        logger.warn('Failed to dispatch credit approval notification', { error: err.message }, 'INTERNAL_TASK_CONTROLLER');
       }
     }
 
@@ -267,8 +267,8 @@ async function updateTask(req, res) {
           },
           actor
         );
-      } catch {
-        // Non-blocking notification
+      } catch (err) {
+        logger.warn('Failed to dispatch task status update notification', { error: err.message }, 'INTERNAL_TASK_CONTROLLER');
       }
     }
 
@@ -421,8 +421,8 @@ async function checkReminders(req, res) {
               actor
             );
           }
-        } catch {
-          // ignore notification errors
+        } catch (err) {
+          logger.warn('Failed to dispatch reminder notification', { error: err.message }, 'INTERNAL_TASK_CONTROLLER');
         }
       }
     }
