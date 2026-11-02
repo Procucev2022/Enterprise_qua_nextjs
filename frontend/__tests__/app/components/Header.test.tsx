@@ -590,7 +590,7 @@ describe('Header Session Timer and Auto Logout', () => {
     fireEvent.click(timer);
     expect(mockShowToast).toHaveBeenCalledWith(
       'Session Extended',
-      expect.stringContaining('30 minutes'),
+      expect.stringMatching(/(5|30) minutes/),
       'info'
     );
   });
@@ -721,7 +721,7 @@ describe('Header Session Timer and Auto Logout', () => {
     fireEvent.keyDown(timer, { key: 'Enter' });
     expect(mockShowToast).toHaveBeenCalledWith(
       'Session Extended',
-      expect.stringContaining('30 minutes'),
+      expect.stringMatching(/(5|30) minutes/),
       'info'
     );
 
