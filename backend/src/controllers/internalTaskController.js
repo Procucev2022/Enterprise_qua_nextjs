@@ -10,7 +10,7 @@ const storeService = require('../services/storeService');
 const { validatePayload } = require('../config/validationSchemas');
 const { logger } = require('../services/loggerService');
 const actionCenterNotificationService = require('../services/actionCenterNotificationService');
-const { CREDIT_APPROVER_ROLES } = require('../config/constants');
+const { CREDIT_APPROVER_ROLES, DEFAULT_CREDIT_APPROVER_EMAIL } = require('../config/constants');
 
 /**
  * List internal tasks with database-side filtering, searching, and pagination.
@@ -197,7 +197,7 @@ async function createTask(req, res) {
             entityType: 'internal_task',
             entityId: task.id,
             channel: 'EMAIL',
-            recipientEmail: 'admin@procucev.com',
+            recipientEmail: process.env.CREDIT_APPROVER_EMAIL || DEFAULT_CREDIT_APPROVER_EMAIL,
             recipientName: 'Administrator / Credit Approver',
             subject: `[Approval Required] Credit Request ${task.task_number}`,
             message: `A new credit allocation/deduction request (${task.task_number}) requires your approval. Target Account: ${task.credit_account_name ?? 'Account'}. Quantity: ${task.credit_quantity ?? 0}. Reason: ${task.credit_reason ?? 'N/A'}.`,

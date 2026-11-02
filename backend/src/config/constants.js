@@ -2843,6 +2843,10 @@ const CREDIT_APPROVER_ROLES = Object.freeze([
   'category_manager',
 ]);
 
+const DEFAULT_CREDIT_APPROVER_EMAIL = Object.freeze(
+  process.env.CREDIT_APPROVER_EMAIL || process.env.ADMIN_NOTIFICATION_EMAIL || 'admin@procucev.com'
+);
+
 const CALL_OUTCOMES = Object.freeze([
   'Connected - Interested',
   'Connected - Follow-up Requested',
@@ -2878,6 +2882,7 @@ module.exports = {
   DEMO_STATUSES,
   CREDIT_ACCOUNT_TYPES,
   CREDIT_APPROVER_ROLES,
+  DEFAULT_CREDIT_APPROVER_EMAIL,
   CALL_OUTCOMES,
   PROPOSAL_STATUSES,
   ONBOARDING_STAGES,
