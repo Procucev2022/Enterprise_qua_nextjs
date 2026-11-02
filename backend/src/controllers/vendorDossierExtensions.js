@@ -289,6 +289,40 @@ async function recordVendorCommunication(req, res, next) {
       },
     });
 
+    // External Live Dispatch for Email and SMS (Restricted to staff and channel-verified destinations)
+    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
+    const smsService = require('../services/smsService');
+    const normalizedVendorPhone = smsService.formatMobileNumber(recipient);
+    const emailTo = (recipient && recipient.includes('@')) ? recipient : vendor.email;
+    const smsTo = (normalizedVendorPhone && normalizedVendorPhone.length === 10) ? recipient : vendor.phone;
+    if (isStaff && normalizedChannel === 'EMAIL' && emailTo) {
+      try {
+        const mailerService = require('../services/mailerService');
+        if (typeof mailerService.deliver === 'function') {
+          mailerService.deliver({
+            to: emailTo,
+            subject: '[Procucev] ' + (subject || 'Supplier Communication'),
+            text: message || commNotes || '',
+            replyTo: req.user?.email || undefined,
+          }, 'SUPPLIER_DOSSIER_COMM').catch((err) => logger.warn('Async vendor email dispatch error', { error: err.message }));
+        }
+      } catch (mailErr) {
+        logger.warn('Failed to dispatch external email for vendor communication', { error: mailErr.message });
+      }
+    } else if (isStaff && normalizedChannel === 'SMS' && smsTo) {
+      try {
+        const smsService = require('../services/smsService');
+        smsService.sendActionCenterSms({
+          mobile: smsTo,
+          recipientName: vendor.companyName || vendor.name || 'Supplier',
+          message: message || subject || 'Supplier notification',
+          entityType: 'supplier_dossier',
+        }).catch((err) => logger.warn('Async vendor SMS dispatch error', { error: err.message }));
+      } catch (smsErr) {
+        logger.warn('Failed to dispatch external SMS for vendor communication', { error: smsErr.message });
+      }
+    }
+
     const vendorLabel = vendor.companyName || vendor.name || vendor.businessName || 'Supplier';
 
     let completedTask = null;

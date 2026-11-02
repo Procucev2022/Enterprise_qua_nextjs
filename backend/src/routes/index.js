@@ -31,8 +31,10 @@ const ticketRoutes = require('./tickets');
 const approvalRoutes = require('./approvals');
 const scorecardRoutes = require('./scorecard');
 const paymentDuesRoutes = require('./paymentDues');
+const actionCenterCommRoutes = require('./actionCenterCommunications');
 
 // Mount sub-routers
+router.use('/action-center/communications', actionCenterCommRoutes);
 router.use('/payment-dues', paymentDuesRoutes);
 router.use('/internal-tasks', internalTaskRoutes);
 router.use('/tickets', ticketRoutes);
