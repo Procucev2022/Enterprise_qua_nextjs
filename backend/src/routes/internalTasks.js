@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const internalTaskController = require('../controllers/internalTaskController');
-const { optionalAuthenticate } = require('../middleware/auth');
+const { authenticate, optionalAuthenticate, requireRole } = require('../middleware/auth');
 
 // Registered Clients (Action Center Registrations Module)
 router.get('/registrations', optionalAuthenticate, internalTaskController.getRegistrations);
@@ -32,8 +32,18 @@ router.put('/:id', optionalAuthenticate, internalTaskController.updateTask);
 router.delete('/:id', optionalAuthenticate, internalTaskController.deleteTask);
 
 // Task actions: credit approval workflow & activity log
-router.post('/:id/approve', optionalAuthenticate, internalTaskController.approveCreditTask);
-router.post('/:id/reject', optionalAuthenticate, internalTaskController.rejectCreditTask);
+router.post(
+  '/:id/approve',
+  authenticate,
+  requireRole('admin', 'category_manager'),
+  internalTaskController.approveCreditTask
+);
+router.post(
+  '/:id/reject',
+  authenticate,
+  requireRole('admin', 'category_manager'),
+  internalTaskController.rejectCreditTask
+);
 router.post('/:id/activities', optionalAuthenticate, internalTaskController.addTaskActivity);
 
 module.exports = router;

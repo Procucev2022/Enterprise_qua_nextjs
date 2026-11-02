@@ -1,6 +1,7 @@
 const request = require('supertest');
 const app = require('../src/app');
 const internalTaskQueries = require('../src/db/internalTaskQueries');
+const authService = require('../src/services/authService');
 
 describe('Internal Tasks API & Controller', () => {
   test('GET /api/internal-tasks/assignees returns team members and handles failure', async () => {
@@ -350,15 +351,26 @@ describe('Internal Tasks API & Controller', () => {
   });
 
   test('POST /api/internal-tasks/:id/approve rejects unauthenticated and unauthorized users', async () => {
-    // Unauthenticated (no token → req.user undefined via optionalAuthenticate)
+    // Unauthenticated (no token → authenticate returns 401)
     const noAuthRes = await request(app)
       .post('/api/internal-tasks/tsk_cred_1/approve')
       .send({ remarks: 'Attempted approval' });
-    expect(noAuthRes.status).toBe(403);
+    expect(noAuthRes.status).toBe(401);
     expect(noAuthRes.body.success).toBe(false);
-    expect(noAuthRes.body.error).toMatch(/Insufficient permissions/);
 
-    // Wrong role (buyer cannot approve credits)
+    // Authenticated with unauthorized role (buyer → requireRole returns 403)
+    jest.spyOn(authService, 'assertSessionActive').mockResolvedValueOnce({
+      valid: true,
+      user: { sub: 'buyer-1', role: 'buyer' },
+    });
+    const forbiddenRes = await request(app)
+      .post('/api/internal-tasks/tsk_cred_1/approve')
+      .set('Authorization', 'Bearer buyer-token')
+      .send({ remarks: 'Attempted approval' });
+    expect(forbiddenRes.status).toBe(403);
+    expect(forbiddenRes.body.success).toBe(false);
+
+    // Direct controller invocation without user or with wrong role
     const internalTaskController = require('../src/controllers/internalTaskController');
     const mockReq = {
       params: { id: 'tsk_cred_role_check' },
@@ -371,6 +383,15 @@ describe('Internal Tasks API & Controller', () => {
     expect(mockRes.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: false, error: expect.stringContaining('Insufficient permissions') })
     );
+
+    // Direct controller invocation with undefined req.user
+    const noUserReq = {
+      params: { id: 'tsk_cred_no_user' },
+      body: { remarks: 'Trying to approve' },
+    };
+    const noUserRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(noUserReq, noUserRes);
+    expect(noUserRes.status).toHaveBeenCalledWith(403);
   });
 
   test('POST /api/internal-tasks/:id/approve approves credit request when user has admin role', async () => {
@@ -437,15 +458,26 @@ describe('Internal Tasks API & Controller', () => {
   });
 
   test('POST /api/internal-tasks/:id/reject rejects unauthenticated and unauthorized users', async () => {
-    // Unauthenticated (no token → req.user undefined via optionalAuthenticate)
+    // Unauthenticated (no token → authenticate returns 401)
     const noAuthRes = await request(app)
       .post('/api/internal-tasks/tsk_cred_2/reject')
       .send({ remarks: 'Attempted rejection' });
-    expect(noAuthRes.status).toBe(403);
+    expect(noAuthRes.status).toBe(401);
     expect(noAuthRes.body.success).toBe(false);
-    expect(noAuthRes.body.error).toMatch(/Insufficient permissions/);
 
-    // Wrong role (vendor cannot reject credits)
+    // Authenticated with unauthorized role (vendor → requireRole returns 403)
+    jest.spyOn(authService, 'assertSessionActive').mockResolvedValueOnce({
+      valid: true,
+      user: { sub: 'vendor-1', role: 'vendor' },
+    });
+    const forbiddenRes = await request(app)
+      .post('/api/internal-tasks/tsk_cred_2/reject')
+      .set('Authorization', 'Bearer vendor-token')
+      .send({ remarks: 'Attempted rejection' });
+    expect(forbiddenRes.status).toBe(403);
+    expect(forbiddenRes.body.success).toBe(false);
+
+    // Direct controller invocation with wrong role
     const internalTaskController = require('../src/controllers/internalTaskController');
     const mockReq = {
       params: { id: 'tsk_cred_role_check' },
@@ -458,6 +490,15 @@ describe('Internal Tasks API & Controller', () => {
     expect(mockRes.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: false, error: expect.stringContaining('Insufficient permissions') })
     );
+
+    // Direct controller invocation with undefined req.user
+    const noUserReq = {
+      params: { id: 'tsk_cred_no_user_rej' },
+      body: { remarks: 'Trying to reject' },
+    };
+    const noUserRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(noUserReq, noUserRes);
+    expect(noUserRes.status).toHaveBeenCalledWith(403);
   });
 
   test('POST /api/internal-tasks/:id/reject rejects credit request when user has category_manager role', async () => {
