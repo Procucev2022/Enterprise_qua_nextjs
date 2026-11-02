@@ -702,6 +702,212 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         expect(pendingUpdated.acknowledgementStatus).toBe('Delivery Pending');
       });
 
+      test('reconciles BOTH deliveryStatus for SMS target and Email target callbacks', async () => {
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+        // Case 1: BOTH with Email delivered, SMS delivery callback arrives as Delivered
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'b-both-1',
+          accountType: 'buyer',
+          channel: 'BOTH',
+          recipient: 'both1@example.com',
+          message: 'Both test 1',
+          metadata: {
+            smsResult: { messageId: 'sms-gw-1', sent: true },
+            emailResult: { messageId: 'email-gw-1', sent: true },
+            emailDeliveryStatus: 'Delivered',
+          },
+        });
+        const updateSmsDelivered = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'sms-gw-1',
+          deliveryStatus: 'Delivered',
+        });
+        expect(updateSmsDelivered.deliveryStatus).toBe('Delivered');
+
+        // Case 2: BOTH with Email failed, SMS delivery callback arrives as Delivered -> Partial
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'b-both-2',
+          accountType: 'buyer',
+          channel: 'BOTH',
+          recipient: 'both2@example.com',
+          message: 'Both test 2',
+          metadata: {
+            smsResult: { messageId: 'sms-gw-2', sent: true },
+            emailResult: { messageId: 'email-gw-2', sent: false },
+            emailDeliveryStatus: 'Failed',
+          },
+        });
+        const updateSmsPartial = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'sms-gw-2',
+          deliveryStatus: 'Delivered',
+        });
+        expect(updateSmsPartial.deliveryStatus).toBe('Partial');
+
+        // Case 3: BOTH with SMS failed, Email callback arrives as Failed -> Failed
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'b-both-3',
+          accountType: 'buyer',
+          channel: 'BOTH',
+          recipient: 'both3@example.com',
+          message: 'Both test 3',
+          metadata: {
+            smsResult: { messageId: 'sms-gw-3', sent: false },
+            smsDeliveryStatus: 'Failed',
+            emailResult: { messageId: 'email-gw-3', sent: false },
+          },
+        });
+        const updateEmailFailed = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'email-gw-3',
+          deliveryStatus: 'Failed',
+        });
+        expect(updateEmailFailed.deliveryStatus).toBe('Failed');
+
+        // Case 4: BOTH with SMS delivered, Email callback arrives as Delivered -> Delivered
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'b-both-4',
+          accountType: 'buyer',
+          channel: 'BOTH',
+          recipient: 'both4@example.com',
+          message: 'Both test 4',
+          metadata: {
+            smsResult: { messageId: 'sms-gw-4', sent: true },
+            smsDeliveryStatus: 'Delivered',
+            emailResult: { messageId: 'email-gw-4', sent: true },
+          },
+        });
+        const updateEmailDelivered = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'email-gw-4',
+          deliveryStatus: 'Delivered',
+        });
+        expect(updateEmailDelivered.deliveryStatus).toBe('Delivered');
+
+        // Case 5: BOTH with SMS delivered, Email callback arrives as Failed -> Partial
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'b-both-5',
+          accountType: 'buyer',
+          channel: 'BOTH',
+          recipient: 'both5@example.com',
+          message: 'Both test 5',
+          metadata: {
+            smsResult: { messageId: 'sms-gw-5', sent: true },
+            smsDeliveryStatus: 'Delivered',
+            emailResult: { messageId: 'email-gw-5', sent: false },
+          },
+        });
+        const updateEmailPartial = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'email-gw-5',
+          deliveryStatus: 'Failed',
+        });
+        expect(updateEmailPartial.deliveryStatus).toBe('Partial');
+
+        // Case 6: BOTH with msgid targeting SMS and both failing -> Failed
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'b-both-6',
+          accountType: 'buyer',
+          channel: 'BOTH',
+          recipient: 'both6@example.com',
+          message: 'Both test 6',
+          metadata: {
+            msgid: 'sms-msgid-6',
+            emailResult: { sent: false },
+          },
+        });
+        const updateSmsFailed = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'sms-msgid-6',
+          deliveryStatus: 'Failed',
+        });
+        expect(updateSmsFailed.deliveryStatus).toBe('Failed');
+
+        // Case 7: BOTH targeting SMS when emailResult.sent is true
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'b-both-7',
+          accountType: 'buyer',
+          channel: 'BOTH',
+          recipient: 'both7@example.com',
+          message: 'Both test 7',
+          metadata: {
+            gatewayMessageId: 'sms-gw-7',
+            emailResult: { sent: true },
+          },
+        });
+        const updateSmsBothDelivered = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'sms-gw-7',
+          deliveryStatus: 'Delivered',
+        });
+        expect(updateSmsBothDelivered.deliveryStatus).toBe('Delivered');
+
+        // Case 8: BOTH targeting Email when smsResult.sent is true
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'b-both-8',
+          accountType: 'buyer',
+          channel: 'BOTH',
+          recipient: 'both8@example.com',
+          message: 'Both test 8',
+          metadata: {
+            emailResult: { messageId: 'email-gw-8', sent: true },
+            smsResult: { sent: true },
+          },
+        });
+        const updateEmailBothDelivered = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'email-gw-8',
+          deliveryStatus: 'Delivered',
+        });
+        expect(updateEmailBothDelivered.deliveryStatus).toBe('Delivered');
+
+        // Case 9: BOTH targeting Email when smsResult.sent is false
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'b-both-9',
+          accountType: 'buyer',
+          channel: 'BOTH',
+          recipient: 'both9@example.com',
+          message: 'Both test 9',
+          metadata: {
+            emailResult: { messageId: 'email-gw-9', sent: false },
+            smsResult: { sent: false },
+          },
+        });
+        const updateEmailBothFailed = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'email-gw-9',
+          deliveryStatus: 'Failed',
+        });
+        expect(updateEmailBothFailed.deliveryStatus).toBe('Failed');
+
+        // Case 10: Fallback when not targeting either specifically
+        const bothDirect = await paymentDuesQueries.recordCommunication({
+          accountId: 'b-both-direct',
+          accountType: 'buyer',
+          channel: 'BOTH',
+          recipient: 'direct@example.com',
+          message: 'Direct update',
+        });
+        const updateDirect = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: bothDirect.id,
+          deliveryStatus: 'Delivered',
+        });
+        expect(updateDirect.deliveryStatus).toBe('Delivered');
+      });
+
+      test('getCommunicationHistory handles unbounded and bounded pagination with storage', async () => {
+        // Pool storage with explicit limit
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+        jest.spyOn(pool, 'query').mockResolvedValueOnce({
+          rows: [{ id: 'comm-bounded', account_id: 'b-test', sent_at: new Date().toISOString() }],
+        });
+        const bounded = await paymentDuesQueries.getCommunicationHistory('b-test', { limit: 10, offset: 0 });
+        expect(bounded).toHaveLength(1);
+
+        // Pool storage without explicit limit (unbounded)
+        jest.spyOn(pool, 'query').mockResolvedValueOnce({
+          rows: [{ id: 'comm-unbounded', account_id: 'b-test', sent_at: new Date().toISOString() }],
+        });
+        const unbounded = await paymentDuesQueries.getCommunicationHistory('b-test');
+        expect(unbounded).toHaveLength(1);
+
+        // In-memory with explicit limit
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+        const memBounded = await paymentDuesQueries.getCommunicationHistory('b-test', { limit: 5 });
+        expect(Array.isArray(memBounded)).toBe(true);
+      });
+
       test('updates acknowledgement status in DB targeting communicationId when pool has storage', async () => {
         jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
         const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({

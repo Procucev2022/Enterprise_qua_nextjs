@@ -331,6 +331,20 @@ describe('Backend Validation Schemas Unit Tests', () => {
       expect(enumRes.isValid).toBe(false);
       expect(enumRes.errors.severity).toMatch(/must be one of/);
     });
+
+    test('actionCenterCommunicationSend scheduleFollowup custom validator branches', () => {
+      const customFn = VALIDATION_SCHEMAS.actionCenterCommunicationSend.scheduleFollowup.custom;
+      expect(customFn(null)).toBeNull();
+      expect(customFn(undefined)).toBeNull();
+      expect(customFn('')).toBeNull();
+      expect(customFn('not-an-object')).toMatch(/must be a valid object/);
+      expect(customFn(['array'])).toMatch(/must be a valid object/);
+      expect(customFn({})).toMatch(/dueDate is required/);
+      expect(customFn({ dueDate: 'invalid-date' })).toMatch(/must be a valid date/);
+      expect(customFn({ dueDate: '2026-12-31', priority: 'InvalidPriority' })).toMatch(/priority must be one of/);
+      expect(customFn({ dueDate: '2026-12-31', priority: 'High' })).toBeNull();
+      expect(customFn({ dueDate: '2026-12-31' })).toBeNull();
+    });
   });
 });
 
