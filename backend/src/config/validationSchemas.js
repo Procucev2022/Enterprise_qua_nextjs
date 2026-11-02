@@ -839,8 +839,8 @@ const VALIDATION_SCHEMAS = {
         if (isNaN(d.getTime())) {
           return 'scheduleFollowup.dueDate must be a valid date.';
         }
-        if (val.priority && !['Low', 'Medium', 'High', 'Urgent'].includes(val.priority)) {
-          return 'scheduleFollowup.priority must be one of: Low, Medium, High, Urgent.';
+        if (val.priority && !['Low', 'Medium', 'High', 'Critical', 'Urgent'].includes(val.priority)) {
+          return 'scheduleFollowup.priority must be one of: Low, Medium, High, Critical, Urgent.';
         }
         return null;
       },

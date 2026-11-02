@@ -884,6 +884,27 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
           deliveryStatus: 'Delivered',
         });
         expect(updateDirect.deliveryStatus).toBe('Delivered');
+
+        // Case 11: BOTH channel acknowledgement-only callback preserves delivery status
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'b-both-11',
+          accountType: 'buyer',
+          channel: 'BOTH',
+          recipient: 'both11@example.com',
+          message: 'Both test 11',
+          metadata: {
+            smsResult: { messageId: 'sms-gw-11', sent: true },
+            emailResult: { messageId: 'email-gw-11', sent: true },
+            smsDeliveryStatus: 'Delivered',
+            emailDeliveryStatus: 'Delivered',
+          },
+        });
+        const updateAckOnly = await paymentDuesQueries.updateAcknowledgementStatus({
+          communicationId: 'sms-gw-11',
+          acknowledgementStatus: 'Acknowledged',
+        });
+        expect(updateAckOnly.acknowledgementStatus).toBe('Acknowledged');
+        expect(updateAckOnly.metadata?.smsDeliveryStatus).toBe('Delivered');
       });
 
       test('getCommunicationHistory handles unbounded and bounded pagination with storage', async () => {

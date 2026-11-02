@@ -151,7 +151,7 @@ export default function ActionCenterComposeModal({
         channel,
         recipientName: recipientName.trim(),
         recipientEmail: channel === 'SMS' ? '' : recipientEmail.trim(),
-        recipientPhone: recipientPhone.trim(),
+        recipientPhone: channel === 'EMAIL' ? '' : recipientPhone.trim(),
         subject: subject.trim(),
         message: message.trim(),
         scheduleFollowup: scheduleFollowup && followupDueDate

@@ -343,6 +343,7 @@ describe('Backend Validation Schemas Unit Tests', () => {
       expect(customFn({ dueDate: 'invalid-date' })).toMatch(/must be a valid date/);
       expect(customFn({ dueDate: '2026-12-31', priority: 'InvalidPriority' })).toMatch(/priority must be one of/);
       expect(customFn({ dueDate: '2026-12-31', priority: 'High' })).toBeNull();
+      expect(customFn({ dueDate: '2026-12-31', priority: 'Critical' })).toBeNull();
       expect(customFn({ dueDate: '2026-12-31' })).toBeNull();
     });
   });

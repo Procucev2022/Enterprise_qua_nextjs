@@ -509,10 +509,10 @@ async function updateAcknowledgementStatus({
               acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
               updated_at = $4
           WHERE id = $6
-             OR metadata->>'gatewayMessageId' = $7
-             OR metadata->>'msgid' = $8
-             OR metadata->'smsResult'->>'messageId' = $9
-             OR metadata->'emailResult'->>'messageId' = $10
+             OR metadata->>'gatewayMessageId' = $6
+             OR metadata->>'msgid' = $6
+             OR metadata->'smsResult'->>'messageId' = $6
+             OR metadata->'emailResult'->>'messageId' = $6
           RETURNING *
         `
         : `
@@ -531,9 +531,14 @@ async function updateAcknowledgementStatus({
           )
           RETURNING *
         `;
-      const queryParams = communicationId
-        ? [acknowledgementStatus || null, deliveryStatus || null, notes || null, now, updatedBy, targetParam, targetParam, targetParam, targetParam, targetParam]
-        : [acknowledgementStatus || null, deliveryStatus || null, notes || null, now, updatedBy, targetParam];
+      const queryParams = [
+        acknowledgementStatus || null,
+        deliveryStatus || null,
+        notes || null,
+        now,
+        updatedBy,
+        targetParam,
+      ];
       const result = await pool.query(sql, queryParams);
       if (result && result.rows && result.rows.length > 0) {
         const row = result.rows[0];
@@ -584,31 +589,35 @@ async function updateAcknowledgementStatus({
         }
 
         if (found.channel === 'BOTH') {
-          const isSmsTarget = found.metadata?.gatewayMessageId === communicationId ||
-            found.metadata?.msgid === communicationId ||
-            found.metadata?.smsResult?.messageId === communicationId;
-          const isEmailTarget = found.metadata?.emailResult?.messageId === communicationId;
+          if (deliveryStatus) {
+            const isSmsTarget = found.metadata?.gatewayMessageId === communicationId ||
+              found.metadata?.msgid === communicationId ||
+              found.metadata?.smsResult?.messageId === communicationId;
+            const isEmailTarget = found.metadata?.emailResult?.messageId === communicationId;
 
-          if (isSmsTarget && !isEmailTarget) {
-            found.metadata = found.metadata || {};
-            found.metadata.smsDeliveryStatus = deliveryStatus;
-            const emailState = found.metadata.emailDeliveryStatus || (found.metadata.emailResult?.sent ? 'Delivered' : 'Failed');
-            found.deliveryStatus = (emailState === 'Delivered' && deliveryStatus === 'Delivered')
-              ? 'Delivered'
-              : (deliveryStatus === 'Failed' && emailState === 'Failed')
-              ? 'Failed'
-              : 'Partial';
-          } else if (isEmailTarget && !isSmsTarget) {
-            found.metadata = found.metadata || {};
-            found.metadata.emailDeliveryStatus = deliveryStatus;
-            const smsState = found.metadata.smsDeliveryStatus || (found.metadata.smsResult?.sent ? 'Delivered' : 'Failed');
-            found.deliveryStatus = (smsState === 'Delivered' && deliveryStatus === 'Delivered')
-              ? 'Delivered'
-              : (deliveryStatus === 'Failed' && smsState === 'Failed')
-              ? 'Failed'
-              : 'Partial';
-          } else if (deliveryStatus) {
-            found.deliveryStatus = deliveryStatus;
+            if (isSmsTarget && !isEmailTarget) {
+              found.metadata = found.metadata || {};
+              found.metadata.smsDeliveryStatus = deliveryStatus;
+              const emailState = found.metadata.emailDeliveryStatus ||
+                ((found.metadata.emailResult?.success || found.metadata.emailResult?.sent) ? 'Delivered' : 'Failed');
+              found.deliveryStatus = (emailState === 'Delivered' && deliveryStatus === 'Delivered')
+                ? 'Delivered'
+                : (deliveryStatus === 'Failed' && emailState === 'Failed')
+                ? 'Failed'
+                : 'Partial';
+            } else if (isEmailTarget && !isSmsTarget) {
+              found.metadata = found.metadata || {};
+              found.metadata.emailDeliveryStatus = deliveryStatus;
+              const smsState = found.metadata.smsDeliveryStatus ||
+                ((found.metadata.smsResult?.success || found.metadata.smsResult?.sent) ? 'Delivered' : 'Failed');
+              found.deliveryStatus = (smsState === 'Delivered' && deliveryStatus === 'Delivered')
+                ? 'Delivered'
+                : (deliveryStatus === 'Failed' && smsState === 'Failed')
+                ? 'Failed'
+                : 'Partial';
+            } else {
+              found.deliveryStatus = deliveryStatus;
+            }
           }
         } else if (deliveryStatus) {
           found.deliveryStatus = deliveryStatus;
