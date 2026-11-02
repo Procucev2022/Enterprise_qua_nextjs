@@ -3,6 +3,42 @@ const app = require('../src/app');
 const internalTaskQueries = require('../src/db/internalTaskQueries');
 
 describe('Internal Tasks API & Controller', () => {
+  test('GET /api/internal-tasks/assignees returns team members and handles failure', async () => {
+    jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValue([
+      { id: 'exec-1', name: 'Pavani', role: 'CRM Executive' },
+      { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist' },
+    ]);
+
+    const res = await request(app).get('/api/internal-tasks/assignees');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.assignees.length).toBe(2);
+    expect(res.body.assignees[0].name).toBe('Pavani');
+
+    // Error branch
+    jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockRejectedValue(new Error('Assignees DB error'));
+    const errRes = await request(app).get('/api/internal-tasks/assignees');
+    expect(errRes.status).toBe(500);
+    expect(errRes.body.success).toBe(false);
+  });
+
+  test('GET /api/internal-tasks/summary with assignedTo passes user filter', async () => {
+    const summarySpy = jest.spyOn(internalTaskQueries, 'getInternalTaskSummary').mockResolvedValue({
+      total: 3,
+      pending: 1,
+      inProgress: 1,
+      blocked: 0,
+      completed: 1,
+      escalated: 0,
+      criticalCount: 0,
+    });
+
+    const res = await request(app).get('/api/internal-tasks/summary?assignedTo=Pavani');
+    expect(res.status).toBe(200);
+    expect(res.body.summary.total).toBe(3);
+    expect(summarySpy).toHaveBeenCalledWith({ assignedTo: 'Pavani' });
+  });
+
   beforeEach(() => {
     jest.restoreAllMocks();
   });

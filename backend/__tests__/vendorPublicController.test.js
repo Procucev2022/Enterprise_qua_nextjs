@@ -69,6 +69,8 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
             expect.objectContaining({
               id: 'v-pub-1',
               name: 'Kirloskar Pneumatic Co',
+              email: 'sXXXX@kirloskar.example.com',
+              phone: '+91 2XXXXXXX34',
               pan: 'ABC****4F', // Masked PAN
               isProcucevNetwork: true,
             }),
@@ -131,6 +133,67 @@ describe('Public Vendor Directory Backend Controller & Database Queries', () => 
         })
       );
       expect(res.json).toHaveBeenCalled();
+    });
+
+
+    test('masks email and phone across various formats and handles invalid inputs gracefully', async () => {
+      const mockRow = {
+        id: 'v-mask-test',
+        name: 'Contact Masking Corp',
+        raw: {
+          email: 'srinivasm@procucev.com',
+          phone: '9876543210',
+          city: 'Mumbai',
+          state: 'Maharashtra',
+        },
+      };
+
+      jest.spyOn(domainQueries, 'getPublicVendorsPageFromDB').mockResolvedValue({
+        rows: [
+          mockRow,
+          { id: 'v-m2', raw: { email: null, phone: null } },
+          { id: 'v-m3', raw: { email: 'invalid-email', phone: '123' } },
+          { id: 'v-m4', raw: { email: 'user@test.org', phone: '+14155551234' } },
+        ],
+        total: 4,
+      });
+
+      const req = { query: {} };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await vendorController.getPublicVendors(req, res, next);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'v-mask-test',
+              email: 'sXXXX@procucev.com',
+              phone: '9XXXXXXX10',
+              location: 'Mumbai, Maharashtra',
+              city: 'Mumbai',
+              state: 'Maharashtra',
+            }),
+            expect.objectContaining({
+              id: 'v-m2',
+              email: null,
+              phone: null,
+            }),
+            expect.objectContaining({
+              id: 'v-m3',
+              email: null,
+              phone: null,
+            }),
+            expect.objectContaining({
+              id: 'v-m4',
+              email: 'uXXXX@test.org',
+              phone: '+ 4XXXXXXX34',
+            }),
+          ]),
+        })
+      );
     });
 
     test('calls next(err) if domain query throws an exception', async () => {

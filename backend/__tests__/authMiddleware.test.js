@@ -178,6 +178,7 @@ describe('auth middleware', () => {
       expect(res.status).toHaveBeenCalledWith(401);
     });
 
+
     test('rejects when user UUID does not match session user (403)', async () => {
       jest.spyOn(vendorDirectorySessionQueries, 'findSessionById').mockResolvedValue(validSession);
       const req = {

@@ -230,12 +230,30 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     action: { required: true, message: 'Action is required.' },
   },
 
+  registrationActionForm: {
+    action: { required: true, message: 'Action is required.' },
+  },
+
   extendRFQ: {
     hours: {
       required: true,
       type: 'number',
       custom: (val: unknown) => ([24, 48].includes(Number(val)) ? null : 'Extension duration must be either 24 or 48 hours.'),
       message: 'Extension hours must be 24 or 48.',
+    },
+  },
+
+  actionCenterCommunicationSend: {
+    message: {
+      required: true,
+      minLength: 1,
+      maxLength: 5000,
+      message: UI_STRINGS.actionCenter.communicationModal.validationMessageRequired,
+    },
+    recipientPhone: {
+      required: false,
+      pattern: INDIAN_MOBILE_PATTERN,
+      message: UI_STRINGS.actionCenter.communicationModal.validationPhoneRequired,
     },
   },
 };
@@ -588,5 +606,26 @@ export const PAYMENT_DUES_COMMUNICATION_SCHEMA = {
       ],
     },
     notes: { maxLength: 2000 },
+  },
+} as const;
+
+/** Action Center Activity Log validation schema */
+export const ACTIVITY_LOG_SCHEMA = {
+  channel: {
+    allowed: ['CALL', 'EMAIL', 'SMS', 'WHATSAPP'] as const,
+  },
+  subject: {
+    minLength: 1,
+    maxLength: 255,
+  },
+  message: {
+    minLength: 1,
+    maxLength: 5000,
+  },
+  callOutcome: {
+    allowed: ['Connected', 'Left Voicemail', 'Busy', 'No Answer', 'Wrong Number'] as const,
+  },
+  followupPriority: {
+    allowed: ['Low', 'Medium', 'High', 'Critical'] as const,
   },
 } as const;

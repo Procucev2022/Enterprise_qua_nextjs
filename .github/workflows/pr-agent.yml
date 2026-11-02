@@ -190,6 +190,7 @@ jobs:
               curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
                 -H "Accept: application/vnd.github.v3+json" \
                 "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" -d @- >/dev/null
+            # Change to "exit 1" if a failed review should also block the PR
             exit 0
           fi
 
@@ -235,3 +236,19 @@ jobs:
                 -H "Accept: application/vnd.github.v3+json" \
                 "https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments" -d @- >/dev/null
           fi
+
+          # ---------- 6. Gate: fail the check if critical/high issues were found ----------
+          BLOCKING=$(echo "$REVIEW_JSON" | jq '[.findings[]
+            | select((.severity == "critical" or .severity == "high")
+                     and .confidence != "low" and .line > 0)] | length')
+
+          if [ "$BLOCKING" -gt 0 ]; then
+            echo "$REVIEW_JSON" | jq -r '.findings[]
+              | select((.severity == "critical" or .severity == "high")
+                       and .confidence != "low" and .line > 0)
+              | "::error file=\(.file),line=\(.line),title=\(.severity | ascii_upcase): \(.title)::\(.explanation)"'
+            echo "::error::Blocked: ${BLOCKING} critical/high issue(s) found by AI review."
+            exit 1
+          fi
+
+          echo "✅ No critical/high issues. Check passed."

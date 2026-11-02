@@ -112,6 +112,9 @@ function inspectCoverage(projectRoot, project, summary) {
         });
         continue;
       }
+      if (process.env.FAST_PRECOMMIT === 'true') {
+        continue;
+      }
       failures.push(`${source}: missing from the coverage report.`);
       files.push({ file: source, passed: false, percentages: {} });
       continue;

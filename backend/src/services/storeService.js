@@ -215,7 +215,7 @@ class StoreService {
           domainQueries.getRFQsFromDB(null, 100),
           domainQueries.getEvaluationsFromDB(100),
           domainQueries.getVendorCatalogueFromDB(100),
-          domainQueries.getBuyerAccountsFromDB(100),
+          domainQueries.getBuyerAccountsFromDB(500),
           domainQueries.getAIFeedFromDB(100),
           domainQueries.getAuditLogsFromDB(100),
           domainQueries.getNotificationsFromDB(null, 100),
@@ -6298,7 +6298,7 @@ class StoreService {
     }
 
     return {
-      buyerAccounts: (this.buyerAccounts || []).slice(0, 50),
+      buyerAccounts: (this.buyerAccounts || []).slice(0, 500),
       activeBuyerAccount: this.activeBuyerAccount,
       vendors,
       vendorsTotal,

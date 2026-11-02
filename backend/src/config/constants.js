@@ -971,7 +971,7 @@ const GEMINI_CONFIG = {
   // Extraction automatically advances through the backup models upon error or 503 overload.
   MODELS: (
     process.env.GEMINI_MODELS ||
-    'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash'
+    'gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash'
   )
     .split(',')
     .map((m) => m.trim().replace(/\s+/g, '-'))
@@ -1596,7 +1596,30 @@ const SMS_DLT_TEMPLATES = {
     VARIABLE_TYPES: ['alp', 'num', 'urg'],
     URL_SHORTENING: false,
   },
+  ACTION_CENTER_COMM: {
+    NAME:     'Action_Center_Alert',
+    REFERENCE_NUMBER: '11-ACCOMM-2026',
+    SMSGID:   process.env.SMS_GATEWAY_ACTION_CENTER_SMSGID || '1777179138668879299',
+    CATEGORY: 'SERVICE_IMPLICIT',
+    HEADER:   'PROCUC',
+    TEMPLATE: 'Procucev Alert for {#alp#}: {#alp#}. Details: {#urg#} - Team Procucev.',
+    VARIABLES: ['recipientName', 'alertMessage', 'linkUrl'],
+    VARIABLE_TYPES: ['alp', 'alp', 'urg'],
+    URL_SHORTENING: false,
+  },
 };
+
+const ACTION_CENTER_CHANNELS = ['EMAIL', 'SMS', 'BOTH'];
+const ACTION_CENTER_ENTITY_TYPES = [
+  'internal_task',
+  'ticket',
+  'approval',
+  'buyer_dossier',
+  'supplier_dossier',
+  'payment_due',
+  'registration',
+];
+const ACTION_CENTER_COMM_STATUSES = ['Pending', 'Dispatched', 'Delivered', 'Failed', 'Acknowledged'];
 
 /**
  * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
@@ -2733,7 +2756,16 @@ const VENDOR_DIRECTORY_AUTH_CONFIG = Object.freeze({
   SESSION_SCOPE: 'vendor_directory',
 });
 
+const DEFAULT_INTERNAL_MEMBERS = Object.freeze([
+  { id: 'exec-1', name: 'Pavani', role: 'CRM Executive', email: 'pavani@procucev.com', project: 'Hyderabad Hub' },
+  { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist', email: 'navin@procucev.com', project: 'Mechanical Spares' },
+  { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead', email: 'prajwal.karakoon@procucev.com', project: 'Supplier Network' },
+  { id: 'exec-4', name: 'Veerababu V', role: 'Sourcing Manager', email: 'veerababu.v@procucev.com', project: 'Electrical Engineering' },
+  { id: 'exec-5', name: 'Srinivas Mukku', role: 'Commercial Director', email: 'srinivas.mukku@procucev.com', project: 'Industrial Capital' },
+]);
+
 module.exports = {
+  DEFAULT_INTERNAL_MEMBERS,
   VENDOR_DIRECTORY_SESSION_STATUS,
   VENDOR_DIRECTORY_LOGOUT_REASONS,
   VENDOR_DIRECTORY_AUTH_CONFIG,
@@ -2863,5 +2895,8 @@ module.exports = {
   PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES,
   PAYMENT_DUES_CHANNELS,
   DEFAULT_LOW_CREDIT_NOTIFICATION,
+  ACTION_CENTER_CHANNELS,
+  ACTION_CENTER_ENTITY_TYPES,
+  ACTION_CENTER_COMM_STATUSES,
 };
 

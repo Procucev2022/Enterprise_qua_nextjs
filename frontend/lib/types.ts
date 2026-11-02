@@ -1798,7 +1798,9 @@ export interface BuyerAccount {
   unlimitedRfqAccess?: boolean;
   unlimitedAccess?: boolean;
   accountSource: 'public_system' | 'web_registration' | 'enterprise_sso';
-  status: 'ACTIVE_VERIFIED' | 'PENDING_ALIGNMENT' | 'SYNCED_LEGACY';
+  sourceType?: 'Web App' | 'WhatsApp' | 'Email' | string;
+  status: 'ACTIVE_VERIFIED' | 'PENDING_ALIGNMENT' | 'SYNCED_LEGACY' | 'PENDING_VERIFICATION' | 'PENDING_ONBOARDING' | 'PENDING' | 'REJECTED' | string;
+  verificationStatus?: string;
   primaryPlantLocation: string;
   street?: string;
   address1?: string;
@@ -2262,6 +2264,7 @@ export interface PublicVendorPageResult {
     totalPages: number;
   };
   error?: string;
+  sessionExpired?: boolean;
 }
 
 /** Search & filter state for the Public Vendor Directory page */
@@ -2327,6 +2330,78 @@ export type ActionCenterTabKey =
   | 'sellers'
   | 'registrations'
   | 'payment_dues';
+
+export type ActionCenterCommChannel = 'EMAIL' | 'SMS' | 'BOTH';
+
+export type ActionCenterEntityType =
+  | 'internal_task'
+  | 'ticket'
+  | 'approval'
+  | 'buyer_dossier'
+  | 'supplier_dossier'
+  | 'payment_due'
+  | 'registration'
+  | 'general';
+
+export type ActionCenterDeliveryStatus =
+  | 'Pending'
+  | 'Dispatched'
+  | 'Delivered'
+  | 'Failed'
+  | 'Acknowledged';
+
+export interface ActionCenterCommunicationPayload {
+  entityType: ActionCenterEntityType;
+  entityId: string;
+  channel: ActionCenterCommChannel;
+  recipientEmail?: string;
+  recipientPhone?: string;
+  recipientName?: string;
+  subject?: string;
+  message: string;
+  linkUrl?: string;
+  notes?: string;
+  scheduleFollowup?: {
+    dueDate: string;
+    priority: 'Critical' | 'High' | 'Medium' | 'Low';
+    assigneeId?: string;
+    assigneeName?: string;
+    notes?: string;
+  };
+}
+
+export interface ActionCenterCommunicationRecord {
+  id: string;
+  accountId: string;
+  accountType: string;
+  channel: string;
+  recipient: string;
+  subject: string;
+  message: string;
+  notificationStatus: string;
+  deliveryStatus: ActionCenterDeliveryStatus;
+  acknowledgementStatus: string;
+  communicatedBy: string;
+  sentAt?: string;
+  acknowledgedAt?: string | null;
+  acknowledgedBy?: string | null;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ActionCenterCommunicationResult {
+  success: boolean;
+  message?: string;
+  error?: string;
+  communication?: ActionCenterCommunicationRecord;
+  emailResult?: { success: boolean; recipient?: string; error?: string };
+  smsResult?: { success: boolean; messageId?: string; recipient?: string; throttled?: boolean; error?: string };
+  completedTask?: { id: string; [key: string]: unknown } | null;
+  followupTask?: { id: string; [key: string]: unknown } | null;
+  followupError?: string | null;
+}
 
 export type TicketPriority = 'Critical' | 'High' | 'Medium' | 'Low';
 export type TicketStatus = 'Pending' | 'In Progress' | 'Escalated' | 'Completed';
@@ -2648,6 +2723,7 @@ export type BuyerDirectoryColumnKey =
   | 'totalSpend'
   | 'status'
   | 'createdDate'
+  | 'sourceType'
   | 'actions';
 
 export interface BuyerDirectoryColumnConfig {
@@ -2705,6 +2781,26 @@ export interface BuyerCommunicationItem {
   attachments?: Array<{ name: string; url: string; size?: number }>;
   duration?: string;
   notes?: string;
+  callOutcome?: string;
+  nextFollowupDate?: string;
+  followupPriority?: string;
+  followupNotes?: string;
+}
+
+export interface RecordCommunicationPayload {
+  channel: 'EMAIL' | 'SMS' | 'WHATSAPP' | 'CALL' | string;
+  recipient?: string;
+  subject?: string;
+  message: string;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+  callOutcome?: string;
+  duration?: string;
+  nextFollowupDate?: string;
+  followupPriority?: 'Low' | 'Medium' | 'High' | 'Critical';
+  followupAssigneeId?: string;
+  followupAssigneeName?: string;
+  followupNotes?: string;
 }
 
 export interface BuyerPaymentSummary {
@@ -2804,6 +2900,10 @@ export interface SupplierCommunicationItem {
   attachments?: Array<{ name: string; url: string; size?: number }>;
   duration?: string;
   notes?: string;
+  callOutcome?: string;
+  nextFollowupDate?: string;
+  followupPriority?: string;
+  followupNotes?: string;
 }
 
 export interface SupplierPaymentSummary {
@@ -2832,3 +2932,26 @@ export interface SupplierPaymentTransaction {
   receiptUrl?: string;
 }
 
+
+
+export interface RegisteredClient {
+  id: string;
+  userName: string;
+  companyName: string;
+  phoneNumber: string;
+  userEmail: string;
+  regDate: string;
+  status: 'Accepted' | 'New' | 'Rejected' | 'Pending';
+  sourceType: 'Web App' | 'WhatsApp' | 'Email';
+  isApproved?: boolean;
+  remarks?: string;
+}
+
+
+export interface InternalTeamMember {
+  id: string;
+  name: string;
+  role: string;
+  email: string;
+  project?: string;
+}

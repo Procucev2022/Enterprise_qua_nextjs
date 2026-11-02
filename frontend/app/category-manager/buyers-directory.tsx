@@ -34,6 +34,39 @@ import {
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import BuyerDossierDrawer from './components/BuyerDossierDrawer';
+
+export function isPendingBuyer(buyer?: { status?: string; verificationStatus?: string } | null): boolean {
+  if (!buyer) return false;
+  const s = String(buyer.status || '').toUpperCase().trim();
+  const vs = String(buyer.verificationStatus || '').toUpperCase().trim();
+  return (
+    s === 'PENDING_VERIFICATION' ||
+    s === 'PENDING_ONBOARDING' ||
+    s === 'PENDING' ||
+    s === 'PENDING_ALIGNMENT' ||
+    s === 'PENDING_EMAIL_VERIFICATION' ||
+    s === 'AWAITING_APPROVAL' ||
+    s.includes('AWAITING') ||
+    s === 'NEW' ||
+    s.includes('PENDING') ||
+    vs.includes('PENDING') ||
+    vs.includes('AWAITING')
+  );
+}
+
+export function isVerifiedBuyer(buyer?: { status?: string; verificationStatus?: string } | null): boolean {
+  if (!buyer || isPendingBuyer(buyer)) return false;
+  const s = String(buyer.status || '').toUpperCase().trim();
+  const vs = String(buyer.verificationStatus || '').toUpperCase().trim();
+  return (
+    s === 'ACTIVE_VERIFIED' ||
+    s === 'ACTIVE' ||
+    s === 'VERIFIED' ||
+    vs === 'VERIFIED' ||
+    vs === 'ACTIVE'
+  );
+}
+
 import type { BuyerAccount, RFQItem, AuditLogEntry, BuyerDirectoryColumnKey, BuyerDirectoryColumnConfig, BuyerCommunicationItem, BuyerPaymentTransaction } from '@/lib/types';
 import {
   RFQ_MODES,
@@ -49,9 +82,11 @@ import { exportReportToExcel } from '@/lib/reportsClient';
 
 interface BuyersDirectoryProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
+  initialBuyerId?: string;
+  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments';
 }
 
-export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
+export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTab }: BuyersDirectoryProps) {
   const { buyerAccounts = [], rfqs = [], auditLogs = [] } = useApp();
 
   // Search & Filters
@@ -59,10 +94,58 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
   const [selectedMode, setSelectedMode] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [selectedPlan, setSelectedPlan] = useState<string>('all');
+  const [selectedSource, setSelectedSource] = useState<string>('all');
 
   // Sorting state
   const [sortColumn, setSortColumn] = useState<BuyerDirectoryColumnKey | null>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
+
+
+
+  // Context preservation: load saved directory state from sessionStorage on mount
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('buyer_directory_state');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.searchTerm !== undefined) setSearchTerm(parsed.searchTerm);
+        if (parsed.selectedMode !== undefined) setSelectedMode(parsed.selectedMode);
+        if (parsed.selectedStatus !== undefined) setSelectedStatus(parsed.selectedStatus);
+        if (parsed.selectedPlan !== undefined) setSelectedPlan(parsed.selectedPlan);
+        if (parsed.selectedSource !== undefined) setSelectedSource(parsed.selectedSource);
+        if (parsed.currentPage !== undefined) setCurrentPage(parsed.currentPage);
+        if (parsed.sortColumn !== undefined) setSortColumn(parsed.sortColumn);
+        if (parsed.sortOrder !== undefined) setSortOrder(parsed.sortOrder);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Context preservation: persist current state on updates
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        'buyer_directory_state',
+        JSON.stringify({
+          searchTerm,
+          selectedMode,
+          selectedStatus,
+          selectedPlan,
+          selectedSource,
+          currentPage,
+          sortColumn,
+          sortOrder,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }, [searchTerm, selectedMode, selectedStatus, selectedPlan, selectedSource, currentPage, sortColumn, sortOrder]);
 
   // Column Customization state
   const [columns, setColumns] = useState<BuyerDirectoryColumnConfig[]>(DEFAULT_BUYER_DIRECTORY_COLUMNS);
@@ -141,16 +224,26 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
   }, [saveColumns]);
 
   // Pagination state
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(10);
 
   // Reset to first page when search, filters, or sorting change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, selectedMode, selectedStatus, selectedPlan, sortColumn, sortOrder]);
+  }, [searchTerm, selectedMode, selectedStatus, selectedPlan, selectedSource, sortColumn, sortOrder]);
 
   // Dossier Drawer / Modal state
   const [activeBuyer, setActiveBuyer] = useState<BuyerAccount | null>(null);
+
+  useEffect(() => {
+    if (initialBuyerId && buyerAccounts.length > 0) {
+      const match = buyerAccounts.find((b) => b.id === initialBuyerId);
+      if (match) {
+        setActiveBuyer(match);
+        if (initialTab) {
+          setDossierTab(initialTab);
+        }
+      }
+    }
+  }, [initialBuyerId, initialTab, buyerAccounts]);
   const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'activity'>('profile');
 
   // Pre-calculate per-buyer RFQ counts and actual spend from the live RFQs collection
@@ -224,7 +317,7 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
   // KPI Metrics Calculation (5 Summary Cards)
   const totalBuyers = buyerAccounts.length;
   const verifiedBuyers = useMemo(
-    () => buyerAccounts.filter((b) => b.status === 'ACTIVE_VERIFIED' || (b.status as string) === 'ACTIVE').length,
+    () => buyerAccounts.filter(isVerifiedBuyer).length,
     [buyerAccounts]
   );
   const subscriptionBuyers = useMemo(
@@ -290,20 +383,31 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
 
       const matchesMode = selectedMode === 'all' || buyer.sourcingMode === selectedMode;
 
-            const buyerStatus = (buyer.status as string) || '';
-      const matchesStatus =
+            const matchesStatus =
         selectedStatus === 'all' ||
         (selectedStatus === 'ACTIVE_VERIFIED'
-          ? buyerStatus === 'ACTIVE_VERIFIED' || buyerStatus === 'ACTIVE'
+          ? isVerifiedBuyer(buyer)
           : selectedStatus === 'PENDING_VERIFICATION'
-          ? buyerStatus === 'PENDING_VERIFICATION' || buyerStatus === 'PENDING' || buyerStatus === 'PENDING_ALIGNMENT'
-          : buyerStatus === selectedStatus);;
+          ? isPendingBuyer(buyer)
+          : (buyer.status as string) === selectedStatus);
+
+      const buyerSource = String(buyer.sourceType || buyer.accountSource || '').toLowerCase();
+      let matchesSource = true;
+      if (selectedSource === 'Web App') {
+        matchesSource = !buyerSource || buyerSource.includes('web') || buyerSource === 'public_system';
+      } else if (selectedSource === 'WhatsApp') {
+        matchesSource = buyerSource.includes('whatsapp');
+      } else if (selectedSource === 'Email') {
+        matchesSource = buyerSource.includes('email');
+      } else if (selectedSource !== 'all') {
+        matchesSource = buyerSource === selectedSource.toLowerCase();
+      }
 
       const matchesPlan = selectedPlan === 'all' || buyer.subscriptionPlan === selectedPlan;
 
-      return matchesSearch && matchesMode && matchesStatus && matchesPlan;
+      return matchesSearch && matchesMode && matchesStatus && matchesPlan && matchesSource;
     });
-  }, [buyerAccounts, searchTerm, selectedMode, selectedStatus, selectedPlan]);
+  }, [buyerAccounts, searchTerm, selectedMode, selectedStatus, selectedPlan, selectedSource]);
 
   // Sorted Buyers
   const sortedBuyers = useMemo(() => {
@@ -598,6 +702,19 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
           <option value="ACTIVE_VERIFIED">Active & Verified</option>
         </select>
 
+        {/* Source Type Filter: All Sources, Web App, WhatsApp, Email */}
+        <select
+          value={selectedSource}
+          onChange={(e) => setSelectedSource(e.target.value)}
+          aria-label="Filter by source type"
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 whitespace-nowrap cursor-pointer"
+        >
+          <option value="all">{UI_STRINGS.buyerDirectory.allSources}</option>
+          <option value="Web App">{UI_STRINGS.buyerDirectory.sourceWebApp}</option>
+          <option value="WhatsApp">{UI_STRINGS.buyerDirectory.sourceWhatsApp}</option>
+          <option value="Email">{UI_STRINGS.buyerDirectory.sourceEmail}</option>
+        </select>
+
         {/* Export Directory and Gear icon aligned to right */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <button
@@ -758,7 +875,15 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
                   return (
                     <tr
                       key={buyer.id}
-                      className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.closest('button') || target.closest('a') || target.closest('input') || target.closest('select')) {
+                          return;
+                        }
+                        setActiveBuyer(buyer);
+                        setDossierTab('profile');
+                      }}
+                      className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
                     >
                       {visibleColumns.map((col) => {
                         switch (col.key) {
@@ -991,6 +1116,8 @@ export default function BuyersDirectory({ onSelectRFQ }: BuyersDirectoryProps) {
             totalSpend: buyerMetricsMap.get(activeBuyer.id)?.spendFormatted || (activeBuyer.totalSpend ? activeBuyer.totalSpend.split("$").join("₹") : "₹0"),
             totalRFQsCreated: buyerMetricsMap.get(activeBuyer.id)?.rfqCount ?? activeBuyer.totalRFQsCreated,
           }}
+          initialTab={dossierTab as any}
+          onTabChange={(t) => setDossierTab(t as any)}
           onClose={() => setActiveBuyer(null)}
           onSelectRFQ={onSelectRFQ}
           buyerRfqs={buyerRfqs}
