@@ -1125,7 +1125,48 @@ describe('internalTaskQueries', () => {
         expect.any(Object)
       );
     });
+    test('approveCreditTask returns task immediately if already approved', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockImplementation((sql) => {
+        if (typeof sql === 'string' && sql.includes('FOR UPDATE')) {
+          return Promise.resolve({
+            rows: [{ id: 'tsk_already_done', status: 'Completed', approval_status: 'APPROVED' }],
+          });
+        }
+        if (typeof sql === 'string' && sql.includes('FROM internal_tasks')) {
+          return Promise.resolve({
+            rows: [{ id: 'tsk_already_done', status: 'Completed', approval_status: 'APPROVED' }],
+          });
+        }
+        return Promise.resolve({ rows: [] });
+      });
 
+      const res = await queries.approveCreditTask('tsk_already_done');
+      expect(res).toBeDefined();
+    });
+
+    test('approveCreditTask rolls back memory store if commit fails', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const storeService = require('../src/services/storeService');
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([
+        { id: 'buy_commit_fail', creditBalance: 50 },
+      ]);
+      const updateBuyerSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockImplementation((id, updates) => updates);
+
+      jest.spyOn(pool, 'query').mockImplementation((sql) => {
+        if (typeof sql === 'string' && sql.includes('FROM internal_tasks')) {
+          return Promise.resolve({
+            rows: [{ id: 'tsk_cf', task_category: 'CREDIT_MANAGEMENT', task_type: 'Add Credits', credit_account_type: 'BUYER', credit_account_id: 'buy_commit_fail', credit_quantity: 10 }],
+          });
+        }
+        if (sql === 'COMMIT') {
+          return Promise.reject(new Error('Commit failed'));
+        }
+        return Promise.resolve({ rows: [] });
+      });
+
+      await expect(queries.approveCreditTask('tsk_cf')).rejects.toThrow('Commit failed');
+      expect(updateBuyerSpy).toHaveBeenCalledWith('buy_commit_fail', { creditBalance: 50 });
+    });
   });
-
 });

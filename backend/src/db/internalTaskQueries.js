@@ -568,7 +568,8 @@ async function createInternalTask(data = {}, actor = {}) {
   const creditAccountType = data.creditAccountType || data.credit_account_type || null;
   const creditAccountId = data.creditAccountId || data.credit_account_id || null;
   const creditAccountName = data.creditAccountName || data.credit_account_name || null;
-  const creditQuantity = Number(data.creditQuantity || data.credit_quantity) || 0;
+  const rawCreditQty = Number(data.creditQuantity ?? data.credit_quantity);
+  const creditQuantity = Number.isInteger(rawCreditQty) && rawCreditQty > 0 ? rawCreditQty : 0;
   const creditReason = data.creditReason || data.credit_reason || '';
   const attachments = JSON.stringify(data.attachments || []);
   const rawObj = {
@@ -1006,11 +1007,9 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
     }
   }
 
-  // 2. Authoritative Database Transactions First (Explicit SQL Transaction Boundary: BEGIN / COMMIT / ROLLBACK)
-  try {
-    await pool.query('BEGIN');
-  } catch {}
-
+  // 2. Authoritative Database Transactions with Explicit Row-Level Locking (BEGIN / COMMIT / ROLLBACK)
+  await pool.query('BEGIN');
+  let memorySynchronized = false;
   try {
     // Explicit row locking on internal_tasks to prevent concurrent duplicate approvals
     const lockRes = await pool.query(
@@ -1019,9 +1018,7 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
     );
     const lockedRow = lockRes && lockRes.rows && lockRes.rows[0];
     if (lockedRow && (lockedRow.approval_status === 'APPROVED' || lockedRow.status === 'Completed')) {
-      try {
-        await pool.query('ROLLBACK');
-      } catch {}
+      await pool.query('ROLLBACK');
       return getInternalTaskById(task.id);
     }
 
@@ -1104,24 +1101,35 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       });
     }
 
-    try {
-      await pool.query('COMMIT');
-    } catch {}
+    // Synchronize in-memory store service within the transaction lifecycle
+    if (targetBuyer && storeService.updateBuyerAccount) {
+      storeService.updateBuyerAccount(targetBuyer.buyerId, { creditBalance: targetBuyer.updatedBal });
+      memorySynchronized = true;
+    } else if (targetVendor && storeService.updateVendor) {
+      storeService.updateVendor(targetVendor.vendorId, {
+        freeQuotationCredits: targetVendor.updatedBal,
+        freeRfqDownloadCredits: targetVendor.updatedBal,
+      });
+      memorySynchronized = true;
+    }
+
+    await pool.query('COMMIT');
   } catch (error) {
     try {
       await pool.query('ROLLBACK');
     } catch {}
+    // Revert in-memory store if it was updated prior to failure
+    if (memorySynchronized) {
+      if (targetBuyer && storeService.updateBuyerAccount) {
+        storeService.updateBuyerAccount(targetBuyer.buyerId, { creditBalance: targetBuyer.prevBal });
+      } else if (targetVendor && storeService.updateVendor) {
+        storeService.updateVendor(targetVendor.vendorId, {
+          freeQuotationCredits: targetVendor.prevBal,
+          freeRfqDownloadCredits: targetVendor.prevBal,
+        });
+      }
+    }
     throw error;
-  }
-
-  // 3. Synchronize in-memory cache ONLY AFTER database persistence succeeds
-  if (targetBuyer && storeService.updateBuyerAccount) {
-    await Promise.resolve(storeService.updateBuyerAccount(targetBuyer.buyerId, { creditBalance: targetBuyer.updatedBal }));
-  } else if (targetVendor && storeService.updateVendor) {
-    await Promise.resolve(storeService.updateVendor(targetVendor.vendorId, {
-      freeQuotationCredits: targetVendor.updatedBal,
-      freeRfqDownloadCredits: targetVendor.updatedBal,
-    }));
   }
 
   return getInternalTaskById(task.id);
