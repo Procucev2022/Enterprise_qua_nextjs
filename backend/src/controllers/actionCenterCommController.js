@@ -228,7 +228,8 @@ async function handleDeliveryWebhook(req, res) {
       });
     }
 
-    const { communicationId, messageId, msgid, accountId, acknowledgementStatus, deliveryStatus, notes } = req.body || {};
+    const body = (req && typeof req.body === 'object' && req.body !== null && !Array.isArray(req.body)) ? req.body : {};
+    const { communicationId, messageId, msgid, accountId, acknowledgementStatus, deliveryStatus, notes } = body;
     const effectiveCommId = communicationId || messageId || msgid;
 
     if (!effectiveCommId) {

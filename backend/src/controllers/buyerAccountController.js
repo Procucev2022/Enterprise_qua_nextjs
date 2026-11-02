@@ -877,7 +877,7 @@ async function recordBuyerCommunication(req, res, next) {
     const smsService = require('../services/smsService');
     const normalizedBuyerPhone = smsService.formatMobileNumber(recipient);
     const buyerEmail = (recipient && recipient.includes('@')) ? recipient : (buyer.corporateEmail || buyer.email);
-    const buyerPhone = (normalizedBuyerPhone && normalizedBuyerPhone.length === 10) ? recipient : (buyer.phone || buyer.mobileNumber);
+    const buyerPhone = (normalizedBuyerPhone && normalizedBuyerPhone.length === 10) ? normalizedBuyerPhone : (buyer.phone || buyer.mobileNumber);
     if (isStaff && normalizedChannel === 'EMAIL' && buyerEmail) {
       try {
         const mailerService = require('../services/mailerService');
