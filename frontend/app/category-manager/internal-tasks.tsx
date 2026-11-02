@@ -1581,7 +1581,7 @@ export default function InternalTasksDashboard() {
             entityId={activeTask?.id || 'general-task'}
             defaultSubject={activeTask?.title ? `Task Update: ${activeTask.title}` : 'Task Notification'}
             defaultRecipientName={activeTask?.assigned_to_name || sessionUser?.name || 'Category Manager'}
-            defaultRecipientEmail={sessionUser?.email || ''}
+            defaultRecipientEmail={assignees.find((member) => member.id === activeTask?.assigned_to_user_id)?.email || ''}
           />
         );
       })()}
