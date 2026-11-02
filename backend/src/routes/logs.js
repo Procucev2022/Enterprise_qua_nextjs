@@ -8,7 +8,7 @@ const { authenticate, requireRole } = require('../middleware/auth');
 // (reading, purging, diagnosing, auto-remediating, performance tuning) is
 // Admin-only.
 // Public client error beacon for early boot, login, and registration crashes
-router.post('/client-error', logsController.createLog);
+router.post('/client-error', rateLimiter, logsController.createLog);
 
 router.post('/', authenticate, logsController.createLog);
 
