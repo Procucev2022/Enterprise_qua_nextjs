@@ -27,8 +27,18 @@ function message(overrides = {}) {
   return { fromAddress: 'stranger@outside.org', subject: 'Requirement for pumps', automatedReason: null, ...overrides };
 }
 
+// Sender addresses the gateway treats as "our own". A developer shell or .env
+// that sets one to a procucev.com mailbox (e.g. SMTP_FROM=rfq@procucev.com)
+// would otherwise change which rule a test address hits.
+const PLATFORM_SENDER_ENV = [
+  'EMAIL_GATEWAY_USER', 'EMAIL_GATEWAY_ADDRESS', 'SMTP_USER', 'SMTP_FROM', 'GMAIL_SENDER_EMAIL',
+  'VENDOR_EMAIL_GATEWAY_USER', 'VENDOR_EMAIL_GATEWAY_ADDRESS', 'VENDOR_SMTP_USER', 'VENDOR_SMTP_FROM',
+  'VENDOR_GMAIL_SENDER_EMAIL', 'QUOTE_ALERT_GMAIL_SENDER_EMAIL',
+];
+
 beforeEach(() => {
   emailGatewayService.resetAutoReplyMemory();
+  PLATFORM_SENDER_ENV.forEach((name) => { delete process.env[name]; });
 });
 
 afterEach(() => {

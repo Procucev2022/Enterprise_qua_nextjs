@@ -3,6 +3,12 @@ import { BUYER_PROFILE_ENDPOINTS } from './constants';
 import { logger } from './logger';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type {
+  BuyerCreditSummary,
+  BuyerCreditTransaction,
+  BuyerCommunicationItem,
+  RecordCommunicationPayload,
+  BuyerPaymentSummary,
+  BuyerPaymentTransaction,
   BuyerProfile,
   BuyerProfileCategory,
   BuyerProfileResult,
@@ -318,6 +324,128 @@ export async function saveDispatchTemplate(
   return { success: true, status: res.status, data: (body.data as DispatchTemplate | null) ?? null };
 }
 
+
+export async function fetchBuyerCreditHistory(buyerId: string): Promise<{
+  success: boolean;
+  error?: string;
+  summary?: BuyerCreditSummary;
+  transactions?: BuyerCreditTransaction[];
+}> {
+  try {
+    const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/credit-history`, {
+      headers: authHeaders(),
+    });
+    const body = await res.json();
+    return body;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to fetch credit history' };
+  }
+}
+
+export async function addBuyerCredit(
+  buyerId: string,
+  payload: { amount: number; reason?: string; source?: string }
+): Promise<{
+  success: boolean;
+  error?: string;
+  message?: string;
+  data?: any;
+}> {
+  try {
+    const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/add-credit`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+    return body;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to allocate credit' };
+  }
+}
+
+export async function updateBuyerCategories(
+  buyerId: string,
+  categories: string[]
+): Promise<{
+  success: boolean;
+  error?: string;
+  message?: string;
+  data?: any;
+}> {
+  try {
+    const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/categories`, {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({ categories }),
+    });
+    const body = await res.json();
+    return body;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to update categories' };
+  }
+}
+
+export async function fetchBuyerCommunications(
+  buyerId: string,
+  channel?: string
+): Promise<{
+  success: boolean;
+  error?: string;
+  data?: BuyerCommunicationItem[];
+}> {
+  try {
+    const url = `/api/buyer-accounts/${encodeURIComponent(buyerId)}/communications${channel ? `?channel=${encodeURIComponent(channel)}` : ''}`;
+    const res = await fetch(url, {
+      headers: authHeaders(),
+    });
+    const body = await res.json();
+    return body;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to fetch communications' };
+  }
+}
+
+export async function recordBuyerCommunication(
+  buyerId: string,
+  payload: RecordCommunicationPayload
+): Promise<{
+  success: boolean;
+  error?: string;
+  data?: any;
+  completedTask?: any;
+  followupTask?: any;
+}> {
+  try {
+    const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/communications`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+    return body;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to record communication' };
+  }
+}
+
+export async function fetchBuyerPaymentHistory(buyerId: string): Promise<{
+  success: boolean;
+  error?: string;
+  summary?: BuyerPaymentSummary;
+  payments?: BuyerPaymentTransaction[];
+}> {
+  try {
+    const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/payment-history`, {
+      headers: authHeaders(),
+    });
+    const body = await res.json();
+    return body;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to fetch payment history' };
+  }
+}
+
 const buyerProfileClient = {
   fetchBuyerProfile,
   saveBuyerProfile,
@@ -326,6 +454,12 @@ const buyerProfileClient = {
   expandCategorySelection,
   fetchDispatchTemplates,
   saveDispatchTemplate,
+  fetchBuyerCreditHistory,
+  addBuyerCredit,
+  updateBuyerCategories,
+  fetchBuyerCommunications,
+  recordBuyerCommunication,
+  fetchBuyerPaymentHistory,
 };
 
 export default buyerProfileClient;

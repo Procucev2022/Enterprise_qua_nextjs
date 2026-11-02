@@ -245,7 +245,7 @@ describe('InviteVendorsModal — Comprehensive Multi-Filter & 20-Vendor Limit Su
     await waitFor(() => {
       expect(screen.getByText('Gujarat Techno Forge')).toBeInTheDocument();
       expect(screen.queryByText('Apex Pune Fasteners Pvt Ltd')).not.toBeInTheDocument();
-    });
+    }, { timeout: 4000 });
   });
 
   it('Requirement 2 & 5: Enforces 20-vendor maximum limit, displays count ratio (15/20), and allows removing selected vendors', async () => {

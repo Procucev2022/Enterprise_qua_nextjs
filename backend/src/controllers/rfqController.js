@@ -77,6 +77,9 @@ const ATTACHMENT_ERRORS = {
 
 async function resolveVendorForUser(user) {
   if (!user || !user.email) return null;
+  if (user.role === 'vendor') {
+    return (await storeService.ensureVendorProfileForUser(user)) || null;
+  }
   let vendor = storeService.getVendorById(user.email, 'all');
   if (!vendor) {
     vendor = await storeService.getVendorByIdWithDBFallback(user.email, 'all');

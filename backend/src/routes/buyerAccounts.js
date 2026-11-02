@@ -17,5 +17,12 @@ router.post('/:id/activate', authenticate, buyerAccountController.setActiveAccou
 router.post('/:id/subscription-payment', authenticate, buyerAccountController.createSubscriptionPaymentLink);
 router.get('/:id/payment-links', authenticate, buyerAccountController.getPaymentLinks);
 router.get('/:id/payment-links/:linkId/invoice', authenticate, buyerAccountController.downloadInvoice);
+router.get('/:id/credit-history', authenticate, buyerAccountController.getCreditHistory);
+router.post('/:id/add-credit', authenticate, buyerAccountController.addCredit);
+router.put('/:id/categories', authenticate, buyerAccountController.updateSupportedCategories);
+router.get('/:id/communications', authenticate, buyerAccountController.getBuyerCommunications);
+router.post('/:id/communications', authenticate, buyerAccountController.recordBuyerCommunication);
+router.get('/:id/payment-history', authenticate, buyerAccountController.getBuyerPaymentHistory);
+
 
 module.exports = router;

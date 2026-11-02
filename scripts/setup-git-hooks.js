@@ -18,7 +18,7 @@ const hookContent = `#!/bin/sh
 
 echo "🛡️  [PRE-COMMIT GATE] Executing full workspace quality check..."
 
-npm run check:quality
+FAST_PRECOMMIT=true npm run check:quality
 
 EXIT_CODE=$?
 

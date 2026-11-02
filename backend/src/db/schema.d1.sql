@@ -666,116 +666,21 @@ CREATE TABLE IF NOT EXISTS vendor_credit_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_vendor_credit_transactions_vendor ON vendor_credit_transactions (vendor_id, created_at DESC);
 
--- =============================================================================
--- VENDOR DIRECTORY SESSIONS (Dedicated Category Manager Access Audit & Inactivity)
--- =============================================================================
-CREATE TABLE IF NOT EXISTS vendor_directory_sessions (
+CREATE TABLE IF NOT EXISTS buyer_credit_transactions (
   id TEXT PRIMARY KEY,
-  user_uuid TEXT NOT NULL,
-  email TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'category_manager',
-  auth_method TEXT NOT NULL DEFAULT 'EMAIL_OTP',
-  login_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  last_activity_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  logout_at TEXT,
-  duration_seconds INTEGER DEFAULT 0,
-  logout_reason TEXT,
-  status TEXT NOT NULL DEFAULT 'ACTIVE',
-  ip_address TEXT,
-  user_agent TEXT,
+  buyer_id TEXT NOT NULL,
+  rfq_id TEXT,
+  transaction_type TEXT NOT NULL,
+  credit_source TEXT,
+  credits_added INTEGER NOT NULL DEFAULT 0,
+  credits_consumed INTEGER NOT NULL DEFAULT 0,
+  previous_balance INTEGER NOT NULL DEFAULT 0,
+  updated_balance INTEGER NOT NULL DEFAULT 0,
+  payment_reference TEXT,
+  status TEXT NOT NULL DEFAULT 'COMPLETED',
+  description TEXT,
+  idempotency_key TEXT UNIQUE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_buyer_credit_transactions_buyer ON buyer_credit_transactions (buyer_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_vdir_sessions_user_login ON vendor_directory_sessions (user_uuid, login_at DESC);
-CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email_login ON vendor_directory_sessions (email, login_at DESC);
-CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status_act ON vendor_directory_sessions (status, last_activity_at DESC);
-
--- RELATIONAL DYNAMIC INTERNAL TASKS & ACTION CENTER
--- =============================================================================
-CREATE TABLE IF NOT EXISTS internal_task_types (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  code TEXT UNIQUE NOT NULL,
-  default_module TEXT NOT NULL DEFAULT 'GENERAL',
-  description TEXT,
-  is_active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS internal_tasks (
-  id TEXT PRIMARY KEY,
-  task_number TEXT UNIQUE NOT NULL,
-  title TEXT NOT NULL,
-  description TEXT,
-  task_type_id TEXT REFERENCES internal_task_types(id),
-  priority TEXT NOT NULL DEFAULT 'Medium',
-  status TEXT NOT NULL DEFAULT 'Pending',
-  assigned_to_user_id TEXT,
-  assigned_to_name TEXT,
-  assigned_team TEXT,
-  created_by_user_id TEXT,
-  created_by_name TEXT,
-  due_date TEXT,
-  completed_at TEXT,
-  related_entity_type TEXT NOT NULL DEFAULT 'GENERAL',
-  related_entity_id TEXT,
-  related_entity_label TEXT,
-  notes TEXT,
-  attachments TEXT,
-  raw TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS internal_task_activities (
-  id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL REFERENCES internal_tasks(id) ON DELETE CASCADE,
-  action_type TEXT NOT NULL,
-  actor_id TEXT,
-  actor_name TEXT,
-  from_value TEXT,
-  to_value TEXT,
-  comment TEXT,
-  metadata TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_internal_tasks_status ON internal_tasks (status);
-CREATE INDEX IF NOT EXISTS idx_internal_tasks_priority ON internal_tasks (priority);
-CREATE INDEX IF NOT EXISTS idx_internal_tasks_related ON internal_tasks (related_entity_type, related_entity_id);
-CREATE INDEX IF NOT EXISTS idx_internal_tasks_due_date ON internal_tasks (due_date);
-CREATE INDEX IF NOT EXISTS idx_internal_tasks_assigned_to ON internal_tasks (assigned_to_user_id);
-CREATE INDEX IF NOT EXISTS idx_internal_tasks_task_type ON internal_tasks (task_type_id);
-CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_at ON internal_tasks (created_at DESC);
-
-
-
--- ==============================================================================
--- PAYMENT DUES - LOW CREDIT MONITORING & COMMUNICATION (Cloudflare D1)
--- ==============================================================================
-CREATE TABLE IF NOT EXISTS payment_dues_communications (
-  id TEXT PRIMARY KEY,
-  account_id TEXT NOT NULL,
-  account_type TEXT NOT NULL,
-  channel TEXT NOT NULL,
-  recipient TEXT NOT NULL,
-  subject TEXT,
-  message TEXT NOT NULL,
-  notification_status TEXT NOT NULL DEFAULT 'Notification Sent',
-  delivery_status TEXT NOT NULL DEFAULT 'Delivered',
-  acknowledgement_status TEXT NOT NULL DEFAULT 'Acknowledgement Pending',
-  communicated_by TEXT DEFAULT 'Category Manager',
-  sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  acknowledged_at TEXT,
-  acknowledged_by TEXT,
-  notes TEXT,
-  metadata TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_account_id ON payment_dues_communications (account_id);
-CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_account_type ON payment_dues_communications (account_type);
-CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_ack_status ON payment_dues_communications (acknowledgement_status);
-CREATE INDEX IF NOT EXISTS idx_payment_dues_comm_sent_at ON payment_dues_communications (sent_at DESC);

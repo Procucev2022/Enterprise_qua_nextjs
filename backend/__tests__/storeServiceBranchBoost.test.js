@@ -2100,7 +2100,7 @@ describe('storeService comprehensive branch boost tests', () => {
       storeService.vendors = [vExhausted];
       const resEx = await storeService.unlockRFQForVendor('v-ex-1', 'rfq-ex-1');
       expect(resEx.success).toBe(false);
-      expect(resEx.error).toContain('You have used all 5 free RFQ download credits');
+      expect(resEx.error).toContain('You have no free RFQ download credits available');
     });
 
     test('createRFQ executes line 2563 candidate filter callback when isV3 and mode3ProcucevCount is 0', () => {

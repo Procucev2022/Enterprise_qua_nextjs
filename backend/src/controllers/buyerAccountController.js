@@ -23,6 +23,40 @@ const identityQueries = require('../db/identityQueries');
  * RFQs correctly; that's a separate, already-solved concern from the
  * buyer-account-record ownership gap this comment is about.)
  */
+function assertCategoryManagerOrAdmin(req, res) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  if (user.role === 'category_manager' || user.role === 'admin') return true;
+  res.status(403).json({ success: false, error: 'Only administrators and category managers can perform this operation.' });
+  return false;
+}
+
+function assertCategoryManagerOrBuyer(req, res, targetBuyer = null) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  if (user.role === 'category_manager' || user.role === 'admin') return true;
+  if (user.role === 'buyer') {
+    if (!targetBuyer) return true;
+    const buyerEmail = targetBuyer.corporateEmail || targetBuyer.email;
+    const isOwner =
+      (user.email && buyerEmail && user.email.toLowerCase() === buyerEmail.toLowerCase()) ||
+      (user.buyerAccountId && user.buyerAccountId === targetBuyer.id) ||
+      (user.orgId && user.orgId === targetBuyer.id) ||
+      (user.organizationId && user.organizationId === targetBuyer.id) ||
+      (targetBuyer.userId && targetBuyer.userId === user.id) ||
+      (targetBuyer.id === user.id);
+    if (isOwner) return true;
+  }
+  res.status(403).json({ success: false, error: 'You do not have permission to access buyer profile dossier.' });
+  return false;
+}
+
 function assertBuyerAccountRole(req, res) {
   const user = req.user;
   if (!user) {
@@ -469,6 +503,528 @@ function aiCrossMatch(req, res, next) {
   }
 }
 
+
+async function getCreditHistory(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrBuyer(req, res)) return;
+    const { id } = req.params;
+    const domainQueries = require('../db/domainQueries');
+
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && req.user.role === 'buyer') {
+      buyer = await storeService.getBuyerAccountByEmail(req.user.email);
+    }
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
+    }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
+
+    const remainingFree = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 5;
+    const sourcingMode = buyer.sourcingMode || 'mode_0';
+    const subscriptionPlan = buyer.subscriptionPlan || 'free_trial';
+
+    let transactions = await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100);
+
+    if (!transactions || transactions.length === 0) {
+      const createdDate = buyer.createdDate || new Date().toISOString();
+      const initialTx = {
+        id: `ctx-init-${buyer.id.slice(0, 8)}`,
+        buyerId: buyer.id,
+        rfqId: null,
+        transactionType: 'Free Credits Allocated',
+        creditSource: 'Enterprise Free Trial',
+        creditsAdded: 5,
+        creditsConsumed: 0,
+        previousBalance: 0,
+        updatedBalance: 5,
+        paymentReference: 'TRIAL-INIT',
+        status: 'COMPLETED',
+        description: 'Initial allocation of 5 Free Trial RFQ Credits',
+        idempotencyKey: `init-${buyer.id}`,
+        createdAt: createdDate,
+      };
+
+      await domainQueries.recordBuyerCreditTransactionInDB(initialTx);
+
+      const allRfqs = storeService.getRFQs().filter(
+        (r) =>
+          (r.buyerAccountId && r.buyerAccountId === buyer.id) ||
+          (r.raisedByEmail && buyer.corporateEmail && r.raisedByEmail.toLowerCase() === buyer.corporateEmail.toLowerCase())
+      );
+
+      let currentBal = 5;
+      for (const rfq of allRfqs) {
+        if (!storeService.isV0SourcingMode(rfq.sourcingMode) && currentBal > 0) {
+          const prevBal = currentBal;
+          currentBal = Math.max(0, currentBal - 1);
+          const rfqTx = {
+            id: `ctx-rfq-${rfq.id.slice(0, 8)}`,
+            buyerId: buyer.id,
+            rfqId: rfq.rfqNumber || rfq.id,
+            transactionType: 'Credits Consumed',
+            creditSource: 'RFQ Generation',
+            creditsAdded: 0,
+            creditsConsumed: 1,
+            previousBalance: prevBal,
+            updatedBalance: currentBal,
+            paymentReference: null,
+            status: 'COMPLETED',
+            description: `Deduction for RFQ ${rfq.rfqNumber || rfq.id} (${rfq.title || 'Sourcing'})`,
+            idempotencyKey: `rfq-consume-${rfq.id}`,
+            createdAt: rfq.createdAt || new Date().toISOString(),
+          };
+          await domainQueries.recordBuyerCreditTransactionInDB(rfqTx);
+        }
+      }
+
+      transactions = await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100);
+    }
+
+    let totalAllocated = 5;
+    let totalConsumed = 0;
+    let purchasedCredits = 0;
+    let adjustedCredits = 0;
+
+    for (const t of transactions) {
+      const added = Number(t.credits_added || t.creditsAdded || 0);
+      const consumed = Number(t.credits_consumed || t.creditsConsumed || 0);
+      const type = t.transaction_type || t.transactionType || '';
+
+      if (type.includes('Allocated') || type.includes('Addition')) {
+        totalAllocated += added;
+      }
+      if (type.includes('Purchased')) {
+        purchasedCredits += added;
+        totalAllocated += added;
+      }
+      if (type.includes('Adjustment') || type.includes('Refund')) {
+        adjustedCredits += added;
+      }
+      if (consumed > 0) {
+        totalConsumed += consumed;
+      }
+    }
+
+    if (totalConsumed === 0) {
+      totalConsumed = Math.max(0, 5 - remainingFree);
+    }
+
+    const summary = {
+      totalCreditsAllocated: totalAllocated,
+      totalCreditsConsumed: totalConsumed,
+      remainingFreeCredits: remainingFree,
+      purchasedCredits,
+      adjustedCredits,
+      currentEntitlementMode: sourcingMode,
+      currentSubscriptionPlan: subscriptionPlan,
+    };
+
+    const formattedTransactions = transactions.map((t) => ({
+      id: t.id,
+      transactionId: t.id,
+      transactionDate: t.created_at || t.createdAt,
+      transactionType: t.transaction_type || t.transactionType,
+      creditSource: t.credit_source || t.creditSource || 'Enterprise System',
+      creditsAdded: Number(t.credits_added || t.creditsAdded || 0),
+      creditsConsumed: Number(t.credits_consumed || t.creditsConsumed || 0),
+      previousBalance: Number(t.previous_balance || t.previousBalance || 0),
+      updatedBalance: Number(t.updated_balance || t.updatedBalance || 0),
+      relatedRfqId: t.rfq_id || t.rfqId || null,
+      paymentReference: t.payment_reference || t.paymentReference || null,
+      status: t.status || 'COMPLETED',
+      description: t.description || 'Credit balance update',
+    }));
+
+    return res.json({ success: true, summary, transactions: formattedTransactions });
+  } catch (err) {
+    logger.error('Error fetching buyer credit history', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+async function addCredit(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
+    const { id } = req.params;
+    const { amount, reason, source } = req.body || {};
+    const creditAmount = parseInt(amount, 10);
+    if (isNaN(creditAmount) || creditAmount <= 0) {
+      return res.status(400).json({ success: false, error: 'A valid positive credit amount is required.' });
+    }
+
+    const domainQueries = require('../db/domainQueries');
+    const crypto = require('crypto');
+
+    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
+    }
+
+    const previousBalance = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 5;
+    const updatedBalance = previousBalance + creditAmount;
+
+    storeService.updateBuyerAccount(id, {
+      remainingFreeRFQs: updatedBalance,
+    });
+
+    const txId = `ctx-add-${crypto.randomBytes(6).toString('hex')}`;
+    const tx = {
+      id: txId,
+      buyerId: id,
+      rfqId: null,
+      transactionType: 'Admin Credit Addition',
+      creditSource: source || 'Category Manager Console',
+      creditsAdded: creditAmount,
+      creditsConsumed: 0,
+      previousBalance,
+      updatedBalance,
+      paymentReference: `MANUAL-${req.user?.email || 'ADMIN'}`,
+      status: 'COMPLETED',
+      description: reason || `Admin manual credit addition of ${creditAmount} credits by ${req.user?.email || 'Category Manager'}`,
+      idempotencyKey: `add-${txId}`,
+      createdAt: new Date().toISOString(),
+    };
+
+    await domainQueries.recordBuyerCreditTransactionInDB(tx);
+
+    storeService.addAuditLog({
+      userEmail: req.user?.email || 'admin@procucev.com',
+      action: `Added ${creditAmount} credits to ${buyer.organizationName} (${buyer.corporateEmail}). New balance: ${updatedBalance}`,
+    });
+
+    return res.json({
+      success: true,
+      message: `Successfully allocated ${creditAmount} credits to ${buyer.organizationName}.`,
+      data: {
+        buyerId: id,
+        previousBalance,
+        updatedBalance,
+        transaction: tx,
+      },
+    });
+  } catch (err) {
+    logger.error('Error adding credit to buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+async function updateSupportedCategories(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrBuyer(req, res)) return;
+    const { id } = req.params;
+    const { categories } = req.body || {};
+    if (!Array.isArray(categories)) {
+      return res.status(400).json({ success: false, error: 'categories must be an array of strings.' });
+    }
+
+    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
+    }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
+
+    const cleanCategories = Array.from(new Set(categories.map((c) => String(c).trim()).filter(Boolean)));
+    const updated = storeService.updateBuyerAccount(id, {
+      supportedMajorCategories: cleanCategories,
+    });
+
+    storeService.addAuditLog({
+      userEmail: req.user?.email || 'admin@procucev.com',
+      action: `Updated supported major categories for ${buyer.organizationName}: [${cleanCategories.join(', ')}]`,
+    });
+
+    return res.json({
+      success: true,
+      message: 'Supported major categories updated successfully.',
+      data: updated,
+    });
+  } catch (err) {
+    logger.error('Error updating buyer supported categories', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+async function getBuyerCommunications(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrBuyer(req, res)) return;
+    const { id } = req.params;
+    const paymentDuesQueries = require('../db/paymentDuesQueries');
+
+    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
+    }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
+
+    const comms = await paymentDuesQueries.getCommunicationHistory(id);
+
+    // Also include standard onboarding & RFQ notifications as email/system records if not present
+    const combined = [...comms];
+
+    if (!combined.some((c) => c.subject && c.subject.includes('Onboarding'))) {
+      combined.push({
+        id: `comm-reg-${buyer.id}`,
+        accountId: buyer.id,
+        accountType: 'buyer',
+        channel: 'EMAIL',
+        subject: 'Enterprise Onboarding Confirmation & API Key Generation',
+        sender: 'Procucev Onboarding Desk',
+        recipient: buyer.corporateEmail,
+        message: `Welcome ${buyer.contactPerson || buyer.organizationName} to the Procucev Enterprise Network. Initial free trial activated.`,
+        deliveryStatus: 'Delivered',
+        notificationStatus: 'Delivered',
+        acknowledgementStatus: 'Acknowledged',
+        sentAt: buyer.createdDate || new Date().toISOString(),
+        direction: 'OUTGOING',
+      });
+    }
+
+    // Include RFQ notifications
+    const buyerRfqs = storeService.getRFQs().filter(
+      (r) =>
+        (r.buyerAccountId && r.buyerAccountId === buyer.id) ||
+        (r.raisedByEmail && buyer.corporateEmail && r.raisedByEmail.toLowerCase() === buyer.corporateEmail.toLowerCase())
+    );
+
+    buyerRfqs.forEach((rfq, idx) => {
+      const commId = `comm-rfq-${rfq.id}-${idx}`;
+      if (!combined.some((c) => c.id === commId)) {
+        combined.push({
+          id: commId,
+          accountId: buyer.id,
+          accountType: 'buyer',
+          channel: 'EMAIL',
+          subject: `RFQ Dispatch & Supplier Sourcing Match: ${rfq.rfqNumber || rfq.id}`,
+          sender: 'Qua AI Dispatch Engine',
+          recipient: buyer.corporateEmail,
+          message: `RFQ for "${rfq.title || 'Material Sourcing'}" dispatched across ${(rfq.assignedVendors || []).length} verified suppliers via ${rfq.sourcingMode || 'Mode 1'}.`,
+          deliveryStatus: 'Delivered',
+          notificationStatus: 'Dispatched',
+          acknowledgementStatus: 'Acknowledged',
+          sentAt: rfq.createdAt || new Date().toISOString(),
+          direction: 'OUTGOING',
+        });
+      }
+    });
+
+    // Sort newest first
+    combined.sort((a, b) => new Date(b.sentAt || b.createdAt || 0).getTime() - new Date(a.sentAt || a.createdAt || 0).getTime());
+
+    return res.json({ success: true, data: combined });
+  } catch (err) {
+    logger.error('Error fetching buyer communications', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+async function recordBuyerCommunication(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrBuyer(req, res)) return;
+    const { id } = req.params;
+    const {
+      channel,
+      recipient,
+      subject,
+      message,
+      notes,
+      metadata,
+      callOutcome,
+      duration,
+      nextFollowupDate,
+      followupPriority,
+      followupAssigneeId,
+      followupAssigneeName,
+      followupNotes,
+    } = req.body || {};
+    const paymentDuesQueries = require('../db/paymentDuesQueries');
+    const internalTaskQueries = require('../db/internalTaskQueries');
+
+    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
+    }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
+
+    const normalizedChannel = (channel || 'EMAIL').toUpperCase();
+    const commNotes = [
+      callOutcome ? `Call Outcome: ${callOutcome}` : null,
+      duration ? `Duration: ${duration}` : null,
+      notes || null,
+    ].filter(Boolean).join(' | ');
+
+    const record = await paymentDuesQueries.recordCommunication({
+      accountId: id,
+      accountType: 'buyer',
+      channel: normalizedChannel,
+      recipient: recipient || buyer.corporateEmail || buyer.phone || buyer.mobileNumber || '',
+      subject: subject || null,
+      message: message || '',
+      notificationStatus: 'Delivered',
+      deliveryStatus: 'Delivered',
+      acknowledgementStatus: 'Acknowledgement Pending',
+      communicatedBy: req.user?.fullName || req.user?.name || req.user?.email || 'Category Manager',
+      notes: commNotes || null,
+      metadata: {
+        ...(metadata || {}),
+        callOutcome: callOutcome || null,
+        duration: duration || null,
+        nextFollowupDate: nextFollowupDate || null,
+      },
+    });
+
+    let completedTask = null;
+    try {
+      const channelLabel = normalizedChannel === 'CALL' ? 'Call' : normalizedChannel === 'WHATSAPP' ? 'WhatsApp' : normalizedChannel === 'SMS' ? 'SMS' : 'Email';
+      const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+      completedTask = await internalTaskQueries.createInternalTask({
+        title: `[${channelLabel} Log / Completed] ${subject || buyer.organizationName}`,
+        description: message || commNotes || 'Buyer communication activity recorded.',
+        taskTypeId: 'itt_buyer_onboarding',
+        priority: 'Medium',
+        status: 'Completed',
+        relatedEntityType: 'BUYER',
+        relatedEntityId: buyer.id,
+        relatedEntityLabel: buyer.organizationName,
+        assignedToUserId: actor.uuid || actor.id || null,
+        assignedToName: actor.fullName || actor.name || actor.email || 'Category Manager',
+        dueDate: new Date().toISOString(),
+        notes: commNotes || '',
+      }, actor);
+    } catch (taskErr) {
+      logger.warn('Failed to create completed internal task for buyer communication', { error: taskErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
+    }
+
+    let followupTask = null;
+    if (nextFollowupDate) {
+      try {
+        const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+        followupTask = await internalTaskQueries.createInternalTask({
+          title: `[Follow-up] ${buyer.organizationName} - ${subject || 'Buyer Follow-up'}`,
+          description: followupNotes || `Follow-up needed following ${normalizedChannel} outreach: ${message || ''}`,
+          taskTypeId: 'itt_buyer_onboarding',
+          priority: followupPriority || 'Medium',
+          status: 'Pending',
+          relatedEntityType: 'BUYER',
+          relatedEntityId: buyer.id,
+          relatedEntityLabel: buyer.organizationName,
+          assignedToUserId: followupAssigneeId || actor.uuid || actor.id || null,
+          assignedToName: followupAssigneeName || actor.fullName || actor.name || actor.email || 'Category Manager',
+          dueDate: nextFollowupDate,
+          notes: followupNotes || '',
+        }, actor);
+      } catch (followupErr) {
+        logger.warn('Failed to create pending follow-up internal task for buyer communication', { error: followupErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
+      }
+    }
+
+    return res.status(201).json({ success: true, data: record, completedTask, followupTask });
+  } catch (err) {
+    logger.error('Error recording buyer communication', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+async function getBuyerPaymentHistory(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrBuyer(req, res)) return;
+    const { id } = req.params;
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && req.user.role === 'buyer') {
+      buyer = await storeService.getBuyerAccountByEmail(req.user.email);
+    }
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
+    }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
+
+    let links = await storeService.getPaymentLinksForBuyer(buyer.id);
+    const reconciled = await zohoReconciliationService.reconcilePendingLinks(links);
+    if (reconciled > 0) {
+      links = await storeService.getPaymentLinksForBuyer(buyer.id);
+    }
+
+    const payments = [];
+
+    // Include initial trial/subscription plan record
+    const planName = buyer.subscriptionPlan || 'Free Enterprise Trial';
+    const isPaidPlan = planName.includes('version_1') || planName.includes('version_2') || planName.includes('version_3') || planName.includes('growth') || planName.includes('custom');
+    const baseAmount = planName.includes('version_1') ? 14999 : planName.includes('version_2') ? 29999 : planName.includes('version_3') ? 49999 : 0;
+
+    payments.push({
+      id: `pay-init-${buyer.id}`,
+      paymentId: `pay-init-${buyer.id}`,
+      invoiceNo: `INV-2026-${buyer.id.slice(0, 5).toUpperCase()}`,
+      invoiceNumber: `INV-2026-${buyer.id.slice(0, 5).toUpperCase()}`,
+      description: `Plan: ${planName}`,
+      subscriptionPlan: planName,
+      amount: baseAmount,
+      currency: 'INR',
+      gateway: 'Zoho Payments (India UPI / NetBanking)',
+      paymentMethod: 'UPI / NetBanking',
+      status: 'PAID',
+      gatewayRef: `ZOHO-INIT-${buyer.id.slice(0, 8)}`,
+      date: buyer.createdDate || new Date().toISOString(),
+      transactionDate: buyer.createdDate || new Date().toISOString(),
+      receiptUrl: `/api/buyer-accounts/${buyer.id}/payment-links/pay-init-${buyer.id}/invoice`,
+    });
+
+    // Add Zoho payment links
+    for (const link of links) {
+      payments.push({
+        id: link.id,
+        paymentId: link.id,
+        invoiceNo: link.invoiceNumber || `INV-2026-${link.id.slice(0, 6).toUpperCase()}`,
+        invoiceNumber: link.invoiceNumber || `INV-2026-${link.id.slice(0, 6).toUpperCase()}`,
+        description: `Subscription Renewal: ${link.planId || planName}`,
+        subscriptionPlan: link.planId || planName,
+        amount: Number(link.amount || 0),
+        currency: link.currency || 'INR',
+        gateway: 'Zoho Payments',
+        paymentMethod: 'Credit Card / NetBanking / UPI',
+        status: (link.status || 'CREATED').toUpperCase(),
+        gatewayRef: link.zohoPaymentLinkId || link.id,
+        date: link.createdAt || new Date().toISOString(),
+        transactionDate: link.createdAt || new Date().toISOString(),
+        receiptUrl: `/api/buyer-accounts/${buyer.id}/payment-links/${link.id}/invoice`,
+      });
+    }
+
+    // Calculate Payment Summary
+    let totalPaid = 0;
+    let totalSuccessful = 0;
+    let pending = 0;
+    let failed = 0;
+    let refunded = 0;
+
+    for (const p of payments) {
+      const st = String(p.status).toUpperCase();
+      if (st === 'PAID' || st === 'SUCCESS' || st === 'COMPLETED') {
+        totalPaid += p.amount;
+        totalSuccessful += 1;
+      } else if (st === 'PENDING' || st === 'CREATED' || st === 'IN_PROGRESS') {
+        pending += 1;
+      } else if (st === 'FAILED' || st === 'EXPIRED') {
+        failed += 1;
+      } else if (st === 'REFUNDED') {
+        refunded += p.amount;
+      }
+    }
+
+    const summary = {
+      totalAmountPaid: totalPaid,
+      totalSuccessfulPayments: totalSuccessful,
+      pendingPayments: pending,
+      failedPayments: failed,
+      totalRefundedAmount: refunded,
+    };
+
+    return res.json({ success: true, summary, payments });
+  } catch (err) {
+    logger.error('Error fetching buyer payment history', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
 function getSubscriptionPricing(req, res) {
   try {
     const config = getSubscriptionPricingConfig();
@@ -492,4 +1048,12 @@ module.exports = {
   ingestHistoricalData,
   aiCrossMatch,
   getSubscriptionPricing,
+  getCreditHistory,
+  addCredit,
+  updateSupportedCategories,
+  getBuyerCommunications,
+  recordBuyerCommunication,
+  getBuyerPaymentHistory,
+  assertCategoryManagerOrAdmin,
+  assertCategoryManagerOrBuyer,
 };

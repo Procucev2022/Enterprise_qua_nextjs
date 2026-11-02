@@ -214,7 +214,7 @@ class StoreService {
           domainQueries.getRFQsFromDB(null, 100),
           domainQueries.getEvaluationsFromDB(100),
           domainQueries.getVendorCatalogueFromDB(100),
-          domainQueries.getBuyerAccountsFromDB(100),
+          domainQueries.getBuyerAccountsFromDB(500),
           domainQueries.getAIFeedFromDB(100),
           domainQueries.getAuditLogsFromDB(100),
           domainQueries.getNotificationsFromDB(null, 100),
@@ -555,6 +555,133 @@ class StoreService {
       country: profile?.country || 'India',
       categories: profile?.categories || [],
     });
+  }
+
+  /**
+   * The signed-in vendor's profile, created on first use when none exists.
+   *
+   * Vendors migrated straight into the identity `user` table (e.g.
+   * mumbai@japl.org) can sign in but have no `vendors` row, so every
+   * vendor-scoped lookup resolved to null and the RFQ list, credits and quote
+   * submission all came back empty. The profile is built from the identity
+   * record with no category, which existing visibility rules treat as "show
+   * all V0/V2/V3 RFQs" until the vendor sets one on their profile. No login is
+   * provisioned and no onboarding email is sent: the account already exists.
+   * Concurrent calls in one isolate share a single creation; a cross-isolate
+   * race loses on vendors.email UNIQUE and re-reads the winner's row.
+   */
+  async ensureVendorProfileForUser(user) {
+    if (!user || user.role !== 'vendor' || !user.email) return null;
+    const email = String(user.email).trim().toLowerCase();
+    const existing =
+      this.getVendorById(user.email, 'all') || (await this.getVendorByIdWithDBFallback(email, 'all'));
+    if (existing) return existing;
+
+    if (!this._pendingVendorProfiles) this._pendingVendorProfiles = new Map();
+    const pending = this._pendingVendorProfiles.get(email);
+    if (pending) return pending;
+
+    const task = this._createVendorProfileFromIdentity(user, email).finally(() => {
+      this._pendingVendorProfiles.delete(email);
+    });
+    this._pendingVendorProfiles.set(email, task);
+    return task;
+  }
+
+  async _createVendorProfileFromIdentity(user, email) {
+    let identity = null;
+    try {
+      identity = await identityQueries.findUserByEmail(email);
+    } catch (err) {
+      logger.warn('Could not read identity record for vendor profile', { email, error: err.message }, 'STORE_SERVICE');
+    }
+
+    const contactName = (identity && identity.name) || user.name || '';
+    const created = this.addVendor(
+      {
+        name: (identity && identity.orgName) || user.orgName || contactName || email,
+        contactPerson: contactName,
+        email,
+        phone: (identity && identity.mobile) || '',
+        source: 'migrated_identity',
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+        subscriptionPlan: 'premium',
+        freeQuotationCredits: VENDOR_FREE_CREDITS_LIMIT,
+        majorCategory: '',
+        minorCategories: [],
+        vendorSelectedCategories: [],
+        clientMappedCategories: [],
+        isCategoryAligned: false,
+        country: 'India',
+      },
+      email
+    );
+    created.onboardingEmailStatus = 'account_exists';
+    logger.info('Auto-created missing vendor profile', { id: created.id, email }, 'STORE_SERVICE');
+
+    try {
+      await this.confirmVendorPersisted(created);
+      return created;
+    } catch (err) {
+      if (err.statusCode === 409) {
+        return (await domainQueries.getVendorByEmailFromDB(email)) || null;
+      }
+      logger.error('Failed to auto-create vendor profile', err, 'STORE_SERVICE');
+      return null;
+    }
+  }
+
+  /**
+   * Hand an auto-created migrated profile (see ensureVendorProfileForUser) to
+   * whoever adds that vendor next — a buyer, CM, admin or bulk import —
+   * instead of rejecting the add as a duplicate. Without this, a migrated
+   * vendor who signed in before their buyer added them could never be linked
+   * to that buyer. Only an unowned `migrated_identity` profile whose email
+   * matches exactly is claimable; anything else returns null so the caller
+   * keeps its normal duplicate handling. The vendor's own usage (credits,
+   * quoted/unlocked RFQs, plan) is preserved; no login or email is issued.
+   */
+  async claimMigratedVendorProfile(email, details, buyerId = null, actorEmail = null) {
+    if (!email) return null;
+    const normalized = String(email).trim().toLowerCase();
+    const existing = await this.getVendorByIdWithDBFallback(normalized, 'all');
+    if (
+      !existing ||
+      existing.source !== 'migrated_identity' ||
+      existing.buyerId ||
+      existing.buyerAccountId ||
+      String(existing.email || '').toLowerCase() !== normalized
+    ) {
+      return null;
+    }
+
+    const {
+      id: _id,
+      email: _email,
+      quotedRfqIds: _quoted,
+      unlockedRfqIds: _unlocked,
+      rfqDownloadsUsed: _downloads,
+      freeQuotationCredits: _credits,
+      subscriptionPlan: _plan,
+      onboardingEmailStatus: _onboarding,
+      createdAt: _createdAt,
+      created_at: _createdAtRaw,
+      ...claimable
+    } = details || {};
+    Object.assign(existing, claimable, {
+      buyerId: buyerId || null,
+      buyerAccountId: buyerId || null,
+      source: claimable.source || (buyerId || claimable.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
+      isCategoryAligned: claimable.isCategoryAligned !== undefined ? claimable.isCategoryAligned : true,
+      onboardingEmailStatus: 'account_exists',
+    });
+
+    await this.confirmVendorPersisted(existing);
+    this.addAuditLog({
+      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Linked migrated vendor ${existing.name} (${existing.email}) in category ${existing.majorCategory}`,
+    });
+    return existing;
   }
 
   addBuyerAccount(accData) {
@@ -1011,6 +1138,54 @@ class StoreService {
     }
   }
 
+  /** A bulk-import row as a new vendor record (see bulkAddVendors). */
+  _buildBulkVendor(row, idx) {
+    return {
+      id: `v-bulk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+      vendorCode: row.vendorCode || '',
+      name: row.name,
+      contactPerson: row.contactPerson || '',
+      phone: row.phone,
+      email: row.email || null,
+      majorCategory: row.majorCategory || 'Uncategorised',
+      minorCategories: row.minorCategories || [],
+      location: row.city || '',
+      city: row.city || '',
+      state: row.state || '',
+      pincode: row.pincode || '',
+      gstin: row.gstin || '',
+      products: row.products || '',
+      rating: 4.5,
+      score: 85.0,
+      // A category manager's upload feeds the shared Procucev network
+      // ('excel', unscoped); a buyer's own upload is their private roster
+      // and carries buyerId/addedByBuyerCompany through from the
+      // controller (see vendorController.bulkImportVendors) — same
+      // attribution the single-add createVendor path already applies.
+      source: row.source || 'excel',
+      ...(row.buyerId ? { buyerId: row.buyerId } : {}),
+      ...(row.addedByBuyerCompany ? { addedByBuyerCompany: row.addedByBuyerCompany } : {}),
+      status: 'REGISTERED / NOT EVALUATED',
+      evaluated: false,
+      hasRecord: false,
+      isExistingInDatabase: true,
+      onboardingEmailStatus: 'pending',
+      isCategoryAligned: true,
+      subscriptionPlan: 'premium',
+      rfqDownloadsUsed: 0,
+      freeQuotationCredits: VENDOR_FREE_CREDITS_LIMIT,
+      quotedRfqIds: [],
+      // Carried through from the request's server-side re-validation
+      // (see vendorController.bulkImportVendors) so a row that failed a
+      // format check (bad email/phone/GSTIN/pincode, or a normally-
+      // required field left blank) still lands as a real vendor record —
+      // just one the CM can see is questionable, not one that got
+      // silently dropped or had a value invented for it.
+      hasIssues: !!row.hasIssues,
+      issues: Array.isArray(row.issues) ? row.issues : [],
+    };
+  }
+
   /**
    * Bulk-import already-validated vendor rows from a category manager's
    * Excel upload (one call per uploaded-file chunk from the client, not one
@@ -1043,6 +1218,9 @@ class StoreService {
     const seenVendorCodesInBatch = new Set();
     const results = [];
     const toInsert = [];
+    // Duplicate-email rows that may match an unowned auto-created migrated
+    // profile (see claimMigratedVendorProfile) — claimed after the insert.
+    const claimCandidates = [];
 
     rows.forEach((row, idx) => {
       const email = (row.email || '').toLowerCase();
@@ -1063,7 +1241,9 @@ class StoreService {
 
       if (email) {
         if (existingEmails.has(email)) {
-          results.push({ rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'A vendor with this email already exists.' });
+          const duplicate = { rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'A vendor with this email already exists.' };
+          results.push(duplicate);
+          claimCandidates.push({ result: duplicate, vendor: this._buildBulkVendor(row, idx) });
           return;
         }
         if (seenInBatch.has(email)) {
@@ -1073,50 +1253,7 @@ class StoreService {
         seenInBatch.add(email);
       }
 
-      const newVendor = {
-        id: `v-bulk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-        vendorCode: row.vendorCode || '',
-        name: row.name,
-        contactPerson: row.contactPerson || '',
-        phone: row.phone,
-        email: row.email || null,
-        majorCategory: row.majorCategory || 'Uncategorised',
-        minorCategories: row.minorCategories || [],
-        location: row.city || '',
-        city: row.city || '',
-        state: row.state || '',
-        pincode: row.pincode || '',
-        gstin: row.gstin || '',
-        products: row.products || '',
-        rating: 4.5,
-        score: 85.0,
-        // A category manager's upload feeds the shared Procucev network
-        // ('excel', unscoped); a buyer's own upload is their private roster
-        // and carries buyerId/addedByBuyerCompany through from the
-        // controller (see vendorController.bulkImportVendors) — same
-        // attribution the single-add createVendor path already applies.
-        source: row.source || 'excel',
-        ...(row.buyerId ? { buyerId: row.buyerId } : {}),
-        ...(row.addedByBuyerCompany ? { addedByBuyerCompany: row.addedByBuyerCompany } : {}),
-        status: 'REGISTERED / NOT EVALUATED',
-        evaluated: false,
-        hasRecord: false,
-        isExistingInDatabase: true,
-        onboardingEmailStatus: 'pending',
-        isCategoryAligned: true,
-        subscriptionPlan: 'premium',
-        rfqDownloadsUsed: 0,
-        freeQuotationCredits: VENDOR_FREE_CREDITS_LIMIT,
-        quotedRfqIds: [],
-        // Carried through from the request's server-side re-validation
-        // (see vendorController.bulkImportVendors) so a row that failed a
-        // format check (bad email/phone/GSTIN/pincode, or a normally-
-        // required field left blank) still lands as a real vendor record —
-        // just one the CM can see is questionable, not one that got
-        // silently dropped or had a value invented for it.
-        hasIssues: !!row.hasIssues,
-        issues: Array.isArray(row.issues) ? row.issues : [],
-      };
+      const newVendor = this._buildBulkVendor(row, idx);
       toInsert.push({ rowNumber: row.rowNumber, vendor: newVendor });
     });
 
@@ -1195,7 +1332,29 @@ class StoreService {
           importedResult.onboardingEmailStatus = importedResult.vendor.onboardingEmailStatus;
         }
       } else {
-        results.push({ rowNumber, status: 'duplicate', email: vendor.email, reason: 'A vendor with this email already exists.' });
+        const duplicate = { rowNumber, status: 'duplicate', email: vendor.email, reason: 'A vendor with this email already exists.' };
+        results.push(duplicate);
+        claimCandidates.push({ result: duplicate, vendor });
+      }
+    }
+
+    for (const { result, vendor } of claimCandidates) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const claimed = await this.claimMigratedVendorProfile(vendor.email, vendor, vendor.buyerId || null, 'vendor-bulk-import');
+        if (claimed) {
+          delete result.reason;
+          Object.assign(result, {
+            status: 'imported',
+            missingEmail: false,
+            hasIssues: claimed.hasIssues,
+            issues: claimed.issues,
+            vendor: claimed,
+            onboardingEmailStatus: 'account_exists',
+          });
+        }
+      } catch (err) {
+        logger.error(`Failed to link migrated vendor ${vendor.email} during bulk import`, err, 'STORE_SERVICE');
       }
     }
 
@@ -1593,7 +1752,7 @@ class StoreService {
       });
       return {
         success: false,
-        error: 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.',
+        error: 'You have no free RFQ download credits available. Please upgrade your subscription to download this RFQ.',
         creditsExhausted: true,
         freeCreditsRemaining: 0,
       };
@@ -6111,7 +6270,7 @@ class StoreService {
     }
 
     return {
-      buyerAccounts: (this.buyerAccounts || []).slice(0, 50),
+      buyerAccounts: (this.buyerAccounts || []).slice(0, 500),
       activeBuyerAccount: this.activeBuyerAccount,
       vendors,
       vendorsTotal,

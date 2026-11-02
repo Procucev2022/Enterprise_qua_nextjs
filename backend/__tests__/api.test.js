@@ -1031,12 +1031,14 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(403);
     });
 
-    test('POST /api/rfqs/:id/quotes returns 400 when the vendor has no profile yet', async () => {
+    test('POST /api/rfqs/:id/quotes returns 400 when the vendor profile cannot be created', async () => {
+      const ensureSpy = jest.spyOn(storeService, 'ensureVendorProfileForUser').mockResolvedValueOnce(null);
       const res = await request(app)
         .post(`/api/rfqs/${testRfqId}/quotes`)
         .set(customAuthHeader({ id: 'usr-no-profile', email: 'no-profile-vendor@test.com', name: 'No Profile', role: 'vendor' }))
         .send({ unitPrice: 100 });
       expect(res.statusCode).toBe(400);
+      ensureSpy.mockRestore();
     });
 
     test('POST /api/rfqs/:id/quotes adds quote and recalculates matrix', async () => {

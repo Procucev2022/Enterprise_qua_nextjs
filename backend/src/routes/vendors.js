@@ -29,4 +29,9 @@ router.get('/:id/payment-links', authenticate, vendorController.getPaymentLinks)
 router.get('/:id/payment-links/:linkId/invoice', authenticate, vendorController.downloadInvoice);
 router.get('/:id/onboarding-email', authenticate, vendorController.generateOnboardingEmailPreview);
 
+router.get('/:id/credit-history', authenticate, vendorController.getCreditHistory);
+router.get('/:id/communications', authenticate, vendorController.getVendorCommunications);
+router.post('/:id/communications', authenticate, vendorController.recordVendorCommunication);
+router.get('/:id/payment-history', authenticate, vendorController.getVendorPaymentHistory);
+
 module.exports = router;

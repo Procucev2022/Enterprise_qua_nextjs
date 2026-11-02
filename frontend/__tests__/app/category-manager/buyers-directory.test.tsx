@@ -123,6 +123,8 @@ describe('BuyersDirectory Component Suite', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    window.sessionStorage.clear();
+    window.localStorage.clear();
     (useApp as jest.Mock).mockReturnValue({
       buyerAccounts: mockBuyerAccounts,
       rfqs: mockRfqs,
@@ -184,11 +186,10 @@ describe('BuyersDirectory Component Suite', () => {
     expect(screen.getByText('Standard Auto')).toBeInTheDocument();
     expect(screen.queryByText('Tata Motors Corp')).not.toBeInTheDocument();
 
-    fireEvent.change(statusSelect, { target: { value: 'ACTIVE' } });
-    expect(screen.getByText('Bharat Electronics')).toBeInTheDocument();
-
     fireEvent.change(statusSelect, { target: { value: 'ACTIVE_VERIFIED' } });
     expect(screen.getByText('Tata Motors Corp')).toBeInTheDocument();
+    expect(screen.getByText('Bharat Electronics')).toBeInTheDocument();
+    expect(screen.queryByText('Standard Auto')).not.toBeInTheDocument();
   });
 
   test('displays empty state when search matches no buyers', () => {
@@ -234,23 +235,21 @@ describe('BuyersDirectory Component Suite', () => {
     // Check Tab 3: Credits & Quotas
     const creditsTab = screen.getByRole('button', { name: /^Credit$/i });
     fireEvent.click(creditsTab);
-    expect(screen.getByText('Remaining Free RFQs')).toBeInTheDocument();
+    expect(screen.getByText(/Remaining Free (?:Credits|RFQs)/)).toBeInTheDocument();
     expect(screen.getAllByText('4').length).toBeGreaterThanOrEqual(1);
 
     // Check Tab 4: Communications
-    const commsTab = screen.getByRole('button', { name: /Messages/i });
+    const commsTab = screen.getByRole('button', { name: /Communications|Messages/i });
     fireEvent.click(commsTab);
-    expect(screen.getByText(/Enterprise Onboarding Confirmation/)).toBeInTheDocument();
+    expect(await screen.findByText(/Enterprise Onboarding Confirmation/)).toBeInTheDocument();
 
     // Check Tab 5: Payments
     const payTab = screen.getByRole('button', { name: /Payments/i });
     fireEvent.click(payTab);
-    expect(screen.getAllByText(/Growth Enterprise/).length).toBeGreaterThanOrEqual(1);
+    expect((await screen.findAllByText(/Growth Enterprise/)).length).toBeGreaterThanOrEqual(1);
 
-    // Check Tab 6: Audit Activity
-    const actTab = screen.getByRole('button', { name: /^Audit$/i });
-    fireEvent.click(actTab);
-    expect(screen.getByText('BUYER_RFQ_CREATED')).toBeInTheDocument();
+    // Check Tab 6: Audit Activity is removed from visible navigation per dossier specification
+    expect(screen.queryByRole('button', { name: /^Audit$/i })).not.toBeInTheDocument();
 
     // Close dossier via top X button (first button in header)
     const closeButtons = screen.getAllByRole('button');
@@ -293,10 +292,8 @@ describe('BuyersDirectory Component Suite', () => {
     fireEvent.click(emptyRfqTab);
     expect(screen.getByText('No RFQs created by this buyer yet.')).toBeInTheDocument();
 
-    // Tab 6: Empty Audit Logs
-    const emptyActTab = screen.getByRole('button', { name: /^Audit$/i });
-    fireEvent.click(emptyActTab);
-    expect(screen.getByText('No audit events logged for this enterprise buyer.')).toBeInTheDocument();
+    // Tab 6: Audit Activity is removed from visible navigation per dossier specification
+    expect(screen.queryByRole('button', { name: /^Audit$/i })).not.toBeInTheDocument();
 
     // Close via bottom Close Dossier button
     const closeFooterBtn = screen.getByText('Close Dossier');
@@ -365,6 +362,319 @@ describe('BuyersDirectory Component Suite', () => {
 
     // Total Spend KPI card removed
     expect(screen.queryByText('Total Sourcing Spend')).not.toBeInTheDocument();
+  });
+
+  test('renders 5 summary cards with proper values and subtext', () => {
+    render(<BuyersDirectory />);
+    expect(screen.getByText('Total Buyers')).toBeInTheDocument();
+    expect(screen.getByText('Subscription Buyers')).toBeInTheDocument();
+    expect(screen.getByText('Total RFQs')).toBeInTheDocument();
+    expect(screen.getByText('Free RFQs')).toBeInTheDocument();
+    expect(screen.getByText('Paid RFQs')).toBeInTheDocument();
+  });
+
+  test('clicking company name opens dossier directly to profile tab', () => {
+    render(<BuyersDirectory />);
+    const companyBtn = screen.getByRole('button', { name: /Tata Motors Corp/i });
+    fireEvent.click(companyBtn);
+    expect(screen.getByText('Corporate Contact')).toBeInTheDocument();
+  });
+
+  test('opens and interacts with Column Settings modal, toggling columns and resetting', () => {
+    render(<BuyersDirectory />);
+
+    // Open Column Settings
+    const gearBtn = screen.getByLabelText('Customize Columns');
+    fireEvent.click(gearBtn);
+    expect(screen.getByRole('dialog', { name: 'Customize Columns' })).toBeInTheDocument();
+    expect(screen.getByText('Column Settings')).toBeInTheDocument();
+
+    // Toggle all optional columns on to test full cell rendering
+    const optionalLabels = [
+      'Contact Person',
+      'Email',
+      'Phone',
+      'Free Credits',
+      'Total Spend',
+      'Registration Date',
+      'Location',
+    ];
+    optionalLabels.forEach((label) => {
+      const checkbox = screen.queryByLabelText(new RegExp(label, 'i'));
+      if (checkbox) {
+        fireEvent.click(checkbox);
+      }
+    });
+
+    // Toggle required column (Buyer) - should be disabled and locked
+    const orgCheckbox = screen.getByLabelText(/Buyer/i);
+    expect(orgCheckbox).toBeDisabled();
+    fireEvent.click(orgCheckbox);
+
+    // Reset columns
+    const resetBtn = screen.getByText('Reset to Default');
+    fireEvent.click(resetBtn);
+
+    // Click Done button
+    const doneBtn = screen.getByText('Done');
+    fireEvent.click(doneBtn);
+    expect(screen.queryByRole('dialog', { name: 'Customize Columns' })).not.toBeInTheDocument();
+
+    // Reopen and test close button (X)
+    fireEvent.click(gearBtn);
+    const closeBtn = screen.getByLabelText('Close column settings');
+    fireEvent.click(closeBtn);
+    expect(screen.queryByRole('dialog', { name: 'Customize Columns' })).not.toBeInTheDocument();
+  });
+
+  test('handles drag and drop reordering of columns in settings modal', () => {
+    render(<BuyersDirectory />);
+
+    const gearBtn = screen.getByLabelText('Customize Columns');
+    fireEvent.click(gearBtn);
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    const firstContainer = checkboxes[0].closest('div[draggable="true"]');
+    const secondContainer = checkboxes[1].closest('div[draggable="true"]');
+
+    if (firstContainer && secondContainer) {
+      fireEvent.dragStart(firstContainer, { dataTransfer: { effectAllowed: 'move' } });
+      fireEvent.dragOver(secondContainer, { dataTransfer: { dropEffect: 'move' } });
+      fireEvent.drop(secondContainer);
+
+      // Same item drop (no-op)
+      fireEvent.dragStart(firstContainer, { dataTransfer: { effectAllowed: 'move' } });
+      fireEvent.drop(firstContainer);
+    }
+  });
+
+  test('sorts by different columns in ascending and descending orders', () => {
+    // Render with all columns enabled via localStorage
+    const allColsVisible = [
+      { key: 'organizationName', label: 'Buyer', visible: true, required: true },
+      { key: 'contactPerson', label: 'Contact Person', visible: true },
+      { key: 'corporateEmail', label: 'Email', visible: true },
+      { key: 'mobileNumber', label: 'Phone', visible: true },
+      { key: 'location', label: 'Location', visible: true },
+      { key: 'sourcingMode', label: 'Mode', visible: true },
+      { key: 'subscriptionPlan', label: 'Plan', visible: true },
+      { key: 'totalRFQsCreated', label: 'RFQs', visible: true },
+      { key: 'remainingFreeRFQs', label: 'Free Credits', visible: true },
+      { key: 'totalSpend', label: 'Total Spend', visible: true },
+      { key: 'status', label: 'Status', visible: true },
+      { key: 'createdDate', label: 'Registration Date', visible: true },
+      { key: 'actions', label: 'Actions', visible: true, required: true },
+    ];
+    window.localStorage.setItem('buyer_directory_columns_pref', JSON.stringify(allColsVisible));
+
+    render(<BuyersDirectory />);
+
+    const columnHeaders = [
+      'Buyer',
+      'Contact Person',
+      'Email',
+      'Phone',
+      'Location',
+      'Mode',
+      'Plan',
+      'RFQs',
+      'Free Credits',
+      'Total Spend',
+      'Status',
+      'Registration Date',
+    ];
+
+    columnHeaders.forEach((name) => {
+      const th = screen.queryByRole('columnheader', { name: new RegExp(name, 'i') });
+      if (th) {
+        fireEvent.click(th); // asc
+        fireEvent.click(th); // desc
+      }
+    });
+
+    // Also click actions column (should not trigger sort)
+    const actionsTh = screen.queryByRole('columnheader', { name: /Actions/i });
+    if (actionsTh) {
+      fireEvent.click(actionsTh);
+    }
+
+    window.localStorage.clear();
+  });
+
+  test('loads partial column preferences and appends missing defaults', () => {
+    const partialPrefs = [
+      { key: 'organizationName', label: 'Buyer', visible: true, required: true },
+      { key: 'location', label: 'Location', visible: false },
+    ];
+    window.localStorage.setItem('buyer_directory_columns_pref', JSON.stringify(partialPrefs));
+
+    render(<BuyersDirectory />);
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    window.localStorage.clear();
+  });
+
+  test('handles corrupted localStorage JSON without crashing', () => {
+    window.localStorage.setItem('buyer_directory_columns_pref', '{invalid_json');
+
+    render(<BuyersDirectory />);
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    window.localStorage.clear();
+  });
+  test('filters buyers by Source Type (Web App, WhatsApp, Email, All)', () => {
+    const buyersWithSources = [
+      {
+        ...mockBuyerAccounts[0],
+        id: 'b-web',
+        organizationName: 'Web Enterprises',
+        sourceType: 'Web App',
+        status: 'ACTIVE_VERIFIED',
+      },
+      {
+        ...mockBuyerAccounts[1],
+        id: 'b-wa',
+        organizationName: 'WhatsApp Buyers Corp',
+        sourceType: 'WhatsApp',
+        status: 'ACTIVE_VERIFIED',
+      },
+      {
+        ...mockBuyerAccounts[2],
+        id: 'b-email',
+        organizationName: 'Email Sourcing Group',
+        sourceType: 'Email',
+        status: 'ACTIVE_VERIFIED',
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      buyerAccounts: buyersWithSources,
+      rfqs: mockRfqs,
+      auditLogs: mockAuditLogs,
+      setSelectedRFQForMatrix: jest.fn(),
+    });
+
+    render(<BuyersDirectory />);
+
+    expect(screen.getByText('Web Enterprises')).toBeInTheDocument();
+    expect(screen.getByText('WhatsApp Buyers Corp')).toBeInTheDocument();
+    expect(screen.getByText('Email Sourcing Group')).toBeInTheDocument();
+
+    const sourceSelect = screen.getByDisplayValue('All Sources');
+
+    // Filter by WhatsApp
+    fireEvent.change(sourceSelect, { target: { value: 'WhatsApp' } });
+    expect(screen.queryByText('Web Enterprises')).not.toBeInTheDocument();
+    expect(screen.getByText('WhatsApp Buyers Corp')).toBeInTheDocument();
+    expect(screen.queryByText('Email Sourcing Group')).not.toBeInTheDocument();
+
+    // Filter by Email
+    fireEvent.change(sourceSelect, { target: { value: 'Email' } });
+    expect(screen.queryByText('Web Enterprises')).not.toBeInTheDocument();
+    expect(screen.queryByText('WhatsApp Buyers Corp')).not.toBeInTheDocument();
+    expect(screen.getByText('Email Sourcing Group')).toBeInTheDocument();
+
+    // Filter by Web App
+    fireEvent.change(sourceSelect, { target: { value: 'Web App' } });
+    expect(screen.getByText('Web Enterprises')).toBeInTheDocument();
+    expect(screen.queryByText('WhatsApp Buyers Corp')).not.toBeInTheDocument();
+    expect(screen.queryByText('Email Sourcing Group')).not.toBeInTheDocument();
+
+    // Reset to All Sources
+    fireEvent.change(sourceSelect, { target: { value: 'all' } });
+    expect(screen.getByText('Web Enterprises')).toBeInTheDocument();
+    expect(screen.getByText('WhatsApp Buyers Corp')).toBeInTheDocument();
+    expect(screen.getByText('Email Sourcing Group')).toBeInTheDocument();
+  });
+
+  test('displays all pending verification buyer variations correctly', () => {
+    const variedPendingBuyers = [
+      {
+        ...mockBuyerAccounts[0],
+        id: 'b-pend-1',
+        organizationName: 'Onboarding Pending Ltd',
+        status: 'PENDING_ONBOARDING',
+      },
+      {
+        ...mockBuyerAccounts[1],
+        id: 'b-pend-2',
+        organizationName: 'Email Pending Corp',
+        status: 'PENDING_EMAIL_VERIFICATION',
+      },
+      {
+        ...mockBuyerAccounts[2],
+        id: 'b-pend-3',
+        organizationName: 'Alignment Pending Co',
+        status: 'PENDING_ALIGNMENT',
+      },
+      {
+        ...mockBuyerAccounts[3],
+        id: 'b-pend-4',
+        organizationName: 'New Client Awaiting Approval',
+        status: 'AWAITING_APPROVAL',
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      buyerAccounts: variedPendingBuyers,
+      rfqs: mockRfqs,
+      auditLogs: mockAuditLogs,
+      setSelectedRFQForMatrix: jest.fn(),
+    });
+
+    render(<BuyersDirectory />);
+
+    const statusSelect = screen.getByDisplayValue('All Statuses');
+    fireEvent.change(statusSelect, { target: { value: 'PENDING_VERIFICATION' } });
+
+    expect(screen.getByText('Onboarding Pending Ltd')).toBeInTheDocument();
+    expect(screen.getByText('Email Pending Corp')).toBeInTheDocument();
+    expect(screen.getByText('Alignment Pending Co')).toBeInTheDocument();
+    expect(screen.getByText('New Client Awaiting Approval')).toBeInTheDocument();
+
+    fireEvent.change(statusSelect, { target: { value: 'ACTIVE_VERIFIED' } });
+    expect(screen.queryByText('Onboarding Pending Ltd')).not.toBeInTheDocument();
+    expect(screen.queryByText('Email Pending Corp')).not.toBeInTheDocument();
+    expect(screen.queryByText('Alignment Pending Co')).not.toBeInTheDocument();
+    expect(screen.queryByText('New Client Awaiting Approval')).not.toBeInTheDocument();
+  });
+
+  test('restores saved state from sessionStorage on mount', () => {
+    const savedState = {
+      searchTerm: 'Tata',
+      selectedMode: RFQ_MODES.MODE_1,
+      selectedStatus: 'ACTIVE_VERIFIED',
+      selectedSource: 'Web App',
+      sortColumn: 'organizationName',
+      sortOrder: 'asc',
+      currentPage: 1,
+      pageSize: 10,
+    };
+    window.sessionStorage.setItem('buyer_directory_state', JSON.stringify(savedState));
+
+    render(<BuyersDirectory />);
+
+    expect(screen.getByDisplayValue('Tata')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Web App')).toBeInTheDocument();
+    expect(screen.getByText('Tata Motors Corp')).toBeInTheDocument();
+
+    window.sessionStorage.clear();
+  });
+
+  test('handles corrupted sessionStorage JSON gracefully', () => {
+    window.sessionStorage.setItem('buyer_directory_state', '{corrupted_json');
+
+    render(<BuyersDirectory />);
+    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+
+    window.sessionStorage.clear();
+  });
+  test('initialBuyerId opens drawer on matching buyer with initialTab', () => {
+    render(<BuyersDirectory initialBuyerId="b-1" initialTab="rfqs" />);
+    expect(screen.getByText('Close Dossier')).toBeInTheDocument();
+  });
+
+  test('initialBuyerId with non-matching buyer does not open drawer', () => {
+    render(<BuyersDirectory initialBuyerId="non-matching-id" />);
+    expect(screen.queryByText('Close Dossier')).toBeNull();
   });
 });
 

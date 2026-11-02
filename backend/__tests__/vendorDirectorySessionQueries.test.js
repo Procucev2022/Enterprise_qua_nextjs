@@ -488,4 +488,178 @@ describe('vendorDirectorySessionQueries', () => {
       expect(updated.logoutReason).toBe(VENDOR_DIRECTORY_LOGOUT_REASONS.INACTIVITY);
     });
   });
+
+  describe('isTableMissingError helper', () => {
+    test('detects table missing errors correctly', () => {
+      expect(vendorDirectorySessionQueries.isTableMissingError(null)).toBe(false);
+      expect(vendorDirectorySessionQueries.isTableMissingError(undefined)).toBe(false);
+      expect(vendorDirectorySessionQueries.isTableMissingError(new Error('no such table: vendor_directory_sessions'))).toBe(true);
+      expect(vendorDirectorySessionQueries.isTableMissingError(new Error('relation "vendor_directory_sessions" does not exist'))).toBe(true);
+      expect(vendorDirectorySessionQueries.isTableMissingError(new Error('table vendor_directory_sessions not found'))).toBe(true);
+      expect(vendorDirectorySessionQueries.isTableMissingError(new Error('error: undefined table'))).toBe(true);
+      expect(vendorDirectorySessionQueries.isTableMissingError(new Error('connection timeout'))).toBe(false);
+    });
+  });
+
+  describe('ensureVendorDirectorySessionsTable self-healing', () => {
+    test('creates table and indexes successfully', async () => {
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rowCount: 0 });
+
+      await vendorDirectorySessionQueries.ensureVendorDirectorySessionsTable();
+
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('CREATE TABLE IF NOT EXISTS vendor_directory_sessions'),
+        [],
+        { d1: true }
+      );
+    });
+
+    test('handles index creation failure gracefully', async () => {
+      jest.spyOn(pool, 'query')
+        .mockResolvedValueOnce({ rowCount: 0 }) // table create succeeds
+        .mockRejectedValueOnce(new Error('Index already exists')) // index 1 fails
+        .mockResolvedValueOnce({ rowCount: 0 });
+
+      await expect(vendorDirectorySessionQueries.ensureVendorDirectorySessionsTable()).resolves.not.toThrow();
+    });
+
+    test('handles table DDL failure gracefully and logs warning', async () => {
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('DDL restricted'));
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(vendorDirectorySessionQueries.ensureVendorDirectorySessionsTable()).resolves.not.toThrow();
+      expect(warnSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('table missing self-healing integration in DB queries', () => {
+    test('createSession auto-creates table and retries on missing table error', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      let callCount = 0;
+      jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('INSERT INTO vendor_directory_sessions')) {
+          callCount++;
+          if (callCount === 1) {
+            throw new Error('no such table: vendor_directory_sessions');
+          }
+          return { rowCount: 1 };
+        }
+        return { rowCount: 0 };
+      });
+
+      const session = await vendorDirectorySessionQueries.createSession({
+        id: 'auto-heal-create',
+        email: 'cm@procucev.com',
+      });
+
+      expect(session.id).toBe('auto-heal-create');
+      expect(callCount).toBe(2);
+    });
+
+    test('createSession falls back to memory if retry also fails', async () => {
+      jest.spyOn(console, 'warn').mockImplementation(() => {});
+      jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('INSERT INTO vendor_directory_sessions')) {
+          throw new Error('no such table: vendor_directory_sessions');
+        }
+        return { rowCount: 0 };
+      });
+
+      const session = await vendorDirectorySessionQueries.createSession({
+        id: 'auto-heal-retry-fail',
+        email: 'cm@procucev.com',
+      });
+
+      expect(session.id).toBe('auto-heal-retry-fail');
+      const inMem = vendorDirectorySessionQueries.getMemoryStoreForTesting().get('auto-heal-retry-fail');
+      expect(inMem).toBeDefined();
+    });
+
+    test('findSessionById auto-creates table and retries on missing table error', async () => {
+      jest.spyOn(console, 'warn').mockImplementation(() => {});
+      let callCount = 0;
+      jest.spyOn(pool, 'rows').mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error('no such table: vendor_directory_sessions');
+        }
+        return [{
+          id: 'auto-heal-find',
+          user_uuid: 'u-1',
+          email: 'cm@procucev.com',
+          role: 'category_manager',
+          status: 'ACTIVE',
+          login_at: new Date().toISOString(),
+          last_activity_at: new Date().toISOString(),
+        }];
+      });
+      jest.spyOn(pool, 'query').mockResolvedValue({ rowCount: 0 });
+
+      const session = await vendorDirectorySessionQueries.findSessionById('auto-heal-find');
+      expect(session).not.toBeNull();
+      expect(session.id).toBe('auto-heal-find');
+      expect(callCount).toBe(2);
+    });
+
+    test('findSessionById handles retry error gracefully and uses memory fallback', async () => {
+      jest.spyOn(console, 'warn').mockImplementation(() => {});
+      vendorDirectorySessionQueries.getMemoryStoreForTesting().set('mem-find-sess', {
+        id: 'mem-find-sess',
+        userUuid: 'u-1',
+        email: 'cm@procucev.com',
+        status: 'ACTIVE',
+      });
+
+      jest.spyOn(pool, 'rows').mockRejectedValue(new Error('no such table: vendor_directory_sessions'));
+      jest.spyOn(pool, 'query').mockResolvedValue({ rowCount: 0 });
+
+      const session = await vendorDirectorySessionQueries.findSessionById('mem-find-sess');
+      expect(session).not.toBeNull();
+      expect(session.id).toBe('mem-find-sess');
+    });
+
+    test('findActiveSession auto-creates table and retries on missing table error', async () => {
+      jest.spyOn(console, 'warn').mockImplementation(() => {});
+      let callCount = 0;
+      jest.spyOn(pool, 'rows').mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error('no such table: vendor_directory_sessions');
+        }
+        return [{
+          id: 'auto-heal-active',
+          user_uuid: 'u-1',
+          email: 'cm@procucev.com',
+          role: 'category_manager',
+          status: 'ACTIVE',
+          login_at: new Date().toISOString(),
+          last_activity_at: new Date().toISOString(),
+        }];
+      });
+      jest.spyOn(pool, 'query').mockResolvedValue({ rowCount: 0 });
+
+      const session = await vendorDirectorySessionQueries.findActiveSession('auto-heal-active');
+      expect(session).not.toBeNull();
+      expect(session.id).toBe('auto-heal-active');
+      expect(callCount).toBe(2);
+    });
+
+    test('findActiveSession handles retry failure and falls back to memory', async () => {
+      jest.spyOn(console, 'warn').mockImplementation(() => {});
+      vendorDirectorySessionQueries.getMemoryStoreForTesting().set('mem-active-sess', {
+        id: 'mem-active-sess',
+        userUuid: 'u-1',
+        email: 'cm@procucev.com',
+        status: 'ACTIVE',
+      });
+
+      jest.spyOn(pool, 'rows').mockRejectedValue(new Error('no such table: vendor_directory_sessions'));
+      jest.spyOn(pool, 'query').mockResolvedValue({ rowCount: 0 });
+
+      const session = await vendorDirectorySessionQueries.findActiveSession('mem-active-sess');
+      expect(session).not.toBeNull();
+      expect(session.id).toBe('mem-active-sess');
+    });
+  });
+
 });

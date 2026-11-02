@@ -10,6 +10,11 @@
 // per test case and are unaffected by this default.
 process.env.DATABASE_URL = '';
 
+// Jest only defaults NODE_ENV to 'test' when it is unset. A shell left on
+// NODE_ENV=development (common after running the dev server) otherwise makes
+// mailerService send real SMTP mail and server.js bind the real port 4000.
+process.env.NODE_ENV = 'test';
+
 // Same reasoning, same mechanism, for the real Gmail API credentials: without
 // this, mailerService.isGmailApiConfigured()/isVendorGmailApiConfigured()
 // come back true in every test process (backend/.env has real values for

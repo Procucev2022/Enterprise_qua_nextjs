@@ -2000,7 +2000,8 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
       jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
 
-      const bareVendor = { id: 'v-bare', name: 'Bare Vendor' };
+      // Vendors get no free credits by default; one credit lets the quote through.
+      const bareVendor = { id: 'v-bare', name: 'Bare Vendor', freeQuotationCredits: 1 };
       const outcome = await emailGatewayService.processVendorQuoteMessage(
         emailRecord,
         sampleRfq,

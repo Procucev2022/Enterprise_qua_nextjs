@@ -193,7 +193,7 @@ describe('PaymentDuesDashboard', () => {
     });
 
     // Check KPI counts
-    expect(screen.getByText('Total Low-Credit Accounts')).toBeInTheDocument();
+    expect(screen.getByText('Low-Credit Accounts')).toBeInTheDocument();
     expect(screen.getAllByText('0 Credits · Critical')[0]).toBeInTheDocument();
     expect(screen.getAllByText('1 Credit · Attention')[0]).toBeInTheDocument();
     expect(screen.getAllByText('2 Credits · Low')[0]).toBeInTheDocument();
@@ -291,7 +291,7 @@ describe('PaymentDuesDashboard', () => {
     });
 
     // Click Total Buyers card
-    const buyersCard = screen.getByText('Total Buyers').closest('div');
+    const buyersCard = screen.getAllByText('Buyers')[0].closest('div');
     if (buyersCard) fireEvent.click(buyersCard);
 
     await waitFor(() => {
@@ -649,11 +649,11 @@ describe('PaymentDuesDashboard', () => {
     });
 
     // Total Low-Credit Accounts
-    const totalCard = screen.getByText('Total Low-Credit Accounts').closest('div');
+    const totalCard = screen.getByText('Low-Credit Accounts').closest('div');
     if (totalCard) fireEvent.click(totalCard);
 
     // Total Sellers
-    const sellersCard = screen.getByText('Total Sellers').closest('div');
+    const sellersCard = screen.getAllByText('Sellers')[0].closest('div');
     if (sellersCard) fireEvent.click(sellersCard);
 
     // 1-2 Credits
@@ -1165,5 +1165,52 @@ describe('PaymentDuesDashboard', () => {
     if (firstItem) {
       fireEvent.drop(firstItem);
     }
+  });
+  it('closes Column Settings modal with Escape key, backdrop click, and Done button', async () => {
+    render(<PaymentDuesDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('Apex Industries')).toBeInTheDocument();
+    });
+
+    // 1. Open and close with Escape key
+    fireEvent.click(screen.getByTitle('Customize Columns'));
+    expect(screen.getByText('Column Settings')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByText('Column Settings')).not.toBeInTheDocument();
+
+    // Ignore other keys
+    fireEvent.click(screen.getByTitle('Customize Columns'));
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(screen.getByText('Column Settings')).toBeInTheDocument();
+
+    // 2. Close with Done button
+    const doneBtn = screen.getByRole('button', { name: 'Done' });
+    fireEvent.click(doneBtn);
+    expect(screen.queryByText('Column Settings')).not.toBeInTheDocument();
+
+    // 3. Close with backdrop click
+    fireEvent.click(screen.getByTitle('Customize Columns'));
+    const modalDialog = screen.getByRole('dialog', { name: 'Customize Columns' });
+    fireEvent.click(modalDialog);
+    expect(screen.queryByText('Column Settings')).not.toBeInTheDocument();
+  });
+
+  it('triggers onSummaryChange callback and dispatches custom event when data loads', async () => {
+    const mockOnSummaryChange = jest.fn();
+    const mockEventHandler = jest.fn();
+    window.addEventListener('qua_payment_dues_updated', mockEventHandler);
+
+    render(<PaymentDuesDashboard onSummaryChange={mockOnSummaryChange} />);
+    await waitFor(() => {
+      expect(screen.getByText('Apex Industries')).toBeInTheDocument();
+    });
+
+    expect(mockOnSummaryChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        totalLowCreditAccounts: 3,
+      })
+    );
+    expect(mockEventHandler).toHaveBeenCalled();
+    window.removeEventListener('qua_payment_dues_updated', mockEventHandler);
   });
 });

@@ -2,7 +2,7 @@ const storeService = require('../services/storeService');
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
 const { logger } = require('../services/loggerService');
-const { RFQ_MODES, RFQ_MODE_LABELS } = require('../config/constants');
+const { RFQ_MODES, RFQ_MODE_LABELS, VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
 
 const LOG_CATEGORY = 'REPORTS_CONTROLLER';
 
@@ -383,7 +383,7 @@ async function getSellerReports(req, res, next) {
           LastLogin: lastLoginVal,
           Plan: str(vendor.subscriptionPlan, 'premium'),
           DownloadsUsed: vendor.rfqDownloadsUsed !== undefined ? vendor.rfqDownloadsUsed : 0,
-          FreeQuotationCredits: vendor.freeQuotationCredits !== undefined ? vendor.freeQuotationCredits : 10,
+          FreeQuotationCredits: vendor.freeQuotationCredits !== undefined ? vendor.freeQuotationCredits : VENDOR_FREE_CREDITS_LIMIT,
           QuotedRFQsCount: Array.isArray(vendor.quotedRfqIds) ? vendor.quotedRfqIds.length : 0,
           Status: str(vendor.status, 'ACTIVE'),
         });

@@ -1,11 +1,17 @@
 import {
+  addBuyerCredit,
   expandCategorySelection,
+  fetchBuyerCommunications,
+  fetchBuyerCreditHistory,
+  fetchBuyerPaymentHistory,
   fetchBuyerProfile,
   fetchCategoryTaxonomy,
   fetchDispatchTemplates,
   flattenCategorySelection,
+  recordBuyerCommunication,
   saveBuyerProfile,
   saveDispatchTemplate,
+  updateBuyerCategories,
 } from '@/lib/buyerProfileClient';
 import buyerProfileClient from '@/lib/buyerProfileClient';
 import { authClient } from '@/lib/authClient';
@@ -444,15 +450,144 @@ describe('buyerProfileClient', () => {
     });
   });
 
+  describe('fetchBuyerCreditHistory', () => {
+    test('fetches buyer credit history successfully', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, summary: { totalCreditsAllocated: 10 }, transactions: [] }),
+      });
+      const res = await fetchBuyerCreditHistory('buyer-1');
+      expect(res.success).toBe(true);
+      expect(res.summary?.totalCreditsAllocated).toBe(10);
+    });
+
+    test('handles fetch failure gracefully', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+      const res = await fetchBuyerCreditHistory('buyer-1');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('Network offline');
+    });
+  });
+
+  describe('addBuyerCredit', () => {
+    test('calls add-credit endpoint with payload', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, message: 'Credit added' }),
+      });
+      const res = await addBuyerCredit('buyer-1', { amount: 5, reason: 'Trial topup' });
+      expect(res.success).toBe(true);
+      expect(res.message).toBe('Credit added');
+    });
+
+    test('handles add-credit network error', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Server timeout'));
+      const res = await addBuyerCredit('buyer-1', { amount: 5 });
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('Server timeout');
+    });
+  });
+
+  describe('updateBuyerCategories', () => {
+    test('updates buyer categories successfully', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, message: 'Categories updated' }),
+      });
+      const res = await updateBuyerCategories('buyer-1', ['IT', 'Spares']);
+      expect(res.success).toBe(true);
+      expect(res.message).toBe('Categories updated');
+    });
+
+    test('handles categories update error', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Update failed'));
+      const res = await updateBuyerCategories('buyer-1', ['IT']);
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('Update failed');
+    });
+  });
+
+  describe('fetchBuyerCommunications', () => {
+    test('fetches buyer communications without channel filter', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: [{ id: 'comm-1', channel: 'EMAIL' }] }),
+      });
+      const res = await fetchBuyerCommunications('buyer-1');
+      expect(res.success).toBe(true);
+      expect(res.data?.length).toBe(1);
+    });
+
+    test('fetches buyer communications with channel filter', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: [{ id: 'comm-2', channel: 'SMS' }] }),
+      });
+      const res = await fetchBuyerCommunications('buyer-1', 'SMS');
+      expect(res.success).toBe(true);
+      expect(res.data?.[0].channel).toBe('SMS');
+    });
+
+    test('handles communications fetch error', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Fetch comms failed'));
+      const res = await fetchBuyerCommunications('buyer-1');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('Fetch comms failed');
+    });
+  });
+
+  describe('recordBuyerCommunication', () => {
+    test('records buyer communication successfully', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: { id: 'c-1' } }),
+      });
+      const res = await recordBuyerCommunication('buyer-1', { channel: 'EMAIL', message: 'Hello' });
+      expect(res.success).toBe(true);
+    });
+
+    test('handles record communication error', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Record failed'));
+      const res = await recordBuyerCommunication('buyer-1', { channel: 'EMAIL', message: 'Hello' });
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('Record failed');
+    });
+  });
+
+  describe('fetchBuyerPaymentHistory', () => {
+    test('fetches buyer payment history successfully', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, summary: { totalAmountPaid: 5000 }, payments: [] }),
+      });
+      const res = await fetchBuyerPaymentHistory('buyer-1');
+      expect(res.success).toBe(true);
+      expect(res.summary?.totalAmountPaid).toBe(5000);
+    });
+
+    test('handles payment history fetch error', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Payment history failed'));
+      const res = await fetchBuyerPaymentHistory('buyer-1');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('Payment history failed');
+    });
+  });
+
   test('the default export exposes the whole client surface', () => {
     expect(Object.keys(buyerProfileClient).sort()).toEqual([
+      'addBuyerCredit',
       'expandCategorySelection',
+      'fetchBuyerCommunications',
+      'fetchBuyerCreditHistory',
+      'fetchBuyerPaymentHistory',
       'fetchBuyerProfile',
       'fetchCategoryTaxonomy',
       'fetchDispatchTemplates',
       'flattenCategorySelection',
+      'recordBuyerCommunication',
       'saveBuyerProfile',
       'saveDispatchTemplate',
+      'updateBuyerCategories',
     ]);
   });
 });

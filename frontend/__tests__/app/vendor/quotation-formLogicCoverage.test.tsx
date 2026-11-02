@@ -853,7 +853,7 @@ describe('bid form access', () => {
 
     expect(mockShowToast).toHaveBeenCalledWith(
       'Subscription Required',
-      'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
+      'You have no free quotation credits. Please upgrade your subscription to continue quoting on external buyer RFQs.',
       'warning'
     );
     expect(await screen.findByText('🔒 Upgrade Plan to Submit Quotations')).toBeInTheDocument();
@@ -1333,7 +1333,7 @@ describe('quote submission', () => {
       fireEvent.click(submitQuotationButton());
 
       const fallbackMessage =
-        'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.';
+        'You have no free quotation credits available. Please upgrade your subscription plan to continue submitting quotations.';
       expect(await screen.findByText(fallbackMessage)).toBeInTheDocument();
       expect(mockShowToast).toHaveBeenCalledWith('Quotation Credits Exhausted', fallbackMessage, 'warning');
     });
@@ -1469,7 +1469,7 @@ describe('RFQ specification download', () => {
     await waitFor(() =>
       expect(mockShowToast).toHaveBeenCalledWith(
         'Free Credits Exhausted',
-        'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.',
+        'You have no free RFQ download credits available. Please upgrade your subscription to download this RFQ.',
         'warning'
       )
     );

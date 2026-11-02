@@ -967,7 +967,7 @@ function buildRfqInviteEmail(to, context = {}) {
         isSubscribed
           ? '<div style="background: #f0fdf4; border: 1px solid #86efac; color: #166534; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">✨ <strong>Subscribed Supplier:</strong> You have active subscription access with unlimited quotation submissions.</div>'
           : freeCreditsRemaining !== undefined && freeCreditsRemaining !== null
-          ? `<div style="background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">📊 <strong>Available Free Quotation Credits:</strong> ${freeCreditsRemaining} / 5 remaining.${freeCreditsRemaining === 0 ? ' <span style="color: #b91c1c; font-weight: bold;">(Plan upgrade required to submit quote)</span>' : ''}</div>`
+          ? `<div style="background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">📊 <strong>Available Free Quotation Credits:</strong> ${freeCreditsRemaining} remaining.${freeCreditsRemaining === 0 ? ' <span style="color: #b91c1c; font-weight: bold;">(Plan upgrade required to submit quote)</span>' : ''}</div>`
           : ''
       }
       <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">How to Submit Your Quotation</h4>

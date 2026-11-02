@@ -11,7 +11,11 @@ const { authHeader, TEST_USERS } = require('./testHelpers');
 let vendorRecord;
 let buyerAccount;
 
+let prevHydrated;
+
 beforeAll(() => {
+  prevHydrated = storeService.isHydratedFromDB;
+  storeService.isHydratedFromDB = true;
   vendorRecord = storeService.addVendor({
     name: 'Notification Test Vendor',
     email: TEST_USERS.vendor.email,
@@ -22,6 +26,10 @@ beforeAll(() => {
     organizationName: 'Notification Test Buyer',
     corporateEmail: TEST_USERS.buyer.email,
   });
+});
+
+afterAll(() => {
+  storeService.isHydratedFromDB = prevHydrated;
 });
 
 describe('GET /api/notifications', () => {
