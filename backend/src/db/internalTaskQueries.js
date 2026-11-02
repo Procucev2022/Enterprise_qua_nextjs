@@ -976,149 +976,157 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
   let updatedBuyerInfo = null;
   let updatedVendorInfo = null;
 
-  // 1. Authoritative Database Transactions with Explicit Row-Level Locking (BEGIN / COMMIT / ROLLBACK)
-  await pool.query('BEGIN');
+  // 1. Authoritative Database Transactions with Dedicated Client (BEGIN / COMMIT / ROLLBACK)
+  const client = (pool.pool && typeof pool.pool.connect === 'function')
+    ? await pool.pool.connect()
+    : pool;
+
   try {
-    // Explicit row locking on internal_tasks to prevent concurrent duplicate approvals
-    const lockRes = await pool.query(
-      'SELECT id, status, approval_status FROM internal_tasks WHERE id = $1 FOR UPDATE',
-      [task.id]
-    );
-    const lockedRow = lockRes && lockRes.rows && lockRes.rows[0];
-    if (lockedRow && (lockedRow.approval_status === 'APPROVED' || lockedRow.status === 'Completed')) {
-      await pool.query('ROLLBACK');
-      return getInternalTaskById(task.id);
-    }
-
-    if (accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT') {
-      let prevBal = 0;
-      let targetBuyerId = accountId;
-      const dbBuyerRes = await pool.query(
-        'SELECT id, raw FROM buyer_accounts WHERE id = $1 FOR UPDATE',
-        [accountId]
-      );
-      if (dbBuyerRes && dbBuyerRes.rows && dbBuyerRes.rows[0]) {
-        const bRow = dbBuyerRes.rows[0];
-        targetBuyerId = bRow.id;
-        const bRaw = typeof bRow.raw === 'string' ? JSON.parse(bRow.raw || '{}') : (bRow.raw || {});
-        prevBal = Number(bRaw.creditBalance ?? bRow.available_credits ?? 0);
-      } else {
-        const buyers = (storeService.getBuyerAccounts && storeService.getBuyerAccounts()) || [];
-        const buyer = buyers.find(
-          (b) => b.id === accountId || b.corporateEmail === accountId || b.organizationName === task.credit_account_name
-        );
-        if (buyer) {
-          targetBuyerId = buyer.id;
-          prevBal = Number(buyer.creditBalance) || 0;
-        }
-      }
-      const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-      const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
-      await pool.query(bSql, [updatedBal, targetBuyerId], { d1: true, d1Text: bSql });
-
-      if (domainQueries.recordBuyerCreditTransactionInDB) {
-        const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
-        await domainQueries.recordBuyerCreditTransactionInDB({
-          id: txId,
-          buyerId: targetBuyerId,
-          rfqId: null,
-          transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
-          creditSource: 'Action Center Internal Tasks Approval',
-          creditsAdded: isDeduct ? 0 : creditQty,
-          creditsConsumed: isDeduct ? creditQty : 0,
-          previousBalance: prevBal,
-          updatedBalance: updatedBal,
-          status: 'COMPLETED',
-          description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
-          idempotencyKey: `task-approval-${task.id}`,
-        });
-      }
-      updatedBuyerInfo = { buyerId: targetBuyerId, updatedBal };
-    } else if (accountType === 'SELLER' || accountType === 'VENDOR') {
-      let prevBal = 0;
-      let targetVendorId = accountId;
-      const dbVendorRes = await pool.query(
-        'SELECT id, raw FROM vendors WHERE id = $1 FOR UPDATE',
-        [accountId]
-      );
-      if (dbVendorRes && dbVendorRes.rows && dbVendorRes.rows[0]) {
-        const vRow = dbVendorRes.rows[0];
-        targetVendorId = vRow.id;
-        const vRaw = typeof vRow.raw === 'string' ? JSON.parse(vRow.raw || '{}') : (vRow.raw || {});
-        prevBal = Number(vRaw.freeQuotationCredits ?? vRaw.freeRfqDownloadCredits ?? vRow.credits ?? 0);
-      } else {
-        const vendor = (storeService.getVendorById && storeService.getVendorById(accountId)) || null;
-        if (vendor) {
-          targetVendorId = vendor.id;
-          prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? 0);
-        }
-      }
-      const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-      const vSql = `UPDATE vendors SET raw = jsonb_set(raw, '{freeQuotationCredits}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
-      await pool.query(vSql, [updatedBal, targetVendorId], { d1: true, d1Text: vSql });
-
-      if (domainQueries.recordCreditTransactionInDB) {
-        const txId = `vtx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
-        await domainQueries.recordCreditTransactionInDB({
-          id: txId,
-          vendorId: targetVendorId,
-          rfqId: null,
-          transactionType: isDeduct ? 'CREDIT_DEDUCTION' : 'CREDIT_GRANT',
-          amount: creditQty,
-          balanceAfter: updatedBal,
-          idempotencyKey: `task-approval-${task.id}`,
-        });
-      }
-      updatedVendorInfo = { vendorId: targetVendorId, updatedBal };
-    }
-
-    // Update task status and approval details in database
-    const updateSql = `
-      UPDATE internal_tasks SET
-        status = 'Completed',
-        approval_status = 'APPROVED',
-        approver_id = $1,
-        approver_name = $2,
-        approved_at = CURRENT_TIMESTAMP,
-        approval_remarks = $3,
-        completed_at = CURRENT_TIMESTAMP,
-        completed_by_user_id = $1,
-        completed_by_name = $2,
-        completion_remarks = $3,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $4
-    `;
-    await pool.query(updateSql, [actorId, actorName, approvalRemarks, task.id], { d1: true, d1Text: updateSql });
-
-    // Log approval activity record in database
-    const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
-    const actSql = `
-      INSERT INTO internal_task_activities (
-        id, task_id, action_type, actor_id, actor_name, from_value, to_value, comment
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `;
-    await pool.query(
-      actSql,
-      [
-        actId,
-        task.id,
-        'APPROVED',
-        actorId,
-        actorName,
-        task.status,
-        'Completed',
-        `Credit request approved by ${actorName}. Remarks: ${approvalRemarks}`,
-      ],
-      { d1: true, d1Text: actSql }
-    );
-
-    // Commit database transaction - Authoritative persistence complete!
-    await pool.query('COMMIT');
-  } catch (error) {
+    await client.query('BEGIN');
     try {
-      await pool.query('ROLLBACK');
-    } catch {}
-    throw error;
+      // Explicit row locking on internal_tasks to prevent concurrent duplicate approvals
+      const lockRes = await client.query(
+        'SELECT id, status, approval_status FROM internal_tasks WHERE id = $1 FOR UPDATE',
+        [task.id]
+      );
+      const lockedRow = lockRes && lockRes.rows && lockRes.rows[0];
+      if (lockedRow && (lockedRow.approval_status === 'APPROVED' || lockedRow.status === 'Completed')) {
+        await client.query('ROLLBACK');
+        return getInternalTaskById(task.id);
+      }
+
+      if (accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT') {
+        let prevBal = 0;
+        let targetBuyerId = accountId;
+        const dbBuyerRes = await client.query(
+          'SELECT id, raw FROM buyer_accounts WHERE id = $1 FOR UPDATE',
+          [accountId]
+        );
+        if (dbBuyerRes && dbBuyerRes.rows && dbBuyerRes.rows[0]) {
+          const bRow = dbBuyerRes.rows[0];
+          targetBuyerId = bRow.id;
+          const bRaw = typeof bRow.raw === 'string' ? JSON.parse(bRow.raw || '{}') : (bRow.raw || {});
+          prevBal = Number(bRaw.creditBalance ?? bRow.available_credits ?? 0);
+        } else {
+          const buyers = (storeService.getBuyerAccounts && storeService.getBuyerAccounts()) || [];
+          const buyer = buyers.find(
+            (b) => b.id === accountId || b.corporateEmail === accountId || b.organizationName === task.credit_account_name
+          );
+          if (buyer) {
+            targetBuyerId = buyer.id;
+            prevBal = Number(buyer.creditBalance) || 0;
+          }
+        }
+        const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
+        const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
+        await client.query(bSql, [updatedBal, targetBuyerId], { d1: true, d1Text: bSql });
+
+        if (domainQueries.recordBuyerCreditTransactionInDB) {
+          const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+          await domainQueries.recordBuyerCreditTransactionInDB({
+            id: txId,
+            buyerId: targetBuyerId,
+            rfqId: null,
+            transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
+            creditSource: 'Action Center Internal Tasks Approval',
+            creditsAdded: isDeduct ? 0 : creditQty,
+            creditsConsumed: isDeduct ? creditQty : 0,
+            previousBalance: prevBal,
+            updatedBalance: updatedBal,
+            status: 'COMPLETED',
+            description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
+            idempotencyKey: `task-approval-${task.id}`,
+          });
+        }
+        updatedBuyerInfo = { buyerId: targetBuyerId, updatedBal };
+      } else if (accountType === 'SELLER' || accountType === 'VENDOR') {
+        let prevBal = 0;
+        let targetVendorId = accountId;
+        const dbVendorRes = await client.query(
+          'SELECT id, raw FROM vendors WHERE id = $1 FOR UPDATE',
+          [accountId]
+        );
+        if (dbVendorRes && dbVendorRes.rows && dbVendorRes.rows[0]) {
+          const vRow = dbVendorRes.rows[0];
+          targetVendorId = vRow.id;
+          const vRaw = typeof vRow.raw === 'string' ? JSON.parse(vRow.raw || '{}') : (vRow.raw || {});
+          prevBal = Number(vRaw.freeQuotationCredits ?? vRaw.freeRfqDownloadCredits ?? vRow.credits ?? 0);
+        } else {
+          const vendor = (storeService.getVendorById && storeService.getVendorById(accountId)) || null;
+          if (vendor) {
+            targetVendorId = vendor.id;
+            prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? 0);
+          }
+        }
+        const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
+        const vSql = `UPDATE vendors SET raw = jsonb_set(raw, '{freeQuotationCredits}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
+        await client.query(vSql, [updatedBal, targetVendorId], { d1: true, d1Text: vSql });
+
+        if (domainQueries.recordCreditTransactionInDB) {
+          const txId = `vtx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+          await domainQueries.recordCreditTransactionInDB({
+            id: txId,
+            vendorId: targetVendorId,
+            rfqId: null,
+            transactionType: isDeduct ? 'CREDIT_DEDUCTION' : 'CREDIT_GRANT',
+            amount: creditQty,
+            balanceAfter: updatedBal,
+            idempotencyKey: `task-approval-${task.id}`,
+          });
+        }
+        updatedVendorInfo = { vendorId: targetVendorId, updatedBal };
+      }
+
+      // Update task status and approval details in database
+      const updateSql = `
+        UPDATE internal_tasks SET
+          status = 'Completed',
+          approval_status = 'APPROVED',
+          approver_id = $1,
+          approver_name = $2,
+          approved_at = CURRENT_TIMESTAMP,
+          approval_remarks = $3,
+          completed_at = CURRENT_TIMESTAMP,
+          completed_by_user_id = $1,
+          completed_by_name = $2,
+          completion_remarks = $3,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $4
+      `;
+      await client.query(updateSql, [actorId, actorName, approvalRemarks, task.id], { d1: true, d1Text: updateSql });
+
+      // Log approval activity record in database
+      const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
+      const actSql = `
+        INSERT INTO internal_task_activities (
+          id, task_id, action_type, actor_id, actor_name, from_value, to_value, comment
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `;
+      await client.query(
+        actSql,
+        [
+          actId,
+          task.id,
+          'APPROVED',
+          actorId,
+          actorName,
+          task.status,
+          'Completed',
+          `Credit request approved by ${actorName}. Remarks: ${approvalRemarks}`,
+        ],
+        { d1: true, d1Text: actSql }
+      );
+
+      // Commit transaction
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    }
+  } finally {
+    if (client && typeof client.release === 'function') {
+      client.release();
+    }
   }
 
   // Synchronize in-memory caches ONLY after database transaction has successfully committed

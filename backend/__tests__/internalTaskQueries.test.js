@@ -905,6 +905,54 @@ describe('internalTaskQueries', () => {
       expect(updateVendorSpy).toHaveBeenCalledWith('ven_db_1', { freeQuotationCredits: 30, freeRfqDownloadCredits: 30 });
     });
 
+    test('approveCreditTask checks out client from pool.pool.connect and releases on completion', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const storeService = require('../src/services/storeService');
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([
+        { id: 'buy_client_rel', creditBalance: 50 },
+      ]);
+      const mockClientRelease = jest.fn();
+      const mockClientQuery = jest.fn().mockImplementation((sql) => {
+        if (typeof sql === 'string' && sql.includes('FROM internal_tasks')) {
+          return Promise.resolve({
+            rows: [
+              {
+                id: 'tsk_client_rel',
+                task_number: 'TASK-1007',
+                task_category: 'CREDIT_MANAGEMENT',
+                task_type: 'Add Credits',
+                status: 'Pending Approval',
+                credit_account_type: 'BUYER',
+                credit_account_id: 'buy_client_rel',
+                credit_quantity: 10,
+                attachments: '[]',
+                raw: '{}',
+              },
+            ],
+          });
+        }
+        if (typeof sql === 'string' && sql.includes('FROM internal_task_activities')) {
+          return Promise.resolve({ rows: [] });
+        }
+        return Promise.resolve({ rowCount: 1 });
+      });
+
+      pool.pool = {
+        connect: jest.fn().mockResolvedValue({
+          query: mockClientQuery,
+          release: mockClientRelease,
+        }),
+      };
+
+      try {
+        const res = await queries.approveCreditTask('tsk_client_rel', { id: 'adm' });
+        expect(res).toBeDefined();
+        expect(mockClientRelease).toHaveBeenCalled();
+      } finally {
+        pool.pool = null;
+      }
+    });
+
     test('approveCreditTask returns null when storage disabled or task not found', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
       expect(await queries.approveCreditTask('tsk_1')).toBeNull();
