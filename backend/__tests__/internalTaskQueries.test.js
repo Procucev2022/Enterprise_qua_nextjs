@@ -859,6 +859,101 @@ describe('internalTaskQueries', () => {
       expect(res).toBeDefined();
     });
 
+    test('approveCreditTask rolls back memory balance if database update fails for buyer', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const storeService = require('../src/services/storeService');
+      const domainQueries = require('../src/db/domainQueries');
+
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([
+        { id: 'buy_roll', creditBalance: 100 },
+      ]);
+      const updateBuyerSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockImplementation((id, updates) => updates);
+      jest.spyOn(domainQueries, 'recordBuyerCreditTransactionInDB').mockResolvedValue({});
+
+      jest.spyOn(pool, 'query').mockImplementation((sql) => {
+        if (sql.includes('FROM internal_tasks')) {
+          return Promise.resolve({
+            rows: [
+              {
+                id: 'tsk_roll',
+                task_number: 'TASK-ROLL',
+                task_category: 'CREDIT_MANAGEMENT',
+                credit_account_type: 'BUYER',
+                credit_account_id: 'buy_roll',
+                credit_quantity: 25,
+                task_type: 'Add Credits',
+                status: 'Pending Approval',
+                attachments: '[]',
+                raw: '{}',
+              },
+            ],
+          });
+        }
+        if (sql.includes('UPDATE internal_tasks')) {
+          return Promise.reject(new Error('Simulated DB update failure during approval'));
+        }
+        return Promise.resolve({ rowCount: 1 });
+      });
+
+      await expect(queries.approveCreditTask('tsk_roll')).rejects.toThrow('Simulated DB update failure');
+      expect(updateBuyerSpy).toHaveBeenCalledWith('buy_roll', { creditBalance: 100 });
+    });
+
+    test('approveCreditTask rolls back vendor memory balance if database update fails', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const storeService = require('../src/services/storeService');
+      const domainQueries = require('../src/db/domainQueries');
+
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue({
+        id: 'ven_roll',
+        freeQuotationCredits: 40,
+        freeRfqDownloadCredits: 40,
+      });
+      const updateVendorSpy = jest.spyOn(storeService, 'updateVendor').mockImplementation((id, updates) => updates);
+      jest.spyOn(domainQueries, 'recordCreditTransactionInDB').mockResolvedValue({});
+
+      jest.spyOn(pool, 'query').mockImplementation((sql) => {
+        if (sql.includes('FROM internal_tasks')) {
+          return Promise.resolve({
+            rows: [
+              {
+                id: 'tsk_ven_roll',
+                task_number: 'TASK-VROLL',
+                task_category: 'CREDIT_MANAGEMENT',
+                credit_account_type: 'VENDOR',
+                credit_account_id: 'ven_roll',
+                credit_quantity: 10,
+                task_type: 'Delete Credits',
+                status: 'Pending Approval',
+                attachments: '[]',
+                raw: '{}',
+              },
+            ],
+          });
+        }
+        if (sql.includes('UPDATE internal_tasks')) {
+          return Promise.reject(new Error('Simulated DB vendor update failure'));
+        }
+        return Promise.resolve({ rowCount: 1 });
+      });
+
+      await expect(queries.approveCreditTask('tsk_ven_roll')).rejects.toThrow('Simulated DB vendor update failure');
+      expect(updateVendorSpy).toHaveBeenCalledWith('ven_roll', { freeQuotationCredits: 40, freeRfqDownloadCredits: 40 });
+    });
+
+    test('getInternalTasks safely escapes wildcards in search, assignedTo, and createdBy', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ total: 0 }] });
+
+      await queries.getInternalTasks({
+        search: '100%_special',
+        assignedTo: 'admin_%',
+        createdBy: 'user_%',
+      });
+
+      expect(querySpy).toHaveBeenCalled();
+    });
+
     test('rejectCreditTask returns null when storage disabled or task not found', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
       expect(await queries.rejectCreditTask('tsk_1')).toBeNull();
