@@ -459,27 +459,31 @@ describe('actionCenterCommController', () => {
       await actionCenterCommController.handleDeliveryWebhook(req, res);
 
       expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith({
-        success: false,
-        error: 'accountId is required.',
-      });
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'A unique communicationId or gateway messageId is required for delivery status webhooks.',
+        })
+      );
     });
 
-    it('returns 400 when accountId is missing', async () => {
-      req.body = { acknowledgementStatus: 'Delivered' };
+    it('returns 400 when communicationId and messageId are missing (rejects account-only)', async () => {
+      req.body = { accountId: 'acc-only' };
 
       await actionCenterCommController.handleDeliveryWebhook(req, res);
 
       expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith({
-        success: false,
-        error: 'accountId is required.',
-      });
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'A unique communicationId or gateway messageId is required for delivery status webhooks.',
+        })
+      );
     });
 
     it('returns 200 on successful status update with full details', async () => {
       req.body = {
-        accountId: 'acc-101',
+        communicationId: 'comm-1',
         acknowledgementStatus: 'Delivered',
         deliveryStatus: 'Delivered',
         notes: 'Carrier delivered',
@@ -487,13 +491,14 @@ describe('actionCenterCommController', () => {
 
       const updateSpy = jest
         .spyOn(paymentDuesQueries, 'updateAcknowledgementStatus')
-        .mockResolvedValueOnce({ id: 'comm-1', acknowledgementStatus: 'Delivered' });
+        .mockResolvedValueOnce({ id: 'comm-1', acknowledgementStatus: 'Delivered', deliveryStatus: 'Delivered' });
 
       await actionCenterCommController.handleDeliveryWebhook(req, res);
 
       expect(updateSpy).toHaveBeenCalledWith({
-        accountId: 'acc-101',
+        communicationId: 'comm-1',
         acknowledgementStatus: 'Delivered',
+        deliveryStatus: 'Delivered',
         notes: 'Carrier delivered',
         updatedBy: 'Category Manager',
       });
@@ -510,19 +515,19 @@ describe('actionCenterCommController', () => {
 
     it('returns 200 with fallback default notes and acknowledgementStatus', async () => {
       req.body = {
-        accountId: 'acc-defaults',
+        communicationId: 'comm-defaults',
       };
 
       const updateSpy = jest
         .spyOn(paymentDuesQueries, 'updateAcknowledgementStatus')
-        .mockResolvedValueOnce({ id: 'comm-def', acknowledgementStatus: 'Acknowledged' });
+        .mockResolvedValueOnce({ id: 'comm-defaults', acknowledgementStatus: 'Acknowledged' });
 
       await actionCenterCommController.handleDeliveryWebhook(req, res);
 
       expect(updateSpy).toHaveBeenCalledWith({
-        accountId: 'acc-defaults',
+        communicationId: 'comm-defaults',
         acknowledgementStatus: 'Acknowledged',
-        notes: 'Webhook updated status to Acknowledged',
+        notes: 'Webhook acknowledgement status: Acknowledged',
         updatedBy: 'Category Manager',
       });
       expect(res.status).toHaveBeenCalledWith(200);
@@ -530,34 +535,77 @@ describe('actionCenterCommController', () => {
       updateSpy.mockRestore();
     });
 
-    it('returns 200 and passes communicationId when provided', async () => {
+    it('returns 200 and updates deliveryStatus without changing acknowledgementStatus when only delivery is supplied', async () => {
       req.body = {
-        communicationId: 'comm-exact-99',
-        accountId: 'acc-101',
-        acknowledgementStatus: 'Delivered',
-        notes: 'Delivered to recipient',
+        communicationId: 'comm-delivery-only',
+        deliveryStatus: 'DELIVRD',
       };
 
       const updateSpy = jest
         .spyOn(paymentDuesQueries, 'updateAcknowledgementStatus')
-        .mockResolvedValueOnce({ id: 'comm-exact-99', acknowledgementStatus: 'Delivered' });
+        .mockResolvedValueOnce({ id: 'comm-delivery-only', deliveryStatus: 'DELIVRD' });
 
       await actionCenterCommController.handleDeliveryWebhook(req, res);
 
       expect(updateSpy).toHaveBeenCalledWith({
-        communicationId: 'comm-exact-99',
-        accountId: 'acc-101',
-        acknowledgementStatus: 'Delivered',
-        notes: 'Delivered to recipient',
+        communicationId: 'comm-delivery-only',
+        deliveryStatus: 'DELIVRD',
+        notes: 'Webhook delivery status: DELIVRD',
         updatedBy: 'Category Manager',
       });
       expect(res.status).toHaveBeenCalledWith(200);
+
+      updateSpy.mockRestore();
+    });
+
+    it('returns 200 and correlates using gateway messageId or msgid', async () => {
+      req.body = {
+        messageId: 'gateway-msg-88',
+        deliveryStatus: 'Delivered',
+      };
+
+      const updateSpy = jest
+        .spyOn(paymentDuesQueries, 'updateAcknowledgementStatus')
+        .mockResolvedValueOnce({ id: 'comm-msg-88', deliveryStatus: 'Delivered' });
+
+      await actionCenterCommController.handleDeliveryWebhook(req, res);
+
+      expect(updateSpy).toHaveBeenCalledWith({
+        communicationId: 'gateway-msg-88',
+        deliveryStatus: 'Delivered',
+        notes: 'Webhook delivery status: Delivered',
+        updatedBy: 'Category Manager',
+      });
+      expect(res.status).toHaveBeenCalledWith(200);
+
+      updateSpy.mockRestore();
+    });
+
+    it('returns 404 when communication record is not found', async () => {
+      req.body = {
+        communicationId: 'comm-non-existent',
+        deliveryStatus: 'Delivered',
+      };
+
+      const updateSpy = jest
+        .spyOn(paymentDuesQueries, 'updateAcknowledgementStatus')
+        .mockResolvedValueOnce(null);
+
+      await actionCenterCommController.handleDeliveryWebhook(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: "Communication record with ID 'comm-non-existent' was not found.",
+        })
+      );
 
       updateSpy.mockRestore();
     });
 
     it('returns 500 when webhook update throws error', async () => {
-      req.body = { accountId: 'acc-err' };
+      req.body = { communicationId: 'comm-err' };
 
       const updateSpy = jest
         .spyOn(paymentDuesQueries, 'updateAcknowledgementStatus')

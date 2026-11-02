@@ -885,6 +885,18 @@ export default function InternalTasksDashboard() {
                       <td className="py-3 px-3.5 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1.5">
                           <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTaskDetails(task);
+                              setIsComposeModalOpen(true);
+                            }}
+                            className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
+                            title="Dispatch SMS / Email for task"
+                            data-testid={`task-row-compose-${task.id}`}
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                          </button>
+                          <button
                             onClick={() => setSelectedTaskDetails(task)}
                             className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
                             title="View details"
@@ -1534,12 +1546,23 @@ export default function InternalTasksDashboard() {
                   <Trash2 className="w-3.5 h-3.5" />
                   <span>Delete Task</span>
                 </button>
-                <button
-                  onClick={() => setSelectedTaskDetails(null)}
-                  className="px-4 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg font-semibold text-slate-700 dark:text-slate-300"
-                >
-                  Close
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsComposeModalOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 transition-all shadow-sm"
+                    data-testid="drawer-compose-btn"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Dispatch SMS / Email</span>
+                  </button>
+                  <button
+                    onClick={() => setSelectedTaskDetails(null)}
+                    className="px-4 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg font-semibold text-slate-700 dark:text-slate-300"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1548,17 +1571,20 @@ export default function InternalTasksDashboard() {
         </>
       )}
 
-      {isComposeModalOpen && (
-        <ActionCenterComposeModal
-          isOpen={isComposeModalOpen}
-          onClose={() => setIsComposeModalOpen(false)}
-          entityType="internal_task"
-          entityId={selectedTaskDetails?.id || 'general-task'}
-          defaultSubject={selectedTaskDetails ? `Task Update: ${selectedTaskDetails.title}` : 'Task Notification'}
-          defaultRecipientName={selectedTaskDetails?.assigned_to_name || sessionUser?.name || 'Category Manager'}
-          defaultRecipientEmail={sessionUser?.email || ''}
-        />
-      )}
+      {isComposeModalOpen && (() => {
+        const activeTask = selectedTaskDetails || tasks[0] || null;
+        return (
+          <ActionCenterComposeModal
+            isOpen={isComposeModalOpen}
+            onClose={() => setIsComposeModalOpen(false)}
+            entityType="internal_task"
+            entityId={activeTask?.id || 'general-task'}
+            defaultSubject={activeTask?.title ? `Task Update: ${activeTask.title}` : 'Task Notification'}
+            defaultRecipientName={activeTask?.assigned_to_name || sessionUser?.name || 'Category Manager'}
+            defaultRecipientEmail={sessionUser?.email || ''}
+          />
+        );
+      })()}
     </div>
   );
 }

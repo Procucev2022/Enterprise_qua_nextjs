@@ -608,10 +608,11 @@ describe('ActionCenterComposeModal', () => {
       followupError: 'Assignee queue unavailable',
     });
 
+    const testOnClose = jest.fn();
     const { container } = render(
       <ActionCenterComposeModal
         isOpen={true}
-        onClose={mockOnClose}
+        onClose={testOnClose}
         onSuccess={mockOnSuccess}
         entityType="internal_task"
         entityId="tsk-fol-err"
@@ -630,7 +631,7 @@ describe('ActionCenterComposeModal', () => {
         screen.getByText(/Notification was dispatched successfully, but scheduling the follow-up task failed/i)
       ).toBeInTheDocument();
       expect(mockOnSuccess).toHaveBeenCalled();
-      expect(mockOnClose).not.toHaveBeenCalled();
+      expect(testOnClose).not.toHaveBeenCalled();
     });
   });
 });

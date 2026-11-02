@@ -559,7 +559,7 @@ async function updateAcknowledgementStatus({
   // Update in-memory storage
   if (communicationId) {
     for (const list of inMemoryCommunications.values()) {
-      const found = list.find((item) => item.id === communicationId);
+      const found = list.find((item) => item.id === communicationId || item.metadata?.gatewayMessageId === communicationId || item.metadata?.msgid === communicationId);
       if (found) {
         if (acknowledgementStatus) found.acknowledgementStatus = acknowledgementStatus;
         if (deliveryStatus) found.deliveryStatus = deliveryStatus;
@@ -618,7 +618,7 @@ async function updateAcknowledgementStatus({
  * Get communication history for an account or across all accounts
  */
 async function getCommunicationHistory(accountId, options = {}) {
-  const isAll = !accountId || accountId === '' || accountId === '*';
+  const isAll = Boolean(options?.isCrossAccount) && (!accountId || accountId === '' || accountId === '*');
   const limit = Math.min(Math.max(Number(options?.limit) || 50, 1), 200);
   const offset = Math.max(Number(options?.offset) || 0, 0);
 
@@ -672,12 +672,117 @@ async function getCommunicationHistory(accountId, options = {}) {
   return list.slice(offset, offset + limit);
 }
 
+
+/**
+ * Query communications with database-level filtering and pagination.
+ */
+async function queryCommunications({
+  accountId,
+  entityType,
+  channel,
+  limit = 20,
+  offset = 0,
+  isCrossAccount = false,
+} = {}) {
+  const pLimit = Math.max(1, Number(limit) || 20);
+  const pOffset = Math.max(0, Number(offset) || 0);
+  const conditions = [];
+  const params = [];
+  let paramIdx = 1;
+
+  if (accountId && !isCrossAccount) {
+    conditions.push(`account_id = ${paramIdx++}`);
+    params.push(accountId);
+  }
+
+  if (entityType) {
+    conditions.push(`(LOWER(account_type) = LOWER(${paramIdx}) OR LOWER(metadata->>'entityType') = LOWER(${paramIdx}))`);
+    paramIdx++;
+    params.push(entityType);
+  }
+
+  if (channel && channel !== 'ALL') {
+    conditions.push(`UPPER(channel) = UPPER(${paramIdx++})`);
+    params.push(channel);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  if (pool.hasStorage()) {
+    try {
+      const countSql = `SELECT COUNT(*) AS total FROM payment_dues_communications ${whereClause}`;
+      const countResult = await pool.query(countSql, params, { d1: true, d1Text: countSql });
+      const total = Number(countResult?.rows?.[0]?.total || 0);
+
+      const dataSql = `SELECT * FROM payment_dues_communications ${whereClause} ORDER BY sent_at DESC LIMIT ${paramIdx++} OFFSET ${paramIdx++}`;
+      const dataParams = [...params, pLimit, pOffset];
+      const dataResult = await pool.query(dataSql, dataParams, { d1: true, d1Text: dataSql });
+      const rows = Array.isArray(dataResult?.rows) ? dataResult.rows : [];
+
+      return {
+        items: rows.map((row) => ({
+          id: row.id,
+          accountId: row.account_id,
+          accountType: row.account_type,
+          channel: row.channel,
+          recipient: row.recipient,
+          subject: row.subject,
+          message: row.message,
+          notificationStatus: row.notification_status,
+          deliveryStatus: row.delivery_status,
+          acknowledgementStatus: row.acknowledgement_status,
+          communicatedBy: row.communicated_by,
+          sentAt: row.sent_at,
+          acknowledgedAt: row.acknowledged_at,
+          acknowledgedBy: row.acknowledged_by,
+          notes: row.notes,
+          metadata: parseRaw(row.metadata, {}),
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        })),
+        total,
+      };
+    } catch {
+      // fallback to in-memory
+    }
+  }
+
+  // In-memory query implementation
+  let all = [];
+  if (accountId && !isCrossAccount) {
+    all = [...(inMemoryCommunications.get(accountId) || [])];
+  } else {
+    for (const comms of inMemoryCommunications.values()) {
+      all.push(...comms);
+    }
+  }
+
+  if (entityType) {
+    const et = String(entityType).toLowerCase();
+    all = all.filter(
+      (r) => String(r.accountType || '').toLowerCase() === et || String(r.metadata?.entityType || '').toLowerCase() === et
+    );
+  }
+
+  if (channel && channel !== 'ALL') {
+    const ch = String(channel).toUpperCase();
+    all = all.filter((r) => String(r.channel || '').toUpperCase() === ch);
+  }
+
+  all.sort((a, b) => new Date(b.sentAt || 0) - new Date(a.sentAt || 0));
+  const total = all.length;
+  const items = all.slice(pOffset, pOffset + pLimit);
+
+  return { items, total };
+}
+
 module.exports = {
   getLowCreditAccounts,
   getPaymentDuesSummary,
   recordCommunication,
   updateAcknowledgementStatus,
   getCommunicationHistory,
+  queryCommunications,
   resetInMemoryCommunications,
   fetchRawBuyers,
   fetchRawVendors,

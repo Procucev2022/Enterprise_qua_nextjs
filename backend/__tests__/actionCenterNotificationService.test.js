@@ -341,16 +341,128 @@ describe('actionCenterNotificationService', () => {
       recordSpy.mockRestore();
       taskSpy.mockRestore();
     });
+
+    it('covers partial success when BOTH channels are requested and email succeeds but SMS fails', async () => {
+      const deliverSpy = jest.spyOn(mailerService, 'deliver').mockResolvedValueOnce({ messageId: 'm-part-1' });
+      const smsSpy = jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValueOnce({ success: false, error: 'SMS gateway error' });
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValueOnce({ id: 'comm-part-1' });
+
+      const res = await actionCenterNotificationService.dispatchActionCenterCommunication(
+        {
+          entityType: 'ticket',
+          entityId: 't-part-1',
+          channel: 'BOTH',
+          recipientEmail: 'user@example.com',
+          recipientPhone: '9876543210',
+          message: 'Partial test message',
+        },
+        {}
+      );
+
+      expect(res.success).toBe(false);
+      expect(res.partialSuccess).toBe(true);
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryStatus: 'Partial',
+        })
+      );
+
+      deliverSpy.mockRestore();
+      smsSpy.mockRestore();
+      recordSpy.mockRestore();
+    });
+
+    it('covers partial success when BOTH channels are requested and SMS succeeds but email fails', async () => {
+      const deliverSpy = jest.spyOn(mailerService, 'deliver').mockRejectedValueOnce(new Error('SMTP down'));
+      const smsSpy = jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValueOnce({ success: true, messageId: 's-part-2' });
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValueOnce({ id: 'comm-part-2' });
+
+      const res = await actionCenterNotificationService.dispatchActionCenterCommunication(
+        {
+          entityType: 'ticket',
+          entityId: 't-part-2',
+          channel: 'BOTH',
+          recipientEmail: 'user@example.com',
+          recipientPhone: '9876543210',
+          message: 'Partial test message 2',
+        },
+        {}
+      );
+
+      expect(res.success).toBe(false);
+      expect(res.partialSuccess).toBe(true);
+      expect(recordSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryStatus: 'Partial',
+        })
+      );
+
+      deliverSpy.mockRestore();
+      smsSpy.mockRestore();
+      recordSpy.mockRestore();
+    });
+
+    it('covers recipient fallbacks for SMS and EMAIL when primary recipient field is missing', async () => {
+      const smsSpy = jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValueOnce({ success: true });
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication')
+        .mockResolvedValueOnce({ id: 'comm-rec-sms' })
+        .mockResolvedValueOnce({ id: 'comm-rec-mail' });
+      const deliverSpy = jest.spyOn(mailerService, 'deliver').mockResolvedValueOnce({ messageId: 'm-rec' });
+
+      // SMS with no phone, falls back to recipientName
+      await actionCenterNotificationService.dispatchActionCenterCommunication({
+        channel: 'SMS',
+        recipientName: 'Vendor Name Fallback',
+        recipientPhone: '',
+      });
+
+      expect(recordSpy).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          recipient: 'Vendor Name Fallback',
+        })
+      );
+
+      // EMAIL with no email, falls back to recipientPhone
+      await actionCenterNotificationService.dispatchActionCenterCommunication({
+        channel: 'EMAIL',
+        recipientEmail: '',
+        recipientPhone: '9988776655',
+      });
+
+      expect(recordSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          recipient: '9988776655',
+        })
+      );
+
+      smsSpy.mockRestore();
+      deliverSpy.mockRestore();
+      recordSpy.mockRestore();
+    });
+
+    it('covers sanitizeActionUrl and escapeHtml edge-cases', () => {
+      expect(actionCenterNotificationService.sanitizeActionUrl(null, 'https://fallback.com')).toBe('https://fallback.com');
+      expect(actionCenterNotificationService.sanitizeActionUrl('not a valid url', 'https://fallback.com')).toBe('https://fallback.com');
+      expect(actionCenterNotificationService.sanitizeActionUrl('javascript:alert(1)', 'https://fallback.com')).toBe('https://fallback.com');
+      expect(actionCenterNotificationService.sanitizeActionUrl('http://insecure.com/path', 'https://fallback.com')).toBe('http://insecure.com/path');
+      expect(actionCenterNotificationService.sanitizeActionUrl('https://secure.com/path', 'https://fallback.com')).toBe('https://secure.com/path');
+
+      expect(actionCenterNotificationService.escapeHtml(null)).toBe('');
+      expect(actionCenterNotificationService.escapeHtml('&<>"\'')).toBe('&amp;&lt;&gt;&quot;&#39;');
+    });
   });
 
   describe('getActionCenterCommunications', () => {
     it('returns filtered and paginated communication items', async () => {
-      const mockRecords = [
-        { id: '1', accountId: 'ent-1', accountType: 'ticket', channel: 'EMAIL' },
-        { id: '2', accountId: 'ent-1', accountType: 'ticket', channel: 'SMS' },
-        { id: '3', accountId: 'ent-2', accountType: 'approval', channel: 'EMAIL' },
-      ];
-      const getHistorySpy = jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValueOnce(mockRecords);
+      const mockResult = {
+        items: [
+          { id: '1', accountId: 'ent-1', accountType: 'ticket', channel: 'EMAIL' },
+        ],
+        total: 1,
+      };
+      const querySpy = jest.spyOn(paymentDuesQueries, 'queryCommunications').mockResolvedValueOnce(mockResult);
 
       const res = await actionCenterNotificationService.getActionCenterCommunications({
         entityId: 'ent-1',
@@ -360,49 +472,65 @@ describe('actionCenterNotificationService', () => {
         pageSize: 10,
       });
 
-      expect(getHistorySpy).toHaveBeenCalledWith('ent-1', expect.anything());
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountId: 'ent-1',
+          entityType: 'ticket',
+          channel: 'EMAIL',
+          limit: 10,
+          offset: 0,
+          isCrossAccount: false,
+        })
+      );
       expect(res.items).toHaveLength(1);
       expect(res.items[0].id).toBe('1');
       expect(res.pagination.total).toBe(1);
 
-      getHistorySpy.mockRestore();
+      querySpy.mockRestore();
     });
 
     it('retrieves all communications when entityId is omitted and filters by ALL channel', async () => {
-      const mockRecords = [
-        { id: '1', accountType: 'ticket', channel: 'EMAIL' },
-        { id: '2', accountType: 'ticket', channel: 'SMS' },
-      ];
-      const getHistorySpy = jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValueOnce(mockRecords);
+      const mockResult = {
+        items: [
+          { id: '1', accountType: 'ticket', channel: 'EMAIL' },
+          { id: '2', accountType: 'ticket', channel: 'SMS' },
+        ],
+        total: 2,
+      };
+      const querySpy = jest.spyOn(paymentDuesQueries, 'queryCommunications').mockResolvedValueOnce(mockResult);
 
       const res = await actionCenterNotificationService.getActionCenterCommunications({
         channel: 'ALL',
       });
 
-      expect(getHistorySpy).toHaveBeenCalledWith('', expect.anything());
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountId: '',
+          isCrossAccount: true,
+        })
+      );
       expect(res.items).toHaveLength(2);
       expect(res.pagination.page).toBe(1);
 
-      getHistorySpy.mockRestore();
+      querySpy.mockRestore();
     });
 
     it('handles non-array response from database gracefully', async () => {
-      const getHistorySpy = jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValueOnce(null);
+      const querySpy = jest.spyOn(paymentDuesQueries, 'queryCommunications').mockResolvedValueOnce(null);
 
       const res = await actionCenterNotificationService.getActionCenterCommunications();
       expect(res.items).toEqual([]);
       expect(res.pagination.total).toBe(0);
 
-      getHistorySpy.mockRestore();
+      querySpy.mockRestore();
     });
 
     it('filters by metadata.entityType when accountType is missing, handles edge page bounds', async () => {
-      const mockRecords = [
-        { id: '10', accountType: null, metadata: { entityType: 'buyer_dossier' }, channel: null },
-        { id: '11', accountType: 'buyer_dossier', channel: 'SMS' },
-        { id: '12', accountType: 'other' },
-      ];
-      const getHistorySpy = jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValueOnce(mockRecords);
+      const mockResult = {
+        items: [{ id: '11', accountType: 'buyer_dossier', channel: 'SMS' }],
+        total: 1,
+      };
+      const querySpy = jest.spyOn(paymentDuesQueries, 'queryCommunications').mockResolvedValueOnce(mockResult);
 
       const res = await actionCenterNotificationService.getActionCenterCommunications({
         entityType: 'buyer_dossier',
@@ -411,17 +539,28 @@ describe('actionCenterNotificationService', () => {
         pageSize: 999,
       });
 
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityType: 'buyer_dossier',
+          channel: 'SMS',
+          limit: 100,
+          offset: 0,
+        })
+      );
       expect(res.items).toHaveLength(1);
       expect(res.items[0].id).toBe('11');
       expect(res.pagination.page).toBe(1);
       expect(res.pagination.pageSize).toBe(100);
 
-      getHistorySpy.mockRestore();
+      querySpy.mockRestore();
     });
 
     it('handles non-numeric page and pageSize strings with default fallbacks', async () => {
-      const mockRecords = [{ id: '99', accountType: 'ticket' }];
-      const getHistorySpy = jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValueOnce(mockRecords);
+      const mockResult = {
+        items: [{ id: '99', accountType: 'ticket' }],
+        total: 1,
+      };
+      const querySpy = jest.spyOn(paymentDuesQueries, 'queryCommunications').mockResolvedValueOnce(mockResult);
 
       const res = await actionCenterNotificationService.getActionCenterCommunications({
         page: 'invalid-page',
@@ -432,7 +571,7 @@ describe('actionCenterNotificationService', () => {
       expect(res.pagination.pageSize).toBe(20);
       expect(res.pagination.totalPages).toBe(1);
 
-      getHistorySpy.mockRestore();
+      querySpy.mockRestore();
     });
   });
 });

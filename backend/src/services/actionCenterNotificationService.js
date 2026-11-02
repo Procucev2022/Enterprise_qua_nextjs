@@ -247,7 +247,10 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
   const deliveryStatus = overallSuccess ? 'Sent' : partialSuccess ? 'Partial' : 'Failed';
 
   // 4. Persist communication record
-  const primaryRecipient = recipientEmail || recipientPhone || recipientName;
+  const primaryRecipient =
+    channelUpper === 'SMS'
+      ? (recipientPhone || recipientName || recipientEmail)
+      : (recipientEmail || recipientPhone || recipientName);
   const record = await paymentDuesQueries.recordCommunication({
     accountId: entityId,
     accountType: entityType,
@@ -269,6 +272,9 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
       recipientPhone,
       emailResult: results.email,
       smsResult: results.sms,
+      gatewayMessageId: results.sms?.messageId || results.email?.messageId || null,
+      dispatchedSmsText: results.sms?.renderedMessage || null,
+      isSmsTruncated: Boolean(results.sms?.isTruncated),
       linkUrl,
     },
   });
@@ -360,31 +366,23 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
  */
 async function getActionCenterCommunications(filter = {}) {
   const { entityId, entityType, channel, page = 1, pageSize = 20 } = filter;
-
-  const records = await paymentDuesQueries.getCommunicationHistory(entityId || '', { limit: 500, offset: 0 });
-
-  let filtered = Array.isArray(records) ? records : [];
-
-  if (entityType) {
-    const et = String(entityType).toLowerCase();
-    filtered = filtered.filter(
-      (r) => String(r.accountType || '').toLowerCase() === et || String(r.metadata?.entityType || '').toLowerCase() === et
-    );
-  }
-
-  if (channel && channel !== 'ALL') {
-    const ch = String(channel).toUpperCase();
-    filtered = filtered.filter((r) => String(r.channel || '').toUpperCase() === ch);
-  }
-
-  const total = filtered.length;
   const p = Math.max(1, Number(page) || 1);
   const size = Math.max(1, Math.min(100, Number(pageSize) || 20));
-  const startIndex = (p - 1) * size;
-  const items = filtered.slice(startIndex, startIndex + size);
+  const offset = (p - 1) * size;
+
+  const result = await paymentDuesQueries.queryCommunications({
+    accountId: entityId || '',
+    entityType,
+    channel,
+    limit: size,
+    offset,
+    isCrossAccount: !entityId,
+  });
+
+  const total = Number(result?.total || 0);
 
   return {
-    items,
+    items: result?.items || [],
     pagination: {
       total,
       page: p,

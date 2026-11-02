@@ -291,8 +291,10 @@ async function recordVendorCommunication(req, res, next) {
 
     // External Live Dispatch for Email and SMS (Restricted to staff and channel-verified destinations)
     const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
+    const smsService = require('../services/smsService');
+    const normalizedVendorPhone = smsService.formatMobileNumber(recipient);
     const emailTo = (recipient && recipient.includes('@')) ? recipient : vendor.email;
-    const smsTo = (recipient && /^\d{10}$/.test(recipient.replace(/\D/g, ''))) ? recipient : vendor.phone;
+    const smsTo = (normalizedVendorPhone && normalizedVendorPhone.length === 10) ? recipient : vendor.phone;
     if (isStaff && normalizedChannel === 'EMAIL' && emailTo) {
       try {
         const mailerService = require('../services/mailerService');

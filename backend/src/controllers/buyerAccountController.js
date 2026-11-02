@@ -874,8 +874,10 @@ async function recordBuyerCommunication(req, res, next) {
 
     // External Live Dispatch for Email and SMS (Restricted to staff and channel-verified destinations)
     const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
+    const smsService = require('../services/smsService');
+    const normalizedBuyerPhone = smsService.formatMobileNumber(recipient);
     const buyerEmail = (recipient && recipient.includes('@')) ? recipient : (buyer.corporateEmail || buyer.email);
-    const buyerPhone = (recipient && /^\d{10}$/.test(recipient.replace(/\D/g, ''))) ? recipient : (buyer.phone || buyer.mobileNumber);
+    const buyerPhone = (normalizedBuyerPhone && normalizedBuyerPhone.length === 10) ? recipient : (buyer.phone || buyer.mobileNumber);
     if (isStaff && normalizedChannel === 'EMAIL' && buyerEmail) {
       try {
         const mailerService = require('../services/mailerService');

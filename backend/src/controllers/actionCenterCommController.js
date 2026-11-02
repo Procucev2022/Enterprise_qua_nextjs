@@ -218,37 +218,47 @@ async function handleDeliveryWebhook(req, res) {
       });
     }
 
-    const { communicationId, accountId, acknowledgementStatus, deliveryStatus, notes } = req.body || {};
-    const targetId = communicationId || accountId;
+    const { communicationId, messageId, msgid, accountId, acknowledgementStatus, deliveryStatus, notes } = req.body || {};
+    const effectiveCommId = communicationId || messageId || msgid;
 
-    if (!targetId) {
+    if (!effectiveCommId) {
       return res.status(400).json({
         success: false,
-        error: 'accountId is required.',
+        error: 'A unique communicationId or gateway messageId is required for delivery status webhooks.',
       });
     }
 
-    const finalAcknowledgement = acknowledgementStatus || 'Acknowledged';
-
-    const updated = await paymentDuesQueries.updateAcknowledgementStatus({
-      ...(communicationId ? { communicationId } : {}),
-      ...(accountId ? { accountId } : {}),
-      acknowledgementStatus: finalAcknowledgement,
-      notes: notes || `Webhook updated status to ${finalAcknowledgement}`,
+    const updatePayload = {
+      communicationId: effectiveCommId,
       updatedBy: 'Category Manager',
-    });
+      notes: notes || (deliveryStatus ? `Webhook delivery status: ${deliveryStatus}` : `Webhook acknowledgement status: ${acknowledgementStatus || 'Acknowledged'}`),
+    };
+    if (accountId) {
+      updatePayload.accountId = accountId;
+    }
 
-    if (!updated && communicationId) {
+    if (deliveryStatus) {
+      updatePayload.deliveryStatus = deliveryStatus;
+    }
+    if (acknowledgementStatus) {
+      updatePayload.acknowledgementStatus = acknowledgementStatus;
+    } else if (!deliveryStatus) {
+      updatePayload.acknowledgementStatus = 'Acknowledged';
+    }
+
+    const updated = await paymentDuesQueries.updateAcknowledgementStatus(updatePayload);
+
+    if (!updated) {
       return res.status(404).json({
         success: false,
-        error: `Communication record with ID '${communicationId}' was not found.`,
+        error: `Communication record with ID '${effectiveCommId}' was not found.`,
       });
     }
 
     logger.audit(
-      `[ACTION_CENTER_WEBHOOK] Updated status for communication ${targetId}: ack=${finalAcknowledgement}`,
+      `[ACTION_CENTER_WEBHOOK] Updated status for communication ${effectiveCommId}: delivery=${updatePayload.deliveryStatus || 'unchanged'}, ack=${updatePayload.acknowledgementStatus || 'unchanged'}`,
       null,
-      { communicationId, accountId, finalAcknowledgement }
+      { communicationId: effectiveCommId, deliveryStatus: updatePayload.deliveryStatus, acknowledgementStatus: updatePayload.acknowledgementStatus }
     );
 
     return res.status(200).json({

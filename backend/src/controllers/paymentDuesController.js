@@ -344,8 +344,11 @@ async function getHistory(req, res) {
     if (!accountId) {
       return res.status(400).json({ success: false, error: 'Account ID is required.' });
     }
+    if (accountId === '*' || accountId === '%2A') {
+      return res.status(400).json({ success: false, error: 'Cross-account wildcard lookup is not permitted.' });
+    }
 
-    const history = await paymentDuesQueries.getCommunicationHistory(accountId);
+    const history = await paymentDuesQueries.getCommunicationHistory(accountId, { isCrossAccount: false });
     return res.status(200).json({ success: true, history });
   } catch (error) {
     logger.error('Error fetching communication history', { error: error.message, stack: error.stack });

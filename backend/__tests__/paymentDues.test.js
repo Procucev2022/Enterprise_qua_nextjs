@@ -747,7 +747,7 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
           ],
         });
 
-        const allDb = await paymentDuesQueries.getCommunicationHistory('', { limit: 10, offset: 0 });
+        const allDb = await paymentDuesQueries.getCommunicationHistory('', { limit: 10, offset: 0, isCrossAccount: true });
         expect(querySpy).toHaveBeenCalledWith(
           expect.stringContaining('ORDER BY sent_at DESC LIMIT $1 OFFSET $2'),
           [10, 0],
@@ -756,7 +756,7 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         expect(allDb.length).toBe(1);
       });
 
-      test('retrieves all communications across accounts when accountId is empty or wildcard', async () => {
+      test('retrieves all communications across accounts when accountId is empty or wildcard and isCrossAccount is true', async () => {
         jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
         await paymentDuesQueries.recordCommunication({
           accountId: 'acc-all-1',
@@ -773,11 +773,15 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
           message: 'All history 2',
         });
 
-        const allHistory = await paymentDuesQueries.getCommunicationHistory('', { limit: 10, offset: 0 });
+        const allHistory = await paymentDuesQueries.getCommunicationHistory('', { limit: 10, offset: 0, isCrossAccount: true });
         expect(allHistory.length).toBeGreaterThanOrEqual(2);
 
-        const wildcardHistory = await paymentDuesQueries.getCommunicationHistory('*', { limit: 5, offset: 0 });
+        const wildcardHistory = await paymentDuesQueries.getCommunicationHistory('*', { limit: 5, offset: 0, isCrossAccount: true });
         expect(wildcardHistory.length).toBeGreaterThanOrEqual(2);
+
+        // Without isCrossAccount, it does not match all accounts
+        const singleAcc = await paymentDuesQueries.getCommunicationHistory('acc-all-1', { limit: 10, offset: 0 });
+        expect(singleAcc.every((item) => item.accountId === 'acc-all-1')).toBe(true);
       });
 
       test('fetches communication history from DB when pool has storage', async () => {
@@ -801,6 +805,152 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         const history = await paymentDuesQueries.getCommunicationHistory('b-0');
         expect(history.length).toBe(1);
         expect(history[0].id).toBe('pdc_db_1');
+      });
+    });
+
+    describe('queryCommunications Unit Tests', () => {
+      beforeEach(() => {
+        paymentDuesQueries.resetInMemoryCommunications();
+      });
+
+      test('queries communications from database when pool has storage', async () => {
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+        const querySpy = jest.spyOn(pool, 'query')
+          .mockResolvedValueOnce({ rows: [{ total: '2' }] })
+          .mockResolvedValueOnce({
+            rows: [
+              {
+                id: 'pdc_1',
+                account_id: 't-1',
+                account_type: 'ticket',
+                channel: 'EMAIL',
+                recipient: 'dev@procucev.com',
+                subject: 'Sub',
+                message: 'Msg',
+                notification_status: 'Delivered',
+                delivery_status: 'Delivered',
+                acknowledgement_status: 'Acknowledged',
+                communicated_by: 'Category Manager',
+                sent_at: '2026-02-01T00:00:00Z',
+                acknowledged_at: '2026-02-01T01:00:00Z',
+                acknowledged_by: 'Dev',
+                notes: 'Note',
+                metadata: '{"entityType":"ticket"}',
+                created_at: '2026-02-01T00:00:00Z',
+                updated_at: '2026-02-01T00:00:00Z',
+              },
+            ],
+          });
+
+        const res = await paymentDuesQueries.queryCommunications({
+          accountId: 't-1',
+          entityType: 'ticket',
+          channel: 'EMAIL',
+          limit: 10,
+          offset: 0,
+        });
+
+        expect(querySpy).toHaveBeenCalledTimes(2);
+        expect(res.total).toBe(2);
+        expect(res.items.length).toBe(1);
+        expect(res.items[0].id).toBe('pdc_1');
+        expect(res.items[0].metadata).toEqual({ entityType: 'ticket' });
+      });
+
+      test('handles DB query failure and falls back to in-memory gracefully', async () => {
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+        jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('DB failure'));
+
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'acc-fallback',
+          accountType: 'buyer_dossier',
+          channel: 'SMS',
+          recipient: '9157154504',
+          message: 'Fallback SMS',
+        });
+
+        const res = await paymentDuesQueries.queryCommunications({
+          accountId: 'acc-fallback',
+        });
+
+        expect(res.total).toBeGreaterThanOrEqual(1);
+        expect(res.items[0].accountId).toBe('acc-fallback');
+      });
+
+      test('handles empty database rows array when pool has storage', async () => {
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+        jest.spyOn(pool, 'query')
+          .mockResolvedValueOnce({ rows: [] })
+          .mockResolvedValueOnce({});
+
+        const res = await paymentDuesQueries.queryCommunications();
+        expect(res.total).toBe(0);
+        expect(res.items).toEqual([]);
+      });
+
+      test('filters in-memory communications by channel, entityType, and pagination bounds', async () => {
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'acc-1',
+          accountType: 'ticket',
+          channel: 'EMAIL',
+          recipient: 'a@procucev.com',
+          message: 'Msg A',
+          sentAt: '2026-01-01T00:00:00Z',
+        });
+
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'acc-2',
+          accountType: 'buyer_dossier',
+          channel: 'SMS',
+          recipient: '9988776655',
+          message: 'Msg B',
+          sentAt: '2026-01-02T00:00:00Z',
+          metadata: { entityType: 'buyer_dossier' },
+        });
+
+        await paymentDuesQueries.recordCommunication({
+          accountId: 'acc-3',
+          accountType: null,
+          channel: 'SMS',
+          recipient: '9988776644',
+          message: 'Msg C',
+          sentAt: '2026-01-03T00:00:00Z',
+          metadata: { entityType: 'buyer_dossier' },
+        });
+
+        // 1. Cross account with channel ALL
+        const allRes = await paymentDuesQueries.queryCommunications({
+          channel: 'ALL',
+          isCrossAccount: true,
+          limit: -5,
+          offset: -10,
+        });
+        expect(allRes.total).toBeGreaterThanOrEqual(3);
+
+        // 2. Filter by entityType matching metadata
+        const typeRes = await paymentDuesQueries.queryCommunications({
+          entityType: 'buyer_dossier',
+          channel: 'SMS',
+          isCrossAccount: true,
+          limit: 1,
+          offset: 0,
+        });
+        expect(typeRes.total).toBe(2);
+        expect(typeRes.items.length).toBe(1);
+
+        // 3. Filter single account
+        const singleRes = await paymentDuesQueries.queryCommunications({
+          accountId: 'acc-1',
+          isCrossAccount: false,
+        });
+        expect(singleRes.total).toBe(1);
+        expect(singleRes.items[0].accountId).toBe('acc-1');
+
+        // 4. Default invocation with no arguments
+        const defaultRes = await paymentDuesQueries.queryCommunications();
+        expect(defaultRes.items).toBeDefined();
       });
     });
   });

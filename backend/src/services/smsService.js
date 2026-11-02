@@ -720,10 +720,15 @@ async function sendActionCenterSms({
 
   recentSmsDispatches.set(formattedNumber, now);
 
+  const rawMessage = String(alertText || 'Action required on Procucev').replace(/[^a-zA-Z0-9\s.,-]/g, '').trim();
+  const cleanMessage = rawMessage.length > 70 ? rawMessage.slice(0, 67) + '...' : rawMessage;
+
   if (process.env.NODE_ENV === 'test') {
     return {
       success: true,
       messageId: 'mock-test-sms-ac-' + Date.now(),
+      renderedMessage: cleanMessage,
+      isTruncated: rawMessage.length > 70,
     };
   }
 
@@ -733,8 +738,6 @@ async function sendActionCenterSms({
 
   const resolvedLink = linkUrl || (defaultFrontend + '/category-manager/internal-tasks');
   const cleanRecipient = String(recipientName || 'Partner').replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 30);
-  const rawMessage = String(alertText || 'Action required on Procucev').replace(/[^a-zA-Z0-9\s.,-]/g, '').trim();
-  const cleanMessage = rawMessage.length > 70 ? rawMessage.slice(0, 67) + '...' : rawMessage;
 
   const templateConfig = SMS_DLT_TEMPLATES.ACTION_CENTER_COMM || {
     TEMPLATE: 'Procucev Alert for {#alp#}: {#alp#}. Details: {#urg#} - Team Procucev.',
@@ -809,6 +812,8 @@ async function sendActionCenterSms({
       return {
         success: !isGatewayError,
         messageId,
+        renderedMessage,
+        isTruncated: rawMessage.length > 70,
         response: responseText,
       };
     } finally {
