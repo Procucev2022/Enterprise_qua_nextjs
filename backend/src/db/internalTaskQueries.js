@@ -316,16 +316,16 @@ async function getInternalTasks({
   }
 
   if (assignedTo && assignedTo !== 'all') {
-    conditions.push(`(assigned_to_user_id = $${paramIdx} OR assigned_to_name ILIKE $${paramIdx + 1})`);
+    conditions.push(`(assigned_to_user_id = $${paramIdx} OR lower(assigned_to_name) LIKE $${paramIdx + 1})`);
     params.push(assignedTo);
-    params.push(`%${escapeLikeWildcards(assignedTo)}%`);
+    params.push(`%${escapeLikeWildcards(assignedTo.toLowerCase())}%`);
     paramIdx += 2;
   }
 
   if (createdBy && createdBy !== 'all') {
-    conditions.push(`(created_by_user_id = $${paramIdx} OR created_by_name ILIKE $${paramIdx + 1})`);
+    conditions.push(`(created_by_user_id = $${paramIdx} OR lower(created_by_name) LIKE $${paramIdx + 1})`);
     params.push(createdBy);
-    params.push(`%${escapeLikeWildcards(createdBy)}%`);
+    params.push(`%${escapeLikeWildcards(createdBy.toLowerCase())}%`);
     paramIdx += 2;
   }
 
@@ -340,23 +340,21 @@ async function getInternalTasks({
   }
 
   if (search && search.trim()) {
-    const q = `%${escapeLikeWildcards(search.trim())}%`;
+    const q = `%${escapeLikeWildcards(search.trim().toLowerCase())}%`;
     conditions.push(
-      `(title ILIKE $${paramIdx} OR description ILIKE $${paramIdx} OR task_number ILIKE $${paramIdx} OR related_entity_label ILIKE $${paramIdx} OR notes ILIKE $${paramIdx} OR credit_account_name ILIKE $${paramIdx})`
+      `(lower(title) LIKE $${paramIdx} OR lower(description) LIKE $${paramIdx} OR lower(task_number) LIKE $${paramIdx} OR lower(related_entity_label) LIKE $${paramIdx} OR lower(notes) LIKE $${paramIdx} OR lower(credit_account_name) LIKE $${paramIdx})`
     );
     params.push(q);
     paramIdx++;
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  const d1WhereClause = whereClause.replace(/ILIKE/g, 'LIKE');
 
   // Count query
   const countSql = `SELECT count(*) as total FROM internal_tasks ${whereClause}`;
-  const d1CountSql = `SELECT count(*) as total FROM internal_tasks ${d1WhereClause}`;
   const countResult = await pool.query(countSql, params, {
     d1: true,
-    d1Text: d1CountSql,
+    d1Text: countSql,
   });
   const total = countResult && countResult.rows && countResult.rows[0] ? Number(countResult.rows[0].total) : 0;
 
@@ -379,21 +377,9 @@ async function getInternalTasks({
     ORDER BY t.created_at DESC
     LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
   `;
-  const d1DataSql = `
-    SELECT
-      t.*,
-      tt.name as task_type_name,
-      tt.code as task_type_code
-    FROM internal_tasks t
-    LEFT JOIN internal_task_types tt ON t.task_type_id = tt.id
-    ${d1WhereClause}
-    ORDER BY t.created_at DESC
-    LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
-  `;
-
   const dataResult = await pool.query(dataSql, dataParams, {
     d1: true,
-    d1Text: d1DataSql,
+    d1Text: dataSql,
   });
 
   const rows = (dataResult && dataResult.rows ? dataResult.rows : []).map(hydrateTaskRow);
@@ -426,9 +412,9 @@ async function getInternalTaskSummary({ assignedTo = '', taskCategory = '' } = {
   let pIdx = 1;
 
   if (assignedTo && assignedTo !== 'all') {
-    conditions.push(`(assigned_to_user_id = $${pIdx} OR assigned_to_name ILIKE $${pIdx + 1})`);
+    conditions.push(`(assigned_to_user_id = $${pIdx} OR lower(assigned_to_name) LIKE $${pIdx + 1})`);
     params.push(assignedTo);
-    params.push(`%${escapeLikeWildcards(assignedTo)}%`);
+    params.push(`%${escapeLikeWildcards(assignedTo.toLowerCase())}%`);
     pIdx += 2;
   }
 
@@ -437,6 +423,10 @@ async function getInternalTaskSummary({ assignedTo = '', taskCategory = '' } = {
     params.push(taskCategory);
     pIdx++;
   }
+
+  const today = new Date().toISOString().split('T')[0];
+  const overdueParamIdx = pIdx++;
+  params.push(today);
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -454,12 +444,11 @@ async function getInternalTaskSummary({ assignedTo = '', taskCategory = '' } = {
       sum(case when status = 'Blocked' then 1 else 0 end) as blocked,
       sum(case when status = 'Escalated' then 1 else 0 end) as escalated,
       sum(case when priority = 'Critical' and status NOT IN ('Completed', 'Rejected', 'Cancelled') then 1 else 0 end) as critical_count,
-      sum(case when due_date < CURRENT_DATE and status NOT IN ('Completed', 'Rejected', 'Cancelled') then 1 else 0 end) as overdue_count
+      sum(case when due_date < $${overdueParamIdx} and status NOT IN ('Completed', 'Rejected', 'Cancelled') then 1 else 0 end) as overdue_count
     FROM internal_tasks
     ${whereClause}
   `;
-  const d1Sql = sql.replace(/ILIKE/g, 'LIKE').replace(/CURRENT_DATE/g, "date('now')");
-  const result = await pool.query(sql, params, { d1: true, d1Text: d1Sql });
+  const result = await pool.query(sql, params, { d1: true, d1Text: sql });
   const row = result && result.rows && result.rows[0] ? result.rows[0] : {};
 
   return {
@@ -984,32 +973,11 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
   const storeService = require('../services/storeService');
   const domainQueries = require('./domainQueries');
 
-  // 1. Resolve target account and compute new balance
-  let targetBuyer = null;
-  let targetVendor = null;
+  let updatedBuyerInfo = null;
+  let updatedVendorInfo = null;
 
-  if (accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT') {
-    const buyers = (storeService.getBuyerAccounts && storeService.getBuyerAccounts()) || [];
-    const buyer = buyers.find(
-      (b) => b.id === accountId || b.corporateEmail === accountId || b.organizationName === task.credit_account_name
-    );
-    if (buyer) {
-      const prevBal = Number(buyer.creditBalance) || 0;
-      const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-      targetBuyer = { buyerId: buyer.id, prevBal, updatedBal };
-    }
-  } else if (accountType === 'SELLER' || accountType === 'VENDOR') {
-    const vendor = (storeService.getVendorById && storeService.getVendorById(accountId)) || null;
-    if (vendor) {
-      const prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? 0);
-      const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-      targetVendor = { vendorId: vendor.id, prevBal, updatedBal };
-    }
-  }
-
-  // 2. Authoritative Database Transactions with Explicit Row-Level Locking (BEGIN / COMMIT / ROLLBACK)
+  // 1. Authoritative Database Transactions with Explicit Row-Level Locking (BEGIN / COMMIT / ROLLBACK)
   await pool.query('BEGIN');
-  let memorySynchronized = false;
   try {
     // Explicit row locking on internal_tasks to prevent concurrent duplicate approvals
     const lockRes = await pool.query(
@@ -1022,13 +990,86 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       return getInternalTaskById(task.id);
     }
 
-    // Direct atomic database balance updates on accounts table
-    if (targetBuyer) {
+    if (accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT') {
+      let prevBal = 0;
+      let targetBuyerId = accountId;
+      const dbBuyerRes = await pool.query(
+        'SELECT id, raw FROM buyer_accounts WHERE id = $1 FOR UPDATE',
+        [accountId]
+      );
+      if (dbBuyerRes && dbBuyerRes.rows && dbBuyerRes.rows[0]) {
+        const bRow = dbBuyerRes.rows[0];
+        targetBuyerId = bRow.id;
+        const bRaw = typeof bRow.raw === 'string' ? JSON.parse(bRow.raw || '{}') : (bRow.raw || {});
+        prevBal = Number(bRaw.creditBalance ?? bRow.available_credits ?? 0);
+      } else {
+        const buyers = (storeService.getBuyerAccounts && storeService.getBuyerAccounts()) || [];
+        const buyer = buyers.find(
+          (b) => b.id === accountId || b.corporateEmail === accountId || b.organizationName === task.credit_account_name
+        );
+        if (buyer) {
+          targetBuyerId = buyer.id;
+          prevBal = Number(buyer.creditBalance) || 0;
+        }
+      }
+      const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
       const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
-      await pool.query(bSql, [targetBuyer.updatedBal, targetBuyer.buyerId], { d1: true, d1Text: bSql });
-    } else if (targetVendor) {
+      await pool.query(bSql, [updatedBal, targetBuyerId], { d1: true, d1Text: bSql });
+
+      if (domainQueries.recordBuyerCreditTransactionInDB) {
+        const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+        await domainQueries.recordBuyerCreditTransactionInDB({
+          id: txId,
+          buyerId: targetBuyerId,
+          rfqId: null,
+          transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
+          creditSource: 'Action Center Internal Tasks Approval',
+          creditsAdded: isDeduct ? 0 : creditQty,
+          creditsConsumed: isDeduct ? creditQty : 0,
+          previousBalance: prevBal,
+          updatedBalance: updatedBal,
+          status: 'COMPLETED',
+          description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
+          idempotencyKey: `task-approval-${task.id}`,
+        });
+      }
+      updatedBuyerInfo = { buyerId: targetBuyerId, updatedBal };
+    } else if (accountType === 'SELLER' || accountType === 'VENDOR') {
+      let prevBal = 0;
+      let targetVendorId = accountId;
+      const dbVendorRes = await pool.query(
+        'SELECT id, raw FROM vendors WHERE id = $1 FOR UPDATE',
+        [accountId]
+      );
+      if (dbVendorRes && dbVendorRes.rows && dbVendorRes.rows[0]) {
+        const vRow = dbVendorRes.rows[0];
+        targetVendorId = vRow.id;
+        const vRaw = typeof vRow.raw === 'string' ? JSON.parse(vRow.raw || '{}') : (vRow.raw || {});
+        prevBal = Number(vRaw.freeQuotationCredits ?? vRaw.freeRfqDownloadCredits ?? vRow.credits ?? 0);
+      } else {
+        const vendor = (storeService.getVendorById && storeService.getVendorById(accountId)) || null;
+        if (vendor) {
+          targetVendorId = vendor.id;
+          prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? 0);
+        }
+      }
+      const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
       const vSql = `UPDATE vendors SET raw = jsonb_set(raw, '{freeQuotationCredits}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
-      await pool.query(vSql, [targetVendor.updatedBal, targetVendor.vendorId], { d1: true, d1Text: vSql });
+      await pool.query(vSql, [updatedBal, targetVendorId], { d1: true, d1Text: vSql });
+
+      if (domainQueries.recordCreditTransactionInDB) {
+        const txId = `vtx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+        await domainQueries.recordCreditTransactionInDB({
+          id: txId,
+          vendorId: targetVendorId,
+          rfqId: null,
+          transactionType: isDeduct ? 'CREDIT_DEDUCTION' : 'CREDIT_GRANT',
+          amount: creditQty,
+          balanceAfter: updatedBal,
+          idempotencyKey: `task-approval-${task.id}`,
+        });
+      }
+      updatedVendorInfo = { vendorId: targetVendorId, updatedBal };
     }
 
     // Update task status and approval details in database
@@ -1071,65 +1112,23 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       { d1: true, d1Text: actSql }
     );
 
-    // Record credit transaction in database ledger
-    if (targetBuyer && domainQueries.recordBuyerCreditTransactionInDB) {
-      const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
-      await domainQueries.recordBuyerCreditTransactionInDB({
-        id: txId,
-        buyerId: targetBuyer.buyerId,
-        rfqId: null,
-        transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
-        creditSource: 'Action Center Internal Tasks Approval',
-        creditsAdded: isDeduct ? 0 : creditQty,
-        creditsConsumed: isDeduct ? creditQty : 0,
-        previousBalance: targetBuyer.prevBal,
-        updatedBalance: targetBuyer.updatedBal,
-        status: 'COMPLETED',
-        description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
-        idempotencyKey: `task-approval-${task.id}`,
-      });
-    } else if (targetVendor && domainQueries.recordCreditTransactionInDB) {
-      const txId = `vtx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
-      await domainQueries.recordCreditTransactionInDB({
-        id: txId,
-        vendorId: targetVendor.vendorId,
-        rfqId: null,
-        transactionType: isDeduct ? 'CREDIT_DEDUCTION' : 'CREDIT_GRANT',
-        amount: creditQty,
-        balanceAfter: targetVendor.updatedBal,
-        idempotencyKey: `task-approval-${task.id}`,
-      });
-    }
-
-    // Synchronize in-memory store service within the transaction lifecycle
-    if (targetBuyer && storeService.updateBuyerAccount) {
-      storeService.updateBuyerAccount(targetBuyer.buyerId, { creditBalance: targetBuyer.updatedBal });
-      memorySynchronized = true;
-    } else if (targetVendor && storeService.updateVendor) {
-      storeService.updateVendor(targetVendor.vendorId, {
-        freeQuotationCredits: targetVendor.updatedBal,
-        freeRfqDownloadCredits: targetVendor.updatedBal,
-      });
-      memorySynchronized = true;
-    }
-
+    // Commit database transaction - Authoritative persistence complete!
     await pool.query('COMMIT');
   } catch (error) {
     try {
       await pool.query('ROLLBACK');
     } catch {}
-    // Revert in-memory store if it was updated prior to failure
-    if (memorySynchronized) {
-      if (targetBuyer && storeService.updateBuyerAccount) {
-        storeService.updateBuyerAccount(targetBuyer.buyerId, { creditBalance: targetBuyer.prevBal });
-      } else if (targetVendor && storeService.updateVendor) {
-        storeService.updateVendor(targetVendor.vendorId, {
-          freeQuotationCredits: targetVendor.prevBal,
-          freeRfqDownloadCredits: targetVendor.prevBal,
-        });
-      }
-    }
     throw error;
+  }
+
+  // Synchronize in-memory caches ONLY after database transaction has successfully committed
+  if (updatedBuyerInfo && storeService.updateBuyerAccount) {
+    storeService.updateBuyerAccount(updatedBuyerInfo.buyerId, { creditBalance: updatedBuyerInfo.updatedBal });
+  } else if (updatedVendorInfo && storeService.updateVendor) {
+    storeService.updateVendor(updatedVendorInfo.vendorId, {
+      freeQuotationCredits: updatedVendorInfo.updatedBal,
+      freeRfqDownloadCredits: updatedVendorInfo.updatedBal,
+    });
   }
 
   return getInternalTaskById(task.id);
@@ -1222,22 +1221,16 @@ async function addTaskActivity(taskId, { comment = '', actionType = 'COMMENT' } 
  */
 async function getOverdueAndUpcomingTasks() {
   if (!pool.hasStorage()) return [];
+  const deadlineCutoff = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   const sql = `
     SELECT * FROM internal_tasks
     WHERE status NOT IN ('Completed', 'Rejected', 'Cancelled')
       AND due_date IS NOT NULL
-      AND (due_date <= CURRENT_DATE OR due_date <= (CURRENT_DATE + INTERVAL '1 day'))
+      AND due_date <= $1
     ORDER BY due_date ASC
     LIMIT 100
   `;
-  const d1Sql = `
-    SELECT * FROM internal_tasks
-    WHERE status NOT IN ('Completed', 'Rejected', 'Cancelled')
-      AND due_date IS NOT NULL
-    ORDER BY due_date ASC
-    LIMIT 100
-  `;
-  const res = await pool.query(sql, [], { d1: true, d1Text: d1Sql });
+  const res = await pool.query(sql, [deadlineCutoff], { d1: true, d1Text: sql });
   return (res.rows || []).map(hydrateTaskRow);
 }
 

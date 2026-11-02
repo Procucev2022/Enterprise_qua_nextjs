@@ -179,8 +179,8 @@ describe('internalTaskQueries', () => {
       expect(summary.total).toBe(4);
       expect(summary.completed).toBe(2);
       expect(querySpy).toHaveBeenCalledWith(
-        expect.stringContaining('WHERE (assigned_to_user_id = $1 OR assigned_to_name ILIKE $2)'),
-        ['Pavani', '%Pavani%'],
+        expect.stringContaining('WHERE (assigned_to_user_id = $1 OR lower(assigned_to_name) LIKE $2)'),
+        ['Pavani', '%pavani%', expect.any(String)],
         expect.any(Object)
       );
     });
@@ -194,7 +194,7 @@ describe('internalTaskQueries', () => {
       expect(summary.total).toBe(2);
       expect(querySpy).toHaveBeenCalledWith(
         expect.stringContaining('task_category = $1'),
-        ['CREDIT_MANAGEMENT'],
+        ['CREDIT_MANAGEMENT', expect.any(String)],
         expect.any(Object)
       );
     });
@@ -823,6 +823,88 @@ describe('internalTaskQueries', () => {
       expect(recordVendorTxSpy).toHaveBeenCalled();
     });
 
+    test('approveCreditTask reads live balance from database table when account exists in DB for buyer and vendor', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const storeService = require('../src/services/storeService');
+      const domainQueries = require('../src/db/domainQueries');
+      const updateBuyerSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({ id: 'buy_db_1' });
+      const updateVendorSpy = jest.spyOn(storeService, 'updateVendor').mockReturnValue({ id: 'ven_db_1' });
+
+      jest.spyOn(pool, 'query').mockImplementation((sql) => {
+        if (typeof sql === 'string' && sql.includes('FROM internal_tasks')) {
+          return Promise.resolve({
+            rows: [
+              {
+                id: 'tsk_cred_db_b',
+                task_number: 'TASK-1005',
+                task_category: 'CREDIT_MANAGEMENT',
+                task_type: 'Add Credits',
+                status: 'Pending Approval',
+                credit_account_type: 'BUYER',
+                credit_account_id: 'buy_db_1',
+                credit_quantity: 15,
+                attachments: '[]',
+                raw: '{}',
+              },
+            ],
+          });
+        }
+        if (typeof sql === 'string' && sql.includes('FROM buyer_accounts WHERE id = $1 FOR UPDATE')) {
+          return Promise.resolve({
+            rows: [{ id: 'buy_db_1', raw: JSON.stringify({ creditBalance: 80 }) }],
+          });
+        }
+        if (typeof sql === 'string' && sql.includes('FROM vendors WHERE id = $1 FOR UPDATE')) {
+          return Promise.resolve({
+            rows: [{ id: 'ven_db_1', raw: { freeQuotationCredits: 40 } }],
+          });
+        }
+        if (typeof sql === 'string' && sql.includes('FROM internal_task_activities')) {
+          return Promise.resolve({ rows: [] });
+        }
+        return Promise.resolve({ rowCount: 1 });
+      });
+
+      const buyerRes = await queries.approveCreditTask('tsk_cred_db_b', { id: 'adm' });
+      expect(buyerRes).toBeDefined();
+      expect(updateBuyerSpy).toHaveBeenCalledWith('buy_db_1', { creditBalance: 95 });
+
+      // Now test vendor DB branch
+      jest.spyOn(pool, 'query').mockImplementation((sql) => {
+        if (typeof sql === 'string' && sql.includes('FROM internal_tasks')) {
+          return Promise.resolve({
+            rows: [
+              {
+                id: 'tsk_cred_db_v',
+                task_number: 'TASK-1006',
+                task_category: 'CREDIT_MANAGEMENT',
+                task_type: 'Deduct Credits',
+                status: 'Pending Approval',
+                credit_account_type: 'VENDOR',
+                credit_account_id: 'ven_db_1',
+                credit_quantity: 10,
+                attachments: '[]',
+                raw: '{}',
+              },
+            ],
+          });
+        }
+        if (typeof sql === 'string' && sql.includes('FROM vendors WHERE id = $1 FOR UPDATE')) {
+          return Promise.resolve({
+            rows: [{ id: 'ven_db_1', raw: { freeQuotationCredits: 40 } }],
+          });
+        }
+        if (typeof sql === 'string' && sql.includes('FROM internal_task_activities')) {
+          return Promise.resolve({ rows: [] });
+        }
+        return Promise.resolve({ rowCount: 1 });
+      });
+
+      const vendorRes = await queries.approveCreditTask('tsk_cred_db_v', { id: 'adm' });
+      expect(vendorRes).toBeDefined();
+      expect(updateVendorSpy).toHaveBeenCalledWith('ven_db_1', { freeQuotationCredits: 30, freeRfqDownloadCredits: 30 });
+    });
+
     test('approveCreditTask returns null when storage disabled or task not found', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
       expect(await queries.approveCreditTask('tsk_1')).toBeNull();
@@ -1145,7 +1227,7 @@ describe('internalTaskQueries', () => {
       expect(res).toBeDefined();
     });
 
-    test('approveCreditTask rolls back memory store if commit fails', async () => {
+    test('approveCreditTask does not mutate memory store if commit fails', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       const storeService = require('../src/services/storeService');
       jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([
@@ -1166,7 +1248,7 @@ describe('internalTaskQueries', () => {
       });
 
       await expect(queries.approveCreditTask('tsk_cf')).rejects.toThrow('Commit failed');
-      expect(updateBuyerSpy).toHaveBeenCalledWith('buy_commit_fail', { creditBalance: 50 });
+      expect(updateBuyerSpy).not.toHaveBeenCalled();
     });
   });
 });
