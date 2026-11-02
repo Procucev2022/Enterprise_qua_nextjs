@@ -1005,75 +1005,83 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
     }
   }
 
-  // 2. Authoritative Database Transactions First:
-  // Update task status and approval details
-  const updateSql = `
-    UPDATE internal_tasks SET
-      status = 'Completed',
-      approval_status = 'APPROVED',
-      approver_id = $1,
-      approver_name = $2,
-      approved_at = CURRENT_TIMESTAMP,
-      approval_remarks = $3,
-      completed_at = CURRENT_TIMESTAMP,
-      completed_by_user_id = $1,
-      completed_by_name = $2,
-      completion_remarks = $3,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = $4
-  `;
-  await pool.query(updateSql, [actorId, actorName, approvalRemarks, task.id], { d1: true, d1Text: updateSql });
+  // 2. Authoritative Database Transactions First (Explicit SQL Transaction Boundary: BEGIN / COMMIT / ROLLBACK)
+  await pool.query('BEGIN').catch(() => {});
+  try {
+    // Update task status and approval details
+    const updateSql = `
+      UPDATE internal_tasks SET
+        status = 'Completed',
+        approval_status = 'APPROVED',
+        approver_id = $1,
+        approver_name = $2,
+        approved_at = CURRENT_TIMESTAMP,
+        approval_remarks = $3,
+        completed_at = CURRENT_TIMESTAMP,
+        completed_by_user_id = $1,
+        completed_by_name = $2,
+        completion_remarks = $3,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $4
+    `;
+    await pool.query(updateSql, [actorId, actorName, approvalRemarks, task.id], { d1: true, d1Text: updateSql });
 
-  // Log approval activity record in database
-  const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
-  const actSql = `
-    INSERT INTO internal_task_activities (
-      id, task_id, action_type, actor_id, actor_name, from_value, to_value, comment
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-  `;
-  await pool.query(
-    actSql,
-    [
-      actId,
-      task.id,
-      'APPROVED',
-      actorId,
-      actorName,
-      task.status,
-      'Completed',
-      `Credit request approved by ${actorName}. Remarks: ${approvalRemarks}`,
-    ],
-    { d1: true, d1Text: actSql }
-  );
+    // Log approval activity record in database
+    const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
+    const actSql = `
+      INSERT INTO internal_task_activities (
+        id, task_id, action_type, actor_id, actor_name, from_value, to_value, comment
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `;
+    await pool.query(
+      actSql,
+      [
+        actId,
+        task.id,
+        'APPROVED',
+        actorId,
+        actorName,
+        task.status,
+        'Completed',
+        `Credit request approved by ${actorName}. Remarks: ${approvalRemarks}`,
+      ],
+      { d1: true, d1Text: actSql }
+    );
 
-  // Record credit transaction in database ledger
-  if (targetBuyer && domainQueries.recordBuyerCreditTransactionInDB) {
-    const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
-    await domainQueries.recordBuyerCreditTransactionInDB({
-      id: txId,
-      buyerId: targetBuyer.buyerId,
-      rfqId: null,
-      transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
-      creditSource: 'Action Center Internal Tasks Approval',
-      creditsAdded: isDeduct ? 0 : creditQty,
-      creditsConsumed: isDeduct ? creditQty : 0,
-      previousBalance: targetBuyer.prevBal,
-      updatedBalance: targetBuyer.updatedBal,
-      status: 'COMPLETED',
-      description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
-      idempotencyKey: `task-approval-${task.id}`,
-    });
-  } else if (targetVendor && domainQueries.recordCreditTransactionInDB) {
-    const txId = `vtx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
-    await domainQueries.recordCreditTransactionInDB({
-      id: txId,
-      vendorId: targetVendor.vendorId,
-      rfqId: null,
-      transactionType: isDeduct ? 'CREDIT_DEDUCTION' : 'CREDIT_GRANT',
-      amount: creditQty,
-      balanceAfter: targetVendor.updatedBal,
-      idempotencyKey: `task-approval-${task.id}`,
-    });
+    // Record credit transaction in database ledger
+    if (targetBuyer && domainQueries.recordBuyerCreditTransactionInDB) {
+      const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+      await domainQueries.recordBuyerCreditTransactionInDB({
+        id: txId,
+        buyerId: targetBuyer.buyerId,
+        rfqId: null,
+        transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
+        creditSource: 'Action Center Internal Tasks Approval',
+        creditsAdded: isDeduct ? 0 : creditQty,
+        creditsConsumed: isDeduct ? creditQty : 0,
+        previousBalance: targetBuyer.prevBal,
+        updatedBalance: targetBuyer.updatedBal,
+        status: 'COMPLETED',
+        description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
+        idempotencyKey: `task-approval-${task.id}`,
+      });
+    } else if (targetVendor && domainQueries.recordCreditTransactionInDB) {
+      const txId = `vtx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+      await domainQueries.recordCreditTransactionInDB({
+        id: txId,
+        vendorId: targetVendor.vendorId,
+        rfqId: null,
+        transactionType: isDeduct ? 'CREDIT_DEDUCTION' : 'CREDIT_GRANT',
+        amount: creditQty,
+        balanceAfter: targetVendor.updatedBal,
+        idempotencyKey: `task-approval-${task.id}`,
+      });
+    }
+
+    await pool.query('COMMIT').catch(() => {});
+  } catch (error) {
+    await pool.query('ROLLBACK').catch(() => {});
+    throw error;
   }
 
   // 3. Synchronize in-memory cache only AFTER database persistence succeeds
