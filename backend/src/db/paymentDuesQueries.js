@@ -577,12 +577,43 @@ async function updateAcknowledgementStatus({
       );
       if (found) {
         if (acknowledgementStatus) found.acknowledgementStatus = acknowledgementStatus;
-        if (deliveryStatus) found.deliveryStatus = deliveryStatus;
         if (notes) found.notes = notes;
         if (acknowledgementStatus === 'Acknowledged') {
           found.acknowledgedAt = now;
           found.acknowledgedBy = updatedBy;
         }
+
+        if (found.channel === 'BOTH') {
+          const isSmsTarget = found.metadata?.gatewayMessageId === communicationId ||
+            found.metadata?.msgid === communicationId ||
+            found.metadata?.smsResult?.messageId === communicationId;
+          const isEmailTarget = found.metadata?.emailResult?.messageId === communicationId;
+
+          if (isSmsTarget && !isEmailTarget) {
+            found.metadata = found.metadata || {};
+            found.metadata.smsDeliveryStatus = deliveryStatus;
+            const emailState = found.metadata.emailDeliveryStatus || (found.metadata.emailResult?.sent ? 'Delivered' : 'Failed');
+            found.deliveryStatus = (emailState === 'Delivered' && deliveryStatus === 'Delivered')
+              ? 'Delivered'
+              : (deliveryStatus === 'Failed' && emailState === 'Failed')
+              ? 'Failed'
+              : 'Partial';
+          } else if (isEmailTarget && !isSmsTarget) {
+            found.metadata = found.metadata || {};
+            found.metadata.emailDeliveryStatus = deliveryStatus;
+            const smsState = found.metadata.smsDeliveryStatus || (found.metadata.smsResult?.sent ? 'Delivered' : 'Failed');
+            found.deliveryStatus = (smsState === 'Delivered' && deliveryStatus === 'Delivered')
+              ? 'Delivered'
+              : (deliveryStatus === 'Failed' && smsState === 'Failed')
+              ? 'Failed'
+              : 'Partial';
+          } else if (deliveryStatus) {
+            found.deliveryStatus = deliveryStatus;
+          }
+        } else if (deliveryStatus) {
+          found.deliveryStatus = deliveryStatus;
+        }
+
         found.updatedAt = now;
         updatedRecord = found;
         break;

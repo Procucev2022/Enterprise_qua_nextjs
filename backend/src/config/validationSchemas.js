@@ -794,6 +794,8 @@ const VALIDATION_SCHEMAS = {
       type: 'string',
       required: false,
       maxLength: 32,
+      pattern: INDIAN_MOBILE_REGEX,
+      message: INDIAN_MOBILE_MESSAGE,
     },
     recipientName: {
       type: 'string',
@@ -825,6 +827,23 @@ const VALIDATION_SCHEMAS = {
     scheduleFollowup: {
       type: 'object',
       required: false,
+      custom: (val) => {
+        if (!val) return null;
+        if (typeof val !== 'object' || Array.isArray(val)) {
+          return 'scheduleFollowup must be a valid object.';
+        }
+        if (!val.dueDate) {
+          return 'scheduleFollowup.dueDate is required.';
+        }
+        const d = new Date(val.dueDate);
+        if (isNaN(d.getTime())) {
+          return 'scheduleFollowup.dueDate must be a valid date.';
+        }
+        if (val.priority && !['Low', 'Medium', 'High', 'Urgent'].includes(val.priority)) {
+          return 'scheduleFollowup.priority must be one of: Low, Medium, High, Urgent.';
+        }
+        return null;
+      },
     },
     notes: {
       type: 'string',

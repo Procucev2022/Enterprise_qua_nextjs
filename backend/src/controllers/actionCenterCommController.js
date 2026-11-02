@@ -49,9 +49,7 @@ function verifyWebhookAuthenticity(req) {
   const providedSecret =
     req?.headers?.['x-webhook-secret'] ||
     req?.headers?.['x-signature'] ||
-    req?.headers?.['x-gateway-secret'] ||
-    req?.query?.secret ||
-    req?.body?.secret;
+    req?.headers?.['x-gateway-secret'];
 
   if (!providedSecret) {
     return { valid: false, error: 'Missing webhook authentication signature.' };
@@ -104,19 +102,31 @@ async function dispatchCommunication(req, res) {
     const channel = (validation.sanitizedData.channel || '').toUpperCase();
     const { recipientEmail, recipientPhone } = validation.sanitizedData;
 
+    const { INDIAN_MOBILE_REGEX, EMAIL_REGEX } = require('../config/validationSchemas');
+
     // Contact requirement assertions based on selected channel
-    if ((channel === 'EMAIL' || channel === 'BOTH') && !recipientEmail) {
-      return res.status(400).json({
-        success: false,
-        error: 'A valid recipient email address is required for Email dispatch.',
-      });
+    if ((channel === 'EMAIL' || channel === 'BOTH')) {
+      if (!recipientEmail || !EMAIL_REGEX.test(recipientEmail)) {
+        return res.status(400).json({
+          success: false,
+          error: 'A valid recipient email address is required for Email dispatch.',
+        });
+      }
     }
 
-    if ((channel === 'SMS' || channel === 'BOTH') && !recipientPhone) {
-      return res.status(400).json({
-        success: false,
-        error: 'A valid recipient phone number is required for SMS dispatch.',
-      });
+    if ((channel === 'SMS' || channel === 'BOTH')) {
+      if (!recipientPhone) {
+        return res.status(400).json({
+          success: false,
+          error: 'A valid recipient phone number is required for SMS dispatch.',
+        });
+      }
+      if (!INDIAN_MOBILE_REGEX.test(recipientPhone)) {
+        return res.status(400).json({
+          success: false,
+          error: 'A valid 10-digit Indian mobile number is required for SMS dispatch.',
+        });
+      }
     }
 
     const payload = {

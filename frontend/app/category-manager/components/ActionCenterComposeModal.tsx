@@ -102,6 +102,11 @@ export default function ActionCenterComposeModal({
     return Math.max(1, Math.ceil(smsChars / ACTION_CENTER_SMS_MAX_CHARS));
   }, [smsChars]);
 
+  const cleanDltMessage = useMemo(() => {
+    const raw = message.replace(/[^a-zA-Z0-9\s.,-]/g, '').trim();
+    return raw.length > 70 ? raw.slice(0, 67) + '...' : raw;
+  }, [message]);
+
   const assignedMember = useMemo(() => {
     return DEFAULT_INTERNAL_MEMBERS.find((m) => m.id === followupAssigneeId);
   }, [followupAssigneeId]);
@@ -193,6 +198,12 @@ export default function ActionCenterComposeModal({
           const emailStatus = result.emailResult?.success ? 'Email: Sent' : `Email: Failed (${result.emailResult?.error || 'Unsent'})`;
           const smsStatus = result.smsResult?.success ? 'SMS: Sent' : `SMS: Failed (${result.smsResult?.error || 'Unsent'})`;
           setFormError(`Partial delivery: ${emailStatus} | ${smsStatus}`);
+          if (result.emailResult?.success && !result.smsResult?.success) {
+            setChannel('SMS');
+          } else if (!result.emailResult?.success && result.smsResult?.success) {
+            setChannel('EMAIL');
+          }
+          setScheduleFollowup(false);
         } else {
           const channelErrors = [result.emailResult?.error, result.smsResult?.error].filter(Boolean).join(' | ');
           setFormError(result.error || channelErrors || strings.errorToast);

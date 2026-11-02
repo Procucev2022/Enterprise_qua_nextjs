@@ -250,6 +250,11 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
       maxLength: 5000,
       message: UI_STRINGS.actionCenter.communicationModal.validationMessageRequired,
     },
+    recipientPhone: {
+      required: false,
+      pattern: INDIAN_MOBILE_PATTERN,
+      message: UI_STRINGS.actionCenter.communicationModal.validationPhoneRequired,
+    },
   },
 };
 
