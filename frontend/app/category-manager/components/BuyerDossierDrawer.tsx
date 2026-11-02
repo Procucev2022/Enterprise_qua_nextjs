@@ -31,6 +31,7 @@ import {
   PhoneCall,
   Smartphone,
   Eye,
+  Calendar,
 } from 'lucide-react';
 import type {
   BuyerAccount,
@@ -45,6 +46,9 @@ import {
   formatCurrency,
   formatIndianDateTime,
   RFQ_MODE_LABELS,
+  DEFAULT_INTERNAL_MEMBERS,
+  CALL_OUTCOMES,
+  FOLLOWUP_PRIORITIES,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
@@ -52,6 +56,7 @@ import {
   addBuyerCredit,
   updateBuyerCategories,
   fetchBuyerCommunications,
+  recordBuyerCommunication,
   fetchBuyerPaymentHistory,
 } from '@/lib/buyerProfileClient';
 
@@ -62,6 +67,8 @@ interface BuyerDossierDrawerProps {
   buyerRfqs?: RFQItem[];
   initialCommunications?: BuyerCommunicationItem[];
   initialPayments?: BuyerPaymentTransaction[];
+  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments';
+  onTabChange?: (tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments') => void;
 }
 
 const DEFAULT_MAJOR_CATEGORIES = [
@@ -84,14 +91,43 @@ export default function BuyerDossierDrawer({
   buyerRfqs = [],
   initialCommunications = [],
   initialPayments = [],
+  initialTab = 'profile',
+  onTabChange,
 }: BuyerDossierDrawerProps) {
   const strings = UI_STRINGS.buyerDirectory.dossier;
 
-  // Active Main Tab
-  const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments'>('profile');
+  // Active Main Tab with context preservation
+  const [dossierTab, setDossierTabState] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments'>(initialTab);
+  const setDossierTab = useCallback((tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments') => {
+    setDossierTabState(tab);
+    if (onTabChange) onTabChange(tab);
+  }, [onTabChange]);
 
   // Active Communications Sub-Tab
   const [commSubTab, setCommSubTab] = useState<'email' | 'sms' | 'whatsapp' | 'call'>('email');
+  const [isComposeOpen, setIsComposeOpen] = useState<boolean>(false);
+  const [composeChannel, setComposeChannel] = useState<'EMAIL' | 'SMS' | 'WHATSAPP' | 'CALL'>('EMAIL');
+  const [composeSubject, setComposeSubject] = useState<string>('');
+  const [composeMessage, setComposeMessage] = useState<string>('');
+  const [composeRecipient, setComposeRecipient] = useState<string>(buyer.corporateEmail || buyer.mobileNumber || '');
+  const [composeCallOutcome, setComposeCallOutcome] = useState<string>('Connected');
+  const [composeDuration, setComposeDuration] = useState<string>('');
+  const [composeNextFollowupDate, setComposeNextFollowupDate] = useState<string>('');
+  const [composeFollowupPriority, setComposeFollowupPriority] = useState<'Low' | 'Medium' | 'High' | 'Critical'>('Medium');
+  const [composeFollowupAssigneeId, setComposeFollowupAssigneeId] = useState<string>(DEFAULT_INTERNAL_MEMBERS[0].id);
+  const [composeFollowupAssigneeName, setComposeFollowupAssigneeName] = useState<string>(DEFAULT_INTERNAL_MEMBERS[0].name);
+  const [composeFollowupNotes, setComposeFollowupNotes] = useState<string>('');
+  const [isSendingComm, setIsSendingComm] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isComposeOpen) {
+        setIsComposeOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isComposeOpen]);
 
   // Toast feedback
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -267,6 +303,48 @@ export default function BuyerDossierDrawer({
   const [commDateFilter, setCommDateFilter] = useState<string>('');
   const [selectedEmailModal, setSelectedEmailModal] = useState<BuyerCommunicationItem | null>(null);
 
+  const handleSendCommunication = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!composeMessage.trim()) return;
+    setIsSendingComm(true);
+    try {
+      const res = await recordBuyerCommunication(buyer.id, {
+        channel: composeChannel,
+        recipient: composeRecipient || buyer.corporateEmail || buyer.mobileNumber || '',
+        subject: composeSubject || `Buyer Communication: ${composeChannel}`,
+        message: composeMessage,
+        callOutcome: composeChannel === 'CALL' ? composeCallOutcome : undefined,
+        duration: composeChannel === 'CALL' ? composeDuration : undefined,
+        nextFollowupDate: composeNextFollowupDate || undefined,
+        followupPriority: composeFollowupPriority,
+        followupAssigneeId: composeFollowupAssigneeId,
+        followupAssigneeName: composeFollowupAssigneeName,
+        followupNotes: composeFollowupNotes || undefined,
+      });
+      if (res.success) {
+        showToast(
+          composeNextFollowupDate
+            ? (strings.compose?.successToast || 'Communication recorded, completed task created, and follow-up scheduled.')
+            : (strings.compose?.successToast || 'Communication recorded and completed task created.'),
+          'success'
+        );
+        setIsComposeOpen(false);
+        setComposeSubject('');
+        setComposeMessage('');
+        setComposeDuration('');
+        setComposeNextFollowupDate('');
+        setComposeFollowupNotes('');
+        loadCommunications();
+      } else {
+        showToast(res.error || strings.compose.errorToast, 'error');
+      }
+    } catch {
+      showToast(strings.compose.errorToast, 'error');
+    } finally {
+      setIsSendingComm(false);
+    }
+  };
+
   const loadCommunications = useCallback(async () => {
     setLoadingComms(true);
     try {
@@ -391,6 +469,8 @@ export default function BuyerDossierDrawer({
           setSelectedEmailModal(null);
         } else if (selectedPaymentModal) {
           setSelectedPaymentModal(null);
+        } else if (isComposeOpen) {
+          setIsComposeOpen(false);
         } else {
           onClose();
         }
@@ -398,7 +478,7 @@ export default function BuyerDossierDrawer({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, selectedRfqForModal, isAddCreditModalOpen, isEditCategoriesOpen, selectedEmailModal, selectedPaymentModal]);
+  }, [onClose, selectedRfqForModal, isAddCreditModalOpen, isEditCategoriesOpen, selectedEmailModal, selectedPaymentModal, isComposeOpen]);
 
   // CSV Exporter for Credit History
   const exportCreditCsv = () => {
@@ -984,8 +1064,19 @@ export default function BuyerDossierDrawer({
                 })}
               </div>
 
-              {/* Search & Date Filter */}
-              <div className="flex items-center gap-2">
+              {/* Search, Filter & Record Action */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setComposeChannel(commSubTab === 'sms' ? 'SMS' : commSubTab === 'whatsapp' ? 'WHATSAPP' : commSubTab === 'call' ? 'CALL' : 'EMAIL');
+                    setIsComposeOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
+                >
+                  <Plus size={13} />
+                  <span>{strings.compose?.title || 'Record Communication'}</span>
+                </button>
                 <div className="relative flex-1">
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
@@ -1030,6 +1121,11 @@ export default function BuyerDossierDrawer({
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
                               {comm.deliveryStatus || 'Delivered'}
                             </span>
+                            {comm.acknowledgementStatus && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
+                                {comm.acknowledgementStatus}
+                              </span>
+                            )}
                           </div>
                           <p className="text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{comm.message}</p>
                         </div>
@@ -1066,7 +1162,7 @@ export default function BuyerDossierDrawer({
           {dossierTab === 'payments' && (
             <div className="space-y-5">
               {/* Payment Summary Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
                   <p className="text-[10px] font-medium text-slate-500 uppercase">{strings.payments.totalPaid}</p>
                   <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
@@ -1089,12 +1185,6 @@ export default function BuyerDossierDrawer({
                   <p className="text-[10px] font-medium text-slate-500 uppercase">{strings.payments.failed}</p>
                   <p className="text-lg font-bold text-rose-600 dark:text-rose-400 mt-0.5">
                     {paymentSummary?.failedPayments ?? 0}
-                  </p>
-                </div>
-                <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
-                  <p className="text-[10px] font-medium text-slate-500 uppercase">{strings.payments.refunded}</p>
-                  <p className="text-lg font-bold text-slate-600 dark:text-slate-400 mt-0.5">
-                    {formatCurrency(paymentSummary?.totalRefundedAmount ?? 0)}
                   </p>
                 </div>
               </div>
@@ -1121,7 +1211,8 @@ export default function BuyerDossierDrawer({
                       setPaymentStatusFilter(e.target.value);
                       setPaymentPage(1);
                     }}
-                    className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300"
+                    aria-label="Filter payments by status"
+                    className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 min-w-[130px] shrink-0"
                   >
                     <option value="all">All Statuses</option>
                     <option value="PAID">Paid</option>
@@ -1468,8 +1559,10 @@ export default function BuyerDossierDrawer({
         <div
           role="dialog"
           aria-modal="true"
+          aria-label="RFQ Details"
           className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
           onClick={(e) => {
+            e.stopPropagation();
             if (e.target === e.currentTarget) setSelectedRfqForModal(null);
           }}
         >
@@ -1493,8 +1586,12 @@ export default function BuyerDossierDrawer({
 
               <button
                 type="button"
-                onClick={() => setSelectedRfqForModal(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedRfqForModal(null);
+                }}
+                aria-label="Close RFQ popup"
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 cursor-pointer"
               >
                 <X size={18} />
               </button>
@@ -1620,7 +1717,10 @@ export default function BuyerDossierDrawer({
               )}
               <button
                 type="button"
-                onClick={() => setSelectedRfqForModal(null)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedRfqForModal(null);
+                }}
                 className="px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-200 dark:bg-slate-700 rounded-lg hover:bg-slate-300 cursor-pointer"
               >
                 Close
@@ -1680,6 +1780,246 @@ export default function BuyerDossierDrawer({
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------------ */}
+      {/* MODAL: RECORD COMMUNICATION & ACTIVITY MODAL */}
+      {/* ------------------------------------------------------------------------ */}
+      {isComposeOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setIsComposeOpen(false)}
+        >
+          <div
+            className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <MessageSquare className="w-4.5 h-4.5 text-indigo-600 dark:text-indigo-400" />
+                <span>{strings.compose.title}</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsComposeOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 dark:text-slate-400 -mt-2">
+              {strings.compose.subtitle}
+            </p>
+
+            <form onSubmit={handleSendCommunication} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {strings.compose.channelLabel}
+                </label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[
+                    { id: 'CALL', label: 'Call Log', icon: PhoneCall },
+                    { id: 'EMAIL', label: 'Email', icon: Mail },
+                    { id: 'SMS', label: 'SMS', icon: Smartphone },
+                    { id: 'WHATSAPP', label: 'WhatsApp', icon: MessageSquare },
+                  ].map((ch) => {
+                    const Icon = ch.icon;
+                    const isSelected = composeChannel === ch.id;
+                    return (
+                      <button
+                        key={ch.id}
+                        type="button"
+                        onClick={() => {
+                          setComposeChannel(ch.id as any);
+                          if (ch.id === 'CALL' || ch.id === 'SMS' || ch.id === 'WHATSAPP') {
+                            setComposeRecipient(buyer.mobileNumber || buyer.corporateEmail || '');
+                          } else {
+                            setComposeRecipient(buyer.corporateEmail || buyer.mobileNumber || '');
+                          }
+                        }}
+                        className={`flex flex-col items-center justify-center gap-1 p-2 rounded-xl border text-xs font-semibold transition cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-700 dark:text-indigo-300'
+                            : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-slate-300'
+                        }`}
+                      >
+                        <Icon size={16} />
+                        <span>{ch.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {strings.compose.recipientLabel}
+                </label>
+                <input
+                  type="text"
+                  value={composeRecipient}
+                  onChange={(e) => setComposeRecipient(e.target.value)}
+                  placeholder={strings.compose.recipientPlaceholder}
+                  className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                />
+              </div>
+
+              {composeChannel === 'CALL' && (
+                <div className="grid grid-cols-2 gap-2 p-3 bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {strings.compose.callOutcomeLabel}
+                    </label>
+                    <select
+                      value={composeCallOutcome}
+                      onChange={(e) => setComposeCallOutcome(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                    >
+                      {CALL_OUTCOMES.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {strings.compose.callDurationLabel}
+                    </label>
+                    <input
+                      type="text"
+                      value={composeDuration}
+                      onChange={(e) => setComposeDuration(e.target.value)}
+                      placeholder={strings.compose.callDurationPlaceholder}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {strings.compose.subjectLabel}
+                </label>
+                <input
+                  type="text"
+                  placeholder={strings.compose.subjectPlaceholder}
+                  value={composeSubject}
+                  onChange={(e) => setComposeSubject(e.target.value)}
+                  className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {strings.compose.messageLabel}
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  placeholder={strings.compose.messagePlaceholder}
+                  value={composeMessage}
+                  onChange={(e) => setComposeMessage(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                    <Calendar size={13} className="text-indigo-600" />
+                    <span>{strings.compose.nextFollowupLabel}</span>
+                  </span>
+                  {composeNextFollowupDate && (
+                    <button
+                      type="button"
+                      onClick={() => setComposeNextFollowupDate('')}
+                      className="text-[10px] text-slate-400 hover:text-rose-500 underline cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <input
+                      type="datetime-local"
+                      value={composeNextFollowupDate}
+                      onChange={(e) => setComposeNextFollowupDate(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                    />
+                  </div>
+                  <div>
+                    <select
+                      value={composeFollowupPriority}
+                      onChange={(e) => setComposeFollowupPriority(e.target.value as any)}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                    >
+                      {FOLLOWUP_PRIORITIES.map((p) => (
+                        <option key={p.value} value={p.value}>Priority: {p.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {composeNextFollowupDate && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
+                        {strings.compose.followupAssigneeLabel}
+                      </label>
+                      <select
+                        value={composeFollowupAssigneeId}
+                        onChange={(e) => {
+                          setComposeFollowupAssigneeId(e.target.value);
+                          const m = DEFAULT_INTERNAL_MEMBERS.find((mem) => mem.id === e.target.value);
+                          if (m) setComposeFollowupAssigneeName(m.name);
+                        }}
+                        className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                      >
+                        {DEFAULT_INTERNAL_MEMBERS.map((m) => (
+                          <option key={m.id} value={m.id}>{m.name} ({m.role})</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
+                        {strings.compose.followupNotesLabel}
+                      </label>
+                      <input
+                        type="text"
+                        value={composeFollowupNotes}
+                        onChange={(e) => setComposeFollowupNotes(e.target.value)}
+                        placeholder={strings.compose.followupNotesPlaceholder}
+                        className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsComposeOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                >
+                  {strings.compose.cancelBtn}
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSendingComm}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  {isSendingComm && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{strings.compose.sendBtn}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -1756,6 +2096,8 @@ export default function BuyerDossierDrawer({
           </div>
         </div>
       )}
+
+      {/* ------------------------------------------------------------------------ */}
     </div>
   );
 }

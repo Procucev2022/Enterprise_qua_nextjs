@@ -4,6 +4,7 @@ import type {
   SupplierCreditSummary,
   SupplierCreditTransaction,
   SupplierCommunicationItem,
+  RecordCommunicationPayload,
   SupplierPaymentSummary,
   SupplierPaymentTransaction,
 } from './types';
@@ -59,11 +60,13 @@ export async function fetchSupplierCommunications(
 
 export async function recordSupplierCommunication(
   vendorId: string,
-  payload: { channel: string; recipient?: string; subject?: string; message: string; notes?: string; metadata?: unknown }
+  payload: RecordCommunicationPayload
 ): Promise<{
   success: boolean;
   error?: string;
   data?: unknown;
+  completedTask?: unknown;
+  followupTask?: unknown;
 }> {
   try {
     const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/communications`, {

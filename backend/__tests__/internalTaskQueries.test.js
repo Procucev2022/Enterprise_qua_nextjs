@@ -125,6 +125,32 @@ describe('internalTaskQueries', () => {
   });
 
   describe('getInternalTaskSummary', () => {
+    test('filters summary by assignedTo when provided', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({
+        rows: [
+          {
+            total: 4,
+            pending: 1,
+            in_progress: 1,
+            blocked: 0,
+            completed: 2,
+            escalated: 0,
+            critical_count: 0,
+          },
+        ],
+      });
+
+      const summary = await queries.getInternalTaskSummary({ assignedTo: 'Pavani' });
+      expect(summary.total).toBe(4);
+      expect(summary.completed).toBe(2);
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('WHERE (assigned_to_user_id = $1 OR assigned_to_name ILIKE $2)'),
+        ['Pavani', '%Pavani%'],
+        expect.any(Object)
+      );
+    });
+
     test('returns aggregate metrics', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       jest.spyOn(pool, 'query').mockResolvedValue({
@@ -466,4 +492,36 @@ describe('internalTaskQueries', () => {
       expect(await queries.searchRelatedEntities('UNKNOWN_MODULE')).toEqual([]);
     });
   });
+
+  describe('getInternalAssignees', () => {
+    test('returns default assignees when storage is not configured', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      const assignees = await queries.getInternalAssignees();
+      expect(assignees.length).toBeGreaterThanOrEqual(5);
+      expect(assignees.some((m) => m.name === 'Pavani')).toBe(true);
+    });
+
+    test('merges distinct assignees from database when storage is configured', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockResolvedValue({
+        rows: [
+          { assigned_to_user_id: 'usr_new', assigned_to_name: 'Anil Kumar' },
+          { assigned_to_user_id: 'exec-1', assigned_to_name: 'Pavani' }, // Already exists
+        ],
+      });
+
+      const assignees = await queries.getInternalAssignees();
+      expect(assignees.some((m) => m.name === 'Anil Kumar')).toBe(true);
+      expect(assignees.some((m) => m.name === 'Pavani')).toBe(true);
+    });
+
+    test('handles database query error gracefully and returns defaults', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('D1 Connection Timeout'));
+
+      const assignees = await queries.getInternalAssignees();
+      expect(assignees.length).toBeGreaterThanOrEqual(5);
+    });
+  });
+
 });

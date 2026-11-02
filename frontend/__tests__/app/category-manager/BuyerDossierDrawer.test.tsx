@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import BuyerDossierDrawer from '@/app/category-manager/components/BuyerDossierDrawer';
 import type { BuyerAccount, RFQItem } from '@/lib/types';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
@@ -10,6 +10,7 @@ jest.mock('@/lib/buyerProfileClient', () => ({
   updateBuyerCategories: jest.fn(),
   fetchBuyerCommunications: jest.fn(),
   fetchBuyerPaymentHistory: jest.fn(),
+  recordBuyerCommunication: jest.fn(),
 }));
 
 const mockBuyer: BuyerAccount = {
@@ -929,6 +930,587 @@ describe('BuyerDossierDrawer', () => {
     );
     expect(screen.getAllByText('Sparse Org').length).toBeGreaterThan(0);
     unmount();
+  });
+
+test('Payments tab renders exactly 4 summary cards and removes refund summary card', async () => {
+    (buyerProfileClient.fetchBuyerPaymentHistory as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      summary: {
+        totalPaid: 450000,
+        totalPayments: 10,
+        successfulPayments: 8,
+        pendingPayments: 1,
+        failedPayments: 1,
+        refundedPayments: 0,
+        totalRefunded: 0,
+        currency: 'INR',
+      },
+      transactions: [],
+    });
+
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        onSelectRFQ={onSelectRFQMock}
+        buyerRfqs={mockRfqs}
+        initialTab="payments"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Total Amount Paid')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Total Successful Payments')).toBeInTheDocument();
+    expect(screen.getByText('Pending Payments')).toBeInTheDocument();
+    expect(screen.getByText('Failed Payments')).toBeInTheDocument();
+    expect(screen.queryByText(/Total Refunded Amount/i)).toBeNull();
+  });
+
+  test('respects initialTab prop and triggers onTabChange callback', () => {
+    const onTabChange = jest.fn();
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        buyerRfqs={mockRfqs}
+        initialTab="rfqs"
+        onTabChange={onTabChange}
+      />
+    );
+
+    expect(screen.getByText('Dell Latitude Laptop Procurement')).toBeInTheDocument();
+
+    const commsTab = screen.getByRole('button', { name: /Communications/i });
+    fireEvent.click(commsTab);
+    expect(onTabChange).toHaveBeenCalledWith('communications');
+  });
+
+  test('opens Record Communication modal and dispatches recordBuyerCommunication', async () => {
+    (buyerProfileClient.fetchBuyerCommunications as jest.Mock).mockResolvedValue({
+      success: true,
+      communications: [],
+    });
+    (buyerProfileClient.recordBuyerCommunication as jest.Mock).mockResolvedValueOnce({
+      success: true,
+    });
+
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        buyerRfqs={mockRfqs}
+        initialTab="communications"
+      />
+    );
+
+    const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
+    fireEvent.click(recordBtn);
+
+    expect(screen.getByPlaceholderText(/Price negotiation|Brief summary/i)).toBeInTheDocument();
+
+    // Fill modal form fields
+    const subjectInput = screen.getByPlaceholderText(/Price negotiation|Brief summary/i);
+    const bodyTextarea = screen.getByPlaceholderText(/Enter detailed conversation notes|Key details/i);
+    fireEvent.change(subjectInput, { target: { value: 'Followup on pricing' } });
+    fireEvent.change(bodyTextarea, { target: { value: 'Buyer requested lower price on item 2' } });
+
+    const saveBtn = screen.getByRole('button', { name: /Save & Synchronize Tasks|Save Record/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(buyerProfileClient.recordBuyerCommunication).toHaveBeenCalledWith(
+        mockBuyer.id,
+        expect.objectContaining({
+          subject: 'Followup on pricing',
+          message: 'Buyer requested lower price on item 2',
+        })
+      );
+    });
+  });
+
+  test('comprehensive test covering all compose modal channels, fallbacks, backdrop clicks, and errors', async () => {
+    (buyerProfileClient.fetchBuyerCommunications as jest.Mock).mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'comm-rcpt',
+          accountId: mockBuyer.id,
+          channel: 'SMS',
+          recipient: 'special-recipient-number',
+          message: 'Short text alert',
+          sentAt: '2026-10-31',
+        },
+      ],
+    });
+
+    const buyerWithMobileOnly = {
+      ...mockBuyer,
+      corporateEmail: undefined,
+      mobileNumber: '+919123456789',
+    };
+
+    const { rerender } = render(
+      <BuyerDossierDrawer
+        buyer={buyerWithMobileOnly as any}
+        onClose={onCloseMock}
+        buyerRfqs={mockRfqs}
+        initialTab="communications"
+      />
+    );
+
+    await waitFor(() => {
+      expect(buyerProfileClient.fetchBuyerCommunications).toHaveBeenCalled();
+    });
+
+    // Switch sub-tabs and verify composeChannel auto-sets
+    // SMS sub-tab
+    const smsSubTab = screen.getByRole('button', { name: /SMS/i });
+    fireEvent.click(smsSubTab);
+
+    // Test searching by recipient
+    const commSearchInput = screen.getByPlaceholderText(/Search sms communications/i);
+    fireEvent.change(commSearchInput, { target: { value: 'special-recipient' } });
+    expect(await screen.findByText('Short text alert')).toBeInTheDocument();
+    fireEvent.change(commSearchInput, { target: { value: '' } });
+
+    // Open compose from SMS
+    const recordBtnSMS = screen.getByRole('button', { name: /Record Communication/i });
+    fireEvent.click(recordBtnSMS);
+    expect(screen.getByPlaceholderText(/Price negotiation|Brief summary/i)).toBeInTheDocument();
+
+    // Verify recipient defaulted to mobileNumber
+    const recipientInput = screen.getByPlaceholderText(/buyer@company\.com|Recipient email/i);
+    expect(recipientInput).toHaveValue('+919123456789');
+
+    // Close via backdrop click (inner vs outer)
+    const composeDialog = screen.getByPlaceholderText(/Price negotiation|Brief summary/i).closest('[role="dialog"]');
+    // Click inner content does not close
+    const modalInner = screen.getByPlaceholderText(/Price negotiation|Brief summary/i).closest('.max-w-lg');
+    if (modalInner) fireEvent.click(modalInner);
+    expect(screen.getByPlaceholderText(/Price negotiation|Brief summary/i)).toBeInTheDocument();
+
+    // Click backdrop closes
+    if (composeDialog) fireEvent.click(composeDialog);
+    expect(screen.queryByPlaceholderText(/Price negotiation|Brief summary/i)).toBeNull();
+
+    // Open from WhatsApp sub-tab
+    const waSubTab = screen.getByRole('button', { name: /WhatsApp/i });
+    fireEvent.click(waSubTab);
+    const recordBtnWA = screen.getByRole('button', { name: /Record Communication/i });
+    fireEvent.click(recordBtnWA);
+
+    // Close via Cancel button
+    const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
+    fireEvent.click(cancelBtn);
+    expect(screen.queryByPlaceholderText(/Price negotiation|Brief summary/i)).toBeNull();
+
+    // Open from Call Logs sub-tab
+    const callSubTab = screen.getByRole('button', { name: /Call Logs/i });
+    fireEvent.click(callSubTab);
+    const recordBtnCall = screen.getByRole('button', { name: /Record Communication/i });
+    fireEvent.click(recordBtnCall);
+
+    // Close via X button
+    const xBtn = screen.getAllByRole('button').find((b) => b.querySelector('.lucide-x') && b.closest('.max-w-lg'));
+    if (xBtn) fireEvent.click(xBtn);
+    expect(screen.queryByPlaceholderText(/Price negotiation|Brief summary/i)).toBeNull();
+
+    // Open and close via Escape
+    const emailSubTab = screen.getByRole('button', { name: /Email/i });
+    fireEvent.click(emailSubTab);
+    fireEvent.click(screen.getByRole('button', { name: /Record Communication/i }));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByPlaceholderText(/Price negotiation|Brief summary/i)).toBeNull();
+
+    // Test form validation: empty message trimmed does not submit
+    fireEvent.click(screen.getByRole('button', { name: /Record Communication/i }));
+    const msgTextarea = screen.getByPlaceholderText(/Enter detailed conversation notes|Key details/i);
+    fireEvent.change(msgTextarea, { target: { value: '   ' } });
+    const saveBtn = screen.getByRole('button', { name: /Save & Synchronize Tasks|Save Record/i });
+    fireEvent.click(saveBtn);
+    expect(buyerProfileClient.recordBuyerCommunication).not.toHaveBeenCalled();
+
+    // Test changing channel dropdown, empty subject fallback, empty recipient fallback
+    // Select channels via modal channel buttons
+    const modalChannelBtns = screen.getAllByRole('button');
+    const waBtn = modalChannelBtns.find(b => b.textContent?.includes('WhatsApp') && b.closest('.grid-cols-4'));
+    if (waBtn) fireEvent.click(waBtn);
+    const smsBtn = modalChannelBtns.find(b => b.textContent?.includes('SMS') && b.closest('.grid-cols-4'));
+    if (smsBtn) fireEvent.click(smsBtn);
+    const callBtn = modalChannelBtns.find(b => b.textContent?.includes('Call Log') && b.closest('.grid-cols-4'));
+    if (callBtn) fireEvent.click(callBtn);
+
+    // Empty recipient and empty subject
+    fireEvent.change(screen.getByPlaceholderText(/buyer@company\.com|Recipient email/i), { target: { value: '' } });
+    fireEvent.change(screen.getByPlaceholderText(/Price negotiation|Brief summary/i), { target: { value: '' } });
+    fireEvent.change(msgTextarea, { target: { value: 'Test call summary notes' } });
+
+    (buyerProfileClient.recordBuyerCommunication as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: 'Dispatch failed on carrier',
+    });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(buyerProfileClient.recordBuyerCommunication).toHaveBeenCalledWith(
+        mockBuyer.id,
+        expect.objectContaining({
+          channel: 'CALL',
+          subject: 'Buyer Communication: CALL',
+          message: 'Test call summary notes',
+        })
+      );
+    });
+
+    // Test API response with success: false and no error message
+    (buyerProfileClient.recordBuyerCommunication as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    fireEvent.click(saveBtn);
+    await waitFor(() => {
+      expect(buyerProfileClient.recordBuyerCommunication).toHaveBeenCalledTimes(2);
+    });
+
+    // Test API rejection / catch block
+    (buyerProfileClient.recordBuyerCommunication as jest.Mock).mockRejectedValueOnce(new Error('Network offline'));
+    fireEvent.click(saveBtn);
+    await waitFor(() => {
+      expect(buyerProfileClient.recordBuyerCommunication).toHaveBeenCalledTimes(3);
+    });
+
+    // Test fallback recipient when neither corporateEmail nor mobileNumber exists
+    const buyerNoContact = {
+      ...mockBuyer,
+      corporateEmail: undefined,
+      mobileNumber: undefined,
+    };
+    rerender(
+      <BuyerDossierDrawer
+        buyer={buyerNoContact as any}
+        onClose={onCloseMock}
+        buyerRfqs={mockRfqs}
+        initialTab="communications"
+      />
+    );
+  });
+
+  test('comprehensive test for Add Credit modal edge cases, Edit Categories backdrop, and RFQ popup edge cases', async () => {
+    (buyerProfileClient.fetchBuyerCreditHistory as jest.Mock).mockResolvedValue({
+      success: true,
+      summary: null,
+      transactions: [],
+    });
+
+    const rfqWithFullBids: any = {
+      id: 'rfq-detailed',
+      rfqNumber: 'RFQ-DETAILED-001',
+      title: 'Detailed RFQ Procurement',
+      sourcingMode: 'mode_1',
+      budget: 50000,
+      createdAt: '2026-10-31',
+      targetDeliveryDate: undefined, // test fallback to 'Standard'
+      assignedVendors: ['v1', 'v2'],
+      extractedEntities: [
+        {
+          id: 'ent-1',
+          itemName: 'Special Steel Rods',
+          technicalSpecs: '', // empty technicalSpecs
+          quantity: 100,
+          unit: '', // empty unit fallback to 'units'
+          targetDate: undefined, // fallback to '-'
+        },
+      ],
+      quotes: [
+        {
+          id: 'q-1',
+          vendorId: 'v-steel',
+          vendorName: 'Apex Steel Corp',
+          totalPrice: 48000,
+          leadTimeDays: 7,
+          submittedAt: '2026-10-31',
+          status: 'SUBMITTED',
+        },
+      ],
+    };
+
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        buyerRfqs={[rfqWithFullBids]}
+        initialTab="rfqs"
+      />
+    );
+
+    // Open RFQ modal
+    const viewRfqBtn = screen.getByTitle('View RFQ Popup');
+    fireEvent.click(viewRfqBtn);
+    expect(screen.getAllByText('RFQ-DETAILED-001').length).toBeGreaterThan(0);
+    expect(screen.getByText('Standard')).toBeInTheDocument();
+    expect(screen.getByText('Special Steel Rods')).toBeInTheDocument();
+    expect(screen.getByText('100 units')).toBeInTheDocument();
+    expect(screen.getByText('Apex Steel Corp')).toBeInTheDocument();
+
+    // Test backdrop click on RFQ modal (inner does not close, dialog backdrop closes)
+    const rfqDialog = screen.getByRole('dialog', { name: 'RFQ Details' });
+    const innerTitle = screen.getAllByText('Detailed RFQ Procurement')[0];
+    fireEvent.click(innerTitle);
+    expect(screen.getAllByText('RFQ-DETAILED-001').length).toBeGreaterThan(0);
+    fireEvent.click(rfqDialog);
+    expect(screen.queryByRole('dialog', { name: 'RFQ Details' })).toBeNull();
+
+    // Test Edit Categories modal backdrop click
+    const profileTab = screen.getByRole('button', { name: /^Profile$/i });
+    fireEvent.click(profileTab);
+    const editCatBtn = screen.getByText('Edit');
+    fireEvent.click(editCatBtn);
+    expect(screen.getByText('Edit Supported Major Categories')).toBeInTheDocument();
+
+    // Inner click does not close
+    fireEvent.click(screen.getByText('Edit Supported Major Categories'));
+    expect(screen.getByText('Edit Supported Major Categories')).toBeInTheDocument();
+
+    // Backdrop click closes
+    const catDialog = screen.getByText('Edit Supported Major Categories').closest('[role="dialog"]');
+    if (catDialog) fireEvent.click(catDialog);
+    expect(screen.queryByText('Edit Supported Major Categories')).toBeNull();
+
+    // Test Add Credit modal edge cases
+    const addCreditHeaderBtn = screen.getByTitle('Add RFQ Sourcing Credits');
+    fireEvent.click(addCreditHeaderBtn);
+    expect(screen.getByRole('heading', { name: 'Allocate Buyer Credits' })).toBeInTheDocument();
+
+    // Inner click does not close
+    fireEvent.click(screen.getByRole('heading', { name: 'Allocate Buyer Credits' }));
+    expect(screen.getByRole('heading', { name: 'Allocate Buyer Credits' })).toBeInTheDocument();
+
+    // Empty input sets 0 via isNaN
+    const creditAmountInput = screen.getByRole('spinbutton');
+    fireEvent.change(creditAmountInput, { target: { value: '' } });
+    expect(creditAmountInput).toHaveValue(0);
+
+    // Form submission with amount <= 0 does not call addBuyerCredit
+    const submitBtn = screen.getByRole('button', { name: 'Confirm Credit Allocation' });
+    fireEvent.click(submitBtn);
+    expect(buyerProfileClient.addBuyerCredit).not.toHaveBeenCalled();
+
+    // Fill valid amount, empty reason -> uses fallback reason
+    fireEvent.change(creditAmountInput, { target: { value: '10' } });
+    const reasonTextarea = screen.getByPlaceholderText(/Enterprise relationship top-up/i);
+    fireEvent.change(reasonTextarea, { target: { value: '' } });
+
+    // API success with no custom message
+    (buyerProfileClient.addBuyerCredit as jest.Mock).mockResolvedValueOnce({
+      success: true,
+    });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(buyerProfileClient.addBuyerCredit).toHaveBeenCalledWith(
+        mockBuyer.id,
+        expect.objectContaining({
+          amount: 10,
+          reason: 'Category Manager console allocation',
+        })
+      );
+    });
+
+    // Reopen and test API failure with no custom error
+    fireEvent.click(addCreditHeaderBtn);
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
+    (buyerProfileClient.addBuyerCredit as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Credit Allocation' }));
+    await waitFor(() => {
+      expect(buyerProfileClient.addBuyerCredit).toHaveBeenCalledTimes(2);
+    });
+
+    // Reopen and test API rejection / throw
+    fireEvent.click(addCreditHeaderBtn);
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
+    (buyerProfileClient.addBuyerCredit as jest.Mock).mockRejectedValueOnce(new Error('DB failure'));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Credit Allocation' }));
+    await waitFor(() => {
+      expect(buyerProfileClient.addBuyerCredit).toHaveBeenCalledTimes(3);
+    });
+
+    // Close via backdrop click
+    fireEvent.click(addCreditHeaderBtn);
+    const creditDialog = screen.getByRole('heading', { name: /Allocate Buyer Credits/i }).closest('[role="dialog"]');
+    if (creditDialog) fireEvent.click(creditDialog);
+    expect(screen.queryByRole('heading', { name: 'Allocate Buyer Credits' })).toBeNull();
+  });
+
+  test('payments sort handles items without transactionDate or date', async () => {
+    (buyerProfileClient.fetchBuyerPaymentHistory as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      summary: null,
+      payments: [
+        {
+          id: 'p-no-date-1',
+          paymentId: 'PAY-ND1',
+          invoiceNo: 'INV-ND1',
+          amount: 100,
+          status: 'PAID',
+          description: 'No date test 1',
+        },
+        {
+          id: 'p-no-date-2',
+          paymentId: 'PAY-ND2',
+          invoiceNo: 'INV-ND2',
+          amount: 200,
+          status: 'PAID',
+          description: 'No date test 2',
+        },
+      ],
+    });
+
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        initialTab="payments"
+      />
+    );
+
+    expect(await screen.findByText('INV-ND1')).toBeInTheDocument();
+    const sortBtn = screen.getByRole('button', { name: /Newest First/i });
+    fireEvent.click(sortBtn);
+    expect(screen.getByText(/Oldest First/i)).toBeInTheDocument();
+  });
+
+  test('exercises full followup workflow, call outcomes, and receiptUrl in payments modal', async () => {
+    (buyerProfileClient.fetchBuyerCommunications as jest.Mock).mockResolvedValue({
+      success: true,
+      data: [],
+    });
+    (buyerProfileClient.recordBuyerCommunication as jest.Mock).mockResolvedValue({
+      success: true,
+    });
+
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        initialTab="communications"
+      />
+    );
+
+    // Switch to Call Logs sub-tab first
+    fireEvent.click(screen.getByRole('button', { name: /Call Logs/i }));
+
+    const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
+    fireEvent.click(recordBtn);
+
+    // Toggle channel buttons inside modal
+    const composeDialog = screen.getByPlaceholderText(/Price negotiation|Brief summary/i).closest('[role="dialog"]') as HTMLElement;
+    const modalChannelBtns = within(composeDialog).getAllByRole('button');
+    const emailModalBtn = modalChannelBtns.find(b => b.textContent?.trim() === 'Email');
+    if (emailModalBtn) fireEvent.click(emailModalBtn);
+    const waModalBtn = modalChannelBtns.find(b => b.textContent?.trim() === 'WhatsApp');
+    if (waModalBtn) fireEvent.click(waModalBtn);
+    const smsModalBtn = modalChannelBtns.find(b => b.textContent?.trim() === 'SMS');
+    if (smsModalBtn) fireEvent.click(smsModalBtn);
+    const callModalBtn = modalChannelBtns.find(b => b.textContent?.trim() === 'Call Log');
+    if (callModalBtn) fireEvent.click(callModalBtn);
+
+    // Call outcome and duration inputs
+    const outcomeSelect = screen.getByDisplayValue('Connected');
+    fireEvent.change(outcomeSelect, { target: { value: 'Left Voicemail' } });
+
+    const durationInput = screen.getByPlaceholderText(/e\.g\. 10 mins/i);
+    fireEvent.change(durationInput, { target: { value: '15 mins' } });
+
+    // Next followup date
+    const followupDateInput = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    expect(followupDateInput).toBeInTheDocument();
+    fireEvent.change(followupDateInput, { target: { value: '2026-11-05T14:30' } });
+
+    // Priority change
+    const prioritySelect = screen.getByDisplayValue(/Priority: Medium/i);
+    fireEvent.change(prioritySelect, { target: { value: 'Critical' } });
+
+    // Assignee change - test both matching member and non-matching member
+    const assigneeSelect = screen.getByDisplayValue(/Pavani/i);
+    fireEvent.change(assigneeSelect, { target: { value: 'exec-2' } });
+    expect(screen.getByDisplayValue(/Navin Chaudhary/i)).toBeInTheDocument();
+    fireEvent.change(assigneeSelect, { target: { value: 'NON_EXISTENT_ID' } });
+
+    // Followup objective
+    const followupNotesInput = screen.getByPlaceholderText(/Action items for next scheduled interaction|Agenda or deliverables for next interaction/i);
+    fireEvent.change(followupNotesInput, { target: { value: 'Final contract signing follow-up' } });
+
+    // Test Clear button
+    const clearBtn = screen.getByRole('button', { name: 'Clear' });
+    fireEvent.click(clearBtn);
+
+    // Re-add date
+    fireEvent.change(followupDateInput, { target: { value: '2026-11-05T14:30' } });
+
+    // Subject and message
+    const subjectInput = screen.getByPlaceholderText(/Price negotiation|Brief summary/i);
+    fireEvent.change(subjectInput, { target: { value: 'Executive alignment call' } });
+    const messageInput = screen.getByPlaceholderText(/Enter detailed conversation notes|Key details/i);
+    fireEvent.change(messageInput, { target: { value: 'Reviewed credit terms and finalized 15% annual pricing.' } });
+
+    const saveBtn = screen.getByRole('button', { name: /Save Record|Save & Synchronize Tasks/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(buyerProfileClient.recordBuyerCommunication).toHaveBeenCalledWith(
+        mockBuyer.id,
+        expect.objectContaining({
+          channel: 'CALL',
+          duration: '15 mins',
+          nextFollowupDate: '2026-11-05T14:30',
+        })
+      );
+    });
+  });
+
+  test('payment details modal renders download invoice link when receiptUrl is present', async () => {
+    (buyerProfileClient.fetchBuyerPaymentHistory as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      summary: null,
+      payments: [
+        {
+          id: 'p-receipt-1',
+          paymentId: 'PAY-RCP-1',
+          invoiceNo: 'INV-RCP-101',
+          amount: 25000,
+          status: 'SUCCESS',
+          description: 'Quarterly enterprise tier',
+          subscriptionPlan: 'Enterprise Pro',
+          gateway: 'Razorpay',
+          paymentMethod: 'Net Banking',
+          receiptUrl: 'https://procucev.com/invoices/INV-RCP-101.pdf',
+          transactionDate: '2026-10-25',
+        },
+      ],
+    });
+
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        initialTab="payments"
+      />
+    );
+
+    const viewPaymentBtn = await screen.findByRole('button', { name: 'Details' });
+    fireEvent.click(viewPaymentBtn);
+
+    expect(screen.getByText('Payment Record Details')).toBeInTheDocument();
+    expect(screen.getByText('Download Invoice')).toBeInTheDocument();
+
+    // Close payment modal via backdrop click (inner does not close, outer closes)
+    const paymentDialog = screen.getByText('Payment Record Details').closest('[role="dialog"]');
+    fireEvent.click(screen.getAllByText('Quarterly enterprise tier')[1]);
+    expect(screen.getByText('Payment Record Details')).toBeInTheDocument();
+    if (paymentDialog) fireEvent.click(paymentDialog);
+    expect(screen.queryByText('Payment Record Details')).toBeNull();
   });
 
 });

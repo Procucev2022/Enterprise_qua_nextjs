@@ -24,7 +24,7 @@ import {
   Users,
   TrendingUp,
 } from 'lucide-react';
-import { avatarForName, getInitials, renderStars } from './vendorUtils';
+import { avatarForName, getInitials, renderStars, maskPublicEmail, maskPublicPhone } from './vendorUtils';
 
 const S = UI_STRINGS.publicVendorDirectory;
 
@@ -50,8 +50,9 @@ export default function VendorDetailModal({ vendor, onClose }: VendorDetailModal
 
   function copyEmail() {
     if (!vendor.email) return;
+    const emailToCopy = maskPublicEmail(vendor.email);
     navigator.clipboard
-      .writeText(vendor.email)
+      .writeText(emailToCopy)
       .then(() => {
         setEmailCopied(true);
         setTimeout(() => setEmailCopied(false), 2000);
@@ -90,16 +91,16 @@ export default function VendorDetailModal({ vendor, onClose }: VendorDetailModal
           </button>
           <div className="flex items-center gap-4">
             <div
-              className={`w-16 h-16 rounded-2xl bg-white/20 ring-2 ring-white/40 flex items-center justify-center text-white font-bold text-xl`}
+              className={`w-16 h-16 rounded-2xl bg-white/20 ring-2 ring-white/40 flex items-center justify-center text-white font-bold text-xl filter blur-[2px] select-none`}
             >
               {getInitials(vendor.name)}
             </div>
             <div className="min-w-0">
-              <h2 className="text-white font-bold text-lg leading-tight line-clamp-2">
+              <h2 className="text-white font-bold text-lg leading-tight line-clamp-2 filter blur-[4px] select-none">
                 {vendor.name}
               </h2>
               {vendor.brandName && vendor.brandName !== vendor.name && (
-                <p className="text-white/80 text-sm mt-0.5">{vendor.brandName}</p>
+                <p className="text-white/80 text-sm mt-0.5 filter blur-[4px] select-none">{vendor.brandName}</p>
               )}
               <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                 {vendor.isVerified && (
@@ -204,7 +205,7 @@ function OverviewTab({
           icon={<Users size={15} />}
           label={S.labels.contactPerson}
           value={
-            <span>
+            <span className="filter blur-[4px] select-none inline-block">
               {vendor.contactPerson}
               {vendor.contactDesignation && (
                 <span className="ml-1.5 text-xs text-slate-500 dark:text-slate-400">
@@ -220,12 +221,9 @@ function OverviewTab({
           icon={<Mail size={15} />}
           label={S.labels.email}
           value={
-            <a
-              href={`mailto:${vendor.email}`}
-              className="text-blue-600 dark:text-blue-400 hover:underline"
-            >
-              {vendor.email}
-            </a>
+            <span className="font-mono text-slate-800 dark:text-slate-200 font-medium">
+              {maskPublicEmail(vendor.email)}
+            </span>
           }
           action={
             <button
@@ -243,12 +241,9 @@ function OverviewTab({
           icon={<Phone size={15} />}
           label={S.labels.phone}
           value={
-            <a
-              href={`tel:${vendor.phone}`}
-              className="text-blue-600 dark:text-blue-400 hover:underline"
-            >
-              {vendor.phone}
-            </a>
+            <span className="font-mono text-slate-800 dark:text-slate-200 font-medium">
+              {maskPublicPhone(vendor.phone)}
+            </span>
           }
         />
       )}

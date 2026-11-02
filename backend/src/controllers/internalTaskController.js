@@ -5,6 +5,8 @@
 // ==============================================================================
 
 const internalTaskQueries = require('../db/internalTaskQueries');
+const registrationQueries = require('../db/registrationQueries');
+const { validatePayload } = require('../config/validationSchemas');
 const { logger } = require('../services/loggerService');
 
 /**
@@ -56,11 +58,25 @@ async function getTasks(req, res) {
  */
 async function getSummary(req, res) {
   try {
-    const summary = await internalTaskQueries.getInternalTaskSummary();
+    const { assignedTo = '' } = req.query;
+    const summary = await internalTaskQueries.getInternalTaskSummary({ assignedTo });
     return res.status(200).json({ success: true, summary });
   } catch (error) {
     logger.error('Failed to get internal tasks summary', { error: error.message });
     return res.status(500).json({ success: false, error: 'Failed to fetch task metrics' });
+  }
+}
+
+/**
+ * Get internal team members and available task assignees.
+ */
+async function getAssignees(req, res) {
+  try {
+    const assignees = await internalTaskQueries.getInternalAssignees();
+    return res.status(200).json({ success: true, assignees });
+  } catch (error) {
+    logger.error('Failed to get internal assignees', { error: error.message });
+    return res.status(500).json({ success: false, error: 'Failed to fetch assignees' });
   }
 }
 
@@ -258,7 +274,73 @@ async function exportTasks(req, res) {
   }
 }
 
+async function getRegistrations(req, res) {
+  try {
+    const {
+      search = '',
+      sourceType = 'all',
+      status = 'all',
+      limit = 100,
+      offset = 0,
+    } = req.query || {};
+
+    logger.info('Fetching registered clients', { search, sourceType, status }, 'INTERNAL_TASK_CONTROLLER');
+    const result = await registrationQueries.getRegisteredClients({
+      search,
+      sourceType,
+      status,
+      limit: parseInt(limit, 10) || 100,
+      offset: parseInt(offset, 10) || 0,
+    });
+
+    return res.status(200).json({
+      success: true,
+      total: result.total,
+      data: result.clients,
+      limit: result.limit,
+      offset: result.offset,
+    });
+  } catch (error) {
+    logger.error('Failed to fetch registered clients', { error: error.message }, 'INTERNAL_TASK_CONTROLLER');
+    return res.status(500).json({ success: false, error: 'Failed to retrieve registered clients.' });
+  }
+}
+
+async function handleRegistrationAction(req, res) {
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+
+    const { isValid, errors } = validatePayload('registrationAction', body);
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: Object.values(errors)[0] });
+    }
+
+    const { action, remarks } = body;
+    logger.info(`Processing registration action: ${action} for client ${id}`, { id, action }, 'INTERNAL_TASK_CONTROLLER');
+
+    const updated = await registrationQueries.updateClientRegistrationStatus(id, action, remarks);
+
+    try {
+      const storeService = require('../services/storeService');
+      storeService.addAuditLog(`Client registration ${action === 'accept' ? 'ACCEPTED' : 'REJECTED'} for ${updated.userName || id}`);
+    } catch {
+      // ignore
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Client registration ${action === 'accept' ? 'accepted' : 'rejected'} successfully.`,
+      client: updated,
+    });
+  } catch (error) {
+    logger.error('Failed to update registration status', { error: error.message }, 'INTERNAL_TASK_CONTROLLER');
+    return res.status(500).json({ success: false, error: 'Failed to update client registration status.' });
+  }
+}
+
 module.exports = {
+  getAssignees,
   getTasks,
   getSummary,
   getTaskTypes,
@@ -269,4 +351,6 @@ module.exports = {
   deleteTask,
   searchEntities,
   exportTasks,
+  getRegistrations,
+  handleRegistrationAction,
 };

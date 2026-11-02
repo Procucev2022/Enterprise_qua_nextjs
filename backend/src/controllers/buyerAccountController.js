@@ -821,8 +821,23 @@ async function recordBuyerCommunication(req, res, next) {
   try {
     if (!assertCategoryManagerOrBuyer(req, res)) return;
     const { id } = req.params;
-    const { channel, recipient, subject, message, notes, metadata } = req.body || {};
+    const {
+      channel,
+      recipient,
+      subject,
+      message,
+      notes,
+      metadata,
+      callOutcome,
+      duration,
+      nextFollowupDate,
+      followupPriority,
+      followupAssigneeId,
+      followupAssigneeName,
+      followupNotes,
+    } = req.body || {};
     const paymentDuesQueries = require('../db/paymentDuesQueries');
+    const internalTaskQueries = require('../db/internalTaskQueries');
 
     const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
     if (!buyer) {
@@ -830,22 +845,113 @@ async function recordBuyerCommunication(req, res, next) {
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
+    const normalizedChannel = (channel || 'EMAIL').toUpperCase();
+    const commNotes = [
+      callOutcome ? `Call Outcome: ${callOutcome}` : null,
+      duration ? `Duration: ${duration}` : null,
+      notes || null,
+    ].filter(Boolean).join(' | ');
+
     const record = await paymentDuesQueries.recordCommunication({
       accountId: id,
       accountType: 'buyer',
-      channel: channel || 'EMAIL',
-      recipient: recipient || buyer.corporateEmail || buyer.phone || '',
+      channel: normalizedChannel,
+      recipient: recipient || buyer.corporateEmail || buyer.phone || buyer.mobileNumber || '',
       subject: subject || null,
       message: message || '',
       notificationStatus: 'Delivered',
       deliveryStatus: 'Delivered',
       acknowledgementStatus: 'Acknowledgement Pending',
-      communicatedBy: req.user?.email || 'Category Manager',
-      notes: notes || null,
-      metadata: metadata || {},
+      communicatedBy: req.user?.fullName || req.user?.name || req.user?.email || 'Category Manager',
+      notes: commNotes || null,
+      metadata: {
+        ...(metadata || {}),
+        callOutcome: callOutcome || null,
+        duration: duration || null,
+        nextFollowupDate: nextFollowupDate || null,
+      },
     });
 
-    return res.status(201).json({ success: true, data: record });
+    // External Live Dispatch for Email and SMS (Restricted to staff and channel-verified destinations)
+    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
+    const smsService = require('../services/smsService');
+    const normalizedBuyerPhone = smsService.formatMobileNumber(recipient);
+    const buyerEmail = (recipient && recipient.includes('@')) ? recipient : (buyer.corporateEmail || buyer.email);
+    const buyerPhone = (normalizedBuyerPhone && normalizedBuyerPhone.length === 10) ? normalizedBuyerPhone : (buyer.phone || buyer.mobileNumber);
+    if (isStaff && normalizedChannel === 'EMAIL' && buyerEmail) {
+      try {
+        const mailerService = require('../services/mailerService');
+        if (typeof mailerService.deliver === 'function') {
+          Promise.resolve().then(() => mailerService.deliver({
+            to: buyerEmail,
+            subject: '[Procucev] ' + (subject || 'Buyer Account Update'),
+            text: message || commNotes || '',
+            replyTo: req.user?.email || undefined,
+          }, 'BUYER_DOSSIER_COMM')).catch((err) => logger.warn('Async buyer email dispatch error', { error: err.message }));
+        }
+      } catch (mailErr) {
+        logger.warn('Failed to dispatch external email for buyer communication', { error: mailErr.message });
+      }
+    } else if (isStaff && normalizedChannel === 'SMS' && buyerPhone) {
+      try {
+        const smsService = require('../services/smsService');
+        smsService.sendActionCenterSms({
+          mobile: buyerPhone,
+          recipientName: buyer.organizationName || 'Buyer',
+          message: message || subject || 'Buyer account notification',
+          entityType: 'buyer_dossier',
+        }).catch((err) => logger.warn('Async buyer SMS dispatch error', { error: err.message }));
+      } catch (smsErr) {
+        logger.warn('Failed to dispatch external SMS for buyer communication', { error: smsErr.message });
+      }
+    }
+
+    let completedTask = null;
+    try {
+      const channelLabel = normalizedChannel === 'CALL' ? 'Call' : normalizedChannel === 'WHATSAPP' ? 'WhatsApp' : normalizedChannel === 'SMS' ? 'SMS' : 'Email';
+      const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+      completedTask = await internalTaskQueries.createInternalTask({
+        title: `[${channelLabel} Log / Completed] ${subject || buyer.organizationName}`,
+        description: message || commNotes || 'Buyer communication activity recorded.',
+        taskTypeId: 'itt_buyer_onboarding',
+        priority: 'Medium',
+        status: 'Completed',
+        relatedEntityType: 'BUYER',
+        relatedEntityId: buyer.id,
+        relatedEntityLabel: buyer.organizationName,
+        assignedToUserId: actor.uuid || actor.id || null,
+        assignedToName: actor.fullName || actor.name || actor.email || 'Category Manager',
+        dueDate: new Date().toISOString(),
+        notes: commNotes || '',
+      }, actor);
+    } catch (taskErr) {
+      logger.warn('Failed to create completed internal task for buyer communication', { error: taskErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
+    }
+
+    let followupTask = null;
+    if (nextFollowupDate) {
+      try {
+        const actor = req.user || { name: 'Category Manager', email: 'category.manager@procucev.com' };
+        followupTask = await internalTaskQueries.createInternalTask({
+          title: `[Follow-up] ${buyer.organizationName} - ${subject || 'Buyer Follow-up'}`,
+          description: followupNotes || `Follow-up needed following ${normalizedChannel} outreach: ${message || ''}`,
+          taskTypeId: 'itt_buyer_onboarding',
+          priority: followupPriority || 'Medium',
+          status: 'Pending',
+          relatedEntityType: 'BUYER',
+          relatedEntityId: buyer.id,
+          relatedEntityLabel: buyer.organizationName,
+          assignedToUserId: followupAssigneeId || actor.uuid || actor.id || null,
+          assignedToName: followupAssigneeName || actor.fullName || actor.name || actor.email || 'Category Manager',
+          dueDate: nextFollowupDate,
+          notes: followupNotes || '',
+        }, actor);
+      } catch (followupErr) {
+        logger.warn('Failed to create pending follow-up internal task for buyer communication', { error: followupErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
+      }
+    }
+
+    return res.status(201).json({ success: true, data: record, completedTask, followupTask });
   } catch (err) {
     logger.error('Error recording buyer communication', err, 'BUYER_ACCOUNT_CONTROLLER');
     next(err);

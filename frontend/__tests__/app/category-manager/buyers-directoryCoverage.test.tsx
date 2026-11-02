@@ -69,6 +69,8 @@ const exportDirectory = (): void => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  window.sessionStorage.clear();
+  window.localStorage.clear();
   mockStore({});
 });
 

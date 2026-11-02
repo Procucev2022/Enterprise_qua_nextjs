@@ -139,6 +139,23 @@ describe('vendorDirectoryClient', () => {
     });
   });
 
+    test('detects sessionExpired when API returns 401 with sessionExpired payload', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          success: false,
+          sessionExpired: true,
+          error: 'Vendor directory session has expired or is closed. Please log in again.',
+        }),
+      });
+
+      const res = await fetchPublicVendors();
+      expect(res.success).toBe(false);
+      expect(res.sessionExpired).toBe(true);
+      expect(res.error).toBe('Vendor directory session has expired or is closed. Please log in again.');
+    });
+
   describe('fetchPublicVendorFilters', () => {
     test('fetches dynamic category and state filters successfully', async () => {
       global.fetch = jest.fn().mockResolvedValue({
@@ -183,6 +200,37 @@ describe('vendorDirectoryClient', () => {
       expect(res.states).toEqual([]);
     });
   });
+
+    test('detects sessionExpired when filter API returns 401 with sessionExpired payload', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          success: false,
+          sessionExpired: true,
+          error: 'Vendor directory session has expired or is closed. Please log in again.',
+        }),
+      });
+
+      const res = await fetchPublicVendorFilters();
+      expect(res.success).toBe(false);
+      expect(res.sessionExpired).toBe(true);
+      expect(res.categories).toEqual([]);
+    });
+
+    test('detects sessionExpired default when filter API returns 401 and JSON parse fails', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => {
+          throw new Error('Not JSON');
+        },
+      });
+
+      const res = await fetchPublicVendorFilters();
+      expect(res.success).toBe(false);
+      expect(res.sessionExpired).toBe(true);
+    });
 
   describe('fetchPublicVendorById', () => {
     test('returns null if id is empty', async () => {

@@ -103,14 +103,19 @@ export async function fetchPublicVendors(
 
     if (!res.ok) {
       let errMsg = `${UI_STRINGS.publicVendorDirectory.errorText} (HTTP ${res.status})`;
+      let sessionExpired = res.status === 401;
       try {
         const json = await res.json();
         if (json?.error) errMsg = json.error;
+        if (json?.sessionExpired !== undefined) {
+          sessionExpired = Boolean(json.sessionExpired);
+        }
       } catch {
         // ignore parse error, use default message
       }
       return {
         success: false,
+        sessionExpired,
         data: [],
         pagination: { page, pageSize, total: 0, totalPages: 1 },
         error: errMsg,
@@ -139,6 +144,7 @@ export async function fetchPublicVendors(
  */
 export async function fetchPublicVendorFilters(): Promise<{
   success: boolean;
+  sessionExpired?: boolean;
   categories: string[];
   states: string[];
 }> {
@@ -158,7 +164,16 @@ export async function fetchPublicVendorFilters(): Promise<{
       cache: 'no-store',
     });
     if (!res.ok) {
-      return { success: false, categories: [], states: [] };
+      let sessionExpired = res.status === 401;
+      try {
+        const json = await res.json();
+        if (json?.sessionExpired !== undefined) {
+          sessionExpired = Boolean(json.sessionExpired);
+        }
+      } catch {
+        // ignore
+      }
+      return { success: false, sessionExpired, categories: [], states: [] };
     }
     const json: { success: boolean; data?: PublicVendorFilterOptions } = await res.json();
     const result = {

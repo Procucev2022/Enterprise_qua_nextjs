@@ -89,3 +89,46 @@ export const MAJOR_CATEGORIES = [
   'Mining & Minerals',
   'General Industrial',
 ];
+
+/**
+ * Masks an email for public display (e.g. "sXXXX@gmail.com" or "mXXXX@japl.org").
+ */
+export function maskPublicEmail(email?: string | null): string {
+  if (!email || typeof email !== 'string') return '';
+  const trimmed = email.trim();
+  if (trimmed.includes('XXXX')) return trimmed;
+  const atIndex = trimmed.indexOf('@');
+  if (atIndex <= 0) return trimmed;
+  const username = trimmed.slice(0, atIndex);
+  const domain = trimmed.slice(atIndex);
+  return `${username.charAt(0)}XXXX${domain}`;
+}
+
+/**
+ * Masks a phone number for public display (e.g. "9XXXXXXX09").
+ */
+export function maskPublicPhone(phone?: string | null): string {
+  if (!phone || typeof phone !== 'string') return '';
+  const trimmed = phone.trim();
+  if (trimmed.includes('XXXX')) return trimmed;
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length < 4) return trimmed;
+
+  let prefix = '';
+  let national = digits;
+  if (trimmed.startsWith('+91') || (digits.length === 12 && digits.startsWith('91'))) {
+    prefix = '+91 ';
+    national = digits.slice(-10);
+  } else if (trimmed.startsWith('+')) {
+    prefix = '+ ';
+    national = digits.slice(-10);
+  } else if (digits.length > 10) {
+    national = digits.slice(-10);
+  }
+
+  const firstDigit = national.charAt(0);
+  const lastTwo = national.slice(-2);
+  const maskLength = Math.max(1, national.length - 3);
+  const maskedMiddle = 'X'.repeat(maskLength);
+  return `${prefix}${firstDigit}${maskedMiddle}${lastTwo}`;
+}

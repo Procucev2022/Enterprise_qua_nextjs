@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import SupplierDossierDrawer from '@/app/category-manager/components/SupplierDossierDrawer';
 import type { RFQItem } from '@/lib/types';
 import * as supplierProfileClient from '@/lib/supplierProfileClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/supplierProfileClient', () => ({
   fetchSupplierCreditHistory: jest.fn(),
@@ -485,7 +486,7 @@ describe('SupplierDossierDrawer', () => {
     const recordBtn = screen.getByRole('button', { name: /Record Communication/i });
     fireEvent.click(recordBtn);
 
-    expect(screen.getByText('Record Supplier Communication')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.sellerDirectory.dossier.compose.title)).toBeInTheDocument();
     const msgInput = screen.getByPlaceholderText(/Type message content/i);
     fireEvent.change(msgInput, { target: { value: 'Follow-up regarding technical queries.' } });
 
@@ -1089,5 +1090,153 @@ describe('SupplierDossierDrawer', () => {
     const creditSearch = screen.getByPlaceholderText('Search credit transactions...');
     fireEvent.change(creditSearch, { target: { value: 'bonus' } });
     expect(screen.getByText('TX-NOTE-SEARCH')).toBeInTheDocument();
+  });
+
+  test('exercises activity log with call outcome, duration, and scheduled followup date in supplier drawer', async () => {
+    (supplierProfileClient.fetchSupplierCommunications as jest.Mock).mockResolvedValue({
+      success: true,
+      data: [],
+    });
+    (supplierProfileClient.recordSupplierCommunication as jest.Mock).mockResolvedValue({
+      success: true,
+    });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        onClose={jest.fn()}
+        sellerRfqs={[]}
+      />
+    );
+
+    // Switch to Communication tab
+    fireEvent.click(screen.getByRole('button', { name: /^Communications/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Record Communication/i })).toBeInTheDocument();
+    });
+    const recordBtn = screen.getByRole('button', { name: /Record Communication/i });
+    fireEvent.click(recordBtn);
+
+    // Channel selection and toggling all channel options
+    const dialog = await screen.findByRole('dialog');
+    const channelSelect = dialog.querySelector('select');
+    if (channelSelect) {
+      fireEvent.change(channelSelect, { target: { value: 'SMS' } });
+      fireEvent.change(channelSelect, { target: { value: 'WHATSAPP' } });
+      fireEvent.change(channelSelect, { target: { value: 'EMAIL' } });
+      fireEvent.change(channelSelect, { target: { value: 'CALL' } });
+    }
+
+    // Recipient input manual change
+    const recipientInput = screen.getByPlaceholderText(/supplier@company\.com|\+91/i);
+    fireEvent.change(recipientInput, { target: { value: '9876543210' } });
+
+    // Call outcome & duration
+    const outcomeSelect = screen.getByDisplayValue('Connected');
+    fireEvent.change(outcomeSelect, { target: { value: 'Wrong Number' } });
+
+    const durationInput = screen.getByPlaceholderText(/e\.g\. 10 mins/i);
+    fireEvent.change(durationInput, { target: { value: '5 mins' } });
+
+    // Next followup date & clear button
+    const followupDateInput = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    expect(followupDateInput).toBeInTheDocument();
+    fireEvent.change(followupDateInput, { target: { value: '2026-11-06T10:00' } });
+
+    const clearBtn = screen.getByRole('button', { name: 'Clear' });
+    fireEvent.click(clearBtn);
+    fireEvent.change(followupDateInput, { target: { value: '2026-11-06T10:00' } });
+
+    // Priority change
+    const prioritySelect = screen.getByDisplayValue(/Priority: Medium/i);
+    fireEvent.change(prioritySelect, { target: { value: 'High' } });
+
+    // Assignee change - with valid and non-matching ids
+    const assigneeSelect = screen.getByDisplayValue(/Pavani/i);
+    fireEvent.change(assigneeSelect, { target: { value: 'exec-2' } });
+    fireEvent.change(assigneeSelect, { target: { value: 'NON_EXISTENT_ID' } });
+
+    // Follow-up notes
+    const followupNotesInput = screen.getByPlaceholderText(/Action items for next scheduled interaction|Agenda or deliverables for next interaction/i);
+    fireEvent.change(followupNotesInput, { target: { value: 'Confirm quotation delivery date' } });
+
+    // Subject & message
+    const subjectInput = screen.getByPlaceholderText(/clarification follow-up|Deadline Follow-up|RFQ Quotation/i);
+    fireEvent.change(subjectInput, { target: { value: 'Delivery SLA follow-up' } });
+    const messageInput = screen.getByPlaceholderText(/Type message content|summary of call/i);
+    fireEvent.change(messageInput, { target: { value: 'Vendor agreed to shorten machining lead time.' } });
+
+    // Save
+    const saveBtn = screen.getByRole('button', { name: /Save & Synchronize Tasks|Dispatch & Record/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(supplierProfileClient.recordSupplierCommunication).toHaveBeenCalledWith(
+        mockSeller.id,
+        expect.objectContaining({
+          channel: 'CALL',
+          callOutcome: 'Wrong Number',
+          duration: '5 mins',
+          nextFollowupDate: '2026-11-06T10:00',
+          followupPriority: 'High',
+          followupAssigneeName: 'Navin Chaudhary',
+          followupNotes: 'Confirm quotation delivery date',
+        })
+      );
+    });
+
+    // Re-open and test API failure branch without error string
+    const recordBtnAgain = await screen.findByRole('button', { name: /Record Communication/i });
+    fireEvent.click(recordBtnAgain);
+    const msgInputAgain = screen.getByPlaceholderText(/Type message content|summary of call/i);
+    fireEvent.change(msgInputAgain, { target: { value: 'Another follow-up note' } });
+
+    (supplierProfileClient.recordSupplierCommunication as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save & Synchronize Tasks|Dispatch & Record/i }));
+
+    await waitFor(() => {
+      expect(supplierProfileClient.recordSupplierCommunication).toHaveBeenCalledTimes(2);
+    });
+
+    // Re-open and test API rejection / exception branch
+    const recordBtnThird = await screen.findByRole('button', { name: /Record Communication/i });
+    fireEvent.click(recordBtnThird);
+    const msgInputThird = screen.getByPlaceholderText(/Type message content|summary of call/i);
+    fireEvent.change(msgInputThird, { target: { value: 'Third attempt' } });
+
+    (supplierProfileClient.recordSupplierCommunication as jest.Mock).mockRejectedValueOnce(
+      new Error('Failed network gateway')
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Save & Synchronize Tasks|Dispatch & Record/i }));
+
+    await waitFor(() => {
+      expect(supplierProfileClient.recordSupplierCommunication).toHaveBeenCalledTimes(3);
+    });
+
+    // Re-open and test Escape key dismissal
+    const recordBtnFourth = await screen.findByRole('button', { name: /Record Communication/i });
+    fireEvent.click(recordBtnFourth);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText(/Type message content|summary of call/i)).toBeNull();
+    });
+
+    // Test sparse seller with neither phone nor email to cover all fallback branches
+    const sparseSeller = {
+      ...mockSeller,
+      phone: undefined,
+      email: undefined,
+    };
+    const { unmount } = render(
+      <SupplierDossierDrawer
+        seller={sparseSeller as any}
+        onClose={jest.fn()}
+      />
+    );
+    unmount();
   });
 });

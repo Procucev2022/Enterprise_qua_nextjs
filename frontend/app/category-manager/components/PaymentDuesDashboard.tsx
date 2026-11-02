@@ -77,7 +77,11 @@ const DEFAULT_COLUMNS: PaymentDuesColumnConfig[] = [
 
 const LOCAL_STORAGE_KEY = 'qua_payment_dues_column_prefs';
 
-export default function PaymentDuesDashboard() {
+export interface PaymentDuesDashboardProps {
+  onSummaryChange?: (summary: PaymentDuesSummary) => void;
+}
+
+export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDashboardProps = {}) {
   const strings = UI_STRINGS.actionCenter.paymentDues;
 
   // Account Data & Summary
@@ -109,6 +113,18 @@ export default function PaymentDuesDashboard() {
   const [columns, setColumns] = useState<PaymentDuesColumnConfig[]>(DEFAULT_COLUMNS);
   const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState<boolean>(false);
   const [draggedColumnIndex, setDraggedColumnIndex] = useState<number | null>(null);
+
+  // Close column settings modal on Escape key
+  useEffect(() => {
+    if (!isColumnSettingsOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsColumnSettingsOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isColumnSettingsOpen]);
 
   // Profile Modals
   const [selectedBuyerId, setSelectedBuyerId] = useState<string | null>(null);
@@ -202,6 +218,10 @@ export default function PaymentDuesDashboard() {
         setAccounts(res.accounts);
         setTotalAccounts(res.total);
         setSummary(res.summary);
+        onSummaryChange?.(res.summary);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('qua_payment_dues_updated', { detail: res.summary }));
+        }
         setLoadError(null);
       }
     } catch (err) {
@@ -211,7 +231,7 @@ export default function PaymentDuesDashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [search, accountTypeFilter, creditsFilter, statusFilter, sortBy, sortOrder, page, pageSize, showToast]);
+  }, [search, accountTypeFilter, creditsFilter, statusFilter, sortBy, sortOrder, page, pageSize, showToast, onSummaryChange]);
 
   useEffect(() => {
     loadData();
@@ -671,7 +691,7 @@ export default function PaymentDuesDashboard() {
   const totalPages = Math.ceil(totalAccounts / pageSize) || 1;
 
   return (
-    <div className="space-y-4 animate-in fade-in duration-200">
+    <div className="w-full space-y-4 animate-in fade-in duration-200">
       {/* Toast alert */}
       {toastMessage && (
         <div
@@ -688,7 +708,7 @@ export default function PaymentDuesDashboard() {
       )}
 
       {/* 6 Dynamic Summary KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3 w-full">
         {/* Low-Credit Accounts */}
         <div
           onClick={() => {
@@ -836,7 +856,7 @@ export default function PaymentDuesDashboard() {
       </div>
 
       {/* TOOLBAR: SEARCH, ACCOUNT TYPE, CREDIT FILTER, ACKNOWLEDGEMENT STATUS, REFRESH, EXPORT CSV & GEAR ICON IN ONE HORIZONTAL ROW */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto no-scrollbar">
+      <div className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto no-scrollbar">
         {/* Search input with maximum available width */}
         <div className="relative flex-1 min-w-[180px]">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
@@ -958,109 +978,139 @@ export default function PaymentDuesDashboard() {
           </a>
 
           {/* Gear Icon - Customize Columns */}
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setIsColumnSettingsOpen((prev) => !prev)}
-              title={strings.toolbar.columnSettings}
-              aria-label={strings.toolbar.columnSettings}
-              className={`p-2 h-8.5 w-8.5 rounded-lg border transition-colors flex items-center justify-center shrink-0 cursor-pointer ${
-                isColumnSettingsOpen
-                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-600 dark:text-emerald-400'
-                  : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
-              }`}
-            >
-              <Settings className="w-3.5 h-3.5" />
-            </button>
-
-            {/* Column Settings Popover */}
-            {isColumnSettingsOpen && (
-              <div className="absolute right-0 top-full mt-2 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl z-40 p-3.5 space-y-3">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-                  <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
-                    <Settings className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>{strings.columnSettings.title}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsColumnSettingsOpen(false)}
-                    aria-label="Close"
-                    title="Close"
-                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                <p className="text-[11px] text-slate-500 leading-tight">
-                  {strings.columnSettings.description}
-                </p>
-
-                {/* Quick Selection Buttons */}
-                <div className="flex items-center justify-between gap-1 text-[11px] pt-1">
-                  <button
-                    type="button"
-                    onClick={handleSelectAllColumns}
-                    className="text-emerald-600 dark:text-emerald-400 hover:underline font-medium cursor-pointer"
-                  >
-                    {strings.columnSettings.selectAll}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleHideAllOptionalColumns}
-                    className="text-slate-500 hover:underline font-medium cursor-pointer"
-                  >
-                    {strings.columnSettings.hideAll}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleResetColumns}
-                    className="text-rose-600 hover:underline font-medium cursor-pointer"
-                  >
-                    {strings.columnSettings.resetToDefault}
-                  </button>
-                </div>
-
-                {/* Draggable & Toggleable Columns List */}
-                <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1 no-scrollbar border-t border-slate-100 dark:border-slate-800 pt-2">
-                  {columns.map((col, index) => (
-                    <div
-                      key={col.key}
-                      draggable
-                      onDragStart={() => handleDragStart(index)}
-                      onDragOver={(e) => handleDragOver(e, index)}
-                      onDrop={() => handleDrop(index)}
-                      className={`flex items-center justify-between px-2 py-1.5 rounded-lg border text-xs cursor-move transition select-none ${
-                        draggedColumnIndex === index
-                          ? 'opacity-40 border-emerald-400 bg-emerald-50/50'
-                          : 'border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60'
-                      }`}
-                    >
-                      <label className="flex items-center gap-2 cursor-pointer flex-1">
-                        <input
-                          type="checkbox"
-                          checked={col.visible}
-                          disabled={col.required}
-                          onChange={() => handleToggleColumnVisibility(col.key)}
-                          className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 disabled:opacity-40"
-                        />
-                        <span className={`text-[12px] ${col.visible ? 'text-slate-900 dark:text-white font-medium' : 'text-slate-400'}`}>
-                          {col.label}
-                        </span>
-                      </label>
-                      <GripVertical className="w-3.5 h-3.5 text-slate-400 hover:text-slate-600 cursor-grab" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={() => setIsColumnSettingsOpen((prev) => !prev)}
+            title={strings.toolbar.columnSettings}
+            aria-label={strings.toolbar.columnSettings}
+            className={`p-2 h-8.5 w-8.5 rounded-lg border transition-colors flex items-center justify-center shrink-0 cursor-pointer ${
+              isColumnSettingsOpen
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-600 dark:text-emerald-400'
+                : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
+            }`}
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 
+      {/* Column Customization Modal - Centered Popup with Background Overlay */}
+      {isColumnSettingsOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Customize Columns"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsColumnSettingsOpen(false);
+            }
+          }}
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+            {/* Modal Header */}
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">Column Settings</h3>
+                  <p className="text-[11px] text-slate-500">Show, hide, and drag handles to reorder columns</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsColumnSettingsOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                aria-label="Close"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick Actions (Select All, Hide Optional) */}
+            <div className="px-4 py-2 bg-slate-50/80 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+              <button
+                type="button"
+                onClick={handleSelectAllColumns}
+                className="text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                onClick={handleHideAllOptionalColumns}
+                className="text-xs font-medium text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 cursor-pointer"
+              >
+                Hide All Optional
+              </button>
+            </div>
+
+            {/* Column List with Drag-and-Drop */}
+            <div className="p-4 overflow-y-auto space-y-1 divide-y divide-slate-100 dark:divide-slate-800/60 flex-1">
+              {columns.map((col, idx) => (
+                <div
+                  key={col.key}
+                  draggable
+                  onDragStart={() => handleDragStart(idx)}
+                  onDragOver={(e) => handleDragOver(e, idx)}
+                  onDrop={() => handleDrop(idx)}
+                  className={`pt-2 pb-2 first:pt-0 flex items-center justify-between gap-3 px-2 rounded-lg transition-colors cursor-move ${
+                    draggedColumnIndex === idx
+                      ? 'bg-emerald-50 dark:bg-emerald-950/30 opacity-50'
+                      : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <GripVertical className="w-4 h-4 text-slate-400 shrink-0 cursor-grab active:cursor-grabbing" />
+                    <label
+                      htmlFor={`col-toggle-${col.key}`}
+                      className="flex items-center gap-2.5 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer select-none truncate"
+                    >
+                      <input
+                        type="checkbox"
+                        id={`col-toggle-${col.key}`}
+                        checked={col.visible}
+                        disabled={col.required}
+                        onChange={() => handleToggleColumnVisibility(col.key)}
+                        className="rounded border-slate-300 dark:border-slate-700 text-emerald-600 focus:ring-emerald-500 disabled:opacity-50 cursor-pointer"
+                      />
+                      <span className={col.required ? 'font-semibold text-slate-900 dark:text-slate-100' : ''}>
+                        {col.label}
+                      </span>
+                      {col.required && <span className="ml-1 text-[10px] text-slate-400 font-normal">(locked)</span>}
+                    </label>
+                  </div>
+                  <span className="text-[11px] text-slate-400 font-mono shrink-0">#{idx + 1}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Modal Footer with Reset and Done */}
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={handleResetColumns}
+                className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 font-medium transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset to Default</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsColumnSettingsOpen(false)}
+                className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Structured Table */}
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto no-scrollbar">
+      <div className="w-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+        <div className="w-full overflow-x-auto no-scrollbar">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 select-none">

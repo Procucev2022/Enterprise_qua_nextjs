@@ -583,32 +583,32 @@ function LoginPageContent() {
     }
   };
 
-  // ── Shared style tokens ────────────────────────────────────────────────────
+  // ── Shared style tokens (fixed, comfortable spacing: no more dvh-squeezed paddings) ──
   const fieldLabel =
-    'block text-[10px] font-bold text-[#1E293B] dark:text-gray-300 uppercase tracking-wider mb-0.5';
+    'block text-[11px] font-bold text-[#1E293B] dark:text-gray-300 uppercase tracking-wider mb-1.5';
   const inputBase =
-    'text-xs border border-slate-200 dark:border-gray-700 rounded-xl w-full text-slate-800 dark:text-white bg-white dark:bg-gray-800 placeholder:text-slate-500 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-[#1D5BD8] transition-all';
-  const fieldInput = `${inputBase} px-3 py-[clamp(6px,1.2dvh,12px)]`;
-  const iconFieldInput = `${inputBase} pl-9 pr-3 py-[clamp(6px,1.2dvh,12px)]`;
-  const plainInput = `${inputBase} px-3 py-[clamp(6px,1.2dvh,12px)]`;
-  const otpInput = `${inputBase} px-3 py-[clamp(6px,1.2dvh,12px)] font-mono font-bold tracking-widest text-center`;
-  const otpIconInput = `${inputBase} pl-9 pr-9 py-[clamp(6px,1.2dvh,12px)] font-mono font-bold tracking-widest text-center`;
+    'text-sm border border-slate-200 dark:border-gray-700 rounded-xl w-full text-slate-800 dark:text-white bg-white dark:bg-gray-800 placeholder:text-slate-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-[#1D5BD8] transition-all';
+  const fieldInput = `${inputBase} px-3.5 py-[clamp(6px,1.2dvh,10px)]`;
+  const iconFieldInput = `${inputBase} pl-9 pr-3 py-[clamp(6px,1.2dvh,10px)]`;
+  const plainInput = `${inputBase} px-3.5 py-[clamp(6px,1.2dvh,10px)]`;
+  const otpInput = `${inputBase} px-3.5 py-[clamp(6px,1.2dvh,10px)] font-mono font-bold tracking-widest text-center`;
+  const otpIconInput = `${inputBase} pl-9 pr-9 py-[clamp(6px,1.2dvh,10px)] font-mono font-bold tracking-widest text-center`;
   const primaryBtn =
-    'w-full text-xs sm:text-sm font-bold py-[clamp(8px,1.4dvh,14px)] px-4 rounded-xl text-white bg-gradient-to-r from-[#1546A5] to-[#2468DC] hover:brightness-110 shadow-md shadow-blue-700/20 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed transition-all';
+    'w-full text-sm font-bold py-[clamp(8px,1.4dvh,12px)] px-4 rounded-xl text-white bg-gradient-to-r from-[#1546A5] to-[#2468DC] hover:brightness-110 shadow-md shadow-blue-700/20 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed transition-all';
   const iconClass = 'absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none';
-  const helperText = 'text-[9.5px] leading-tight text-slate-500 dark:text-gray-400 italic block mt-0.5';
+  const helperText = 'text-[11px] leading-snug text-slate-500 dark:text-gray-400 italic block mt-1.5';
 
   const otpModeActive = loginAuthMode === 'email_otp';
 
   const tabClass = (active: boolean) =>
-    `pb-1.5 -mb-px text-[13px] sm:text-sm border-b-2 transition-all ${
+    `pb-2.5 -mb-px text-sm sm:text-base border-b-2 transition-all ${
       active
         ? 'font-bold text-[#0B1B3D] dark:text-white border-[#1D5BD8]'
         : 'font-semibold text-slate-500 dark:text-gray-500 border-transparent hover:text-slate-700 dark:hover:text-gray-300'
     }`;
 
   const modeClass = (active: boolean) =>
-    `flex-1 py-1 rounded-lg text-xs leading-4 transition-all flex items-center justify-center ${
+    `flex-1 py-1.5 rounded-lg text-sm leading-5 transition-all flex items-center justify-center ${
       active
         ? 'bg-white dark:bg-gray-900 text-[#0B1B3D] dark:text-white font-bold shadow-[0_1px_3px_rgba(15,23,42,0.12)]'
         : 'text-slate-600 dark:text-gray-400 font-semibold hover:text-slate-800'
@@ -616,37 +616,48 @@ function LoginPageContent() {
 
   return (
     <div
-      className="login-root w-full bg-[#F0F4FA] dark:bg-[#070B14] flex flex-col overflow-x-hidden lg:overflow-hidden"
+      className="login-root w-full bg-[#F0F4FA] dark:bg-[#070B14] flex flex-col overflow-x-hidden"
       style={{ ['--hdr' as any]: `${headerH}px` }}
     >
       <style>{`
+        /* Page is at least the free viewport height, but GROWS with content (never clips or overlaps). */
         .login-root { min-height: calc(100dvh - var(--hdr)); }
-        @media (min-width: 1024px) { .login-root { height: calc(100dvh - var(--hdr)); } }
-        /* Spacing that grows with viewport height so content fills the space between header and banner. */
-        .fluid-stack > * + * { margin-top: clamp(6px, 1.5dvh, 18px); }
-        .fluid-stack-sm > * + * { margin-top: clamp(6px, 1.1dvh, 14px); }
+        @media (min-width: 1024px) and (min-height: 720px) { .login-root { height: calc(100dvh - var(--hdr)); overflow: hidden; } }
+        /* Fixed, comfortable vertical rhythm between stacked form blocks. */
+        .fluid-stack > * + * { margin-top: clamp(6px, 1.4dvh, 14px); }
+        .fluid-stack-sm > * + * { margin-top: clamp(6px, 1.2dvh, 12px); }
         /* Hide scrollbars on this page; scrolling still works. */
         html, body, .login-root, .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
         html::-webkit-scrollbar, body::-webkit-scrollbar,
         .login-root::-webkit-scrollbar, .no-scrollbar::-webkit-scrollbar { display: none; width: 0; height: 0; }
+        .register-form-scroll { scrollbar-width: thin !important; scrollbar-color: #94a3b8 #f1f5f9 !important; }
+        .dark .register-form-scroll { scrollbar-color: #64748b #1e293b !important; }
+        .register-form-scroll::-webkit-scrollbar { display: block !important; width: 6px !important; }
+        .register-form-scroll::-webkit-scrollbar-track { background: #f1f5f9 !important; border-radius: 9999px; }
+        .dark .register-form-scroll::-webkit-scrollbar-track { background: #1e293b !important; }
+        .register-form-scroll::-webkit-scrollbar-thumb { background: #94a3b8 !important; border-radius: 9999px; }
+        .register-form-scroll::-webkit-scrollbar-thumb:hover { background: #64748b !important; }
+        .dark .register-form-scroll::-webkit-scrollbar-thumb { background: #64748b !important; }
+        .dark .register-form-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8 !important; }
       `}</style>
 
-      {/* ── Main Hero Section: fills all free space, content centered, no extra top/bottom gap ── */}
+      {/* ── Main Hero Section: takes the free space, content vertically centred, modest padding ── */}
       <div className="flex-1 min-h-0 flex">
-        <div className="max-w-[1280px] mx-auto w-full lg:h-full px-4 sm:px-6 lg:px-10 xl:px-16 py-[clamp(8px,2.5dvh,36px)] flex flex-col lg:flex-row lg:items-stretch justify-between gap-5 lg:gap-10 xl:gap-12">
+        <div className="max-w-[1280px] mx-auto w-full px-4 sm:px-6 lg:px-10 xl:px-16 py-3 lg:py-2 lg:h-full flex flex-col lg:flex-row lg:items-stretch justify-between gap-6 lg:gap-12 xl:gap-16">
 
-          {/* ── Left Column: three groups, spaced cleanly ── */}
-          <div className="order-2 lg:order-1 flex-1 min-w-0 w-full lg:max-w-[680px] flex flex-col gap-4 lg:gap-[clamp(16px,3.2dvh,36px)] lg:justify-center">
+          {/* ── Left Column ── */}
+          <div className="order-2 lg:order-1 flex-1 min-w-0 w-full lg:max-w-[700px] flex flex-col gap-6 lg:gap-[clamp(14px,4.2dvh,46px)] lg:justify-center">
             {/* Group 1: kicker + heading */}
             <div>
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className="w-4 h-[2px] bg-[#1D5BD8] rounded-full inline-block shrink-0" />
-                <span className="text-[10px] sm:text-[11px] lg:text-[clamp(11px,1.8dvh,15px)] font-black uppercase tracking-[0.12em] text-[#1D5BD8]">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="w-5 h-[2px] bg-[#1D5BD8] rounded-full inline-block shrink-0" />
+                <span className="text-[11px] sm:text-xs lg:text-sm font-black uppercase tracking-[0.12em] text-[#1D5BD8]">
                   Procurement Automation · PR to Comparison
                 </span>
               </div>
 
-              <h1 className="text-[26px] leading-[1.12] sm:text-3xl lg:text-[clamp(32px,6.6dvh,68px)] font-black tracking-tight text-[#0B1B3D] dark:text-white">
+              {/* leading raised from 1.12 → 1.2 so descenders (p) no longer hit the next line */}
+              <h1 className="text-[28px] leading-[1.2] sm:text-4xl lg:text-[clamp(28px,min(3.4vw,6dvh),58px)] font-extrabold tracking-tight text-[#0B1B3D] dark:text-white">
                 Your procurement starts <br className="hidden sm:inline" />
                 with a <span className="text-[#1D5BD8]">simple email.</span>
               </h1>
@@ -654,56 +665,56 @@ function LoginPageContent() {
 
             {/* Group 2: email CTA + subtext */}
             <div>
-              <div className="text-[10px] sm:text-[11px] lg:text-[clamp(11px,1.7dvh,14px)] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-[0.1em] mb-1">
+              <div className="text-[11px] sm:text-xs lg:text-[13px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-[0.1em] mb-2.5">
                 Email your requirement to
               </div>
               <a
                 href="mailto:RFQ@Procucev.com"
-                className="inline-flex max-w-full items-center gap-2.5 lg:gap-3 px-3.5 sm:px-4 py-2 sm:py-2.5 lg:px-[clamp(16px,2.6dvh,30px)] lg:py-[clamp(10px,2dvh,20px)] rounded-xl bg-gradient-to-r from-[#0C2E68] via-[#2457D6] to-[#1E90D6] text-white shadow-lg shadow-blue-900/15 hover:brightness-110 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer"
+                className="inline-flex max-w-full items-center gap-3 px-4 py-2.5 sm:px-5 sm:py-3 lg:px-6 lg:py-3.5 rounded-xl bg-gradient-to-r from-[#0C2E68] via-[#2457D6] to-[#1E90D6] text-white shadow-lg shadow-blue-900/15 hover:brightness-110 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer"
                 title="Click to email your RFQ requirement"
               >
-                <Mail className="w-5 h-5 sm:w-5 sm:h-5 lg:w-[clamp(24px,3.8dvh,38px)] lg:h-[clamp(24px,3.8dvh,38px)] text-white shrink-0" strokeWidth={1.75} />
-                <span className="whitespace-nowrap font-extrabold leading-none tracking-tight text-lg sm:text-xl lg:text-[clamp(22px,3.8dvh,38px)]">
+                <Mail className="w-6 h-6 lg:w-8 lg:h-8 text-white shrink-0" strokeWidth={1.75} />
+                <span className="whitespace-nowrap font-extrabold leading-tight tracking-tight text-xl sm:text-2xl lg:text-[clamp(22px,2.4vw,34px)]">
                   RFQ@Procucev.com
                 </span>
               </a>
 
-              <p className="mt-1.5 text-slate-600 dark:text-slate-300 text-xs sm:text-sm lg:text-[clamp(14px,2.3dvh,21px)] font-normal max-w-[40rem] leading-snug">
+              <p className="mt-3 text-slate-600 dark:text-slate-300 text-sm sm:text-base xl:text-lg font-normal max-w-[40rem] leading-snug xl:leading-relaxed">
                 Email it once. QUA AI automates Procurement from Purchase Requisition to Comparison — no portal hopping, no manual chasing.
               </p>
             </div>
 
             {/* Group 3: pipeline cards */}
             <div className="w-full">
-              <div className="text-[10px] sm:text-[11px] lg:text-[clamp(11px,1.7dvh,14px)] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-[0.1em] mb-1.5">
+              <div className="text-[11px] sm:text-xs lg:text-[13px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-[0.1em] mb-2.5">
                 Automated from PR to Comparison
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {PIPELINE_STEPS.map((s) => (
                   <div
                     key={s.n}
                     className={
                       s.highlight
-                        ? 'bg-gradient-to-br from-[#0F3277] to-[#1B49A3] text-white rounded-xl p-2 sm:p-2.5 lg:py-[clamp(8px,2dvh,24px)] border border-[#113A7E] shadow-sm'
-                        : 'bg-white dark:bg-slate-900 rounded-xl p-2 sm:p-2.5 lg:py-[clamp(8px,2dvh,24px)] border border-slate-200/80 dark:border-slate-800 shadow-xs'
+                        ? 'bg-gradient-to-br from-[#0F3277] to-[#1B49A3] text-white rounded-xl p-3 lg:p-3 border border-[#113A7E] shadow-sm'
+                        : 'bg-white dark:bg-slate-900 rounded-xl p-3 lg:p-3 border border-slate-200/80 dark:border-slate-800 shadow-xs'
                     }
                   >
                     <div
-                      className={`w-5 h-5 lg:w-[clamp(20px,3.2dvh,32px)] lg:h-[clamp(20px,3.2dvh,32px)] rounded-full flex items-center justify-center font-bold text-[11px] lg:text-[clamp(11px,1.8dvh,16px)] mb-1 ${
+                      className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs mb-2 ${
                         s.highlight ? 'bg-[#38C3F2] text-[#0B1B3D]' : 'bg-[#0E2A5C] text-white'
                       }`}
                     >
                       {s.n}
                     </div>
                     <div
-                      className={`font-bold text-[11px] lg:text-[clamp(12px,2dvh,17px)] leading-snug ${
+                      className={`font-bold text-sm leading-snug ${
                         s.highlight ? 'text-white' : 'text-[#0B1B3D] dark:text-white'
                       }`}
                     >
                       {s.title}
                     </div>
                     <div
-                      className={`text-[9.5px] lg:text-[clamp(10.5px,1.6dvh,14px)] mt-0.5 leading-snug ${
+                      className={`text-xs mt-1 leading-snug ${
                         s.highlight ? 'text-blue-200' : 'text-slate-500 dark:text-slate-400'
                       }`}
                     >
@@ -716,10 +727,10 @@ function LoginPageContent() {
           </div>
 
           {/* ── Right Column: Auth Card (first on phones/tablets, right on desktop) ── */}
-          <div className="order-1 lg:order-2 w-full max-w-[440px] mx-auto lg:mx-0 lg:w-[370px] xl:w-[390px] lg:shrink-0 bg-white dark:bg-slate-900 rounded-[22px] shadow-[0_20px_45px_-15px_rgba(30,64,175,0.18)] dark:shadow-none border border-slate-200/80 dark:border-slate-800 px-5 py-[clamp(8px,1.4dvh,16px)] sm:px-7 flex flex-col self-center">
-            <div>
+          <div className={`order-1 lg:order-2 w-full max-w-[460px] mx-auto lg:mx-0 lg:w-[360px] xl:w-[400px] lg:shrink-0 lg:self-stretch bg-white dark:bg-slate-900 rounded-[22px] shadow-[0_20px_45px_-15px_rgba(30,64,175,0.18)] dark:shadow-none border border-slate-200/80 dark:border-slate-800 px-5 pt-3 pb-6 sm:px-7 sm:pt-3 sm:pb-7 flex flex-col ${authTab === 'register' ? 'max-h-[min(90vh,620px)]' : ''}`}>
+            <div className="flex-1 min-h-0 flex flex-col">
               {/* Tabs */}
-              <div className="flex items-center gap-5 border-b border-slate-200 dark:border-gray-800">
+              <div className="flex items-center gap-6 border-b border-slate-200 dark:border-gray-800">
                 <button
                   type="button"
                   onClick={() => { setAuthTab('login'); setLoginOtpSent(false); }}
@@ -736,18 +747,18 @@ function LoginPageContent() {
                 </button>
               </div>
 
-              <div className="pt-[clamp(8px,1.6dvh,18px)] pb-1 fluid-stack">
+              <div className="pt-3 flex-1 min-h-0 flex flex-col">
                 {authTab === 'login' ? (
-                  <div className="fluid-stack">
+                  <div className="flex-1 min-h-0 flex flex-col justify-between gap-2">
                     <div>
-                      <h3 className="text-base sm:text-lg font-bold text-[#0B1B3D] dark:text-white tracking-tight">Welcome back</h3>
-                      <p className="text-[11px] text-slate-600 dark:text-gray-400 mt-0.5 leading-snug">
+                      <h3 className="text-lg sm:text-xl font-bold text-[#0B1B3D] dark:text-white tracking-tight">Welcome back</h3>
+                      <p className="text-xs text-slate-600 dark:text-gray-400 mt-1 leading-relaxed">
                         Sign in with your Procucev account. Credentials are verified against the enterprise user directory.
                       </p>
                     </div>
 
                     {/* Auth method switcher */}
-                    <div className="flex rounded-xl bg-[#EEF2F6] dark:bg-gray-800/80 p-0.5">
+                    <div className="flex rounded-xl bg-[#EEF2F6] dark:bg-gray-800/80 p-1">
                       <button
                         type="button"
                         onClick={() => { setLoginAuthMode('password'); setLoginOtpSent(false); }}
@@ -766,7 +777,7 @@ function LoginPageContent() {
 
                     {!otpModeActive ? (
                       /* PASSWORD SIGN-IN */
-                      <form onSubmit={handlePasswordLogin} className="fluid-stack">
+                      <form onSubmit={handlePasswordLogin} className="flex-1 flex flex-col justify-between gap-2">
                         <div>
                           <label htmlFor="login-email" className={fieldLabel}>Registered Email ID</label>
                           <input
@@ -809,16 +820,18 @@ function LoginPageContent() {
                           required
                           showLeadingIcon={false}
                           labelClassName={fieldLabel}
-                          inputClassName={`${inputBase} pl-3 pr-8 py-[clamp(6px,1.2dvh,12px)]`}
+                          inputClassName={`${inputBase} pl-3.5 pr-10 py-[clamp(6px,1.2dvh,10px)]`}
                         />
 
-                        <button type="submit" disabled={submitting} className={primaryBtn}>
-                          {submitting ? 'Verifying...' : 'Sign In'} <ArrowRight size={14} />
-                        </button>
+                        <div className="pt-1 pb-2">
+                          <button type="submit" disabled={submitting} className={primaryBtn}>
+                            {submitting ? 'Verifying...' : 'Sign In'} <ArrowRight size={14} />
+                          </button>
+                        </div>
                       </form>
                     ) : !loginOtpSent ? (
                       /* REQUEST OTP */
-                      <form onSubmit={handleRequestOtp} className="fluid-stack">
+                      <form onSubmit={handleRequestOtp} className="flex-1 flex flex-col justify-between gap-2">
                         <div>
                           <label htmlFor="otp-email" className={fieldLabel}>Registered Email ID</label>
                           <input
@@ -852,14 +865,16 @@ function LoginPageContent() {
                           </span>
                         </div>
 
-                        <button type="submit" disabled={submitting} className={primaryBtn}>
-                          {submitting ? 'Sending...' : 'Request Login OTP'} <ArrowRight size={14} />
-                        </button>
+                        <div className="pt-1 pb-2">
+                          <button type="submit" disabled={submitting} className={primaryBtn}>
+                            {submitting ? 'Sending...' : 'Request Login OTP'} <ArrowRight size={14} />
+                          </button>
+                        </div>
                       </form>
                     ) : (
                       /* VERIFY OTP */
-                      <form onSubmit={handleVerifyOtp} className="fluid-stack">
-                        <div className="p-2 sm:p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-[10.5px] text-blue-700 dark:text-blue-300 border border-blue-200/60 break-words">
+                      <form onSubmit={handleVerifyOtp} className="flex-1 flex flex-col justify-between gap-2">
+                        <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-xs text-blue-700 dark:text-blue-300 border border-blue-200/60 break-words">
                           A verification code has been emailed to <strong>{loginEmail}</strong>. Enter it below to sign in.
                         </div>
 
@@ -891,8 +906,8 @@ function LoginPageContent() {
                           </button>
                         </div>
 
-                        <div className="flex gap-2">
-                          <button type="button" onClick={() => setLoginOtpSent(false)} className="btn btn-secondary text-xs w-1/3 py-2 rounded-xl">
+                        <div className="flex gap-2 pt-1">
+                          <button type="button" onClick={() => setLoginOtpSent(false)} className="btn btn-secondary text-sm w-1/3 py-3 rounded-xl">
                             Back
                           </button>
                           <button type="submit" disabled={submitting} className={`${primaryBtn} w-2/3`}>
@@ -904,7 +919,7 @@ function LoginPageContent() {
                   </div>
                 ) : (
                   /* ── REGISTER ── */
-                  <div className="fluid-stack">
+                  <div className="flex-1 min-h-0 flex flex-col gap-3">
                     {/* Role Switcher for Registration */}
                     <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-gray-800 rounded-xl">
                       <button
@@ -913,13 +928,13 @@ function LoginPageContent() {
                           setSelectedRegRole('buyer');
                           setRegStep('form');
                         }}
-                        className={`py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                        className={`py-2 px-3 rounded-lg text-sm font-bold flex items-center justify-center gap-1.5 transition-all ${
                           selectedRegRole === 'buyer'
                             ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
                             : 'text-slate-500 dark:text-gray-400 hover:text-slate-700'
                         }`}
                       >
-                        <Building2 size={13} />
+                        <Building2 size={14} />
                         <span>Buyer</span>
                       </button>
                       <button
@@ -928,27 +943,27 @@ function LoginPageContent() {
                           setSelectedRegRole('vendor');
                           setRegStep('form');
                         }}
-                        className={`py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                        className={`py-2 px-3 rounded-lg text-sm font-bold flex items-center justify-center gap-1.5 transition-all ${
                           selectedRegRole === 'vendor'
                             ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
                             : 'text-slate-500 dark:text-gray-400 hover:text-slate-700'
                         }`}
                       >
-                        <Truck size={13} />
+                        <Truck size={14} />
                         <span>Vendor Partner</span>
                       </button>
                     </div>
 
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="text-base font-bold text-slate-800 dark:text-white">
+                        <h3 className="text-base sm:text-lg font-bold text-slate-800 dark:text-white">
                           {selectedRegRole === 'buyer' ? 'Create Buyer Account' : 'Create Vendor Partner Account'}
                         </h3>
                         <span className="badge badge-amber font-bold text-[10px]">
                           {selectedRegRole === 'buyer' ? '5 Free RFQs' : '5 Free Quotes'}
                         </span>
                       </div>
-                      <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5 leading-snug">
+                      <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 leading-relaxed">
                         {selectedRegRole === 'buyer'
                           ? 'Your account is created in the Procucev enterprise user directory and works across every Procucev application.'
                           : 'Join the verified supplier roster and respond to live enterprise RFQs with free quotation credits.'}
@@ -958,7 +973,7 @@ function LoginPageContent() {
                     {regStep === 'form' ? (
                       <form
                         onSubmit={handleInitiateRegister}
-                        className="fluid-stack-sm max-h-[clamp(200px,46dvh,420px)] overflow-y-auto no-scrollbar pr-1"
+                        className="fluid-stack-sm flex-1 min-h-0 max-h-[clamp(280px,44dvh,400px)] overflow-y-auto register-form-scroll pr-2 overscroll-contain"
                       >
                         <div>
                           <label htmlFor="reg-name" className={fieldLabel}>
@@ -970,7 +985,7 @@ function LoginPageContent() {
                               id="reg-name"
                               type="text"
                               autoComplete="name"
-                              placeholder={selectedRegRole === 'buyer' ? 'e.g. Navin Chaudhary' : 'e.g. Rajesh Kumar'}
+                              placeholder={selectedRegRole === 'buyer' ? 'e.g. John Doe' : 'e.g. Jane Smith'}
                               value={regName}
                               onChange={(e) => setRegName(e.target.value)}
                               className={iconFieldInput}
@@ -992,8 +1007,8 @@ function LoginPageContent() {
                               autoComplete="organization"
                               placeholder={
                                 selectedRegRole === 'buyer'
-                                  ? 'e.g. Larsen & Toubro Procurement'
-                                  : 'e.g. Precision Engineering Works Pvt Ltd'
+                                  ? 'e.g. Acme Enterprises'
+                                  : 'e.g. Apex Industrial Solutions Pvt Ltd'
                               }
                               value={regOrgName}
                               onChange={(e) => setRegOrgName(e.target.value)}
@@ -1025,24 +1040,24 @@ function LoginPageContent() {
                         </div>
 
                         {/* Pincode + City side by side, State full width */}
-                        <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 items-start">
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-3 items-start">
                           <div>
-                            <div className="flex items-center justify-between min-h-[16px]">
+                            <div className="flex items-center justify-between min-h-[20px]">
                               <label htmlFor="reg-pincode" className={fieldLabel}>
                                 Pincode <span className="text-red-500">*</span>
                               </label>
                               {regPincodeValidating && (
-                                <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
+                                <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1 mb-1.5">
                                   <Loader2 size={10} className="animate-spin" /> Checking
                                 </span>
                               )}
                               {!regPincodeValidating && regPincodePostOffices.length > 0 && !regPincodeError && (
-                                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
+                                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5 mb-1.5">
                                   <CheckCircle2 size={10} /> Valid
                                 </span>
                               )}
                               {!regPincodeValidating && regPincodeError && regPincode.trim().length >= 6 && (
-                                <span className="text-[10px] font-bold text-rose-500 flex items-center gap-0.5">
+                                <span className="text-[10px] font-bold text-rose-500 flex items-center gap-0.5 mb-1.5">
                                   <AlertCircle size={10} /> Invalid
                                 </span>
                               )}
@@ -1059,11 +1074,11 @@ function LoginPageContent() {
                               required
                             />
                             {regPincodeError && regPincode.trim().length >= 6 && (
-                              <p className="text-[10px] text-rose-500 font-medium mt-1">{regPincodeError}</p>
+                              <p className="text-[11px] text-rose-500 font-medium mt-1.5">{regPincodeError}</p>
                             )}
                           </div>
                           <div>
-                            <div className="flex items-center min-h-[16px]">
+                            <div className="flex items-center min-h-[20px]">
                               <label htmlFor="reg-city" className={fieldLabel}>
                                 City <span className="text-red-500">*</span>
                               </label>
@@ -1079,7 +1094,7 @@ function LoginPageContent() {
                             />
                           </div>
                           <div className="col-span-2">
-                            <div className="flex items-center min-h-[16px]">
+                            <div className="flex items-center min-h-[20px]">
                               <label htmlFor="reg-state" className={fieldLabel}>
                                 State <span className="text-red-500">*</span>
                               </label>
@@ -1147,13 +1162,15 @@ function LoginPageContent() {
                           required
                         />
 
-                        <button type="submit" disabled={submitting} className={primaryBtn} aria-label="Create Account">
-                          <span>Create Account</span> <ArrowRight size={14} />
-                        </button>
+                        <div className="pt-1 pb-2">
+                          <button type="submit" disabled={submitting} className={primaryBtn} aria-label="Create Account">
+                            <span>Create Account</span> <ArrowRight size={14} />
+                          </button>
+                        </div>
                       </form>
                     ) : (
                       /* ── Dual Email & Mobile OTP Verification Step ── */
-                      <form onSubmit={handleVerifyAndCompleteRegistration} className="fluid-stack animate-fade-in">
+                      <form onSubmit={handleVerifyAndCompleteRegistration} className="fluid-stack animate-fade-in flex-1 min-h-0 max-h-[clamp(280px,44dvh,400px)] overflow-y-auto register-form-scroll pr-2 pb-2 overscroll-contain">
                         <div className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/60 dark:border-indigo-800/60 space-y-1">
                           <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300">
                             <ShieldCheck size={14} />
@@ -1222,11 +1239,11 @@ function LoginPageContent() {
                           </button>
                         </div>
 
-                        <div className="flex gap-2 pt-2">
+                        <div className="flex gap-2 pt-1">
                           <button
                             type="button"
                             onClick={() => setRegStep('form')}
-                            className="btn btn-secondary text-xs w-1/3 py-3 rounded-xl"
+                            className="btn btn-secondary text-sm w-1/3 py-3 rounded-xl"
                           >
                             Back
                           </button>
@@ -1244,49 +1261,49 @@ function LoginPageContent() {
         </div>
       </div>
 
-      {/* ── Bottom Dark Banner ── */}
-      <div className="w-full bg-gradient-to-r from-[#0A1A3C] via-[#0D2250] to-[#1A43A0] text-white pt-2.5 pb-2 sm:pt-2.5 sm:pb-2 border-t border-blue-900/40 shrink-0">
+      {/* ── Bottom Dark Banner: sits flush under the hero ── */}
+      <div className="w-full bg-gradient-to-r from-[#0A1A3C] via-[#0D2250] to-[#1A43A0] text-white py-3 border-t border-blue-900/40 shrink-0">
         <div className="max-w-[1280px] mx-auto px-5 sm:px-6 lg:px-10 xl:px-16">
-          <div className="flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-6">
-            <h2 className="lg:w-[260px] shrink-0 text-sm sm:text-base font-bold text-white leading-tight">
+          <div className="flex flex-col xl:flex-row xl:items-center gap-3 xl:gap-8">
+            <h2 className="xl:w-[260px] shrink-0 text-base font-bold text-white leading-snug">
               Enterprise AI Sourcing &amp; Logistics Matching Roster
             </h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 lg:gap-5 flex-1 min-w-0">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 lg:gap-6 flex-1 min-w-0">
               {/* Pillar 1 */}
-              <div className="flex items-start gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-[#4A2144] text-white/90 flex items-center justify-center shrink-0">
-                  <Zap size={14} />
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#4A2144] text-white/90 flex items-center justify-center shrink-0">
+                  <Zap size={15} />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-sky-300 leading-snug">Mode 1, 2, and 3 Sourcing Engines</h4>
-                  <p className="text-[10px] text-slate-300 mt-0.5 leading-snug">
+                  <h4 className="text-[13px] xl:text-sm font-bold text-sky-300 leading-snug">Mode 1, 2, and 3 Sourcing Engines</h4>
+                  <p className="text-[11px] xl:text-xs text-slate-300 mt-0.5 leading-snug">
                     Deploy flexible private rosters, hybrid base networks, or 360-degree AI evaluations dynamically.
                   </p>
                 </div>
               </div>
 
               {/* Pillar 2 */}
-              <div className="flex items-start gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-[#123A5E] text-white/90 flex items-center justify-center shrink-0">
-                  <Layers size={14} />
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#123A5E] text-white/90 flex items-center justify-center shrink-0">
+                  <Layers size={15} />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-sky-300 leading-snug">Automated Chaser Outreach</h4>
-                  <p className="text-[10px] text-slate-300 mt-0.5 leading-snug">
+                  <h4 className="text-[13px] xl:text-sm font-bold text-sky-300 leading-snug">Automated Chaser Outreach</h4>
+                  <p className="text-[11px] xl:text-xs text-slate-300 mt-0.5 leading-snug">
                     Sequenced SMS, Voice Bot Calls, and WhatsApp follow-ups governed strictly by IST working-hour rules.
                   </p>
                 </div>
               </div>
 
               {/* Pillar 3 */}
-              <div className="flex items-start gap-2.5">
-                <div className="w-7 h-7 rounded-lg bg-[#3E2F85] text-white/90 flex items-center justify-center shrink-0">
-                  <ShieldCheck size={14} />
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#3E2F85] text-white/90 flex items-center justify-center shrink-0">
+                  <ShieldCheck size={15} />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-sky-300 leading-snug">OCR Ingestion &amp; Audit Trails</h4>
-                  <p className="text-[10px] text-slate-300 mt-0.5 leading-snug">
+                  <h4 className="text-[13px] xl:text-sm font-bold text-sky-300 leading-snug">OCR Ingestion &amp; Audit Trails</h4>
+                  <p className="text-[11px] xl:text-xs text-slate-300 mt-0.5 leading-snug">
                     Autonomous quote extraction from incoming emails with secure cryptographic logging.
                   </p>
                 </div>

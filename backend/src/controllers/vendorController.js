@@ -137,6 +137,49 @@ function withoutTemporaryPassword(vendor) {
  * notes. Everything else (category, contacts, compliance creds,
  * rating) is safe to expose in the public directory.
  */
+/**
+ * Masks an email for public directory responses (e.g. "sXXXX@gmail.com" or "mXXXX@japl.org").
+ * Ensures raw email is never exposed in the API response or Network tab inspection.
+ */
+function maskPublicEmail(email) {
+  if (!email || typeof email !== 'string') return null;
+  const trimmed = email.trim();
+  const atIndex = trimmed.indexOf('@');
+  if (atIndex <= 0) return null;
+  const username = trimmed.slice(0, atIndex);
+  const domain = trimmed.slice(atIndex);
+  return `${username.charAt(0)}XXXX${domain}`;
+}
+
+/**
+ * Masks a phone number for public directory responses (e.g. "9XXXXXXX09").
+ * Ensures raw phone is never exposed in the API response or Network tab inspection.
+ */
+function maskPublicPhone(phone) {
+  if (!phone || typeof phone !== 'string') return null;
+  const trimmed = phone.trim();
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length < 4) return null;
+
+  let prefix = '';
+  let nationalNumber = digits;
+  if (trimmed.startsWith('+91') || (digits.length === 12 && digits.startsWith('91'))) {
+    prefix = '+91 ';
+    nationalNumber = digits.slice(-10);
+  } else if (trimmed.startsWith('+')) {
+    prefix = '+ ';
+    nationalNumber = digits.slice(-10);
+  } else if (digits.length > 10) {
+    nationalNumber = digits.slice(-10);
+  }
+
+  const firstDigit = nationalNumber.charAt(0);
+  const lastTwo = nationalNumber.slice(-2);
+  const maskLength = Math.max(1, nationalNumber.length - 3);
+  const maskedMiddle = 'X'.repeat(maskLength);
+  return `${prefix}${firstDigit}${maskedMiddle}${lastTwo}`;
+}
+
 function sanitizePublicVendor(vendor) {
   if (!vendor || typeof vendor !== 'object') return null;
   const rawObj = vendor.raw && typeof vendor.raw === 'object' ? vendor.raw : {};
@@ -144,21 +187,24 @@ function sanitizePublicVendor(vendor) {
   const majorCategory = v._majorCategory || v.major_category || v.majorCategory || rawObj.majorCategory || 'General Industrial';
   const rating = typeof v.rating === 'number' ? v.rating :
     (typeof v.score === 'number' ? Math.round((v.score / 20) * 10) / 10 : null);
+  const city = v.city || null;
+  const state = v.state || null;
+  const location = [city, state].filter(Boolean).join(', ') || v.location || city || state || 'India';
   return {
     id: v.id || null,
     name: v.name || 'Unnamed Supplier',
     brandName: v.brandName || null,
-    email: v.email || null,
-    phone: v.phone || null,
+    email: maskPublicEmail(v.email),
+    phone: maskPublicPhone(v.phone),
     contactPerson: v.contactPerson || null,
     contactDesignation: v.contactDesignation || null,
     website: v.website || null,
     majorCategory,
     minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
     products: Array.isArray(v.products) ? v.products : [],
-    location: v.location || v.city || null,
-    city: v.city || null,
-    state: v.state || null,
+    location,
+    city,
+    state,
     pincode: v.pincode || null,
     country: v.country || 'India',
     factoryAddress: v.factoryAddress || null,
