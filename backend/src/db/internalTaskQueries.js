@@ -975,7 +975,8 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
     (task.task_type || '').toLowerCase().includes('delete') ||
     (task.title || '').toLowerCase().includes('deduct') ||
     (task.title || '').toLowerCase().includes('delete');
-  const creditQty = Number(task.credit_quantity) || 0;
+  const rawQty = Number(task.credit_quantity);
+  const creditQty = Number.isFinite(rawQty) && rawQty > 0 ? Math.floor(rawQty) : 0;
   const accountType = (task.credit_account_type || task.related_entity_type || 'BUYER').toUpperCase();
   const accountId = task.credit_account_id || task.related_entity_id;
 
@@ -1006,9 +1007,34 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
   }
 
   // 2. Authoritative Database Transactions First (Explicit SQL Transaction Boundary: BEGIN / COMMIT / ROLLBACK)
-  try { await pool.query('BEGIN'); } catch {}
   try {
-    // Update task status and approval details
+    await pool.query('BEGIN');
+  } catch {}
+
+  try {
+    // Explicit row locking on internal_tasks to prevent concurrent duplicate approvals
+    const lockRes = await pool.query(
+      'SELECT id, status, approval_status FROM internal_tasks WHERE id = $1 FOR UPDATE',
+      [task.id]
+    );
+    const lockedRow = lockRes && lockRes.rows && lockRes.rows[0];
+    if (lockedRow && (lockedRow.approval_status === 'APPROVED' || lockedRow.status === 'Completed')) {
+      try {
+        await pool.query('ROLLBACK');
+      } catch {}
+      return getInternalTaskById(task.id);
+    }
+
+    // Direct atomic database balance updates on accounts table
+    if (targetBuyer) {
+      const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
+      await pool.query(bSql, [targetBuyer.updatedBal, targetBuyer.buyerId], { d1: true, d1Text: bSql });
+    } else if (targetVendor) {
+      const vSql = `UPDATE vendors SET raw = jsonb_set(raw, '{freeQuotationCredits}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
+      await pool.query(vSql, [targetVendor.updatedBal, targetVendor.vendorId], { d1: true, d1Text: vSql });
+    }
+
+    // Update task status and approval details in database
     const updateSql = `
       UPDATE internal_tasks SET
         status = 'Completed',
@@ -1078,13 +1104,17 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       });
     }
 
-    try { await pool.query('COMMIT'); } catch {}
+    try {
+      await pool.query('COMMIT');
+    } catch {}
   } catch (error) {
-    try { await pool.query('ROLLBACK'); } catch {}
+    try {
+      await pool.query('ROLLBACK');
+    } catch {}
     throw error;
   }
 
-  // 3. Synchronize in-memory cache only AFTER database persistence succeeds
+  // 3. Synchronize in-memory cache ONLY AFTER database persistence succeeds
   if (targetBuyer && storeService.updateBuyerAccount) {
     await Promise.resolve(storeService.updateBuyerAccount(targetBuyer.buyerId, { creditBalance: targetBuyer.updatedBal }));
   } else if (targetVendor && storeService.updateVendor) {
