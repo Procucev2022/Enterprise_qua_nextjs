@@ -498,6 +498,7 @@ async function updateAcknowledgementStatus({
 
   if (pool.hasStorage()) {
     try {
+      const targetParam = communicationId || accountId;
       const sql = communicationId
         ? `
           UPDATE payment_dues_communications
@@ -508,10 +509,10 @@ async function updateAcknowledgementStatus({
               acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
               updated_at = $4
           WHERE id = $6
-             OR metadata->>'gatewayMessageId' = $6
-             OR metadata->>'msgid' = $6
-             OR metadata->'smsResult'->>'messageId' = $6
-             OR metadata->'emailResult'->>'messageId' = $6
+             OR metadata->>'gatewayMessageId' = $7
+             OR metadata->>'msgid' = $8
+             OR metadata->'smsResult'->>'messageId' = $9
+             OR metadata->'emailResult'->>'messageId' = $10
           RETURNING *
         `
         : `
@@ -530,8 +531,10 @@ async function updateAcknowledgementStatus({
           )
           RETURNING *
         `;
-      const targetParam = communicationId || accountId;
-      const result = await pool.query(sql, [acknowledgementStatus || null, deliveryStatus || null, notes || null, now, updatedBy, targetParam]);
+      const queryParams = communicationId
+        ? [acknowledgementStatus || null, deliveryStatus || null, notes || null, now, updatedBy, targetParam, targetParam, targetParam, targetParam, targetParam]
+        : [acknowledgementStatus || null, deliveryStatus || null, notes || null, now, updatedBy, targetParam];
+      const result = await pool.query(sql, queryParams);
       if (result && result.rows && result.rows.length > 0) {
         const row = result.rows[0];
         updatedRecord = {

@@ -882,12 +882,12 @@ async function recordBuyerCommunication(req, res, next) {
       try {
         const mailerService = require('../services/mailerService');
         if (typeof mailerService.deliver === 'function') {
-          mailerService.deliver({
+          Promise.resolve().then(() => mailerService.deliver({
             to: buyerEmail,
             subject: '[Procucev] ' + (subject || 'Buyer Account Update'),
             text: message || commNotes || '',
             replyTo: req.user?.email || undefined,
-          }, 'BUYER_DOSSIER_COMM').catch((err) => logger.warn('Async buyer email dispatch error', { error: err.message }));
+          }, 'BUYER_DOSSIER_COMM')).catch((err) => logger.warn('Async buyer email dispatch error', { error: err.message }));
         }
       } catch (mailErr) {
         logger.warn('Failed to dispatch external email for buyer communication', { error: mailErr.message });
