@@ -859,6 +859,115 @@ const VALIDATION_SCHEMAS = {
     page: { type: 'number', required: false, min: 1 },
     pageSize: { type: 'number', required: false, min: 1, max: 100 },
   },
+
+  createInternalTask: {
+    title: {
+      type: 'string',
+      required: true,
+      minLength: 2,
+      maxLength: 512,
+      message: 'Task title must be between 2 and 512 characters.',
+    },
+    taskCategory: {
+      type: 'string',
+      required: false,
+    },
+    taskType: {
+      type: 'string',
+      required: false,
+    },
+    priority: {
+      type: 'string',
+      required: false,
+      enum: ['Low', 'Medium', 'High', 'Critical'],
+    },
+    status: {
+      type: 'string',
+      required: false,
+      enum: [
+        'New',
+        'Assigned',
+        'In Progress',
+        'Pending Approval',
+        'Completed',
+        'Rejected',
+        'Cancelled',
+        'Pending',
+        'Blocked',
+        'Escalated',
+      ],
+    },
+    assignedToName: {
+      type: 'string',
+      required: false,
+    },
+    dueDate: {
+      type: 'string',
+      required: false,
+    },
+    creditQuantity: {
+      type: 'number',
+      required: false,
+      min: 0,
+    },
+  },
+
+  updateInternalTask: {
+    title: {
+      type: 'string',
+      required: false,
+      minLength: 2,
+      maxLength: 512,
+    },
+    status: {
+      type: 'string',
+      required: false,
+      enum: [
+        'New',
+        'Assigned',
+        'In Progress',
+        'Pending Approval',
+        'Completed',
+        'Rejected',
+        'Cancelled',
+        'Pending',
+        'Blocked',
+        'Escalated',
+      ],
+    },
+    priority: {
+      type: 'string',
+      required: false,
+      enum: ['Low', 'Medium', 'High', 'Critical'],
+    },
+  },
+
+  approveInternalTask: {
+    remarks: {
+      type: 'string',
+      required: false,
+      maxLength: 2000,
+    },
+  },
+
+  rejectInternalTask: {
+    remarks: {
+      type: 'string',
+      required: false,
+      maxLength: 2000,
+    },
+  },
+
+  addInternalTaskActivity: {
+    comment: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 5000,
+      message: 'Comment or note cannot be blank.',
+    },
+  },
+
 };
 
 

@@ -109,3 +109,62 @@ module.exports = {
 };
 
 
+
+
+/**
+ * @typedef {Object} InternalTaskEntity
+ * @property {string} id
+ * @property {string} task_number
+ * @property {string} [task_category]
+ * @property {string} [task_type]
+ * @property {string} [task_type_id]
+ * @property {string} title
+ * @property {string} [description]
+ * @property {string} priority
+ * @property {string} status
+ * @property {string} [assigned_to_user_id]
+ * @property {string} [assigned_to_name]
+ * @property {string} [created_by_user_id]
+ * @property {string} [created_by_name]
+ * @property {string} [due_date]
+ * @property {string} [due_time]
+ * @property {string} [completed_at]
+ * @property {string} [completed_by_user_id]
+ * @property {string} [completed_by_name]
+ * @property {string} [completion_remarks]
+ * @property {string} [related_entity_type]
+ * @property {string} [related_entity_id]
+ * @property {string} [related_entity_label]
+ * @property {string} [notes]
+ * @property {Array<Object>} [attachments]
+ * @property {string} [approval_status]
+ * @property {string} [approver_id]
+ * @property {string} [approver_name]
+ * @property {string} [approved_at]
+ * @property {string} [approval_remarks]
+ * @property {string} [demo_date]
+ * @property {string} [demo_time]
+ * @property {string} [demo_status]
+ * @property {string} [credit_account_type]
+ * @property {string} [credit_account_id]
+ * @property {string} [credit_account_name]
+ * @property {number} [credit_quantity]
+ * @property {string} [credit_reason]
+ * @property {Object} [raw]
+ * @property {string} created_at
+ * @property {string} updated_at
+ */
+
+/**
+ * @typedef {Object} InternalTaskActivityEntity
+ * @property {string} id
+ * @property {string} task_id
+ * @property {string} action_type
+ * @property {string} [actor_id]
+ * @property {string} [actor_name]
+ * @property {string} [from_value]
+ * @property {string} [to_value]
+ * @property {string} [comment]
+ * @property {Object} [metadata]
+ * @property {string} created_at
+ */

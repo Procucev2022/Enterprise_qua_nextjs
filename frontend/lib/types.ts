@@ -2955,3 +2955,125 @@ export interface InternalTeamMember {
   email: string;
   project?: string;
 }
+
+
+// ==============================================================================
+// ACTION CENTER: INTERNAL TASKS MODULE TYPES
+// ==============================================================================
+
+export type InternalTaskCategory =
+  | 'COMMUNICATION'
+  | 'DEMO_SCHEDULING'
+  | 'CREDIT_MANAGEMENT'
+  | 'BUSINESS_DEVELOPMENT'
+  | 'INTERNAL_OPERATIONS'
+  | 'ONBOARDING';
+
+export type InternalTaskStatus =
+  | 'New'
+  | 'Assigned'
+  | 'In Progress'
+  | 'Pending Approval'
+  | 'Completed'
+  | 'Rejected'
+  | 'Cancelled'
+  | 'Pending'
+  | 'Blocked'
+  | 'Escalated';
+
+export type InternalTaskPriority = 'Low' | 'Medium' | 'High' | 'Critical';
+
+export type DemoStatus = 'Scheduled' | 'Completed' | 'Rescheduled' | 'Cancelled';
+
+export type CreditAccountType = 'BUYER' | 'SELLER';
+
+export interface InternalTaskAttachment {
+  name: string;
+  url?: string;
+  size?: number;
+  uploadedAt?: string;
+}
+
+export interface InternalTaskActivity {
+  id: string;
+  task_id: string;
+  action_type: string;
+  actor_id?: string;
+  actor_name?: string;
+  from_value?: string;
+  to_value?: string;
+  comment?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface InternalTask {
+  id: string;
+  task_number: string;
+  task_category?: InternalTaskCategory;
+  task_type?: string;
+  task_type_id?: string;
+  task_type_name?: string;
+  task_type_code?: string;
+  title: string;
+  description?: string;
+  priority: InternalTaskPriority;
+  status: InternalTaskStatus;
+  assigned_to_user_id?: string;
+  assigned_to_name?: string;
+  assigned_team?: string;
+  created_by_user_id?: string;
+  created_by_name?: string;
+  due_date?: string;
+  due_time?: string;
+  completed_at?: string;
+  completed_by_user_id?: string;
+  completed_by_name?: string;
+  completion_remarks?: string;
+  related_entity_type?: string;
+  related_entity_id?: string;
+  related_entity_label?: string;
+  notes?: string;
+  attachments?: InternalTaskAttachment[];
+  approval_status?: 'PENDING' | 'APPROVED' | 'REJECTED' | null;
+  approver_id?: string;
+  approver_name?: string;
+  approved_at?: string;
+  approval_remarks?: string;
+  demo_date?: string;
+  demo_time?: string;
+  demo_status?: DemoStatus;
+  credit_account_type?: CreditAccountType;
+  credit_account_id?: string;
+  credit_account_name?: string;
+  credit_quantity?: number;
+  credit_reason?: string;
+  current_account_credits?: number;
+  onboarding_stage?: number;
+  proposal_value?: number;
+  proposal_url?: string;
+  proposal_status?: string;
+  call_outcome?: string;
+  recipient_phone?: string;
+  recipient_email?: string;
+  raw?: Record<string, unknown>;
+  activities?: InternalTaskActivity[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskSummary {
+  total: number;
+  newTasks?: number;
+  assigned?: number;
+  inProgress: number;
+  pendingApproval?: number;
+  completed: number;
+  rejected?: number;
+  cancelled?: number;
+  overdueCount?: number;
+  criticalCount: number;
+  pending?: number;
+  blocked?: number;
+  escalated?: number;
+}

@@ -684,3 +684,85 @@ CREATE TABLE IF NOT EXISTS buyer_credit_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_buyer_credit_transactions_buyer ON buyer_credit_transactions (buyer_id, created_at DESC);
 
+
+
+-- ============================================================================
+-- ACTION CENTER: INTERNAL TASKS, DYNAMIC TYPES & ACTIVITIES (D1 SQLite)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS internal_task_types (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  code TEXT UNIQUE NOT NULL,
+  default_module TEXT NOT NULL DEFAULT 'GENERAL',
+  description TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS internal_tasks (
+  id TEXT PRIMARY KEY,
+  task_number TEXT UNIQUE NOT NULL,
+  task_category TEXT NOT NULL DEFAULT 'INTERNAL_OPERATIONS',
+  task_type TEXT NOT NULL DEFAULT 'General',
+  task_type_id TEXT,
+  title TEXT NOT NULL,
+  description TEXT,
+  priority TEXT NOT NULL DEFAULT 'Medium',
+  status TEXT NOT NULL DEFAULT 'New',
+  assigned_to_user_id TEXT,
+  assigned_to_name TEXT,
+  assigned_team TEXT,
+  created_by_user_id TEXT,
+  created_by_name TEXT,
+  due_date TEXT,
+  due_time TEXT,
+  completed_at TEXT,
+  completed_by_user_id TEXT,
+  completed_by_name TEXT,
+  completion_remarks TEXT,
+  related_entity_type TEXT NOT NULL DEFAULT 'GENERAL',
+  related_entity_id TEXT,
+  related_entity_label TEXT,
+  notes TEXT,
+  attachments TEXT,
+  approval_status TEXT,
+  approver_id TEXT,
+  approver_name TEXT,
+  approved_at TEXT,
+  approval_remarks TEXT,
+  demo_date TEXT,
+  demo_time TEXT,
+  demo_status TEXT,
+  credit_account_type TEXT,
+  credit_account_id TEXT,
+  credit_account_name TEXT,
+  credit_quantity NUMERIC DEFAULT 0,
+  credit_reason TEXT,
+  raw TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_category ON internal_tasks (task_category);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_type ON internal_tasks (task_type);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_status ON internal_tasks (status);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_priority ON internal_tasks (priority);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_related ON internal_tasks (related_entity_type, related_entity_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_due_date ON internal_tasks (due_date);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_assigned_to ON internal_tasks (assigned_to_user_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_by ON internal_tasks (created_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_at ON internal_tasks (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS internal_task_activities (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  action_type TEXT NOT NULL,
+  actor_id TEXT,
+  actor_name TEXT,
+  from_value TEXT,
+  to_value TEXT,
+  comment TEXT,
+  metadata TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_internal_task_activities_task ON internal_task_activities (task_id, created_at DESC);

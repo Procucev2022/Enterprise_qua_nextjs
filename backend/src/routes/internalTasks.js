@@ -21,11 +21,19 @@ router.get('/entities', optionalAuthenticate, internalTaskController.searchEntit
 // Export filtered tasks as CSV
 router.get('/export', optionalAuthenticate, internalTaskController.exportTasks);
 
+// Automated reminder check
+router.post('/check-reminders', optionalAuthenticate, internalTaskController.checkReminders);
+
 // Standard task CRUD
 router.get('/', optionalAuthenticate, internalTaskController.getTasks);
 router.post('/', optionalAuthenticate, internalTaskController.createTask);
 router.get('/:id', optionalAuthenticate, internalTaskController.getTaskById);
 router.put('/:id', optionalAuthenticate, internalTaskController.updateTask);
 router.delete('/:id', optionalAuthenticate, internalTaskController.deleteTask);
+
+// Task actions: credit approval workflow & activity log
+router.post('/:id/approve', optionalAuthenticate, internalTaskController.approveCreditTask);
+router.post('/:id/reject', optionalAuthenticate, internalTaskController.rejectCreditTask);
+router.post('/:id/activities', optionalAuthenticate, internalTaskController.addTaskActivity);
 
 module.exports = router;

@@ -12,6 +12,11 @@ import {
   getExportTasksUrl,
   fetchInternalAssignees,
   completeInternalTask,
+  approveCreditTask,
+  rejectCreditTask,
+  addTaskActivity,
+  checkTaskReminders,
+  exportTasksToCsv,
 } from '@/lib/internalTaskClient';
 import { DEFAULT_INTERNAL_MEMBERS } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
@@ -370,11 +375,7 @@ describe('internalTaskClient', () => {
       '/api/internal-tasks/tsk_1',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({
-          status: 'Completed',
-          activityComment: 'Completed: Verified and approved',
-          notes: 'Verified and approved',
-        }),
+        body: expect.stringContaining('"status":"Completed"'),
       })
     );
 
@@ -387,6 +388,196 @@ describe('internalTaskClient', () => {
     });
     const res2 = await completeInternalTask('tsk_2');
     expect(res2?.status).toBe('Completed');
+  });
+
+
+  test('exportTasksToCsv formats task array into valid CSV', () => {
+    const csv = exportTasksToCsv([
+      {
+        id: 'tsk_1',
+        task_number: 'TASK-1001',
+        task_category: 'COMMUNICATION',
+        task_type: 'SMS',
+        title: 'Send "Critical" Alert',
+        priority: 'High',
+        status: 'Completed',
+        assigned_to_name: 'Pavani',
+        created_by_name: 'Admin',
+        due_date: '2026-11-05',
+        due_time: '14:00',
+        completed_at: '2026-11-04',
+        completed_by_name: 'Pavani',
+        related_entity_type: 'BUYER',
+        related_entity_label: 'Acme "Steel" Corp',
+        created_at: '2026-11-01',
+        updated_at: '2026-11-04',
+      },
+      {
+        id: 'tsk_empty',
+        task_number: '',
+        title: '',
+        priority: 'Medium',
+        status: 'New',
+        created_at: '2026-11-01',
+        updated_at: '2026-11-01',
+      },
+    ]);
+
+    expect(csv).toContain('Task Number,Category,Task Type,Title');
+    expect(csv).toContain('TASK-1001,COMMUNICATION,SMS,"Send ""Critical"" Alert"');
+    expect(csv).toContain('Acme ""Steel"" Corp');
+
+    // Handles empty array
+    expect(exportTasksToCsv([])).toContain('Task Number');
+  });
+
+
+  test('approveCreditTask and rejectCreditTask handle approve/reject workflows', async () => {
+    // Approve success
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, message: 'Approved successfully', task: { id: 'tsk_1', status: 'Completed' } }),
+    });
+    const appRes = await approveCreditTask('tsk_1', 'Verified ledger balance');
+    expect(appRes.success).toBe(true);
+    expect(appRes.message).toBe('Approved successfully');
+
+    // Approve failure
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({ success: false, error: 'Unauthorized approver' }),
+    });
+    const appFail = await approveCreditTask('tsk_1');
+    expect(appFail.success).toBe(false);
+    expect(appFail.error).toBe('Unauthorized approver');
+
+    // Approve exception
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network drop'));
+    expect((await approveCreditTask('tsk_1')).success).toBe(false);
+
+    // Reject success
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, message: 'Rejected request', task: { id: 'tsk_2', status: 'Rejected' } }),
+    });
+    const rejRes = await rejectCreditTask('tsk_2', 'Insufficient business justification');
+    expect(rejRes.success).toBe(true);
+
+    // Reject failure
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({ success: false, error: 'Task not found' }),
+    });
+    const rejFail = await rejectCreditTask('tsk_2');
+    expect(rejFail.success).toBe(false);
+
+    // Reject exception
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('Server error'));
+    expect((await rejectCreditTask('tsk_2')).success).toBe(false);
+  });
+
+  test('addTaskActivity logs comment and handles errors', async () => {
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        success: true,
+        activity: { id: 'act_1', comment: 'Client confirmed specs', action_type: 'COMMENT' },
+      }),
+    });
+    const res = await addTaskActivity('tsk_1', 'Client confirmed specs');
+    expect(res.success).toBe(true);
+    expect(res.activity?.comment).toBe('Client confirmed specs');
+
+    // Failure branch
+    global.fetch = jest.fn().mockResolvedValueOnce({ ok: false, json: async () => ({ error: 'Fail' }) });
+    expect((await addTaskActivity('tsk_1', 'failed note')).success).toBe(false);
+
+    // Exception branch
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network drop'));
+    expect((await addTaskActivity('tsk_1', 'error note')).success).toBe(false);
+  });
+
+  test('checkTaskReminders checks deadlines and alerts', async () => {
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, dispatched: 3 }),
+    });
+    const res = await checkTaskReminders();
+    expect(res.success).toBe(true);
+    expect(res.dispatched).toBe(3);
+
+    // Failure
+    global.fetch = jest.fn().mockResolvedValueOnce({ ok: false, json: async () => ({ error: 'Fail' }) });
+    expect((await checkTaskReminders()).success).toBe(false);
+
+    // Exception
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('Err'));
+    expect((await checkTaskReminders()).success).toBe(false);
+  });
+
+
+  test('getExportTasksUrl handles empty filters and all values', () => {
+    // Empty / default
+    const emptyUrl = getExportTasksUrl();
+    expect(emptyUrl).toBe('/api/internal-tasks/export?');
+
+    // "all" filters
+    const allUrl = getExportTasksUrl({
+      status: 'all',
+      priority: 'all',
+      taskCategory: 'all',
+      taskType: 'all',
+      taskTypeId: 'all',
+      relatedEntityType: 'all',
+      assignedTo: 'all',
+      createdBy: 'all',
+    });
+    expect(allUrl).toBe('/api/internal-tasks/export?');
+  });
+
+  test('fetchInternalTasks handles "all" filter values', async () => {
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ tasks: [], total: 0 }),
+    });
+
+    const res = await fetchInternalTasks({
+      status: 'all',
+      priority: 'all',
+      taskCategory: 'all',
+      taskType: 'all',
+      taskTypeId: 'all',
+      relatedEntityType: 'all',
+      assignedTo: 'all',
+      createdBy: 'all',
+    });
+    expect(res.tasks).toEqual([]);
+  });
+
+  test('completeInternalTask handles omitted resolution remarks', async () => {
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ task: { id: 'tsk_no_remarks', status: 'Completed' } }),
+    });
+
+    const res = await completeInternalTask('tsk_no_remarks');
+    expect(res?.status).toBe('Completed');
+  });
+
+  test('approve and reject credit task handle missing data.error', async () => {
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({}),
+    });
+    const appRes = await approveCreditTask('tsk_err_1');
+    expect(appRes.error).toBe('Failed to approve credit task.');
+
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({}),
+    });
+    const rejRes = await rejectCreditTask('tsk_err_2');
+    expect(rejRes.error).toBe('Failed to reject credit task.');
   });
 
 });

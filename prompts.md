@@ -5199,3 +5199,156 @@ Footer navigation
 Manage cookies
 Do not share my personal information
 ```
+
+---
+
+### Prompt 26
+
+**Timestamp**: 2026-11-02T07:59:00Z
+
+`	ext
+### Action Center – Internal Tasks Module Implementation
+
+Implement a complete **Internal Task Management System** under Action Center. All the activities listed below are internal tasks created by employees or admins to track work, assign responsibilities, monitor progress, and complete tasks.
+
+### 1. Internal Task Categories
+
+Create the following task types:
+
+1. **Communication Tasks**
+   - Phone Call
+   - SMS
+   - WhatsApp
+   - Email
+   - Follow-up (New Follow-up / Existing Follow-up)
+
+2. **Demo Scheduling**
+   - Schedule product demonstrations.
+   - Record demo date, time, client details, assigned employee, and demo status.
+
+3. **Credit Management**
+   - Add Credits
+   - Delete / Deduct Credits
+   - Capture account details, credit quantity, reason, and requested by.
+
+4. **Business Development Tasks**
+   - Send Proposal
+   - Send Corporate Email
+   - Track whether the proposal or email was sent and completed.
+
+5. **Internal Operations**
+   - Other internal operational activities.
+   - Allow users to enter a custom task title and description.
+
+6. **Onboarding Process**
+   - Track client onboarding activities.
+   - Assign tasks and monitor onboarding progress.
+
+### 2. Task Creation and Assignment
+
+Provide a Create Task option with:
+- Task Category and Task Type
+- Task Title
+- Description / Instructions
+- Related Buyer, Seller, or Client (where applicable)
+- Assigned Employee
+- Priority (Low, Medium, High, Critical)
+- Due Date and Time
+- Attachments
+- Additional Notes
+
+Automatically capture the task creator, creation date, and task reference ID.
+
+### 3. Task Status and Tracking
+
+Every task should have these statuses:
+- New
+- Assigned
+- In Progress
+- Pending Approval
+- Completed
+- Rejected
+- Cancelled
+
+Employees should be able to update progress, add remarks, and attach supporting documents. When a task is completed, record the completion date and completed by.
+
+### 4. Credit Add/Delete Approval Workflow
+
+For Add Credits and Delete Credits tasks, implement a separate approval workflow:
+
+**Requester:**
+- Creates an Add Credit or Delete Credit request.
+- Enters the buyer/seller account, credit quantity, and reason.
+- Tracks the request status.
+
+**Admin / Approver:**
+- Views pending credit requests.
+- Reviews account details, requested credits, and reason.
+- Approves or rejects the request with remarks.
+- Only after approval should the actual credit balance be updated in the database.
+- Maintain a complete credit transaction and approval history.
+
+### 5. Internal Task Dashboard
+
+Display summary cards:
+- Total Tasks
+- New Tasks
+- In Progress
+- Pending Approval
+- Completed
+- Overdue Tasks
+
+Provide filters for Task Type, Assigned Employee, Created By, Priority, Status, and Date Range.
+
+### 6. Task Details and History
+
+When clicking a task, open a detailed view showing:
+- Task information
+- Requester and assigned employee
+- Related buyer/seller details
+- Status history
+- Comments and remarks
+- Attachments
+- Approval history, where applicable
+- Created and completed timestamps
+
+### 7. Notifications and Reminders
+
+- Notify assigned employees when a task is created or assigned.
+- Notify requesters when task status changes.
+- Notify approvers when credit requests are submitted.
+- Send reminders for approaching deadlines and overdue tasks.
+
+### 8. Important Implementation Requirements
+
+- All tasks and task histories must be stored in the database.
+- Implement role-based access for employees, admins, and approvers.
+- Maintain a complete audit trail.
+- Use existing email, SMS, WhatsApp, notification, buyer, seller, and credit services wherever available.
+- Do not automatically mark communication tasks as completed unless the required action is successfully performed or completion is explicitly confirmed.
+- Do not update credits before approval.
+- Reuse existing APIs, components, database models, and authentication.
+- Do not break existing Action Center modules, especially Tickets, Approvals, Scorecard, Buyer Directory, Seller Directory, and Registrations.
+
+**Expected Result:** Internal Tasks should function as a centralized employee task-management and approval system, where every internal activity can be created, assigned, tracked, approved when required, and marked completed with a complete history.
+```
+
+---
+
+### Prompt 27
+
+**Timestamp**: 2026-11-02T09:43:24Z
+
+```text
+Please do a detailed analysis, what all features are pending or missing, & then continue adding the remaining missing features & functionalities & tell apart from these what else is pending
+```
+
+---
+
+### Prompt 28
+
+**Timestamp**: 2026-11-02T10:48:45Z
+
+```text
+Create the branch from main and raise the pr
+```
