@@ -872,4 +872,60 @@ describe('Internal Tasks API & Controller', () => {
     expect(mockRes.status).toHaveBeenCalledWith(201);
   });
 
+
+  test('POST /api/internal-tasks and PUT /api/internal-tasks handle notification dispatch errors gracefully', async () => {
+    const actionCenterNotificationService = require('../src/services/actionCenterNotificationService');
+    jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication').mockRejectedValue(new Error('Notification service down'));
+    jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValue([
+      { id: 'exec-1', name: 'Pavani', email: 'pavani@procucev.com' },
+    ]);
+    jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({
+      id: 'tsk_cred_fail',
+      task_number: 'TASK-102',
+      title: 'Credit Increase Fail',
+      task_category: 'CREDIT_MANAGEMENT',
+      status: 'Pending Approval',
+      assigned_to_user_id: 'exec-1',
+      assigned_to_name: 'Pavani',
+    });
+
+    const createRes = await request(app)
+      .post('/api/internal-tasks')
+      .send({
+        title: 'Credit Increase Fail',
+        taskCategory: 'CREDIT_MANAGEMENT',
+        assignedToName: 'Pavani',
+      });
+    expect(createRes.status).toBe(201);
+
+    jest.spyOn(internalTaskQueries, 'updateInternalTask').mockResolvedValue({
+      id: 'tsk_101',
+      task_number: 'TASK-101',
+      title: 'Update Vendor Documentation',
+      status: 'In Progress',
+      created_by_user_id: 'usr-requester-1',
+      created_by_name: 'Operations Manager',
+      created_by_email: 'ops@procucev.com',
+    });
+
+    const updateRes = await request(app)
+      .put('/api/internal-tasks/tsk_101')
+      .send({
+        status: 'In Progress',
+      });
+    expect(updateRes.status).toBe(200);
+
+    // Also test check-reminders when notification fails
+    jest.spyOn(internalTaskQueries, 'getOverdueAndUpcomingTasks').mockResolvedValue([
+      {
+        id: 'tsk_rem_fail',
+        task_number: 'TASK-7799',
+        title: 'Reminder Fail Task',
+        assigned_to_name: 'Pavani',
+      },
+    ]);
+    const remRes = await request(app).post('/api/internal-tasks/check-reminders').send({});
+    expect(remRes.status).toBe(200);
+    expect(remRes.body.dispatched).toBe(0);
+  });
 });

@@ -397,16 +397,28 @@ async function addTaskActivity(req, res) {
  */
 async function checkReminders(req, res) {
   try {
-    const tasks = await internalTaskQueries.getOverdueAndUpcomingTasks();
     const actor = req.user ?? { name: 'Reminder Service', role: 'system' };
-    let remindersDispatched = 0;
+    const [tasks, assignees] = await Promise.all([
+      internalTaskQueries.getOverdueAndUpcomingTasks(),
+      internalTaskQueries.getInternalAssignees(),
+    ]);
 
-    for (const t of (tasks ?? [])) {
-      if (t.assigned_to_name && t.assigned_to_name !== 'Unassigned') {
-        remindersDispatched++;
+    const assigneeMap = new Map();
+    for (const member of (assignees ?? [])) {
+      if (member.name) assigneeMap.set(member.name.toLowerCase().trim(), member);
+      if (member.id) assigneeMap.set(member.id.toLowerCase().trim(), member);
+    }
+
+    const eligibleTasks = (tasks ?? []).filter(
+      (t) => t.assigned_to_name && t.assigned_to_name !== 'Unassigned'
+    );
+
+    const dispatchResults = await Promise.all(
+      eligibleTasks.map(async (t) => {
         try {
-          const assignees = await internalTaskQueries.getInternalAssignees();
-          const member = (assignees ?? []).find((m) => m.name.toLowerCase() === t.assigned_to_name.toLowerCase());
+          const member =
+            assigneeMap.get((t.assigned_to_name || '').toLowerCase().trim()) ||
+            (t.assigned_to_user_id ? assigneeMap.get(t.assigned_to_user_id.toLowerCase().trim()) : null);
           if (member && member.email) {
             await actionCenterNotificationService.dispatchActionCenterCommunication(
               {
@@ -420,12 +432,17 @@ async function checkReminders(req, res) {
               },
               actor
             );
+            return true;
           }
+          return false;
         } catch (err) {
           logger.warn('Failed to dispatch reminder notification', { error: err.message }, 'INTERNAL_TASK_CONTROLLER');
+          return false;
         }
-      }
-    }
+      })
+    );
+
+    const remindersDispatched = dispatchResults.filter(Boolean).length;
 
     return res.status(200).json({
       success: true,

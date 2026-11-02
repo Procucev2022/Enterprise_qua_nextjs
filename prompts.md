@@ -5470,3 +5470,31 @@ continue
 ```text
 continue
 ```
+
+
+---
+
+### Prompt 32
+
+**Timestamp**: 2026-11-02T13:23:23Z
+
+```text
+In the category manager portal, in the action center, now that you understand the internal task scenarios and communication logs i nthe buyers detail page and sellers detail page, I want to give an option to create an email option where i pick the scenario and click on the attachment from the dropdown and can send it by click of a button. 
+
+For example; for buyers/sellers detail page; in the call log we have an option for followup call. So i want to send an email with the followup call schedule date and time. This is one of the scenario. Please give me all such scenarios which we can use in internal task scenarios and email drafts and give me the scenarios and email drafts in buyers/sellers detail page. 
+
+Also to display the attachments, i want to create a new page named document vault and any documents uploaded and named here can be shown for attachments while sending an email.
+
+Did you understand? Please tell me. Donot make any code changes yet.
+```
+
+
+---
+
+### Prompt 32
+
+**Timestamp**: 2026-11-02T13:58:10Z
+
+```text
+continue
+```

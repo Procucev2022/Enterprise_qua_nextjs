@@ -294,13 +294,15 @@ async function getInternalTasks({
   }
 
   if (taskCategory && taskCategory !== 'all') {
-    conditions.push(`task_category = $${paramIdx++}`);
+    conditions.push(`(task_category = $${paramIdx} OR raw->>'taskCategory' = $${paramIdx} OR raw->>'task_category' = $${paramIdx})`);
     params.push(taskCategory);
+    paramIdx++;
   }
 
   if (taskType && taskType !== 'all') {
-    conditions.push(`task_type = $${paramIdx++}`);
+    conditions.push(`(task_type = $${paramIdx} OR raw->>'taskType' = $${paramIdx} OR raw->>'task_type' = $${paramIdx})`);
     params.push(taskType);
+    paramIdx++;
   }
 
   if (taskTypeId && taskTypeId !== 'all') {
@@ -431,8 +433,9 @@ async function getInternalTaskSummary({ assignedTo = '', taskCategory = '' } = {
   }
 
   if (taskCategory && taskCategory !== 'all') {
-    conditions.push(`task_category = $${pIdx++}`);
+    conditions.push(`(task_category = $${pIdx} OR raw->>'taskCategory' = $${pIdx} OR raw->>'task_category' = $${pIdx})`);
     params.push(taskCategory);
+    pIdx++;
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -1003,7 +1006,7 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
   }
 
   // 2. Authoritative Database Transactions First (Explicit SQL Transaction Boundary: BEGIN / COMMIT / ROLLBACK)
-  await pool.query('BEGIN').catch(() => {});
+  try { await pool.query('BEGIN'); } catch {}
   try {
     // Update task status and approval details
     const updateSql = `
@@ -1075,9 +1078,9 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       });
     }
 
-    await pool.query('COMMIT').catch(() => {});
+    try { await pool.query('COMMIT'); } catch {}
   } catch (error) {
-    await pool.query('ROLLBACK').catch(() => {});
+    try { await pool.query('ROLLBACK'); } catch {}
     throw error;
   }
 
