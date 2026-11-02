@@ -33,19 +33,19 @@ export default function VendorCard({ vendor, onViewDetails }: VendorCardProps) {
       <div className={`h-1.5 w-full bg-gradient-to-r ${pal.bg}`} />
 
       <div className="flex flex-col gap-3 p-5 flex-1">
-        {/* Avatar + name */}
+        {/* Avatar + name (blurred for privacy) */}
         <div className="flex items-start gap-3">
           <div
-            className={`shrink-0 w-11 h-11 rounded-xl bg-gradient-to-br ${pal.bg} flex items-center justify-center text-white font-bold text-sm ring-2 ${pal.ring}`}
+            className={`shrink-0 w-11 h-11 rounded-xl bg-gradient-to-br ${pal.bg} flex items-center justify-center text-white font-bold text-sm ring-2 ${pal.ring} filter blur-[2px] select-none`}
           >
             {getInitials(vendor.name)}
           </div>
           <div className="min-w-0">
-            <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm leading-snug line-clamp-2 group-hover:text-blue-700 dark:group-hover:text-blue-400 transition-colors">
+            <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm leading-snug line-clamp-2 filter blur-[4px] select-none transition-colors">
               {vendor.name}
             </h3>
             {vendor.brandName && vendor.brandName !== vendor.name && (
-              <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{vendor.brandName}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 truncate filter blur-[4px] select-none mt-0.5">{vendor.brandName}</p>
             )}
           </div>
         </div>
@@ -58,15 +58,13 @@ export default function VendorCard({ vendor, onViewDetails }: VendorCardProps) {
           </span>
         )}
 
-        {/* Location */}
-        {(vendor.city || vendor.state || vendor.location) && (
-          <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-            <MapPin size={11} className="shrink-0 text-slate-400" />
-            <span className="truncate">
-              {[vendor.city, vendor.state].filter(Boolean).join(', ') || vendor.location}
-            </span>
-          </div>
-        )}
+        {/* Location (City / State) */}
+        <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+          <MapPin size={11} className="shrink-0 text-slate-400" />
+          <span className="truncate">
+            {[vendor.city, vendor.state].filter(Boolean).join(', ') || vendor.location || 'India'}
+          </span>
+        </div>
 
         {/* Rating */}
         {(vendor.rating ?? 0) > 0 && (

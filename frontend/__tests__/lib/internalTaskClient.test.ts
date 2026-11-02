@@ -10,7 +10,10 @@ import {
   deleteInternalTask,
   searchRelatedEntities,
   getExportTasksUrl,
+  fetchInternalAssignees,
+  completeInternalTask,
 } from '@/lib/internalTaskClient';
+import { DEFAULT_INTERNAL_MEMBERS } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 
 describe('internalTaskClient', () => {
@@ -305,4 +308,85 @@ describe('internalTaskClient', () => {
       })
     );
   });
+
+  test('fetchInternalAssignees returns assignees list and handles fallbacks', async () => {
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        assignees: [
+          { id: 'exec-1', name: 'Pavani', role: 'CRM Executive' },
+          { id: 'exec-2', name: 'Navin Chaudhary', role: 'Category Specialist' },
+        ],
+      }),
+    });
+
+    const assignees = await fetchInternalAssignees();
+    expect(assignees).toHaveLength(2);
+    expect(assignees[0].name).toBe('Pavani');
+
+    // res.ok = false fallback
+    global.fetch = jest.fn().mockResolvedValueOnce({ ok: false });
+    expect(await fetchInternalAssignees()).toEqual(DEFAULT_INTERNAL_MEMBERS);
+
+    // exception fallback
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network failure'));
+    expect(await fetchInternalAssignees()).toEqual(DEFAULT_INTERNAL_MEMBERS);
+
+    // empty array fallback
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ assignees: [] }),
+    });
+    expect(await fetchInternalAssignees()).toEqual(DEFAULT_INTERNAL_MEMBERS);
+  });
+
+  test('fetchTaskSummary supports assignedTo query parameter', async () => {
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        summary: { total: 4, pending: 1, inProgress: 1, blocked: 0, completed: 2, escalated: 0, criticalCount: 0 },
+      }),
+    });
+
+    const sum = await fetchTaskSummary({ assignedTo: 'Pavani' });
+    expect(sum.total).toBe(4);
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/internal-tasks/summary?assignedTo=Pavani',
+      expect.any(Object)
+    );
+  });
+
+  test('completeInternalTask calls updateInternalTask with Completed status and remarks', async () => {
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        task: { id: 'tsk_1', status: 'Completed', notes: 'Verified and approved' },
+      }),
+    });
+
+    const res = await completeInternalTask('tsk_1', 'Verified and approved');
+    expect(res?.status).toBe('Completed');
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/internal-tasks/tsk_1',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({
+          status: 'Completed',
+          activityComment: 'Completed: Verified and approved',
+          notes: 'Verified and approved',
+        }),
+      })
+    );
+
+    // Call without remarks
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        task: { id: 'tsk_2', status: 'Completed' },
+      }),
+    });
+    const res2 = await completeInternalTask('tsk_2');
+    expect(res2?.status).toBe('Completed');
+  });
+
 });

@@ -1136,5 +1136,148 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       await buyerAccountController.createSubscriptionPaymentLink(reqSub, resSub, jest.fn());
       expect(resSub.status).toHaveBeenCalledWith(400); // unknown plan returns 400
     });
+
+    test('recordBuyerCommunication handles nextFollowupDate and task creation failure branches', async () => {
+      const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({ id: 'comm-followup-1' });
+
+      const buyerAcc = {
+        id: 'b-followup',
+        organizationName: 'Followup Org',
+        corporateEmail: 'followup@buyer.com',
+      };
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyerAcc]);
+
+      // 1. Success with nextFollowupDate and full fields
+      const taskSpy = jest.spyOn(internalTaskQueries, 'createInternalTask')
+        .mockResolvedValueOnce({ id: 'task-completed-1', status: 'Completed' })
+        .mockResolvedValueOnce({ id: 'task-followup-1', status: 'Pending' });
+
+      const req = {
+        user: { ...adminUser, uuid: 'u-1', fullName: 'CM Lead' },
+        params: { id: 'b-followup' },
+        body: {
+          channel: 'CALL',
+          recipient: '9876543210',
+          subject: 'Credit Renewal',
+          message: 'Discussed subscription upgrade',
+          callOutcome: 'Connected',
+          duration: '12 mins',
+          nextFollowupDate: '2026-11-10T10:00:00.000Z',
+          followupPriority: 'High',
+          followupAssigneeId: 'exec-2',
+          followupAssigneeName: 'Navin Chaudhary',
+          followupNotes: 'Finalize payment terms',
+        },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.recordBuyerCommunication(req, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        completedTask: expect.objectContaining({ id: 'task-completed-1' }),
+        followupTask: expect.objectContaining({ id: 'task-followup-1' }),
+      }));
+
+      // 2. Exception in completed task creation and followup task creation handled gracefully
+      taskSpy
+        .mockRejectedValueOnce(new Error('Task DB failure 1'))
+        .mockRejectedValueOnce(new Error('Task DB failure 2'));
+
+      const resErr = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.recordBuyerCommunication(req, resErr, jest.fn());
+      expect(resErr.status).toHaveBeenCalledWith(201);
+      expect(resErr.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        completedTask: null,
+        followupTask: null,
+      }));
+
+      // 3. Cover WHATSAPP, SMS, and fallback actor/buyer labels
+      const fallbackBuyer = { id: 'b-fallback', organizationName: 'Fallback Buyer Org' };
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([fallbackBuyer]);
+      taskSpy
+        .mockResolvedValueOnce({ id: 'btask-wa-comp' })
+        .mockResolvedValueOnce({ id: 'btask-wa-fol' })
+        .mockResolvedValueOnce({ id: 'btask-sms-comp' })
+        .mockResolvedValueOnce({ id: 'btask-sms-fol' });
+
+      const reqWA = {
+        user: { role: 'admin', id: 'actor-id-only', email: 'cm.actor@procucev.com' },
+        params: { id: 'b-fallback' },
+        body: {
+          channel: 'WHATSAPP',
+          nextFollowupDate: '2026-11-20T10:00:00.000Z',
+        },
+      };
+      const resWA = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.recordBuyerCommunication(reqWA, resWA, jest.fn());
+      expect(resWA.status).toHaveBeenCalledWith(201);
+
+      const reqSMS = {
+        user: { role: 'admin', id: 'actor-id-only', name: 'CM Person' },
+        params: { id: 'b-fallback' },
+        body: {
+          channel: 'SMS',
+          nextFollowupDate: '2026-11-20T10:00:00.000Z',
+        },
+      };
+      const resSMS = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.recordBuyerCommunication(reqSMS, resSMS, jest.fn());
+      expect(resSMS.status).toHaveBeenCalledWith(201);
+
+      // 4. Cover EMAIL channel and missing subject
+      taskSpy
+        .mockResolvedValueOnce({ id: 'btask-email-comp' })
+        .mockResolvedValueOnce({ id: 'btask-email-fol' });
+
+      const reqEmail = {
+        user: { role: 'admin', id: 'actor-id-only' },
+        params: { id: 'b-fallback' },
+        body: {
+          channel: 'EMAIL',
+          nextFollowupDate: '2026-11-20T10:00:00.000Z',
+        },
+      };
+      const resEmail = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.recordBuyerCommunication(reqEmail, resEmail, jest.fn());
+      expect(resEmail.status).toHaveBeenCalledWith(201);
+    });
+
+    test('createSubscriptionPaymentLink covers missing corporateEmail and 502 error catch branches', async () => {
+      const zohoPaymentService = require('../src/services/zohoPaymentService');
+
+      // 1. Missing corporateEmail -> 400
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        id: 'b-no-email',
+        corporateEmail: null,
+      });
+      const reqNoEmail = {
+        user: { ...adminUser, email: 'noemail@buyer.com' },
+        params: { id: 'b-no-email' },
+        body: { plan: 'version_1' },
+      };
+      const resNoEmail = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.createSubscriptionPaymentLink(reqNoEmail, resNoEmail, jest.fn());
+      expect(resNoEmail.status).toHaveBeenCalledWith(400);
+
+      // 2. Error throwing -> 502
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        id: 'b-valid',
+        corporateEmail: 'valid@buyer.com',
+        mobileNumber: '+919999999999',
+      });
+      jest.spyOn(zohoPaymentService, 'createPaymentLink').mockRejectedValueOnce(new Error('Zoho down'));
+      const reqErr = {
+        user: { ...adminUser, email: 'valid@buyer.com' },
+        params: { id: 'b-valid' },
+        body: { plan: 'version_1' },
+      };
+      const resErr = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.createSubscriptionPaymentLink(reqErr, resErr, jest.fn());
+      expect(resErr.status).toHaveBeenCalledWith(502);
+    });
   });
 });

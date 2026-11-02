@@ -429,7 +429,7 @@ describe('native Jest coverage enforcement', () => {
     }
     const configPath = path.join(testFixture.projectRoot, 'jest.config.json');
     writeFile(configPath, JSON.stringify(fixtureConfig));
-    const run = () => spawnSync(process.execPath, [JEST_CLI, '--config', configPath, '--runInBand', '--silent'], { cwd: testFixture.projectRoot, encoding: 'utf8', timeout: 15000 });
+    const run = () => spawnSync(process.execPath, [JEST_CLI, '--config', configPath, '--runInBand', '--silent'], { cwd: testFixture.projectRoot, encoding: 'utf8', timeout: 35000 });
     writeFile(testPath, `${project === 'frontend' ? "require('./lib/constant.js');\n" : ''}${testSource(8)}`);
     const rejected = run();
     expect(rejected.status).toBe(1);

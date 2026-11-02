@@ -748,6 +748,11 @@ const VALIDATION_SCHEMAS = {
     action: { type: 'string', required: true, enum: ['APPROVE', 'REJECT', 'Approve', 'Reject', 'approved', 'rejected'], message: 'Action must be APPROVE or REJECT.' },
     remarks: { type: 'string', required: false, maxLength: 1000 },
   },
+
+  registrationAction: {
+    action: { type: 'string', required: true, enum: ['accept', 'reject', 'ACCEPT', 'REJECT', 'Accept', 'Reject'], message: 'Action must be accept or reject.' },
+    remarks: { type: 'string', required: false, maxLength: 1000 },
+  },
 };
 
 
