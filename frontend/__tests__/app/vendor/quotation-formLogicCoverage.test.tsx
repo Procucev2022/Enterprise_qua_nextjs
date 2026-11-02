@@ -436,10 +436,22 @@ describe('upgrade plan selection', () => {
 // ─── Credit balance ───────────────────────────────────────────────────────────
 
 describe('quotation credit balance', () => {
-  test('defaults to 5 free credits when neither the vendor record, the vendor list nor the store reports a balance', async () => {
+  test('defaults to 0 free credits when neither the vendor record, the vendor list nor the store reports a balance', async () => {
     await renderForm({ vendorFreeCreditsRemaining: undefined });
 
-    expect(screen.getByText('5 Free Left')).toBeInTheDocument();
+    expect(screen.getByText('0 Free Left')).toBeInTheDocument();
+  });
+
+  test('shows a subscriber their remaining plan credits instead of a plain Active Plan label', async () => {
+    await renderForm({ vendorSubscription: 'select', vendorFreeCreditsRemaining: 89 } as Partial<AppState>);
+
+    expect(screen.getByText('89 Credits Left')).toBeInTheDocument();
+  });
+
+  test('shows a placeholder for a subscriber whose credits have not loaded yet', async () => {
+    await renderForm({ vendorSubscription: 'connect', vendorFreeCreditsRemaining: null } as Partial<AppState>);
+
+    expect(screen.getByText('… Credits Left')).toBeInTheDocument();
   });
 });
 

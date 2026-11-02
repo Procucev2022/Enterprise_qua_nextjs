@@ -44,6 +44,8 @@ import type {
 import {
   formatCurrency,
   formatIndianDateTime,
+  getVendorCreditBalance,
+  VENDOR_PLAN_RFQ_QUOTA,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
@@ -869,7 +871,7 @@ export default function SupplierDossierDrawer({
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.credit.totalAllocated}</span>
                 <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                  {creditSummary?.totalCreditsAllocated ?? (seller.freeQuotationCredits || 15)}
+                  {creditSummary?.totalCreditsAllocated ?? (VENDOR_PLAN_RFQ_QUOTA[seller.subscriptionPlan || ''] ?? getVendorCreditBalance(seller))}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Enterprise quota</p>
               </div>
@@ -883,14 +885,14 @@ export default function SupplierDossierDrawer({
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.credit.remainingFree}</span>
                 <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                  {creditSummary?.remainingFreeCredits ?? (seller.freeQuotationCredits || 15)}
+                  {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller)}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Active quote balance</p>
               </div>
               <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm">
                 <span className="text-xs text-slate-400 font-medium">{strings.credit.currentBalance}</span>
                 <div className="text-2xl font-bold text-purple-600 dark:text-purple-400 mt-1">
-                  {creditSummary?.currentCreditBalance ?? (seller.freeQuotationCredits || 15)}
+                  {creditSummary?.currentCreditBalance ?? getVendorCreditBalance(seller)}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5 capitalize">
                   {creditSummary?.subscriptionPlan || seller.subscriptionPlan || 'Preferred Partner'}
