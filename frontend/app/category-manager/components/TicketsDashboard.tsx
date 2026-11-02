@@ -34,6 +34,7 @@ import {
 } from '@/lib/ticketClient';
 import type { Ticket, TicketSummary, TicketPriority, TicketStatus } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import ActionCenterComposeModal from './ActionCenterComposeModal';
 
 const TICKET_CATEGORIES = [
   'General',
@@ -87,6 +88,7 @@ export default function TicketsDashboard() {
   const [isCreateOpen, setIsCreateOpen] = useState<boolean>(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [isEscalateOpen, setIsEscalateOpen] = useState<boolean>(false);
+  const [isCommModalOpen, setIsCommModalOpen] = useState<boolean>(false);
   const [escalatingTicket, setEscalatingTicket] = useState<Ticket | null>(null);
 
   // Create Form State
@@ -895,6 +897,14 @@ export default function TicketsDashboard() {
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCommModalOpen(true)}
+                  className="px-2.5 py-1 font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:text-indigo-300 rounded-lg border border-indigo-300 flex items-center gap-1"
+                >
+                  <Send size={12} />
+                  <span>Send SMS / Email</span>
+                </button>
                 {selectedTicket.status !== 'Completed' && (
                   <button
                     type="button"
@@ -988,6 +998,18 @@ export default function TicketsDashboard() {
             </div>
           </div>
         </div>
+      )}
+      {isCommModalOpen && selectedTicket && (
+        <ActionCenterComposeModal
+          isOpen={isCommModalOpen}
+          onClose={() => setIsCommModalOpen(false)}
+          entityType="ticket"
+          entityId={selectedTicket.id}
+          defaultRecipientName={selectedTicket.customer_name || 'Customer'}
+          defaultRecipientEmail={selectedTicket.customer_email || ''}
+          defaultRecipientPhone={selectedTicket.customer_phone || ''}
+          defaultSubject={`Ticket #${selectedTicket.ticket_number}: ${selectedTicket.subject}`}
+        />
       )}
     </div>
   );

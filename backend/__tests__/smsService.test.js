@@ -64,7 +64,7 @@ describe('smsService Unit Tests', () => {
     test('rejects invalid mobile number', async () => {
       const res = await smsService.sendOtpSms('123', '123456');
       expect(res.success).toBe(false);
-      expect(res.error).toBe('Invalid mobile number format');
+      expect(res.error).toContain('Invalid mobile number format');
     });
 
     test('returns mock success in test environment', async () => {
@@ -414,5 +414,147 @@ describe('smsService Unit Tests', () => {
       });
       expect(errorRes.success).toBe(false);
     });
+  });
+
+  describe('sendActionCenterSms', () => {
+    test('rejects invalid mobile number', async () => {
+      const res = await smsService.sendActionCenterSms({
+        mobile: '123',
+        message: 'Action Center Notification',
+      });
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('Invalid mobile number format. A 10-digit Indian mobile number is required.');
+    });
+
+    test('returns mock success in test environment', async () => {
+      process.env.NODE_ENV = 'test';
+      const res = await smsService.sendActionCenterSms({
+        mobile: '9157154504',
+        recipientName: 'Enterprise Client',
+        message: 'Your ticket has been updated',
+        linkUrl: 'https://procucev.com/action-center',
+        entityType: 'ticket',
+      });
+      expect(res.success).toBe(true);
+      expect(res.messageId).toContain('mock-test-sms-ac-');
+    });
+
+    test('handles non-test environment live, throttled, failure, and exception', async () => {
+      process.env.NODE_ENV = 'production';
+      smsService.clearSmsThrottleCache();
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ status: 'success', msgid: 'ACT123' }),
+      });
+      const res = await smsService.sendActionCenterSms({
+        mobile: '9157154504',
+        recipientName: 'Acme Admin',
+        message: 'Action needed on task',
+      });
+      expect(res.success).toBe(true);
+      expect(res.response).toContain('ACT123');
+      const sentPayload = JSON.parse(global.fetch.mock.calls[0][1].body);
+      expect(sentPayload.smstosend[0].smstext).toContain('Acme Admin');
+      expect(sentPayload.smstosend[0].smstext).toContain('Action needed on task');
+      expect(sentPayload.smstosend[0].smstext).not.toMatch(/\{#[a-z0-9_]+#\}/i);
+
+      const throttled = await smsService.sendActionCenterSms({
+        mobile: '9157154504',
+        message: 'Duplicate action',
+      });
+      expect(throttled.success).toBe(false);
+      expect(throttled.throttled).toBe(true);
+
+      smsService.clearSmsThrottleCache();
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => 'Gateway Error',
+      });
+      const failed = await smsService.sendActionCenterSms({
+        mobile: '9157154504',
+        message: 'Failure test',
+      });
+      expect(failed.success).toBe(false);
+
+      smsService.clearSmsThrottleCache();
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
+      const errorRes = await smsService.sendActionCenterSms({
+        mobile: '9157154504',
+        message: 'Network error test',
+      });
+      expect(errorRes.success).toBe(false);
+    });
+
+    test('covers branch edge-cases for CF_ENV, URL cleaning, and Action Center fallbacks', async () => {
+      // 1. clearSmsThrottleForPhone
+      smsService.clearSmsThrottleForPhone('9157154504');
+      smsService.clearSmsThrottleForPhone('invalid-num');
+
+      // 2. CF_ENV fallback in getEnv
+      const prevUrl = process.env.SMS_GATEWAY_URL;
+      delete process.env.SMS_GATEWAY_URL;
+      globalThis.__CF_ENV__ = { SMS_GATEWAY_URL: 'https://cf.example.com/sms' };
+      expect(smsService.SMS_GATEWAY_CONFIG.URL).toBe('https://cf.example.com/sms');
+      delete globalThis.__CF_ENV__;
+      if (prevUrl) process.env.SMS_GATEWAY_URL = prevUrl;
+
+      // 3. SMS_GATEWAY_CONFIG getters
+      expect(smsService.SMS_GATEWAY_CONFIG.ACTION_CENTER_SMSGID).toBeTruthy();
+      expect(smsService.SMS_GATEWAY_CONFIG.BUYER_UNLOCKED_SMSGID).toBeTruthy();
+
+      // 4. sendRFQChaserSms with &source=wa_1click and empty title/rfqNumber fallback
+      process.env.NODE_ENV = 'production';
+      smsService.clearSmsThrottleCache();
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ status: 'success', msgid: 'CHASER-WA-CLEAN' }),
+      });
+      const resWa = await smsService.sendRFQChaserSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-999',
+        rfqTitle: '',
+        bidLink: 'https://procucev.com/quote?rfq=RFQ-999&source=wa_1click',
+      });
+      expect(resWa.success).toBe(true);
+
+      // 5. sendBuyerComparisonSms with &source=wa_1click and empty title/name fallback
+      smsService.clearSmsThrottleCache();
+      const resBuyerWa = await smsService.sendBuyerComparisonSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-888',
+        rfqTitle: '',
+        buyerName: '',
+        comparisonUrl: 'https://procucev.com/compare?rfq=RFQ-888&source=wa_1click',
+      });
+      expect(resBuyerWa.success).toBe(true);
+
+      // 6. sendActionCenterSms with empty recipientName, alertText, linkUrl, and gateway rejected text
+      smsService.clearSmsThrottleCache();
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ status: 'error', error: 'DLT_REJECT' }),
+      });
+      const resReject = await smsService.sendActionCenterSms({
+        mobile: '9157154504',
+      });
+      expect(resReject.success).toBe(false);
+
+      // 7. sendActionCenterSms with ERR string response
+      smsService.clearSmsThrottleCache();
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => 'ERR_INVALID_SENDER',
+      });
+      const resErrStr = await smsService.sendActionCenterSms({
+        mobile: '9157154504',
+      });
+      expect(resErrStr.success).toBe(false);
+    });
+
   });
 });

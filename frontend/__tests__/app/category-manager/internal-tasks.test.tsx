@@ -1461,4 +1461,67 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
   });
 
+  test('covers row compose button, drawer compose button, and empty tasks fallback', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: mockTasks,
+      total: mockTasks.length,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-compose-tsk_101')).toBeInTheDocument();
+    });
+
+    // 1. Click row compose button
+    const rowComposeBtn = screen.getByTestId('task-row-compose-tsk_101');
+    fireEvent.click(rowComposeBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.actionCenter.communicationModal.modalTitle)).toBeInTheDocument();
+    });
+
+    // Close compose modal using header cancel button
+    const closeBtns = screen.getAllByRole('button', { name: UI_STRINGS.actionCenter.communicationModal.btnCancel });
+    fireEvent.click(closeBtns[0]);
+
+    // 2. Open task details drawer and click drawer compose button
+    fireEvent.click(screen.getByTestId('task-row-tsk_101'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-compose-btn')).toBeInTheDocument();
+    });
+
+    const drawerComposeBtn = screen.getByTestId('drawer-compose-btn');
+    fireEvent.click(drawerComposeBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+  });
+
+  test('covers compose modal when tasks list is empty and session user has no name', async () => {
+    const origSessionUser = require('@/lib/authClient').authClient.getSessionUser;
+    require('@/lib/authClient').authClient.getSessionUser = jest.fn().mockReturnValue({ email: 'noname@procucev.com' });
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [],
+      total: 0,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Send SMS/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Send SMS/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    require('@/lib/authClient').authClient.getSessionUser = origSessionUser;
+  });
+
 });

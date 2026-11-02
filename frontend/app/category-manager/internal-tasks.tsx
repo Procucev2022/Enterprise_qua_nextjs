@@ -26,6 +26,7 @@ import {
   Flame,
   Check,
   ChevronDown,
+  Send,
 } from 'lucide-react';
 import {
   InternalTask,
@@ -65,6 +66,7 @@ import { PaymentDuesDashboard } from './components/PaymentDuesDashboard';
 import { fetchPaymentDuesSummary } from '@/lib/paymentDuesClient';
 import { fetchTicketSummary } from '@/lib/ticketClient';
 import { fetchApprovalSummary } from '@/lib/approvalClient';
+import ActionCenterComposeModal from './components/ActionCenterComposeModal';
 
 export default function InternalTasksDashboard() {
   // Data state
@@ -98,6 +100,7 @@ export default function InternalTasksDashboard() {
   const [ticketSummary, setTicketSummary] = useState<TicketSummary | null>(null);
   const [approvalSummary, setApprovalSummary] = useState<ApprovalSummary | null>(null);
   const [paymentDuesSummary, setPaymentDuesSummary] = useState<PaymentDuesSummary | null>(null);
+  const [isComposeModalOpen, setIsComposeModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
       const tabParam = new URLSearchParams(window.location.search).get('tab') as ActionCenterTabKey;
@@ -669,6 +672,17 @@ export default function InternalTasksDashboard() {
             <span>Export</span>
           </a>
 
+          {/* Quick Compose SMS / Email Button */}
+          <button
+            type="button"
+            onClick={() => setIsComposeModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition-all shadow-sm"
+            title="Dispatch SMS or Email Notification"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>Send SMS / Email</span>
+          </button>
+
           {/* Create Internal Task Button */}
           <button
             onClick={handleOpenCreateModal}
@@ -870,6 +884,18 @@ export default function InternalTasksDashboard() {
                       {/* Actions */}
                       <td className="py-3 px-3.5 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTaskDetails(task);
+                              setIsComposeModalOpen(true);
+                            }}
+                            className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
+                            title="Dispatch SMS / Email for task"
+                            data-testid={`task-row-compose-${task.id}`}
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                          </button>
                           <button
                             onClick={() => setSelectedTaskDetails(task)}
                             className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
@@ -1520,12 +1546,23 @@ export default function InternalTasksDashboard() {
                   <Trash2 className="w-3.5 h-3.5" />
                   <span>Delete Task</span>
                 </button>
-                <button
-                  onClick={() => setSelectedTaskDetails(null)}
-                  className="px-4 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg font-semibold text-slate-700 dark:text-slate-300"
-                >
-                  Close
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsComposeModalOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 transition-all shadow-sm"
+                    data-testid="drawer-compose-btn"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Dispatch SMS / Email</span>
+                  </button>
+                  <button
+                    onClick={() => setSelectedTaskDetails(null)}
+                    className="px-4 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg font-semibold text-slate-700 dark:text-slate-300"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1533,6 +1570,21 @@ export default function InternalTasksDashboard() {
       )}
         </>
       )}
+
+      {isComposeModalOpen && (() => {
+        const activeTask = selectedTaskDetails || tasks[0] || null;
+        return (
+          <ActionCenterComposeModal
+            isOpen={isComposeModalOpen}
+            onClose={() => setIsComposeModalOpen(false)}
+            entityType="internal_task"
+            entityId={activeTask?.id || 'general-task'}
+            defaultSubject={activeTask?.title ? `Task Update: ${activeTask.title}` : 'Task Notification'}
+            defaultRecipientName={activeTask?.assigned_to_name || sessionUser?.name || 'Category Manager'}
+            defaultRecipientEmail={assignees.find((member) => member.id === activeTask?.assigned_to_user_id)?.email || ''}
+          />
+        );
+      })()}
     </div>
   );
 }

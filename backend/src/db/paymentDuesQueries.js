@@ -485,9 +485,11 @@ async function recordCommunication({
  * Update acknowledgement status of an account
  */
 async function updateAcknowledgementStatus({
+  communicationId,
   accountId,
   accountType,
   acknowledgementStatus,
+  deliveryStatus,
   notes = '',
   updatedBy = 'Category Manager',
 }) {
@@ -496,22 +498,36 @@ async function updateAcknowledgementStatus({
 
   if (pool.hasStorage()) {
     try {
-      const sql = `
-        UPDATE payment_dues_communications
-        SET acknowledgement_status = $1,
-            notes = COALESCE($2, notes),
-            acknowledged_at = CASE WHEN $1 = 'Acknowledged' THEN $3 ELSE acknowledged_at END,
-            acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $4 ELSE acknowledged_by END,
-            updated_at = $3
-        WHERE id = (
-          SELECT id FROM payment_dues_communications
-          WHERE account_id = $5
-          ORDER BY sent_at DESC
-          LIMIT 1
-        )
-        RETURNING *
-      `;
-      const result = await pool.query(sql, [acknowledgementStatus, notes || null, now, updatedBy, accountId]);
+      const sql = communicationId
+        ? `
+          UPDATE payment_dues_communications
+          SET acknowledgement_status = COALESCE($1, acknowledgement_status),
+              delivery_status = COALESCE($2, delivery_status),
+              notes = COALESCE($3, notes),
+              acknowledged_at = CASE WHEN $1 = 'Acknowledged' THEN $4 ELSE acknowledged_at END,
+              acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
+              updated_at = $4
+          WHERE id = $6
+          RETURNING *
+        `
+        : `
+          UPDATE payment_dues_communications
+          SET acknowledgement_status = COALESCE($1, acknowledgement_status),
+              delivery_status = COALESCE($2, delivery_status),
+              notes = COALESCE($3, notes),
+              acknowledged_at = CASE WHEN $1 = 'Acknowledged' THEN $4 ELSE acknowledged_at END,
+              acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
+              updated_at = $4
+          WHERE id = (
+            SELECT id FROM payment_dues_communications
+            WHERE account_id = $6
+            ORDER BY sent_at DESC
+            LIMIT 1
+          )
+          RETURNING *
+        `;
+      const targetParam = communicationId || accountId;
+      const result = await pool.query(sql, [acknowledgementStatus || null, deliveryStatus || null, notes || null, now, updatedBy, targetParam]);
       if (result && result.rows && result.rows.length > 0) {
         const row = result.rows[0];
         updatedRecord = {
@@ -540,36 +556,58 @@ async function updateAcknowledgementStatus({
     }
   }
 
-  // Update in-memory list
-  const list = inMemoryCommunications.get(accountId) || [];
-  if (list.length > 0) {
-    const item = list[0];
-    item.acknowledgementStatus = acknowledgementStatus;
-    if (notes) item.notes = notes;
-    if (acknowledgementStatus === 'Acknowledged') {
-      item.acknowledgedAt = now;
-      item.acknowledgedBy = updatedBy;
+  // Update in-memory storage
+  if (communicationId) {
+    for (const list of inMemoryCommunications.values()) {
+      const found = list.find((item) => item.id === communicationId || item.metadata?.gatewayMessageId === communicationId || item.metadata?.msgid === communicationId);
+      if (found) {
+        if (acknowledgementStatus) found.acknowledgementStatus = acknowledgementStatus;
+        if (deliveryStatus) found.deliveryStatus = deliveryStatus;
+        if (notes) found.notes = notes;
+        if (acknowledgementStatus === 'Acknowledged') {
+          found.acknowledgedAt = now;
+          found.acknowledgedBy = updatedBy;
+        }
+        found.updatedAt = now;
+        updatedRecord = found;
+        break;
+      }
     }
-    item.updatedAt = now;
-    updatedRecord = item;
-  } else {
-    // If no prior communication existed, create an initial acknowledgement record
-    updatedRecord = await recordCommunication({
-      accountId,
-      accountType: accountType || 'buyer',
-      channel: 'message',
-      recipient: accountId,
-      subject: 'Manual Acknowledgement Status Update',
-      message: `Status updated to ${acknowledgementStatus}`,
-      communicatedBy: updatedBy,
-      notificationStatus: 'Delivered',
-      deliveryStatus: 'Delivered',
-      acknowledgementStatus,
-      notes,
-    });
-    if (acknowledgementStatus === 'Acknowledged') {
-      updatedRecord.acknowledgedAt = now;
-      updatedRecord.acknowledgedBy = updatedBy;
+    return updatedRecord;
+  }
+
+  // Fallback by accountId when communicationId is not provided
+  if (accountId) {
+    const list = inMemoryCommunications.get(accountId) || [];
+    if (list.length > 0) {
+      const item = list[0];
+      if (acknowledgementStatus) item.acknowledgementStatus = acknowledgementStatus;
+      if (deliveryStatus) item.deliveryStatus = deliveryStatus;
+      if (notes) item.notes = notes;
+      if (acknowledgementStatus === 'Acknowledged') {
+        item.acknowledgedAt = now;
+        item.acknowledgedBy = updatedBy;
+      }
+      item.updatedAt = now;
+      updatedRecord = item;
+    } else {
+      updatedRecord = await recordCommunication({
+        accountId,
+        accountType: accountType || 'buyer',
+        channel: 'message',
+        recipient: accountId,
+        subject: 'Manual Acknowledgement Status Update',
+        message: `Status updated to ${acknowledgementStatus || deliveryStatus}`,
+        communicatedBy: updatedBy,
+        notificationStatus: 'Delivered',
+        deliveryStatus: deliveryStatus || 'Delivered',
+        acknowledgementStatus: acknowledgementStatus || 'Pending',
+        notes,
+      });
+      if (acknowledgementStatus === 'Acknowledged') {
+        updatedRecord.acknowledgedAt = now;
+        updatedRecord.acknowledgedBy = updatedBy;
+      }
     }
   }
 
@@ -577,15 +615,22 @@ async function updateAcknowledgementStatus({
 }
 
 /**
- * Get communication history for an account
+ * Get communication history for an account or across all accounts
  */
-async function getCommunicationHistory(accountId) {
+async function getCommunicationHistory(accountId, options = {}) {
+  const isAll = Boolean(options?.isCrossAccount) && (!accountId || accountId === '' || accountId === '*');
+  const limit = Math.min(Math.max(Number(options?.limit) || 50, 1), 200);
+  const offset = Math.max(Number(options?.offset) || 0, 0);
+
   if (pool.hasStorage()) {
     try {
-      const sql = 'SELECT * FROM payment_dues_communications WHERE account_id = $1 ORDER BY sent_at DESC';
-      const result = await pool.query(sql, [accountId], {
+      const sql = isAll
+        ? 'SELECT * FROM payment_dues_communications ORDER BY sent_at DESC LIMIT $1 OFFSET $2'
+        : 'SELECT * FROM payment_dues_communications WHERE account_id = $1 ORDER BY sent_at DESC LIMIT $2 OFFSET $3';
+      const params = isAll ? [limit, offset] : [accountId, limit, offset];
+      const result = await pool.query(sql, params, {
         d1: true,
-        d1Text: 'SELECT * FROM payment_dues_communications WHERE account_id = $1 ORDER BY sent_at DESC',
+        d1Text: sql,
       });
       if (result && Array.isArray(result.rows)) {
         return result.rows.map((row) => ({
@@ -614,7 +659,121 @@ async function getCommunicationHistory(accountId) {
     }
   }
 
-  return inMemoryCommunications.get(accountId) || [];
+  if (isAll) {
+    const all = [];
+    for (const comms of inMemoryCommunications.values()) {
+      all.push(...comms);
+    }
+    all.sort((a, b) => new Date(b.sentAt || 0) - new Date(a.sentAt || 0));
+    return all.slice(offset, offset + limit);
+  }
+
+  const list = inMemoryCommunications.get(accountId) || [];
+  return list.slice(offset, offset + limit);
+}
+
+
+/**
+ * Query communications with database-level filtering and pagination.
+ */
+async function queryCommunications({
+  accountId,
+  entityType,
+  channel,
+  limit = 20,
+  offset = 0,
+  isCrossAccount = false,
+} = {}) {
+  const pLimit = Math.max(1, Number(limit) || 20);
+  const pOffset = Math.max(0, Number(offset) || 0);
+  const conditions = [];
+  const params = [];
+  let paramIdx = 1;
+
+  if (accountId && !isCrossAccount) {
+    conditions.push(`account_id = ${paramIdx++}`);
+    params.push(accountId);
+  }
+
+  if (entityType) {
+    conditions.push(`(LOWER(account_type) = LOWER(${paramIdx}) OR LOWER(metadata->>'entityType') = LOWER(${paramIdx}))`);
+    paramIdx++;
+    params.push(entityType);
+  }
+
+  if (channel && channel !== 'ALL') {
+    conditions.push(`UPPER(channel) = UPPER(${paramIdx++})`);
+    params.push(channel);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  if (pool.hasStorage()) {
+    try {
+      const countSql = `SELECT COUNT(*) AS total FROM payment_dues_communications ${whereClause}`;
+      const countResult = await pool.query(countSql, params, { d1: true, d1Text: countSql });
+      const total = Number(countResult?.rows?.[0]?.total || 0);
+
+      const dataSql = `SELECT * FROM payment_dues_communications ${whereClause} ORDER BY sent_at DESC LIMIT ${paramIdx++} OFFSET ${paramIdx++}`;
+      const dataParams = [...params, pLimit, pOffset];
+      const dataResult = await pool.query(dataSql, dataParams, { d1: true, d1Text: dataSql });
+      const rows = Array.isArray(dataResult?.rows) ? dataResult.rows : [];
+
+      return {
+        items: rows.map((row) => ({
+          id: row.id,
+          accountId: row.account_id,
+          accountType: row.account_type,
+          channel: row.channel,
+          recipient: row.recipient,
+          subject: row.subject,
+          message: row.message,
+          notificationStatus: row.notification_status,
+          deliveryStatus: row.delivery_status,
+          acknowledgementStatus: row.acknowledgement_status,
+          communicatedBy: row.communicated_by,
+          sentAt: row.sent_at,
+          acknowledgedAt: row.acknowledged_at,
+          acknowledgedBy: row.acknowledged_by,
+          notes: row.notes,
+          metadata: parseRaw(row.metadata, {}),
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        })),
+        total,
+      };
+    } catch {
+      // fallback to in-memory
+    }
+  }
+
+  // In-memory query implementation
+  let all = [];
+  if (accountId && !isCrossAccount) {
+    all = [...(inMemoryCommunications.get(accountId) || [])];
+  } else {
+    for (const comms of inMemoryCommunications.values()) {
+      all.push(...comms);
+    }
+  }
+
+  if (entityType) {
+    const et = String(entityType).toLowerCase();
+    all = all.filter(
+      (r) => String(r.accountType || '').toLowerCase() === et || String(r.metadata?.entityType || '').toLowerCase() === et
+    );
+  }
+
+  if (channel && channel !== 'ALL') {
+    const ch = String(channel).toUpperCase();
+    all = all.filter((r) => String(r.channel || '').toUpperCase() === ch);
+  }
+
+  all.sort((a, b) => new Date(b.sentAt || 0) - new Date(a.sentAt || 0));
+  const total = all.length;
+  const items = all.slice(pOffset, pOffset + pLimit);
+
+  return { items, total };
 }
 
 module.exports = {
@@ -623,6 +782,7 @@ module.exports = {
   recordCommunication,
   updateAcknowledgementStatus,
   getCommunicationHistory,
+  queryCommunications,
   resetInMemoryCommunications,
   fetchRawBuyers,
   fetchRawVendors,
