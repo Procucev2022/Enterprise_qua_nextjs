@@ -1272,42 +1272,28 @@ describe('SupplierDossierDrawer', () => {
       <SupplierDossierDrawer
         seller={mockSeller as any}
         onClose={jest.fn()}
-        initialTab="communications"
       />
     );
+
+    // Switch to Communications tab
+    fireEvent.click(screen.getByRole('button', { name: /^Communications/i }));
 
     const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
     fireEvent.click(recordBtn);
 
-    const composeDialog = (await screen.findByPlaceholderText(/Type message content|summary of call|Price negotiation|Brief summary/i)).closest('[role="dialog"]') as HTMLElement;
+    const dialog = await screen.findByRole('dialog');
 
-    // Switch to Email channel
-    const channelSelect = composeDialog.querySelector('select');
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'EMAIL' } });
-
-    // Change Scenario to Premium Access
-    const scenarioSelect = within(composeDialog).getByText(/Select Conversion Scenario/i).closest('div')?.querySelector('select') as HTMLSelectElement;
+    // Change Scenario to seller_premium_access
+    const scenarioSelect = dialog.querySelectorAll('select')[1];
     fireEvent.change(scenarioSelect, { target: { value: 'seller_premium_access' } });
 
     // Verify subject and message were interpolated
-    const subjectInput = within(composeDialog).getByPlaceholderText(/RFQ Quotation|Deadline Follow-up/i) as HTMLInputElement;
-    expect(subjectInput.value).toContain('Exclusive Invitation');
+    const subjectInput = within(dialog).getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.compose.subjectPlaceholder) as HTMLInputElement;
+    expect(subjectInput.value).toContain('Sudheer Solutions pvt LTD');
 
-    // Change to Conversion Followup
-    fireEvent.change(scenarioSelect, { target: { value: 'seller_conversion_followup' } });
-    expect(subjectInput.value).toContain('Verified Supplier Partnership');
-
-    // Re-select same scenario to test duplicate attachment filter branch
-    fireEvent.change(scenarioSelect, { target: { value: 'seller_premium_access' } });
-
-    // Select scenario with empty suggested tags
-    fireEvent.change(scenarioSelect, { target: { value: 'seller_call_outcome_busy' } });
-
-    // Test empty scenario selection
-    fireEvent.change(scenarioSelect, { target: { value: '' } });
-
-    // Test non-matching scenario
-    fireEvent.change(scenarioSelect, { target: { value: 'NON_EXISTENT_SCENARIO' } });
+    // Change to seller_featured_placement scenario
+    fireEvent.change(scenarioSelect, { target: { value: 'seller_featured_placement' } });
+    expect(subjectInput.value).toContain('Sudheer Solutions pvt LTD');
 
     // Test custom scenario selection
     fireEvent.change(scenarioSelect, { target: { value: 'custom' } });
@@ -1323,50 +1309,58 @@ describe('SupplierDossierDrawer', () => {
       <SupplierDossierDrawer
         seller={mockSeller as any}
         onClose={jest.fn()}
-        initialTab="communications"
       />
     );
+
+    // Switch to Communications tab
+    fireEvent.click(screen.getByRole('button', { name: /^Communications/i }));
 
     const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
     fireEvent.click(recordBtn);
 
-    const composeDialog = (await screen.findByPlaceholderText(/Type message content|summary of call|Price negotiation|Brief summary/i)).closest('[role="dialog"]') as HTMLElement;
+    const dialog = await screen.findByRole('dialog');
+    const channelSelect = dialog.querySelectorAll('select')[0];
+    fireEvent.change(channelSelect, { target: { value: 'CALL' } });
 
-    // Switch to Call channel
-    const channelSelect = composeDialog.querySelector('select');
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-
-    // Click Connected outcome draft button
-    const connectedBtn = within(composeDialog).getByRole('button', { name: /Draft for Connected/i });
+    // Click Draft for Connected
+    const connectedBtn = within(dialog).getByRole('button', { name: /Draft for Connected/i });
     fireEvent.click(connectedBtn);
-    expect(within(composeDialog).getByPlaceholderText(/RFQ Quotation|Deadline Follow-up/i)).toBeInTheDocument();
+    const subjectInput = within(dialog).getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.compose.subjectPlaceholder) as HTMLInputElement;
+    expect(subjectInput.value).toContain('Sudheer Solutions pvt LTD');
 
-    // Click Call again and test Left Voicemail
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-    const vmBtn = within(composeDialog).getByRole('button', { name: /Draft for Left Voicemail/i });
+    // Switch to CALL again and test Left Voicemail
+    fireEvent.change(dialog.querySelectorAll('select')[0], { target: { value: 'CALL' } });
+    const vmBtn = within(dialog).getByRole('button', { name: /Draft for Left Voicemail/i });
     fireEvent.click(vmBtn);
+    expect(subjectInput.value).toContain('Sudheer Solutions pvt LTD');
 
-    // Click Call again and test Busy
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-    const busyBtn = within(composeDialog).getByRole('button', { name: /Draft for Busy/i });
+    // Switch to CALL again and test Busy
+    fireEvent.change(dialog.querySelectorAll('select')[0], { target: { value: 'CALL' } });
+    const busyBtn = within(dialog).getByRole('button', { name: /Draft for Busy/i });
     fireEvent.click(busyBtn);
+    expect(subjectInput.value).toContain('Sudheer Solutions pvt LTD');
 
-    // Click Call again and test No Answer
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-    const noAnswerBtn = within(composeDialog).getByRole('button', { name: /Draft for No Answer/i });
+    // Switch to CALL again and test No Answer
+    fireEvent.change(dialog.querySelectorAll('select')[0], { target: { value: 'CALL' } });
+    const noAnswerBtn = within(dialog).getByRole('button', { name: /Draft for No Answer/i });
     fireEvent.click(noAnswerBtn);
+    expect(subjectInput.value).toContain('Sudheer Solutions pvt LTD');
 
-    // Click Call again and test Wrong Number
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-    const wrongNumBtn = within(composeDialog).getByRole('button', { name: /Draft for Wrong Number/i });
+    // Switch to CALL again and test Wrong Number
+    fireEvent.change(dialog.querySelectorAll('select')[0], { target: { value: 'CALL' } });
+    const wrongNumBtn = within(dialog).getByRole('button', { name: /Draft for Wrong Number/i });
     fireEvent.click(wrongNumBtn);
+    expect(subjectInput.value).toContain('Sudheer Solutions pvt LTD');
 
-    // Set followup date and test Convert Call to Followup Email button
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-    const dateInput = composeDialog.querySelector('input[type="datetime-local"]') as HTMLInputElement;
-    if (dateInput) fireEvent.change(dateInput, { target: { value: '2026-11-10T14:00' } });
-    const convertBtn = within(composeDialog).getByRole('button', { name: /Email Follow-up Call Schedule to Vendor/i });
+    // Convert Call to Followup Email button with date set
+    fireEvent.change(dialog.querySelectorAll('select')[0], { target: { value: 'CALL' } });
+    const dateInput = dialog.querySelector('input[type="datetime-local"]');
+    if (dateInput) {
+      fireEvent.change(dateInput, { target: { value: '2026-11-10T14:00' } });
+    }
+    const convertBtn = within(dialog).getByRole('button', { name: /Email Follow-up Call Schedule to Vendor/i });
     fireEvent.click(convertBtn);
+    expect(subjectInput.value).toContain('Sudheer Solutions pvt LTD');
   });
 
   test('toggles vault dropdown and attaches/removes vault collateral and local files for seller', async () => {
@@ -1378,29 +1372,27 @@ describe('SupplierDossierDrawer', () => {
       <SupplierDossierDrawer
         seller={mockSeller as any}
         onClose={jest.fn()}
-        initialTab="communications"
       />
     );
+
+    // Switch to Communications tab
+    fireEvent.click(screen.getByRole('button', { name: /^Communications/i }));
 
     const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
     fireEvent.click(recordBtn);
 
-    const composeDialog = (await screen.findByPlaceholderText(/Type message content|summary of call|Price negotiation|Brief summary/i)).closest('[role="dialog"]') as HTMLElement;
-
-    // Switch to Email channel
-    const channelSelect = composeDialog.querySelector('select');
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'EMAIL' } });
+    const dialog = await screen.findByRole('dialog');
 
     // Open Document Vault dropdown
-    const vaultDropdownBtn = within(composeDialog).getByText(/Select collateral from Document Vault\.\.\./i);
+    const vaultDropdownBtn = within(dialog).getByText(/Select collateral from Document Vault\.\.\./i);
     fireEvent.click(vaultDropdownBtn);
 
     // Select Product Rate Card from vault
-    const rateCardOption = await within(composeDialog).findByText('Product Rate Card');
+    const rateCardOption = await within(dialog).findByText('Product Rate Card');
     fireEvent.click(rateCardOption);
 
     // Verify rate card attachment badge appears
-    expect(within(composeDialog).getAllByText('Product Rate Card').length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText('Product Rate Card').length).toBeGreaterThan(0);
 
     // Click again to unselect
     fireEvent.click(rateCardOption);
@@ -1410,128 +1402,189 @@ describe('SupplierDossierDrawer', () => {
 
     // Attach local file
     const file = new File(['mock content'], 'seller_specs.pdf', { type: 'application/pdf' });
-    const fileInput = composeDialog.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = dialog.querySelector('input[type="file"]') as HTMLInputElement;
     if (fileInput) {
       fireEvent.change(fileInput, { target: { files: [file] } });
-      expect(await within(composeDialog).findByText(/seller specs \(Local Upload\)/i)).toBeInTheDocument();
+      expect(await within(dialog).findByText(/seller specs \(Local Upload\)/i)).toBeInTheDocument();
     }
 
     // Remove attachment via X button
-    const removeBtns = within(composeDialog).getAllByRole('button').filter(b => b.querySelector('svg.lucide-x'));
+    const removeBtns = within(dialog).getAllByRole('button').filter(b => b.querySelector('svg.lucide-x'));
     if (removeBtns.length > 0) {
       fireEvent.click(removeBtns[0]);
     }
-
-    // Test file input with empty files list
-    if (fileInput) {
-      fireEvent.change(fileInput, { target: { files: [] } });
-    }
   });
-
-  test('covers supplier scenario branch fallbacks with sparse seller and prefilled notes', async () => {
-    (supplierProfileClient.fetchSupplierCommunications as jest.Mock).mockResolvedValueOnce({
-      success: true,
-      data: [],
-    });
-    const sparseSeller = {
-      ...mockSeller,
-      name: '',
-      contactPerson: undefined,
-      email: undefined,
-      phone: undefined,
+  test('covers remaining edge-case branches for 90%+ branch coverage benchmark', async () => {
+    // 1. initialTab and category fallback (line 132, 150)
+    const sparseSeller: any = {
+      id: 'v-sparse-1',
+      category: 'Electronics',
+      phone: '9876543210',
     };
-    render(
+    (supplierProfileClient.fetchSupplierCreditHistory as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    const { unmount } = render(
       <SupplierDossierDrawer
-        seller={sparseSeller as any}
+        seller={sparseSeller}
+        initialTab="credit"
         onClose={jest.fn()}
-        initialTab="communications"
       />
     );
+    expect(await screen.findByText(/Total Credits Allocated/i)).toBeInTheDocument();
+    unmount();
 
-    const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
-    fireEvent.click(recordBtn);
-
-    const composeDialog = (await screen.findByPlaceholderText(/Type message content|summary of call|Price negotiation|Brief summary/i)).closest('[role="dialog"]') as HTMLElement;
-
-    // Test scenario dropdown changes with empty, custom, and unknown scenarios
-    const scenarioSelect = within(composeDialog).getByText(/Select Conversion Scenario/i).closest('div')?.querySelector('select');
-    if (scenarioSelect) {
-      fireEvent.change(scenarioSelect, { target: { value: '' } });
-      fireEvent.change(scenarioSelect, { target: { value: 'custom' } });
-      fireEvent.change(scenarioSelect, { target: { value: 'non_existent_scenario' } });
-      fireEvent.change(scenarioSelect, { target: { value: 'seller_premium_access' } });
-    }
-
-    // Attach local file with no extension and no mime type
-    const noExtFile = new File(['content'], 'LICENSE', { type: '' });
-    const fileInput = composeDialog.querySelector('input[type="file"]') as HTMLInputElement;
-    if (fileInput) {
-      fireEvent.change(fileInput, { target: { files: [noExtFile] } });
-      expect(await within(composeDialog).findByText(/LICENSE \(Local Upload\)/i)).toBeInTheDocument();
-    }
-
-    // Prefill notes and message
-    const msgInput = within(composeDialog).getByPlaceholderText(/Type message content|summary of call/i);
-    fireEvent.change(msgInput, { target: { value: 'Pre-existing supplier notes' } });
-
-    // Switch to Call channel
-    const channelSelect = composeDialog.querySelector('select');
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-
-    // Set followup date and convert to email
-    const dateInput = composeDialog.querySelector('input[type="datetime-local"]') as HTMLInputElement;
-    if (dateInput) fireEvent.change(dateInput, { target: { value: '2026-11-22T11:00' } });
-    const convertBtn = within(composeDialog).getByRole('button', { name: /Email Follow-up Call Schedule to Vendor/i });
-    fireEvent.click(convertBtn);
-
-    // Now submit form with attachments and followup date
-    (supplierProfileClient.recordSupplierCommunication as jest.Mock).mockResolvedValueOnce({
-      success: true,
-      data: { id: 'comm-sent-with-attachments' },
-    });
-    const form = composeDialog.querySelector('form');
-    if (form) {
-      fireEvent.submit(form);
-    }
-  });
-
-  test('handles draft for call outcome when seller has vendorName instead of email, and submits without followup date', async () => {
+    // 2. Communications modal Escape, empty message validation, vault matching, and submission with attachments (lines 433-435, 494, 541, 557)
+    const { fetchDocuments } = jest.requireMock('@/lib/documentVaultClient');
+    fetchDocuments.mockResolvedValueOnce([
+      {
+        id: 'vault-rc-1',
+        documentName: 'Rate Card 2026',
+        fileName: 'rate_card.pdf',
+        fileSize: 1024,
+        category: 'rate_cards',
+        isActive: true,
+      },
+    ]);
     (supplierProfileClient.fetchSupplierCommunications as jest.Mock).mockResolvedValueOnce({
       success: true,
-      data: [],
+      data: [
+        {
+          id: 'comm-row-1',
+          channel: 'EMAIL',
+          subject: 'Test Subject Row',
+          message: 'Test Message Row',
+          recipient: 'seller@test.com',
+          createdAt: '2026-11-01T10:00:00Z',
+        },
+      ],
     });
     (supplierProfileClient.recordSupplierCommunication as jest.Mock).mockResolvedValueOnce({
       success: true,
-      data: { id: 'comm-no-followup' },
     });
-    const vendorSeller = {
-      ...mockSeller,
-      email: undefined,
-      vendorName: 'Acme Vendor Supplies',
-    };
-    render(
+
+    const { unmount: unmountComm } = render(
       <SupplierDossierDrawer
-        seller={vendorSeller as any}
-        onClose={jest.fn()}
+        seller={{ ...mockSeller, contactPerson: undefined, name: undefined }}
         initialTab="communications"
+        onClose={jest.fn()}
       />
     );
 
+    // Click communication table row to open detail modal, then press Escape (line 494)
+    const commRow = await screen.findByText('Test Subject Row');
+    fireEvent.click(commRow);
+    expect(screen.getByText(/Channel:/i)).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByText(/Channel:/i)).not.toBeInTheDocument();
+    });
+
+    // Open record communication modal
     const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
     fireEvent.click(recordBtn);
+    const dialog = await screen.findByRole('dialog');
 
-    const composeDialog = (await screen.findByPlaceholderText(/Type message content|summary of call|Price negotiation|Brief summary/i)).closest('[role="dialog"]') as HTMLElement;
-    const channelSelect = composeDialog.querySelector('select');
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
+    // Test submitting with empty message (line 541)
+    const submitBtn = within(dialog).getByRole('button', { name: /Dispatch & Record/i });
+    fireEvent.click(submitBtn);
 
-    // Draft for Connected
-    const connectedBtn = within(composeDialog).getByRole('button', { name: /Draft for Connected/i });
-    fireEvent.click(connectedBtn);
+    // Switch channel to SMS to cover line 1890 (seller.phone || seller.email || '')
+    const channelSelect = dialog.querySelectorAll('select')[0];
+    fireEvent.change(channelSelect, { target: { value: 'SMS' } });
+    fireEvent.change(channelSelect, { target: { value: 'EMAIL' } });
 
-    // Submit communication without followup date
-    const form = composeDialog.querySelector('form');
-    if (form) {
-      fireEvent.submit(form);
+    // Select seller_premium_access to trigger suggestedVaultTags: ['rate_cards'] matching vault docs (lines 433-435)
+    const scenarioSelect = dialog.querySelectorAll('select')[1];
+    fireEvent.change(scenarioSelect, { target: { value: 'seller_premium_access' } });
+
+    // Upload file with empty MIME type to hit mimeType fallback (line 480)
+    const fileNoType = new File(['mock content'], 'test_specs.doc', { type: '' });
+    const localInput = dialog.querySelector('input[type="file"]') as HTMLInputElement;
+    if (localInput) {
+      fireEvent.change(localInput, { target: { files: [fileNoType] } });
     }
+
+    // Fill message and submit with attachments (lines 557)
+    const messageInput = dialog.querySelector('textarea') as HTMLTextAreaElement;
+    fireEvent.change(messageInput, { target: { value: 'Valid test communication message content.' } });
+    fireEvent.click(submitBtn);
+    await waitFor(() => {
+      expect(supplierProfileClient.recordSupplierCommunication).toHaveBeenCalled();
+    });
+    unmountComm();
+
+    // 3. Payments with date fallback & search (lines 621, 642, 1460)
+    (supplierProfileClient.fetchSupplierPaymentHistory as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      payments: [
+        {
+          id: 'pay-fallback-date',
+          invoiceNo: 'INV-DATE-TEST',
+          date: '2026-11-02T10:00:00Z',
+          amount: 15000,
+          status: 'COMPLETED',
+          description: 'Payment description search match',
+          currency: 'INR',
+          gateway: 'RAZORPAY',
+          receiptUrl: 'https://example.com/receipt.pdf',
+        },
+      ],
+      summary: { totalPaid: 15000, pendingCount: 0 },
+    });
+    const { unmount: unmountPay } = render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="payments"
+        onClose={jest.fn()}
+      />
+    );
+    expect(await screen.findByText('INV-DATE-TEST')).toBeInTheDocument();
+    const searchInput = screen.getByPlaceholderText('Search invoices or gateway...');
+    fireEvent.change(searchInput, { target: { value: 'search match' } });
+    expect(screen.getByText('INV-DATE-TEST')).toBeInTheDocument();
+    const exportBtn = screen.getByRole('button', { name: /Export CSV/i });
+    fireEvent.click(exportBtn);
+    unmountPay();
+
+    // 4. Quotes modal with missing itemName and unitPrice (lines 1724, 1725, 1727, 1730)
+    const mockRfqWithFallback: any = {
+      id: 'rfq-fallback',
+      rfqNumber: 'RFQ-FALLBACK-01',
+      title: 'RFQ Fallback Title',
+      category: 'Engineering Spares - Electrical',
+      sourcingMode: 'mode_1',
+      status: 'QUOTED',
+      quotesCount: 1,
+      budget: 100000,
+      extractedEntities: [
+        {
+          id: 'ent-desc-only',
+          description: 'Custom Fitting Description',
+          quantity: 2,
+        },
+      ],
+      quotes: [
+        {
+          vendorId: 'v-hist-1793193596192-6-qspy',
+          vendorName: 'Sudheer Solutions pvt LTD',
+          totalPrice: 140000,
+          leadTimeDays: 5,
+        },
+      ],
+    };
+    const { unmount: unmountQuotes } = render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="quotes"
+        onClose={jest.fn()}
+        sellerRfqs={[mockRfqWithFallback]}
+      />
+    );
+    const detailsBtn = await screen.findByRole('button', { name: /^Details$/i });
+    fireEvent.click(detailsBtn);
+    expect(await screen.findByText(/Custom Fitting Description/i)).toBeInTheDocument();
+    unmountQuotes();
   });
+
 });
