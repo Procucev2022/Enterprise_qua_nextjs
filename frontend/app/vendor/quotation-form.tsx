@@ -136,7 +136,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   );
   const effectiveFreeCredits = (vendorSubscription as string) === 'standard'
     ? 0
-    : (freeCreditsRemaining ?? myVendorRecord?.freeQuotationCredits ?? vendorFreeCreditsRemaining ?? 5);
+    : (freeCreditsRemaining ?? myVendorRecord?.freeQuotationCredits ?? vendorFreeCreditsRemaining ?? 0);
   // isOwnBuyerRfq depends on myAddedByBuyerCompany, which only exists once
   // this fetch resolves — the deep-link auto-open effect below waits on this
   // flag so it doesn't judge a real direct-buyer RFQ as locked just because
@@ -731,7 +731,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500 dark:text-gray-400">Quotation Credits</div>
             <span className="mt-2 block font-mono text-2xl font-black text-orange-700 dark:text-orange-400">
               {vendorSubscription === 'connect' || vendorSubscription === 'select'
-                ? 'Active Plan'
+                ? `${vendorFreeCreditsRemaining ?? '…'} Credits Left`
                 : `${effectiveFreeCredits} Free Left`}
             </span>
           </div>

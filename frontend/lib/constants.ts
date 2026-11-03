@@ -326,6 +326,25 @@ export const VENDOR_SUBSCRIPTION_PLANS = [
   },
 ];
 
+/** RFQ downloads included per paid vendor plan per 3-month period (mirrors backend VENDOR_PLAN_RFQ_QUOTA). */
+export const VENDOR_PLAN_RFQ_QUOTA: Record<string, number> = { connect: 50, select: 100 };
+
+/**
+ * A vendor's displayable credit balance: plan quota less downloads used for a
+ * Connect/Select subscriber, otherwise their free-tier balance (0 unless the
+ * vendor still holds free credits). Reading the free-tier field alone
+ * rendered every subscriber as "0 Credits".
+ */
+export function getVendorCreditBalance(vendor: {
+  subscriptionPlan?: string;
+  rfqDownloadsUsed?: number;
+  freeQuotationCredits?: number;
+}): number {
+  const quota = vendor.subscriptionPlan ? VENDOR_PLAN_RFQ_QUOTA[vendor.subscriptionPlan] : undefined;
+  if (quota !== undefined) return Math.max(0, quota - (Number(vendor.rfqDownloadsUsed) || 0));
+  return Math.max(0, Number(vendor.freeQuotationCredits) || 0);
+}
+
 export const INITIAL_SYSTEM_CONFIG: SystemConfig = {
   ollamaModel: 'Llama 3 (8B Instruct)',
   ollamaActive: true,

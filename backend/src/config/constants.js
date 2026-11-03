@@ -152,6 +152,11 @@ const BUYER_SUBSCRIPTION_PLANS = [
   },
 ];
 
+// RFQ downloads included in each paid vendor plan per 3-month period, as
+// promised by the plan features below. A subscriber's credit balance is this
+// quota less rfqDownloadsUsed (see storeService.getVendorRfqCredits).
+const VENDOR_PLAN_RFQ_QUOTA = { connect: 50, select: 100 };
+
 const VENDOR_SUBSCRIPTION_PLANS = [
   {
     id: 'premium',
@@ -2920,6 +2925,7 @@ module.exports = {
   SOURCING_MODES,
   BUYER_SUBSCRIPTION_PLANS,
   VENDOR_SUBSCRIPTION_PLANS,
+  VENDOR_PLAN_RFQ_QUOTA,
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
   DATABASE_HEALTH_SERVICE_LABEL,

@@ -9,6 +9,7 @@ const {
   hasUnlimitedQuoteAccess,
   hasUnlimitedDownloadAccess,
   VENDOR_FREE_CREDITS_LIMIT,
+  VENDOR_PLAN_RFQ_QUOTA,
   VENDOR_ASSIGNMENT_LIMITS,
   MAJOR_CATEGORY_ALIASES,
   DEFAULT_CATEGORY_TAXONOMY,
@@ -1598,6 +1599,25 @@ class StoreService {
       hasUnlimitedDownloads
     );
 
+    // A Connect/Select subscriber's balance is their plan's download quota
+    // less the downloads used. Their free-tier field stays 0 (subscribers are
+    // never charged against it), and showing it made every subscriber read
+    // "0 credits" while the Subscription page showed the real balance.
+    const planQuota = hasUnlimitedDownloads ? undefined : VENDOR_PLAN_RFQ_QUOTA[vendor.subscriptionPlan];
+    if (planQuota !== undefined) {
+      const planUsed = Math.max(0, Number(vendor.rfqDownloadsUsed) || 0);
+      return {
+        vendorId: vendor.id,
+        freeCreditsAllocated: planQuota,
+        freeCreditsUsed: Math.min(planUsed, planQuota),
+        freeCreditsRemaining: Math.max(0, planQuota - planUsed),
+        isSubscribed,
+        hasUnlimitedDownloads,
+        subscriptionPlan: vendor.subscriptionPlan,
+        unlockedRfqIds: Array.isArray(vendor.unlockedRfqIds) ? vendor.unlockedRfqIds : [],
+      };
+    }
+
     const allocated = hasUnlimitedDownloads ? 999999 : (vendor.freeCreditsAllocated !== undefined ? Number(vendor.freeCreditsAllocated) : VENDOR_FREE_CREDITS_LIMIT);
     const remaining = hasUnlimitedDownloads ? 999999 : Math.max(0, freeCredits);
     const used = vendor.freeCreditsUsed !== undefined ? Number(vendor.freeCreditsUsed) : Math.max(0, allocated - remaining);
@@ -1716,8 +1736,13 @@ class StoreService {
       if (!unlockedList.includes(normRfqId)) unlockedList.push(normRfqId);
       if (rfq.rfqNumber && !unlockedList.includes(normRfqNum)) unlockedList.push(normRfqNum);
 
-      vendor.unlockedRfqIds = unlockedList;
-      this.updateVendor(vendor.id, { unlockedRfqIds: unlockedList });
+      // Only a first-time download of a non-buyer-mapped RFQ counts against a
+      // subscriber's plan quota; re-downloads and direct invites are free.
+      const updates = { unlockedRfqIds: unlockedList };
+      if (!isDirect) updates.rfqDownloadsUsed = (Number(vendor.rfqDownloadsUsed) || 0) + 1;
+      Object.assign(vendor, updates);
+      this.updateVendor(vendor.id, updates);
+      const balanceAfter = this.getVendorRfqCredits(vendor.id).freeCreditsRemaining;
       await domainQueries.unlockRFQInDB({
         id: `unl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         vendorId: vendor.id,
@@ -1736,7 +1761,7 @@ class StoreService {
         success: true,
         alreadyUnlocked: false,
         unlocked: true,
-        freeCreditsRemaining: hasUnlimitedDownloads ? 999999 : creditInfo.freeCreditsRemaining,
+        freeCreditsRemaining: balanceAfter,
         creditCharged: 0,
         rfq,
         vendor,
@@ -1764,15 +1789,18 @@ class StoreService {
     if (!unlockedList.includes(normRfqId)) unlockedList.push(normRfqId);
     if (rfq.rfqNumber && !unlockedList.includes(normRfqNum)) unlockedList.push(normRfqNum);
 
+    const rfqDownloadsUsed = (Number(vendor.rfqDownloadsUsed) || 0) + 1;
     vendor.freeQuotationCredits = newRemaining;
     vendor.freeRfqDownloadCredits = newRemaining;
     vendor.freeCreditsUsed = newUsed;
+    vendor.rfqDownloadsUsed = rfqDownloadsUsed;
     vendor.unlockedRfqIds = unlockedList;
 
     this.updateVendor(vendor.id, {
       freeQuotationCredits: newRemaining,
       freeRfqDownloadCredits: newRemaining,
       freeCreditsUsed: newUsed,
+      rfqDownloadsUsed,
       unlockedRfqIds: unlockedList,
     });
 
