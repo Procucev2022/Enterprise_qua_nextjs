@@ -573,6 +573,20 @@ describe('SellersDirectory coverage companion', () => {
     });
   });
 
+  describe('credit balance', () => {
+    test('shows a Select subscriber their plan balance and a non-subscriber 0', async () => {
+      setStore({});
+      setVendorResponse([
+        { id: 'v-select', name: 'Chinna Vendor Supplies', email: 'chinna@x.example', subscriptionPlan: 'select', rfqDownloadsUsed: 11, freeQuotationCredits: 0 },
+        { id: 'v-free', name: 'No Plan Supplies', email: 'free@x.example', subscriptionPlan: 'premium', freeQuotationCredits: 0 },
+      ]);
+      await renderDirectory();
+
+      expect(within(rowOf(/Chinna Vendor Supplies/)).getByText('89 Credits')).toBeInTheDocument();
+      expect(within(rowOf(/No Plan Supplies/)).getByText('0 Credits')).toBeInTheDocument();
+    });
+  });
+
   describe('uploaded vendor mapping', () => {
     test('labels sparse uploaded vendors with client-list defaults and generates an id when none exists', async () => {
       jest.spyOn(Math, 'random').mockReturnValue(0.5);
@@ -589,7 +603,8 @@ describe('SellersDirectory coverage companion', () => {
       expect(emailOnly.getAllByText('India')).toHaveLength(2);
       expect(emailOnly.getByText('Custom Client Category')).toBeInTheDocument();
       expect(emailOnly.getByText('4.2')).toBeInTheDocument();
-      expect(emailOnly.getByText('10 Credits')).toBeInTheDocument();
+      // No plan and no free credits on the record: a real 0, not a made-up 10.
+      expect(emailOnly.getByText('0 Credits')).toBeInTheDocument();
       expect(emailOnly.getByText('VERIFIED_CLIENT_LIST')).toBeInTheDocument();
       expect(emailOnly.getByText('Never')).toBeInTheDocument();
 
@@ -903,7 +918,7 @@ describe('SellersDirectory coverage companion', () => {
           AIScore: 88,
           StarRating: 4.5,
           FreeQuotationCredits: 0,
-          RFQDownloadsUsed: 4,
+          RFQDownloadsUsed: 0,
           Status: 'ACTIVE',
         },
         {
@@ -934,8 +949,8 @@ describe('SellersDirectory coverage companion', () => {
           MajorCategory: 'Custom Client Category',
           AIScore: 85,
           StarRating: 4.2,
-          FreeQuotationCredits: 10,
-          RFQDownloadsUsed: 2,
+          FreeQuotationCredits: 0,
+          RFQDownloadsUsed: 0,
           Status: 'VERIFIED_CLIENT_LIST',
         },
       ]);

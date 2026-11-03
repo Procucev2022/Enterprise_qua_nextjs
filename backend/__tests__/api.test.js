@@ -1090,7 +1090,7 @@ describe('API Route Endpoints', () => {
       expect(res.body.data).toHaveProperty('htmlBody');
     });
 
-    test('GET /api/rfqs/:id/email-preview succeeds for a free-tier vendor downloading a marketplace RFQ (quota enforcement temporarily disabled for every tier), and still tracks usage', async () => {
+    test('GET /api/rfqs/:id/email-preview succeeds for a free-tier vendor downloading a marketplace RFQ (quota enforcement temporarily disabled for every tier), without charging a download it never unlocked', async () => {
       const header = customAuthHeader({
         id: 'usr-free-tier-vendor',
         email: 'free-tier@vendor.com',
@@ -1110,14 +1110,15 @@ describe('API Route Endpoints', () => {
       // Left on the default 'premium' (free, client-uploaded-only) plan —
       // this RFQ was never raised by a buyer who added this vendor, so it's
       // a marketplace download. Quota enforcement is disabled for every tier
-      // right now, so this still succeeds and increments rfqDownloadsUsed.
+      // right now, so this still succeeds. Downloads are only counted when
+      // unlockRFQForVendor actually unlocks something new, so nothing is charged.
       const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(header);
       expect(res.statusCode).toBe(200);
       expect(res.body.data).toHaveProperty('htmlBody');
       const vendorAfter = await request(app)
         .get(`/api/vendors/${encodeURIComponent(freeVendorRes.body.data.id)}`)
         .set(header);
-      expect(vendorAfter.body.data.rfqDownloadsUsed).toBe(1);
+      expect(vendorAfter.body.data.rfqDownloadsUsed || 0).toBe(0);
     });
 
     test('GET /api/rfqs/:id/email-preview keeps succeeding for a vendor whose usage counter is already past the old quota', async () => {

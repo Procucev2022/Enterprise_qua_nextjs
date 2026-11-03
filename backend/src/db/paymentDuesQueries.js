@@ -7,6 +7,7 @@
 const pool = require('./pool');
 const crypto = require('crypto');
 const storeService = require('../services/storeService');
+const { VENDOR_PLAN_RFQ_QUOTA } = require('../config/constants');
 
 function parseRaw(val, fallback = {}) {
   if (!val) return fallback;
@@ -34,7 +35,15 @@ function parseCredits(val, fallback = 0) {
   return fallback;
 }
 
+// A Connect/Select subscriber's balance is plan quota less downloads used;
+// their free-tier field stays 0, which wrongly listed them as low-credit.
+function getSellerPlanQuota(v) {
+  return VENDOR_PLAN_RFQ_QUOTA[v.subscriptionPlan];
+}
+
 function getSellerAvailableCredits(v) {
+  const quota = getSellerPlanQuota(v);
+  if (quota !== undefined) return Math.max(0, quota - parseCredits(v.rfqDownloadsUsed, 0));
   if (v.availableCredits != null) return parseCredits(v.availableCredits, 0);
   if (v.freeQuotationCredits != null) return parseCredits(v.freeQuotationCredits, 0);
   if (v.freeRfqDownloadCredits != null) return parseCredits(v.freeRfqDownloadCredits, 0);
@@ -251,7 +260,7 @@ async function getLowCreditAccounts({
     // Strict eligibility: available credits <= 2 and >= 0
     if (available > 2 || available < 0) continue;
 
-    const totalCredits = Number(v.totalCredits || v.freeCreditsAllocated || 10);
+    const totalCredits = getSellerPlanQuota(v) ?? Number(v.totalCredits || v.freeCreditsAllocated || 10);
     const creditsUsed = getSellerCreditsUsed(v, totalCredits, available);
     const history = commMap.get(v.id) || [];
     const latestComm = history[0] || null;
