@@ -112,6 +112,37 @@ const ORGANIZATION_TYPES = [
   'Sole Proprietorship',
 ];
 
+const INTERNAL_TASK_CATEGORY_ENUM = Object.freeze([
+  'COMMUNICATION',
+  'DEMO_SCHEDULING',
+  'CREDIT_MANAGEMENT',
+  'BUSINESS_DEVELOPMENT',
+  'INTERNAL_OPERATIONS',
+  'ONBOARDING',
+]);
+
+const INTERNAL_TASK_TYPE_ENUM = Object.freeze([
+  'Phone Call',
+  'SMS',
+  'WhatsApp',
+  'Email',
+  'New Follow-up',
+  'Existing Follow-up',
+  'Schedule Demo',
+  'Demo Scheduling',
+  'Add Credits',
+  'Delete Credits',
+  'Delete / Deduct Credits',
+  'Send Proposal',
+  'Send Corporate Email',
+  'Operational Task',
+  'Internal Operations',
+  'Custom Task',
+  'Client Onboarding',
+  'Onboarding Process',
+  'Quotation Review',
+]);
+
 const VALIDATION_SCHEMAS = {
   sendPaymentDuesEmail: {
     accountId: { type: 'string', required: true, minLength: 1 },
@@ -859,6 +890,131 @@ const VALIDATION_SCHEMAS = {
     page: { type: 'number', required: false, min: 1 },
     pageSize: { type: 'number', required: false, min: 1, max: 100 },
   },
+
+  createInternalTask: {
+    title: {
+      type: 'string',
+      required: true,
+      minLength: 2,
+      maxLength: 512,
+      message: 'Task title must be between 2 and 512 characters.',
+    },
+    taskCategory: {
+      type: 'string',
+      required: false,
+      enum: INTERNAL_TASK_CATEGORY_ENUM,
+      message: 'Invalid taskCategory. Must be one of the defined internal task categories.',
+    },
+    taskType: {
+      type: 'string',
+      required: false,
+      enum: INTERNAL_TASK_TYPE_ENUM,
+      message: 'Invalid taskType. Must be one of the defined task types.',
+    },
+    priority: {
+      type: 'string',
+      required: false,
+      enum: ['Low', 'Medium', 'High', 'Critical'],
+    },
+    status: {
+      type: 'string',
+      required: false,
+      enum: [
+        'New',
+        'Assigned',
+        'In Progress',
+        'Pending Approval',
+        'Completed',
+        'Rejected',
+        'Cancelled',
+        'Pending',
+        'Blocked',
+        'Escalated',
+      ],
+    },
+    assignedToName: {
+      type: 'string',
+      required: false,
+    },
+    dueDate: {
+      type: 'string',
+      required: false,
+    },
+    creditQuantity: {
+      type: 'number',
+      required: false,
+      min: 0,
+    },
+  },
+
+  updateInternalTask: {
+    title: {
+      type: 'string',
+      required: false,
+      minLength: 2,
+      maxLength: 512,
+    },
+    taskCategory: {
+      type: 'string',
+      required: false,
+      enum: INTERNAL_TASK_CATEGORY_ENUM,
+      message: 'Invalid taskCategory. Must be one of the defined internal task categories.',
+    },
+    taskType: {
+      type: 'string',
+      required: false,
+      enum: INTERNAL_TASK_TYPE_ENUM,
+      message: 'Invalid taskType. Must be one of the defined task types.',
+    },
+    status: {
+      type: 'string',
+      required: false,
+      enum: [
+        'New',
+        'Assigned',
+        'In Progress',
+        'Pending Approval',
+        'Completed',
+        'Rejected',
+        'Cancelled',
+        'Pending',
+        'Blocked',
+        'Escalated',
+      ],
+    },
+    priority: {
+      type: 'string',
+      required: false,
+      enum: ['Low', 'Medium', 'High', 'Critical'],
+    },
+  },
+
+  approveInternalTask: {
+    remarks: {
+      type: 'string',
+      required: false,
+      maxLength: 2000,
+    },
+  },
+
+  rejectInternalTask: {
+    remarks: {
+      type: 'string',
+      required: false,
+      maxLength: 2000,
+    },
+  },
+
+  addInternalTaskActivity: {
+    comment: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 5000,
+      message: 'Comment or note cannot be blank.',
+    },
+  },
+
 };
 
 

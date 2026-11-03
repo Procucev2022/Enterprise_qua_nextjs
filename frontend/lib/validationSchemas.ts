@@ -97,6 +97,101 @@ export interface FieldRule {
 export type FormSchema = Record<string, FieldRule>;
 
 export const FORM_SCHEMAS: Record<string, FormSchema> = {
+  createInternalTask: {
+    title: {
+      required: true,
+      type: 'string',
+      minLength: 2,
+      maxLength: 512,
+      message: 'Task title must be between 2 and 512 characters.',
+    },
+    taskCategory: {
+      type: 'string',
+      required: false,
+    },
+    taskType: {
+      type: 'string',
+      required: false,
+    },
+    priority: {
+      type: 'string',
+      required: false,
+      enum: ['Low', 'Medium', 'High', 'Critical'],
+    },
+    status: {
+      type: 'string',
+      required: false,
+      enum: [
+        'New',
+        'Assigned',
+        'In Progress',
+        'Pending Approval',
+        'Completed',
+        'Rejected',
+        'Cancelled',
+        'Pending',
+        'Blocked',
+        'Escalated',
+      ],
+    },
+    dueDate: {
+      type: 'string',
+      required: false,
+    },
+  },
+  updateInternalTask: {
+    title: {
+      type: 'string',
+      required: false,
+      minLength: 2,
+      maxLength: 512,
+    },
+    status: {
+      type: 'string',
+      required: false,
+      enum: [
+        'New',
+        'Assigned',
+        'In Progress',
+        'Pending Approval',
+        'Completed',
+        'Rejected',
+        'Cancelled',
+        'Pending',
+        'Blocked',
+        'Escalated',
+      ],
+    },
+    priority: {
+      type: 'string',
+      required: false,
+      enum: ['Low', 'Medium', 'High', 'Critical'],
+    },
+  },
+  approveInternalTask: {
+    remarks: {
+      type: 'string',
+      required: false,
+      maxLength: 2000,
+    },
+  },
+  rejectInternalTask: {
+    remarks: {
+      type: 'string',
+      required: false,
+      maxLength: 2000,
+    },
+  },
+  addInternalTaskActivity: {
+    comment: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 5000,
+      message: 'Comment or note cannot be blank.',
+    },
+  },
+
   /**
    * Password sign-in. The backend re-checks the same three fields and resolves
    * the account by email + mobile together, so the mobile number is a hard
@@ -628,4 +723,13 @@ export const ACTIVITY_LOG_SCHEMA = {
   followupPriority: {
     allowed: ['Low', 'Medium', 'High', 'Critical'] as const,
   },
+} as const;
+
+
+/** Internal task validation schema */
+export const INTERNAL_TASK_SCHEMA = {
+  title: { minLength: 2, maxLength: 512 },
+  description: { maxLength: 5000 },
+  notes: { maxLength: 2000 },
+  creditQuantity: { min: 0 },
 } as const;

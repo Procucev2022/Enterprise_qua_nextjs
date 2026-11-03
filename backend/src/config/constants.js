@@ -2764,7 +2764,134 @@ const DEFAULT_INTERNAL_MEMBERS = Object.freeze([
   { id: 'exec-5', name: 'Srinivas Mukku', role: 'Commercial Director', email: 'srinivas.mukku@procucev.com', project: 'Industrial Capital' },
 ]);
 
+const INTERNAL_TASK_CATEGORIES = Object.freeze({
+  COMMUNICATION: 'COMMUNICATION',
+  DEMO_SCHEDULING: 'DEMO_SCHEDULING',
+  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
+  BUSINESS_DEVELOPMENT: 'BUSINESS_DEVELOPMENT',
+  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
+  ONBOARDING: 'ONBOARDING',
+});
+
+const INTERNAL_TASK_CATEGORY_LABELS = Object.freeze({
+  COMMUNICATION: 'Communication Tasks',
+  DEMO_SCHEDULING: 'Demo Scheduling',
+  CREDIT_MANAGEMENT: 'Credit Management',
+  BUSINESS_DEVELOPMENT: 'Business Development Tasks',
+  INTERNAL_OPERATIONS: 'Internal Operations',
+  ONBOARDING: 'Onboarding Process',
+});
+
+const INTERNAL_TASK_CATEGORY_TYPES = Object.freeze({
+  COMMUNICATION: Object.freeze([
+    'Phone Call',
+    'SMS',
+    'WhatsApp',
+    'Email',
+    'New Follow-up',
+    'Existing Follow-up',
+  ]),
+  DEMO_SCHEDULING: Object.freeze([
+    'Schedule Demo',
+  ]),
+  CREDIT_MANAGEMENT: Object.freeze([
+    'Add Credits',
+    'Delete Credits',
+  ]),
+  BUSINESS_DEVELOPMENT: Object.freeze([
+    'Send Proposal',
+    'Send Corporate Email',
+  ]),
+  INTERNAL_OPERATIONS: Object.freeze([
+    'Operational Task',
+  ]),
+  ONBOARDING: Object.freeze([
+    'Client Onboarding',
+  ]),
+});
+
+const INTERNAL_TASK_STATUSES = Object.freeze([
+  'New',
+  'Assigned',
+  'In Progress',
+  'Pending Approval',
+  'Completed',
+  'Rejected',
+  'Cancelled',
+]);
+
+const INTERNAL_TASK_PRIORITIES = Object.freeze([
+  'Low',
+  'Medium',
+  'High',
+  'Critical',
+]);
+
+const DEMO_STATUSES = Object.freeze([
+  'Scheduled',
+  'Completed',
+  'Rescheduled',
+  'Cancelled',
+]);
+
+const CREDIT_ACCOUNT_TYPES = Object.freeze([
+  'BUYER',
+  'SELLER',
+]);
+
+/**
+ * Roles permitted to approve or reject credit add/delete requests.
+ * Checked in approveCreditTask / rejectCreditTask controller handlers.
+ */
+const CREDIT_APPROVER_ROLES = Object.freeze([
+  'admin',
+  'category_manager',
+]);
+
+const DEFAULT_CREDIT_APPROVER_EMAIL = Object.freeze(
+  process.env.CREDIT_APPROVER_EMAIL || process.env.ADMIN_NOTIFICATION_EMAIL || 'admin@procucev.com'
+);
+
+const CALL_OUTCOMES = Object.freeze([
+  'Connected - Interested',
+  'Connected - Follow-up Requested',
+  'Connected - Not Interested',
+  'No Answer / Ringing',
+  'Busy / Callback Later',
+  'Wrong / Invalid Number',
+]);
+
+const PROPOSAL_STATUSES = Object.freeze([
+  'Draft',
+  'Sent to Client',
+  'Under Negotiation',
+  'Accepted',
+  'Declined',
+]);
+
+const ONBOARDING_STAGES = Object.freeze({
+  1: 'Registration & Initial Contact',
+  2: 'KYC & Document Collection',
+  3: 'Compliance & Verification',
+  4: 'Agreement & Terms',
+  5: 'Live Onboarded',
+});
+
+
 module.exports = {
+  INTERNAL_TASK_CATEGORIES,
+  INTERNAL_TASK_CATEGORY_LABELS,
+  INTERNAL_TASK_CATEGORY_TYPES,
+  INTERNAL_TASK_STATUSES,
+  INTERNAL_TASK_PRIORITIES,
+  DEMO_STATUSES,
+  CREDIT_ACCOUNT_TYPES,
+  CREDIT_APPROVER_ROLES,
+  DEFAULT_CREDIT_APPROVER_EMAIL,
+  CALL_OUTCOMES,
+  PROPOSAL_STATUSES,
+  ONBOARDING_STAGES,
+
   DEFAULT_INTERNAL_MEMBERS,
   VENDOR_DIRECTORY_SESSION_STATUS,
   VENDOR_DIRECTORY_LOGOUT_REASONS,
