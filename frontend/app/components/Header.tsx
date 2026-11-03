@@ -112,6 +112,9 @@ export default function Header() {
   const router = useRouter();
   const pathname = usePathname();
 
+  // Red only once a real balance of 0 has loaded — null means still loading.
+  const vendorCreditsExhausted = vendorFreeCreditsRemaining != null && vendorFreeCreditsRemaining <= 0;
+
   const [userProfileDropdownOpen, setUserProfileDropdownOpen] = useState(false);
 
   // Visibility of the Account & Security overlay. The forms inside it live in
@@ -131,8 +134,15 @@ export default function Header() {
   // fallback.
   const currentOrgName = resolveSessionOrgName(currentUserSession, activeBuyerAccount);
 
-  // Session timeout state: 3 hours for category manager (10800s), standard 30 minutes for other roles (1800s)
-  const SESSION_DURATION_SECONDS = currentRole === 'category_manager' ? 3 * 60 * 60 : 30 * 60;
+  // Session duration: 3 hours for Category Manager (10800s); 30 minutes for standard roles (1800s)
+  // For Buyer & Vendor roles, sessions time out after 5 minutes of inactivity (300s).
+  const isBuyerOrVendorRole = currentRole === 'buyer' || currentRole === 'vendor';
+  const INACTIVITY_LIMIT_SECONDS = 5 * 60; // 5 minutes inactivity limit for Buyer & Vendor
+  const SESSION_DURATION_SECONDS = isBuyerOrVendorRole
+    ? INACTIVITY_LIMIT_SECONDS
+    : currentRole === 'category_manager'
+    ? 3 * 60 * 60
+    : 30 * 60;
   const [sessionSecondsLeft, setSessionSecondsLeft] = useState<number>(SESSION_DURATION_SECONDS);
 
   const handleLogout = useCallback(() => {
@@ -174,9 +184,35 @@ export default function Header() {
       localStorage.setItem('procucev_session_role', currentRole);
     }
     setSessionSecondsLeft(SESSION_DURATION_SECONDS);
-    const durationLabel = currentRole === 'category_manager' ? '3 hours' : '30 minutes';
+    const durationLabel = isBuyerOrVendorRole ? '5 minutes' : currentRole === 'category_manager' ? '3 hours' : '30 minutes';
     showToast('Session Extended', `Your session has been extended by ${durationLabel}.`, 'info');
   }, [SESSION_DURATION_SECONDS, currentRole, showToast]);
+
+  // Inactivity activity tracker: resets the 5-minute inactivity countdown on any user interaction for Buyer & Vendor
+  useEffect(() => {
+    if (!isLoggedIn || !isBuyerOrVendorRole) return;
+
+    let lastThrottle = Date.now();
+    const handleUserInteraction = () => {
+      const now = Date.now();
+      if (now - lastThrottle > 1000) {
+        lastThrottle = now;
+        const newExpiresAt = now + INACTIVITY_LIMIT_SECONDS * 1000;
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('procucev_session_expires_at', String(newExpiresAt));
+          localStorage.setItem('procucev_session_role', currentRole);
+        }
+        setSessionSecondsLeft(INACTIVITY_LIMIT_SECONDS);
+      }
+    };
+
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart', 'click', 'input'];
+    events.forEach((ev) => window.addEventListener(ev, handleUserInteraction, { passive: true }));
+
+    return () => {
+      events.forEach((ev) => window.removeEventListener(ev, handleUserInteraction));
+    };
+  }, [isLoggedIn, isBuyerOrVendorRole, INACTIVITY_LIMIT_SECONDS, currentRole]);
 
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -197,8 +233,8 @@ export default function Header() {
 
     const interval = setInterval(() => {
       if (typeof window === 'undefined') return;
-      const stored = localStorage.getItem('procucev_session_expires_at');
       const now = Date.now();
+      const stored = localStorage.getItem('procucev_session_expires_at');
       const expiresAt = stored ? Number(stored) : now + SESSION_DURATION_SECONDS * 1000;
       const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
       setSessionSecondsLeft(remaining);
@@ -341,29 +377,29 @@ export default function Header() {
           {currentRole === 'vendor' && (
             <div
               className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl border shadow-xs transition-colors ${
-                (vendorFreeCreditsRemaining ?? 0) > 0
+                !vendorCreditsExhausted
                   ? 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800'
                   : 'bg-rose-50/80 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800'
               }`}
-              title={`Free RFQ Credits: ${vendorFreeCreditsRemaining ?? 0} remaining`}
+              title={vendorFreeCreditsRemaining == null ? 'RFQ Credits: loading' : `RFQ Credits: ${vendorFreeCreditsRemaining} remaining`}
             >
               <span
                 className={`text-[11px] font-bold ${
-                  (vendorFreeCreditsRemaining ?? 0) > 0
+                  !vendorCreditsExhausted
                     ? 'text-emerald-800 dark:text-emerald-300'
                     : 'text-rose-800 dark:text-rose-300'
                 }`}
               >
-                Free RFQ Credits:
+                RFQ Credits:
               </span>
               <span
                 className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                  (vendorFreeCreditsRemaining ?? 0) > 0
+                  !vendorCreditsExhausted
                     ? 'bg-emerald-600 text-white'
                     : 'bg-rose-600 text-white'
                 }`}
               >
-                {vendorFreeCreditsRemaining ?? 0}
+                {vendorFreeCreditsRemaining ?? '…'}
               </span>
             </div>
           )}
@@ -372,7 +408,7 @@ export default function Header() {
           <div
             data-testid="header-session-timer"
             onClick={handleExtendSession}
-            title={`Active Session: ${formatSessionCountdown(sessionSecondsLeft)} remaining. Click to extend by ${currentRole === 'category_manager' ? '3 hrs' : '30 mins'}.`}
+            title={`Active Session: ${formatSessionCountdown(sessionSecondsLeft)} remaining. ${isBuyerOrVendorRole ? 'Automatically resets on activity. Inactivity timeout: 5 minutes.' : `Click to extend by ${currentRole === 'category_manager' ? '3 hrs' : '30 mins'}.`}`}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {

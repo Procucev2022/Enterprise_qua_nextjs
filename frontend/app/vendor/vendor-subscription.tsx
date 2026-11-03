@@ -5,6 +5,7 @@ import { useApp } from '@/lib/store';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
 import { fetchSubscriptionPricing } from '@/lib/subscriptionPaymentClient';
 import { authClient } from '@/lib/authClient';
+import { VENDOR_PLAN_RFQ_QUOTA } from '@/lib/constants';
 import { ShieldCheck, Check, Zap, Layers, AlertCircle, Download, Package, ArrowRight } from 'lucide-react';
 
 export default function VendorSubscriptionCenter() {
@@ -140,9 +141,8 @@ export default function VendorSubscriptionCenter() {
   };
 
   const getMaxQuota = () => {
-    if (vendorSubscription === 'connect') return 50;
-    if (vendorSubscription === 'select') return 100;
-    return 0; // Premium model is for client-uploaded RFQs
+    // Premium (client-uploaded) has no marketplace quota.
+    return VENDOR_PLAN_RFQ_QUOTA[vendorSubscription] ?? 0;
   };
 
   const maxQuota = getMaxQuota();

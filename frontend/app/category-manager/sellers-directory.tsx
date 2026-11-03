@@ -50,6 +50,7 @@ import {
   formatIndianDateTime,
   SELLER_DIRECTORY_COLUMN_PREF_KEY,
   DEFAULT_SELLER_DIRECTORY_COLUMNS,
+  getVendorCreditBalance,
 } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { exportReportToExcel } from '@/lib/reportsClient';
@@ -278,8 +279,9 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
         rating: typeof (v as any).rating === 'number' ? (v as any).rating : 4.5,
         status: (v as any).status || 'ACTIVE',
         subscriptionPlan: (v as any).subscriptionPlan || 'Preferred Partner',
-        freeQuotationCredits: (v as any).freeQuotationCredits ?? 0,
-        rfqDownloadsUsed: (v as any).rfqDownloadsUsed ?? 4,
+        // Plan balance for Connect/Select subscribers, free-tier balance otherwise.
+        freeQuotationCredits: getVendorCreditBalance(v as any),
+        rfqDownloadsUsed: (v as any).rfqDownloadsUsed ?? 0,
         gstNumber: (v as any).gstNumber || '27AAACG0000A1Z5',
         panNumber: (v as any).panNumber || 'AAACG0000A',
         isNetwork: true,
@@ -317,8 +319,8 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           rating: Number(bv.rating || 4.2),
           status: 'VERIFIED_CLIENT_LIST',
           subscriptionPlan: 'Verified Supplier',
-          freeQuotationCredits: 10,
-          rfqDownloadsUsed: 2,
+          freeQuotationCredits: getVendorCreditBalance(bv as any),
+          rfqDownloadsUsed: (bv as any).rfqDownloadsUsed ?? 0,
           gstNumber: (bv as any).gstNumber || '27AAACB1111B1Z6',
           panNumber: (bv as any).panNumber || 'AAACB1111B',
           isNetwork: false,

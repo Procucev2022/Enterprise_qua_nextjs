@@ -2821,9 +2821,29 @@ export default function IngestionWizard({
                               <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
                               <span className="badge badge-indigo text-[8px] font-bold shrink-0">Private</span>
                             </div>
-                            <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                              <span className="font-semibold text-slate-700 dark:text-gray-300">{v.majorCategory || 'General Industrial'}</span>
-                              <span className="text-indigo-600 dark:text-indigo-400 font-semibold">🔒 Double-Blind</span>
+                            <div className="space-y-0.5 text-[10px] text-slate-500 dark:text-gray-400">
+                              {v.contactPerson && (
+                                <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
+                                  <Users size={10} className="text-slate-400 shrink-0" />
+                                  <span className="truncate">{v.contactPerson}</span>
+                                </div>
+                              )}
+                              {v.email && (
+                                <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                  <Mail size={10} className="text-blue-500 shrink-0" />
+                                  <span className="font-mono text-[9px] truncate">{v.email}</span>
+                                </div>
+                              )}
+                              {v.phone && (
+                                <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                  <Phone size={10} className="text-emerald-500 shrink-0" />
+                                  <span className="font-mono text-[9px]">{v.phone}</span>
+                                </div>
+                              )}
+                            </div>
+                            <div className="pt-1 border-t border-indigo-100 dark:border-indigo-900/40 text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                              <span className="font-semibold text-slate-700 dark:text-gray-300 truncate">{v.majorCategory || 'General Industrial'}</span>
+                              <span className="truncate">{v.city || v.state || v.location || 'India'}</span>
                             </div>
                           </div>
                         ))}

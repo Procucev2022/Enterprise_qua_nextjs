@@ -530,12 +530,13 @@ describe('ManualRFQModal: supporting documents', () => {
 
 describe('ManualRFQModal: header and item fields', () => {
   it('records the RFQ title, budget and target date on the payload', async () => {
+    // Relative to today: the date input has min=today, so a fixed date goes stale.
+    const futureDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     renderModal();
     fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
       target: { value: 'Monsoon Pump Overhaul' },
     });
     fireEvent.change(screen.getByLabelText(/Estimated Budget/i), { target: { value: '250000' } });
-    const futureDate = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
     fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
       target: { value: futureDate },
     });

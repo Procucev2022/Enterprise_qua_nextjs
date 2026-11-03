@@ -555,3 +555,21 @@ describe('normalizePoDate', () => {
   });
 });
 
+
+describe('getVendorCreditBalance', () => {
+  const { getVendorCreditBalance, VENDOR_PLAN_RFQ_QUOTA } = require('@/lib/constants');
+
+  it('returns plan quota less downloads used for Select and Connect subscribers', () => {
+    expect(VENDOR_PLAN_RFQ_QUOTA).toEqual({ connect: 50, select: 100 });
+    expect(getVendorCreditBalance({ subscriptionPlan: 'select', rfqDownloadsUsed: 9, freeQuotationCredits: 0 })).toBe(91);
+    expect(getVendorCreditBalance({ subscriptionPlan: 'connect', rfqDownloadsUsed: 10 })).toBe(40);
+    expect(getVendorCreditBalance({ subscriptionPlan: 'select' })).toBe(100);
+    expect(getVendorCreditBalance({ subscriptionPlan: 'select', rfqDownloadsUsed: 150 })).toBe(0);
+  });
+
+  it('falls back to the free-tier balance, 0 when there is none, for vendors without a subscription', () => {
+    expect(getVendorCreditBalance({ subscriptionPlan: 'premium', freeQuotationCredits: 3 })).toBe(3);
+    expect(getVendorCreditBalance({ freeQuotationCredits: -2 })).toBe(0);
+    expect(getVendorCreditBalance({})).toBe(0);
+  });
+});

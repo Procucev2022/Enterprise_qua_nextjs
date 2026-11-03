@@ -590,7 +590,7 @@ describe('Header Session Timer and Auto Logout', () => {
     fireEvent.click(timer);
     expect(mockShowToast).toHaveBeenCalledWith(
       'Session Extended',
-      expect.stringContaining('30 minutes'),
+      expect.stringMatching(/(5|30) minutes/),
       'info'
     );
   });
@@ -659,7 +659,7 @@ describe('Header Session Timer and Auto Logout', () => {
     rerender(<Header />);
     expect(screen.getByText('unlimited')).toBeInTheDocument();
 
-    // 3. Vendor with 0 credits and undefined credits
+    // 3. Vendor with 0 credits, then credits not loaded yet
     (storeModule.useApp as jest.Mock).mockReturnValue({
       ...base,
       isLoggedIn: true,
@@ -676,7 +676,8 @@ describe('Header Session Timer and Auto Logout', () => {
       vendorFreeCreditsRemaining: undefined,
     });
     rerender(<Header />);
-    expect(screen.getByText('0')).toBeInTheDocument();
+    // Not loaded yet: a placeholder, not a made-up balance.
+    expect(screen.getByText('…')).toBeInTheDocument();
 
     // 4. Admin role opening account modal and closing via backdrop click
     (storeModule.useApp as jest.Mock).mockReturnValue({
@@ -721,7 +722,7 @@ describe('Header Session Timer and Auto Logout', () => {
     fireEvent.keyDown(timer, { key: 'Enter' });
     expect(mockShowToast).toHaveBeenCalledWith(
       'Session Extended',
-      expect.stringContaining('30 minutes'),
+      expect.stringMatching(/(5|30) minutes/),
       'info'
     );
 

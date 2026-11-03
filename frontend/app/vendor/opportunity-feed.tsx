@@ -8,7 +8,7 @@ import { authClient } from '@/lib/authClient';
 import { rfqAttachmentUrl } from '@/lib/rfqClient';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
 import { VendorOpportunity } from '@/lib/types';
-import { hasUnlimitedAccess } from '@/lib/constants';
+import { hasUnlimitedAccess, VENDOR_PLAN_RFQ_QUOTA } from '@/lib/constants';
 import {
   Clock,
   AlertTriangle,
@@ -185,13 +185,13 @@ export default function OpportunityFeed({
       return;
     }
 
-    if (vendorSubscription === 'connect' && vendorRfqDownloadsUsed >= 50 && !isDirect) {
+    if (vendorSubscription === 'connect' && vendorRfqDownloadsUsed >= VENDOR_PLAN_RFQ_QUOTA.connect && !isDirect) {
       setShowUpgradeModal(true);
       showToast('Quarterly Quota Reached', '50 RFQ download limit reached.', 'warning');
       return;
     }
 
-    if (vendorSubscription === 'select' && vendorRfqDownloadsUsed >= 100 && !isDirect) {
+    if (vendorSubscription === 'select' && vendorRfqDownloadsUsed >= VENDOR_PLAN_RFQ_QUOTA.select && !isDirect) {
       setShowUpgradeModal(true);
       showToast('Quarterly Quota Reached', '100 RFQ download limit reached.', 'warning');
       return;

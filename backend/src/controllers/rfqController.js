@@ -1834,8 +1834,7 @@ async function downloadRFQ(req, res, next) {
       }
 
       const isUnlimitedVendor = hasUnlimitedDownloadAccess(requestingVendor) || hasUnlimitedDownloadAccess(req.user);
-      const used = requestingVendor.rfqDownloadsUsed || 0;
-      storeService.updateVendor(requestingVendor.id, { rfqDownloadsUsed: used + 1 });
+      // Counted inside unlockRFQForVendor, and only when the download is new.
 
       const unlockResult = await storeService.unlockRFQForVendor(requestingVendor.id, rfq.id);
       if (!unlockResult.success && unlockResult.creditsExhausted && !isUnlimitedVendor) {
@@ -1882,8 +1881,7 @@ async function generateEmailPreview(req, res, next) {
       const requestingVendor = await resolveVendorForUser(req.user);
       if (requestingVendor) {
         const isUnlimitedVendor = hasUnlimitedDownloadAccess(requestingVendor) || hasUnlimitedDownloadAccess(req.user);
-        const used = requestingVendor.rfqDownloadsUsed || 0;
-        storeService.updateVendor(requestingVendor.id, { rfqDownloadsUsed: used + 1 });
+        // Counted inside unlockRFQForVendor, and only when the download is new.
         const unlockResult = await storeService.unlockRFQForVendor(requestingVendor.id, rfq.id);
         if (!unlockResult.success && unlockResult.creditsExhausted && !isUnlimitedVendor) {
           return res.status(403).json({
