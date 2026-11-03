@@ -5714,3 +5714,89 @@ Required
 [Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41585703938/job/125751728218?pr=400)
 Failing after 8s
 ```
+
+
+---
+
+### Prompt 42
+
+**Timestamp**: 2026-11-03T07:15:00Z
+
+```text
+# Buyer & Seller Directory – Documents Section Implementation
+
+Implement a new Documents section in both Buyer 360° Dossier and Seller 360° Dossier. The Documents tab must display all documents associated with the respective buyer or seller account.
+
+## 1. Documents Tab Placement
+Add the Documents tab immediately after the Payments tab in both profiles.
+
+Required tab order:
+
+Buyer 360° Dossier:
+1. Profile
+2. RFQs
+3. Credit
+4. Communications
+5. Payments
+6. Documents
+
+Seller 360° Dossier:
+1. Profile
+2. Quotes
+3. Credit
+4. Communications
+5. Payments
+6. Documents
+
+Keep the existing tabs and their functionality unchanged.
+
+## 2. Display Associated Documents
+When opening a buyer's or seller's Documents tab:
+- Fetch and display all documents associated with that specific account.
+- Retrieve documents from the existing database and document storage.
+- Include documents uploaded through registration, onboarding, RFQ, quotation, and other existing workflows wherever they are associated with that account.
+- Display only documents belonging to the selected buyer or seller.
+- Avoid duplicate document entries.
+
+## 3. Document Information
+Display the following fields for each document:
+- Document Name: Original document/file name
+- Document Type: PDF, Image, Excel, Word, etc.
+- Category: Registration, Company Profile, GST, PAN, RFQ, Quotation, Other, etc.
+- Uploaded By: User or employee who uploaded it
+- Upload Date: Date and time of upload
+- File Size: Actual file size
+- Description: Document description, if available
+- Actions: Preview, Download, Delete
+
+## 4. Document Actions
+- Preview: Open supported documents such as PDF and images in an in-app preview.
+- Download: Download the original document.
+- Open: Open the document using its stored file link where applicable.
+- Upload: Allow authorized users to upload additional documents.
+- Delete: Allow authorized users to delete documents after confirmation.
+
+## Additional Requirements – Buyer Credit Approval & Seller Quote Credits
+1. Buyer Profile – Add Credit with Approval Workflow
+- In the Buyer 360° Dossier, display an + Add Credit button next to the buyer's profile information.
+- Open a popup showing Buyer Name, Available Credits, Requested Credits, and Reason.
+- Initiated By options: Govardhan, Krishna, Chandhan.
+- Approver options: Srinu Sir, Sudheer Sir.
+- Submit request as Pending Approval, tracked in Action Center → Internal Tasks.
+
+2. Seller Profile – Add Quote Credits
+- In the Seller 360° Dossier, provide a + Add Quote Credits button.
+- Restrict to 1 to 5 credits per request.
+- Display seller's available quote credits before and after transaction.
+- Authorize and update balance immediately with full transaction history.
+```
+
+---
+
+### Prompt 43
+
+**Timestamp**: 2026-11-03T11:29:45Z
+
+```text
+create a branch and raise the pr to test-v3 upcoming pr also raise to test-v3  only not for main
+```
