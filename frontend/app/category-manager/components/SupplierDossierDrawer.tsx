@@ -103,6 +103,7 @@ export interface SupplierDossierDrawerProps {
   onClose: () => void;
   onSelectRFQ?: (rfq: RFQItem) => void;
   sellerRfqs?: RFQItem[];
+  initialTab?: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments';
 }
 
 const DEFAULT_SUPPLIER_CATEGORIES = [
@@ -123,11 +124,12 @@ export default function SupplierDossierDrawer({
   onClose,
   onSelectRFQ,
   sellerRfqs = [],
+  initialTab = 'profile',
 }: SupplierDossierDrawerProps) {
   const strings = UI_STRINGS.sellerDirectory.dossier;
 
   // Active Main Tab
-  const [dossierTab, setDossierTab] = useState<'profile' | 'quotes' | 'credit' | 'communications' | 'payments'>('profile');
+  const [dossierTab, setDossierTab] = useState<'profile' | 'quotes' | 'credit' | 'communications' | 'payments'>(initialTab || 'profile');
 
   // Active Communications Sub-Tab
   const [commSubTab, setCommSubTab] = useState<'email' | 'sms' | 'whatsapp' | 'call'>('email');
@@ -1940,6 +1942,26 @@ export default function SupplierDossierDrawer({
                         placeholder={strings.compose.callDurationPlaceholder}
                         className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
                       />
+                    </div>
+                    <div className="col-span-2 pt-1 border-t border-amber-200/60 dark:border-amber-800/60">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[11px] font-semibold text-amber-900 dark:text-amber-200 flex items-center gap-1">
+                          <Sparkles size={11} className="text-amber-600" />
+                          <span>Draft Conversion Email for Call Outcome:</span>
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {CALL_OUTCOMES.map((o) => (
+                          <button
+                            key={o.value}
+                            type="button"
+                            onClick={() => handleDraftEmailForCallOutcome(o.value)}
+                            className="text-[10px] px-2 py-0.5 rounded bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-amber-200 dark:border-amber-800 hover:border-indigo-400 hover:text-indigo-600 font-medium transition cursor-pointer"
+                          >
+                            Draft for {o.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                   {composeNextFollowupDate && (
