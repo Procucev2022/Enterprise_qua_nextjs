@@ -144,6 +144,52 @@ const INTERNAL_TASK_TYPE_ENUM = Object.freeze([
 ]);
 
 const VALIDATION_SCHEMAS = {
+  accountDocumentUpload: {
+    documentName: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'Document name is required.' },
+    category: { type: 'string', required: true, minLength: 1, maxLength: 64, message: 'Valid document category is required.' },
+    fileName: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'File name is required.' },
+    fileSize: { type: 'number', required: false, min: 0, max: 26214400, message: 'File size must not exceed 25MB.' },
+    description: { type: 'string', required: false, maxLength: 2000 },
+    fileUrl: { type: 'string', required: false },
+    mimeType: { type: 'string', required: false },
+  },
+
+  sellerAddQuoteCredits: {
+    amount: {
+      type: 'number',
+      required: true,
+      min: 1,
+      max: 5,
+      custom: (val) => (!Number.isInteger(Number(val)) || Number(val) < 1 || Number(val) > 5 ? 'Quote credits must be an integer between 1 and 5.' : null),
+      message: 'Quote credits must be an integer between 1 and 5.',
+    },
+    reason: { type: 'string', required: false, maxLength: 500 },
+  },
+
+  buyerCreditApprovalRequest: {
+    amount: {
+      type: 'number',
+      required: true,
+      min: 1,
+      max: 100000,
+      custom: (val) => (!Number.isInteger(Number(val)) || Number(val) < 1 ? 'Credit amount must be a positive integer.' : null),
+      message: 'Credit amount must be a positive integer.',
+    },
+    reason: { type: 'string', required: false, maxLength: 1000 },
+    approverName: {
+      type: 'string',
+      required: true,
+      enum: ['Srinu Sir', 'Sudheer Sir'],
+      message: 'Approver must be Srinu Sir or Sudheer Sir.',
+    },
+    initiatorName: {
+      type: 'string',
+      required: true,
+      enum: ['Govardhan', 'Krishna', 'Chandhan'],
+      message: 'Initiator must be Govardhan, Krishna, or Chandhan.',
+    },
+  },
+
   sendPaymentDuesEmail: {
     accountId: { type: 'string', required: true, minLength: 1 },
     accountType: { type: 'string', required: true, enum: ['buyer', 'seller'] },

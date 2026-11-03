@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const buyerAccountController = require('../controllers/buyerAccountController');
+const accountDocumentController = require('../controllers/accountDocumentController');
 const { authenticate } = require('../middleware/auth');
 
 router.get('/', buyerAccountController.getBuyerAccounts);
@@ -19,10 +20,15 @@ router.get('/:id/payment-links', authenticate, buyerAccountController.getPayment
 router.get('/:id/payment-links/:linkId/invoice', authenticate, buyerAccountController.downloadInvoice);
 router.get('/:id/credit-history', authenticate, buyerAccountController.getCreditHistory);
 router.post('/:id/add-credit', authenticate, buyerAccountController.addCredit);
+router.post('/:id/request-credit-approval', authenticate, buyerAccountController.requestCreditApproval);
 router.put('/:id/categories', authenticate, buyerAccountController.updateSupportedCategories);
 router.get('/:id/communications', authenticate, buyerAccountController.getBuyerCommunications);
 router.post('/:id/communications', authenticate, buyerAccountController.recordBuyerCommunication);
 router.get('/:id/payment-history', authenticate, buyerAccountController.getBuyerPaymentHistory);
 
+// Buyer Dossier Documents
+router.get('/:id/documents', authenticate, accountDocumentController.getBuyerDocuments);
+router.post('/:id/documents', authenticate, accountDocumentController.uploadBuyerDocument);
+router.delete('/:id/documents/:docId', authenticate, accountDocumentController.deleteBuyerDocument);
 
 module.exports = router;
