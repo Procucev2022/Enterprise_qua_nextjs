@@ -100,7 +100,7 @@ describe('Approvals API & Controller', () => {
 
     querySpy.mockResolvedValueOnce({ rows: [] });
     const emptySummary = await approvalQueries.getApprovalSummary();
-    expect(emptySummary.total).toBeGreaterThanOrEqual(1);
+    expect(emptySummary.total).toEqual(0);
 
     querySpy.mockRejectedValueOnce(new Error('DB err'));
     const errSummary = await approvalQueries.getApprovalSummary();

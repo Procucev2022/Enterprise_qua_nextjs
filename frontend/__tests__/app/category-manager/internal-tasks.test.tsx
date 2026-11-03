@@ -45,7 +45,7 @@ jest.mock('@/lib/internalTaskClient', () => {
     fetchTaskTypes: jest.fn(),
     createNewTaskType: jest.fn(),
     fetchTaskSummary: jest.fn(),
-    fetchTaskById: jest.fn(),
+    fetchTaskById: jest.fn().mockResolvedValue(null),
     createInternalTask: jest.fn(),
     updateInternalTask: jest.fn(),
     deleteInternalTask: jest.fn(),
@@ -57,6 +57,10 @@ jest.mock('@/lib/internalTaskClient', () => {
       { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead' },
     ]),
     completeInternalTask: jest.fn(),
+    approveCreditTask: jest.fn(),
+    rejectCreditTask: jest.fn(),
+    addTaskActivity: jest.fn(),
+    checkTaskReminders: jest.fn(),
   };
 });
 
@@ -205,6 +209,11 @@ describe('Action Center & Internal Tasks Redesign', () => {
       { id: 'exec-3', name: 'Prajwal K', role: 'Vendor Operations Lead' },
     ]);
     jest.clearAllMocks();
+    (internalTaskClient.updateInternalTask as jest.Mock).mockReset();
+    (internalTaskClient.completeInternalTask as jest.Mock).mockReset();
+    (internalTaskClient.createInternalTask as jest.Mock).mockReset();
+    (internalTaskClient.fetchTaskById as jest.Mock).mockReset();
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValue(null);
     (internalTaskClient.fetchTaskTypes as jest.Mock).mockResolvedValue(mockTaskTypes);
     (internalTaskClient.fetchTaskSummary as jest.Mock).mockResolvedValue({
       total: 5,
@@ -1360,6 +1369,9 @@ describe('Action Center & Internal Tasks Redesign', () => {
 
     (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
     fireEvent.click(screen.getByTestId('drawer-reopen-task-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-reopen-task-btn')).not.toBeDisabled();
+    });
 
     // Now reopen tsk_multi_2 with updated having no task_number
     (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
@@ -1373,6 +1385,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     await waitFor(() => {
       expect(screen.getByText(/tsk_multi_2/i)).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
   });
 
   test('covers assignee dropdown with member having no id and no role, plus custom type null return', async () => {
@@ -1585,6 +1598,1349 @@ describe('Action Center & Internal Tasks Redesign', () => {
     await waitFor(() => {
       expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
+  });
+
+  // =========================================================================
+  // NEW INTERNAL TASKS MODULE TESTS: CATEGORIES, APPROVALS, ACTIVITIES, REMINDERS
+  // =========================================================================
+
+  const mockCreditTask: internalTaskClient.InternalTask = {
+    id: 'tsk_credit_999',
+    task_number: 'TASK-9999',
+    title: 'Request Additional 50 Credits for Buyer',
+    description: 'Enterprise tier expansion',
+    task_category: 'CREDIT_MANAGEMENT',
+    task_type: 'Add Credits',
+    task_type_id: 'itt_add_credits',
+    priority: 'High',
+    status: 'Pending Approval',
+    assigned_to_name: 'Navin Chaudhary',
+    credit_account_type: 'BUYER',
+    credit_account_id: 'buyer_abc',
+    credit_account_name: 'Tata Steel Corp',
+    credit_quantity: 50,
+    credit_reason: 'Annual contract expansion',
+    created_at: '2026-11-01T10:00:00Z',
+    updated_at: '2026-11-01T10:00:00Z',
+    activities: [
+      {
+        id: 'act_1',
+        task_id: 'tsk_credit_999',
+        action_type: 'CREATED',
+        comment: 'Created credit request',
+        actor_name: 'Navin Chaudhary',
+        created_at: '2026-11-01T10:00:00Z',
+      },
+      {
+        id: 'act_fallback',
+        task_id: 'tsk_credit_999',
+        action_type: 'STATUS_CHANGE',
+        comment: '',
+        actor_name: '',
+        created_at: '',
+      },
+    ],
+  };
+
+  const mockCommTask: internalTaskClient.InternalTask = {
+    id: 'tsk_comm_888',
+    task_number: 'TASK-8888',
+    title: 'Call Vendor for Pricing Negotiations',
+    description: 'Discuss volume discount on pipes',
+    task_category: 'COMMUNICATION',
+    task_type: 'Phone Call',
+    task_type_id: 'itt_phone_call',
+    priority: 'Medium',
+    status: 'In Progress',
+    assigned_to_name: 'Sudheer Kangala',
+    created_at: '2026-11-01T10:00:00Z',
+    updated_at: '2026-11-01T10:00:00Z',
+  };
+
+  const mockDemoTask: internalTaskClient.InternalTask = {
+    id: 'tsk_demo_777',
+    task_number: 'TASK-7777',
+    title: 'Product Demo for Logistics Automation',
+    description: 'Demonstrate dashboard to client',
+    task_category: 'DEMO_SCHEDULING',
+    task_type: 'Demo Scheduling',
+    task_type_id: 'itt_demo_scheduling',
+    priority: 'High',
+    status: 'Assigned',
+    demo_date: '2026-11-15',
+    demo_time: '14:30',
+    demo_status: 'Scheduled',
+    assigned_to_name: 'Prajwal K',
+    created_at: '2026-11-01T10:00:00Z',
+    updated_at: '2026-11-01T10:00:00Z',
+  };
+
+  test('handles clicking on each of the 6 summary cards to filter tasks', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: mockTasks,
+      total: mockTasks.length,
+    });
+    (internalTaskClient.fetchTaskSummary as jest.Mock).mockResolvedValue({
+      total: 10,
+      newTasks: 2,
+      inProgress: 3,
+      pendingApproval: 2,
+      completed: 3,
+      overdueCount: 1,
+      criticalCount: 1,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('card-total-tasks')).toBeInTheDocument();
+    });
+
+    // Total card click
+    fireEvent.click(screen.getByTestId('card-total-tasks'));
+    await waitFor(() => {
+      expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'all' })
+      );
+    });
+
+    // New Tasks card click
+    fireEvent.click(screen.getByTestId('card-new-tasks'));
+    await waitFor(() => {
+      expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'New' })
+      );
+    });
+
+    // In Progress card click
+    fireEvent.click(screen.getByTestId('card-in-progress'));
+    await waitFor(() => {
+      expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'In Progress' })
+      );
+    });
+
+    // Pending Approval card click
+    fireEvent.click(screen.getByTestId('card-pending-approval'));
+    await waitFor(() => {
+      expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'Pending Approval' })
+      );
+    });
+
+    // Completed card click
+    fireEvent.click(screen.getByTestId('card-completed'));
+    await waitFor(() => {
+      expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'Completed' })
+      );
+    });
+
+    // Overdue card click
+    fireEvent.click(screen.getByTestId('card-overdue'));
+    await waitFor(() => {
+      expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'all', dueTo: expect.any(String) })
+      );
+    });
+  });
+
+  test('handles toolbar category filter dropdown and drawer category filter', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: mockTasks,
+      total: mockTasks.length,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('toolbar-category-select')).toBeInTheDocument();
+    });
+
+    const categorySelect = screen.getByTestId('toolbar-category-select');
+    fireEvent.change(categorySelect, { target: { value: 'CREDIT_MANAGEMENT' } });
+
+    await waitFor(() => {
+      expect(internalTaskClient.fetchTaskSummary).toHaveBeenCalledWith(
+        expect.objectContaining({ taskCategory: 'CREDIT_MANAGEMENT' })
+      );
+      expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
+        expect.objectContaining({ taskCategory: 'CREDIT_MANAGEMENT' })
+      );
+    });
+
+    fireEvent.change(categorySelect, { target: { value: 'COMMUNICATION' } });
+    await waitFor(() => {
+      expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
+        expect.objectContaining({ taskCategory: 'COMMUNICATION' })
+      );
+    });
+
+    fireEvent.change(categorySelect, { target: { value: 'all' } });
+
+    // Open filter drawer and test drawer category filter
+    const filterBtn = screen.getByRole('button', { name: /Filter/i });
+    fireEvent.click(filterBtn);
+
+    const drawerCatSelect = screen.getByTestId('drawer-filter-category');
+    fireEvent.change(drawerCatSelect, { target: { value: 'DEMO_SCHEDULING' } });
+
+    const applyBtn = screen.getByRole('button', { name: 'Apply Filters' });
+    fireEvent.click(applyBtn);
+
+    await waitFor(() => {
+      expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
+        expect.objectContaining({ taskCategory: 'DEMO_SCHEDULING' })
+      );
+    });
+  });
+
+  test('handles check task reminders button across success, failure, and error', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: mockTasks,
+      total: mockTasks.length,
+    });
+
+    // 1. Success branch with message
+    (internalTaskClient.checkTaskReminders as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      dispatched: 3,
+      message: 'Dispatched 3 deadline alerts.',
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('toolbar-check-reminders-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('toolbar-check-reminders-btn'));
+    await waitFor(() => {
+      expect(internalTaskClient.checkTaskReminders).toHaveBeenCalled();
+      expect(screen.getByText('Dispatched 3 deadline alerts.')).toBeInTheDocument();
+    });
+
+    // 2. Success branch without message (default fallback)
+    (internalTaskClient.checkTaskReminders as jest.Mock).mockResolvedValueOnce({
+      success: true,
+    });
+    fireEvent.click(screen.getByTestId('toolbar-check-reminders-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Dispatched 0 reminders.')).toBeInTheDocument();
+    });
+
+    // 3. Failure branch without error (default fallback)
+    (internalTaskClient.checkTaskReminders as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    fireEvent.click(screen.getByTestId('toolbar-check-reminders-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Failed to check reminders.')).toBeInTheDocument();
+    });
+
+    // 4. Exception branch
+    (internalTaskClient.checkTaskReminders as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    fireEvent.click(screen.getByTestId('toolbar-check-reminders-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Error checking task reminders.')).toBeInTheDocument();
+    });
+  });
+
+  test('creates a task under CREDIT_MANAGEMENT with credit parameters', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: mockTasks,
+      total: mockTasks.length,
+    });
+    (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...mockCreditTask,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Create Internal Task/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Internal Task/i }));
+
+    // Select CREDIT_MANAGEMENT
+    const catSelect = screen.getByTestId('create-task-category-select');
+    fireEvent.change(catSelect, { target: { value: 'CREDIT_MANAGEMENT' } });
+
+    // Fill title
+    const titleInput = screen.getByPlaceholderText(/e.g. Verify mechanical spare specifications/i);
+    fireEvent.change(titleInput, { target: { value: 'Extend 100 Credits for Steel Plant' } });
+
+    // Fill credit specific fields
+    const accountTypeSelect = screen.getByTestId('create-credit-account-type-select');
+    fireEvent.change(accountTypeSelect, { target: { value: 'SELLER' } });
+
+    const qtyInput = screen.getByTestId('create-credit-quantity-input');
+    fireEvent.change(qtyInput, { target: { value: '100' } });
+
+    const accountNameInput = screen.getByTestId('create-credit-account-name-input');
+    fireEvent.change(accountNameInput, { target: { value: 'Jindal Steel Works' } });
+
+    const reasonInput = screen.getByTestId('create-credit-reason-input');
+    fireEvent.change(reasonInput, { target: { value: 'Special incentive for emergency spares' } });
+
+    // Submit
+    const submitBtn = screen.getByRole('button', { name: 'Create Task' });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(internalTaskClient.createInternalTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskCategory: 'CREDIT_MANAGEMENT',
+          creditAccountType: 'SELLER',
+          creditQuantity: 100,
+          creditAccountName: 'Jindal Steel Works',
+          creditReason: 'Special incentive for emergency spares',
+          status: 'Pending Approval',
+        })
+      );
+    });
+  });
+
+  test('creates a task under DEMO_SCHEDULING and other categories (BUYER credit, ONBOARDING, BD)', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: mockTasks,
+      total: mockTasks.length,
+    });
+    (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...mockDemoTask,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Create Internal Task/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Internal Task/i }));
+
+    const catSelect = screen.getByTestId('create-task-category-select');
+    fireEvent.change(catSelect, { target: { value: 'DEMO_SCHEDULING' } });
+
+    const titleInput = screen.getByPlaceholderText(/e.g. Verify mechanical spare specifications/i);
+    fireEvent.change(titleInput, { target: { value: 'Demo of enterprise bidding platform' } });
+
+    const dateInput = screen.getByTestId('create-demo-date-input');
+    fireEvent.change(dateInput, { target: { value: '2026-11-20' } });
+
+    const timeInput = screen.getByTestId('create-demo-time-input');
+    fireEvent.change(timeInput, { target: { value: '15:30' } });
+
+    const submitBtn = screen.getByRole('button', { name: 'Create Task' });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(internalTaskClient.createInternalTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskCategory: 'DEMO_SCHEDULING',
+          demoDate: '2026-11-20',
+          demoTime: '15:30',
+        })
+      );
+    });
+
+    // Test creating BUYER credit account
+    fireEvent.click(screen.getByRole('button', { name: /Create Internal Task/i }));
+    fireEvent.change(screen.getByTestId('create-task-category-select'), { target: { value: 'CREDIT_MANAGEMENT' } });
+    fireEvent.change(screen.getByTestId('create-credit-account-type-select'), { target: { value: 'BUYER' } });
+    fireEvent.change(screen.getByPlaceholderText(/e.g. Verify mechanical spare specifications/i), { target: { value: 'Buyer Credit Test' } });
+    (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValueOnce(mockCreditTask);
+    fireEvent.click(screen.getByRole('button', { name: 'Create Task' }));
+    await waitFor(() => {
+      expect(internalTaskClient.createInternalTask).toHaveBeenCalledWith(
+        expect.objectContaining({ relatedEntityType: 'BUYER' })
+      );
+    });
+
+    // Test ONBOARDING, BUSINESS_DEVELOPMENT, INTERNAL_OPERATIONS categories
+    fireEvent.click(screen.getByRole('button', { name: /Create Internal Task/i }));
+    fireEvent.change(screen.getByTestId('create-task-category-select'), { target: { value: 'ONBOARDING' } });
+    fireEvent.change(screen.getByTestId('create-task-category-select'), { target: { value: 'BUSINESS_DEVELOPMENT' } });
+    fireEvent.change(screen.getByTestId('create-task-category-select'), { target: { value: 'INTERNAL_OPERATIONS' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  });
+
+  test('handles credit approval and rejection workflow in Task Details drawer', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [mockCreditTask],
+      total: 1,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_credit_999')).toBeInTheDocument();
+    });
+
+    // Open drawer
+    fireEvent.click(screen.getByTestId('task-row-tsk_credit_999'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-approve-credit-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-reject-credit-btn')).toBeInTheDocument();
+    });
+
+    const remarksInput = screen.getByTestId('credit-approval-remarks-input');
+    fireEvent.change(remarksInput, { target: { value: 'Approved by Financial Governance Board' } });
+
+    // 1. Approve Failure without error payload (fallback branch)
+    (internalTaskClient.approveCreditTask as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    fireEvent.click(screen.getByTestId('drawer-approve-credit-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Failed to approve credit task.')).toBeInTheDocument();
+    });
+
+    // 2. Approve Exception (status stays 'Pending Approval')
+    (internalTaskClient.approveCreditTask as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    fireEvent.click(screen.getByTestId('drawer-approve-credit-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Error approving credit task.')).toBeInTheDocument();
+    });
+
+    // 3. Reject Failure without error payload (fallback branch)
+    (internalTaskClient.rejectCreditTask as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    fireEvent.click(screen.getByTestId('drawer-reject-credit-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Failed to reject credit task.')).toBeInTheDocument();
+    });
+
+    // 4. Reject Exception (status stays 'Pending Approval')
+    (internalTaskClient.rejectCreditTask as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    fireEvent.click(screen.getByTestId('drawer-reject-credit-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Error rejecting credit task.')).toBeInTheDocument();
+    });
+
+    // 5. Reject Success (fallback message branch)
+    (internalTaskClient.rejectCreditTask as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      task: { ...mockCreditTask, status: 'Rejected', approval_status: 'REJECTED' },
+    });
+    fireEvent.click(screen.getByTestId('drawer-reject-credit-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Credit request rejected.')).toBeInTheDocument();
+    });
+  });
+
+  test('handles credit approval success branch in Task Details drawer', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [mockCreditTask],
+      total: 1,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_credit_999')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_credit_999'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-approve-credit-btn')).toBeInTheDocument();
+    });
+
+    (internalTaskClient.approveCreditTask as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      task: { ...mockCreditTask, status: 'Completed', approval_status: 'APPROVED' },
+    });
+
+    fireEvent.click(screen.getByTestId('drawer-approve-credit-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Credit request approved and balances updated.')).toBeInTheDocument();
+    });
+  });
+
+  test('handles adding activity comments in Task Details drawer across success, failure, and error', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [mockCreditTask],
+      total: 1,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_credit_999')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_credit_999'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-add-activity-btn')).toBeInTheDocument();
+    });
+
+    const commentInput = screen.getByTestId('drawer-add-activity-input');
+
+    // Empty input click does nothing
+    fireEvent.click(screen.getByTestId('drawer-add-activity-btn'));
+    expect(internalTaskClient.addTaskActivity).not.toHaveBeenCalled();
+
+    fireEvent.change(commentInput, { target: { value: 'Verified audited balance sheet with accounts lead.' } });
+
+    // 1. Success
+    (internalTaskClient.addTaskActivity as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      activity: {
+        id: 'act_2',
+        task_id: 'tsk_credit_999',
+        action_type: 'COMMENT',
+        comment: 'Verified audited balance sheet with accounts lead.',
+        actor_name: 'Navin Chaudhary',
+        created_at: '2026-11-02T11:00:00Z',
+      },
+    });
+
+    fireEvent.click(screen.getByTestId('drawer-add-activity-btn'));
+
+    await waitFor(() => {
+      expect(internalTaskClient.addTaskActivity).toHaveBeenCalledWith(
+        'tsk_credit_999',
+        'Verified audited balance sheet with accounts lead.'
+      );
+      expect(screen.getByText('Activity note added.')).toBeInTheDocument();
+    });
+
+    // 2. Failure with fallback error message
+    fireEvent.change(commentInput, { target: { value: 'Attempting invalid log' } });
+    (internalTaskClient.addTaskActivity as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    fireEvent.click(screen.getByTestId('drawer-add-activity-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Failed to add activity note.')).toBeInTheDocument();
+    });
+
+    // 3. Exception
+    fireEvent.change(commentInput, { target: { value: 'Attempting network error log' } });
+    (internalTaskClient.addTaskActivity as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    fireEvent.click(screen.getByTestId('drawer-add-activity-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Error adding activity note.')).toBeInTheDocument();
+    });
+  });
+
+  test('enforces explicit confirmation before completing communication tasks', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [mockCommTask],
+      total: 1,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_comm_888')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_comm_888'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-mark-complete-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('drawer-mark-complete-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('communication-confirm-checkbox')).toBeInTheDocument();
+    });
+
+    // Click Complete WITHOUT checking confirmation box
+    fireEvent.click(screen.getByTestId('confirm-complete-task-btn'));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Failed to complete task. Communication tasks require explicit confirmation.')
+      ).toBeInTheDocument();
+    });
+
+    // Check confirmation checkbox
+    fireEvent.click(screen.getByTestId('communication-confirm-checkbox'));
+
+    const remarksInput = screen.getByTestId('completion-remarks-input');
+    fireEvent.change(remarksInput, { target: { value: 'Spoke with vendor director, agreed to 12% price discount.' } });
+
+    (internalTaskClient.completeInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...mockCommTask,
+      status: 'Completed',
+    });
+
+    fireEvent.click(screen.getByTestId('confirm-complete-task-btn'));
+
+    await waitFor(() => {
+      expect(internalTaskClient.completeInternalTask).toHaveBeenCalledWith(
+        'tsk_comm_888',
+        'Spoke with vendor director, agreed to 12% price discount.'
+      );
+    });
+  });
+
+  test('covers active filter count with taskCategory, taskType, and createdBy', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: mockTasks,
+      total: mockTasks.length,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    // Open filter drawer
+    fireEvent.click(screen.getByRole('button', { name: /Filter/i }));
+
+    // Set Category, CreatedBy
+    fireEvent.change(screen.getByTestId('drawer-filter-category'), { target: { value: 'CREDIT_MANAGEMENT' } });
+    fireEvent.change(screen.getByPlaceholderText('Creator name...'), { target: { value: 'Admin' } });
+
+    // Apply
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Filters' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Filter/i })).toHaveClass('bg-blue-50');
+      expect(screen.getByText('2')).toBeInTheDocument();
+    });
+  });
+
+  test('covers tasks with APPROVED and REJECTED approval_status and task with credit quantity', async () => {
+    const approvedTask: internalTaskClient.InternalTask = {
+      ...mockCreditTask,
+      id: 'tsk_approved_1',
+      approval_status: 'APPROVED',
+      status: 'Completed',
+    };
+    const rejectedTask: internalTaskClient.InternalTask = {
+      ...mockCreditTask,
+      id: 'tsk_rejected_1',
+      approval_status: 'REJECTED',
+      status: 'Rejected',
+    };
+    const generalTaskWithCredits: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_gen_credits',
+      task_category: undefined,
+      credit_quantity: 25,
+      credit_account_name: '',
+      credit_account_type: undefined,
+    };
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [approvedTask, rejectedTask, generalTaskWithCredits],
+      total: 3,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_approved_1')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_approved_1'));
+    await waitFor(() => {
+      expect(screen.getByText('APPROVED')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_rejected_1'));
+    await waitFor(() => {
+      expect(screen.getByText('REJECTED')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_gen_credits'));
+    await waitFor(() => {
+      expect(screen.getByText('Credit Management Approval')).toBeInTheDocument();
+      expect(screen.getByText('25 Credits')).toBeInTheDocument();
+    });
+  });
+
+  test('handles live and projected credit balance calculation and warnings in drawer', async () => {
+    const taskAddCredit: internalTaskClient.InternalTask = {
+      ...mockCreditTask,
+      id: 'tsk_cred_add_1',
+      credit_quantity: 25,
+      current_account_credits: 100,
+      task_type_code: 'itt_add_credits',
+      task_type: 'Add Credits',
+      status: 'Pending Approval',
+    };
+    const taskDeductCreditNegative: internalTaskClient.InternalTask = {
+      ...mockCreditTask,
+      id: 'tsk_cred_ded_neg',
+      credit_quantity: 80,
+      current_account_credits: 30,
+      task_type_code: 'itt_delete_credits',
+      task_type: 'Delete / Deduct Credits',
+      status: 'Pending Approval',
+    };
+    const taskCreditsNoCurrent: internalTaskClient.InternalTask = {
+      ...mockCreditTask,
+      id: 'tsk_cred_no_curr',
+      credit_quantity: 10,
+      current_account_credits: undefined,
+      task_type: 'Add Credits',
+      status: 'Pending Approval',
+    };
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [taskAddCredit, taskDeductCreditNegative, taskCreditsNoCurrent],
+      total: 3,
+    });
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValue(null);
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_cred_add_1')).toBeInTheDocument();
+    });
+
+    // Check addition projection: 100 + 25 = 125
+    fireEvent.click(screen.getByTestId('task-row-tsk_cred_add_1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-current-credits')).toHaveTextContent('100 Credits');
+      expect(screen.getByTestId('drawer-projected-credits')).toHaveTextContent('125 Credits');
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Check deduction negative projection: 30 - 80 = -50 (class text-rose-600)
+    fireEvent.click(screen.getByTestId('task-row-tsk_cred_ded_neg'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-current-credits')).toHaveTextContent('30 Credits');
+      expect(screen.getByTestId('drawer-projected-credits')).toHaveTextContent('-50 Credits');
+      expect(screen.getByTestId('drawer-projected-credits')).toHaveClass('text-rose-600');
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Check undefined current credits: displays '—'
+    fireEvent.click(screen.getByTestId('task-row-tsk_cred_no_curr'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-current-credits')).toHaveTextContent('—');
+      expect(screen.getByTestId('drawer-projected-credits')).toHaveTextContent('—');
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+  });
+
+  test('handles communication suite: phone call logging, outcome selection, tel link, and failure/error branches', async () => {
+    const commTask: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_comm_call_1',
+      task_category: 'COMMUNICATION',
+      task_type: 'Phone Call',
+      recipient_phone: '+919876543210',
+      recipient_email: 'client@example.com',
+      call_outcome: 'Connected',
+    };
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [commTask],
+      total: 1,
+    });
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValue(commTask);
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_comm_call_1')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_comm_call_1'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-recipient-phone')).toHaveTextContent('+919876543210');
+      expect(screen.getByTestId('drawer-recipient-email')).toHaveTextContent('client@example.com');
+      expect(screen.getByTestId('drawer-call-client-btn')).toHaveAttribute('href', 'tel:+919876543210');
+    });
+
+    // Select new call outcome
+    fireEvent.change(screen.getByTestId('drawer-call-outcome-select'), {
+      target: { value: 'Busy' },
+    });
+
+    // Success branch
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...commTask,
+      call_outcome: 'Busy',
+    });
+    fireEvent.click(screen.getByTestId('drawer-log-call-outcome-btn'));
+    await waitFor(() => {
+      expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
+        'tsk_comm_call_1',
+        expect.objectContaining({ call_outcome: 'Busy' })
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Call outcome logged successfully.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-log-call-outcome-btn')).not.toBeDisabled();
+    });
+
+    // Failure branch (returns null)
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByTestId('drawer-log-call-outcome-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Failed to log call outcome.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-log-call-outcome-btn')).not.toBeDisabled();
+    });
+
+    // Error branch (throws)
+    (internalTaskClient.updateInternalTask as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    fireEvent.click(screen.getByTestId('drawer-log-call-outcome-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Error logging call outcome.')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+  });
+
+  test('handles communication suite: WhatsApp links and Follow-up creation trigger', async () => {
+    const waTask: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_wa_1',
+      task_category: 'COMMUNICATION',
+      task_type: 'WhatsApp',
+      recipient_phone: '+91 98765 43210',
+      title: 'Discuss pricing with seller',
+    };
+    const waNoPhoneTask: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_wa_no_phone',
+      task_category: 'COMMUNICATION',
+      task_type: 'WhatsApp',
+      recipient_phone: undefined,
+      title: 'Discuss pricing with seller',
+    };
+    const followupTask: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_followup_1',
+      task_category: 'COMMUNICATION',
+      task_type: 'Follow-up',
+      title: 'Follow-up on quotation',
+    };
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [waTask, waNoPhoneTask, followupTask],
+      total: 3,
+    });
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValue(null);
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_wa_1')).toBeInTheDocument();
+    });
+
+    // WhatsApp with phone
+    fireEvent.click(screen.getByTestId('task-row-tsk_wa_1'));
+    await waitFor(() => {
+      const waLink = screen.getByTestId('drawer-open-whatsapp-btn');
+      expect(waLink).toHaveAttribute('href', expect.stringContaining('https://wa.me/919876543210'));
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // WhatsApp without phone
+    fireEvent.click(screen.getByTestId('task-row-tsk_wa_no_phone'));
+    await waitFor(() => {
+      expect(screen.getByText('No phone number attached to task')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Follow-up task
+    fireEvent.click(screen.getByTestId('task-row-tsk_followup_1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-schedule-followup-btn')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('drawer-schedule-followup-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('create-task-category-select')).toBeInTheDocument();
+    });
+  });
+
+  test('handles demo scheduling: status updates, reschedule controls, and failure/error branches', async () => {
+    const demoTask: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_demo_1',
+      task_category: 'DEMO_SCHEDULING',
+      task_type: 'Demo Scheduling',
+      demo_date: '2026-11-15',
+      demo_time: '14:00',
+      demo_status: 'Scheduled',
+    };
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [demoTask],
+      total: 1,
+    });
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValue(demoTask);
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_demo_1')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_demo_1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-demo-status-badge')).toHaveTextContent('Scheduled');
+      expect(screen.getByTestId('drawer-demo-date')).toHaveTextContent('2026-11-15');
+      expect(screen.getByTestId('drawer-demo-time')).toHaveTextContent('14:00');
+    });
+
+    // Update Demo Status - Success
+    fireEvent.change(screen.getByTestId('drawer-demo-status-select'), {
+      target: { value: 'Completed' },
+    });
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...demoTask,
+      demo_status: 'Completed',
+    });
+    fireEvent.click(screen.getByTestId('drawer-update-demo-status-btn'));
+    await waitFor(() => {
+      expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
+        'tsk_demo_1',
+        expect.objectContaining({ demo_status: 'Completed' })
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Demo status updated.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-update-demo-status-btn')).not.toBeDisabled();
+    });
+
+    // Update Demo Status - Failure & Error
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByTestId('drawer-update-demo-status-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Failed to update demo status.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-update-demo-status-btn')).not.toBeDisabled();
+    });
+
+    (internalTaskClient.updateInternalTask as jest.Mock).mockRejectedValueOnce(new Error('err'));
+    fireEvent.click(screen.getByTestId('drawer-update-demo-status-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Error updating demo status.')).toBeInTheDocument();
+    });
+
+    // Reschedule Demo with empty date -> early return
+    fireEvent.change(screen.getByTestId('drawer-reschedule-date-input'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByTestId('drawer-reschedule-demo-btn'));
+
+    // Reschedule Demo with date only (no time, no reason) -> covers falsy branches
+    fireEvent.change(screen.getByTestId('drawer-reschedule-date-input'), {
+      target: { value: '2026-11-20' },
+    });
+    fireEvent.change(screen.getByTestId('drawer-reschedule-time-input'), {
+      target: { value: '' },
+    });
+    fireEvent.change(screen.getByTestId('drawer-reschedule-reason-input'), {
+      target: { value: '' },
+    });
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...demoTask,
+      demo_date: '2026-11-20',
+      demo_time: '',
+      demo_status: 'Rescheduled',
+    });
+    fireEvent.click(screen.getByTestId('drawer-reschedule-demo-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Demo rescheduled successfully.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-reschedule-demo-btn')).not.toBeDisabled();
+    });
+
+    // Reschedule Demo - Success with time & reason
+    fireEvent.change(screen.getByTestId('drawer-reschedule-date-input'), {
+      target: { value: '2026-11-20' },
+    });
+    fireEvent.change(screen.getByTestId('drawer-reschedule-time-input'), {
+      target: { value: '16:00' },
+    });
+    fireEvent.change(screen.getByTestId('drawer-reschedule-reason-input'), {
+      target: { value: 'Client rescheduled' },
+    });
+
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...demoTask,
+      demo_date: '2026-11-20',
+      demo_time: '16:00',
+      demo_status: 'Rescheduled',
+    });
+    fireEvent.click(screen.getByTestId('drawer-reschedule-demo-btn'));
+    await waitFor(() => {
+      expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
+        'tsk_demo_1',
+        expect.objectContaining({
+          demo_date: '2026-11-20',
+          demo_time: '16:00',
+          demo_status: 'Rescheduled',
+        })
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Demo rescheduled successfully.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-reschedule-demo-btn')).not.toBeDisabled();
+    });
+
+    // Reschedule Demo - Failure & Error
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByTestId('drawer-reschedule-demo-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Failed to reschedule demo.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-reschedule-demo-btn')).not.toBeDisabled();
+    });
+
+    (internalTaskClient.updateInternalTask as jest.Mock).mockRejectedValueOnce(new Error('reschedule error'));
+    fireEvent.click(screen.getByTestId('drawer-reschedule-demo-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Error rescheduling demo.')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+  });
+
+  test('handles business development: proposal status updates, proposal sent button, and failure/error branches', async () => {
+    const bdTask: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_bd_1',
+      task_category: 'BUSINESS_DEVELOPMENT',
+      task_type: 'Send Proposal',
+      proposal_value: 850000,
+      proposal_url: 'https://procucev.com/prop.pdf',
+      proposal_status: 'Draft',
+    };
+    const bdNoUrlTask: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_bd_no_url',
+      task_category: 'BUSINESS_DEVELOPMENT',
+      task_type: 'Send Corporate Email',
+      proposal_value: undefined,
+      proposal_url: undefined,
+      proposal_status: 'Draft',
+    };
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [bdTask, bdNoUrlTask],
+      total: 2,
+    });
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValue(bdTask);
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_bd_1')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_bd_1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-proposal-value')).toHaveTextContent(/8,?50,?000/);
+      expect(screen.getByTestId('drawer-proposal-link')).toHaveAttribute('href', 'https://procucev.com/prop.pdf');
+    });
+
+    // Update Proposal Status - Success
+    fireEvent.change(screen.getByTestId('drawer-proposal-status-select'), {
+      target: { value: 'Under Negotiation' },
+    });
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...bdTask,
+      proposal_status: 'Under Negotiation',
+    });
+    fireEvent.click(screen.getByTestId('drawer-update-proposal-status-btn'));
+    await waitFor(() => {
+      expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
+        'tsk_bd_1',
+        expect.objectContaining({ proposal_status: 'Under Negotiation' })
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Proposal status updated.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-update-proposal-status-btn')).not.toBeDisabled();
+    });
+
+    // Update Proposal Status - Failure & Error
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByTestId('drawer-update-proposal-status-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Failed to update proposal status.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-update-proposal-status-btn')).not.toBeDisabled();
+    });
+
+    (internalTaskClient.updateInternalTask as jest.Mock).mockRejectedValueOnce(new Error('err'));
+    fireEvent.click(screen.getByTestId('drawer-update-proposal-status-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Error updating proposal status.')).toBeInTheDocument();
+    });
+
+    // Mark Proposal Sent - Success
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...bdTask,
+      proposal_status: 'Sent to Client',
+    });
+    fireEvent.click(screen.getByTestId('drawer-mark-proposal-sent-btn'));
+    await waitFor(() => {
+      expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
+        'tsk_bd_1',
+        expect.objectContaining({ proposal_status: 'Sent to Client' })
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Proposal marked as sent.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-mark-proposal-sent-btn')).not.toBeDisabled();
+    });
+
+    // Mark Proposal Sent - Failure & Error
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByTestId('drawer-mark-proposal-sent-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Failed to mark proposal sent.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-mark-proposal-sent-btn')).not.toBeDisabled();
+    });
+
+    (internalTaskClient.updateInternalTask as jest.Mock).mockRejectedValueOnce(new Error('err'));
+    fireEvent.click(screen.getByTestId('drawer-mark-proposal-sent-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Error updating proposal status.')).toBeInTheDocument();
+    });
+
+    // Test bd task without proposal URL
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValueOnce(bdNoUrlTask);
+    fireEvent.click(screen.getByTestId('task-row-tsk_bd_no_url'));
+    await waitFor(() => {
+      expect(screen.getByText('None')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+  });
+
+  test('handles client onboarding: milestone stepper, advance stage, buyer/vendor links, and failure/error branches', async () => {
+    const onboardingBuyerTask: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_onb_buyer',
+      task_category: 'ONBOARDING',
+      task_type: 'Client Onboarding',
+      onboarding_stage: 2,
+      related_entity_type: 'BUYER',
+      related_entity_id: 'buyer-org-123',
+    };
+    const onboardingVendorTask: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_onb_vendor',
+      task_category: 'ONBOARDING',
+      task_type: 'Client Onboarding',
+      onboarding_stage: 5,
+      related_entity_type: 'VENDOR',
+      related_entity_id: 'vendor-org-456',
+    };
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [onboardingBuyerTask, onboardingVendorTask],
+      total: 2,
+    });
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValue(onboardingBuyerTask);
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_onb_buyer')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_onb_buyer'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-onboarding-stage-badge')).toHaveTextContent('Stage 2 of 5');
+      expect(screen.getByTestId('onboarding-stage-item-1')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-goto-buyer-btn')).toBeInTheDocument();
+    });
+
+    // Navigate to Buyer Dossier
+    fireEvent.click(screen.getByTestId('drawer-goto-buyer-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('buyers-directory')).toBeInTheDocument();
+    });
+
+    // Switch back to tasks
+    const tasksTab = screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.internalTasks, 'i') });
+    fireEvent.click(tasksTab);
+
+    // Reopen task details
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_onb_buyer')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('task-row-tsk_onb_buyer'));
+
+    // Advance Stage - Success
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...onboardingBuyerTask,
+      onboarding_stage: 3,
+    });
+    fireEvent.click(screen.getByTestId('drawer-advance-onboarding-btn'));
+    await waitFor(() => {
+      expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
+        'tsk_onb_buyer',
+        expect.objectContaining({ onboarding_stage: 3 })
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Onboarding stage advanced.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-advance-onboarding-btn')).not.toBeDisabled();
+    });
+
+    // Advance Stage - Failure & Error
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByTestId('drawer-advance-onboarding-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Failed to advance onboarding stage.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-advance-onboarding-btn')).not.toBeDisabled();
+    });
+
+    (internalTaskClient.updateInternalTask as jest.Mock).mockRejectedValueOnce(new Error('err'));
+    fireEvent.click(screen.getByTestId('drawer-advance-onboarding-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Error advancing onboarding stage.')).toBeInTheDocument();
+    });
+
+    // Check Stage 5 vendor task: no advance button, vendor link navigation
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValueOnce(onboardingVendorTask);
+    fireEvent.click(screen.getByTestId('task-row-tsk_onb_vendor'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-onboarding-stage-badge')).toHaveTextContent('Stage 5 of 5');
+      expect(screen.queryByTestId('drawer-advance-onboarding-btn')).not.toBeInTheDocument();
+      expect(screen.getByTestId('drawer-goto-vendor-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('drawer-goto-vendor-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('sellers-directory')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('tab', { name: new RegExp(UI_STRINGS.actionCenter.tabs.internalTasks, 'i') }));
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_onb_vendor')).toBeInTheDocument();
+    });
+  });
+
+  test('handles attachments: toggling form, adding attachments, list view, and failure/error branches', async () => {
+    const taskWithAtt: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_with_att',
+      due_time: '11:30 AM',
+      attachments: [{ name: 'SpecSheet.pdf', url: 'https://procucev.com/spec.pdf' }],
+    };
+    const taskNoAtt: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_no_att',
+      attachments: [],
+    };
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [taskWithAtt, taskNoAtt],
+      total: 2,
+    });
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValue(taskWithAtt);
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-row-tsk_with_att')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-tsk_with_att'));
+    await waitFor(() => {
+      expect(screen.getByText('SpecSheet.pdf')).toBeInTheDocument();
+      expect(screen.getByTestId('attachment-link-0')).toHaveAttribute('href', 'https://procucev.com/spec.pdf');
+    });
+
+    // Toggle add attachment form
+    fireEvent.click(screen.getByTestId('drawer-toggle-add-attachment-btn'));
+    expect(screen.getByTestId('drawer-attachment-name-input')).toBeInTheDocument();
+
+    // Save attachment with empty name -> early return branch
+    fireEvent.change(screen.getByTestId('drawer-attachment-name-input'), {
+      target: { value: '   ' },
+    });
+    fireEvent.click(screen.getByTestId('drawer-save-attachment-btn'));
+
+    // Fill form and add attachment - Success
+    fireEvent.change(screen.getByTestId('drawer-attachment-name-input'), {
+      target: { value: 'Agreement.docx' },
+    });
+    fireEvent.change(screen.getByTestId('drawer-attachment-url-input'), {
+      target: { value: 'https://procucev.com/agreement.docx' },
+    });
+
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...taskWithAtt,
+      attachments: [
+        ...taskWithAtt.attachments!,
+        { name: 'Agreement.docx', url: 'https://procucev.com/agreement.docx' },
+      ],
+    });
+    fireEvent.click(screen.getByTestId('drawer-save-attachment-btn'));
+    await waitFor(() => {
+      expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
+        'tsk_with_att',
+        expect.objectContaining({
+          newAttachment: {
+            name: 'Agreement.docx',
+            url: 'https://procucev.com/agreement.docx',
+          },
+        })
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Attachment added successfully.')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('drawer-attachment-name-input')).not.toBeInTheDocument();
+    });
+
+    // Toggle form again for failure & error tests
+    fireEvent.click(screen.getByTestId('drawer-toggle-add-attachment-btn'));
+    fireEvent.change(screen.getByTestId('drawer-attachment-name-input'), {
+      target: { value: 'Doc2.pdf' },
+    });
+
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByTestId('drawer-save-attachment-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Failed to add attachment.')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-save-attachment-btn')).not.toBeDisabled();
+    });
+
+    (internalTaskClient.updateInternalTask as jest.Mock).mockRejectedValueOnce(new Error('att error'));
+    fireEvent.click(screen.getByTestId('drawer-save-attachment-btn'));
+    await waitFor(() => {
+      expect(screen.getByText('Error adding attachment.')).toBeInTheDocument();
+    });
+
+    // No attachments task
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValueOnce(taskNoAtt);
+    fireEvent.click(screen.getByTestId('task-row-tsk_no_att'));
+    await waitFor(() => {
+      expect(screen.getByText('No attachments added')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+  });
+
+  test('covers toolbar CSV export button attributes', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: mockTasks,
+      total: mockTasks.length,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('toolbar-export-csv-btn')).toBeInTheDocument();
+    });
+
+    const exportBtn = screen.getByTestId('toolbar-export-csv-btn');
+    expect(exportBtn).toHaveAttribute('download', 'internal_tasks.csv');
+    expect(exportBtn.getAttribute('href')).toContain('data:text/csv;charset=utf-8');
   });
 
 });

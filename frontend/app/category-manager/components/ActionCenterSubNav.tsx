@@ -11,6 +11,7 @@ import {
   Truck,
   Users,
   TrendingUp,
+  FolderOpen,
 } from 'lucide-react';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { ActionCenterTabKey } from '@/lib/types';
@@ -93,6 +94,11 @@ export default function ActionCenterSubNav({
           ? paymentDuesCount
           : undefined,
       badgeColor: 'bg-amber-600 text-white',
+    },
+    {
+      id: 'document_vault',
+      label: tabs.documentVault,
+      icon: FolderOpen,
     },
   ];
 

@@ -1428,3 +1428,120 @@ export const ACTION_CENTER_COMM_CHANNELS = [
 ] as const;
 
 export const ACTION_CENTER_SMS_MAX_CHARS = 160;
+
+
+export const INTERNAL_TASK_CATEGORIES = {
+  COMMUNICATION: 'COMMUNICATION',
+  DEMO_SCHEDULING: 'DEMO_SCHEDULING',
+  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
+  BUSINESS_DEVELOPMENT: 'BUSINESS_DEVELOPMENT',
+  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
+  ONBOARDING: 'ONBOARDING',
+} as const;
+
+export const INTERNAL_TASK_CATEGORY_LIST = [
+  'COMMUNICATION',
+  'DEMO_SCHEDULING',
+  'CREDIT_MANAGEMENT',
+  'BUSINESS_DEVELOPMENT',
+  'INTERNAL_OPERATIONS',
+  'ONBOARDING',
+] as const;
+
+export const INTERNAL_TASK_CATEGORY_LABELS = {
+  COMMUNICATION: 'Communication Tasks',
+  DEMO_SCHEDULING: 'Demo Scheduling',
+  CREDIT_MANAGEMENT: 'Credit Management',
+  BUSINESS_DEVELOPMENT: 'Business Development Tasks',
+  INTERNAL_OPERATIONS: 'Internal Operations',
+  ONBOARDING: 'Onboarding Process',
+} as const;
+
+export const INTERNAL_TASK_CATEGORY_TYPES: Record<string, string[]> = {
+  COMMUNICATION: [
+    'Phone Call',
+    'SMS',
+    'WhatsApp',
+    'Email',
+    'New Follow-up',
+    'Existing Follow-up',
+  ],
+  DEMO_SCHEDULING: [
+    'Schedule Demo',
+  ],
+  CREDIT_MANAGEMENT: [
+    'Add Credits',
+    'Delete Credits',
+  ],
+  BUSINESS_DEVELOPMENT: [
+    'Send Proposal',
+    'Send Corporate Email',
+  ],
+  INTERNAL_OPERATIONS: [
+    'Operational Task',
+  ],
+  ONBOARDING: [
+    'Client Onboarding',
+  ],
+};
+
+export const INTERNAL_TASK_STATUSES = [
+  'New',
+  'Assigned',
+  'In Progress',
+  'Pending Approval',
+  'Completed',
+  'Rejected',
+  'Cancelled',
+] as const;
+
+export const INTERNAL_TASK_PRIORITIES = [
+  'Low',
+  'Medium',
+  'High',
+  'Critical',
+] as const;
+
+export const DEMO_STATUSES = [
+  'Scheduled',
+  'Completed',
+  'Rescheduled',
+  'Cancelled',
+] as const;
+
+export const CREDIT_ACCOUNT_TYPES = [
+  'BUYER',
+  'SELLER',
+] as const;
+
+export const PROPOSAL_STATUSES = [
+  'Draft',
+  'Sent to Client',
+  'Under Negotiation',
+  'Accepted',
+  'Declined',
+] as const;
+
+export const ONBOARDING_STAGES = {
+  1: 'Registration & Initial Contact',
+  2: 'KYC & Document Collection',
+  3: 'Compliance & Verification',
+  4: 'Agreement & Terms',
+  5: 'Live Onboarded',
+} as const;
+
+
+export const DOCUMENT_VAULT_CATEGORIES = [
+  { id: 'all', label: 'All Documents' },
+  { id: 'marketing_overview', label: 'Company Overview & ROI Decks' },
+  { id: 'rate_cards', label: 'Subscription Plans & Pricing' },
+  { id: 'templates', label: 'Templates & Walkthrough Guides' },
+  { id: 'compliance', label: 'Credit Terms & Compliance' },
+  { id: 'contracts_nda', label: 'Agreements & Sponsorships' },
+  { id: 'other', label: 'General Collateral' },
+] as const;
+
+export const DOCUMENT_VAULT_CONFIG = {
+  MAX_UPLOAD_SIZE_BYTES: 25 * 1024 * 1024,
+  ALLOWED_EXTENSIONS: ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.zip'],
+} as const;

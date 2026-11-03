@@ -74,6 +74,7 @@ const REPORTED_TABLES = [
   'rfq_unlocks',
   'vendor_credit_transactions',
   'buyer_credit_transactions',
+  'document_vault',
 ];
 
 async function reportRowCounts() {

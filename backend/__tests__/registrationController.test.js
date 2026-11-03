@@ -148,6 +148,23 @@ describe('internalTaskController - Registrations', () => {
         error: 'Failed to update client registration status.',
       });
     });
+
+    test('returns 400 when registration record not found or already processed', async () => {
+      req.params = { id: 'reg-client-999' };
+      req.body = { action: 'accept' };
+
+      jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockResolvedValue(null);
+
+      await internalTaskController.handleRegistrationAction(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Registration record not found or already processed.',
+        })
+      );
+    });
+
   });
 });
-

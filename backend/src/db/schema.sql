@@ -856,10 +856,8 @@ CREATE TABLE IF NOT EXISTS buyer_credit_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_buyer_credit_transactions_buyer ON buyer_credit_transactions (buyer_id, created_at DESC);
 
-
-
 -- =============================================================================
--- ACTION CENTER: TICKETS, APPROVALS & INTERNAL TASKS (PostgreSQL)
+-- ACTION CENTER: TICKETS, APPROVALS, INTERNAL TASKS & DOCUMENT VAULT (PostgreSQL)
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS tickets (
@@ -916,38 +914,65 @@ CREATE TABLE IF NOT EXISTS internal_task_types (
   code VARCHAR(128) UNIQUE NOT NULL,
   default_module VARCHAR(64) NOT NULL DEFAULT 'GENERAL',
   description TEXT,
-  is_active INTEGER NOT NULL DEFAULT 1,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS internal_tasks (
   id VARCHAR(64) PRIMARY KEY,
-  task_number VARCHAR(64) UNIQUE,
-  title VARCHAR(500) NOT NULL,
-  description TEXT,
+  task_number VARCHAR(64) UNIQUE NOT NULL,
+  task_category VARCHAR(64) NOT NULL DEFAULT 'INTERNAL_OPERATIONS',
+  task_type VARCHAR(64) NOT NULL DEFAULT 'General',
   task_type_id VARCHAR(64),
+  title VARCHAR(512) NOT NULL,
+  description TEXT,
   priority VARCHAR(32) NOT NULL DEFAULT 'Medium',
-  status VARCHAR(32) NOT NULL DEFAULT 'Pending',
+  status VARCHAR(32) NOT NULL DEFAULT 'New',
   assigned_to_user_id VARCHAR(64),
   assigned_to_name VARCHAR(255),
-  assigned_team VARCHAR(128),
+  assigned_team VARCHAR(100),
   created_by_user_id VARCHAR(64),
   created_by_name VARCHAR(255),
-  due_date TIMESTAMPTZ,
-  related_entity_type VARCHAR(64) DEFAULT 'GENERAL',
+  due_date DATE,
+  due_time VARCHAR(32),
+  completed_at TIMESTAMPTZ,
+  completed_by_user_id VARCHAR(64),
+  completed_by_name VARCHAR(255),
+  completion_remarks TEXT,
+  related_entity_type VARCHAR(64) NOT NULL DEFAULT 'GENERAL',
   related_entity_id VARCHAR(64),
-  related_entity_label VARCHAR(255),
+  related_entity_label VARCHAR(512),
   notes TEXT,
   attachments JSONB DEFAULT '[]'::jsonb,
+  approval_status VARCHAR(32),
+  approver_id VARCHAR(64),
+  approver_name VARCHAR(255),
+  approved_at TIMESTAMPTZ,
+  approval_remarks TEXT,
+  demo_date VARCHAR(64),
+  demo_time VARCHAR(32),
+  demo_status VARCHAR(64),
+  credit_account_type VARCHAR(32),
+  credit_account_id VARCHAR(64),
+  credit_account_name VARCHAR(255),
+  credit_quantity NUMERIC DEFAULT 0,
+  credit_reason TEXT,
   raw JSONB,
   resolved_at TIMESTAMPTZ,
   resolved_by_name VARCHAR(255),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_category ON internal_tasks (task_category);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_type ON internal_tasks (task_type);
 CREATE INDEX IF NOT EXISTS idx_internal_tasks_status ON internal_tasks (status);
-CREATE INDEX IF NOT EXISTS idx_internal_tasks_assigned_to ON internal_tasks (assigned_to_user_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_priority ON internal_tasks (priority);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_related ON internal_tasks (related_entity_type, related_entity_id);
 CREATE INDEX IF NOT EXISTS idx_internal_tasks_due_date ON internal_tasks (due_date);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_assigned_to ON internal_tasks (assigned_to_user_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_by ON internal_tasks (created_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_at ON internal_tasks (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS internal_task_activities (
   id VARCHAR(64) PRIMARY KEY,
@@ -955,9 +980,10 @@ CREATE TABLE IF NOT EXISTS internal_task_activities (
   action_type VARCHAR(64) NOT NULL,
   actor_id VARCHAR(64),
   actor_name VARCHAR(255),
-  comment TEXT,
   from_value TEXT,
   to_value TEXT,
+  comment TEXT,
+  metadata JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_internal_task_activities_task ON internal_task_activities (task_id, created_at DESC);
@@ -1030,3 +1056,24 @@ CREATE TABLE IF NOT EXISTS vendor_categories_indexed (
 );
 CREATE INDEX IF NOT EXISTS idx_vci_cat_name ON vendor_categories_indexed (lower(category_name));
 CREATE INDEX IF NOT EXISTS idx_vci_vendor_id ON vendor_categories_indexed (vendor_id);
+
+-- ==============================================================================
+-- DOCUMENT VAULT (Corporate Sales Collateral, Pitch Decks, Rate Cards & Attachments)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS document_vault (
+  id VARCHAR(64) PRIMARY KEY,
+  document_name VARCHAR(255) NOT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  file_size BIGINT DEFAULT 0,
+  mime_type VARCHAR(128) DEFAULT 'application/pdf',
+  category VARCHAR(64) NOT NULL,
+  file_url TEXT NOT NULL,
+  description TEXT,
+  uploaded_by VARCHAR(255) DEFAULT 'System Admin',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_document_vault_category ON document_vault (category);
+CREATE INDEX IF NOT EXISTS idx_document_vault_active ON document_vault (is_active);
+

@@ -86,12 +86,13 @@ async function getApprovalSummary() {
         FROM approvals
       `;
       const res = await pool.query(sql, [], { d1: true, d1Text: sql, useCache: true, tag: 'approvals', ttlMs: 15000 });
-      if (res && res.rows && res.rows[0] && Number(res.rows[0].total) > 0) {
+      if (res && res.rows) {
+        const row = res.rows[0] || {};
         return {
-          total: Number(res.rows[0].total) || 0,
-          pending: Number(res.rows[0].pending) || 0,
-          approved: Number(res.rows[0].approved) || 0,
-          rejected: Number(res.rows[0].rejected) || 0,
+          total: Number(row.total) || 0,
+          pending: Number(row.pending) || 0,
+          approved: Number(row.approved) || 0,
+          rejected: Number(row.rejected) || 0,
         };
       }
     } catch {
