@@ -944,4 +944,35 @@ describe('Account Documents & Credit Workflows API', () => {
       }
     });
   });
+    it('covers findBuyerSafe and findVendorSafe DB fallback and user resolution branches', async () => {
+      const origHasStorage = pool.hasStorage;
+      const origQuery = pool.query;
+      try {
+        const memBuyer = await accountDocumentController.findBuyerSafe(mockBuyer.id);
+        expect(memBuyer.id).toBe(mockBuyer.id);
+        pool.hasStorage = () => true;
+        pool.query = jest.fn().mockResolvedValue({
+          rows: [{ id: 'buyer-db-only-1', is_active: 1, raw: JSON.stringify({ organizationName: 'Postgres Buyer Corp', corporateEmail: 'pg_buyer@corp.com' }) }]
+        });
+        const dbBuyer1 = await accountDocumentController.findBuyerSafe('buyer-db-only-1');
+        expect(dbBuyer1.id).toBe('buyer-db-only-1');
+        pool.query = jest.fn().mockResolvedValue({
+          rows: [{ id: 'buyer-db-only-2', is_active: 1, raw: { organizationName: 'Object Buyer Corp' } }]
+        });
+        const dbBuyer2 = await accountDocumentController.findBuyerSafe('buyer-db-only-2');
+        expect(dbBuyer2.id).toBe('buyer-db-only-2');
+        pool.query = async () => { throw new Error('Postgres fail'); };
+        const dbBuyerCrash = await accountDocumentController.findBuyerSafe('buyer-db-crash');
+        expect(dbBuyerCrash).toBeUndefined();
+        const userFallback = await accountDocumentController.findBuyerSafe('non-existent', { role: 'buyer', email: mockBuyer.corporateEmail });
+        expect(userFallback).toBeDefined();
+        const memVendor = await accountDocumentController.findVendorSafe(mockVendor.id);
+        expect(memVendor.id).toBe(mockVendor.id);
+        const nullVendor = await accountDocumentController.findVendorSafe('missing-vendor');
+        expect(nullVendor).toBeNull();
+      } finally {
+        pool.hasStorage = origHasStorage;
+        pool.query = origQuery;
+      }
+    });
 });

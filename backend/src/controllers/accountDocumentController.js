@@ -8,6 +8,7 @@ const accountDocumentQueries = require('../db/accountDocumentQueries');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const { logger } = require('../services/loggerService');
 const storeService = require('../services/storeService');
+const pool = require('../db/pool');
 
 function extractActor(req) {
   if (req.user) {
@@ -26,12 +27,36 @@ function extractActor(req) {
   };
 }
 
-async function findVendorSafe(id, user) {
-  let vendor = storeService.getVendorById ? storeService.getVendorById(id, 'all') : null;
-  if (!vendor && storeService.getVendorByIdWithDBFallback) {
-    vendor = await storeService.getVendorByIdWithDBFallback(id, 'all');
+async function findBuyerSafe(id, user) {
+  let buyer = (storeService.getBuyerAccounts ? storeService.getBuyerAccounts() : []).find((b) => b.id === id);
+  if (!buyer && pool.hasStorage()) {
+    try {
+      const res = await pool.query('SELECT id, is_active, raw FROM buyer_accounts WHERE id = $1', [id]);
+      if (res?.rows?.[0]) {
+        const row = res.rows[0];
+        buyer = { id: row.id, ...(typeof row.raw === 'string' ? JSON.parse(row.raw) : (row.raw || {})) };
+      }
+    } catch (err) {
+      logger.error('Failed to resolve buyer account from DB fallback', err, 'ACCOUNT_DOC_CONTROLLER');
+    }
   }
-  return vendor;
+  if (!buyer && user?.role === 'buyer' && user.email && storeService.getBuyerAccountByEmail) {
+    buyer = await storeService.getBuyerAccountByEmail(user.email);
+  }
+  return buyer;
+}
+
+async function findVendorSafe(id, user) {
+  try {
+    let vendor = storeService.getVendorById ? storeService.getVendorById(id, 'all') : null;
+    if (!vendor && storeService.getVendorByIdWithDBFallback) {
+      vendor = await storeService.getVendorByIdWithDBFallback(id, 'all');
+    }
+    return vendor;
+  } catch (err) {
+    logger.error('Failed to resolve vendor from DB fallback', err, 'ACCOUNT_DOC_CONTROLLER');
+    return null;
+  }
 }
 
 /**
@@ -42,7 +67,7 @@ async function getBuyerDocuments(req, res, next) {
     const { id } = req.params;
     const { category, type, search, sortOrder } = req.query || {};
 
-    const buyer = (storeService.getBuyerAccounts() || []).find((b) => b.id === id);
+    const buyer = await findBuyerSafe(id, req.user);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account "${id}" not found.` });
     }
@@ -73,7 +98,7 @@ async function getBuyerDocuments(req, res, next) {
 async function uploadBuyerDocument(req, res, next) {
   try {
     const { id } = req.params;
-    const buyer = (storeService.getBuyerAccounts() || []).find((b) => b.id === id);
+    const buyer = await findBuyerSafe(id, req.user);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account "${id}" not found.` });
     }
@@ -240,4 +265,6 @@ module.exports = {
   uploadSellerDocument,
   deleteSellerDocument,
   extractActor,
+  findBuyerSafe,
+  findVendorSafe,
 };
