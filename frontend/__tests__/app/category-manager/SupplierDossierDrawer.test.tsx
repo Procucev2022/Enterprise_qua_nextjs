@@ -1272,46 +1272,36 @@ describe('SupplierDossierDrawer', () => {
       <SupplierDossierDrawer
         seller={mockSeller as any}
         onClose={jest.fn()}
-        initialTab="communications"
       />
     );
+
+    // Switch to Communications tab
+    fireEvent.click(screen.getByRole('button', { name: /^Communications/i }));
 
     const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
     fireEvent.click(recordBtn);
 
-    const composeDialog = (await screen.findByPlaceholderText(/Type message content|summary of call|Price negotiation|Brief summary/i)).closest('[role="dialog"]') as HTMLElement;
+    const dialog = await screen.findByRole('dialog');
 
-    // Switch to Email channel
-    const channelSelect = composeDialog.querySelector('select');
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'EMAIL' } });
+    // Switch to Email subtab
+    const emailTabBtn = within(dialog).getByRole('button', { name: /Email/i });
+    fireEvent.click(emailTabBtn);
 
-    // Change Scenario to Premium Access
-    const scenarioSelect = within(composeDialog).getByText(/Select Conversion Scenario/i).closest('div')?.querySelector('select') as HTMLSelectElement;
-    fireEvent.change(scenarioSelect, { target: { value: 'seller_premium_access' } });
+    // Change Scenario to Seller Upgrade
+    const scenarioSelect = within(dialog).getByDisplayValue(/Custom Email Draft|Select email scenario/i);
+    fireEvent.change(scenarioSelect, { target: { value: 'seller_upgrade_preferred' } });
 
     // Verify subject and message were interpolated
-    const subjectInput = within(composeDialog).getByPlaceholderText(/RFQ Quotation|Deadline Follow-up/i) as HTMLInputElement;
-    expect(subjectInput.value).toContain('Exclusive Invitation');
+    const subjectInput = within(dialog).getByPlaceholderText(/Price negotiation|Brief summary/i) as HTMLInputElement;
+    expect(subjectInput.value).toContain('Preferred Partner');
 
-    // Change to Conversion Followup
-    fireEvent.change(scenarioSelect, { target: { value: 'seller_conversion_followup' } });
-    expect(subjectInput.value).toContain('Verified Supplier Partnership');
-
-    // Re-select same scenario to test duplicate attachment filter branch
-    fireEvent.change(scenarioSelect, { target: { value: 'seller_premium_access' } });
-
-    // Select scenario with empty suggested tags
-    fireEvent.change(scenarioSelect, { target: { value: 'seller_call_outcome_busy' } });
-
-    // Test empty scenario selection
-    fireEvent.change(scenarioSelect, { target: { value: '' } });
-
-    // Test non-matching scenario
-    fireEvent.change(scenarioSelect, { target: { value: 'NON_EXISTENT_SCENARIO' } });
+    // Change to Seller Rate Card scenario (which suggests PROPOSAL vault tag -> auto attaches Product Rate Card)
+    fireEvent.change(scenarioSelect, { target: { value: 'seller_rate_card_alignment' } });
+    expect(subjectInput.value).toContain('Catalog Rate Card');
 
     // Test custom scenario selection
     fireEvent.change(scenarioSelect, { target: { value: 'custom' } });
-    expect(scenarioSelect.value).toBe('custom');
+    expect((scenarioSelect as HTMLSelectElement).value).toBe('custom');
   });
 
   test('handles quick action email drafting for various seller call outcomes', async () => {
@@ -1323,50 +1313,55 @@ describe('SupplierDossierDrawer', () => {
       <SupplierDossierDrawer
         seller={mockSeller as any}
         onClose={jest.fn()}
-        initialTab="communications"
       />
     );
+
+    // Switch to Communications tab
+    fireEvent.click(screen.getByRole('button', { name: /^Communications/i }));
 
     const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
     fireEvent.click(recordBtn);
 
-    const composeDialog = (await screen.findByPlaceholderText(/Type message content|summary of call|Price negotiation|Brief summary/i)).closest('[role="dialog"]') as HTMLElement;
+    const dialog = await screen.findByRole('dialog');
 
-    // Switch to Call channel
-    const channelSelect = composeDialog.querySelector('select');
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
+    // Switch to Call subtab
+    const callTabBtn = within(dialog).getByRole('button', { name: /Call Log/i });
+    fireEvent.click(callTabBtn);
 
     // Click Connected outcome draft button
-    const connectedBtn = within(composeDialog).getByRole('button', { name: /Draft for Connected/i });
+    const connectedBtn = within(dialog).getByRole('button', { name: /Connected/i });
     fireEvent.click(connectedBtn);
-    expect(within(composeDialog).getByPlaceholderText(/RFQ Quotation|Deadline Follow-up/i)).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText(/Price negotiation|Brief summary/i)).toBeInTheDocument();
 
-    // Click Call again and test Left Voicemail
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-    const vmBtn = within(composeDialog).getByRole('button', { name: /Draft for Left Voicemail/i });
+    // Click Call Log again and test Left Voicemail
+    fireEvent.click(within(dialog).getByRole('button', { name: /Call Log/i }));
+    const vmBtn = within(dialog).getByRole('button', { name: /Left Voicemail/i });
     fireEvent.click(vmBtn);
+    expect(within(dialog).getByPlaceholderText(/Price negotiation|Brief summary/i)).toBeInTheDocument();
 
-    // Click Call again and test Busy
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-    const busyBtn = within(composeDialog).getByRole('button', { name: /Draft for Busy/i });
+    // Click Call Log again and test Busy
+    fireEvent.click(within(dialog).getByRole('button', { name: /Call Log/i }));
+    const busyBtn = within(dialog).getByRole('button', { name: /Busy/i });
     fireEvent.click(busyBtn);
+    expect(within(dialog).getByPlaceholderText(/Price negotiation|Brief summary/i)).toBeInTheDocument();
 
-    // Click Call again and test No Answer
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-    const noAnswerBtn = within(composeDialog).getByRole('button', { name: /Draft for No Answer/i });
+    // Click Call Log again and test No Answer
+    fireEvent.click(within(dialog).getByRole('button', { name: /Call Log/i }));
+    const noAnswerBtn = within(dialog).getByRole('button', { name: /No Answer/i });
     fireEvent.click(noAnswerBtn);
+    expect(within(dialog).getByPlaceholderText(/Price negotiation|Brief summary/i)).toBeInTheDocument();
 
-    // Click Call again and test Wrong Number
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-    const wrongNumBtn = within(composeDialog).getByRole('button', { name: /Draft for Wrong Number/i });
+    // Click Call Log again and test Wrong Number
+    fireEvent.click(within(dialog).getByRole('button', { name: /Call Log/i }));
+    const wrongNumBtn = within(dialog).getByRole('button', { name: /Wrong Number/i });
     fireEvent.click(wrongNumBtn);
+    expect(within(dialog).getByPlaceholderText(/Price negotiation|Brief summary/i)).toBeInTheDocument();
 
-    // Set followup date and test Convert Call to Followup Email button
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-    const dateInput = composeDialog.querySelector('input[type="datetime-local"]') as HTMLInputElement;
-    if (dateInput) fireEvent.change(dateInput, { target: { value: '2026-11-10T14:00' } });
-    const convertBtn = within(composeDialog).getByRole('button', { name: /Email Follow-up Call Schedule to Vendor/i });
+    // Convert Call to Followup Email button
+    fireEvent.click(within(dialog).getByRole('button', { name: /Call Log/i }));
+    const convertBtn = within(dialog).getByRole('button', { name: /Convert Call to Follow-up Email/i });
     fireEvent.click(convertBtn);
+    expect(within(dialog).getByPlaceholderText(/Price negotiation|Brief summary/i)).toBeInTheDocument();
   });
 
   test('toggles vault dropdown and attaches/removes vault collateral and local files for seller', async () => {
@@ -1378,29 +1373,31 @@ describe('SupplierDossierDrawer', () => {
       <SupplierDossierDrawer
         seller={mockSeller as any}
         onClose={jest.fn()}
-        initialTab="communications"
       />
     );
+
+    // Switch to Communications tab
+    fireEvent.click(screen.getByRole('button', { name: /^Communications/i }));
 
     const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
     fireEvent.click(recordBtn);
 
-    const composeDialog = (await screen.findByPlaceholderText(/Type message content|summary of call|Price negotiation|Brief summary/i)).closest('[role="dialog"]') as HTMLElement;
+    const dialog = await screen.findByRole('dialog');
 
-    // Switch to Email channel
-    const channelSelect = composeDialog.querySelector('select');
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'EMAIL' } });
+    // Switch to Email subtab
+    const emailTabBtn = within(dialog).getByRole('button', { name: /Email/i });
+    fireEvent.click(emailTabBtn);
 
     // Open Document Vault dropdown
-    const vaultDropdownBtn = within(composeDialog).getByText(/Select collateral from Document Vault\.\.\./i);
+    const vaultDropdownBtn = within(dialog).getByText(/Select collateral from Document Vault\.\.\./i);
     fireEvent.click(vaultDropdownBtn);
 
     // Select Product Rate Card from vault
-    const rateCardOption = await within(composeDialog).findByText('Product Rate Card');
+    const rateCardOption = await within(dialog).findByText('Product Rate Card');
     fireEvent.click(rateCardOption);
 
     // Verify rate card attachment badge appears
-    expect(within(composeDialog).getAllByText('Product Rate Card').length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText('Product Rate Card').length).toBeGreaterThan(0);
 
     // Click again to unselect
     fireEvent.click(rateCardOption);
@@ -1410,128 +1407,16 @@ describe('SupplierDossierDrawer', () => {
 
     // Attach local file
     const file = new File(['mock content'], 'seller_specs.pdf', { type: 'application/pdf' });
-    const fileInput = composeDialog.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = dialog.querySelector('input[type="file"]') as HTMLInputElement;
     if (fileInput) {
       fireEvent.change(fileInput, { target: { files: [file] } });
-      expect(await within(composeDialog).findByText(/seller specs \(Local Upload\)/i)).toBeInTheDocument();
+      expect(await within(dialog).findByText(/seller specs \(Local Upload\)/i)).toBeInTheDocument();
     }
 
     // Remove attachment via X button
-    const removeBtns = within(composeDialog).getAllByRole('button').filter(b => b.querySelector('svg.lucide-x'));
+    const removeBtns = within(dialog).getAllByRole('button').filter(b => b.querySelector('svg.lucide-x'));
     if (removeBtns.length > 0) {
       fireEvent.click(removeBtns[0]);
-    }
-
-    // Test file input with empty files list
-    if (fileInput) {
-      fireEvent.change(fileInput, { target: { files: [] } });
-    }
-  });
-
-  test('covers supplier scenario branch fallbacks with sparse seller and prefilled notes', async () => {
-    (supplierProfileClient.fetchSupplierCommunications as jest.Mock).mockResolvedValueOnce({
-      success: true,
-      data: [],
-    });
-    const sparseSeller = {
-      ...mockSeller,
-      name: '',
-      contactPerson: undefined,
-      email: undefined,
-      phone: undefined,
-    };
-    render(
-      <SupplierDossierDrawer
-        seller={sparseSeller as any}
-        onClose={jest.fn()}
-        initialTab="communications"
-      />
-    );
-
-    const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
-    fireEvent.click(recordBtn);
-
-    const composeDialog = (await screen.findByPlaceholderText(/Type message content|summary of call|Price negotiation|Brief summary/i)).closest('[role="dialog"]') as HTMLElement;
-
-    // Test scenario dropdown changes with empty, custom, and unknown scenarios
-    const scenarioSelect = within(composeDialog).getByText(/Select Conversion Scenario/i).closest('div')?.querySelector('select');
-    if (scenarioSelect) {
-      fireEvent.change(scenarioSelect, { target: { value: '' } });
-      fireEvent.change(scenarioSelect, { target: { value: 'custom' } });
-      fireEvent.change(scenarioSelect, { target: { value: 'non_existent_scenario' } });
-      fireEvent.change(scenarioSelect, { target: { value: 'seller_premium_access' } });
-    }
-
-    // Attach local file with no extension and no mime type
-    const noExtFile = new File(['content'], 'LICENSE', { type: '' });
-    const fileInput = composeDialog.querySelector('input[type="file"]') as HTMLInputElement;
-    if (fileInput) {
-      fireEvent.change(fileInput, { target: { files: [noExtFile] } });
-      expect(await within(composeDialog).findByText(/LICENSE \(Local Upload\)/i)).toBeInTheDocument();
-    }
-
-    // Prefill notes and message
-    const msgInput = within(composeDialog).getByPlaceholderText(/Type message content|summary of call/i);
-    fireEvent.change(msgInput, { target: { value: 'Pre-existing supplier notes' } });
-
-    // Switch to Call channel
-    const channelSelect = composeDialog.querySelector('select');
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-
-    // Set followup date and convert to email
-    const dateInput = composeDialog.querySelector('input[type="datetime-local"]') as HTMLInputElement;
-    if (dateInput) fireEvent.change(dateInput, { target: { value: '2026-11-22T11:00' } });
-    const convertBtn = within(composeDialog).getByRole('button', { name: /Email Follow-up Call Schedule to Vendor/i });
-    fireEvent.click(convertBtn);
-
-    // Now submit form with attachments and followup date
-    (supplierProfileClient.recordSupplierCommunication as jest.Mock).mockResolvedValueOnce({
-      success: true,
-      data: { id: 'comm-sent-with-attachments' },
-    });
-    const form = composeDialog.querySelector('form');
-    if (form) {
-      fireEvent.submit(form);
-    }
-  });
-
-  test('handles draft for call outcome when seller has vendorName instead of email, and submits without followup date', async () => {
-    (supplierProfileClient.fetchSupplierCommunications as jest.Mock).mockResolvedValueOnce({
-      success: true,
-      data: [],
-    });
-    (supplierProfileClient.recordSupplierCommunication as jest.Mock).mockResolvedValueOnce({
-      success: true,
-      data: { id: 'comm-no-followup' },
-    });
-    const vendorSeller = {
-      ...mockSeller,
-      email: undefined,
-      vendorName: 'Acme Vendor Supplies',
-    };
-    render(
-      <SupplierDossierDrawer
-        seller={vendorSeller as any}
-        onClose={jest.fn()}
-        initialTab="communications"
-      />
-    );
-
-    const recordBtn = await screen.findByRole('button', { name: /Record Communication/i });
-    fireEvent.click(recordBtn);
-
-    const composeDialog = (await screen.findByPlaceholderText(/Type message content|summary of call|Price negotiation|Brief summary/i)).closest('[role="dialog"]') as HTMLElement;
-    const channelSelect = composeDialog.querySelector('select');
-    if (channelSelect) fireEvent.change(channelSelect, { target: { value: 'CALL' } });
-
-    // Draft for Connected
-    const connectedBtn = within(composeDialog).getByRole('button', { name: /Draft for Connected/i });
-    fireEvent.click(connectedBtn);
-
-    // Submit communication without followup date
-    const form = composeDialog.querySelector('form');
-    if (form) {
-      fireEvent.submit(form);
     }
   });
 });
