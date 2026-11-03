@@ -78,7 +78,8 @@ export class ClientLogger {
     if (this.isRemoteSyncEnabled && typeof fetch === 'function') {
       try {
         const token = authClient.getToken();
-        fetch('/api/logs', {
+        const endpoint = token ? '/api/logs' : '/api/logs/client-error';
+        fetch(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

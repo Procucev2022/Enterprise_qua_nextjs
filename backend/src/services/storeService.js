@@ -366,6 +366,18 @@ class StoreService {
     this._background(domainQueries.upsertPaymentLinkInDB(link), 'Failed to persist payment link');
   }
 
+  async confirmRfqPersisted(rfq) {
+    this._lastRfqSyncTime = 0;
+    if (!pool.hasStorage()) return { persisted: null };
+    try {
+      await domainQueries.upsertRFQInDB(rfq);
+      return { persisted: true };
+    } catch (err) {
+      logger.error('Failed to confirm RFQ persisted in database', err, 'STORE_SERVICE');
+      throw err;
+    }
+  }
+
   _persistRFQ(rfq) {
     this._lastRfqSyncTime = 0;
     this._background(domainQueries.upsertRFQInDB(rfq), 'Failed to persist RFQ');

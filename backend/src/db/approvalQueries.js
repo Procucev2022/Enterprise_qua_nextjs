@@ -75,6 +75,30 @@ const memoryApprovals = [
  * Summary metrics of management approvals.
  */
 async function getApprovalSummary() {
+  if (pool.hasStorage()) {
+    try {
+      const sql = `
+        SELECT
+          COUNT(*) as total,
+          SUM(CASE WHEN lower(status) = 'pending' THEN 1 ELSE 0 END) as pending,
+          SUM(CASE WHEN lower(status) = 'approved' THEN 1 ELSE 0 END) as approved,
+          SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) as rejected
+        FROM approvals
+      `;
+      const res = await pool.query(sql, [], { d1: true, d1Text: sql, useCache: true, tag: 'approvals', ttlMs: 15000 });
+      if (res && res.rows) {
+        const row = res.rows[0] || {};
+        return {
+          total: Number(row.total) || 0,
+          pending: Number(row.pending) || 0,
+          approved: Number(row.approved) || 0,
+          rejected: Number(row.rejected) || 0,
+        };
+      }
+    } catch {
+      // fallback
+    }
+  }
   const pending = memoryApprovals.filter((a) => a.status === 'Pending').length;
   const approved = memoryApprovals.filter((a) => a.status === 'Approved').length;
   const rejected = memoryApprovals.filter((a) => a.status === 'Rejected').length;
@@ -135,6 +159,23 @@ async function processApprovalAction(id, { action, remarks = '' }, actor = {}) {
   item.approver_name = actor.name || actor.email || 'Management Authority';
   item.approver_remarks = remarks;
   item.updated_at = now;
+
+  if (pool.hasStorage()) {
+    try {
+      const updateSql = `
+        UPDATE approvals
+        SET status = $1, approver_name = $2, approver_remarks = $3, updated_at = $4
+        WHERE id = $5 OR request_number = $5
+      `;
+      await pool.query(
+        updateSql,
+        [normalizedAction, item.approver_name, remarks, now, id],
+        { d1: true, d1Text: updateSql }
+      );
+    } catch {
+      // non-fatal if table not yet populated
+    }
+  }
 
   // Audit log integration if database pool is available
   if (pool.hasStorage()) {

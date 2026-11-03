@@ -958,6 +958,12 @@ async function createRFQ(req, res, next) {
       }
     }
 
+    try {
+      await storeService.confirmRfqPersisted(finalRFQ);
+    } catch (persistErr) {
+      logger.warn('Initial RFQ DB confirmation caught non-fatal warning', { error: persistErr.message }, 'RFQ_CONTROLLER');
+    }
+
     res.status(201).json({ success: true, data: finalRFQ });
   } catch (err) {
     if (consumedFreeTrial && requestingBuyerAccount) {

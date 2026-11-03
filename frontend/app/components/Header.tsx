@@ -134,8 +134,15 @@ export default function Header() {
   // fallback.
   const currentOrgName = resolveSessionOrgName(currentUserSession, activeBuyerAccount);
 
-  // Session timeout state: 3 hours for category manager (10800s), standard 30 minutes for other roles (1800s)
-  const SESSION_DURATION_SECONDS = currentRole === 'category_manager' ? 3 * 60 * 60 : 30 * 60;
+  // Session duration: 3 hours for Category Manager (10800s); 30 minutes for standard roles (1800s)
+  // For Buyer & Vendor roles, sessions time out after 5 minutes of inactivity (300s).
+  const isBuyerOrVendorRole = currentRole === 'buyer' || currentRole === 'vendor';
+  const INACTIVITY_LIMIT_SECONDS = 5 * 60; // 5 minutes inactivity limit for Buyer & Vendor
+  const SESSION_DURATION_SECONDS = isBuyerOrVendorRole
+    ? INACTIVITY_LIMIT_SECONDS
+    : currentRole === 'category_manager'
+    ? 3 * 60 * 60
+    : 30 * 60;
   const [sessionSecondsLeft, setSessionSecondsLeft] = useState<number>(SESSION_DURATION_SECONDS);
 
   const handleLogout = useCallback(() => {
@@ -177,9 +184,35 @@ export default function Header() {
       localStorage.setItem('procucev_session_role', currentRole);
     }
     setSessionSecondsLeft(SESSION_DURATION_SECONDS);
-    const durationLabel = currentRole === 'category_manager' ? '3 hours' : '30 minutes';
+    const durationLabel = isBuyerOrVendorRole ? '5 minutes' : currentRole === 'category_manager' ? '3 hours' : '30 minutes';
     showToast('Session Extended', `Your session has been extended by ${durationLabel}.`, 'info');
   }, [SESSION_DURATION_SECONDS, currentRole, showToast]);
+
+  // Inactivity activity tracker: resets the 5-minute inactivity countdown on any user interaction for Buyer & Vendor
+  useEffect(() => {
+    if (!isLoggedIn || !isBuyerOrVendorRole) return;
+
+    let lastThrottle = Date.now();
+    const handleUserInteraction = () => {
+      const now = Date.now();
+      if (now - lastThrottle > 1000) {
+        lastThrottle = now;
+        const newExpiresAt = now + INACTIVITY_LIMIT_SECONDS * 1000;
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('procucev_session_expires_at', String(newExpiresAt));
+          localStorage.setItem('procucev_session_role', currentRole);
+        }
+        setSessionSecondsLeft(INACTIVITY_LIMIT_SECONDS);
+      }
+    };
+
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart', 'click', 'input'];
+    events.forEach((ev) => window.addEventListener(ev, handleUserInteraction, { passive: true }));
+
+    return () => {
+      events.forEach((ev) => window.removeEventListener(ev, handleUserInteraction));
+    };
+  }, [isLoggedIn, isBuyerOrVendorRole, INACTIVITY_LIMIT_SECONDS, currentRole]);
 
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -200,8 +233,8 @@ export default function Header() {
 
     const interval = setInterval(() => {
       if (typeof window === 'undefined') return;
-      const stored = localStorage.getItem('procucev_session_expires_at');
       const now = Date.now();
+      const stored = localStorage.getItem('procucev_session_expires_at');
       const expiresAt = stored ? Number(stored) : now + SESSION_DURATION_SECONDS * 1000;
       const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
       setSessionSecondsLeft(remaining);
@@ -375,7 +408,7 @@ export default function Header() {
           <div
             data-testid="header-session-timer"
             onClick={handleExtendSession}
-            title={`Active Session: ${formatSessionCountdown(sessionSecondsLeft)} remaining. Click to extend by ${currentRole === 'category_manager' ? '3 hrs' : '30 mins'}.`}
+            title={`Active Session: ${formatSessionCountdown(sessionSecondsLeft)} remaining. ${isBuyerOrVendorRole ? 'Automatically resets on activity. Inactivity timeout: 5 minutes.' : `Click to extend by ${currentRole === 'category_manager' ? '3 hrs' : '30 mins'}.`}`}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {

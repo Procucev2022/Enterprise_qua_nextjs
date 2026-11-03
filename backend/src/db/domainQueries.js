@@ -633,6 +633,49 @@ async function getVendorByIdFromDB(id) {
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
+async function syncVendorCategoriesIndexed(vendorId, vendor) {
+  if (!pool.hasStorage() || !vendorId) return;
+  try {
+    const categories = [];
+    if (vendor.majorCategory) {
+      categories.push({ name: String(vendor.majorCategory).trim(), type: 'major' });
+    }
+    if (Array.isArray(vendor.minorCategories)) {
+      for (const m of vendor.minorCategories) {
+        if (m) categories.push({ name: String(m).trim(), type: 'minor' });
+      }
+    }
+    if (Array.isArray(vendor.vendorSelectedCategories)) {
+      for (const s of vendor.vendorSelectedCategories) {
+        if (s) categories.push({ name: String(s).trim(), type: 'selected' });
+      }
+    }
+    if (Array.isArray(vendor.clientMappedCategories)) {
+      for (const c of vendor.clientMappedCategories) {
+        if (c) categories.push({ name: String(c).trim(), type: 'client_mapped' });
+      }
+    }
+    if (categories.length === 0) return;
+
+    const delSql = 'DELETE FROM vendor_categories_indexed WHERE vendor_id = $1';
+    await pool.query(delSql, [vendorId], { d1: true, d1Text: delSql });
+
+    for (const cat of categories) {
+      const insSql = `
+        INSERT INTO vendor_categories_indexed (vendor_id, category_name, category_type)
+        VALUES ($1, $2, $3)
+      `;
+      const d1InsSql = `
+        INSERT OR IGNORE INTO vendor_categories_indexed (vendor_id, category_name, category_type)
+        VALUES ($1, $2, $3)
+      `;
+      await pool.query(insSql, [vendorId, cat.name, cat.type], { d1: true, d1Text: d1InsSql });
+    }
+  } catch {
+    // Non-fatal category indexing sync
+  }
+}
+
 async function upsertVendorInDB(vendor) {
   if (!pool.hasStorage()) return null;
   const { id, email, majorCategory, status, source } = vendor;
@@ -666,6 +709,9 @@ async function upsertVendorInDB(vendor) {
     }
   );
   queryCache.invalidate('vendors');
+  if (vendor && vendor.id) {
+    void syncVendorCategoriesIndexed(vendor.id, vendor);
+  }
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 

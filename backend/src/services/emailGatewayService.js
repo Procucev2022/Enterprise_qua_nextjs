@@ -2179,6 +2179,14 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
     createdRFQs.push(created);
 
+    try {
+      if (typeof storeService.confirmRfqPersisted === 'function') {
+        await storeService.confirmRfqPersisted(created);
+      }
+    } catch (persistErr) {
+      logger.warn('Email RFQ persistence confirmation caught non-fatal warning', { error: persistErr.message, rfqNumber: created.rfqNumber }, 'EMAIL_GATEWAY');
+    }
+
     // Dispatch RFQ creation acknowledgement email to the buyer
     if (message.fromAddress) {
       const shouldSendOnboardingCredentials = Boolean(

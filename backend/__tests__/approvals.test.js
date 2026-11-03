@@ -92,6 +92,27 @@ describe('Approvals API & Controller', () => {
       { email: 'admin@x.com' }
     );
     expect(nonFatal).toBeDefined();
+
+    // SQL branches coverage for getApprovalSummary
+    querySpy.mockResolvedValueOnce({ rows: [{ total: '5', pending: '2', approved: '2', rejected: '1' }] });
+    const dbSummary = await approvalQueries.getApprovalSummary();
+    expect(dbSummary.total).toBe(5);
+
+    querySpy.mockResolvedValueOnce({ rows: [] });
+    const emptySummary = await approvalQueries.getApprovalSummary();
+    expect(emptySummary.total).toEqual(0);
+
+    querySpy.mockRejectedValueOnce(new Error('DB err'));
+    const errSummary = await approvalQueries.getApprovalSummary();
+    expect(errSummary.total).toBeGreaterThanOrEqual(1);
+
+    // SQL branch for update failure in processApprovalAction
+    querySpy.mockRejectedValueOnce(new Error('Update failed'));
+    await approvalQueries.processApprovalAction(
+      'appr-trial-104',
+      { action: 'APPROVE' },
+      { email: 'admin@x.com' }
+    );
   });
 
   test('approvalController directly tests extractActor branches and query variations', async () => {
