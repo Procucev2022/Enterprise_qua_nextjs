@@ -111,6 +111,55 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.status).toBe(404);
       expect(res.body.success).toBe(false);
     });
+
+    it('enforces role-based permissions on buyer document endpoints', async () => {
+      const otherBuyerToken = authService.generateSessionToken({
+        id: 'other-buyer-1',
+        email: 'other_buyer@enterprise.com',
+        role: 'buyer',
+      });
+      const authorizedBuyerToken = authService.generateSessionToken({
+        id: 'auth-buyer-1',
+        email: mockBuyer.corporateEmail,
+        role: 'buyer',
+      });
+
+      // Unauthorized buyer cannot view documents
+      const unauthGet = await request(app)
+        .get(`/api/buyer-accounts/${mockBuyer.id}/documents`)
+        .set('Authorization', `Bearer ${otherBuyerToken}`);
+      expect(unauthGet.status).toBe(403);
+
+      // Unauthenticated request returns 401
+      const noAuthGet = await request(app)
+        .get(`/api/buyer-accounts/${mockBuyer.id}/documents`);
+      expect(noAuthGet.status).toBe(401);
+
+      // Authorized buyer can view documents
+      const authGet = await request(app)
+        .get(`/api/buyer-accounts/${mockBuyer.id}/documents`)
+        .set('Authorization', `Bearer ${authorizedBuyerToken}`);
+      expect(authGet.status).toBe(200);
+
+      // Unauthorized buyer cannot upload documents
+      const unauthPost = await request(app)
+        .post(`/api/buyer-accounts/${mockBuyer.id}/documents`)
+        .set('Authorization', `Bearer ${otherBuyerToken}`)
+        .send({ documentName: 'Secret Doc' });
+      expect(unauthPost.status).toBe(403);
+
+      // Unauthorized buyer cannot delete documents
+      const unauthDel = await request(app)
+        .delete(`/api/buyer-accounts/${mockBuyer.id}/documents/some-doc-id`)
+        .set('Authorization', `Bearer ${otherBuyerToken}`);
+      expect(unauthDel.status).toBe(403);
+
+      // Non-existent buyer on delete returns 404
+      const nonExistentBuyerDel = await request(app)
+        .delete('/api/buyer-accounts/non-existent-buyer-id/documents/some-doc-id')
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(nonExistentBuyerDel.status).toBe(404);
+    });
   });
 
   describe('Seller Documents API', () => {
@@ -155,6 +204,55 @@ describe('Account Documents & Credit Workflows API', () => {
         .set('Authorization', `Bearer ${cmToken}`);
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
+    });
+
+    it('enforces role-based permissions on seller document endpoints', async () => {
+      const otherVendorToken = authService.generateSessionToken({
+        id: 'other-vendor-1',
+        email: 'other_vendor@enterprise.com',
+        role: 'vendor',
+      });
+      const authorizedVendorToken = authService.generateSessionToken({
+        id: mockVendor.id,
+        email: mockVendor.email,
+        role: 'vendor',
+      });
+
+      // Unauthorized vendor cannot view seller documents
+      const unauthGet = await request(app)
+        .get(`/api/vendors/${mockVendor.id}/documents`)
+        .set('Authorization', `Bearer ${otherVendorToken}`);
+      expect(unauthGet.status).toBe(403);
+
+      // Unauthenticated request returns 401
+      const noAuthGet = await request(app)
+        .get(`/api/vendors/${mockVendor.id}/documents`);
+      expect(noAuthGet.status).toBe(401);
+
+      // Authorized vendor can view documents
+      const authGet = await request(app)
+        .get(`/api/vendors/${mockVendor.id}/documents`)
+        .set('Authorization', `Bearer ${authorizedVendorToken}`);
+      expect(authGet.status).toBe(200);
+
+      // Unauthorized vendor cannot upload documents
+      const unauthPost = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/documents`)
+        .set('Authorization', `Bearer ${otherVendorToken}`)
+        .send({ documentName: 'Vendor Confidential' });
+      expect(unauthPost.status).toBe(403);
+
+      // Unauthorized vendor cannot delete documents
+      const unauthDel = await request(app)
+        .delete(`/api/vendors/${mockVendor.id}/documents/some-doc-id`)
+        .set('Authorization', `Bearer ${otherVendorToken}`);
+      expect(unauthDel.status).toBe(403);
+
+      // Non-existent vendor on delete returns 404
+      const nonExistentDel = await request(app)
+        .delete('/api/vendors/non-existent-vendor-id/documents/some-doc-id')
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(nonExistentDel.status).toBe(404);
     });
   });
 
@@ -267,13 +365,52 @@ describe('Account Documents & Credit Workflows API', () => {
         expect(res2.body.updatedBalance).toBe(10);
         expect(pool.query).toHaveBeenCalled();
 
-        // Test with pool.hasStorage = true but pool.query throws
-        pool.query = jest.fn().mockRejectedValue(new Error('Postgres write failure'));
+        // Test with pool.hasStorage = true and dedicated pool.pool.connect
+        const mockClient = {
+          query: jest.fn().mockResolvedValue({ rowCount: 1 }),
+          release: jest.fn(),
+        };
+        const origPoolInstance = pool.pool;
+        pool.pool = { connect: jest.fn().mockResolvedValue(mockClient) };
+
+        const resClient = await request(app)
+          .post(`/api/vendors/${createdV3.id}/add-quote-credits`)
+          .set('Authorization', `Bearer ${cmToken}`)
+          .send({ amount: 2 });
+        expect(resClient.status).toBe(200);
+        expect(mockClient.query).toHaveBeenCalledWith('BEGIN');
+        expect(mockClient.query).toHaveBeenCalledWith('COMMIT');
+        expect(mockClient.release).toHaveBeenCalled();
+
+        // Test with pool.hasStorage = true but transaction queries throw (rolls back and returns 500)
+        const failingClient = {
+          query: jest.fn().mockImplementation((sql) => {
+            if (sql.includes('UPDATE vendors')) throw new Error('Postgres write failure');
+            return { rowCount: 1 };
+          }),
+          release: jest.fn(),
+        };
+        pool.pool = { connect: jest.fn().mockResolvedValue(failingClient) };
+
         const res3 = await request(app)
           .post(`/api/vendors/${createdV3.id}/add-quote-credits`)
           .set('Authorization', `Bearer ${cmToken}`)
           .send({ amount: 1 });
-        expect(res3.status).toBe(200);
+        expect(res3.status).toBe(500);
+        expect(res3.body.success).toBe(false);
+        expect(failingClient.query).toHaveBeenCalledWith('ROLLBACK');
+        expect(failingClient.release).toHaveBeenCalled();
+
+        // Test with client without release function
+        pool.pool = null;
+        pool.query = jest.fn().mockRejectedValue(new Error('Postgres pool failure'));
+        const res4 = await request(app)
+          .post(`/api/vendors/${createdV3.id}/add-quote-credits`)
+          .set('Authorization', `Bearer ${cmToken}`)
+          .send({ amount: 1 });
+        expect(res4.status).toBe(500);
+
+        pool.pool = origPoolInstance;
       } finally {
         pool.hasStorage = origHasStorage;
         pool.query = origQuery;
@@ -901,40 +1038,42 @@ describe('Account Documents & Credit Workflows API', () => {
         accountDocumentQueries.createAccountDocument = async () => { throw err; };
         accountDocumentQueries.deleteAccountDocument = async () => { throw err; };
 
-        await accountDocumentController.getBuyerDocuments({ params: { id: mockBuyer.id } }, mockRes, nextFn);
+        const cmUser = { id: 'u1', role: 'category_manager', email: 'cm@procucev.com' };
+
+        await accountDocumentController.getBuyerDocuments({ params: { id: mockBuyer.id }, user: cmUser }, mockRes, nextFn);
         expect(nextFn).toHaveBeenCalledWith(err);
 
         nextFn.mockClear();
         await accountDocumentController.uploadBuyerDocument({
           params: { id: mockBuyer.id },
           body: { documentName: 'Test', category: 'Other', fileName: 't.pdf' },
-          user: { id: 'u1' }
+          user: cmUser
         }, mockRes, nextFn);
         expect(nextFn).toHaveBeenCalledWith(err);
 
         nextFn.mockClear();
         await accountDocumentController.deleteBuyerDocument({
           params: { id: mockBuyer.id, docId: 'doc1' },
-          user: { id: 'u1' }
+          user: cmUser
         }, mockRes, nextFn);
         expect(nextFn).toHaveBeenCalledWith(err);
 
         nextFn.mockClear();
-        await accountDocumentController.getSellerDocuments({ params: { id: mockVendor.id } }, mockRes, nextFn);
+        await accountDocumentController.getSellerDocuments({ params: { id: mockVendor.id }, user: cmUser }, mockRes, nextFn);
         expect(nextFn).toHaveBeenCalledWith(err);
 
         nextFn.mockClear();
         await accountDocumentController.uploadSellerDocument({
           params: { id: mockVendor.id },
           body: { documentName: 'Test', category: 'Other', fileName: 't.pdf' },
-          user: { id: 'u1' }
+          user: cmUser
         }, mockRes, nextFn);
         expect(nextFn).toHaveBeenCalledWith(err);
 
         nextFn.mockClear();
         await accountDocumentController.deleteSellerDocument({
           params: { id: mockVendor.id, docId: 'doc1' },
-          user: { id: 'u1' }
+          user: cmUser
         }, mockRes, nextFn);
         expect(nextFn).toHaveBeenCalledWith(err);
       } finally {

@@ -520,24 +520,6 @@ async function addQuoteCredits(req, res, next) {
 
     const updatedBalance = currentBalance + amount;
 
-    // Update vendor in storeService & DB
-    storeService.updateVendor(vendor.id, {
-      freeQuotationCredits: updatedBalance,
-      freeRfqDownloadCredits: updatedBalance,
-      credits: updatedBalance,
-    });
-
-    if (pool.hasStorage()) {
-      try {
-        await pool.query(
-          "UPDATE vendors SET credits = $1, raw = jsonb_set(raw, '{freeQuotationCredits}', $2) WHERE id = $3",
-          [updatedBalance, JSON.stringify(updatedBalance), vendor.id]
-        );
-      } catch (dbErr) {
-        logger.error('Failed to update vendor credits in PostgreSQL', dbErr, 'VENDOR_CONTROLLER');
-      }
-    }
-
     const txId = `vtx_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
     const tx = {
       id: txId,
@@ -551,11 +533,61 @@ async function addQuoteCredits(req, res, next) {
       createdAt: new Date().toISOString(),
     };
 
-    try {
-      await domainQueries.recordVendorCreditTransactionInDB(tx);
-    } catch {
-      // Non-blocking transaction logging
+    // Authoritative database update and audit trail within an atomic transaction block
+    if (pool.hasStorage()) {
+      const client = (pool.pool && typeof pool.pool.connect === 'function')
+        ? await pool.pool.connect()
+        : (typeof pool.connect === 'function' ? await pool.connect() : pool);
+      let inTx = false;
+      try {
+        if (typeof client.query === 'function') {
+          await client.query('BEGIN');
+          inTx = true;
+          await client.query(
+            "UPDATE vendors SET credits = $1, raw = jsonb_set(COALESCE(raw, '{}'::jsonb), '{freeQuotationCredits}', $2) WHERE id = $3",
+            [updatedBalance, JSON.stringify(updatedBalance), vendor.id]
+          );
+          await client.query(
+            `INSERT INTO vendor_credit_transactions (id, vendor_id, rfq_id, transaction_type, amount, balance_after, idempotency_key, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+             ON CONFLICT (idempotency_key) DO NOTHING`,
+            [tx.id, tx.vendorId, tx.rfqId, tx.transactionType, tx.amount, tx.balanceAfter, tx.idempotencyKey]
+          );
+          await client.query('COMMIT');
+          inTx = false;
+        }
+      } catch (dbErr) {
+        if (inTx && typeof client.query === 'function') {
+          try {
+            await client.query('ROLLBACK');
+          } catch (_) {}
+        }
+        logger.error('Failed to update vendor credits atomically in PostgreSQL transaction', dbErr, 'VENDOR_CONTROLLER');
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to update vendor quote credits due to a database error.',
+        });
+      } finally {
+        if (client && typeof client.release === 'function') {
+          client.release();
+        }
+      }
     }
+
+    try {
+      const { queryCache } = require('../db/queryCache');
+      if (queryCache && typeof queryCache.invalidate === 'function') {
+        queryCache.invalidate('vendor_credits');
+        queryCache.invalidate('vendors');
+      }
+    } catch (_) {}
+
+    // Update in-memory vendor balance only after database transaction succeeds
+    storeService.updateVendor(vendor.id, {
+      freeQuotationCredits: updatedBalance,
+      freeRfqDownloadCredits: updatedBalance,
+      credits: updatedBalance,
+    });
 
     const actor = req.user
       ? (req.user.fullName || req.user.name || req.user.email || 'Category Manager')

@@ -9,6 +9,8 @@ const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSch
 const { logger } = require('../services/loggerService');
 const storeService = require('../services/storeService');
 const pool = require('../db/pool');
+const { assertCategoryManagerOrBuyer } = require('./buyerAccountController');
+const { assertCategoryManagerOrVendor } = require('./vendorDossierExtensions');
 
 function extractActor(req) {
   if (req.user) {
@@ -71,6 +73,7 @@ async function getBuyerDocuments(req, res, next) {
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account "${id}" not found.` });
     }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
     const documents = await accountDocumentQueries.listAccountDocuments({
       accountType: 'buyer',
@@ -102,6 +105,7 @@ async function uploadBuyerDocument(req, res, next) {
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account "${id}" not found.` });
     }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
     const validation = validatePayload(VALIDATION_SCHEMAS.accountDocumentUpload, req.body);
     if (!validation.isValid) {
@@ -140,8 +144,13 @@ async function uploadBuyerDocument(req, res, next) {
 async function deleteBuyerDocument(req, res, next) {
   try {
     const { id, docId } = req.params;
-    const actor = extractActor(req);
+    const buyer = await findBuyerSafe(id, req.user);
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: `Buyer account "${id}" not found.` });
+    }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
+    const actor = extractActor(req);
     const deleted = await accountDocumentQueries.deleteAccountDocument(docId, 'buyer', id, actor);
     if (!deleted) {
       return res.status(404).json({ success: false, error: `Document "${docId}" not found for this account.` });
@@ -170,6 +179,7 @@ async function getSellerDocuments(req, res, next) {
     if (!vendor) {
       return res.status(404).json({ success: false, error: `Seller "${id}" not found.` });
     }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
 
     const documents = await accountDocumentQueries.listAccountDocuments({
       accountType: 'seller',
@@ -201,6 +211,7 @@ async function uploadSellerDocument(req, res, next) {
     if (!vendor) {
       return res.status(404).json({ success: false, error: `Seller "${id}" not found.` });
     }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
 
     const validation = validatePayload(VALIDATION_SCHEMAS.accountDocumentUpload, req.body);
     if (!validation.isValid) {
@@ -239,6 +250,12 @@ async function uploadSellerDocument(req, res, next) {
 async function deleteSellerDocument(req, res, next) {
   try {
     const { id, docId } = req.params;
+    const vendor = await findVendorSafe(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: `Seller "${id}" not found.` });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
     const actor = extractActor(req);
 
     const deleted = await accountDocumentQueries.deleteAccountDocument(docId, 'seller', id, actor);
