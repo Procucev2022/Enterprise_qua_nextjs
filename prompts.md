@@ -5512,3 +5512,63 @@ remove B3 ;B4 S4 S5 remove
 
 Ask questions for cllarification?
 ```
+
+
+---
+
+### Prompt 35
+
+**Timestamp**: 2026-11-02T15:17:05Z
+
+```text
+1. I just want to add scenarios that are important to convert them to paid cusotmers. SO please avoid giving all operations email scenarios
+2. Auto-select suggested documents from the vault with the option to remove or add more
+3. Both: select from Document Vault dropdown OR upload a one-off document directly in the email modal
+```
+
+
+---
+
+### Prompt 36
+
+**Timestamp**: 2026-11-02T15:31:12Z
+
+```text
+Ask questions do u really understand or need any clarification?
+```
+
+
+---
+
+### Prompt 37
+
+**Timestamp**: 2026-11-02T15:39:09Z
+
+```text
+continue  Also create email drafts for all call outcomes too
+```
+
+
+---
+
+### Prompt 34
+
+**Timestamp**: 2026-11-02T14:55:09Z
+
+```text
+remove B3 ;B4 S4 S5 remove
+ I need email drafts to send to customers and not to category manager or myself or my staff
+
+Ask questions for cllarification?
+```
+
+
+---
+
+### Prompt 37
+
+**Timestamp**: 2026-11-02T15:39:09Z
+
+```text
+continue  Also create email drafts for all call outcomes too
+```

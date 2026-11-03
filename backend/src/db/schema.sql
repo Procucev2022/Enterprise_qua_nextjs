@@ -938,3 +938,24 @@ CREATE TABLE IF NOT EXISTS internal_task_activities (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_internal_task_activities_task ON internal_task_activities (task_id, created_at DESC);
+
+
+-- ==============================================================================
+-- DOCUMENT VAULT (Corporate Sales Collateral, Pitch Decks, Rate Cards & Attachments)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS document_vault (
+  id VARCHAR(64) PRIMARY KEY,
+  document_name VARCHAR(255) NOT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  file_size BIGINT DEFAULT 0,
+  mime_type VARCHAR(128) DEFAULT 'application/pdf',
+  category VARCHAR(64) NOT NULL,
+  file_url TEXT NOT NULL,
+  description TEXT,
+  uploaded_by VARCHAR(255) DEFAULT 'System Admin',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_document_vault_category ON document_vault (category);
+CREATE INDEX IF NOT EXISTS idx_document_vault_active ON document_vault (is_active);

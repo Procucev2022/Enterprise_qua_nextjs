@@ -1529,3 +1529,19 @@ export const ONBOARDING_STAGES = {
   4: 'Agreement & Terms',
   5: 'Live Onboarded',
 } as const;
+
+
+export const DOCUMENT_VAULT_CATEGORIES = [
+  { id: 'all', label: 'All Documents' },
+  { id: 'marketing_overview', label: 'Company Overview & ROI Decks' },
+  { id: 'rate_cards', label: 'Subscription Plans & Pricing' },
+  { id: 'templates', label: 'Templates & Walkthrough Guides' },
+  { id: 'compliance', label: 'Credit Terms & Compliance' },
+  { id: 'contracts_nda', label: 'Agreements & Sponsorships' },
+  { id: 'other', label: 'General Collateral' },
+] as const;
+
+export const DOCUMENT_VAULT_CONFIG = {
+  MAX_UPLOAD_SIZE_BYTES: 25 * 1024 * 1024,
+  ALLOWED_EXTENSIONS: ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.zip'],
+} as const;

@@ -2329,9 +2329,42 @@ export type ActionCenterTabKey =
   | 'buyers'
   | 'sellers'
   | 'registrations'
-  | 'payment_dues';
+  | 'payment_dues'
+  | 'document_vault';
 
 export type ActionCenterCommChannel = 'EMAIL' | 'SMS' | 'BOTH';
+
+export interface ActionCenterAttachment {
+  id: string;
+  documentName: string;
+  fileName: string;
+  fileSize?: number;
+  fileUrl?: string;
+  mimeType?: string;
+  category?: string;
+}
+
+export interface DocumentVaultItem {
+  id: string;
+  documentName: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  category: string;
+  fileUrl?: string;
+  description?: string;
+  uploadedBy?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface DocumentVaultSummary {
+  totalDocuments: number;
+  activeDocuments: number;
+  totalSizeBytes: number;
+  categoriesCount: number;
+}
 
 export type ActionCenterEntityType =
   | 'internal_task'
@@ -2361,6 +2394,8 @@ export interface ActionCenterCommunicationPayload {
   message: string;
   linkUrl?: string;
   notes?: string;
+  scenarioId?: string;
+  attachments?: ActionCenterAttachment[];
   scheduleFollowup?: {
     dueDate: string;
     priority: 'Critical' | 'High' | 'Medium' | 'Low';
@@ -2801,6 +2836,8 @@ export interface RecordCommunicationPayload {
   followupAssigneeId?: string;
   followupAssigneeName?: string;
   followupNotes?: string;
+  scenarioId?: string;
+  attachments?: ActionCenterAttachment[];
 }
 
 export interface BuyerPaymentSummary {

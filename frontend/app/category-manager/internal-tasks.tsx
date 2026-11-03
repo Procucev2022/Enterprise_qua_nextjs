@@ -102,6 +102,7 @@ import { fetchPaymentDuesSummary } from '@/lib/paymentDuesClient';
 import { fetchTicketSummary } from '@/lib/ticketClient';
 import { fetchApprovalSummary } from '@/lib/approvalClient';
 import ActionCenterComposeModal from './components/ActionCenterComposeModal';
+import DocumentVaultDashboard from './components/DocumentVaultDashboard';
 
 export default function InternalTasksDashboard() {
   // Data state
@@ -984,6 +985,7 @@ export default function InternalTasksDashboard() {
       {activeTab === 'sellers' && <SellersDirectory initialSellerId={selectedSellerDossierId} />}
       {activeTab === 'registrations' && <RegistrationsDashboard />}
       {activeTab === 'payment_dues' && <PaymentDuesDashboard onSummaryChange={setPaymentDuesSummary} />}
+      {activeTab === 'document_vault' && <DocumentVaultDashboard />}
 
       {activeTab === 'tasks' && (
         <>
