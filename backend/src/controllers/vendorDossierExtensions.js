@@ -473,6 +473,97 @@ async function getVendorPaymentHistory(req, res, next) {
   }
 }
 
+
+/**
+ * POST /api/vendors/:id/add-quote-credits
+ * Category Manager / Admin allows adding quote credits strictly in range 1 to 5.
+ */
+async function addQuoteCredits(req, res, next) {
+  try {
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: `Seller "${id}" not found.` });
+    }
+
+    const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
+    const pool = require('../db/pool');
+    const crypto = require('crypto');
+
+    const validation = validatePayload(VALIDATION_SCHEMAS.sellerAddQuoteCredits, req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: validation.errors.amount || 'Quote credits must be an integer between 1 and 5.',
+        details: validation.errors,
+      });
+    }
+
+    const amount = Number(validation.sanitizedData.amount);
+    const reason = validation.sanitizedData.reason || 'Manual quote credit addition by Category Manager';
+
+    const currentBalance = vendor.freeQuotationCredits !== undefined
+      ? Number(vendor.freeQuotationCredits)
+      : (vendor.credits !== undefined ? Number(vendor.credits) : 5);
+
+    const updatedBalance = currentBalance + amount;
+
+    // Update vendor in storeService & DB
+    storeService.updateVendor(vendor.id, {
+      freeQuotationCredits: updatedBalance,
+      freeRfqDownloadCredits: updatedBalance,
+      credits: updatedBalance,
+    });
+
+    if (pool.hasStorage()) {
+      try {
+        await pool.query(
+          "UPDATE vendors SET credits = $1, raw = jsonb_set(raw, '{freeQuotationCredits}', $2) WHERE id = $3",
+          [updatedBalance, JSON.stringify(updatedBalance), vendor.id]
+        );
+      } catch (dbErr) {
+        logger.error('Failed to update vendor credits in PostgreSQL', dbErr, 'VENDOR_CONTROLLER');
+      }
+    }
+
+    const txId = `vtx_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+    const tx = {
+      id: txId,
+      vendorId: vendor.id,
+      rfqId: null,
+      transactionType: 'Quote Credit Addition',
+      amount,
+      balanceAfter: updatedBalance,
+      idempotencyKey: `quote-credit-${txId}`,
+      description: reason,
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      await domainQueries.recordVendorCreditTransactionInDB(tx);
+    } catch {
+      // Non-blocking transaction logging
+    }
+
+    const actor = req.user
+      ? (req.user.fullName || req.user.name || req.user.email || 'Category Manager')
+      : 'Category Manager';
+
+    logger.info(`Quote credits added to vendor ${vendor.id}: +${amount} (New Balance: ${updatedBalance}) by ${actor}`, { vendorId: vendor.id, amount }, 'VENDOR_CONTROLLER');
+
+    return res.json({
+      success: true,
+      message: `Successfully allocated ${amount} quote credits to ${vendor.name || vendor.id}.`,
+      previousBalance: currentBalance,
+      updatedBalance,
+      transaction: tx,
+    });
+  } catch (err) {
+    logger.error('Error adding vendor quote credits', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   assertCategoryManagerOrVendor,
   resolveVendor,
@@ -480,4 +571,5 @@ module.exports = {
   getVendorCommunications,
   recordVendorCommunication,
   getVendorPaymentHistory,
+  addQuoteCredits,
 };

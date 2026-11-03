@@ -903,3 +903,25 @@ CREATE TABLE IF NOT EXISTS document_vault (
 CREATE INDEX IF NOT EXISTS idx_document_vault_category ON document_vault (category);
 CREATE INDEX IF NOT EXISTS idx_document_vault_active ON document_vault (is_active);
 
+-- ==============================================================================
+-- ACCOUNT DOCUMENTS (Buyer & Seller Dossier Associated Documents)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS account_documents (
+  id TEXT PRIMARY KEY,
+  account_type TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  document_name TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_size INTEGER DEFAULT 0,
+  mime_type TEXT DEFAULT 'application/pdf',
+  category TEXT NOT NULL DEFAULT 'Other',
+  file_url TEXT NOT NULL,
+  description TEXT,
+  uploaded_by TEXT DEFAULT 'Category Manager',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_account_documents_account ON account_documents (account_type, account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_account_documents_category ON account_documents (category);
+CREATE INDEX IF NOT EXISTS idx_account_documents_active ON account_documents (is_active);

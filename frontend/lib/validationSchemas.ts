@@ -733,3 +733,39 @@ export const INTERNAL_TASK_SCHEMA = {
   notes: { maxLength: 2000 },
   creditQuantity: { min: 0 },
 } as const;
+/** Account Document Upload validation schema */
+export const ACCOUNT_DOCUMENT_UPLOAD_SCHEMA = {
+  documentName: { minLength: 1, maxLength: 255 },
+  category: {
+    allowed: [
+      'Registration',
+      'Company Profile',
+      'GST',
+      'PAN',
+      'RFQ',
+      'Quotation',
+      'Other',
+    ] as const,
+  },
+  description: { maxLength: 2000 },
+  maxFileSize: 25 * 1024 * 1024,
+  allowedExtensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.xls', '.xlsx'] as const,
+} as const;
+
+/** Seller Add Quote Credits validation schema */
+export const SELLER_ADD_QUOTE_CREDITS_SCHEMA = {
+  amount: { min: 1, max: 5 },
+  reason: { maxLength: 1000 },
+} as const;
+
+/** Buyer Credit Approval Request validation schema */
+export const BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA = {
+  amount: { min: 1 },
+  approverName: {
+    allowed: ['Srinu Sir', 'Sudheer Sir'] as const,
+  },
+  initiatorName: {
+    allowed: ['Govardhan', 'Krishna', 'Chandhan'] as const,
+  },
+  reason: { maxLength: 1000 },
+} as const;

@@ -2866,6 +2866,25 @@ export interface BuyerPaymentTransaction {
   receiptUrl?: string;
 }
 
+export interface AccountDocument {
+  id: string;
+  accountType: 'buyer' | 'seller';
+  accountId: string;
+  documentName: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  category: string;
+  fileUrl: string;
+  description?: string;
+  uploadedBy: string;
+  uploadDate: string;
+  createdAt?: string;
+  updatedAt?: string;
+  isActive?: boolean;
+  sourceWorkflow?: string;
+}
+
 // --- Seller Directory & Supplier 360° Dossier Types -----------------------------
 
 export type SellerDirectoryColumnKey =

@@ -1,3 +1,9 @@
+jest.mock('@/lib/accountDocumentsClient', () => ({
+  addSellerQuoteCredits: jest.fn().mockResolvedValue({ success: true, message: 'Added credits' }),
+  fetchAccountDocuments: jest.fn().mockResolvedValue([]),
+  uploadAccountDocument: jest.fn().mockResolvedValue({ success: true }),
+  deleteAccountDocument: jest.fn().mockResolvedValue({ success: true }),
+}));
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import SupplierDossierDrawer from '@/app/category-manager/components/SupplierDossierDrawer';
@@ -155,7 +161,7 @@ describe('SupplierDossierDrawer', () => {
         status: 'COMPLETED',
         description: i % 2 === 0 ? 'Quota allocation' : 'Unlock quotation',
       })),
-    });
+});
 
     (supplierProfileClient.fetchSupplierCommunications as jest.Mock).mockResolvedValue({
       success: true,
@@ -1585,6 +1591,38 @@ describe('SupplierDossierDrawer', () => {
     fireEvent.click(detailsBtn);
     expect(await screen.findByText(/Custom Fitting Description/i)).toBeInTheDocument();
     unmountQuotes();
+  });
+
+test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal works', async () => {
+    const { unmount } = render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="documents"
+        onClose={jest.fn()}
+      />
+    );
+    expect(screen.getByText(/Total Documents:/i)).toBeInTheDocument();
+    unmount();
+
+    // Reopen and test Add Quote Credits modal
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="profile"
+        onClose={jest.fn()}
+      />
+    );
+
+    const addCreditsHeaderBtn = screen.getByTitle('Add Quote Credits (1-5)');
+    fireEvent.click(addCreditsHeaderBtn);
+    expect(screen.getByText('Add Seller Quote Credits')).toBeInTheDocument();
+
+    // Select +3 credits
+    fireEvent.click(screen.getByRole('button', { name: '+3' }));
+
+    // Submit form
+    const submitBtn = screen.getByRole('button', { name: 'Add Quote Credits' });
+    fireEvent.click(submitBtn);
   });
 
 });
