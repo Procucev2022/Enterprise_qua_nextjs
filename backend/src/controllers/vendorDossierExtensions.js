@@ -3,6 +3,17 @@ const domainQueries = require('../db/domainQueries');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
 
+function assertCategoryManagerOrAdmin(req, res) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  if (user.role === 'category_manager' || user.role === 'admin') return true;
+  res.status(403).json({ success: false, error: 'Unauthorized: Only category managers and admins can allocate quote credits.' });
+  return false;
+}
+
 function assertCategoryManagerOrVendor(req, res, vendorOrEmail = null) {
   const user = req.user;
   if (!user) {
@@ -480,6 +491,7 @@ async function getVendorPaymentHistory(req, res, next) {
  */
 async function addQuoteCredits(req, res, next) {
   try {
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
     const { id } = req.params;
     const vendor = await resolveVendor(id, req.user);
     if (!vendor) {
@@ -565,6 +577,7 @@ async function addQuoteCredits(req, res, next) {
 }
 
 module.exports = {
+  assertCategoryManagerOrAdmin,
   assertCategoryManagerOrVendor,
   resolveVendor,
   getCreditHistory,

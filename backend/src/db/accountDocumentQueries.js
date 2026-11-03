@@ -128,7 +128,7 @@ async function listAccountDocuments(filters = {}) {
   if (normType === 'buyer') {
     try {
       const allRfqs = storeService.rfqs || [];
-      const buyerRfqs = allRfqs.filter((r) => r.buyerId === normId || r.buyer === normId);
+      const buyerRfqs = allRfqs.filter((r) => r.buyerId === normId || r.buyer === normId).slice(0, 100);
 
       buyerRfqs.forEach((rfq) => {
         const attList = Array.isArray(rfq.attachments) ? rfq.attachments : [];
@@ -199,12 +199,13 @@ async function listAccountDocuments(filters = {}) {
 
       // Find quotes submitted by vendor
       const allRfqs = storeService.rfqs || [];
-      allRfqs.forEach((rfq) => {
+      for (let i = 0; i < allRfqs.length && workflowDocs.length < 100; i++) {
+        const rfq = allRfqs[i];
         const quotes = Array.isArray(rfq.quotes) ? rfq.quotes : [];
-        quotes.forEach((q) => {
+        for (const q of quotes) {
           if (q.vendorId === normId) {
             const docId = `quote_doc_${rfq.id}_${normId}`;
-            if (suppressedWorkflowDocIds.has(docId)) return;
+            if (suppressedWorkflowDocIds.has(docId)) continue;
 
             const fileName = `Quotation_Bid_${rfq.rfqNumber || rfq.id}.pdf`;
             workflowDocs.push({
@@ -226,8 +227,8 @@ async function listAccountDocuments(filters = {}) {
               sourceWorkflow: 'Quotation Submission',
             });
           }
-        });
-      });
+        }
+      }
     } catch {
       // Non-blocking workflow doc ingestion
     }

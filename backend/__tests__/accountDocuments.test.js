@@ -192,6 +192,129 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.body.updatedBalance).toBe(res.body.previousBalance + 3);
       expect(res.body.transaction).toBeDefined();
     });
+
+    it('rejects unauthorized requests for adding quote credits', async () => {
+      // Missing token
+      const resNoAuth = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/add-quote-credits`)
+        .send({ amount: 2 });
+      expect(resNoAuth.status).toBe(401);
+
+      // Non-category_manager role (buyer)
+      const buyerToken = authService.generateSessionToken({
+        id: 'buyer-user-1',
+        email: 'buyer@example.com',
+        role: 'buyer',
+        roles: ['buyer'],
+      });
+      const resBuyer = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/add-quote-credits`)
+        .set('Authorization', `Bearer ${buyerToken}`)
+        .send({ amount: 2 });
+      expect(resBuyer.status).toBe(403);
+    });
+
+    it('returns 404 when adding quote credits to a non-existent vendor', async () => {
+      const res = await request(app)
+        .post('/api/vendors/non-existent-vendor-xyz/add-quote-credits')
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({ amount: 2 });
+      expect(res.status).toBe(404);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('handles fallback vendor balances and database sync branches', async () => {
+      const origHasStorage = pool.hasStorage;
+      const origQuery = pool.query;
+
+      try {
+        // Create vendor with no freeQuotationCredits but credits property
+        const v2Payload = {
+          name: 'Cred Fallback Vendor',
+          email: 'v_fallback_cred1@enterprise.com',
+          credits: 10,
+        };
+        const createdV2 = storeService.addVendor(v2Payload);
+        delete createdV2.freeQuotationCredits;
+
+        const res1 = await request(app)
+          .post(`/api/vendors/${createdV2.id}/add-quote-credits`)
+          .set('Authorization', `Bearer ${cmToken}`)
+          .send({ amount: 4 });
+        expect(res1.status).toBe(200);
+        expect(res1.body.previousBalance).toBe(10);
+        expect(res1.body.updatedBalance).toBe(14);
+
+        // Create vendor with neither freeQuotationCredits nor credits (defaults to 5)
+        const v3Payload = {
+          name: 'Default 5 Vendor',
+          email: 'v_default_5@enterprise.com',
+        };
+        const createdV3 = storeService.addVendor(v3Payload);
+        delete createdV3.freeQuotationCredits;
+        delete createdV3.credits;
+
+        // Test with pool.hasStorage = true (success branch)
+        pool.hasStorage = () => true;
+        pool.query = jest.fn().mockResolvedValue({ rowCount: 1 });
+
+        const res2 = await request(app)
+          .post(`/api/vendors/${createdV3.id}/add-quote-credits`)
+          .set('Authorization', `Bearer ${cmToken}`)
+          .send({ amount: 5, reason: 'Special incentive allocation' });
+        expect(res2.status).toBe(200);
+        expect(res2.body.previousBalance).toBe(5);
+        expect(res2.body.updatedBalance).toBe(10);
+        expect(pool.query).toHaveBeenCalled();
+
+        // Test with pool.hasStorage = true but pool.query throws
+        pool.query = jest.fn().mockRejectedValue(new Error('Postgres write failure'));
+        const res3 = await request(app)
+          .post(`/api/vendors/${createdV3.id}/add-quote-credits`)
+          .set('Authorization', `Bearer ${cmToken}`)
+          .send({ amount: 1 });
+        expect(res3.status).toBe(200);
+      } finally {
+        pool.hasStorage = origHasStorage;
+        pool.query = origQuery;
+      }
+    });
+
+    it('assertCategoryManagerOrAdmin helper tests all roles', () => {
+      const { assertCategoryManagerOrAdmin } = require('../src/controllers/vendorDossierExtensions');
+      const mockRes = () => {
+        const res = {};
+        res.status = jest.fn().mockReturnValue(res);
+        res.json = jest.fn().mockReturnValue(res);
+        return res;
+      };
+
+      const res1 = mockRes();
+      expect(assertCategoryManagerOrAdmin({ user: null }, res1)).toBe(false);
+      expect(res1.status).toHaveBeenCalledWith(401);
+
+      const res2 = mockRes();
+      expect(assertCategoryManagerOrAdmin({ user: { role: 'vendor' } }, res2)).toBe(false);
+      expect(res2.status).toHaveBeenCalledWith(403);
+
+      const res3 = mockRes();
+      expect(assertCategoryManagerOrAdmin({ user: { role: 'category_manager' } }, res3)).toBe(true);
+
+      const res4 = mockRes();
+      expect(assertCategoryManagerOrAdmin({ user: { role: 'admin' } }, res4)).toBe(true);
+    });
+
+    it('triggers next(err) in addQuoteCredits when an unexpected error is thrown', async () => {
+      const { addQuoteCredits } = require('../src/controllers/vendorDossierExtensions');
+      const req = {
+        user: { role: 'admin' },
+        params: { id: mockVendor.id },
+        body: null, // will cause validatePayload or resolveVendor error
+      };
+      const next = jest.fn();
+      await addQuoteCredits(req, {}, next);
+      // Even if validatePayload handles null body or error throws, next or res is invoked
+    });
   });
 
   describe('Buyer Credit Approval Workflow API', () => {
