@@ -959,9 +959,11 @@ function LoginPageContent() {
                         <h3 className="text-base sm:text-lg font-bold text-slate-800 dark:text-white">
                           {selectedRegRole === 'buyer' ? 'Create Buyer Account' : 'Create Vendor Partner Account'}
                         </h3>
-                        <span className="badge badge-amber font-bold text-[10px]">
-                          {selectedRegRole === 'buyer' ? '5 Free RFQs' : '5 Free Quotes'}
-                        </span>
+                        {selectedRegRole === 'buyer' && (
+                          <span className="badge badge-amber font-bold text-[10px]">
+                            5 Free RFQs
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 leading-relaxed">
                         {selectedRegRole === 'buyer'

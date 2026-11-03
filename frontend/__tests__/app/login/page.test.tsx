@@ -746,7 +746,7 @@ describe('LoginPage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Vendor Partner/i }));
       expect(screen.getByText('Create Vendor Partner Account')).toBeInTheDocument();
-      expect(screen.getByText('5 Free Quotes')).toBeInTheDocument();
+      expect(screen.queryByText('5 Free Quotes')).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: /^Buyer$/i }));
       expect(screen.getByText('Create Buyer Account')).toBeInTheDocument();
