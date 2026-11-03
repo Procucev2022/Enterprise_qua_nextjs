@@ -59,6 +59,7 @@ import {
   INITIAL_AZURE_HEALTH,
   formatCurrency,
   hasUnlimitedAccess,
+  VENDOR_PLAN_RFQ_QUOTA,
 } from './constants';
 
 // Backend write endpoints now require a session token (Phase 4 authorization
@@ -344,9 +345,10 @@ interface AppContextType {
   vendorCatalogue: any[];
   setVendorCatalogue: React.Dispatch<React.SetStateAction<any[]>>;
 
-  // Vendor Free RFQ Download Credits (5 Free Starter Allowance)
-  vendorFreeCreditsRemaining: number;
-  vendorFreeCreditsAllocated: number;
+  // Vendor RFQ credits: plan quota less downloads used for Connect/Select
+  // subscribers, otherwise the free-tier balance. null until first loaded.
+  vendorFreeCreditsRemaining: number | null;
+  vendorFreeCreditsAllocated: number | null;
   vendorFreeCreditsUsed: number;
   vendorUnlockedRfqIds: string[];
   refreshVendorCredits: () => Promise<void>;
@@ -630,9 +632,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
   const [evaluationModalOpen, setEvaluationModalOpen] = useState<boolean>(false);
 
-  // Vendor Free RFQ Download Credits (5 Free Starter Allowance)
-  const [vendorFreeCreditsRemaining, setVendorFreeCreditsRemaining] = useState<number>(5);
-  const [vendorFreeCreditsAllocated, setVendorFreeCreditsAllocated] = useState<number>(5);
+  // Vendor RFQ credits. Start as null ("not loaded yet") rather than a
+  // made-up 5: the header rendered that 5 on every page load until the real
+  // balance arrived from refreshVendorCredits.
+  const [vendorFreeCreditsRemaining, setVendorFreeCreditsRemaining] = useState<number | null>(null);
+  const [vendorFreeCreditsAllocated, setVendorFreeCreditsAllocated] = useState<number | null>(null);
   const [vendorFreeCreditsUsed, setVendorFreeCreditsUsed] = useState<number>(0);
   const [vendorUnlockedRfqIds, setVendorUnlockedRfqIds] = useState<string[]>([]);
 
@@ -656,8 +660,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const res = await downloadAndUnlockRFQ(rfqIdOrNumber);
     if (res.success) {
       if (res.freeCreditsRemaining !== undefined) {
-        setVendorFreeCreditsRemaining(res.freeCreditsRemaining);
-        setVendorFreeCreditsUsed(Math.max(0, 5 - res.freeCreditsRemaining));
+        const remaining = res.freeCreditsRemaining;
+        setVendorFreeCreditsRemaining(remaining);
+        setVendorFreeCreditsUsed(Math.max(0, (vendorFreeCreditsAllocated ?? 0) - remaining));
+        // Keep the Subscription page's "used / quota" in step with the header.
+        const quota = VENDOR_PLAN_RFQ_QUOTA[vendorSubscription];
+        if (quota !== undefined) setVendorRfqDownloadsUsed(Math.max(0, quota - remaining));
       }
       setVendorUnlockedRfqIds((prev) => {
         const norm = String(rfqIdOrNumber);

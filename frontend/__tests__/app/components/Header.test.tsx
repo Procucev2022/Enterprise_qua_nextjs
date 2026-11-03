@@ -659,7 +659,7 @@ describe('Header Session Timer and Auto Logout', () => {
     rerender(<Header />);
     expect(screen.getByText('unlimited')).toBeInTheDocument();
 
-    // 3. Vendor with 0 credits and undefined credits
+    // 3. Vendor with 0 credits, then credits not loaded yet
     (storeModule.useApp as jest.Mock).mockReturnValue({
       ...base,
       isLoggedIn: true,
@@ -676,7 +676,8 @@ describe('Header Session Timer and Auto Logout', () => {
       vendorFreeCreditsRemaining: undefined,
     });
     rerender(<Header />);
-    expect(screen.getByText('0')).toBeInTheDocument();
+    // Not loaded yet: a placeholder, not a made-up balance.
+    expect(screen.getByText('…')).toBeInTheDocument();
 
     // 4. Admin role opening account modal and closing via backdrop click
     (storeModule.useApp as jest.Mock).mockReturnValue({

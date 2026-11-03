@@ -66,15 +66,21 @@ runStep('Step 4: Linter & Static Code Analysis Verification', 'npm run lint --pr
 // 5. Database Schema & Migration Health Check
 const fs = require('fs');
 const schemaPath = path.resolve(rootDir, 'backend/src/db/schema.sql');
-if (process.env.DATABASE_URL) {
+// A commit gate must not write to the shared database. DATABASE_URL alone used
+// to trigger a live migration, and VS Code injects the root .env into terminals
+// ("python.terminal.useEnvFile"), so every commit applied schema.sql to the
+// shared D1 database and failed whenever that .env held a stale Cloudflare
+// token (403). A live migration now runs only when asked for explicitly.
+if (process.env.QC_RUN_MIGRATIONS === 'true') {
   runStep('Step 5: Database Schema & Migration Verification', 'node backend/src/db/migrate.js');
-} else if (fs.existsSync(schemaPath)) {
+} else if (fs.existsSync(schemaPath) && fs.statSync(schemaPath).size > 0) {
   printHeader('Step 5: Database Schema & Migration Verification');
   console.log(`[migrate] Schema file verified at ${schemaPath} (${fs.statSync(schemaPath).size} bytes).`);
-  console.log(`[migrate] In-memory/development mode active (DATABASE_URL not configured).`);
+  console.log('[migrate] Live migration skipped (set QC_RUN_MIGRATIONS=true to apply schema.sql to the configured database).');
   console.log(`\n✔ [SUCCESS] Step 5: Database Schema & Migration Verification passed.\n`);
 } else {
-  runStep('Step 5: Database Schema & Migration Verification', 'node backend/src/db/migrate.js');
+  console.error(`\n✖ [FAILED] Step 5: Database Schema & Migration Verification: ${schemaPath} is missing or empty.`);
+  process.exit(1);
 }
 
 console.log('================================================================================');
