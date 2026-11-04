@@ -17,7 +17,8 @@
     "email:check": "node scripts/check-email.js",
     "email:scheduler": "node scripts/email-scheduler.js",
     "dev:worker": "wrangler dev",
-    "deploy:worker": "wrangler deploy"
+    "deploy:worker": "wrangler deploy",
+    "report:daily-rfq": "node scripts/send-daily-rfq-report.js"
   },
   "keywords": [
     "procurement",

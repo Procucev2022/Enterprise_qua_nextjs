@@ -33,13 +33,16 @@ describe('approvalClient', () => {
         status: 'Pending',
         project: 'Project Falcon',
         search: 'CN-101',
+        assigned_approver: 'Srinu Sir',
         limit: 20,
         offset: 0,
+        sortBy: 'created_at',
+        sortOrder: 'desc',
       });
 
       expect(result).toEqual(mockData);
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/approvals?module=Credit+Notes&status=Pending&project=Project+Falcon&search=CN-101&limit=20&offset=0'),
+        expect.stringContaining('/api/approvals?module=Credit+Notes&status=Pending&project=Project+Falcon&search=CN-101&assigned_approver=Srinu+Sir&limit=20&offset=0&sortBy=created_at&sortOrder=desc'),
         expect.objectContaining({
           headers: expect.objectContaining({
             Authorization: 'Bearer test-auth-token',

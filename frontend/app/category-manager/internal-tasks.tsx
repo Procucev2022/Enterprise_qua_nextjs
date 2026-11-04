@@ -21,6 +21,7 @@ import {
   Trash2,
   ExternalLink,
   RefreshCw,
+  RotateCcw,
   FolderOpen,
   ClipboardList,
   Flame,
@@ -1084,9 +1085,7 @@ export default function InternalTasksDashboard() {
 
   return (
     <div
-      className={`min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 ${
-        activeTab === 'payment_dues' ? 'p-2 sm:p-3 md:p-4 space-y-4' : 'p-4 md:p-6 space-y-6'
-      }`}
+      className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-2.5 sm:p-3 md:p-4 space-y-3.5"
     >
       {/* Toast Notification */}
       {toastMessage && (
@@ -1117,161 +1116,242 @@ export default function InternalTasksDashboard() {
 
       {activeTab === 'tasks' && (
         <>
-          {/* Header & Metric Summary */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Action Center</h1>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Internal Task Management, Employee Responsibilities, Approval Governance & Credit Tracking.
+          {/* Section: Ultra-Compact Summary Cards (Single Horizontal Row, Responsive Grid) */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-2.5 w-full">
+            {/* Total Tasks */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('all')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('all');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'all'
+                  ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-slate-900 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-total-tasks"
+            >
+              <p className={`text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight whitespace-nowrap leading-tight ${
+                activeFilters.status === 'all' ? 'opacity-80' : 'text-slate-600 dark:text-slate-300'
+              }`}>
+                Total Tasks
               </p>
+              <p className="text-base sm:text-lg font-bold leading-none mt-1">{summary.total}</p>
+              <span className={`text-[10px] whitespace-nowrap mt-1 leading-tight ${
+                activeFilters.status === 'all' ? 'opacity-70' : 'text-slate-400 dark:text-slate-500'
+              }`}>
+                All records
+              </span>
             </div>
 
-            {/* Section 5: Compact Summary Cards (Single Horizontal Row) */}
-            <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto w-full md:w-auto text-xs pb-1 sm:pb-0">
-              {/* Total Tasks */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('all')}
-                className={`px-3 py-1.5 sm:py-2 rounded-lg border text-left transition-all shrink-0 min-w-[90px] sm:min-w-[105px] cursor-pointer ${
-                  activeFilters.status === 'all'
-                    ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-slate-900 shadow-xs'
-                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 shadow-xs'
-                }`}
-                data-testid="card-total-tasks"
-              >
-                <div className="text-[10px] uppercase font-bold tracking-tight opacity-75 whitespace-nowrap">Total Tasks</div>
-                <div className="text-base sm:text-lg font-extrabold mt-0.5 leading-none">{summary.total}</div>
-              </button>
+            {/* New Tasks */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('New')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('New');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'New'
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-blue-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-new-tasks"
+            >
+              <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-blue-700 dark:text-blue-300 whitespace-nowrap leading-tight">
+                New Tasks
+              </p>
+              <p className="text-base sm:text-lg font-bold text-blue-600 dark:text-blue-400 leading-none mt-1">
+                {summary.newTasks ?? summary.pending ?? 0}
+              </p>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+                Awaiting action
+              </span>
+            </div>
 
-              {/* New Tasks */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('New')}
-                className={`px-3 py-1.5 sm:py-2 rounded-lg border text-left transition-all shrink-0 min-w-[90px] sm:min-w-[105px] cursor-pointer ${
-                  activeFilters.status === 'New'
-                    ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
-                    : 'bg-blue-50/70 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800/60 hover:bg-blue-100/70 shadow-xs'
-                }`}
-                data-testid="card-new-tasks"
-              >
-                <div className="text-[10px] uppercase font-bold tracking-tight text-blue-700 dark:text-blue-300 whitespace-nowrap">New Tasks</div>
-                <div className="text-base sm:text-lg font-extrabold text-blue-900 dark:text-blue-100 mt-0.5 leading-none">
-                  {summary.newTasks ?? summary.pending ?? 0}
-                </div>
-              </button>
+            {/* In Progress */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('In Progress')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('In Progress');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'In Progress'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-in-progress"
+            >
+              <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-indigo-700 dark:text-indigo-300 whitespace-nowrap leading-tight">
+                In Progress
+              </p>
+              <p className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 leading-none mt-1">
+                {summary.inProgress}
+              </p>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+                Active work
+              </span>
+            </div>
 
-              {/* In Progress */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('In Progress')}
-                className={`px-3 py-1.5 sm:py-2 rounded-lg border text-left transition-all shrink-0 min-w-[90px] sm:min-w-[105px] cursor-pointer ${
-                  activeFilters.status === 'In Progress'
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                    : 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-200 dark:border-indigo-800/60 hover:bg-indigo-100/70 shadow-xs'
-                }`}
-                data-testid="card-in-progress"
-              >
-                <div className="text-[10px] uppercase font-bold tracking-tight text-indigo-700 dark:text-indigo-300 whitespace-nowrap">In Progress</div>
-                <div className="text-base sm:text-lg font-extrabold text-indigo-900 dark:text-indigo-100 mt-0.5 leading-none">
-                  {summary.inProgress}
-                </div>
-              </button>
+            {/* Pending Approval */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('Pending Approval')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('Pending Approval');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'Pending Approval'
+                  ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-amber-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-pending-approval"
+            >
+              <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-amber-700 dark:text-amber-300 whitespace-nowrap leading-tight">
+                Pending Approval
+              </p>
+              <p className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400 leading-none mt-1">
+                {summary.pendingApproval ?? 0}
+              </p>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+                Requires review
+              </span>
+            </div>
 
-              {/* Pending Approval */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('Pending Approval')}
-                className={`px-3 py-1.5 sm:py-2 rounded-lg border text-left transition-all shrink-0 min-w-[105px] sm:min-w-[120px] cursor-pointer ${
-                  activeFilters.status === 'Pending Approval'
-                    ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                    : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/60 hover:bg-amber-100/70 shadow-xs'
-                }`}
-                data-testid="card-pending-approval"
-              >
-                <div className="text-[10px] uppercase font-bold tracking-tight text-amber-700 dark:text-amber-300 whitespace-nowrap">Pending Approval</div>
-                <div className="text-base sm:text-lg font-extrabold text-amber-900 dark:text-amber-100 mt-0.5 leading-none">
-                  {summary.pendingApproval ?? 0}
-                </div>
-              </button>
+            {/* Completed */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('Completed')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('Completed');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'Completed'
+                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-emerald-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-completed"
+            >
+              <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-emerald-700 dark:text-emerald-300 whitespace-nowrap leading-tight">
+                Completed
+              </p>
+              <p className="text-base sm:text-lg font-bold text-emerald-600 dark:text-emerald-400 leading-none mt-1">
+                {summary.completed}
+              </p>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+                Resolved
+              </span>
+            </div>
 
-              {/* Completed */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('Completed')}
-                className={`px-3 py-1.5 sm:py-2 rounded-lg border text-left transition-all shrink-0 min-w-[90px] sm:min-w-[105px] cursor-pointer ${
-                  activeFilters.status === 'Completed'
-                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                    : 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60 hover:bg-emerald-100/70 shadow-xs'
-                }`}
-                data-testid="card-completed"
-              >
-                <div className="text-[10px] uppercase font-bold tracking-tight text-emerald-700 dark:text-emerald-300 whitespace-nowrap">Completed</div>
-                <div className="text-base sm:text-lg font-extrabold text-emerald-900 dark:text-emerald-100 mt-0.5 leading-none">
-                  {summary.completed}
-                </div>
-              </button>
-
-              {/* Overdue Tasks */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('overdue')}
-                className="px-3 py-1.5 sm:py-2 rounded-lg border text-left bg-rose-50/70 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60 hover:bg-rose-100/70 transition-all shrink-0 min-w-[90px] sm:min-w-[105px] shadow-xs cursor-pointer"
-                data-testid="card-overdue"
-              >
-                <div className="text-[10px] uppercase font-bold tracking-tight text-rose-700 dark:text-rose-300 whitespace-nowrap">Overdue</div>
-                <div className="text-base sm:text-lg font-extrabold text-rose-900 dark:text-rose-100 mt-0.5 leading-none">
-                  {summary.overdueCount ?? 0}
-                </div>
-              </button>
+            {/* Overdue Tasks */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('overdue')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('overdue');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'overdue'
+                  ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-rose-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-overdue"
+            >
+              <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-rose-700 dark:text-rose-300 whitespace-nowrap leading-tight">
+                Overdue
+              </p>
+              <p className="text-base sm:text-lg font-bold text-rose-600 dark:text-rose-400 leading-none mt-1">
+                {summary.overdueCount ?? 0}
+              </p>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+                Past deadline
+              </span>
             </div>
           </div>
 
           {/* ============================================================== */}
           {/* TOOLBAR: Search, Category, Assignee, Reminders, Create, Export */}
           {/* ============================================================== */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-sm flex flex-col lg:flex-row items-center justify-between gap-3">
-            {/* Search Bar */}
-            <div className="relative flex-1 w-full">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-2.5" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder="Search by title, task ID, related entity, or instructions..."
-                className="w-full bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            {/* Action Controls */}
-            <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-end">
-              {/* Category Filter Dropdown */}
-              <div className="relative">
-                <select
-                  value={activeFilters.taskCategory || 'all'}
-                  onChange={(e) => handleCategoryChange(e.target.value)}
-                  className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                  data-testid="toolbar-category-select"
-                >
-                  <option value="all">All Categories</option>
-                  {Object.values(INTERNAL_TASK_CATEGORIES).map((cat) => (
-                    <option key={cat} value={cat}>
-                      {INTERNAL_TASK_CATEGORY_LABELS[cat] || cat}
-                    </option>
-                  ))}
-                </select>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-wrap items-center justify-between gap-2 sm:gap-2.5">
+            {/* Left: Search input and primary dropdowns */}
+            <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[260px]">
+              {/* Search Bar */}
+              <div className="relative flex-1 min-w-[200px] max-w-sm">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="Search by title, ID, entity, instructions..."
+                  className="w-full pl-8 pr-8 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setCurrentPage(1);
+                    }}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    aria-label="Clear search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
+
+              {/* Category Filter Dropdown */}
+              <select
+                value={activeFilters.taskCategory || 'all'}
+                onChange={(e) => handleCategoryChange(e.target.value)}
+                className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 whitespace-nowrap cursor-pointer"
+                data-testid="toolbar-category-select"
+              >
+                <option value="all">All Categories</option>
+                {Object.values(INTERNAL_TASK_CATEGORIES).map((cat) => (
+                  <option key={cat} value={cat}>
+                    {INTERNAL_TASK_CATEGORY_LABELS[cat] || cat}
+                  </option>
+                ))}
+              </select>
 
               {/* Quick "My Tasks" Button */}
               <button
                 type="button"
                 onClick={handleToggleMyTasks}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${
+                className={`shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
                   isMyTasksActive
                     ? 'bg-blue-600 border-blue-600 text-white shadow-sm shadow-blue-600/20'
-                    : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
                 }`}
                 title={UI_STRINGS.actionCenter.tasks.myTasks}
                 data-testid="toolbar-my-tasks-btn"
@@ -1281,38 +1361,40 @@ export default function InternalTasksDashboard() {
               </button>
 
               {/* Internal User / Assignee Dropdown */}
-              <div className="relative">
-                <select
-                  value={activeFilters.assignedTo || 'all'}
-                  onChange={(e) => handleAssigneeChange(e.target.value)}
-                  className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                  aria-label={UI_STRINGS.actionCenter.tasks.selectAssignee}
-                  data-testid="toolbar-assignee-select"
-                >
-                  <option value="all">{UI_STRINGS.actionCenter.tasks.allUsers}</option>
-                  {sessionUser?.name && (
-                    <option value={sessionUser.name}>
-                      {UI_STRINGS.actionCenter.tasks.myTasks} ({sessionUser.name})
+              <select
+                value={activeFilters.assignedTo || 'all'}
+                onChange={(e) => handleAssigneeChange(e.target.value)}
+                className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 whitespace-nowrap cursor-pointer"
+                aria-label={UI_STRINGS.actionCenter.tasks.selectAssignee}
+                data-testid="toolbar-assignee-select"
+              >
+                <option value="all">{UI_STRINGS.actionCenter.tasks.allUsers}</option>
+                {sessionUser?.name && (
+                  <option value={sessionUser.name}>
+                    {UI_STRINGS.actionCenter.tasks.myTasks} ({sessionUser.name})
+                  </option>
+                )}
+                <option value="Unassigned">{UI_STRINGS.actionCenter.tasks.unassigned}</option>
+                <optgroup label="Internal Team Members">
+                  {assignees.map((m) => (
+                    <option key={m.id || m.name} value={m.name}>
+                      {m.name} {m.role ? `• ${m.role}` : ''}
                     </option>
-                  )}
-                  <option value="Unassigned">{UI_STRINGS.actionCenter.tasks.unassigned}</option>
-                  <optgroup label="Internal Team Members">
-                    {assignees.map((m) => (
-                      <option key={m.id || m.name} value={m.name}>
-                        {m.name} {m.role ? `• ${m.role}` : ''}
-                      </option>
-                    ))}
-                  </optgroup>
-                </select>
-              </div>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
 
+            {/* Right: Actions */}
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               {/* Filter Button */}
               <button
+                type="button"
                 onClick={handleOpenFilterDrawer}
-                className={`flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${
+                className={`shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
                   activeFilterCount > 0
                     ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-400 text-blue-700 dark:text-blue-300 shadow-sm'
-                    : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
                 }`}
               >
                 <Filter className="w-3.5 h-3.5" />
@@ -1324,11 +1406,11 @@ export default function InternalTasksDashboard() {
                 )}
               </button>
 
-              {/* Export Button */}
+              {/* Export CSV Button */}
               <a
                 href={clientCsvExportUri || exportUrl}
                 download="internal_tasks.csv"
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors"
+                className="shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3 text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
                 data-testid="toolbar-export-csv-btn"
               >
                 <Download className="w-3.5 h-3.5 text-slate-500" />
@@ -1339,7 +1421,7 @@ export default function InternalTasksDashboard() {
               <button
                 type="button"
                 onClick={handleCheckReminders}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100 transition-all shadow-sm"
+                className="shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3 text-xs font-semibold rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100 transition-all shadow-sm cursor-pointer"
                 title="Evaluate deadline triggers and dispatch overdue reminders"
                 data-testid="toolbar-check-reminders-btn"
               >
@@ -1354,7 +1436,7 @@ export default function InternalTasksDashboard() {
                   setSelectedTaskDetails(null);
                   setIsComposeModalOpen(true);
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition-all shadow-sm"
+                className="shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3 text-xs font-semibold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition-all shadow-sm cursor-pointer"
                 title="Dispatch SMS or Email Notification"
               >
                 <Send className="w-3.5 h-3.5" />
@@ -1363,8 +1445,9 @@ export default function InternalTasksDashboard() {
 
               {/* Create Internal Task Button */}
               <button
+                type="button"
                 onClick={handleOpenCreateModal}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm shadow-blue-600/20 transition-all"
+                className="shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm shadow-blue-600/20 transition-all cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Create Internal Task</span>
@@ -1372,15 +1455,17 @@ export default function InternalTasksDashboard() {
 
               {/* Refresh Button */}
               <button
+                type="button"
                 onClick={() => {
                   loadTasks();
                   loadSummary();
                   showToast('Refreshed data.');
                 }}
-                className="p-1.5 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-500 transition-colors"
+                aria-label="Refresh tasks"
+                className="shrink-0 h-8.5 w-8.5 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-500 transition-colors cursor-pointer"
                 title="Refresh"
               >
-                <RefreshCw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
@@ -2213,7 +2298,10 @@ export default function InternalTasksDashboard() {
               />
 
               <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
-                <div className="w-screen max-w-md bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200 text-xs">
+                <div
+                  className="w-screen max-w-md bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200 text-xs"
+                  data-testid="task-details-drawer"
+                >
                   {/* Header */}
                   <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
                     <div>

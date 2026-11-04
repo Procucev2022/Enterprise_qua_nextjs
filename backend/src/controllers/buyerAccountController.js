@@ -764,6 +764,48 @@ async function requestCreditApproval(req, res, next) {
 
     logger.info(`Credit approval request created: ${task.task_number} (${amount} credits for ${buyer.organizationName}) assigned to ${approverName}`, { buyerId: id, amount, approverName }, 'BUYER_ACCOUNT_CONTROLLER');
 
+    // Link to Approvals section
+    const approvalQueries = require('../db/approvalQueries');
+    await approvalQueries.createApproval(
+      {
+        module: 'Buyer Credit Addition',
+        request_type: 'Buyer Credit Addition',
+        project: buyer.organizationName,
+        applicant_name: buyer.organizationName,
+        applicant_email: buyer.corporateEmail || '',
+        value_impact: `${amount} RFQ Credits (${buyer.organizationName})`,
+        amount,
+        quantity: amount,
+        available_balance: buyer.creditBalance ?? 5,
+        maker_name: initiatorName,
+        maker_role: 'Category Manager',
+        assigned_approver: approverName,
+        status: 'Pending',
+        details: reason || `Requested credit top-up for ${buyer.organizationName}`,
+        internal_task_id: task.id,
+        buyer_id: buyer.id,
+        history: [
+          {
+            action: 'SUBMITTED',
+            actor_name: initiatorName,
+            actor_role: 'Category Manager',
+            timestamp: new Date().toISOString(),
+            remarks: reason || `Submitted for credit approval by ${approverName}.`,
+          },
+        ],
+        raw: {
+          internal_task_id: task.id,
+          buyer_id: buyer.id,
+          amount,
+          quantity: amount,
+          available_balance: buyer.creditBalance ?? 5,
+          assigned_approver: approverName,
+          request_type: 'Buyer Credit Addition',
+        },
+      },
+      req.user || { name: initiatorName, role: 'category_manager' }
+    );
+
     return res.status(201).json({
       success: true,
       message: `Credit request submitted for approval by ${approverName}. Status: Pending Approval.`,

@@ -195,6 +195,336 @@ describe('Approvals API & Controller', () => {
     await approvalQueries.processApprovalAction('appr-cred-101', { action: '' });
     await approvalQueries.processApprovalAction('appr-cred-101', { action: 'APPROVE' }, { email: 'only@x.com' });
     await approvalQueries.processApprovalAction('appr-cred-101', { action: 'APPROVE' }, {});
-  });
-});
 
+    // 8. test limit and offset numeric branches in controller
+    await approvalController.getApprovals({ query: { limit: '10', offset: '5' } }, resMock);
+    expect(jsonResult.limit).toBe(10);
+    expect(jsonResult.offset).toBe(5);
+  });
+
+  test('approvalQueries with pool.hasStorage() covers SQL query, hydration, createApproval, and internal task linkage', async () => {
+    const internalTaskQueries = require('../src/db/internalTaskQueries');
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+    // 1. getApprovals with SQL storage
+    const fakeRow = {
+      id: 'appr-db-1',
+      request_number: 'REQ-DB-001',
+      module: 'Buyer Credit Addition',
+      project: 'Project Alpha',
+      applicant_name: 'Alpha Buyer',
+      applicant_email: 'buyer@alpha.com',
+      value_impact: '₹1,00,000 (50 Credits)',
+      maker_name: 'Manager Bob',
+      maker_role: 'Category Specialist',
+      approver_name: 'Srinu Sir',
+      status: 'Pending',
+      details: 'Quarterly top up',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      raw: JSON.stringify({
+        request_type: 'Buyer Credit Addition',
+        amount: 100000,
+        quantity: 50,
+        available_balance: 10,
+        assigned_approver: 'Srinu Sir',
+        internal_task_id: 'tsk-credit-1',
+        buyer_id: 'b-alpha-1',
+        history: [{ action: 'SUBMITTED', timestamp: new Date().toISOString() }],
+        attachments: [{ name: 'file.pdf', url: '/f.pdf' }],
+      }),
+    };
+
+    const querySpy = jest.spyOn(pool, 'query');
+
+    // Total > 0 with results
+    querySpy
+      .mockResolvedValueOnce({ rows: [{ total: '1' }] })
+      .mockResolvedValueOnce({ rows: [fakeRow] });
+
+    const sqlApprovals = await approvalQueries.getApprovals({
+      module: 'Buyer Credit Addition',
+      status: 'Pending',
+      project: 'Project Alpha',
+      assigned_approver: 'Srinu Sir',
+      search: 'Alpha',
+      sortBy: 'module',
+      sortOrder: 'asc',
+      limit: 10,
+      offset: 0,
+    });
+    expect(sqlApprovals.total).toBe(1);
+    expect(sqlApprovals.rows[0].request_number).toBe('REQ-DB-001');
+    expect(sqlApprovals.rows[0].amount).toBe(100000);
+
+    // Total == 0 branch
+    querySpy.mockResolvedValueOnce({ rows: [{ total: '0' }] });
+    const emptySql = await approvalQueries.getApprovals({ module: 'Packages' });
+    expect(emptySql.total).toBe(0);
+
+    // Exception branch in getApprovals (falls back to memory)
+    querySpy.mockRejectedValueOnce(new Error('SQL failure in getApprovals'));
+    const fallbackSql = await approvalQueries.getApprovals();
+    expect(fallbackSql.rows.length).toBeGreaterThanOrEqual(1);
+
+    // 2. createApproval with storage
+    querySpy.mockResolvedValueOnce({ rowCount: 1 });
+    const createdItem = await approvalQueries.createApproval({
+      request_type: 'Buyer Credit Addition',
+      project: 'Tata Steel',
+      applicant_name: 'Tata Steel',
+      amount: 50000,
+      quantity: 20,
+      internal_task_id: 'task-link-99',
+      buyer_id: 'buyer-99',
+      attachments: [{ name: 'doc.pdf' }],
+      history: [{ action: 'SUBMITTED' }],
+    }, { name: 'Maker', role: 'Executive' });
+    expect(createdItem.id).toBeDefined();
+
+    // createApproval with SQL error (non-fatal)
+    querySpy.mockRejectedValueOnce(new Error('Insert table missing'));
+    const safeCreated = await approvalQueries.createApproval({
+      applicant_name: 'Safe',
+    });
+    expect(safeCreated.id).toBeDefined();
+
+    // 3. processApprovalAction with database record and internal task linkage
+    jest.spyOn(internalTaskQueries, 'approveCreditTask').mockResolvedValue({ success: true });
+    jest.spyOn(internalTaskQueries, 'rejectCreditTask').mockResolvedValue({ success: true });
+
+    // Database record found via pool.query (APPROVE with internal task)
+    querySpy
+      .mockResolvedValueOnce({ rows: [fakeRow] }) // SELECT
+      .mockResolvedValueOnce({ rowCount: 1 });   // UPDATE
+    const approvedDb = await approvalQueries.processApprovalAction('appr-db-1', {
+      action: 'APPROVE',
+      remarks: 'Approved in DB',
+    }, { name: 'Director' });
+    expect(approvedDb.status).toBe('Approved');
+    expect(internalTaskQueries.approveCreditTask).toHaveBeenCalledWith(
+      'tsk-credit-1',
+      expect.objectContaining({ name: 'Director' }),
+      'Approved in DB'
+    );
+
+    // Database record found (REJECT with internal task)
+    querySpy
+      .mockResolvedValueOnce({ rows: [fakeRow] }) // SELECT
+      .mockResolvedValueOnce({ rowCount: 1 });   // UPDATE
+    const rejectedDb = await approvalQueries.processApprovalAction('appr-db-1', {
+      action: 'REJECT',
+      remarks: 'Rejected in DB',
+    }, { name: 'Director' });
+    expect(rejectedDb.status).toBe('Rejected');
+    expect(internalTaskQueries.rejectCreditTask).toHaveBeenCalledWith(
+      'tsk-credit-1',
+      expect.objectContaining({ name: 'Director' }),
+      'Rejected in DB'
+    );
+
+    // Database record with internal task error (non-fatal)
+    jest.spyOn(internalTaskQueries, 'approveCreditTask').mockRejectedValueOnce(new Error('Internal task sync err'));
+    querySpy
+      .mockResolvedValueOnce({ rows: [fakeRow] }) // SELECT
+      .mockResolvedValueOnce({ rowCount: 1 });   // UPDATE
+    const safeSync = await approvalQueries.processApprovalAction('appr-db-1', {
+      action: 'APPROVE',
+    }, { name: 'Director' });
+    expect(safeSync.status).toBe('Approved');
+
+    // Database record not found in DB (falls back to memory)
+    querySpy.mockResolvedValueOnce({ rows: [] }); // SELECT empty
+    const memItem = await approvalQueries.processApprovalAction('appr-cred-101', {
+      action: 'APPROVE',
+    });
+    expect(memItem).toBeDefined();
+    await approvalQueries.processApprovalAction('appr-cred-101', { action: '' });
+    await approvalQueries.processApprovalAction('appr-cred-101', { action: 'APPROVE' }, { email: 'only@x.com' });
+    await approvalQueries.processApprovalAction('appr-cred-101', { action: 'APPROVE' }, {});
+  });
+
+  test('approvalQueries exhaustive branch coverage for memory filtering, hydration, and actions', async () => {
+    await approvalQueries.createApproval({
+      request_number: 'REQ-FILTER-1',
+      applicant_name: 'Filter Applicant One',
+      applicant_email: 'filter1@test.com',
+      maker_name: 'Maker Alpha',
+      project: 'Filter Project',
+      value_impact: '999 INR',
+      details: 'Special search token unique_detail_token',
+      assigned_approver: 'Specific Approver X',
+      approver_name: 'Specific Approver X',
+      status: 'Pending',
+    });
+
+    await approvalQueries.createApproval({
+      request_number: 'REQ-FILTER-2',
+      applicant_name: 'Filter Applicant Two',
+      applicant_email: 'filter2@test.com',
+      maker_name: 'Maker Beta',
+      project: 'Filter Project',
+      value_impact: '888 INR',
+      details: 'Other detail',
+      assigned_approver: 'Other Person',
+      approver_name: 'Specific Approver X',
+      status: 'Approved',
+    });
+
+    const approverRes = await approvalQueries.getApprovals({ assigned_approver: 'Specific Approver X' });
+    expect(approverRes.rows.length).toBeGreaterThanOrEqual(1);
+
+    const searchNumber = await approvalQueries.getApprovals({ search: 'REQ-FILTER-1' });
+    expect(searchNumber.rows.length).toBeGreaterThanOrEqual(1);
+    const searchEmail = await approvalQueries.getApprovals({ search: 'filter1@test.com' });
+    expect(searchEmail.rows.length).toBeGreaterThanOrEqual(1);
+    const searchMaker = await approvalQueries.getApprovals({ search: 'Maker Alpha' });
+    expect(searchMaker.rows.length).toBeGreaterThanOrEqual(1);
+    const searchProject = await approvalQueries.getApprovals({ search: 'Filter Project' });
+    expect(searchProject.rows.length).toBeGreaterThanOrEqual(1);
+    const searchImpact = await approvalQueries.getApprovals({ search: '999 INR' });
+    expect(searchImpact.rows.length).toBeGreaterThanOrEqual(1);
+    const searchApprover = await approvalQueries.getApprovals({ search: 'Specific Approver X' });
+    expect(searchApprover.rows.length).toBeGreaterThanOrEqual(1);
+    const searchDetail = await approvalQueries.getApprovals({ search: 'unique_detail_token' });
+    expect(searchDetail.rows.length).toBeGreaterThanOrEqual(1);
+
+    const sortEqualRes = await approvalQueries.getApprovals({
+      project: 'Filter Project',
+      sortBy: 'project',
+      sortOrder: 'asc',
+    });
+    expect(sortEqualRes.rows.length).toBeGreaterThanOrEqual(2);
+
+    const sortDescRes = await approvalQueries.getApprovals({
+      sortBy: 'value_impact',
+      sortOrder: 'desc',
+    });
+    expect(sortDescRes.rows.length).toBeGreaterThanOrEqual(1);
+
+    const sortAscRes = await approvalQueries.getApprovals({
+      sortBy: 'value_impact',
+      sortOrder: 'asc',
+    });
+    expect(sortAscRes.rows.length).toBeGreaterThanOrEqual(1);
+
+    const allFiltersRes = await approvalQueries.getApprovals({
+      module: 'all',
+      project: 'all',
+      status: 'all',
+    });
+    expect(allFiltersRes.rows.length).toBeGreaterThanOrEqual(1);
+
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+    const notFoundAction = await approvalQueries.processApprovalAction('totally-missing-id', { action: 'APPROVE' });
+    expect(notFoundAction).toBeNull();
+
+    const nonCredit = await approvalQueries.createApproval({
+      module: 'General Hardware',
+      request_type: 'General Hardware',
+      project: 'Hardware',
+      internal_task_id: null,
+      buyer_id: null,
+    });
+    const processedNonCredit = await approvalQueries.processApprovalAction(nonCredit.id, {
+      action: 'APPROVE',
+      remarks: 'Standard hardware signoff',
+    });
+    expect(processedNonCredit.status).toBe('Approved');
+
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Update failed'));
+    const safeErrorAction = await approvalQueries.processApprovalAction(nonCredit.id, {
+      action: 'REJECT',
+      remarks: 'Rejected hardware signoff',
+    });
+    expect(safeErrorAction.status).toBe('Rejected');
+
+    // Database getSummary branch coverage
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(pool, 'query').mockResolvedValueOnce({
+      rows: [{ total: '10', pending: '4', approved: '5', rejected: '1' }],
+    });
+    const dbSummary = await approvalQueries.getApprovalSummary();
+    expect(dbSummary.total).toBe(10);
+    expect(dbSummary.pending).toBe(4);
+
+    jest.spyOn(pool, 'query').mockResolvedValueOnce({ rows: [] });
+    const emptySummary = await approvalQueries.getApprovalSummary();
+    expect(emptySummary.total).toBe(0);
+
+    jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Summary error'));
+    const fallbackSummary = await approvalQueries.getApprovalSummary();
+    expect(fallbackSummary.total).toBeGreaterThanOrEqual(1);
+
+    // Database getApprovals with minimal row hydration
+    const minimalRow = {
+      id: 'appr-min-1',
+      request_number: null,
+      module: null,
+      project: null,
+      applicant_name: null,
+      applicant_email: null,
+      value_impact: null,
+      maker_name: null,
+      maker_role: null,
+      status: null,
+      details: null,
+      approver_name: null,
+      approver_remarks: null,
+      created_at: null,
+      updated_at: null,
+      raw: '{}',
+    };
+    const minimalRowStringRaw = {
+      id: 'appr-min-2',
+      raw: '{"amount": 100}',
+    };
+    const minimalRowObjectRaw = {
+      id: 'appr-min-3',
+      raw: { amount: 200 },
+    };
+
+    jest.spyOn(pool, 'query')
+      .mockResolvedValueOnce({ rows: [{ total: '3' }] })
+      .mockResolvedValueOnce({ rows: [minimalRow, minimalRowStringRaw, minimalRowObjectRaw] });
+
+    const dbMinimal = await approvalQueries.getApprovals({
+      status: 'pending',
+      project: 'General',
+      assigned_approver: 'Approver',
+      search: 'term',
+      sortBy: 'request_number',
+      sortOrder: 'desc',
+    });
+    expect(dbMinimal.rows.length).toBe(3);
+    expect(dbMinimal.rows[0].module).toBe('Buyer Credit Addition');
+    expect(dbMinimal.rows[0].status).toBe('Pending');
+
+    // Credit addition without internal task id and with null history
+    const creditNoTask = await approvalQueries.createApproval({
+      module: 'Buyer Credit Addition',
+      internal_task_id: null,
+      history: null,
+    });
+    creditNoTask.history = null;
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+    const approvedNoTask = await approvalQueries.processApprovalAction(creditNoTask.id, {
+      action: 'APPROVE',
+    });
+    expect(approvedNoTask.status).toBe('Approved');
+    expect(approvedNoTask.history.length).toBe(1);
+    expect(approvalQueries.hydrateApprovalRow(null)).toBeNull();
+    const h1 = approvalQueries.hydrateApprovalRow({ id: 'h1' });
+    expect(h1.status).toBe('Pending');
+    expect(h1.maker_name).toBe('Category Manager');
+    const h2 = approvalQueries.hydrateApprovalRow({ id: 'h2', raw: '{"request_type": "Custom Type", "amount": 42}' });
+    expect(h2.request_type).toBe('Custom Type');
+    expect(h2.amount).toBe(42);
+    const h3 = approvalQueries.hydrateApprovalRow({ id: 'h3', raw: 'invalid-json' });
+    expect(h3.id).toBe('h3');
+
+
+  });
+
+});

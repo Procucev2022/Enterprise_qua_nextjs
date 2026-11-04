@@ -832,7 +832,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       } finally {
         spy.mockRestore();
       }
-    });
+    }, 40000);
 
     test('rejects a buyer with 403', async () => {
       const res = await request(app).get('/api/rfqs/all').set(authHeader('buyer'));

@@ -1063,6 +1063,23 @@ const VALIDATION_SCHEMAS = {
     },
   },
 
+  sendDailyRfqReport: {
+    targetDate: {
+      type: 'string',
+      required: false,
+      pattern: /^\d{4}-\d{2}-\d{2}$/,
+      message: 'targetDate must be a valid date in YYYY-MM-DD format if provided.',
+    },
+    recipients: {
+      type: 'array',
+      required: false,
+      message: 'recipients must be an array of email strings.',
+    },
+    dryRun: {
+      type: 'boolean',
+      required: false,
+    },
+  },
 };
 
 

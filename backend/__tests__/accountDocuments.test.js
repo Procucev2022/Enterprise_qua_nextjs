@@ -7,6 +7,7 @@ const accountDocumentQueries = require('../src/db/accountDocumentQueries');
 const accountDocumentController = require('../src/controllers/accountDocumentController');
 
 describe('Account Documents & Credit Workflows API', () => {
+  afterEach(() => { jest.restoreAllMocks(); });
   let mockBuyer;
   let mockVendor;
   let createdBuyerDocId;
@@ -500,6 +501,391 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.body.task.approval_status).toBe('PENDING');
       expect(res.body.task.assigned_to_name).toBe('Sudheer Sir');
       expect(res.body.task.credit_quantity).toBe(15);
+    });
+  });
+
+  describe('Seller Quote Credit Approval Workflow API', () => {
+    it('returns 401 when unauthenticated', async () => {
+      const res = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .send({ amount: 5, approverName: 'Srinu Sir', initiatorName: 'Govardhan' });
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 404 when seller is not found', async () => {
+      const res = await request(app)
+        .post('/api/vendors/non-existent-seller-id/request-credit-approval')
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({ amount: 5, approverName: 'Srinu Sir', initiatorName: 'Govardhan' });
+      expect(res.status).toBe(404);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('validates approverName must be Srinu Sir or Sudheer Sir', async () => {
+      const res = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 5,
+          reason: 'Authorized quota increase',
+          approverName: 'Invalid Approver',
+          initiatorName: 'Govardhan',
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('submits seller quote credit request with Pending Approval status and creates internal task and approval record', async () => {
+      const res = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 5,
+          reason: 'High priority customer RFP quote top-up',
+          approverName: 'Srinu Sir',
+          initiatorName: 'Govardhan',
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.task).toBeDefined();
+      expect(res.body.task.status).toBe('Pending Approval');
+      expect(res.body.task.approval_status).toBe('PENDING');
+      expect(res.body.task.assigned_to_name).toBe('Srinu Sir');
+      expect(res.body.task.credit_quantity).toBe(5);
+    });
+
+    it('handles unexpected exceptions and invokes next(err)', async () => {
+      const { requestCreditApproval } = require('../src/controllers/vendorDossierExtensions');
+      const req = {
+        user: { role: 'category_manager' },
+        params: { id: mockVendor.id },
+        body: null,
+      };
+      const next = jest.fn();
+      await requestCreditApproval(req, {}, next);
+      expect(next).toHaveBeenCalled();
+    });
+  });
+
+  
+  describe('Vendor Dossier Extensions API (Credits, Communications, Payment History)', () => {
+    const otherVendorToken = authService.generateSessionToken({ id: 'v-other-99', email: 'other@vendor.com', role: 'vendor' });
+    const ownVendorToken = authService.generateSessionToken({ id: 'v-own-doc', email: 'vendor_test_doc@enterprise.com', role: 'vendor' });
+
+    it('GET /api/vendors/:id/credit-history handles auth, not found, and success', async () => {
+      // 401 unauth
+      const unauth = await request(app).get(`/api/vendors/${mockVendor.id}/credit-history`);
+      expect(unauth.status).toBe(401);
+
+      // 404 not found
+      const notFound = await request(app)
+        .get('/api/vendors/non-existent-vendor-xyz/credit-history')
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(notFound.status).toBe(404);
+
+      // 403 forbidden other vendor
+      const forbidden = await request(app)
+        .get(`/api/vendors/${mockVendor.id}/credit-history`)
+        .set('Authorization', `Bearer ${otherVendorToken}`);
+      expect(forbidden.status).toBe(403);
+
+      // 200 success
+      const ok = await request(app)
+        .get(`/api/vendors/${mockVendor.id}/credit-history`)
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(ok.status).toBe(200);
+      expect(ok.body.success).toBe(true);
+      expect(ok.body.summary).toBeDefined();
+    });
+
+    it('GET /api/vendors/:id/communications handles not found and success', async () => {
+      const notFound = await request(app)
+        .get('/api/vendors/non-existent-vendor-xyz/communications')
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(notFound.status).toBe(404);
+
+      const ok = await request(app)
+        .get(`/api/vendors/${mockVendor.id}/communications`)
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(ok.status).toBe(200);
+      expect(ok.body.success).toBe(true);
+      expect(Array.isArray(ok.body.data)).toBe(true);
+    });
+
+    it('POST /api/vendors/:id/communications records email, SMS, and call communications', async () => {
+      const notFound = await request(app)
+        .post('/api/vendors/non-existent-vendor-xyz/communications')
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({ channel: 'EMAIL', message: 'Hello' });
+      expect(notFound.status).toBe(404);
+
+      // EMAIL
+      const emailRes = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/communications`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          channel: 'EMAIL',
+          subject: 'Documentation Update',
+          message: 'Please update your GST certificate.',
+          recipient: 'vendor@test.com',
+        });
+      expect(emailRes.status).toBe(201);
+      expect(emailRes.body.success).toBe(true);
+
+      // SMS
+      const smsRes = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/communications`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          channel: 'SMS',
+          message: 'Urgent RFQ pending response.',
+          recipient: '9876543210',
+        });
+      expect(smsRes.status).toBe(201);
+
+      // CALL with follow-up
+      const callRes = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/communications`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          channel: 'CALL',
+          callOutcome: 'CONNECTED_POSITIVE',
+          duration: '5m 30s',
+          notes: 'Discussion about capacity',
+          nextFollowupDate: '2026-12-01T10:00:00.000Z',
+          followupPriority: 'High',
+          followupNotes: 'Follow up on quote submission',
+        });
+      expect(callRes.status).toBe(201);
+      expect(callRes.body.followupTask).toBeDefined();
+    });
+
+    it('GET /api/vendors/:id/payment-history handles not found and success', async () => {
+      const notFound = await request(app)
+        .get('/api/vendors/non-existent-vendor-xyz/payment-history')
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(notFound.status).toBe(404);
+
+      const ok = await request(app)
+        .get(`/api/vendors/${mockVendor.id}/payment-history`)
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(ok.status).toBe(200);
+      expect(ok.body.success).toBe(true);
+      expect(Array.isArray(ok.body.payments)).toBe(true);
+    });
+
+    it('vendorDossierExtensions branches: helper checks, vendor resolution, transactions, plans', async () => {
+      const vendorDossierExtensions = require('../src/controllers/vendorDossierExtensions');
+      const domainQueries = require('../src/db/domainQueries');
+      const zohoReconciliationService = require('../src/services/zohoReconciliationService');
+
+      // assertCategoryManagerOrVendor role variations
+      const resMock = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      expect(vendorDossierExtensions.assertCategoryManagerOrVendor({ user: null }, resMock)).toBe(false);
+      expect(vendorDossierExtensions.assertCategoryManagerOrVendor({ user: { role: 'admin' } }, resMock)).toBe(true);
+      expect(vendorDossierExtensions.assertCategoryManagerOrVendor({ user: { role: 'vendor', vendorId: 'v-1' } }, resMock, { id: 'v-1' })).toBe(true);
+      expect(vendorDossierExtensions.assertCategoryManagerOrVendor({ user: { role: 'vendor', sub: 'v-2' } }, resMock, 'v-2')).toBe(true);
+      expect(vendorDossierExtensions.assertCategoryManagerOrVendor({ user: { role: 'vendor', email: 'v@test.com' } }, resMock, 'v@test.com')).toBe(true);
+      expect(vendorDossierExtensions.assertCategoryManagerOrVendor({ user: { role: 'vendor', email: 'v@test.com' } }, resMock, null)).toBe(true);
+      expect(vendorDossierExtensions.assertCategoryManagerOrVendor({ user: { role: 'buyer' } }, resMock)).toBe(false);
+
+      // resolveVendor with user email fallback
+      const vEmail = await vendorDossierExtensions.resolveVendor('missing-id', { role: 'vendor', email: mockVendor.email });
+      expect(vEmail).toBeDefined();
+
+      // getCreditHistory with mock transactions covering all types (PURCHASE, ADJUSTMENT, UNLOCK)
+      jest.spyOn(domainQueries, 'getVendorCreditTransactionsFromDB').mockResolvedValueOnce([
+        { transaction_type: 'INITIAL_ALLOCATION', amount: 5, balance_after: 5 },
+        { transaction_type: 'PURCHASE_PLAN', amount: 10, balance_after: 15 },
+        { transaction_type: 'REFUND_ADJUSTMENT', amount: 2, balance_after: 17 },
+        { transaction_type: 'RFQ_UNLOCK', amount: -1, balance_after: 16 },
+      ]);
+      const resCredits = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.getCreditHistory({ params: { id: mockVendor.id }, user: { role: 'category_manager' } }, resCredits, jest.fn());
+      expect(resCredits.json).toHaveBeenCalled();
+
+      // getCreditHistory with unlockedRfqIds
+      jest.spyOn(storeService, 'getVendorRfqCredits').mockReturnValueOnce({
+        freeCreditsAllocated: 5,
+        unlockedRfqIds: ['rfq-alpha-1'],
+      });
+      jest.spyOn(domainQueries, 'getVendorCreditTransactionsFromDB')
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ transaction_type: 'INITIAL_ALLOCATION', amount: 5, balance_after: 5 }]);
+      await vendorDossierExtensions.getCreditHistory({ params: { id: mockVendor.id }, user: { role: 'category_manager' } }, resCredits, jest.fn());
+
+      // getVendorPaymentHistory with select and connect plans, and payment links
+      const vSelect = storeService.addVendor({ name: 'Select Vendor', subscriptionPlan: 'Preferred Select' });
+      jest.spyOn(storeService, 'getPaymentLinksForVendor').mockResolvedValueOnce([
+        { id: 'pl-1', planId: 'select-annual', amount: 9999, currency: 'INR', status: 'PAID' }
+      ]);
+      jest.spyOn(zohoReconciliationService, 'reconcilePendingLinks').mockResolvedValueOnce(1);
+      const resPay = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.getVendorPaymentHistory({ params: { id: vSelect.id }, user: { role: 'category_manager' } }, resPay, jest.fn());
+      expect(resPay.json).toHaveBeenCalled();
+
+      // Connect plan
+      const vConnect = storeService.addVendor({ name: 'Connect Vendor', subscriptionPlan: 'Supplier Connect' });
+      await vendorDossierExtensions.getVendorPaymentHistory({ params: { id: vConnect.id }, user: { role: 'category_manager' } }, resPay, jest.fn());
+
+      // recordVendorCommunication external SMS & Email mock warning branch
+      const resComm = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.recordVendorCommunication({
+        params: { id: mockVendor.id },
+        user: { role: 'category_manager', email: 'cm@test.com' },
+        body: {
+          channel: 'SMS',
+          recipient: '12345', // non 10-digit
+          message: 'Fallback SMS',
+        }
+      }, resComm, jest.fn());
+    });
+
+    
+    it('vendorDossierExtensions deep branch coverage: RFQ comms, payment statuses, task/mail failures', async () => {
+      const vendorDossierExtensions = require('../src/controllers/vendorDossierExtensions');
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      const mailerService = require('../src/services/mailerService');
+      const smsService = require('../src/services/smsService');
+
+      // 1. getVendorCommunications with assigned RFQ
+      jest.spyOn(storeService, 'getRFQs').mockReturnValueOnce([
+        {
+          id: 'rfq-comm-1',
+          rfqNumber: 'RFQ-COMM-101',
+          title: 'Steel Pipe Order',
+          sourcingMode: 'Mode 1',
+          assignedVendors: [{ id: mockVendor.id }],
+          quotes: [{ vendorId: mockVendor.id }],
+        },
+      ]);
+      const resComm = await request(app)
+        .get(`/api/vendors/${mockVendor.id}/communications`)
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(resComm.status).toBe(200);
+      expect(resComm.body.data.some((c) => c.subject.includes('RFQ-COMM-101'))).toBe(true);
+
+      // 2. getVendorPaymentHistory with statuses (FAILED, PENDING, REFUNDED)
+      jest.spyOn(storeService, 'getPaymentLinksForVendor').mockResolvedValueOnce([
+        { id: 'pl-fail', status: 'FAILED', amount: 100 },
+        { id: 'pl-pend', status: 'PENDING', amount: 200 },
+        { id: 'pl-ref', status: 'REFUNDED', amount: 50 },
+      ]);
+      const resPayStatuses = await request(app)
+        .get(`/api/vendors/${mockVendor.id}/payment-history`)
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(resPayStatuses.status).toBe(200);
+      expect(resPayStatuses.body.summary.failedPayments).toBe(1);
+      expect(resPayStatuses.body.summary.pendingPayments).toBe(1);
+      expect(resPayStatuses.body.summary.totalRefundedAmount).toBe(50);
+
+      // 3. mailerService and smsService async rejection paths
+      jest.spyOn(mailerService, 'deliver').mockRejectedValueOnce(new Error('Async mailer failure'));
+      jest.spyOn(smsService, 'sendActionCenterSms').mockRejectedValueOnce(new Error('Async SMS failure'));
+      const dummyRes = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.recordVendorCommunication({
+        params: { id: mockVendor.id },
+        user: { role: 'category_manager', email: 'cm@test.com' },
+        body: { channel: 'EMAIL', recipient: 'vendor@enterprise.com', message: 'Test email' },
+      }, dummyRes, jest.fn());
+
+      await vendorDossierExtensions.recordVendorCommunication({
+        params: { id: mockVendor.id },
+        user: { role: 'category_manager' },
+        body: { channel: 'SMS', recipient: '9876543210', message: 'Test SMS' },
+      }, dummyRes, jest.fn());
+
+      // 4. internalTaskQueries failure catches in recordVendorCommunication
+      jest.spyOn(internalTaskQueries, 'createInternalTask')
+        .mockRejectedValueOnce(new Error('Failed task 1'))
+        .mockRejectedValueOnce(new Error('Failed task 2'));
+
+      await vendorDossierExtensions.recordVendorCommunication({
+        params: { id: mockVendor.id },
+        user: { role: 'category_manager' },
+        body: { channel: 'CALL', nextFollowupDate: '2026-12-01T00:00:00Z' },
+      }, dummyRes, jest.fn());
+    });
+
+    
+    it('vendorDossierExtensions remaining branches: UPGRADE tx, freeCreditsUsed fallback, db fallback, mailer/sms try/catch', async () => {
+      const vendorDossierExtensions = require('../src/controllers/vendorDossierExtensions');
+      const domainQueries = require('../src/db/domainQueries');
+
+      // resolveVendor with DB fallback for user email
+      const spyGetVendor = jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+      const spyDbFallback = jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(mockVendor);
+      const vFound = await vendorDossierExtensions.resolveVendor('missing-id', { role: 'vendor', email: 'test@email.com' });
+      expect(vFound).toBeDefined();
+      spyGetVendor.mockRestore();
+      spyDbFallback.mockRestore();
+
+      // getCreditHistory with UPGRADE transaction and freeCreditsUsed > 0 fallback
+      const spyCredits = jest.spyOn(storeService, 'getVendorRfqCredits').mockReturnValue({
+        freeCreditsAllocated: 10,
+        freeCreditsUsed: 3,
+        freeCreditsRemaining: 7,
+      });
+      jest.spyOn(storeService, 'getVendorRfqCredits').mockReturnValue({
+        freeCreditsAllocated: 10,
+        freeCreditsUsed: 3,
+        freeCreditsRemaining: 7,
+      });
+      jest.spyOn(domainQueries, 'getVendorCreditTransactionsFromDB').mockResolvedValue([
+        { transaction_type: 'SUBSCRIPTION_UPGRADE', amount: 5, balance_after: 15 },
+      ]);
+      const resCred = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.getCreditHistory({ params: { id: mockVendor.id }, user: { role: 'category_manager' } }, resCred, jest.fn());
+      expect(resCred.json).toHaveBeenCalled();
+
+      // recordVendorCommunication with mailer throw synchronously in deliver
+      const mailerService = require('../src/services/mailerService');
+      jest.spyOn(mailerService, 'deliver').mockImplementationOnce(() => {
+        throw new Error('Sync deliver crash');
+      });
+      const smsService = require('../src/services/smsService');
+      jest.spyOn(smsService, 'sendActionCenterSms').mockImplementationOnce(() => {
+        throw new Error('Sync SMS crash');
+      });
+      const dummyRes = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.recordVendorCommunication({
+        params: { id: mockVendor.id },
+        user: { role: 'category_manager', email: 'cm@procucev.com' },
+        body: { channel: 'EMAIL', recipient: 'vendor@enterprise.com', message: 'Test crash' },
+      }, dummyRes, jest.fn());
+
+      await vendorDossierExtensions.recordVendorCommunication({
+        params: { id: mockVendor.id },
+        user: { role: 'category_manager' },
+        body: { channel: 'SMS', recipient: '9876543210', message: 'Test crash' },
+      }, dummyRes, jest.fn());
+    });
+
+    it('vendorDossierExtensions error handling branches invoke next(err)', async () => {
+      const vendorDossierExtensions = require('../src/controllers/vendorDossierExtensions');
+      const errReq = {
+        params: { id: mockVendor.id },
+        user: { role: 'category_manager' },
+        get: () => null,
+      };
+
+      const next1 = jest.fn();
+      await vendorDossierExtensions.getCreditHistory(null, {}, next1);
+      expect(next1).toHaveBeenCalled();
+
+      const next2 = jest.fn();
+      await vendorDossierExtensions.getVendorCommunications(null, {}, next2);
+      expect(next2).toHaveBeenCalled();
+
+      const next3 = jest.fn();
+      await vendorDossierExtensions.recordVendorCommunication(null, {}, next3);
+      expect(next3).toHaveBeenCalled();
+
+      const next4 = jest.fn();
+      await vendorDossierExtensions.getVendorPaymentHistory(null, {}, next4);
+      expect(next4).toHaveBeenCalled();
     });
   });
 

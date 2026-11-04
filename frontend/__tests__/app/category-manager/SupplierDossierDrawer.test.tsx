@@ -1,5 +1,6 @@
 jest.mock('@/lib/accountDocumentsClient', () => ({
   addSellerQuoteCredits: jest.fn().mockResolvedValue({ success: true, message: 'Added credits' }),
+  requestSellerQuoteCreditApproval: jest.fn().mockResolvedValue({ success: true, message: 'Request submitted' }),
   fetchAccountDocuments: jest.fn().mockResolvedValue([]),
   uploadAccountDocument: jest.fn().mockResolvedValue({ success: true }),
   deleteAccountDocument: jest.fn().mockResolvedValue({ success: true }),
@@ -1615,11 +1616,11 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     expect(onTabChangeMock).toHaveBeenCalledWith('documents');
     unmount();
 
-    // Reopen and test Add Quote Credits modal success with custom message and reason
-    const { addSellerQuoteCredits } = require('@/lib/accountDocumentsClient');
-    (addSellerQuoteCredits as jest.Mock).mockResolvedValueOnce({
+    // Reopen and test Request Seller Quote Credit Approval modal
+    const { requestSellerQuoteCreditApproval } = require('@/lib/accountDocumentsClient');
+    (requestSellerQuoteCreditApproval as jest.Mock).mockResolvedValueOnce({
       success: true,
-      message: 'Successfully allocated 3 quote credits to seller',
+      message: 'Quote credit request submitted for approval to Srinu Sir',
     });
 
     const { unmount: unmount2 } = render(
@@ -1632,35 +1633,35 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
 
     const addCreditsHeaderBtn = screen.getByTitle('Add Quote Credits (1-5)');
     fireEvent.click(addCreditsHeaderBtn);
-    expect(screen.getByText('Add Seller Quote Credits')).toBeInTheDocument();
+    expect(screen.getByText('Request Seller Quote Credit Approval')).toBeInTheDocument();
 
-    // Select +3 credits and enter reason
-    fireEvent.click(screen.getByRole('button', { name: '+3' }));
+    // Enter requested credits amount and reason
+    const creditInputs = screen.getAllByRole('spinbutton');
+    if (creditInputs.length > 0) {
+      fireEvent.change(creditInputs[0], { target: { value: '3' } });
+      fireEvent.change(creditInputs[0], { target: { value: 'invalid' } });
+      fireEvent.change(creditInputs[0], { target: { value: '3' } });
+    }
 
-    // Click other credit amount buttons to exercise all button branches
-    fireEvent.click(screen.getByRole('button', { name: '+1' }));
-    fireEvent.click(screen.getByRole('button', { name: '+2' }));
-    fireEvent.click(screen.getByRole('button', { name: '+4' }));
-    fireEvent.click(screen.getByRole('button', { name: '+5' }));
-    fireEvent.click(screen.getByRole('button', { name: '+3' }));
-
-    const reasonInput = screen.getByPlaceholderText(/Reason for quote credits/i);
+    const reasonInput = screen.getByPlaceholderText(/Reason for credit addition/i);
     fireEvent.change(reasonInput, { target: { value: 'High priority customer RFP support' } });
 
     // Submit form
-    const submitBtn = screen.getByRole('button', { name: 'Add Quote Credits' });
+    const submitBtn = screen.getByRole('button', { name: 'Submit for Approval' });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(addSellerQuoteCredits).toHaveBeenCalledWith(mockSeller.id, {
+      expect(requestSellerQuoteCreditApproval).toHaveBeenCalledWith(mockSeller.id, {
         amount: 3,
         reason: 'High priority customer RFP support',
+        approverName: expect.any(String),
+        initiatorName: expect.any(String),
       });
     });
     unmount2();
 
     // Test success branch when res.message is empty (hits formatString branch)
-    (addSellerQuoteCredits as jest.Mock).mockResolvedValueOnce({
+    (requestSellerQuoteCreditApproval as jest.Mock).mockResolvedValueOnce({
       success: true,
       message: '',
     });
@@ -1674,14 +1675,14 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     );
 
     fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add Quote Credits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
-      expect(addSellerQuoteCredits).toHaveBeenCalled();
+      expect(requestSellerQuoteCreditApproval).toHaveBeenCalled();
     });
     unmount3();
 
     // Test error branch with res.error
-    (addSellerQuoteCredits as jest.Mock).mockResolvedValueOnce({
+    (requestSellerQuoteCreditApproval as jest.Mock).mockResolvedValueOnce({
       success: false,
       error: 'Quota exhausted for this billing cycle',
     });
@@ -1695,14 +1696,14 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     );
 
     fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add Quote Credits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
-      expect(addSellerQuoteCredits).toHaveBeenCalled();
+      expect(requestSellerQuoteCreditApproval).toHaveBeenCalled();
     });
     unmount4();
 
     // Test rejection/throw branch
-    (addSellerQuoteCredits as jest.Mock).mockRejectedValueOnce(new Error('Network offline'));
+    (requestSellerQuoteCreditApproval as jest.Mock).mockRejectedValueOnce(new Error('Network offline'));
 
     const { unmount: unmount5 } = render(
       <SupplierDossierDrawer
@@ -1713,21 +1714,21 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     );
 
     fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add Quote Credits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
-      expect(addSellerQuoteCredits).toHaveBeenCalled();
+      expect(requestSellerQuoteCreditApproval).toHaveBeenCalled();
     });
 
     // Test closing modal via backdrop click and cancel button
     fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
     const modalDialog = screen.getByRole('dialog');
     fireEvent.click(modalDialog); // clicks backdrop
-    expect(screen.queryByText('Add Seller Quote Credits')).not.toBeInTheDocument();
+    expect(screen.queryByText('Request Seller Quote Credit Approval')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
     const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
     fireEvent.click(cancelBtn);
-    expect(screen.queryByText('Add Seller Quote Credits')).not.toBeInTheDocument();
+    expect(screen.queryByText('Request Seller Quote Credit Approval')).not.toBeInTheDocument();
     unmount5();
   });
 
@@ -1745,9 +1746,9 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
 
     // Open add quote credits and test inner dialog click (does not close modal)
     fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
-    const modalHeading = screen.getByText('Add Seller Quote Credits');
+    const modalHeading = screen.getByText('Request Seller Quote Credit Approval');
     fireEvent.click(modalHeading);
-    expect(screen.getByText('Add Seller Quote Credits')).toBeInTheDocument();
+    expect(screen.getByText('Request Seller Quote Credit Approval')).toBeInTheDocument();
 
     // Close via X button
     const closeButtons = screen.getAllByRole('button');
@@ -1756,7 +1757,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     unmount();
 
     // Test when res.success is false and res.error is absent (hits line 337 fallback)
-    (addSellerQuoteCredits as jest.Mock).mockResolvedValueOnce({
+    const { requestSellerQuoteCreditApproval: reqApprovalMock } = require('@/lib/accountDocumentsClient');
+    (reqApprovalMock as jest.Mock).mockResolvedValueOnce({
       success: false,
     });
     const { unmount: unmountErrFallback } = render(
@@ -1767,9 +1769,9 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
     fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add Quote Credits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
-      expect(addSellerQuoteCredits).toHaveBeenCalled();
+      expect(reqApprovalMock).toHaveBeenCalled();
     });
     unmountErrFallback();
 

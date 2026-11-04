@@ -61,6 +61,8 @@ import {
   getVendorCreditBalance,
   VENDOR_PLAN_RFQ_QUOTA,
   SELLER_QUOTE_CREDITS_ALLOWED,
+  CREDIT_APPROVAL_INITIATORS,
+  CREDIT_APPROVAL_APPROVERS,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
@@ -70,7 +72,7 @@ import {
   recordSupplierCommunication,
   fetchSupplierPaymentHistory,
 } from '@/lib/supplierProfileClient';
-import { addSellerQuoteCredits } from '@/lib/accountDocumentsClient';
+import { addSellerQuoteCredits, requestSellerQuoteCreditApproval } from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
 
 export interface SupplierDossierSeller {
@@ -148,6 +150,9 @@ export default function SupplierDossierDrawer({
   const [docCount, setDocCount] = useState<number>(0);
   const [isAddQuoteCreditsModalOpen, setIsAddQuoteCreditsModalOpen] = useState<boolean>(false);
   const [selectedQuoteCredits, setSelectedQuoteCredits] = useState<number>(1);
+  const [requestedQuoteCredits, setRequestedQuoteCredits] = useState<number>(5);
+  const [quoteCreditInitiator, setQuoteCreditInitiator] = useState<string>(CREDIT_APPROVAL_INITIATORS[0]);
+  const [quoteCreditApprover, setQuoteCreditApprover] = useState<string>(CREDIT_APPROVAL_APPROVERS[0]);
   const [quoteCreditsReason, setQuoteCreditsReason] = useState<string>('');
   const [isSubmittingQuoteCredits, setIsSubmittingQuoteCredits] = useState<boolean>(false);
 
@@ -301,35 +306,31 @@ export default function SupplierDossierDrawer({
 
   const handleAddQuoteCreditsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!SELLER_QUOTE_CREDITS_ALLOWED.includes(selectedQuoteCredits as any)) {
+    const amount = requestedQuoteCredits > 0 ? requestedQuoteCredits : selectedQuoteCredits;
+    if (amount <= 0) {
       showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError, 'error');
       return;
     }
     setIsSubmittingQuoteCredits(true);
     try {
-      const res = await addSellerQuoteCredits(seller.id, {
-        amount: selectedQuoteCredits,
+      const res = await requestSellerQuoteCreditApproval(seller.id, {
+        amount,
         reason: quoteCreditsReason || 'Authorized quote credit top-up',
+        approverName: quoteCreditApprover,
+        initiatorName: quoteCreditInitiator,
       });
       if (res.success) {
         showToast(
           res.message ||
-            formatString(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.toastSuccess, {
-              amount: selectedQuoteCredits,
-            }),
+            formatString(
+              UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.toastSuccess ||
+                'Quote credit request submitted for approval to {approverName}. Status: Pending Approval.',
+              { approverName: quoteCreditApprover }
+            ),
           'success'
         );
-        if (typeof seller.freeQuotationCredits === 'number') {
-          seller.freeQuotationCredits += selectedQuoteCredits;
-        }
-        if (creditSummary) {
-          setCreditSummary({
-            ...creditSummary,
-            remainingFreeCredits: (creditSummary.remainingFreeCredits || 0) + selectedQuoteCredits,
-            currentCreditBalance: (creditSummary.currentCreditBalance || 0) + selectedQuoteCredits,
-          });
-        }
         setIsAddQuoteCreditsModalOpen(false);
+        setRequestedQuoteCredits(5);
         setSelectedQuoteCredits(1);
         setQuoteCreditsReason('');
         loadCreditHistory();
@@ -2318,7 +2319,7 @@ export default function SupplierDossierDrawer({
       )}
 
       {/* =================================================================== */}
-      {/* MODAL: ADD QUOTE CREDITS MODAL (1-5 ONLY)                           */}
+      {/* MODAL: REQUEST SELLER QUOTE CREDIT APPROVAL                         */}
       {/* =================================================================== */}
       {isAddQuoteCreditsModalOpen && (
         <div
@@ -2348,7 +2349,7 @@ export default function SupplierDossierDrawer({
               </button>
             </div>
 
-            <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-4 text-xs">
+            <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3.5 text-xs">
               {/* Seller Name (Read-Only) */}
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -2362,47 +2363,66 @@ export default function SupplierDossierDrawer({
                 />
               </div>
 
-              {/* Current Available Credits */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
-                  </label>
-                  <div className="px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold">
-                    {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller)} Credits
-                  </div>
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.projectedBalanceLabel}
-                  </label>
-                  <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold">
-                    {(creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller)) + selectedQuoteCredits} Credits
-                  </div>
+              {/* Current Available Credits (Read-Only) */}
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
+                </label>
+                <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold">
+                  {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller)} Credits
                 </div>
               </div>
 
-              {/* Allowed Credits Selection (1, 2, 3, 4, 5 only) */}
+              {/* Requested Credits */}
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.allowedRangeNotice} <span className="text-rose-500">*</span>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.requestedCreditsLabel || 'Requested Credits'} <span className="text-rose-500">*</span>
                 </label>
-                <div className="grid grid-cols-5 gap-2">
-                  {SELLER_QUOTE_CREDITS_ALLOWED.map((num) => (
-                    <button
-                      key={num}
-                      type="button"
-                      onClick={() => setSelectedQuoteCredits(num)}
-                      className={`py-2 text-center rounded-lg font-bold border transition ${
-                        selectedQuoteCredits === num
-                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-                      }`}
-                    >
-                      +{num}
-                    </button>
+                <input
+                  type="number"
+                  min="1"
+                  max="1000"
+                  value={requestedQuoteCredits}
+                  onChange={(e) => setRequestedQuoteCredits(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              {/* Initiated By Select */}
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={quoteCreditInitiator}
+                  onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                >
+                  {CREDIT_APPROVAL_INITIATORS.map((init) => (
+                    <option key={init} value={init}>
+                      {init}
+                    </option>
                   ))}
-                </div>
+                </select>
+              </div>
+
+              {/* Assigned Approver Select */}
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={quoteCreditApprover}
+                  onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                >
+                  {CREDIT_APPROVAL_APPROVERS.map((appr) => (
+                    <option key={appr} value={appr}>
+                      {appr}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Reason / Remarks */}
@@ -2429,12 +2449,12 @@ export default function SupplierDossierDrawer({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingQuoteCredits}
+                  disabled={isSubmittingQuoteCredits || requestedQuoteCredits <= 0}
                   className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50"
                 >
                   {isSubmittingQuoteCredits
                     ? UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submittingBtn
-                    : UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.confirmBtn}
+                    : UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submitBtn || UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.confirmBtn}
                 </button>
               </div>
             </form>

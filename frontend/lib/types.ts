@@ -2511,23 +2511,69 @@ export interface TicketFilterParams {
   offset?: number;
 }
 
+export interface ApprovalHistoryItem {
+  action: string;
+  actor_name: string;
+  actor_role?: string;
+  timestamp: string;
+  remarks?: string;
+}
+
+export interface ApprovalAttachmentItem {
+  name: string;
+  url?: string;
+  size?: number;
+}
+
 export interface ApprovalRequest {
   id: string;
   request_number: string;
   module: string;
+  request_type?: string;
   project: string;
   applicant_name: string;
   applicant_email: string;
   value_impact: string;
+  amount?: number;
+  quantity?: number;
+  available_balance?: number;
   maker_name: string;
   maker_role: string;
+  assigned_approver?: string;
   status: 'Pending' | 'Approved' | 'Rejected';
   details?: string;
   approver_name?: string;
   approver_remarks?: string;
+  history?: ApprovalHistoryItem[];
+  attachments?: ApprovalAttachmentItem[];
+  internal_task_id?: string;
+  buyer_id?: string;
+  seller_id?: string;
+  raw?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
+
+export type ApprovalTableColumnKey =
+  | 'request_id'
+  | 'request_type'
+  | 'requested_by'
+  | 'project_account'
+  | 'amount_quantity'
+  | 'request_date'
+  | 'assigned_approver'
+  | 'status'
+  | 'actions';
+
+export interface ApprovalTableColumnConfig {
+  key: ApprovalTableColumnKey;
+  label: string;
+  visible: boolean;
+  locked?: boolean;
+  order: number;
+}
+
+export type ApprovalTabKey = 'all' | 'pending' | 'approved' | 'rejected' | 'my_approvals';
 
 export interface ApprovalSummary {
   pending: number;
