@@ -554,6 +554,45 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.body.task.credit_quantity).toBe(5);
     });
 
+    it('rejects non-category-manager/admin roles with 403', async () => {
+      const buyerToken = authService.generateSessionToken({
+        id: 'buyer-unauth',
+        email: 'buyer@procucev.com',
+        role: 'buyer',
+      });
+      const res = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${buyerToken}`)
+        .send({ amount: 5, approverName: 'Srinu Sir', initiatorName: 'Govardhan' });
+      expect(res.status).toBe(403);
+    });
+
+    it('handles vendor with missing name and email, and omitted reason and user without email', async () => {
+      const minimalVendor = storeService.addVendor({
+        contactPerson: 'Sparse Seller',
+      });
+      delete minimalVendor.name;
+      delete minimalVendor.email;
+      delete minimalVendor.freeQuotationCredits;
+
+      const userNoEmailToken = authService.generateSessionToken({
+        id: 'cm-no-email',
+        role: 'category_manager',
+      });
+
+      const res = await request(app)
+        .post(`/api/vendors/${minimalVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${userNoEmailToken}`)
+        .send({
+          amount: 3,
+          approverName: 'Sudheer Sir',
+          initiatorName: 'Krishna',
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.task.assigned_to_name).toBe('Sudheer Sir');
+    });
+
     it('handles unexpected exceptions and invokes next(err)', async () => {
       const { requestCreditApproval } = require('../src/controllers/vendorDossierExtensions');
       const req = {
