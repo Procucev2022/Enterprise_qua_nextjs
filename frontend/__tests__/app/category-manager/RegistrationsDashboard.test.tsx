@@ -561,14 +561,12 @@ describe('RegistrationsDashboard', () => {
     }
   });
 
-  test('handles fallback in handleSummaryCardClick when API fails', async () => {
+  test('handles clicking summary cards to open modal with filtered clients', async () => {
     render(<RegistrationsDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('verababu')).toBeInTheDocument();
     });
-
-    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('Total summary fetch failure'));
 
     const totalCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiTotalClients);
     fireEvent.click(totalCards[0]);
@@ -579,10 +577,26 @@ describe('RegistrationsDashboard', () => {
 
     fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
 
-    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('Web App fetch failure'));
-
     const webAppCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWebApp);
     fireEvent.click(webAppCards[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+
+    const whatsAppCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWhatsApp);
+    fireEvent.click(whatsAppCards[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+
+    const emailCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiEmail);
+    fireEvent.click(emailCards[0]);
 
     await waitFor(() => {
       expect(screen.getByRole('dialog')).toBeInTheDocument();

@@ -148,16 +148,20 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
 
   const formatDate = (isoString?: string): string => {
     if (!isoString) return '-';
-    const d = new Date(isoString);
-    if (isNaN(d.getTime())) return isoString;
-    const day = String(d.getDate()).padStart(2, '0');
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const month = months[d.getMonth()];
-    const year = d.getFullYear();
-    return `${day}-${month}-${year}`;
+    try {
+      const d = new Date(isoString);
+      if (isNaN(d.getTime())) return isoString;
+      const day = String(d.getDate()).padStart(2, '0');
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const month = months[d.getMonth()];
+      const year = d.getFullYear();
+      return `${day}-${month}-${year}`;
+    } catch {
+      return isoString;
+    }
   };
 
-    const registrationPopupColumns = useMemo<ActionCenterSummaryPopupColumn<RegisteredClient>[]>(() => [
+  const registrationPopupColumns = useMemo<ActionCenterSummaryPopupColumn<RegisteredClient>[]>(() => [
     {
       key: 'userName',
       label: strings.colUserName,
@@ -218,7 +222,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
     }
   };
 
-  const handleSummaryCardClick = async (type: string) => {
+  const handleSummaryCardClick = (type: string) => {
     setSourceType(type);
     setCurrentPage(1);
 
@@ -229,30 +233,20 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
       Email: strings.email,
     };
 
-    try {
-      const params = new URLSearchParams();
-      if (type !== 'all') params.append('sourceType', type);
-      params.append('limit', '100');
-      const res = await fetch(`/api/internal-tasks/registrations?${params.toString()}`);
-      const json = await res.json();
-      const records = json.success && Array.isArray(json.data) ? json.data : [];
-      setSummaryModalState({
-        isOpen: true,
-        title: titleMap[type] || type,
-        subtitle: type === 'all' ? strings.title : `${type} ${strings.title}`,
-        totalCount: json.total ?? records.length,
-        records,
-      });
-    } catch {
-      const fallback = clients.filter((c) => type === 'all' || c.sourceType === type);
-      setSummaryModalState({
-        isOpen: true,
-        title: titleMap[type] || type,
-        subtitle: type === 'all' ? strings.title : `${type} ${strings.title}`,
-        totalCount: fallback.length,
-        records: fallback,
-      });
-    }
+    const matchingClients = clients.filter((c) => {
+      if (type === 'all') return true;
+      const s = String(c.sourceType || '').toLowerCase();
+      const t = type.toLowerCase();
+      return s.includes(t) || c.sourceType === type;
+    });
+
+    setSummaryModalState({
+      isOpen: true,
+      title: titleMap[type] || type,
+      subtitle: type === 'all' ? strings.title : `${type} ${strings.title}`,
+      totalCount: matchingClients.length,
+      records: matchingClients,
+    });
   };
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(totalCount / pageSize)), [totalCount, pageSize]);

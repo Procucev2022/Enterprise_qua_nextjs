@@ -748,6 +748,134 @@ describe('SellersDirectory Component Suite', () => {
         fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
       }
     });
-  });
+  
 
+    test('exercises initialSellerId match and non-match, row click propagation, column sorting branches, and card key events', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        buyerVendors: [
+          {
+            id: 'v-complete',
+            name: 'Alpha Supplier',
+            majorCategory: 'Electronics',
+            category: 'Hardware',
+            freeQuotationCredits: 10,
+            rating: 4.8,
+            score: 95,
+            lastLogin: '2026-04-01T10:00:00Z',
+            createdAt: '2026-01-01T10:00:00Z',
+            status: 'ACTIVE_VERIFIED',
+            contactPerson: 'Alice',
+            email: 'alice@alpha.com',
+            phone: '9876543210',
+            deliveryLocation: 'Mumbai',
+            source: 'procucev_network',
+          },
+          {
+            id: 'v-sparse',
+            name: 'Beta Supplier',
+            majorCategory: null,
+            category: 'Software',
+            freeQuotationCredits: null,
+            rating: null,
+            score: null,
+            lastLogin: null,
+            createdAt: null,
+            status: null,
+            contactPerson: null,
+            email: null,
+            phone: null,
+            deliveryLocation: null,
+            source: 'buyer_uploaded',
+          },
+          {
+            id: 'v-empty',
+            name: '',
+            majorCategory: null,
+            category: null,
+            freeQuotationCredits: 0,
+            rating: 0,
+            score: 0,
+            lastLogin: null,
+            createdAt: null,
+            status: '',
+            contactPerson: '',
+            email: '',
+            phone: '',
+            deliveryLocation: '',
+            source: 'other',
+          },
+        ],
+        rfqs: [
+          {
+            id: 'rfq-no-quotes',
+            rfqNumber: 'RFQ-NQ-1',
+            quotes: null,
+          },
+        ],
+        categoryTaxonomy: [],
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        auditLogs: [],
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      // 1. Test initialSellerId non-match
+      render(<SellersDirectory initialSellerId="non-existent-seller" />);
+      await waitFor(() => {
+        expect(screen.getByText('Beta Supplier')).toBeInTheDocument();
+      });
+
+      // 2. Open column settings and enable all columns
+      const settingsBtn = screen.getByTitle('Customize Columns');
+      fireEvent.click(settingsBtn);
+      const checkboxes = screen.getAllByRole('checkbox');
+      checkboxes.forEach((cb) => {
+        if (!(cb as HTMLInputElement).checked) {
+          fireEvent.click(cb);
+        }
+      });
+      fireEvent.click(settingsBtn);
+
+      // Verify column renders for sparse/empty rows
+      expect(screen.getAllByText('Never').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+
+      // 3. Test column headers sorting branches (asc & desc with sparse/complete data)
+      const columnNames = [
+        'Supplier',
+        'Category',
+        'Credits',
+        'Rating',
+        '360° Score',
+        'Last Login',
+        'Registration Date',
+      ];
+
+      for (const colName of columnNames) {
+        const thCol = screen.queryByRole('columnheader', { name: new RegExp(colName, 'i') });
+        if (thCol) {
+          fireEvent.click(thCol);
+          fireEvent.click(thCol);
+          fireEvent.click(thCol);
+        }
+      }
+
+      // 4. Test summary cards keyboard events (Enter, Space, Escape)
+      const cards = screen.getAllByRole('group');
+      for (const card of cards) {
+        fireEvent.keyDown(card, { key: ' ' });
+        fireEvent.keyDown(card, { key: 'Escape' });
+        fireEvent.keyDown(card, { key: 'Enter' });
+      }
+
+      // 5. Test row click when clicking on child button vs row
+      const firstRow = screen.getByText('Alpha Supplier').closest('tr');
+      if (firstRow) {
+        const btnInsideRow = within(firstRow).getByRole('button', { name: /360° Dossier/i });
+        fireEvent.click(btnInsideRow);
+        fireEvent.click(firstRow);
+      }
+    });
+
+  });
 });
