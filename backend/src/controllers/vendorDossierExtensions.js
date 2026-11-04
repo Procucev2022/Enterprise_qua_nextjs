@@ -80,15 +80,19 @@ async function getCreditHistory(req, res, next) {
       for (const rfqId of unlockedIds) {
         if (runningBal > 0) {
           runningBal = Math.max(0, runningBal - 1);
-          await domainQueries.recordCreditTransactionInDB({
-            id: `vtx-rfq-${vendor.id.slice(0, 5)}-${String(rfqId).slice(0, 8)}`,
-            vendorId: vendor.id,
-            rfqId: String(rfqId),
-            transactionType: 'RFQ_UNLOCK',
-            amount: -1,
-            balanceAfter: runningBal,
-            idempotencyKey: `unlock-${vendor.id}-${rfqId}`,
-          });
+          try {
+            await domainQueries.recordCreditTransactionInDB({
+              id: `vtx-rfq-${vendor.id.slice(0, 5)}-${String(rfqId).slice(0, 8)}`,
+              vendorId: vendor.id,
+              rfqId: String(rfqId),
+              transactionType: 'RFQ_UNLOCK',
+              amount: -1,
+              balanceAfter: runningBal,
+              idempotencyKey: `unlock-${vendor.id}-${rfqId}`,
+            });
+          } catch (err) {
+            logger.warn('Failed to record initial unlock transaction for vendor', { vendorId: vendor.id, rfqId, error: err.message }, 'VENDOR_DOSSIER');
+          }
         }
       }
 

@@ -211,7 +211,7 @@ class StoreService {
           // (getVendorByIdWithDBFallback) as "a capped, bootstrap-time
           // subset" that individual DB fallbacks paper over — hydration
           // should actually honor that instead of loading everything.
-          domainQueries.getVendorsPageFromDB({ limit: MAX_HYDRATION_VENDORS, offset: 0 }),
+          domainQueries.getVendorsPageFromDB({ limit: MAX_HYDRATION_VENDORS, offset: 0, skipCount: true, publicOnly: true }),
           domainQueries.getRFQsFromDB(null, 100),
           domainQueries.getEvaluationsFromDB(100),
           domainQueries.getVendorCatalogueFromDB(100),
@@ -223,16 +223,13 @@ class StoreService {
         ]);
 
       this.vendors = vendorPage.rows;
-      this.vendorsTotal = vendorPage.total;
+      this.vendorsTotal = vendorPage.total || vendorPage.rows.length;
       this.rfqs = rfqs.map((rfq) => {
         if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
-          rfq = { ...rfq, status: 'PO Generated', poFinalised: true };
-          this._persistRFQ(rfq);
+          return { ...rfq, status: 'PO Generated', poFinalised: true };
         }
         if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
-          const corrected = { ...rfq, source: 'manual_entry' };
-          this._persistRFQ(corrected);
-          return corrected;
+          return { ...rfq, source: 'manual_entry' };
         }
         return rfq;
       });
@@ -6245,9 +6242,14 @@ class StoreService {
     // performance disaster the CM's "Load more" pagination hit, just
     // triggered by something as ordinary as loading the app.
     if (!scopedBuyerId && pool.hasStorage()) {
-      const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true });
-      vendors = page.rows;
-      vendorsTotal = page.total;
+      if (this.isHydratedFromDB && Array.isArray(this.vendors) && this.vendors.length > 0) {
+        vendors = this.vendors.slice(0, MAX_BOOTSTRAP_VENDORS);
+        vendorsTotal = this.vendorsTotal || vendors.length;
+      } else {
+        const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true });
+        vendors = page.rows;
+        vendorsTotal = page.total;
+      }
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();
         if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
