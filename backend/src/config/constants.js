@@ -1491,6 +1491,13 @@ const EMAIL_GATEWAY_CONFIG = {
   LABEL_ERROR: 'Error',
 };
 
+const EMAIL_RFQ_SCENARIOS = Object.freeze({
+  REGISTERED_TO_ONLY: 'REGISTERED_TO_ONLY',
+  REGISTERED_TO_REGISTERED_CC: 'REGISTERED_TO_REGISTERED_CC',
+  UNREGISTERED_TO_REGISTERED_CC: 'UNREGISTERED_TO_REGISTERED_CC',
+  UNREGISTERED_TO_UNREGISTERED_CC: 'UNREGISTERED_TO_UNREGISTERED_CC',
+});
+
 const GMAIL_GATEWAY_LABELS = Object.freeze({
   PROCESSED: 'Processed',
   ERROR: 'Error',
@@ -2878,7 +2885,60 @@ const ONBOARDING_STAGES = Object.freeze({
 });
 
 
+const ACCOUNT_DOCUMENT_CATEGORIES = Object.freeze([
+  'Registration',
+  'Company Profile',
+  'GST',
+  'PAN',
+  'RFQ',
+  'Quotation',
+  'Other',
+]);
+
+const ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES = Object.freeze([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+const ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS = Object.freeze([
+  '.pdf',
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.doc',
+  '.docx',
+  '.xls',
+  '.xlsx',
+]);
+
+const ACCOUNT_DOCUMENT_MAX_BYTES = 25 * 1024 * 1024;
+
+const CREDIT_APPROVAL_APPROVERS = Object.freeze([
+  'Srinu Sir',
+  'Sudheer Sir',
+]);
+
+const CREDIT_APPROVAL_INITIATORS = Object.freeze([
+  'Govardhan',
+  'Krishna',
+  'Chandhan',
+]);
+
+const SELLER_QUOTE_CREDITS_ALLOWED = Object.freeze([1, 2, 3, 4, 5]);
+
 module.exports = {
+  ACCOUNT_DOCUMENT_CATEGORIES,
+  ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES,
+  ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS,
+  ACCOUNT_DOCUMENT_MAX_BYTES,
+  CREDIT_APPROVAL_APPROVERS,
+  CREDIT_APPROVAL_INITIATORS,
+  SELLER_QUOTE_CREDITS_ALLOWED,
   INTERNAL_TASK_CATEGORIES,
   INTERNAL_TASK_CATEGORY_LABELS,
   INTERNAL_TASK_CATEGORY_TYPES,
@@ -2951,6 +3011,7 @@ module.exports = {
   EMAIL_INGESTION_STATUS,
   EMAIL_INGESTION_MESSAGES,
   EMAIL_GATEWAY_CONFIG,
+  EMAIL_RFQ_SCENARIOS,
   GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,

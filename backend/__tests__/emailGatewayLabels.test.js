@@ -227,6 +227,29 @@ describe('Gmail Label-Handling Workflow (Processed & Error Labels)', () => {
       });
     });
 
+    test('moves duplicate identified via Message-ID header to Processed label', async () => {
+      const rawContent = 'Message-ID: <unique-hdr-123@example.com>\r\nFrom: buyer@corp.com\r\nSubject: Need Steel Pipes\r\n\r\nItem: Steel Pipe, Qty: 100';
+      const api = mockGmailApi({ messages: [{ id: 'msg_hdr_dup' }], rawContent });
+      jest.spyOn(google, 'gmail').mockReturnValue(api);
+      jest.spyOn(emailGatewayQueries, 'hasProcessed').mockImplementation(async (id) => {
+        if (id === '<unique-hdr-123@example.com>') return true;
+        return false;
+      });
+
+      const result = await emailGatewayService.pollViaGmailApi(enabledConfig());
+
+      expect(result.outcomes[0].status).toBe(EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED);
+      expect(result.outcomes[0].labelApplied).toBe('Processed');
+      expect(api.users.messages.modify).toHaveBeenCalledWith({
+        userId: 'me',
+        id: 'msg_hdr_dup',
+        requestBody: {
+          addLabelIds: [PROCESSED_LABEL_ID],
+          removeLabelIds: ['UNREAD', 'INBOX'],
+        },
+      });
+    });
+
     test('falls back to removeLabelIds UNREAD when processed label id cannot be resolved', async () => {
       const api = mockGmailApi({ messages: [{ id: 'msg_no_labels' }] });
       api.users.labels.list.mockRejectedValue(new Error('Labels API unavailable'));

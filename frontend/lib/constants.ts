@@ -1545,3 +1545,43 @@ export const DOCUMENT_VAULT_CONFIG = {
   MAX_UPLOAD_SIZE_BYTES: 25 * 1024 * 1024,
   ALLOWED_EXTENSIONS: ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.zip'],
 } as const;
+// --- Account Documents & Dossier Credit Workflows Constants -------------------
+
+export const ACCOUNT_DOCUMENT_CATEGORIES = [
+  'Registration',
+  'Company Profile',
+  'GST',
+  'PAN',
+  'RFQ',
+  'Quotation',
+  'Other',
+] as const;
+
+export type AccountDocumentCategory = (typeof ACCOUNT_DOCUMENT_CATEGORIES)[number];
+
+export const ACCOUNT_DOCUMENT_TYPES = [
+  'All Types',
+  'PDF',
+  'Image',
+  'Excel',
+  'Word',
+] as const;
+
+export type AccountDocumentFilterType = (typeof ACCOUNT_DOCUMENT_TYPES)[number];
+
+export const CREDIT_APPROVAL_APPROVERS = [
+  'Srinu Sir',
+  'Sudheer Sir',
+] as const;
+
+export type CreditApprovalApprover = (typeof CREDIT_APPROVAL_APPROVERS)[number];
+
+export const CREDIT_APPROVAL_INITIATORS = [
+  'Govardhan',
+  'Krishna',
+  'Chandhan',
+] as const;
+
+export type CreditApprovalInitiator = (typeof CREDIT_APPROVAL_INITIATORS)[number];
+
+export const SELLER_QUOTE_CREDITS_ALLOWED = [1, 2, 3, 4, 5] as const;

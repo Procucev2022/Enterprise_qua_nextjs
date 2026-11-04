@@ -2250,7 +2250,13 @@ class StoreService {
     let list = this.rfqs;
     if (buyerAccountId) {
       const targetId = String(buyerAccountId).toLowerCase();
-      list = list.filter((r) => String(r.buyerAccountId || '').toLowerCase() === targetId);
+      list = list.filter((r) => {
+        if (String(r.buyerAccountId || '').toLowerCase() === targetId) return true;
+        if (Array.isArray(r.sharedBuyerAccountIds) && r.sharedBuyerAccountIds.some((id) => String(id).toLowerCase() === targetId)) {
+          return true;
+        }
+        return false;
+      });
     }
     return list.map((r) => {
       let item = r;
@@ -2469,6 +2475,10 @@ class StoreService {
       buyerAccountName: resolvedBuyer
         ? resolvedBuyer.organizationName
         : this.activeBuyerAccount ? this.activeBuyerAccount.organizationName : null,
+      sharedBuyerAccountIds: Array.isArray(rfqData.sharedBuyerAccountIds) ? rfqData.sharedBuyerAccountIds : [],
+      sharedBuyerEmails: Array.isArray(rfqData.sharedBuyerEmails) ? rfqData.sharedBuyerEmails : [],
+      isSharedRfq: Boolean(Array.isArray(rfqData.sharedBuyerAccountIds) && rfqData.sharedBuyerAccountIds.length > 0),
+      emailRfqScenario: rfqData.emailRfqScenario || null,
       sourcingMode: rfqData.source === 'email_gateway'
         ? (resolvedBuyer ? resolveBuyerSourcingMode(resolvedBuyer) : (rfqData.sourcingMode || 'mode_0'))
         : (rfqData.sourcingMode || (resolvedBuyer && resolvedBuyer.subscriptionPlan && resolvedBuyer.subscriptionPlan !== 'free_trial' ? resolveBuyerSourcingMode(resolvedBuyer) : 'mode_1')),

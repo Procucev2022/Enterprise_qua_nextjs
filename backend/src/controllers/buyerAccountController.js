@@ -708,6 +708,72 @@ async function addCredit(req, res, next) {
   }
 }
 
+
+async function requestCreditApproval(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
+    const { id } = req.params;
+    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: `Buyer account "${id}" not found.` });
+    }
+
+    const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
+    const internalTaskQueries = require('../db/internalTaskQueries');
+
+    const validation = validatePayload(VALIDATION_SCHEMAS.buyerCreditApprovalRequest, req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation failed on credit approval request.',
+        details: validation.errors,
+      });
+    }
+
+    const { amount, reason, approverName, initiatorName } = validation.sanitizedData;
+
+    const task = await internalTaskQueries.createInternalTask(
+      {
+        taskCategory: 'CREDIT_MANAGEMENT',
+        taskType: 'Add Credits',
+        title: `Credit Allocation Request: ${amount} Credits for ${buyer.organizationName}`,
+        description: reason || `Requested credit top-up for ${buyer.organizationName}`,
+        priority: 'High',
+        status: 'Pending Approval',
+        approvalStatus: 'PENDING',
+        assignedToName: approverName,
+        assignedTeam: 'Management Approvers',
+        creditAccountType: 'buyer',
+        creditAccountId: buyer.id,
+        creditAccountName: buyer.organizationName,
+        creditQuantity: amount,
+        creditReason: reason,
+        notes: `Initiated By: ${initiatorName}. Requires review and approval by ${approverName}.`,
+        relatedEntityType: 'BUYER',
+        relatedEntityId: buyer.id,
+        relatedEntityLabel: buyer.organizationName,
+      },
+      {
+        fullName: initiatorName,
+        name: initiatorName,
+        email: req.user?.email || 'cm@procucev.com',
+        role: 'category_manager',
+      }
+    );
+
+    logger.info(`Credit approval request created: ${task.task_number} (${amount} credits for ${buyer.organizationName}) assigned to ${approverName}`, { buyerId: id, amount, approverName }, 'BUYER_ACCOUNT_CONTROLLER');
+
+    return res.status(201).json({
+      success: true,
+      message: `Credit request submitted for approval by ${approverName}. Status: Pending Approval.`,
+      task,
+    });
+  } catch (err) {
+    logger.error('Error requesting credit approval for buyer', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
 async function updateSupportedCategories(req, res, next) {
   try {
     if (!assertCategoryManagerOrBuyer(req, res)) return;
@@ -1084,6 +1150,7 @@ module.exports = {
   getSubscriptionPricing,
   getCreditHistory,
   addCredit,
+  requestCreditApproval,
   updateSupportedCategories,
   getBuyerCommunications,
   recordBuyerCommunication,

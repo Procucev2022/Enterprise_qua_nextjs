@@ -3,6 +3,17 @@ const domainQueries = require('../db/domainQueries');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
 
+function assertCategoryManagerOrAdmin(req, res) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  if (user.role === 'category_manager' || user.role === 'admin') return true;
+  res.status(403).json({ success: false, error: 'Unauthorized: Only category managers and admins can allocate quote credits.' });
+  return false;
+}
+
 function assertCategoryManagerOrVendor(req, res, vendorOrEmail = null) {
   const user = req.user;
   if (!user) {
@@ -473,11 +484,137 @@ async function getVendorPaymentHistory(req, res, next) {
   }
 }
 
+
+/**
+ * POST /api/vendors/:id/add-quote-credits
+ * Category Manager / Admin allows adding quote credits strictly in range 1 to 5.
+ */
+async function addQuoteCredits(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: `Seller "${id}" not found.` });
+    }
+
+    const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
+    const pool = require('../db/pool');
+    const crypto = require('crypto');
+
+    const validation = validatePayload(VALIDATION_SCHEMAS.sellerAddQuoteCredits, req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: validation.errors.amount || 'Quote credits must be an integer between 1 and 5.',
+        details: validation.errors,
+      });
+    }
+
+    const amount = Number(validation.sanitizedData.amount);
+    const reason = validation.sanitizedData.reason || 'Manual quote credit addition by Category Manager';
+
+    const currentBalance = vendor.freeQuotationCredits !== undefined
+      ? Number(vendor.freeQuotationCredits)
+      : (vendor.credits !== undefined ? Number(vendor.credits) : 5);
+
+    const updatedBalance = currentBalance + amount;
+
+    const txId = `vtx_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+    const tx = {
+      id: txId,
+      vendorId: vendor.id,
+      rfqId: null,
+      transactionType: 'Quote Credit Addition',
+      amount,
+      balanceAfter: updatedBalance,
+      idempotencyKey: `quote-credit-${txId}`,
+      description: reason,
+      createdAt: new Date().toISOString(),
+    };
+
+    // Authoritative database update and audit trail within an atomic transaction block
+    if (pool.hasStorage()) {
+      const client = (pool.pool && typeof pool.pool.connect === 'function')
+        ? await pool.pool.connect()
+        : (typeof pool.connect === 'function' ? await pool.connect() : pool);
+      let inTx = false;
+      try {
+        if (typeof client.query === 'function') {
+          await client.query('BEGIN');
+          inTx = true;
+          await client.query(
+            "UPDATE vendors SET credits = $1, raw = jsonb_set(COALESCE(raw, '{}'::jsonb), '{freeQuotationCredits}', $2) WHERE id = $3",
+            [updatedBalance, JSON.stringify(updatedBalance), vendor.id]
+          );
+          await client.query(
+            `INSERT INTO vendor_credit_transactions (id, vendor_id, rfq_id, transaction_type, amount, balance_after, idempotency_key, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+             ON CONFLICT (idempotency_key) DO NOTHING`,
+            [tx.id, tx.vendorId, tx.rfqId, tx.transactionType, tx.amount, tx.balanceAfter, tx.idempotencyKey]
+          );
+          await client.query('COMMIT');
+          inTx = false;
+        }
+      } catch (dbErr) {
+        if (inTx && typeof client.query === 'function') {
+          try {
+            await client.query('ROLLBACK');
+          } catch (_) {}
+        }
+        logger.error('Failed to update vendor credits atomically in PostgreSQL transaction', dbErr, 'VENDOR_CONTROLLER');
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to update vendor quote credits due to a database error.',
+        });
+      } finally {
+        if (client && typeof client.release === 'function') {
+          client.release();
+        }
+      }
+    }
+
+    try {
+      const { queryCache } = require('../db/queryCache');
+      if (queryCache && typeof queryCache.invalidate === 'function') {
+        queryCache.invalidate('vendor_credits');
+        queryCache.invalidate('vendors');
+      }
+    } catch (_) {}
+
+    // Update in-memory vendor balance only after database transaction succeeds
+    storeService.updateVendor(vendor.id, {
+      freeQuotationCredits: updatedBalance,
+      freeRfqDownloadCredits: updatedBalance,
+      credits: updatedBalance,
+    });
+
+    const actor = req.user
+      ? (req.user.fullName || req.user.name || req.user.email || 'Category Manager')
+      : 'Category Manager';
+
+    logger.info(`Quote credits added to vendor ${vendor.id}: +${amount} (New Balance: ${updatedBalance}) by ${actor}`, { vendorId: vendor.id, amount }, 'VENDOR_CONTROLLER');
+
+    return res.json({
+      success: true,
+      message: `Successfully allocated ${amount} quote credits to ${vendor.name || vendor.id}.`,
+      previousBalance: currentBalance,
+      updatedBalance,
+      transaction: tx,
+    });
+  } catch (err) {
+    logger.error('Error adding vendor quote credits', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
+  assertCategoryManagerOrAdmin,
   assertCategoryManagerOrVendor,
   resolveVendor,
   getCreditHistory,
   getVendorCommunications,
   recordVendorCommunication,
   getVendorPaymentHistory,
+  addQuoteCredits,
 };

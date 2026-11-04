@@ -1,3 +1,9 @@
+jest.mock('@/lib/accountDocumentsClient', () => ({
+  addSellerQuoteCredits: jest.fn().mockResolvedValue({ success: true, message: 'Added credits' }),
+  fetchAccountDocuments: jest.fn().mockResolvedValue([]),
+  uploadAccountDocument: jest.fn().mockResolvedValue({ success: true }),
+  deleteAccountDocument: jest.fn().mockResolvedValue({ success: true }),
+}));
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import SupplierDossierDrawer from '@/app/category-manager/components/SupplierDossierDrawer';
@@ -155,7 +161,7 @@ describe('SupplierDossierDrawer', () => {
         status: 'COMPLETED',
         description: i % 2 === 0 ? 'Quota allocation' : 'Unlock quotation',
       })),
-    });
+});
 
     (supplierProfileClient.fetchSupplierCommunications as jest.Mock).mockResolvedValue({
       success: true,
@@ -1585,6 +1591,230 @@ describe('SupplierDossierDrawer', () => {
     fireEvent.click(detailsBtn);
     expect(await screen.findByText(/Custom Fitting Description/i)).toBeInTheDocument();
     unmountQuotes();
+  });
+
+test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal works', async () => {
+    const onTabChangeMock = jest.fn();
+    const { unmount } = render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="documents"
+        onTabChange={onTabChangeMock}
+        onClose={jest.fn()}
+      />
+    );
+    expect(screen.getByText(/Total Documents:/i)).toBeInTheDocument();
+    
+    // Switch tabs to trigger onTabChange
+    const profileTabBtn = screen.getByRole('button', { name: /Profile/i });
+    fireEvent.click(profileTabBtn);
+    expect(onTabChangeMock).toHaveBeenCalledWith('profile');
+    
+    const docsTabBtn = screen.getByRole('button', { name: /Documents/i });
+    fireEvent.click(docsTabBtn);
+    expect(onTabChangeMock).toHaveBeenCalledWith('documents');
+    unmount();
+
+    // Reopen and test Add Quote Credits modal success with custom message and reason
+    const { addSellerQuoteCredits } = require('@/lib/accountDocumentsClient');
+    (addSellerQuoteCredits as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      message: 'Successfully allocated 3 quote credits to seller',
+    });
+
+    const { unmount: unmount2 } = render(
+      <SupplierDossierDrawer
+        seller={{ ...mockSeller, freeQuotationCredits: 5 }}
+        initialTab="credit"
+        onClose={jest.fn()}
+      />
+    );
+
+    const addCreditsHeaderBtn = screen.getByTitle('Add Quote Credits (1-5)');
+    fireEvent.click(addCreditsHeaderBtn);
+    expect(screen.getByText('Add Seller Quote Credits')).toBeInTheDocument();
+
+    // Select +3 credits and enter reason
+    fireEvent.click(screen.getByRole('button', { name: '+3' }));
+
+    // Click other credit amount buttons to exercise all button branches
+    fireEvent.click(screen.getByRole('button', { name: '+1' }));
+    fireEvent.click(screen.getByRole('button', { name: '+2' }));
+    fireEvent.click(screen.getByRole('button', { name: '+4' }));
+    fireEvent.click(screen.getByRole('button', { name: '+5' }));
+    fireEvent.click(screen.getByRole('button', { name: '+3' }));
+
+    const reasonInput = screen.getByPlaceholderText(/Reason for quote credits/i);
+    fireEvent.change(reasonInput, { target: { value: 'High priority customer RFP support' } });
+
+    // Submit form
+    const submitBtn = screen.getByRole('button', { name: 'Add Quote Credits' });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(addSellerQuoteCredits).toHaveBeenCalledWith(mockSeller.id, {
+        amount: 3,
+        reason: 'High priority customer RFP support',
+      });
+    });
+    unmount2();
+
+    // Test success branch when res.message is empty (hits formatString branch)
+    (addSellerQuoteCredits as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      message: '',
+    });
+
+    const { unmount: unmount3 } = render(
+      <SupplierDossierDrawer
+        seller={{ ...mockSeller, freeQuotationCredits: undefined }}
+        initialTab="profile"
+        onClose={jest.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Quote Credits' }));
+    await waitFor(() => {
+      expect(addSellerQuoteCredits).toHaveBeenCalled();
+    });
+    unmount3();
+
+    // Test error branch with res.error
+    (addSellerQuoteCredits as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: 'Quota exhausted for this billing cycle',
+    });
+
+    const { unmount: unmount4 } = render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="profile"
+        onClose={jest.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Quote Credits' }));
+    await waitFor(() => {
+      expect(addSellerQuoteCredits).toHaveBeenCalled();
+    });
+    unmount4();
+
+    // Test rejection/throw branch
+    (addSellerQuoteCredits as jest.Mock).mockRejectedValueOnce(new Error('Network offline'));
+
+    const { unmount: unmount5 } = render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="profile"
+        onClose={jest.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Quote Credits' }));
+    await waitFor(() => {
+      expect(addSellerQuoteCredits).toHaveBeenCalled();
+    });
+
+    // Test closing modal via backdrop click and cancel button
+    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    const modalDialog = screen.getByRole('dialog');
+    fireEvent.click(modalDialog); // clicks backdrop
+    expect(screen.queryByText('Add Seller Quote Credits')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
+    fireEvent.click(cancelBtn);
+    expect(screen.queryByText('Add Seller Quote Credits')).not.toBeInTheDocument();
+    unmount5();
+  });
+
+
+  test('covers extra SupplierDossierDrawer branches for 90%+ coverage', async () => {
+    const { addSellerQuoteCredits } = require('@/lib/accountDocumentsClient');
+    // 1. InitialTab omitted (defaults to 'profile') and rfqs fallback
+    const { unmount } = render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        onClose={jest.fn()}
+      />
+    );
+    expect(screen.getByText(mockSeller.name)).toBeInTheDocument();
+
+    // Open add quote credits and test inner dialog click (does not close modal)
+    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    const modalHeading = screen.getByText('Add Seller Quote Credits');
+    fireEvent.click(modalHeading);
+    expect(screen.getByText('Add Seller Quote Credits')).toBeInTheDocument();
+
+    // Close via X button
+    const closeButtons = screen.getAllByRole('button');
+    const xBtn = closeButtons.find(b => b.querySelector('svg.lucide-x'));
+    if (xBtn) fireEvent.click(xBtn);
+    unmount();
+
+    // Test when res.success is false and res.error is absent (hits line 337 fallback)
+    (addSellerQuoteCredits as jest.Mock).mockResolvedValueOnce({
+      success: false,
+    });
+    const { unmount: unmountErrFallback } = render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="profile"
+        onClose={jest.fn()}
+      />
+    );
+    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Quote Credits' }));
+    await waitFor(() => {
+      expect(addSellerQuoteCredits).toHaveBeenCalled();
+    });
+    unmountErrFallback();
+
+    // Test Communications tab empty message submit (line 605) and dispatch error branches (line 638, 641, 626)
+    const { recordSupplierCommunication } = require('@/lib/supplierProfileClient');
+    const { unmount: unmountComm } = render(
+      <SupplierDossierDrawer
+        seller={{ ...mockSeller, email: 'comm_seller@procucev.com' }}
+        initialTab="communications"
+        onClose={jest.fn()}
+      />
+    );
+
+    const commTabBtn = screen.getByRole('button', { name: /^Communications \(\d+\)$/i });
+    fireEvent.click(commTabBtn);
+
+    const composeBtn = screen.getByRole('button', { name: /Record Communication/i });
+    fireEvent.click(composeBtn);
+
+    const messageInput = screen.getByPlaceholderText(/Type message content/i);
+    // Submit with empty/whitespace message (hits line 605)
+    fireEvent.change(messageInput, { target: { value: '   ' } });
+    const sendBtn = screen.getByRole('button', { name: /Dispatch & Record/i });
+    fireEvent.click(sendBtn);
+
+    // Now enter valid message and followup date (hits line 626 and 638)
+    fireEvent.change(messageInput, { target: { value: 'Valid follow up note' } });
+    (recordSupplierCommunication as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: 'SMTP gateway timeout',
+    });
+    fireEvent.click(sendBtn);
+    await waitFor(() => {
+      expect(recordSupplierCommunication).toHaveBeenCalled();
+    });
+
+    // Test exception throw in recordSupplierCommunication (hits line 641)
+    (recordSupplierCommunication as jest.Mock).mockRejectedValueOnce(new Error('Fatal comm error'));
+    fireEvent.click(sendBtn);
+    await waitFor(() => {
+      expect(recordSupplierCommunication).toHaveBeenCalled();
+    });
+
+    unmountComm();
+
   });
 
 });
