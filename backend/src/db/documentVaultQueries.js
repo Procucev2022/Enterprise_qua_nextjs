@@ -137,7 +137,7 @@ async function listDocuments(filters = {}) {
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
       const queryText = `SELECT id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at FROM document_vault ${whereClause} ORDER BY created_at DESC`;
 
-      const result = await pool.query(queryText, values);
+      const result = await pool.query(queryText, values, { d1: true });
       return result.rows.map(mapRow);
     } catch (err) {
       logger.error('documentVaultQueries: PostgreSQL listDocuments query failed, falling back to memory', { error: err.message });
@@ -174,7 +174,8 @@ async function getDocumentById(id) {
     try {
       const result = await pool.query(
         'SELECT id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at FROM document_vault WHERE id = $1',
-        [id]
+        [id],
+        { d1: true }
       );
       if (result.rows && result.rows.length > 0) {
         return mapRow(result.rows[0]);
@@ -221,9 +222,10 @@ async function createDocument(payload = {}, actor) {
           description,
           uploadedBy,
           isActive ? 1 : 0,
-          now,
-          now,
-        ]
+          now.toISOString(),
+          now.toISOString(),
+        ],
+        { d1: true }
       );
       return mapRow(result.rows[0]);
     } catch (err) {
@@ -298,7 +300,7 @@ async function updateDocument(id, updates = {}) {
       values.push(id);
       const queryText = `UPDATE document_vault SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at`;
 
-      const result = await pool.query(queryText, values);
+      const result = await pool.query(queryText, values, { d1: true });
       if (result.rows && result.rows.length > 0) {
         return mapRow(result.rows[0]);
       }
@@ -334,7 +336,7 @@ async function deleteDocument(id) {
 
   if (pool.hasStorage()) {
     try {
-      const result = await pool.query('DELETE FROM document_vault WHERE id = $1', [id]);
+      const result = await pool.query('DELETE FROM document_vault WHERE id = $1', [id], { d1: true });
       return result.rowCount > 0;
     } catch (err) {
       logger.error('documentVaultQueries: PostgreSQL deleteDocument query failed, falling back to memory', { error: err.message, id });

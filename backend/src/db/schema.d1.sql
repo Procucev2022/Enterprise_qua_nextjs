@@ -904,6 +904,29 @@ CREATE INDEX IF NOT EXISTS idx_document_vault_category ON document_vault (catego
 CREATE INDEX IF NOT EXISTS idx_document_vault_active ON document_vault (is_active);
 
 -- ==============================================================================
+-- VENDOR DIRECTORY SESSIONS (D1 SQLite)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS vendor_directory_sessions (
+  id TEXT PRIMARY KEY,
+  user_uuid TEXT NOT NULL,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'category_manager',
+  auth_method TEXT NOT NULL DEFAULT 'EMAIL_OTP',
+  login_at TEXT NOT NULL,
+  last_activity_at TEXT NOT NULL,
+  logout_at TEXT,
+  duration_seconds INTEGER DEFAULT 0,
+  logout_reason TEXT,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  ip_address TEXT,
+  user_agent TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_user ON vendor_directory_sessions (user_uuid);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email ON vendor_directory_sessions (email);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status ON vendor_directory_sessions (status);
+
+-- ==============================================================================
 -- ACCOUNT DOCUMENTS (Buyer & Seller Dossier Associated Documents)
 -- ==============================================================================
 CREATE TABLE IF NOT EXISTS account_documents (
@@ -925,3 +948,26 @@ CREATE TABLE IF NOT EXISTS account_documents (
 CREATE INDEX IF NOT EXISTS idx_account_documents_account ON account_documents (account_type, account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_account_documents_category ON account_documents (category);
 CREATE INDEX IF NOT EXISTS idx_account_documents_active ON account_documents (is_active);
+
+-- ==============================================================================
+-- IDENTITY MASTER LOOKUP DATA (Idempotent Seeds)
+-- ==============================================================================
+INSERT OR IGNORE INTO role (uuid, role_name, is_active) VALUES ('role-client-initiator', 'ClientInitiator', 1);
+INSERT OR IGNORE INTO role (uuid, role_name, is_active) VALUES ('role-vendor', 'Vendor', 1);
+INSERT OR IGNORE INTO role (uuid, role_name, is_active) VALUES ('role-category-manager', 'CategoryManager', 1);
+INSERT OR IGNORE INTO role (uuid, role_name, is_active) VALUES ('role-superuser', 'SuperUser', 1);
+
+INSERT OR IGNORE INTO org_types (uuid, type_name, is_active) VALUES ('orgtype-client', 'CLIENT', 1);
+INSERT OR IGNORE INTO org_types (uuid, type_name, is_active) VALUES ('orgtype-vendor', 'VENDOR', 1);
+INSERT OR IGNORE INTO org_types (uuid, type_name, is_active) VALUES ('orgtype-internal', 'INTERNAL', 1);
+
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-client-new', 'CLIENT_NEW', 1);
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-vendor-new', 'VENDOR_NEW', 1);
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-staff-active', 'STAFF_ACTIVE', 1);
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-active', 'Active', 1);
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-pending', 'Pending', 1);
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-inactive', 'Inactive', 1);
+
+
+
+
