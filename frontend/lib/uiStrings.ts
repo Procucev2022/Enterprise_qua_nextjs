@@ -2253,7 +2253,24 @@ sellerDirectory: {
       errorToast: 'Failed to dispatch communication. Please try again or check recipient details.',
     },
 
+    summaryModal: {
+      clearSearch: 'Clear search',
+      searchPlaceholder: 'Search records...',
+      totalRecordsBadge: '{count} matching record(s)',
+      closeBtn: 'Close',
+      noRecordsFound: 'No records found matching the criteria.',
+      showingRecords: 'Showing {from} to {to} of {total} records',
+      previous: 'Previous',
+      next: 'Next',
+      pageIndicator: 'Page {current} of {total}',
+    },
+
     registrationsDashboard: {
+      kpiTotalClients: 'Total Registrations',
+      kpiWebApp: 'Web App',
+      kpiWhatsApp: 'WhatsApp',
+      kpiEmail: 'Email',
+      refreshTooltip: 'Refresh registrations',
       title: 'Registered Clients',
       totalCountBadge: '{count} Total',
       sourceTypeLabel: 'Source Type:',

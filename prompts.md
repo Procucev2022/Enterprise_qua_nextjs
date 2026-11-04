@@ -6037,3 +6037,145 @@ You can also merge this with the command line.
 
 gemini is fail check and pass that
 ```
+
+
+---
+
+### Prompt 51
+
+**Timestamp**: 2026-11-04T10:58:24+05:30
+
+```text
+# Action Center – UI Size, Search Visibility & Clickable Summary Cards
+
+Please update the Action Center UI based on the attached screenshots. The main objective is to make all navigation tabs, summary cards, search fields, and filters compact, properly aligned, and fully functional.
+
+### 1. Reduce Summary Card Sizes
+
+Currently, the summary cards are too large and occupy unnecessary screen space.
+
+Apply the following changes:
+- Reduce the width, height, padding, font size, and gaps of all summary cards.
+- Make all cards compact, similar in visual size to the main Action Center navigation tabs such as Approvals, Buyers Directory, Sellers Directory, and Payments Due.
+- Keep all cards in one horizontal row wherever screen space allows.
+- Display the complete card title and count without unnecessary truncation.
+- Maintain consistent card dimensions, alignment, and spacing.
+
+Apply this consistently to:
+- Payment Dues
+- Buyer Directory
+- Seller Directory
+- Registrations
+- Internal Tasks
+
+### 2. Make Summary Cards Clickable
+
+Every summary card must work as a filter, not just display a count.
+
+When a user clicks a card:
+- Apply the corresponding filter automatically.
+- Open a centered popup/modal displaying the matching records.
+- Show the relevant records in a table inside the popup.
+- Include appropriate columns based on the selected module.
+- Display the total matching record count.
+- Provide search, sorting, and pagination where applicable.
+- Include a clear Close button.
+- Closing the popup must return the user to the same page without losing existing filters, search, or scroll position.
+
+Examples:
+
+**Payment Dues:**
+- Low-Credit Accounts → Show all accounts with 2 or fewer credits.
+- Buyers → Show low-credit buyer accounts.
+- Sellers → Show low-credit seller accounts.
+- 0 Credits (Critical) → Show accounts with zero credits.
+- 1–2 Credits (Attention) → Show accounts with 1 or 2 credits.
+- Acknowledgement Pending → Show accounts awaiting acknowledgement.
+
+**Buyer Directory:**
+- Total Buyers → Show all buyers.
+- Subscription Buyers → Show subscription buyers.
+- Total RFQs → Show relevant buyer RFQ records.
+- Free RFQs → Show free RFQ records.
+- Paid RFQs → Show paid RFQ records.
+
+**Seller Directory:**
+- Apply the same clickable-card behaviour to existing seller summary cards and their corresponding categories.
+
+**Registrations:**
+- Registered Clients → Show all registered clients.
+- If source-wise summary cards are available, clicking them should show Web App, WhatsApp, or Email registrations respectively.
+
+**Internal Tasks:**
+- Total Tasks, New Tasks, In Progress, Pending Approval, Completed, and Overdue → Show the respective task records.
+
+### 3. Fix Search Visibility and Toolbar Layout
+
+The search field in the Registered Clients and other directory sections is not displaying properly.
+
+Fix the following:
+- Ensure the complete search input and placeholder are visible.
+- Display the search icon correctly without overlapping the placeholder or text.
+- Give the search field sufficient width.
+- Align search, dropdown filters, Refresh, Export, and Gear controls in one horizontal toolbar.
+- Prevent clipping, overlapping, and unwanted horizontal movement.
+- Keep toolbar spacing compact and consistent across modules.
+
+### 4. Standardize Buyer and Seller Directory Sizes
+
+Reduce the overall UI dimensions in both Buyer and Seller Directories:
+- Summary cards should be smaller.
+- Search fields and dropdowns should have compact heights.
+- Table row heights and cell padding should be optimized.
+- Reduce excessive margins and empty spaces.
+- Keep column headings readable.
+- Ensure Export Directory and Gear icons are properly aligned.
+- Maintain consistent font sizes, button heights, and spacing.
+
+Use the existing Action Center navigation buttons as the reference for the compact sizing and styling.
+
+### 5. Registrations – Source Type Filter
+
+Keep the Source Type dropdown with:
+- All
+- Web App
+- WhatsApp
+- Email
+
+Ensure the search field and Source Type filter work together and display the correct database records. Preserve existing registration approval and rejection functionality.
+
+### 6. Popup Behaviour
+
+All clickable summary cards must open their respective data popup without navigating away from the current page.
+
+- Popup should be centered and fully visible.
+- Use a background overlay.
+- Clicking inside the popup must not close it.
+- Close only through the Close/X button or supported outside-click action.
+- Preserve the current page state when closing.
+- Ensure popup tables display actual database records, not dummy data.
+
+### 7. Important Implementation Rules
+
+- Fetch all summary counts and popup records from the existing database/API.
+- Ensure card counts match the actual records shown in their popups.
+- Apply the selected card filter correctly without affecting unrelated filters.
+- Reuse existing components, APIs, database queries, and business logic.
+- Do not introduce hardcoded counts or static records.
+- Do not break existing search, sorting, filters, pagination, export, column settings, or navigation.
+- Test all clickable cards and popups in Buyer Directory, Seller Directory, Payment Dues, Registrations, and Internal Tasks.
+
+### Expected Result
+
+All summary cards should be compact, similar in size to the main navigation buttons. Search fields must be fully visible. Clicking any summary card should open a centered popup containing the actual records matching that card's filter. Apply the same clean, compact design consistently across Buyer and Seller Directories and the entire Action Center.
+```
+
+---
+
+### Prompt 52
+
+**Timestamp**: 2026-11-04T13:07:18+05:30
+
+```text
+create new branch and raise the pr to test-v3 and pass all the gemini stage and AI review also
+```

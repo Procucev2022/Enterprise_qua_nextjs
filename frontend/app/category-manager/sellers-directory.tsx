@@ -44,6 +44,7 @@ import type {
   VendorEntry,
   SellerDirectoryColumnKey,
   SellerDirectoryColumnConfig,
+  ActionCenterSummaryPopupColumn,
 } from '@/lib/types';
 import {
   formatCurrency,
@@ -52,10 +53,11 @@ import {
   DEFAULT_SELLER_DIRECTORY_COLUMNS,
   getVendorCreditBalance,
 } from '@/lib/constants';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { exportReportToExcel } from '@/lib/reportsClient';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import SupplierDossierDrawer from './components/SupplierDossierDrawer';
+import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
 
 interface SellersDirectoryProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
@@ -468,6 +470,187 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     return sortedSellers.slice(startIndex, startIndex + pageSize);
   }, [sortedSellers, startIndex, pageSize]);
 
+    // Summary Card Modal State
+  const [summaryModalState, setSummaryModalState] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle?: string;
+    totalCount: number;
+    columns: ActionCenterSummaryPopupColumn<Record<string, unknown>>[];
+    records: Record<string, unknown>[];
+  }>({
+    isOpen: false,
+    title: '',
+    subtitle: '',
+    totalCount: 0,
+    columns: [],
+    records: [],
+  });
+
+  const supplierPopupColumns = useMemo<ActionCenterSummaryPopupColumn<Record<string, unknown>>[]>(() => [
+    {
+      key: 'name',
+      label: 'Supplier Name',
+      render: (item) => (
+        <span className="font-semibold text-slate-900 dark:text-white">
+          {String(item.name || '–')}
+        </span>
+      ),
+    },
+    {
+      key: 'contactPerson',
+      label: 'Contact Person',
+      render: (item) => <span>{String(item.contactPerson || '–')}</span>,
+    },
+    {
+      key: 'email',
+      label: 'Email / Phone',
+      render: (item) => (
+        <div className="flex flex-col">
+          <span className="font-mono text-[11px] text-slate-700 dark:text-slate-300">{String(item.email || '–')}</span>
+          {Boolean(item.phone) && <span className="text-[10px] text-slate-400">{String(item.phone)}</span>}
+        </div>
+      ),
+    },
+    {
+      key: 'category',
+      label: 'Major Category',
+      render: (item) => (
+        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+          {String(item.majorCategory || item.category || '–')}
+        </span>
+      ),
+    },
+    {
+      key: 'source',
+      label: 'Source',
+      render: (item) => (
+        <span className="text-slate-600 dark:text-slate-400">
+          {item.source === 'procucev_network' ? 'Procucev Network' : 'Buyer Uploaded'}
+        </span>
+      ),
+    },
+    {
+      key: 'score',
+      label: 'Rating / Score',
+      render: (item) => (
+        <div className="flex items-center gap-1.5 font-semibold">
+          <span>{Number(item.score) || 85}</span>
+          <span className="text-amber-500 text-[11px]">★ {Number(item.rating) || 4.5}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'credits',
+      label: 'Free Credits',
+      render: (item) => (
+        <span className="font-bold text-slate-800 dark:text-slate-200">
+          {Number(item.freeQuotationCredits || 0)}
+        </span>
+      ),
+    },
+  ], []);
+
+  const opportunityPopupColumns = useMemo<ActionCenterSummaryPopupColumn<Record<string, unknown>>[]>(() => [
+    {
+      key: 'rfqNumber',
+      label: 'RFQ Number',
+      render: (item) => (
+        <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+          {String(item.rfqNumber || item.id || '–')}
+        </span>
+      ),
+    },
+    {
+      key: 'title',
+      label: 'Title',
+      render: (item) => (
+        <span className="font-semibold text-slate-900 dark:text-white max-w-xs truncate block" title={String(item.title || '')}>
+          {String(item.title || '–')}
+        </span>
+      ),
+    },
+    {
+      key: 'buyerAccountName',
+      label: 'Buyer Organization',
+      render: (item) => <span>{String(item.buyerAccountName || item.raisedByName || '–')}</span>,
+    },
+    {
+      key: 'quotesCount',
+      label: 'Bids Delivered',
+      render: (item) => {
+        const quotesArr = (item.quotes as unknown[]) || [];
+        return (
+          <span className="font-bold text-emerald-600 dark:text-emerald-400 px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60">
+            {quotesArr.length} Delivered
+          </span>
+        );
+      },
+    },
+    {
+      key: 'createdAt',
+      label: 'Created Date',
+      render: (item) => <span>{item.createdAt ? formatIndianDateTime(String(item.createdAt)) : '–'}</span>,
+    },
+  ], []);
+
+  const handleSummaryCardClick = (type: 'total' | 'network' | 'buyer' | 'score' | 'quotes') => {
+    if (type === 'total') {
+      setSelectedSource('all');
+      setSummaryModalState({
+        isOpen: true,
+        title: strings.totalSuppliers,
+        subtitle: formatString(strings.verifiedActiveSubtext, { count: String(verifiedCount) }),
+        totalCount: allSellers.length,
+        columns: supplierPopupColumns,
+        records: allSellers as unknown as Record<string, unknown>[],
+      });
+    } else if (type === 'network') {
+      setSelectedSource('network');
+      const filtered = allSellers.filter((s) => s.source === 'procucev_network');
+      setSummaryModalState({
+        isOpen: true,
+        title: strings.networkSuppliers,
+        subtitle: strings.procucevMarketplace,
+        totalCount: filtered.length,
+        columns: supplierPopupColumns,
+        records: filtered as unknown as Record<string, unknown>[],
+      });
+    } else if (type === 'buyer') {
+      setSelectedSource('buyer');
+      const filtered = allSellers.filter((s) => s.source === 'buyer_uploaded');
+      setSummaryModalState({
+        isOpen: true,
+        title: strings.buyerUploadedCard,
+        subtitle: strings.privateEnterpriseRoster,
+        totalCount: filtered.length,
+        columns: supplierPopupColumns,
+        records: filtered as unknown as Record<string, unknown>[],
+      });
+    } else if (type === 'score') {
+      const filtered = allSellers.filter((s) => Number(s.score) > 0 || Number(s.rating) > 0);
+      setSummaryModalState({
+        isOpen: true,
+        title: strings.avgScore,
+        subtitle: strings.aiEvaluationBenchmark,
+        totalCount: filtered.length,
+        columns: supplierPopupColumns,
+        records: filtered as unknown as Record<string, unknown>[],
+      });
+    } else if (type === 'quotes') {
+      const filtered = rfqs.filter((r) => (r.quotes || []).length > 0);
+      const totalBids = rfqs.reduce((acc, r) => acc + (r.quotes || []).length, 0);
+      setSummaryModalState({
+        isOpen: true,
+        title: strings.quotedOpportunities,
+        subtitle: formatString(strings.totalBidsDelivered, { count: String(totalBids) }),
+        totalCount: totalBids,
+        columns: opportunityPopupColumns,
+        records: filtered as unknown as Record<string, unknown>[],
+      });
+    }
+  };
+
   const handleExportDirectory = () => {
     const rows = sortedSellers.map((s) => ({
       CompanyName: s.name,
@@ -494,50 +677,106 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
 
   return (
     <div className="space-y-4">
-      {/* 5 SUMMARY CARDS IN ONE HORIZONTAL ROW: TOTAL SUPPLIERS, NETWORK SUPPLIERS, BUYER UPLOADED, AVG SCORE, QUOTED OPPORTUNITIES */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      {/* 5 SUMMARY CARDS IN ONE HORIZONTAL ROW (Compact & Clickable) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-2.5 w-full">
         {/* Card 1: Total Suppliers */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{strings.totalSuppliers}</p>
-          <p className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white mt-1">{totalSellersCount}</p>
-          <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-1">
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('total')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSummaryCardClick('total'); } }}
+          className="bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-emerald-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {strings.totalSuppliers}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none mt-1">
+            {totalSellersCount}
+          </p>
+          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium whitespace-nowrap mt-1">
             {verifiedCount} Verified active
           </span>
         </div>
 
         {/* Card 2: Network Suppliers */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{strings.networkSuppliers}</p>
-          <p className="text-xl sm:text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">{networkSellersCount}</p>
-          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{strings.procucevMarketplace}</span>
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('network')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSummaryCardClick('network'); } }}
+          className="bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {strings.networkSuppliers}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 leading-none mt-1">
+            {networkSellersCount}
+          </p>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1">
+            {strings.procucevMarketplace}
+          </span>
         </div>
 
         {/* Card 3: Buyer Uploaded */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{strings.buyerUploadedCard}</p>
-          <p className="text-xl sm:text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">{buyerUploadedCount}</p>
-          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{strings.privateEnterpriseRoster}</span>
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('buyer')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSummaryCardClick('buyer'); } }}
+          className="bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {strings.buyerUploadedCard}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400 leading-none mt-1">
+            {buyerUploadedCount}
+          </p>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1">
+            {strings.privateEnterpriseRoster}
+          </span>
         </div>
 
         {/* Card 4: Average 360° Score */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{strings.avgScore}</p>
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('score')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSummaryCardClick('score'); } }}
+          className="bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {strings.avgScore}
+          </p>
           <div className="flex items-center gap-1.5 mt-1">
-            <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">{avgScore}</span>
-            <span className="text-xs font-semibold text-amber-500 flex items-center">
-              <Star className="w-3.5 h-3.5 fill-current" /> 4.5
+            <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none">
+              {avgScore}
+            </span>
+            <span className="text-[11px] text-amber-500 font-semibold leading-none">
+              ★ 4.5
             </span>
           </div>
-          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{strings.aiEvaluationBenchmark}</span>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1">
+            {strings.aiEvaluationBenchmark}
+          </span>
         </div>
 
         {/* Card 5: Quoted Opportunities */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between col-span-2 sm:col-span-1">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{strings.quotedOpportunities}</p>
-          <p className="text-xl sm:text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('quotes')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSummaryCardClick('quotes'); } }}
+          className="bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-emerald-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {strings.quotedOpportunities}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-emerald-600 dark:text-emerald-400 leading-none mt-1">
             {rfqs.reduce((acc, r) => acc + (r.quotes || []).length, 0)}
           </p>
-          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{strings.totalBidsDelivered}</span>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1">
+            {strings.totalBidsDelivered}
+          </span>
         </div>
       </div>
 
@@ -724,7 +963,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                 {visibleColumns.map((col) => {
                   if (col.key === 'actions') {
                     return (
-                      <th key={col.key} className="px-4 py-2.5 font-semibold text-right">
+                      <th key={col.key} className="px-3.5 py-2 font-semibold text-right">
                         {col.label}
                       </th>
                     );
@@ -735,7 +974,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                     <th
                       key={col.key}
                       onClick={() => handleSort(col.key)}
-                      className="px-4 py-2.5 font-semibold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors select-none"
+                      className="px-3.5 py-2 font-semibold cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors select-none"
                     >
                       <div className="flex items-center gap-1">
                         <span>{col.label}</span>
@@ -815,7 +1054,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                             );
                           case 'category':
                             return (
-                              <td key={col.key} className="px-4 py-3">
+                              <td key={col.key} className="px-3.5 py-2">
                                 <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 truncate max-w-xs">
                                   {seller.majorCategory}
                                 </span>
@@ -833,7 +1072,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                             );
                           case 'rating':
                             return (
-                              <td key={col.key} className="px-4 py-3">
+                              <td key={col.key} className="px-3.5 py-2">
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40">
                                   <Star className="w-3 h-3 fill-current text-amber-500" />
                                   {seller.rating}
@@ -848,7 +1087,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                             );
                           case 'status':
                             return (
-                              <td key={col.key} className="px-4 py-3">
+                              <td key={col.key} className="px-3.5 py-2">
                                 <span
                                   className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${
                                     isVerified
@@ -1016,6 +1255,17 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           </div>
         )}
       </div>
+
+      {/* SUMMARY CARD RECORDS POPUP MODAL */}
+      <ActionCenterSummaryPopupModal
+        isOpen={summaryModalState.isOpen}
+        onClose={() => setSummaryModalState((prev) => ({ ...prev, isOpen: false }))}
+        title={summaryModalState.title}
+        subtitle={summaryModalState.subtitle}
+        totalCount={summaryModalState.totalCount}
+        columns={summaryModalState.columns}
+        records={summaryModalState.records}
+      />
 
       {/* 360° SUPPLIER DOSSIER DRAWER */}
       {activeSeller && (

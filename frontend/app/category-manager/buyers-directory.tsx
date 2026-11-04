@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import BuyerDossierDrawer from './components/BuyerDossierDrawer';
+import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
 
 export function isPendingBuyer(buyer?: { status?: string; verificationStatus?: string } | null): boolean {
   if (!buyer) return false;
@@ -67,7 +68,7 @@ export function isVerifiedBuyer(buyer?: { status?: string; verificationStatus?: 
   );
 }
 
-import type { BuyerAccount, RFQItem, AuditLogEntry, BuyerDirectoryColumnKey, BuyerDirectoryColumnConfig, BuyerCommunicationItem, BuyerPaymentTransaction } from '@/lib/types';
+import type { BuyerAccount, RFQItem, AuditLogEntry, BuyerDirectoryColumnKey, BuyerDirectoryColumnConfig, BuyerCommunicationItem, BuyerPaymentTransaction, ActionCenterSummaryPopupColumn } from '@/lib/types';
 import {
   RFQ_MODES,
   RFQ_MODE_LABELS,
@@ -575,6 +576,202 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
     return payments;
   }, [activeBuyer]);
 
+    // Summary Card Modal State
+  const [summaryModalState, setSummaryModalState] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle?: string;
+    totalCount: number;
+    columns: ActionCenterSummaryPopupColumn<Record<string, unknown>>[];
+    records: Record<string, unknown>[];
+  }>({
+    isOpen: false,
+    title: '',
+    subtitle: '',
+    totalCount: 0,
+    columns: [],
+    records: [],
+  });
+
+  const buyerPopupColumns = useMemo<ActionCenterSummaryPopupColumn<Record<string, unknown>>[]>(() => [
+    {
+      key: 'organizationName',
+      label: 'Organization',
+      render: (item) => (
+        <span className="font-semibold text-slate-900 dark:text-white">
+          {String(item.organizationName || '–')}
+        </span>
+      ),
+    },
+    {
+      key: 'contactPerson',
+      label: 'Contact Person',
+      render: (item) => <span>{String(item.contactPerson || '–')}</span>,
+    },
+    {
+      key: 'corporateEmail',
+      label: 'Email',
+      render: (item) => <span className="font-mono text-[11px]">{String(item.corporateEmail || '–')}</span>,
+    },
+    {
+      key: 'location',
+      label: 'Location',
+      render: (item) => <span>{String(item.city || item.primaryPlantLocation || '–')}</span>,
+    },
+    {
+      key: 'sourcingMode',
+      label: 'Sourcing Mode',
+      render: (item) => {
+        const mode = String(item.sourcingMode || '');
+        return (
+          <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+            {RFQ_MODE_LABELS[mode as keyof typeof RFQ_MODE_LABELS] || mode || 'Mode 0'}
+          </span>
+        );
+      },
+    },
+    {
+      key: 'subscriptionPlan',
+      label: 'Plan',
+      render: (item) => (
+        <span className="capitalize font-medium">{String(item.subscriptionPlan || 'Trial')}</span>
+      ),
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (item) => {
+        const isVer = isVerifiedBuyer(item as unknown as BuyerAccount);
+        return (
+          <span
+            className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
+              isVer
+                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                : 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
+            }`}
+          >
+            {isVer ? 'Verified' : 'Pending'}
+          </span>
+        );
+      },
+    },
+  ], []);
+
+  const rfqPopupColumns = useMemo<ActionCenterSummaryPopupColumn<Record<string, unknown>>[]>(() => [
+    {
+      key: 'rfqNumber',
+      label: 'RFQ Number',
+      render: (item) => (
+        <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+          {String(item.rfqNumber || item.id || '–')}
+        </span>
+      ),
+    },
+    {
+      key: 'title',
+      label: 'Title',
+      render: (item) => (
+        <span className="font-semibold text-slate-900 dark:text-white max-w-xs truncate block" title={String(item.title || '')}>
+          {String(item.title || '–')}
+        </span>
+      ),
+    },
+    {
+      key: 'buyerAccountName',
+      label: 'Buyer',
+      render: (item) => <span>{String(item.buyerAccountName || item.raisedByName || '–')}</span>,
+    },
+    {
+      key: 'sourcingMode',
+      label: 'Mode',
+      render: (item) => {
+        const mode = String(item.sourcingMode || '');
+        return (
+          <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-sky-50 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300">
+            {RFQ_MODE_LABELS[mode as keyof typeof RFQ_MODE_LABELS] || mode || 'Mode 1'}
+          </span>
+        );
+      },
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (item) => (
+        <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          {String(item.status || 'Active')}
+        </span>
+      ),
+    },
+    {
+      key: 'budget',
+      label: 'Budget',
+      render: (item) => {
+        const val = Number(item.budget) || 0;
+        return <span className="font-semibold">{val > 0 ? formatCurrency(val) : '–'}</span>;
+      },
+    },
+    {
+      key: 'createdAt',
+      label: 'Date',
+      render: (item) => <span>{item.createdAt ? formatIndianDateTime(String(item.createdAt)) : '–'}</span>,
+    },
+  ], []);
+
+  const handleSummaryCardClick = (type: 'totalBuyers' | 'subscriptionBuyers' | 'totalRfqs' | 'freeRfqs' | 'paidRfqs') => {
+    if (type === 'totalBuyers') {
+      setSelectedStatus('all');
+      setSelectedPlan('all');
+      setSummaryModalState({
+        isOpen: true,
+        title: UI_STRINGS.buyerDirectory.totalBuyers,
+        subtitle: formatString(UI_STRINGS.buyerDirectory.activeVerifiedSubtext, { count: String(verifiedBuyers) }),
+        totalCount: buyerAccounts.length,
+        columns: buyerPopupColumns,
+        records: buyerAccounts as unknown as Record<string, unknown>[],
+      });
+    } else if (type === 'subscriptionBuyers') {
+      setSelectedPlan('standard');
+      const filtered = buyerAccounts.filter(isSubscriptionBuyer);
+      setSummaryModalState({
+        isOpen: true,
+        title: UI_STRINGS.buyerDirectory.subscriptionBuyers,
+        subtitle: formatString(UI_STRINGS.buyerDirectory.freeTrialSubtext, { count: String(Math.max(0, totalBuyers - subscriptionBuyers)) }),
+        totalCount: filtered.length,
+        columns: buyerPopupColumns,
+        records: filtered as unknown as Record<string, unknown>[],
+      });
+    } else if (type === 'totalRfqs') {
+      setSummaryModalState({
+        isOpen: true,
+        title: UI_STRINGS.buyerDirectory.totalRfqs,
+        subtitle: UI_STRINGS.buyerDirectory.acrossAllEnterprise,
+        totalCount: rfqs.length,
+        columns: rfqPopupColumns,
+        records: rfqs as unknown as Record<string, unknown>[],
+      });
+    } else if (type === 'freeRfqs') {
+      const filtered = rfqs.filter((r) => !isPaidRFQ(r));
+      setSummaryModalState({
+        isOpen: true,
+        title: UI_STRINGS.buyerDirectory.freeRfqs,
+        subtitle: UI_STRINGS.buyerDirectory.trialPromotionalSubtext,
+        totalCount: filtered.length,
+        columns: rfqPopupColumns,
+        records: filtered as unknown as Record<string, unknown>[],
+      });
+    } else if (type === 'paidRfqs') {
+      const filtered = rfqs.filter(isPaidRFQ);
+      setSummaryModalState({
+        isOpen: true,
+        title: UI_STRINGS.buyerDirectory.paidRfqs,
+        subtitle: UI_STRINGS.buyerDirectory.paidSubscriptionSubtext,
+        totalCount: filtered.length,
+        columns: rfqPopupColumns,
+        records: filtered as unknown as Record<string, unknown>[],
+      });
+    }
+  };
+
   const handleExportDirectory = useCallback(() => {
     const rows = sortedBuyers.map((b) => {
       const metrics = buyerMetricsMap.get(b.id);
@@ -614,50 +811,125 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
 
   return (
     <div className="space-y-4">
-      {/* 5 KPI Summary Cards (In 1 horizontal row) */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      {/* 5 KPI Summary Cards (Compact, Clickable & Aligned in 1 horizontal row) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-2.5 w-full">
         {/* Card 1: Total Buyers */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Total Buyers</p>
-          <p className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white mt-1">{totalBuyers}</p>
-          <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-1">
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('totalBuyers')}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleSummaryCardClick('totalBuyers');
+            }
+          }}
+          className="bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {UI_STRINGS.buyerDirectory.totalBuyers}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none mt-1">
+            {totalBuyers}
+          </p>
+          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium whitespace-nowrap mt-1">
             {verifiedBuyers} Active Verified
           </span>
         </div>
 
         {/* Card 2: Subscription Buyers */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Subscription Buyers</p>
-          <p className="text-xl sm:text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">{subscriptionBuyers}</p>
-          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('subscriptionBuyers')}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleSummaryCardClick('subscriptionBuyers');
+            }
+          }}
+          className="bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {UI_STRINGS.buyerDirectory.subscriptionBuyers}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 leading-none mt-1">
+            {subscriptionBuyers}
+          </p>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1">
             {Math.max(0, totalBuyers - subscriptionBuyers)} Free Trial
           </span>
         </div>
 
         {/* Card 3: Total RFQs */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Total RFQs</p>
-          <p className="text-xl sm:text-2xl font-bold text-blue-600 dark:text-blue-400 mt-1">{totalRFQs}</p>
-          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-            Across all enterprise accounts
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('totalRfqs')}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleSummaryCardClick('totalRfqs');
+            }
+          }}
+          className="bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-blue-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {UI_STRINGS.buyerDirectory.totalRfqs}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-blue-600 dark:text-blue-400 leading-none mt-1">
+            {totalRFQs}
+          </p>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1">
+            Enterprise
           </span>
         </div>
 
         {/* Card 4: Free RFQs */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Free RFQs</p>
-          <p className="text-xl sm:text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">{freeRFQs}</p>
-          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-            Trial & promotional credits
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('freeRfqs')}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleSummaryCardClick('freeRfqs');
+            }
+          }}
+          className="bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-amber-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {UI_STRINGS.buyerDirectory.freeRfqs}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400 leading-none mt-1">
+            {freeRFQs}
+          </p>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1">
+            Trial credits
           </span>
         </div>
 
         {/* Card 5: Paid RFQs */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 sm:p-3.5 rounded-xl shadow-sm flex flex-col justify-between">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Paid RFQs</p>
-          <p className="text-xl sm:text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">{paidRFQs}</p>
-          <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-            Subscription & enterprise
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('paidRfqs')}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleSummaryCardClick('paidRfqs');
+            }
+          }}
+          className="bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-emerald-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {UI_STRINGS.buyerDirectory.paidRfqs}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-emerald-600 dark:text-emerald-400 leading-none mt-1">
+            {paidRFQs}
+          </p>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1">
+            Subscription
           </span>
         </div>
       </div>
@@ -889,7 +1161,7 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
                         switch (col.key) {
                           case 'organizationName':
                             return (
-                              <td key={col.key} className="px-4 py-3">
+                              <td key={col.key} className="px-3.5 py-2">
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -898,7 +1170,7 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
                                   }}
                                   className="flex items-center gap-2.5 text-left group cursor-pointer focus:outline-none"
                                 >
-                                  <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 font-bold flex items-center justify-center text-xs shrink-0 group-hover:scale-105 transition-transform">
+                                  <div className="w-7 h-7 rounded-lg text-xs bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 font-bold flex items-center justify-center text-xs shrink-0 group-hover:scale-105 transition-transform">
                                     {(buyer.organizationName || 'B').charAt(0)}
                                   </div>
                                   <span className="font-semibold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">
@@ -933,7 +1205,7 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
                             );
                           case 'sourcingMode':
                             return (
-                              <td key={col.key} className="px-4 py-3">
+                              <td key={col.key} className="px-3.5 py-2">
                                 <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
                                   {modeLabel}
                                 </span>
@@ -965,7 +1237,7 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
                             );
                           case 'status':
                             return (
-                              <td key={col.key} className="px-4 py-3">
+                              <td key={col.key} className="px-3.5 py-2">
                                 <span
                                   className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                                     buyer.status === 'ACTIVE_VERIFIED' || (buyer.status as string) === 'ACTIVE'
@@ -1108,9 +1380,21 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
         )}
       </div>
 
-      {/* 360° Buyer Dossier Drawer / Full Modal */}
+            {/* Dynamic Summary Card Records Popup Modal */}
+      <ActionCenterSummaryPopupModal
+        isOpen={summaryModalState.isOpen}
+        onClose={() => setSummaryModalState((prev) => ({ ...prev, isOpen: false }))}
+        title={summaryModalState.title}
+        subtitle={summaryModalState.subtitle}
+        totalCount={summaryModalState.totalCount}
+        columns={summaryModalState.columns}
+        records={summaryModalState.records}
+      />
+
+{/* 360° Buyer Dossier Drawer / Full Modal */}
       {activeBuyer && (
-        <BuyerDossierDrawer
+        
+      <BuyerDossierDrawer
           buyer={{
             ...activeBuyer,
             totalSpend: buyerMetricsMap.get(activeBuyer.id)?.spendFormatted || (activeBuyer.totalSpend ? activeBuyer.totalSpend.split("$").join("₹") : "₹0"),

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import BuyersDirectory from '@/app/category-manager/buyers-directory';
 import CategoryManagerBuyersDirectoryPage from '@/app/category-manager/buyers-directory/page';
 import { useApp } from '@/lib/store';
@@ -676,5 +676,160 @@ describe('BuyersDirectory Component Suite', () => {
     render(<BuyersDirectory initialBuyerId="non-matching-id" />);
     expect(screen.queryByText('Close Dossier')).toBeNull();
   });
-});
 
+  describe('Summary Cards Click and Modal Popup', () => {
+    test('opens modal on clicking Total Buyers summary card and exercises columns', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        buyerAccounts: mockBuyerAccounts,
+        rfqs: mockRfqs,
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        auditLogs: [],
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      render(<BuyersDirectory />);
+      expect(screen.getByText('Total Buyers')).toBeInTheDocument();
+
+      const totalCard = screen.getByText('Total Buyers').closest('[role="group"]');
+      if (totalCard) {
+        fireEvent.click(totalCard);
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toBeInTheDocument();
+        expect(within(dialog).getByText('Tata Motors Corp')).toBeInTheDocument();
+        expect(within(dialog).getByText('suresh@tatamotors.com')).toBeInTheDocument();
+
+        // Close modal
+        const closeBtn = screen.getAllByRole('button', { name: /close/i })[0];
+        fireEvent.click(closeBtn);
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      }
+    });
+
+    test('opens modal for subscriptionBuyers, totalRfqs, freeRfqs, and paidRfqs with keyboard support', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        buyerAccounts: mockBuyerAccounts,
+        rfqs: mockRfqs,
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        auditLogs: [],
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      render(<BuyersDirectory />);
+
+      // Subscription Buyers
+      const subCard = screen.getByText('Subscription Buyers').closest('[role="group"]');
+      if (subCard) {
+        fireEvent.click(subCard);
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+
+      // Total RFQs with Enter key
+      const rfqCard = screen.getByText('Total RFQs').closest('[role="group"]');
+      if (rfqCard) {
+        fireEvent.keyDown(rfqCard, { key: 'Enter' });
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toBeInTheDocument();
+        expect(within(dialog).getByText('RFQ-TM-001')).toBeInTheDocument();
+        expect(within(dialog).getByText('Precision Alloy Wheels')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+
+      // Free RFQs with Space key
+      const freeCard = screen.getByText('Free RFQs').closest('[role="group"]');
+      if (freeCard) {
+        fireEvent.keyDown(freeCard, { key: ' ' });
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+
+      // Paid RFQs
+      const paidCard = screen.getByText('Paid RFQs').closest('[role="group"]');
+      if (paidCard) {
+        fireEvent.click(paidCard);
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+    });
+  });
+
+
+  describe('Summary Cards Additional Branch Coverage', () => {
+    test('exercises keyboard handlers with Enter, Space, and ignored keys across all 5 cards', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        buyerAccounts: [
+          {
+            id: 'b-empty',
+            organizationName: '',
+            contactPerson: '',
+            corporateEmail: '',
+            city: '',
+            primaryPlantLocation: '',
+            sourcingMode: '',
+            subscriptionPlan: '',
+            status: '',
+          },
+        ],
+        rfqs: [
+          {
+            id: 'rfq-empty',
+            rfqNumber: '',
+            title: '',
+            buyerAccountId: 'b-empty',
+            buyerAccountName: '',
+            raisedByName: '',
+            sourcingMode: '',
+            budget: 0,
+            status: '',
+            quotes: [],
+          },
+        ],
+        auditLogs: [],
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      render(<BuyersDirectory />);
+
+      const cards = [
+        screen.getByText('Total Buyers', { selector: 'p' }).closest('[role="group"]'),
+        screen.getByText('Subscription Buyers', { selector: 'p' }).closest('[role="group"]'),
+        screen.getByText('Total RFQs', { selector: 'p' }).closest('[role="group"]'),
+        screen.getByText('Free RFQs', { selector: 'p' }).closest('[role="group"]'),
+        screen.getByText('Paid RFQs', { selector: 'p' }).closest('[role="group"]'),
+      ];
+
+      // Ignored key (Escape) on all cards
+      cards.forEach((c) => { if (c) fireEvent.keyDown(c, { key: 'Escape' }); });
+
+      // Enter key
+      cards.forEach((c) => {
+        if (c) {
+          fireEvent.keyDown(c, { key: 'Enter' });
+          const closeBtn = screen.getAllByRole('button', { name: /close/i })[0];
+          if (closeBtn) fireEvent.click(closeBtn);
+        }
+      });
+
+      // Space key
+      cards.forEach((c) => {
+        if (c) {
+          fireEvent.keyDown(c, { key: ' ' });
+          const closeBtn = screen.getAllByRole('button', { name: /close/i })[0];
+          if (closeBtn) fireEvent.click(closeBtn);
+        }
+      });
+    });
+
+    test('exercises sessionStorage with empty object to cover false branches', () => {
+      window.sessionStorage.setItem('buyer_directory_state', JSON.stringify({}));
+      render(<BuyersDirectory />);
+      expect(screen.getByText('Total Buyers', { selector: 'p' })).toBeInTheDocument();
+      window.sessionStorage.clear();
+    });
+  });
+
+});

@@ -88,6 +88,7 @@ import type {
   InternalTaskCategory,
   CreditAccountType,
   DemoStatus,
+  ActionCenterSummaryPopupColumn,
 } from '@/lib/types';
 
 import ActionCenterSubNav, { type ActionCenterTabKey } from './components/ActionCenterSubNav';
@@ -103,6 +104,7 @@ import { fetchTicketSummary } from '@/lib/ticketClient';
 import { fetchApprovalSummary } from '@/lib/approvalClient';
 import ActionCenterComposeModal from './components/ActionCenterComposeModal';
 import DocumentVaultDashboard from './components/DocumentVaultDashboard';
+import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
 
 export default function InternalTasksDashboard() {
   // Data state
@@ -141,6 +143,21 @@ export default function InternalTasksDashboard() {
   const [approvalSummary, setApprovalSummary] = useState<ApprovalSummary | null>(null);
   const [paymentDuesSummary, setPaymentDuesSummary] = useState<PaymentDuesSummary | null>(null);
   const [isComposeModalOpen, setIsComposeModalOpen] = useState<boolean>(false);
+  // Summary Card Popup Modal State
+  const [summaryModalState, setSummaryModalState] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle: string;
+    totalCount: number;
+    records: InternalTask[];
+  }>({
+    isOpen: false,
+    title: '',
+    subtitle: '',
+    totalCount: 0,
+    records: [],
+  });
+
 
   // Credit approval action state in Drawer
   const [creditApprovalRemarks, setCreditApprovalRemarks] = useState<string>('');
@@ -436,12 +453,123 @@ export default function InternalTasksDashboard() {
     }
   };
 
-  // Summary Card Click Filter
+  // Summary Modal Columns Configuration
+  const taskPopupColumns = useMemo<ActionCenterSummaryPopupColumn<InternalTask>[]>(() => [
+    {
+      key: 'task_number',
+      label: 'Task ID',
+      render: (t) => (
+        <span className="font-mono font-bold text-blue-600 dark:text-blue-400">
+          {t.task_number || t.id.slice(0, 8)}
+        </span>
+      ),
+    },
+    {
+      key: 'title',
+      label: 'Title',
+      render: (t) => (
+        <span className="font-semibold text-slate-900 dark:text-white max-w-xs truncate block" title={t.title}>
+          {t.title}
+        </span>
+      ),
+    },
+    {
+      key: 'task_category',
+      label: 'Category',
+      render: (t) => (
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          {t.task_category || 'GENERAL'}
+        </span>
+      ),
+    },
+    {
+      key: 'priority',
+      label: 'Priority',
+      render: (t) => (
+        <span
+          className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold ${
+            t.priority === 'Critical'
+              ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
+              : t.priority === 'High'
+              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+              : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+          }`}
+        >
+          {t.priority}
+        </span>
+      ),
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (t) => (
+        <span
+          className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold ${
+            t.status === 'Completed'
+              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+              : t.status === 'In Progress'
+              ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
+              : t.status === 'Pending Approval'
+              ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
+              : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+          }`}
+        >
+          {t.status}
+        </span>
+      ),
+    },
+    {
+      key: 'assigned_to_name',
+      label: 'Assigned To',
+      render: (t) => <span>{t.assigned_to_name || t.assigned_team || 'Unassigned'}</span>,
+    },
+    {
+      key: 'due_date',
+      label: 'Due Date',
+      render: (t) => {
+        if (!t.due_date) return <span>–</span>;
+        const d = new Date(t.due_date);
+        return <span>{isNaN(d.getTime()) ? t.due_date : d.toLocaleDateString('en-GB')}</span>;
+      },
+    },
+  ], []);
+
+  // Summary Card Click Filter & Popup Modal Launcher
   const handleCardClick = (statusKey: string) => {
-    const nextStatus = statusKey === 'all' ? 'all' : statusKey;
-    setActiveFilters((prev) => ({ ...prev, status: nextStatus }));
-    setDraftFilters((prev) => ({ ...prev, status: nextStatus }));
+    let filtered: InternalTask[] = [];
+    let modalTitle = 'Total Tasks';
+    let modalSubtitle = 'All internal tasks across modules';
+
+    if (statusKey === 'overdue') {
+      const todayIso = new Date().toISOString().split('T')[0];
+      setActiveFilters((prev) => ({ ...prev, status: 'all', dueTo: todayIso }));
+      setDraftFilters((prev) => ({ ...prev, status: 'all', dueTo: todayIso }));
+      filtered = tasks.filter((t) => getDaysOverdueOrRemaining(t.due_date, t.status).isOverdue);
+      modalTitle = 'Overdue Tasks';
+      modalSubtitle = 'Tasks that have exceeded their deadline';
+    } else {
+      const nextStatus = statusKey === 'all' ? 'all' : statusKey;
+      setActiveFilters((prev) => ({ ...prev, status: nextStatus, dueTo: '' }));
+      setDraftFilters((prev) => ({ ...prev, status: nextStatus, dueTo: '' }));
+      if (statusKey === 'all') {
+        filtered = tasks;
+        modalTitle = 'Total Tasks';
+        modalSubtitle = 'All internal tasks across modules';
+      } else {
+        filtered = tasks.filter((t) => t.status === statusKey);
+        modalTitle = `${statusKey} Tasks`;
+        modalSubtitle = `Tasks currently marked as ${statusKey}`;
+      }
+    }
     setCurrentPage(1);
+
+    setSummaryModalState({
+      isOpen: true,
+      title: modalTitle,
+      subtitle: modalSubtitle,
+      totalCount: filtered.length,
+      records: filtered,
+    });
   };
 
   // Handle Detailed Complete Task from Drawer
@@ -998,36 +1126,36 @@ export default function InternalTasksDashboard() {
               </p>
             </div>
 
-            {/* Section 5: Summary Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 w-full md:w-auto text-xs">
+            {/* Section 5: Compact Summary Cards (Single Horizontal Row) */}
+            <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto w-full md:w-auto text-xs pb-1 sm:pb-0">
               {/* Total Tasks */}
               <button
                 type="button"
                 onClick={() => handleCardClick('all')}
-                className={`p-2.5 rounded-xl border text-left transition-all ${
+                className={`px-3 py-1.5 sm:py-2 rounded-lg border text-left transition-all shrink-0 min-w-[90px] sm:min-w-[105px] cursor-pointer ${
                   activeFilters.status === 'all'
-                    ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-slate-900 shadow-sm'
-                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                    ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-slate-900 shadow-xs'
+                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 shadow-xs'
                 }`}
                 data-testid="card-total-tasks"
               >
-                <div className="text-[10px] uppercase font-semibold opacity-70">Total Tasks</div>
-                <div className="text-lg font-extrabold mt-0.5">{summary.total}</div>
+                <div className="text-[10px] uppercase font-bold tracking-tight opacity-75 whitespace-nowrap">Total Tasks</div>
+                <div className="text-base sm:text-lg font-extrabold mt-0.5 leading-none">{summary.total}</div>
               </button>
 
               {/* New Tasks */}
               <button
                 type="button"
                 onClick={() => handleCardClick('New')}
-                className={`p-2.5 rounded-xl border text-left transition-all ${
+                className={`px-3 py-1.5 sm:py-2 rounded-lg border text-left transition-all shrink-0 min-w-[90px] sm:min-w-[105px] cursor-pointer ${
                   activeFilters.status === 'New'
-                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
-                    : 'bg-blue-50/70 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800/60 hover:bg-blue-100/70'
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                    : 'bg-blue-50/70 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800/60 hover:bg-blue-100/70 shadow-xs'
                 }`}
                 data-testid="card-new-tasks"
               >
-                <div className="text-[10px] uppercase font-semibold text-blue-700 dark:text-blue-300">New Tasks</div>
-                <div className="text-lg font-extrabold text-blue-900 dark:text-blue-100 mt-0.5">
+                <div className="text-[10px] uppercase font-bold tracking-tight text-blue-700 dark:text-blue-300 whitespace-nowrap">New Tasks</div>
+                <div className="text-base sm:text-lg font-extrabold text-blue-900 dark:text-blue-100 mt-0.5 leading-none">
                   {summary.newTasks ?? summary.pending ?? 0}
                 </div>
               </button>
@@ -1036,15 +1164,15 @@ export default function InternalTasksDashboard() {
               <button
                 type="button"
                 onClick={() => handleCardClick('In Progress')}
-                className={`p-2.5 rounded-xl border text-left transition-all ${
+                className={`px-3 py-1.5 sm:py-2 rounded-lg border text-left transition-all shrink-0 min-w-[90px] sm:min-w-[105px] cursor-pointer ${
                   activeFilters.status === 'In Progress'
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                    : 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-200 dark:border-indigo-800/60 hover:bg-indigo-100/70'
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                    : 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-200 dark:border-indigo-800/60 hover:bg-indigo-100/70 shadow-xs'
                 }`}
                 data-testid="card-in-progress"
               >
-                <div className="text-[10px] uppercase font-semibold text-indigo-700 dark:text-indigo-300">In Progress</div>
-                <div className="text-lg font-extrabold text-indigo-900 dark:text-indigo-100 mt-0.5">
+                <div className="text-[10px] uppercase font-bold tracking-tight text-indigo-700 dark:text-indigo-300 whitespace-nowrap">In Progress</div>
+                <div className="text-base sm:text-lg font-extrabold text-indigo-900 dark:text-indigo-100 mt-0.5 leading-none">
                   {summary.inProgress}
                 </div>
               </button>
@@ -1053,15 +1181,15 @@ export default function InternalTasksDashboard() {
               <button
                 type="button"
                 onClick={() => handleCardClick('Pending Approval')}
-                className={`p-2.5 rounded-xl border text-left transition-all ${
+                className={`px-3 py-1.5 sm:py-2 rounded-lg border text-left transition-all shrink-0 min-w-[105px] sm:min-w-[120px] cursor-pointer ${
                   activeFilters.status === 'Pending Approval'
-                    ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
-                    : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/60 hover:bg-amber-100/70'
+                    ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                    : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/60 hover:bg-amber-100/70 shadow-xs'
                 }`}
                 data-testid="card-pending-approval"
               >
-                <div className="text-[10px] uppercase font-semibold text-amber-700 dark:text-amber-300">Pending Approval</div>
-                <div className="text-lg font-extrabold text-amber-900 dark:text-amber-100 mt-0.5">
+                <div className="text-[10px] uppercase font-bold tracking-tight text-amber-700 dark:text-amber-300 whitespace-nowrap">Pending Approval</div>
+                <div className="text-base sm:text-lg font-extrabold text-amber-900 dark:text-amber-100 mt-0.5 leading-none">
                   {summary.pendingApproval ?? 0}
                 </div>
               </button>
@@ -1070,15 +1198,15 @@ export default function InternalTasksDashboard() {
               <button
                 type="button"
                 onClick={() => handleCardClick('Completed')}
-                className={`p-2.5 rounded-xl border text-left transition-all ${
+                className={`px-3 py-1.5 sm:py-2 rounded-lg border text-left transition-all shrink-0 min-w-[90px] sm:min-w-[105px] cursor-pointer ${
                   activeFilters.status === 'Completed'
-                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                    : 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60 hover:bg-emerald-100/70'
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60 hover:bg-emerald-100/70 shadow-xs'
                 }`}
                 data-testid="card-completed"
               >
-                <div className="text-[10px] uppercase font-semibold text-emerald-700 dark:text-emerald-300">Completed</div>
-                <div className="text-lg font-extrabold text-emerald-900 dark:text-emerald-100 mt-0.5">
+                <div className="text-[10px] uppercase font-bold tracking-tight text-emerald-700 dark:text-emerald-300 whitespace-nowrap">Completed</div>
+                <div className="text-base sm:text-lg font-extrabold text-emerald-900 dark:text-emerald-100 mt-0.5 leading-none">
                   {summary.completed}
                 </div>
               </button>
@@ -1086,12 +1214,12 @@ export default function InternalTasksDashboard() {
               {/* Overdue Tasks */}
               <button
                 type="button"
-                onClick={() => handleCardClick('all')}
-                className="p-2.5 rounded-xl border text-left bg-rose-50/70 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60 hover:bg-rose-100/70 transition-all"
+                onClick={() => handleCardClick('overdue')}
+                className="px-3 py-1.5 sm:py-2 rounded-lg border text-left bg-rose-50/70 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60 hover:bg-rose-100/70 transition-all shrink-0 min-w-[90px] sm:min-w-[105px] shadow-xs cursor-pointer"
                 data-testid="card-overdue"
               >
-                <div className="text-[10px] uppercase font-semibold text-rose-700 dark:text-rose-300">Overdue</div>
-                <div className="text-lg font-extrabold text-rose-900 dark:text-rose-100 mt-0.5">
+                <div className="text-[10px] uppercase font-bold tracking-tight text-rose-700 dark:text-rose-300 whitespace-nowrap">Overdue</div>
+                <div className="text-base sm:text-lg font-extrabold text-rose-900 dark:text-rose-100 mt-0.5 leading-none">
                   {summary.overdueCount ?? 0}
                 </div>
               </button>
@@ -2988,6 +3116,16 @@ export default function InternalTasksDashboard() {
           />
         );
       })()}
+      {/* Action Center Tasks Summary Modal */}
+      <ActionCenterSummaryPopupModal
+        isOpen={summaryModalState.isOpen}
+        onClose={() => setSummaryModalState((prev) => ({ ...prev, isOpen: false }))}
+        title={summaryModalState.title}
+        subtitle={summaryModalState.subtitle}
+        totalCount={summaryModalState.totalCount}
+        columns={taskPopupColumns}
+        records={summaryModalState.records}
+      />
     </div>
   );
 }
