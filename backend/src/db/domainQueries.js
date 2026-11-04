@@ -273,7 +273,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     : await pool.query(
         `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
         [...params],
-        { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}` }
+        { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}`, useCache: true, tag: 'vendors', ttlMs: 300000 }
       );
   const total = countResult.rows[0]?.total || 0;
 
@@ -1943,7 +1943,7 @@ async function getPublicVendorsPageFromDB({
   const countResult = await pool.query(
     `SELECT COUNT(*)::int AS total FROM vendors ${pgWhere}`,
     [...params],
-    { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}` }
+    { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}`, useCache: true, tag: 'vendors', ttlMs: 300000 }
   );
   const total = countResult.rows[0]?.total || 0;
 

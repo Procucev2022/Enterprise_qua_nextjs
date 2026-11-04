@@ -77,19 +77,25 @@ async function getCreditHistory(req, res, next) {
 
       const unlockedIds = creditInfo.unlockedRfqIds || [];
       let runningBal = alloc;
+      const unlockPromises = [];
       for (const rfqId of unlockedIds) {
         if (runningBal > 0) {
           runningBal = Math.max(0, runningBal - 1);
-          await domainQueries.recordCreditTransactionInDB({
-            id: `vtx-rfq-${vendor.id.slice(0, 5)}-${String(rfqId).slice(0, 8)}`,
-            vendorId: vendor.id,
-            rfqId: String(rfqId),
-            transactionType: 'RFQ_UNLOCK',
-            amount: -1,
-            balanceAfter: runningBal,
-            idempotencyKey: `unlock-${vendor.id}-${rfqId}`,
-          });
+          unlockPromises.push(
+            domainQueries.recordCreditTransactionInDB({
+              id: `vtx-rfq-${vendor.id.slice(0, 5)}-${String(rfqId).slice(0, 8)}`,
+              vendorId: vendor.id,
+              rfqId: String(rfqId),
+              transactionType: 'RFQ_UNLOCK',
+              amount: -1,
+              balanceAfter: runningBal,
+              idempotencyKey: `unlock-${vendor.id}-${rfqId}`,
+            })
+          );
         }
+      }
+      if (unlockPromises.length > 0) {
+        await Promise.all(unlockPromises);
       }
 
       transactions = await domainQueries.getVendorCreditTransactionsFromDB(vendor.id, 100);

@@ -14,15 +14,24 @@ const { logger } = require('../services/loggerService');
 async function resolveRecipient(req) {
   if (!req.user) return null;
   if (req.user.role === 'vendor') {
-    // 'all': resolving the caller's own vendor identity by session email, not
-    // filtering a buyer-scoped list — omitting this silently returns nothing
-    // for any buyer-uploaded vendor (one with a buyerId set).
+    if (req.user.vendorId) return { type: 'vendor', id: req.user.vendorId };
     const vendor = storeService.getVendorById(req.user.email, 'all');
-    return vendor ? { type: 'vendor', id: vendor.id } : null;
+    if (vendor) {
+      req.user.vendorId = vendor.id;
+      return { type: 'vendor', id: vendor.id };
+    }
+    return null;
   }
   if (req.user.role === 'buyer') {
+    if (req.user.buyerAccountId || req.user.buyerId) {
+      return { type: 'buyer', id: req.user.buyerAccountId || req.user.buyerId };
+    }
     const account = await storeService.getBuyerAccountByEmail(req.user.email);
-    return account ? { type: 'buyer', id: account.id } : null;
+    if (account) {
+      req.user.buyerAccountId = account.id;
+      return { type: 'buyer', id: account.id };
+    }
+    return null;
   }
   return null;
 }
