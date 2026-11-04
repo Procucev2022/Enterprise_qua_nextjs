@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 export type UserRole = 'buyer' | 'category_manager' | 'vendor' | 'admin';
 
 export type SourcingMode = 'mode_0' | 'mode_1' | 'mode_2' | 'mode_3';
@@ -1830,7 +1832,7 @@ export interface DBHealthStatus {
   providerLabel?: string;
   latencyMs?: number;
   poolStatus?: {
-    totalCount: number;
+    totalCount?: number;
     idleCount: number;
     waitingCount: number;
   };
@@ -3132,4 +3134,25 @@ export interface TaskSummary {
   pending?: number;
   blocked?: number;
   escalated?: number;
+}
+
+
+export interface ActionCenterSummaryPopupColumn<T = Record<string, unknown>> {
+  key: string;
+  label: string;
+  render?: (item: T) => ReactNode;
+  sortable?: boolean;
+}
+
+export interface ActionCenterSummaryPopupModalProps<T = Record<string, unknown>> {
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle?: string;
+  totalCount?: number;
+  columns: ActionCenterSummaryPopupColumn<T>[];
+  records: T[];
+  searchPlaceholder?: string;
+  searchKeys?: string[];
+  initialPageSize?: number;
 }
