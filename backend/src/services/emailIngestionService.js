@@ -130,13 +130,29 @@ function classifyAttachment(attachment) {
 /** Extract list of lowercase email addresses from mailparser address object. */
 function extractCcAddresses(addressObject) {
   if (!addressObject) return [];
+  if (Array.isArray(addressObject)) {
+    return addressObject
+      .map((entry) => {
+        if (!entry) return '';
+        if (typeof entry === 'string') return entry.trim().toLowerCase();
+        if (typeof entry === 'object') return (entry.address || entry.value || '').trim().toLowerCase();
+        return '';
+      })
+      .filter(Boolean);
+  }
   if (Array.isArray(addressObject.value)) {
     return addressObject.value
-      .map((entry) => (entry && typeof entry.address === 'string' ? entry.address.trim().toLowerCase() : ''))
+      .map((entry) => (entry && typeof entry.address === 'string' ? entry.address.trim().toLowerCase() : (entry && typeof entry.value === 'string' ? entry.value.trim().toLowerCase() : '')))
       .filter(Boolean);
   }
   if (typeof addressObject.text === 'string') {
     return addressObject.text
+      .split(',')
+      .map((a) => a.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  if (typeof addressObject === 'string') {
+    return addressObject
       .split(',')
       .map((a) => a.trim().toLowerCase())
       .filter(Boolean);
@@ -301,7 +317,9 @@ async function parseEmailMessage(rawBuffer) {
     fromAddress,
     fromName: firstAddressName(parsed.from, fromAddress),
     toAddress: firstAddress(parsed.to),
+    toAddresses: extractCcAddresses(parsed.to),
     cc: extractCcAddresses(parsed.cc),
+    ccAddresses: extractCcAddresses(parsed.cc),
     sentAt: parsed.date instanceof Date ? parsed.date.toISOString() : null,
     bodyText: stripQuotedReplies(resolveBodyText(parsed)),
     attachments,

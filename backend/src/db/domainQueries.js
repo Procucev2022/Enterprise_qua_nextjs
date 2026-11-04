@@ -868,8 +868,8 @@ async function getRFQsFromDB(buyerAccountId = null, limit = null) {
   if (buyerAccountId) {
     params.push(String(buyerAccountId));
     const p = params.length;
-    conditions.push(`raw->>'buyerAccountId' = $${p}`);
-    d1Conditions.push(`json_extract(raw, '$.buyerAccountId') = $${p}`);
+    conditions.push(`(raw->>'buyerAccountId' = $${p} OR raw->'sharedBuyerAccountIds' ? $${p} OR raw->>'buyerId' = $${p})`);
+    d1Conditions.push(`(json_extract(raw, '$.buyerAccountId') = $${p} OR json_extract(raw, '$.buyerId') = $${p} OR EXISTS (SELECT 1 FROM json_each(raw, '$.sharedBuyerAccountIds') WHERE json_each.value = $${p}))`);
   }
   const wherePg = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const whereD1 = d1Conditions.length > 0 ? `WHERE ${d1Conditions.join(' AND ')}` : '';
