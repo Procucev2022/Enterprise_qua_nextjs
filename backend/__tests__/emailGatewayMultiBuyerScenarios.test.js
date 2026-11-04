@@ -6,6 +6,8 @@ const storeService = require('../src/services/storeService');
 const mailerService = require('../src/services/mailerService');
 const identityQueries = require('../src/db/identityQueries');
 const rfqController = require('../src/controllers/rfqController');
+const domainQueries = require('../src/db/domainQueries');
+const pool = require('../src/db/pool');
 const {
   EMAIL_GATEWAY_CONFIG,
   EMAIL_RFQ_SCENARIOS,
@@ -581,6 +583,24 @@ describe('CC-Based Buyer Identification & Multi-Buyer Email-to-RFQ Scenarios', (
       expect(checkAccess(scope1, rfq)).toBe(true);
       expect(checkAccess(scope2, rfq)).toBe(true);
       expect(checkAccess(scope3, rfq)).toBe(false);
+    });
+
+    test('domainQueries.getRFQsFromDB generates exact JSON array containment for both Postgres and D1', async () => {
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ raw: { id: 'rfq-shared-1' } }] });
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+      const rfqs = await domainQueries.getRFQsFromDB('buyer-123', 50);
+      expect(rfqs).toHaveLength(1);
+      expect(querySpy).toHaveBeenCalled();
+
+      const [sql, params, options] = querySpy.mock.calls[0];
+      expect(sql).toContain("raw->'sharedBuyerAccountIds' ? $1");
+      expect(sql).toContain("raw->>'buyerAccountId' = $1");
+      expect(sql).toContain("raw->>'buyerId' = $1");
+      expect(options.d1Text).toContain("EXISTS (SELECT 1 FROM json_each(raw, '$.sharedBuyerAccountIds') WHERE json_each.value = $1)");
+      expect(options.d1Text).toContain("json_extract(raw, '$.buyerAccountId') = $1");
+      expect(options.d1Text).toContain("json_extract(raw, '$.buyerId') = $1");
+      expect(params).toEqual(['buyer-123', 50]);
     });
 
     test('Identity DB linking fallback for resolveRegisteredBuyerAccount', async () => {

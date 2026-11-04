@@ -5915,3 +5915,125 @@ continue
 ```text
 create a new branch and raise pr to test-v3
 ```
+
+
+---
+
+### Prompt 50
+
+**Timestamp**: 2026-11-04T08:40:48+05:30
+
+```text
+Risk level: medium | Findings: 1
+The PR successfully implements CC-based buyer identification and multi-buyer RFQ routing across four distinct scenarios. Core services, validation schemas, and database queries have been updated cleanly, with strong test coverage. One minor SQL injection vector was identified in a fallback D1 query.
+What changedAdded EMAIL_RFQ_SCENARIOS enum constants for multi-buyer routing workflows.
+Upgraded email extraction and recipient normalization logic to handle diverse input types (strings, arrays, objects).
+Implemented resolveMultiBuyerAttribution in emailGatewayService to support 4 core business scenarios.
+Extended domain queries and controller access checks to support shared buyer account IDs on RFQs.
+Added comprehensive unit and integration test coverage for all scenarios.
+[backend/src/db/domainQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/405/files/4f57637fe0d8400a23aae4e4fa0e8a4bbc5364c6#diff-0efee782c4c1ae7272a5c82de70e40449f8dc4c3df87db08664a460e1eb95de2)
+conditions.push(`raw->>'buyerAccountId' = $${p}`);
+d1Conditions.push(`json_extract(raw, '$.buyerAccountId') = $${p}`);
+conditions.push(`(raw->>'buyerAccountId' = $${p} OR raw->'sharedBuyerAccountIds' ? $${p} OR raw->>'buyerId' = $${p})`);
+d1Conditions.push(`(json_extract(raw, '$.buyerAccountId') = $${p} OR instr(json_extract(raw, '$.sharedBuyerAccountIds'), $${p}) > 0)`);
+[Procucev2022](https://github.com/Procucev2022)[29 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/405#discussion_r4462956484)
+Owner
+🟠 HIGH · security — Potential SQL injection or incorrect parameter binding in SQLite/D1 shared buyer query
+Using string interpolation (instr(json_extract(raw, '$.sharedBuyerAccountIds'), $${p}) > 0) on a JSON array stored as text can lead to false-positive partial string matches (e.g., searching for ID '1' matches ID '10') or injection risks if parameters are improperly handled. Use proper JSON array containment or exact matching instead of instr with unescaped substrings.
+Reply...
+[github-actions](https://github.com/apps/github-actions) Botcommented[25 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/405#issuecomment-6621137629)
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: PASSED
+304 / 304 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+4534
+4534
+0
+0
+frontend
+3622
+3622
+0
+0
+Workspace
+8156
+8156
+0
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.73%
+92.35%
+99.12%
+99.41%
+138 / 138
+frontend
+97.97%
+93.13%
+98.04%
+98.78%
+166 / 166
+Workspace
+98.35%
+92.71%
+98.43%
+99.10%
+304 / 304
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+PASSED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+PASSED
+Frontend per-file coverage
+PASSED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+This branch has not been deployed
+No deployments
+Merge info
+Some checks were not successful
+1 failing, 4 successful checks
+failing checks
+[Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41762327767/job/126352632112?pr=405)
+Failing after 18s
+successful checks
+[Request Copilot Review / request-copilot-review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41762327772/job/126352632248?pr=405)
+Successful in 4s
+Required
+[Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41762327799/job/126352632486?pr=405)
+Successful in 2m
+Required
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41762327799/job/126352632733?pr=405)
+Successful in 4m
+Required
+[Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41762327799/job/126354076974?pr=405)
+Successful in 11s
+Merging is blocked
+A conversation must be resolved before this pull request can be merged.
+You can also merge this with the command line.
+
+gemini is fail check and pass that
+```
