@@ -2,6 +2,7 @@ const request = require('supertest');
 
 const app = require('../src/app');
 const storeService = require('../src/services/storeService');
+const authService = require('../src/services/authService');
 const { authHeader, TEST_USERS } = require('./testHelpers');
 
 // The controller resolves the caller to a recipient by their session email, so
@@ -179,5 +180,102 @@ describe('notification endpoints surface an unexpected failure', () => {
     });
     const res = await request(app).patch('/api/notifications/ntf-1/read').set(authHeader('vendor'));
     expect(res.statusCode).toBeGreaterThanOrEqual(500);
+  });
+
+  test('resolves recipient for buyer user with buyerId only', async () => {
+    const token = authService.generateSessionToken({
+      sub: 'buyer-user-1',
+      email: 'buyer1@test.com',
+      role: 'buyer',
+      buyerId: 'buyer-id-999',
+    });
+    const res = await request(app).get('/api/notifications').set({ Authorization: `Bearer ${token}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  test('resolves recipient for buyer user with neither id when email lookup fails', async () => {
+    jest.spyOn(storeSvc, 'getBuyerAccountByEmail').mockResolvedValue(null);
+    const token = authService.generateSessionToken({
+      sub: 'buyer-user-2',
+      email: 'unregistered-buyer@test.com',
+      role: 'buyer',
+    });
+    const res = await request(app).get('/api/notifications').set({ Authorization: `Bearer ${token}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toEqual([]);
+  });
+
+  test('resolves recipient for vendor user when getVendorById returns null', async () => {
+    jest.spyOn(storeSvc, 'getVendorById').mockReturnValue(null);
+    const token = authService.generateSessionToken({
+      sub: 'vendor-user-1',
+      email: 'unknown-vendor@test.com',
+      role: 'vendor',
+    });
+    const res = await request(app).get('/api/notifications').set({ Authorization: `Bearer ${token}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toEqual([]);
+  });
+});
+
+describe('notificationController unit coverage for branches', () => {
+  const { resolveRecipient, listNotifications, markRead, markAllRead } = require('../src/controllers/notificationController');
+
+  test('covers all resolveRecipient combinations', async () => {
+    expect(await resolveRecipient(null)).toBeNull();
+    expect(await resolveRecipient({})).toBeNull();
+    expect(await resolveRecipient({ user: { role: 'other' } })).toBeNull();
+    expect(await resolveRecipient({ user: { role: 'vendor', vendorId: 'v1' } })).toEqual({ type: 'vendor', id: 'v1' });
+    expect(await resolveRecipient({ user: { role: 'buyer', buyerAccountId: 'ba1' } })).toEqual({ type: 'buyer', id: 'ba1' });
+    expect(await resolveRecipient({ user: { role: 'buyer', buyerId: 'b1' } })).toEqual({ type: 'buyer', id: 'b1' });
+  });
+
+  test('covers listNotifications limit branches', async () => {
+    const fakeRes = () => {
+      const res = {};
+      res.json = jest.fn((val) => val);
+      res.status = jest.fn(() => res);
+      return res;
+    };
+    const next = jest.fn();
+
+    // query.limit integer > 0
+    let res = fakeRes();
+    await listNotifications({ user: { role: 'buyer', buyerAccountId: 'b1' }, query: { limit: '10' } }, res, next);
+    expect(res.json).toHaveBeenCalled();
+
+    // query.limit > 200 (caps at 200)
+    res = fakeRes();
+    await listNotifications({ user: { role: 'buyer', buyerAccountId: 'b1' }, query: { limit: '500' } }, res, next);
+    expect(res.json).toHaveBeenCalled();
+
+    // query.limit <= 0 or not an integer
+    res = fakeRes();
+    await listNotifications({ user: { role: 'buyer', buyerAccountId: 'b1' }, query: { limit: '-5' } }, res, next);
+    expect(res.json).toHaveBeenCalled();
+
+    // no query object
+    res = fakeRes();
+    await listNotifications({ user: { role: 'buyer', buyerAccountId: 'b1' } }, res, next);
+    expect(res.json).toHaveBeenCalled();
+  });
+
+  test('covers markRead and markAllRead when recipient is null', async () => {
+    const fakeRes = () => {
+      const res = {};
+      res.json = jest.fn((val) => val);
+      res.status = jest.fn(() => res);
+      return res;
+    };
+    const next = jest.fn();
+
+    let res = fakeRes();
+    await markRead({ user: { role: 'admin' }, params: { id: 'ntf-1' } }, res, next);
+    expect(res.status).toHaveBeenCalledWith(404);
+
+    res = fakeRes();
+    await markAllRead({ user: { role: 'admin' } }, res, next);
+    expect(res.json).toHaveBeenCalledWith({ success: true, updated: 0 });
   });
 });

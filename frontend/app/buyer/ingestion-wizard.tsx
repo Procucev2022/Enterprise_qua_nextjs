@@ -572,7 +572,7 @@ export default function IngestionWizard({
   useEffect(() => {
     if (!isAllCategories && !selectedMajorCategory) return;
     const key = `${selectedMajorCategory}::${debouncedAllVendorsSearch}`;
-    if (allVendorsList.length > 0 && lastAllVendorsKeyRef.current === key) return;
+    if (lastAllVendorsKeyRef.current === key) return;
     lastAllVendorsKeyRef.current = key;
     const seq = ++allVendorsFetchSeqRef.current;
     setAllVendorsLoading(true);

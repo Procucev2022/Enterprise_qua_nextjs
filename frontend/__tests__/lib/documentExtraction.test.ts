@@ -175,6 +175,27 @@ describe('flattenWorkbook', () => {
   });
 });
 
+
+  test('replicates merged cell values across merged range including empty and non-empty cells', () => {
+    const book = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['Header', null, 'Qty'],
+      ['Submersible', 'Pump', 10],
+    ]);
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 1 } },
+      { s: { r: 5, c: 0 }, e: { r: 5, c: 1 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 1 } },
+    ];
+    XLSX.utils.book_append_sheet(book, ws, 'MergedSheet');
+    const written = XLSX.write(book, { type: 'array', bookType: 'xlsx' });
+
+    const text = flattenWorkbook(written);
+    expect(text).toContain('Header | Header | Qty');
+    expect(text).toContain('Submersible | Pump | 10');
+  });
+
+
 describe('readAsBase64', () => {
   test('returns the body without the data-URL prefix', async () => {
     const file = new File(['hello'], 'note.txt', { type: 'text/plain' });

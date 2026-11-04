@@ -46,7 +46,26 @@ export function isWordDocument(name: string): boolean {
 export function flattenWorkbook(data: ArrayBuffer): string {
   const workbook = XLSX.read(new Uint8Array(data), { type: 'array' });
   return workbook.SheetNames.map((sheetName) => {
-    const rows: unknown[][] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+    const sheet = workbook.Sheets[sheetName];
+    if (sheet && sheet['!merges']) {
+      for (const merge of sheet['!merges']) {
+        const startAddr = XLSX.utils.encode_cell({ r: merge.s.r, c: merge.s.c });
+        const val = sheet[startAddr];
+        if (val) {
+          for (let r = merge.s.r; r <= merge.e.r; r++) {
+            for (let c = merge.s.c; c <= merge.e.c; c++) {
+              if (r !== merge.s.r || c !== merge.s.c) {
+                const cellAddr = XLSX.utils.encode_cell({ r, c });
+                if (!sheet[cellAddr]) {
+                  sheet[cellAddr] = { ...val };
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       blankrows: false,
       defval: '',

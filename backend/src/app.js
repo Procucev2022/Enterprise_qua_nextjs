@@ -30,6 +30,10 @@ const { logger } = require('./services/loggerService');
 
 const app = express();
 
+// Security & Preflight Middlewares - Handle CORS before any DB hydration
+app.use(cors());
+app.options('*', cors());
+
 // Cloudflare Workers' entry point (worker.mjs) only calls app.listen() — it
 // skips server.js's bootstrapServer(), which is what normally hydrates
 // storeService from the database before the first request on Node/Render.
@@ -48,9 +52,13 @@ const app = express();
 // The WhatsApp bot bridge (/api/bot) reads accounts straight from the database
 // and loads any vendor it touches on demand, so it skips this: a cold isolate
 // would otherwise hold the bot's reply until every table above had loaded.
+// Security & Parsing Middlewares
+app.use(cors());
+
 const BOT_BRIDGE_PATH = '/api/bot';
 let hydrationPromise = null;
 app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') return next();
   if (storeService.isHydratedFromDB || !pool.hasStorage()) return next();
   if (req.path === BOT_BRIDGE_PATH || req.path.startsWith(`${BOT_BRIDGE_PATH}/`)) return next();
   if (!hydrationPromise) {
@@ -63,9 +71,6 @@ app.use((req, res, next) => {
   }
   hydrationPromise.then(() => next());
 });
-
-// Security & Parsing Middlewares
-app.use(cors());
 // `verify` captures the exact request bytes onto req.rawBody alongside the
 // parsed body express.json() already produces — needed only by the Zoho
 // webhook route, whose signature covers the raw wire bytes, not a
