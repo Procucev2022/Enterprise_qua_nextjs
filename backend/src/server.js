@@ -4,6 +4,7 @@ const storeService = require('./services/storeService');
 const emailGatewayService = require('./services/emailGatewayService');
 const zohoReconciliationService = require('./services/zohoReconciliationService');
 const rfqChaserScheduler = require('./services/rfqChaserScheduler');
+const dailyRfqReportService = require('./services/dailyRfqReportService');
 const { logger } = require('./services/loggerService');
 const PORT = process.env.PORT || 4000; // Reloaded with SMTP_FROM=manav.procucev@gmail.com
 

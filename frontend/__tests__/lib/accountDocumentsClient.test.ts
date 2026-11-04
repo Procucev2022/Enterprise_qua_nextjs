@@ -3,6 +3,7 @@ import {
   uploadAccountDocument,
   deleteAccountDocument,
   requestBuyerCreditApproval,
+  requestSellerQuoteCreditApproval,
   addSellerQuoteCredits,
 } from '../../lib/accountDocumentsClient';
 import { authClient } from '../../lib/authClient';
@@ -269,6 +270,60 @@ describe('accountDocumentsClient', () => {
       });
       expect(result.success).toBe(false);
       expect(result.error).toContain('Server unavailable');
+    });
+  });
+
+  describe('requestSellerQuoteCreditApproval', () => {
+    it('submits seller quote credit approval request successfully', async () => {
+      const mockTask = { id: 'TASK-202', status: 'Pending Approval' };
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, message: 'Quote credit request submitted', task: mockTask }),
+      } as unknown as Response);
+
+      const result = await requestSellerQuoteCreditApproval('vendor-1', {
+        amount: 5,
+        reason: 'Authorized quota increase',
+        approverName: 'Srinu Sir',
+        initiatorName: 'Govardhan',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.task).toEqual(mockTask);
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/vendors/vendor-1/request-credit-approval',
+        expect.objectContaining({
+          method: 'POST',
+        })
+      );
+    });
+
+    it('handles failure when server rejects quote credit request', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({ success: false, error: 'Invalid approver' }),
+      } as unknown as Response);
+
+      const result = await requestSellerQuoteCreditApproval('vendor-1', {
+        amount: 0,
+        approverName: 'Unknown',
+        initiatorName: 'Govardhan',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Invalid approver');
+    });
+
+    it('handles network throw during quote credit request', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Server offline'));
+      const result = await requestSellerQuoteCreditApproval('vendor-1', {
+        amount: 5,
+        approverName: 'Sudheer Sir',
+        initiatorName: 'Krishna',
+      });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Server offline');
     });
   });
 

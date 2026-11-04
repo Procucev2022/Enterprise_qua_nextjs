@@ -6229,3 +6229,324 @@ i want to merge that pr right now please check and  fix the coveragges and revie
 ```text
 continue
 ```
+
+
+---
+
+### Prompt 57
+
+**Timestamp**: 2026-11-04T16:33:11+05:30
+
+```text
+# Action Center – Complete Approval Module Implementation
+
+Redesign and implement the **Approvals module** under Action Center as a professional Procurement Approval Management Dashboard. The objective is to simplify the existing interface, centralize approval requests, and allow authorized approvers to review, approve, reject, and track requests efficiently.
+
+Use the attached screenshots as UI references.
+
+## 1. Approval Navigation
+
+Simplify the existing approval navigation.
+
+Display only these five tabs:
+
+1. All Requests
+2. Pending Approvals
+3. Approved
+4. Rejected
+5. My Approvals
+
+Remove unnecessary individual module tabs from the main navigation, such as Credit Notes, Account Approvals, Discounts, Trial Periods, Offline Payments, Unit Bookings, Cancellations & Refunds, Packages, and Milestones.
+
+Important:
+- Do not delete or disable these existing approval types.
+- Retain their backend workflows and records.
+- Make them accessible through the Request Type filter.
+- All existing approval functionality must continue working.
+
+## 2. Summary Cards
+
+Display four compact summary cards at the top:
+
+| Card | Description |
+|---|---|
+| Total Requests | All approval requests |
+| Pending Approvals | Requests awaiting approval |
+| Approved | Successfully approved requests |
+| Rejected | Rejected requests |
+
+Requirements:
+- Fetch counts dynamically from the database.
+- Keep all cards in one horizontal row.
+- Reduce card height, width, padding, and font size.
+- Use consistent dimensions and compact styling.
+- Avoid unnecessary spacing and horizontal overflow.
+
+**Clickable Card Functionality:**
+
+When clicking a summary card:
+- Automatically apply its corresponding status filter.
+- Open a centered popup/modal displaying matching approval records.
+- Show the record count and relevant request details.
+- Provide search, sorting, and pagination.
+- Close the popup without resetting the current page, filters, or scroll position.
+
+## 3. Approval Table – Essential Columns
+
+Keep the main approval table simple and relevant to procurement operations.
+
+Display only these columns:
+
+| Column | Description |
+|---|---|
+| Request ID | Unique approval reference |
+| Request Type | Credit Addition, Purchase Request, Payment, Discount, etc. |
+| Requested By | Employee who initiated the request |
+| Project / Buyer / Supplier | Related project or account |
+| Amount / Quantity | Requested amount or credit quantity |
+| Request Date | Request submission date |
+| Assigned Approver | Person responsible for approval |
+| Status | Pending, Approved, Rejected |
+| Actions | View, Approve, Reject |
+
+Requirements:
+- Fetch all information from the database.
+- Display actual request information.
+- Use readable column widths.
+- Support ascending and descending sorting.
+- Use status indicators with consistent colours.
+- Keep the Actions column visible.
+- Avoid unnecessary technical fields in the main table.
+
+## 4. Single-Row Filter Toolbar
+
+Arrange all filters and controls in one horizontal row.
+
+**Required order:**
+
+1. All Projects dropdown
+2. Request Type dropdown
+3. All Statuses dropdown
+4. Search input
+5. Refresh button
+6. Gear icon (Column Settings)
+
+Search placeholder:
+
+`Search by Request ID, requester, buyer, supplier, or project...`
+
+Requirements:
+- All controls must appear in one horizontal row on desktop.
+- Give Search the remaining available width.
+- Keep dropdowns compact but wide enough to display selected values.
+- Keep Refresh and Gear icons compact.
+- Maintain consistent height, padding, and spacing.
+- Prevent overlapping, clipping, and unwanted horizontal scrolling.
+- On smaller screens, use a responsive layout without hiding controls.
+
+All filters must work together correctly.
+
+## 5. Gear Icon – Table Column Settings
+
+Add a Gear icon at the right end of the filter toolbar.
+
+When clicked, open a properly visible, centered Column Settings popup.
+
+The popup must contain:
+- List of all available approval table columns.
+- Checkbox to show or hide each column.
+- Drag-and-drop handles to reorder columns.
+- Position numbers showing the current column order.
+- Reset to Default option.
+- Save / Done button.
+- Close icon.
+
+**Column Settings Behaviour:**
+- Apply selected visibility and ordering to the approval table.
+- Persist preferences separately for each logged-in user.
+- Restore preferences after page refresh and login.
+- Allow users to reset to default settings.
+- Keep essential columns such as Request ID and Actions visible and locked.
+- Ensure the popup is not clipped by parent containers or screen boundaries.
+
+## 6. Approval Request Details Popup
+
+When clicking a Request ID or View action, open a detailed approval popup.
+
+Display:
+
+- Request ID
+- Request Type
+- Requested By
+- Assigned Approver
+- Project / Buyer / Supplier Details
+- Request Date and Time
+- Requested Amount or Quantity
+- Available Balance, where applicable
+- Business Justification / Reason
+- Supporting Documents and Attachments
+- Current Approval Status
+- Approval History
+- Previous Approver Remarks
+- Last Updated Date
+
+Allow authorized approvers to review the complete request before taking action.
+
+## 7. Approve and Reject Workflow
+
+For pending requests, provide:
+
+- View Details
+- Approve
+- Reject
+
+When clicking Approve or Reject:
+
+1. Open a confirmation popup.
+2. Display the complete request summary.
+3. Provide an optional remarks field.
+4. Require confirmation before submitting the decision.
+5. Save the decision to the database.
+6. Record the approver's identity and date/time.
+7. Update the request status immediately.
+8. Notify the requester about the decision.
+
+Only authorized approvers should be able to approve or reject requests.
+
+Prevent duplicate approvals, unauthorized modifications, and repeated submissions.
+
+## 8. Buyer Credit Addition Approval Integration
+
+Integrate the existing Buyer Add Credit workflow with the Approval module.
+
+When a Category Manager submits a buyer credit request:
+
+- Create an approval record.
+- Assign the selected senior approver: Srinu Sir or Sudheer Sir.
+- Display the request under Pending Approvals.
+- Show Buyer Name, Requested Credits, Initiated By, Assigned Approver, and Reason.
+- Allow the authorized approver to approve or reject.
+
+**If Approved:**
+- Update the buyer's actual available credit balance.
+- Create a credit transaction record.
+- Update the approval status to Approved.
+- Update the corresponding Internal Task status to Completed.
+- Notify the requester.
+
+**If Rejected:**
+- Do not modify the buyer's credit balance.
+- Save rejection remarks.
+- Update the approval status to Rejected.
+- Update the corresponding Internal Task.
+- Notify the requester.
+
+## 9. Other Procurement Approval Types
+
+Support existing approval types through the Request Type filter, including:
+
+- Buyer Credit Addition
+- Seller Credit Addition, if approval is required by its existing workflow
+- Credit Notes
+- Purchase Requests
+- Payment Approvals
+- Discounts
+- Account Approvals
+- Trial Periods
+- Offline Payments
+- Unit Bookings
+- Cancellations and Refunds
+- Packages
+- Milestones
+- Other existing approval workflows
+
+Do not introduce new approval rules without checking the existing business logic.
+
+## 10. My Approvals
+
+The My Approvals tab should display requests assigned to the currently logged-in approver.
+
+Show:
+- Assigned requests
+- Pending requests
+- Approved requests
+- Rejected requests
+
+Ensure users can only take actions permitted by their assigned roles and permissions.
+
+## 11. Notifications and Approval History
+
+- Notify approvers when a new request is assigned.
+- Notify requesters when their request is approved or rejected.
+- Maintain complete approval history.
+- Record request creation, assignment, approval, rejection, remarks, and status changes.
+- Display previous decisions and approver details.
+- Avoid duplicate notifications.
+
+## 12. Search, Sorting and Pagination
+
+- Search by Request ID, requester, buyer, supplier, and project.
+- Filter by Request Type.
+- Filter by Status.
+- Filter by Project.
+- Filter by Assigned Approver.
+- Filter by Date Range.
+- Support ascending and descending sorting.
+- Add pagination and page-size selection.
+- Ensure Export CSV downloads the currently filtered records.
+
+## 13. UI/UX Requirements
+
+- Follow the existing Action Center design.
+- Keep the interface compact and professional.
+- Use consistent colours, typography, spacing, and button sizes.
+- Ensure summary cards fit horizontally.
+- Keep the filter toolbar in one row on desktop.
+- Ensure the table uses available screen width.
+- Provide loading, empty, and error states.
+- Use centered popups for request details and confirmation actions.
+- Preserve the user's page state when closing popups.
+
+## 14. Technical and Database Requirements
+
+Before implementation:
+1. Inspect existing approval components and workflows.
+2. Identify all existing approval APIs, database tables, and relationships.
+3. Understand the current role-based authorization.
+4. Identify how Internal Tasks and Buyer Credit Approval are connected.
+5. Reuse existing services and components wherever possible.
+
+Implementation rules:
+- Do not use static or hardcoded data.
+- Do not create duplicate approval records.
+- Do not delete existing approval records or historical data.
+- Validate all approval actions on the backend.
+- Use database transactions for approval operations that update credit balances.
+- Prevent duplicate submissions and race conditions.
+- Preserve existing authentication and authorization.
+- Ensure all counts and records are database-driven.
+
+## 15. Testing and Acceptance Criteria
+
+Test the following scenarios:
+
+1. Create a buyer credit addition request from Buyer Directory.
+2. Verify that it appears under Pending Approvals.
+3. Verify the assigned approver can view the request.
+4. Approve the request and confirm that buyer credits are updated exactly once.
+5. Reject another request and confirm that credits remain unchanged.
+6. Verify Internal Tasks reflect the correct status.
+7. Verify My Approvals shows only requests assigned to the logged-in approver.
+8. Test all five navigation tabs.
+9. Test all filters together.
+10. Test summary-card popups.
+11. Test column visibility and drag-and-drop ordering.
+12. Refresh the page and confirm column preferences are preserved.
+13. Test search, sorting, and pagination.
+14. Test Export CSV.
+15. Verify notifications and approval history.
+16. Verify role-based permissions prevent unauthorized actions.
+17. Ensure existing approval workflows continue functioning normally.
+
+Deliver a production-ready Procurement Approval Management Dashboard adhering to all requirements.
+```

@@ -106,16 +106,16 @@ async function getCreditHistory(req, res, next) {
 
     for (const t of transactions) {
       const type = String(t.transaction_type || '').toUpperCase();
-      const amt = Number(t.amount || 0);
-      if (type.includes('INITIAL') || type.includes('ALLOCATION') || type.includes('ADDITION')) {
-        totalAllocated += Math.abs(amt);
-      } else if (type.includes('PURCHASE') || type.includes('UPGRADE')) {
-        purchasedCredits += Math.abs(amt);
-        totalAllocated += Math.abs(amt);
-      } else if (type.includes('ADJUSTMENT') || type.includes('REFUND')) {
-        adjustedCredits += Math.abs(amt);
-      } else if (amt < 0 || type.includes('UNLOCK')) {
-        totalConsumed += Math.abs(amt);
+      const amt = Math.abs(Number(t.amount || 0));
+      if (/INITIAL|ALLOCATION|ADDITION/.test(type)) {
+        totalAllocated += amt;
+      } else if (/PURCHASE|UPGRADE/.test(type)) {
+        purchasedCredits += amt;
+        totalAllocated += amt;
+      } else if (/ADJUSTMENT|REFUND/.test(type)) {
+        adjustedCredits += amt;
+      } else if (Number(t.amount || 0) < 0 || type.includes('UNLOCK')) {
+        totalConsumed += amt;
       }
     }
 
@@ -123,17 +123,18 @@ async function getCreditHistory(req, res, next) {
       totalAllocated = alloc;
     }
 
-    if (totalConsumed === 0 && creditInfo.freeCreditsUsed > 0) {
-      totalConsumed = creditInfo.freeCreditsUsed;
+    if (totalConsumed === 0 && Number(creditInfo.freeCreditsUsed || 0) > 0) {
+      totalConsumed = Number(creditInfo.freeCreditsUsed);
     }
 
+    const curBal = creditInfo.freeCreditsRemaining ?? Math.max(0, totalAllocated - totalConsumed);
     const summary = {
       totalCreditsAllocated: totalAllocated,
       totalCreditsConsumed: totalConsumed,
-      remainingFreeCredits: creditInfo.freeCreditsRemaining ?? Math.max(0, totalAllocated - totalConsumed),
+      remainingFreeCredits: curBal,
       purchasedCredits,
       adjustedCredits,
-      currentCreditBalance: creditInfo.freeCreditsRemaining ?? Math.max(0, totalAllocated - totalConsumed),
+      currentCreditBalance: curBal,
       isSubscribed: Boolean(creditInfo.isSubscribed),
       subscriptionPlan: creditInfo.subscriptionPlan || vendor.subscriptionPlan || 'Free Tier',
     };
@@ -612,6 +613,121 @@ async function addQuoteCredits(req, res, next) {
   }
 }
 
+/**
+ * POST /api/vendors/:id/request-credit-approval
+ * Submits quote credit allocation request for senior approver authorization.
+ * Creates an internal task in CREDIT_MANAGEMENT and links to the approvals module.
+ */
+async function requestCreditApproval(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: `Seller "${id}" not found.` });
+    }
+
+    const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
+    const internalTaskQueries = require('../db/internalTaskQueries');
+    const approvalQueries = require('../db/approvalQueries');
+
+    const validation = validatePayload(VALIDATION_SCHEMAS.buyerCreditApprovalRequest, req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation failed on quote credit approval request.',
+        details: validation.errors,
+      });
+    }
+
+    const { amount, reason, approverName, initiatorName } = validation.sanitizedData;
+
+    const vendorLabel = vendor.name || vendor.id;
+    const taskReason = reason || `Requested quote credit top-up for ${vendorLabel}`;
+
+    const task = await internalTaskQueries.createInternalTask(
+      {
+        taskCategory: 'CREDIT_MANAGEMENT',
+        taskType: 'Add Credits',
+        title: `Quote Credit Allocation Request: ${amount} Credits for ${vendorLabel}`,
+        description: taskReason,
+        priority: 'High',
+        status: 'Pending Approval',
+        approvalStatus: 'PENDING',
+        assignedToName: approverName,
+        assignedTeam: 'Management Approvers',
+        creditAccountType: 'seller',
+        creditAccountId: vendor.id,
+        creditAccountName: vendorLabel,
+        creditQuantity: amount,
+        creditReason: reason,
+        notes: `Initiated By: ${initiatorName}. Requires review and approval by ${approverName}.`,
+        relatedEntityType: 'SELLER',
+        relatedEntityId: vendor.id,
+        relatedEntityLabel: vendorLabel,
+      },
+      {
+        fullName: initiatorName,
+        name: initiatorName,
+        email: req.user?.email || 'cm@procucev.com',
+        role: 'category_manager',
+      }
+    );
+
+    // Link to Approvals section
+    await approvalQueries.createApproval(
+      {
+        module: 'Seller Credit Addition',
+        request_type: 'Seller Credit Addition',
+        project: vendorLabel,
+        applicant_name: vendorLabel,
+        applicant_email: vendor.email || '',
+        value_impact: `${amount} Quote Credits (${vendorLabel})`,
+        amount,
+        quantity: amount,
+        available_balance: vendor.freeQuotationCredits ?? 0,
+        maker_name: initiatorName,
+        maker_role: 'Category Manager',
+        assigned_approver: approverName,
+        status: 'Pending',
+        details: taskReason,
+        internal_task_id: task.id,
+        seller_id: vendor.id,
+        history: [
+          {
+            action: 'SUBMITTED',
+            actor_name: initiatorName,
+            actor_role: 'Category Manager',
+            timestamp: new Date().toISOString(),
+            remarks: reason || `Submitted quote credit addition for approval (${approverName}).`,
+          },
+        ],
+      },
+      {
+        fullName: initiatorName,
+        name: initiatorName,
+        email: req.user?.email || 'cm@procucev.com',
+        role: 'category_manager',
+      }
+    );
+
+    logger.info(
+      `Quote credit approval request created: ${task.task_number} (${amount} credits for ${vendor.name || vendor.id}) assigned to ${approverName}`,
+      { sellerId: id, amount, approverName },
+      'VENDOR_DOSSIER_EXTENSIONS'
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: `Quote credit request submitted for approval by ${approverName}. Status: Pending Approval.`,
+      task,
+    });
+  } catch (err) {
+    logger.error('Error requesting quote credit approval for seller', err, 'VENDOR_DOSSIER_EXTENSIONS');
+    next(err);
+  }
+}
+
 module.exports = {
   assertCategoryManagerOrAdmin,
   assertCategoryManagerOrVendor,
@@ -621,4 +737,5 @@ module.exports = {
   recordVendorCommunication,
   getVendorPaymentHistory,
   addQuoteCredits,
+  requestCreditApproval,
 };

@@ -1,41 +1,61 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Clock,
   CheckCircle2,
   XCircle,
   ShieldAlert,
   Search,
-  Filter,
   RefreshCw,
   FileCheck,
   Check,
   X,
-  AlertCircle,
+  Settings,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Eye,
+  Download,
+  FileText,
+  Calendar,
+  User,
+  Building2,
+  Coins,
+  History,
+  Lock,
 } from 'lucide-react';
 import {
   fetchApprovalSummary,
   fetchApprovals,
   processApprovalAction,
 } from '@/lib/approvalClient';
-import type { ApprovalRequest, ApprovalSummary } from '@/lib/types';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { authClient } from '@/lib/authClient';
+import type {
+  ApprovalRequest,
+  ApprovalSummary,
+  ApprovalTableColumnConfig,
+  ApprovalTableColumnKey,
+  ApprovalTabKey,
+  ActionCenterSummaryPopupColumn,
+} from '@/lib/types';
+import {
+  APPROVAL_REQUEST_TYPES,
+  DEFAULT_APPROVAL_COLUMNS,
+} from '@/lib/constants';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
 
-const APPROVAL_MODULES = [
-  'All Modules',
-  'Credit Notes',
-  'Account Approvals',
-  'Discounts',
-  'Trial Periods',
-  'Offline Payments',
-  'Unit Bookings',
-  'Cancellations & Refunds',
-  'Packages',
-  'Milestones',
-];
+const STORAGE_PREFS_KEY_PREFIX = 'procucev_approval_col_prefs_';
 
-export default function ApprovalsDashboard() {
+const getUserStorageKey = (user: { id?: string; email?: string } | null | undefined): string => {
+  return `${STORAGE_PREFS_KEY_PREFIX}${user?.id || user?.email || 'default'}`;
+};
+
+export function ApprovalsDashboard() {
+  const strings = UI_STRINGS.actionCenter.approvals;
+
+  // Primary Data State
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [total, setTotal] = useState<number>(0);
   const [summary, setSummary] = useState<ApprovalSummary>({
@@ -45,23 +65,78 @@ export default function ApprovalsDashboard() {
     total: 0,
   });
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [activeModule, setActiveModule] = useState<string>('All Modules');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [projectFilter, setProjectFilter] = useState<string>('all');
-  const [search, setSearch] = useState<string>('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Action Modal State
+  // Navigation Tabs State (5 tabs)
+  const [activeTab, setActiveTab] = useState<ApprovalTabKey>('all');
+
+  // Toolbar Filters State
+  const [projectFilter, setProjectFilter] = useState<string>('all');
+  const [requestTypeFilter, setRequestTypeFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [search, setSearch] = useState<string>('');
+
+  // Sorting & Pagination State
+  const [sortField, setSortField] = useState<string>('created_at');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
+
+  // Column Customization State
+  const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState<boolean>(false);
+  const [columns, setColumns] = useState<ApprovalTableColumnConfig[]>(DEFAULT_APPROVAL_COLUMNS);
+
+  // Details Modal State
+  const [detailsRequest, setDetailsRequest] = useState<ApprovalRequest | null>(null);
+
+  // Approve / Reject Confirmation Modal State
   const [selectedRequest, setSelectedRequest] = useState<ApprovalRequest | null>(null);
   const [pendingAction, setPendingAction] = useState<'APPROVE' | 'REJECT' | null>(null);
-  const [actionRemarks, setActionRemarks] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [actionRemarks, setActionRemarks] = useState<string>('');
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
+  // Summary Card Modal State
+  const [summaryModalState, setSummaryModalState] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle: string;
+    totalCount: number;
+    records: ApprovalRequest[];
+  }>({
+    isOpen: false,
+    title: '',
+    subtitle: '',
+    totalCount: 0,
+    records: [],
+  });
+
+  // Current session user
+  const sessionUser = useMemo(() => authClient.getSessionUser(), []);
+
+  // Show Toast Helper
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
   }, []);
 
+  // Restore column preferences from localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const userKey = getUserStorageKey(sessionUser);
+      const stored = localStorage.getItem(userKey);
+      if (stored) {
+        const parsed = JSON.parse(stored) as ApprovalTableColumnConfig[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setColumns(parsed);
+        }
+      }
+    } catch {
+      // Use defaults if parse fails
+    }
+  }, [sessionUser]);
+
+  // Load summary statistics
   const loadSummary = useCallback(async () => {
     try {
       const s = await fetchApprovalSummary();
@@ -71,19 +146,36 @@ export default function ApprovalsDashboard() {
     }
   }, []);
 
-  const handleCloseModal = useCallback(() => {
-    setSelectedRequest(null);
-    setPendingAction(null);
-  }, []);
+  // Determine effective status filter and approver filter
+  const effectiveStatus = useMemo(() => {
+    if (activeTab === 'pending') return 'Pending';
+    if (activeTab === 'approved') return 'Approved';
+    if (activeTab === 'rejected') return 'Rejected';
+    return statusFilter;
+  }, [activeTab, statusFilter]);
 
+  const effectiveApprover = useMemo(() => {
+    if (activeTab === 'my_approvals') {
+      return sessionUser?.name || sessionUser?.email || 'Srinu Sir';
+    }
+    return '';
+  }, [activeTab, sessionUser]);
+
+  // Load approvals list
   const loadApprovals = useCallback(async () => {
     setIsLoading(true);
     try {
+      const offset = (currentPage - 1) * pageSize;
       const res = await fetchApprovals({
-        module: activeModule === 'All Modules' ? 'all' : activeModule,
-        status: statusFilter,
-        project: projectFilter,
-        search,
+        module: requestTypeFilter === 'all' ? undefined : requestTypeFilter,
+        status: effectiveStatus === 'all' ? undefined : effectiveStatus,
+        project: projectFilter === 'all' ? undefined : projectFilter,
+        search: search.trim() ? search.trim() : undefined,
+        assigned_approver: effectiveApprover || undefined,
+        limit: pageSize,
+        offset,
+        sortBy: sortField,
+        sortOrder,
       });
       setApprovals(res.data);
       setTotal(res.total);
@@ -92,13 +184,80 @@ export default function ApprovalsDashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeModule, statusFilter, projectFilter, search, showToast]);
+  }, [
+    currentPage,
+    pageSize,
+    requestTypeFilter,
+    effectiveStatus,
+    projectFilter,
+    search,
+    effectiveApprover,
+    sortField,
+    sortOrder,
+    showToast,
+  ]);
 
   useEffect(() => {
     void loadSummary();
-    void loadApprovals();
-  }, [loadSummary, loadApprovals]);
+  }, [loadSummary]);
 
+  useEffect(() => {
+    void loadApprovals();
+  }, [loadApprovals]);
+
+  // Handle Tab Change
+  const handleTabSelect = useCallback((tab: ApprovalTabKey) => {
+    setActiveTab(tab);
+    setCurrentPage(1);
+    if (tab === 'all') setStatusFilter('all');
+    else if (tab === 'pending') setStatusFilter('Pending');
+    else if (tab === 'approved') setStatusFilter('Approved');
+    else if (tab === 'rejected') setStatusFilter('Rejected');
+  }, []);
+
+  // Handle Summary Card Click
+  const handleCardClick = useCallback(async (cardType: 'total' | 'pending' | 'approved' | 'rejected') => {
+    let title = strings.total;
+    let targetStatus = 'all';
+
+    if (cardType === 'pending') {
+      targetStatus = 'Pending';
+      title = strings.pending;
+      handleTabSelect('pending');
+    } else if (cardType === 'approved') {
+      targetStatus = 'Approved';
+      title = strings.approved;
+      handleTabSelect('approved');
+    } else if (cardType === 'rejected') {
+      targetStatus = 'Rejected';
+      title = strings.rejected;
+      handleTabSelect('rejected');
+    } else {
+      handleTabSelect('all');
+    }
+
+    // Open matching modal with filtered records
+    try {
+      const res = await fetchApprovals({
+        status: targetStatus === 'all' ? undefined : targetStatus,
+        limit: 100,
+      });
+      setSummaryModalState({
+        isOpen: true,
+        title: `${strings.summaryModalTitlePrefix}${title}`,
+        subtitle: formatString(strings.summaryModalSubtitle, {
+          count: res.total,
+          filter: title,
+        }),
+        totalCount: res.total,
+        records: res.data,
+      });
+    } catch {
+      // safe fallback
+    }
+  }, [handleTabSelect, strings]);
+
+  // Handle Action Confirmation (Approve / Reject)
   const handleActionConfirm = async () => {
     if (!selectedRequest || !pendingAction) return;
 
@@ -107,10 +266,17 @@ export default function ApprovalsDashboard() {
     setIsProcessing(false);
 
     if (res.success) {
-      showToast(`Request ${selectedRequest.request_number} ${pendingAction === 'APPROVE' ? 'Approved' : 'Rejected'}.`);
+      showToast(
+        `Request ${selectedRequest.request_number} marked as ${
+          pendingAction === 'APPROVE' ? 'Approved' : 'Rejected'
+        }.`
+      );
       setSelectedRequest(null);
       setPendingAction(null);
       setActionRemarks('');
+      if (detailsRequest?.id === selectedRequest.id) {
+        setDetailsRequest(null);
+      }
       void loadSummary();
       void loadApprovals();
     } else {
@@ -118,302 +284,1203 @@ export default function ApprovalsDashboard() {
     }
   };
 
-  const strings = UI_STRINGS.actionCenter.approvals;
+  // Close Action Modal
+  const handleCloseActionModal = useCallback(() => {
+    setSelectedRequest(null);
+    setPendingAction(null);
+    setActionRemarks('');
+  }, []);
+
+  // Sort Header Handler
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortOrder('asc');
+    }
+  };
+
+  // Column Preference Handlers
+  const handleToggleColumn = (key: ApprovalTableColumnKey) => {
+    setColumns((prev) =>
+      prev.map((col) => (col.key === key && !col.locked ? { ...col, visible: !col.visible } : col))
+    );
+  };
+
+  const handleMoveColumn = (index: number, direction: 'up' | 'down') => {
+    setColumns((prev) => {
+      const nextIndex = direction === 'up' ? index - 1 : index + 1;
+      if (nextIndex < 0 || nextIndex >= prev.length) return prev;
+      const updated = [...prev];
+      const temp = updated[index];
+      updated[index] = updated[nextIndex];
+      updated[nextIndex] = temp;
+      return updated.map((col, idx) => ({ ...col, order: idx + 1 }));
+    });
+  };
+
+  const handleResetColumns = () => {
+    setColumns(DEFAULT_APPROVAL_COLUMNS);
+    const userKey = getUserStorageKey(sessionUser);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(userKey);
+    }
+    showToast(strings.resetToDefault);
+  };
+
+  const handleSaveColumns = () => {
+    const userKey = getUserStorageKey(sessionUser);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(userKey, JSON.stringify(columns));
+    }
+    setIsColumnSettingsOpen(false);
+    showToast('Column settings saved.');
+  };
+
+  // Export Filtered Records to CSV
+  const handleExportCsv = () => {
+    if (approvals.length === 0) {
+      showToast(strings.noApprovalsFound);
+      return;
+    }
+
+    const headers = [
+      'Request ID',
+      'Request Type',
+      'Requested By',
+      'Maker Role',
+      'Project / Account',
+      'Applicant Email',
+      'Value / Impact',
+      'Request Date',
+      'Assigned Approver',
+      'Status',
+      'Approver Remarks',
+    ];
+
+    const csvRows = [headers.join(',')];
+
+    for (const req of approvals) {
+      const row = [
+        `"${req.request_number}"`,
+        `"${req.module || req.request_type || ''}"`,
+        `"${req.maker_name || ''}"`,
+        `"${req.maker_role || ''}"`,
+        `"${req.project || req.applicant_name || ''}"`,
+        `"${req.applicant_email || ''}"`,
+        `"${req.value_impact || ''}"`,
+        `"${new Date(req.created_at).toISOString()}"`,
+        `"${req.assigned_approver || req.approver_name || ''}"`,
+        `"${req.status}"`,
+        `"${(req.approver_remarks || '').replace(/"/g, '""')}"`,
+      ];
+      csvRows.push(row.join(','));
+    }
+
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `approvals_export_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast(strings.exportCsvSuccess);
+  };
+
+  // Popup columns definition for ActionCenterSummaryPopupModal
+  const summaryPopupColumns = useMemo<ActionCenterSummaryPopupColumn<ApprovalRequest>[]>(() => [
+    {
+      key: 'request_number',
+      label: strings.colRequestId,
+      render: (item: ApprovalRequest) => (
+        <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+          {item.request_number}
+        </span>
+      ),
+    },
+    {
+      key: 'module',
+      label: strings.colRequestType,
+      render: (item: ApprovalRequest) => (
+        <span className="font-semibold text-slate-800 dark:text-slate-200">
+          {item.module || item.request_type}
+        </span>
+      ),
+    },
+    {
+      key: 'applicant_name',
+      label: strings.colProjectAccount,
+      render: (item: ApprovalRequest) => (
+        <div>
+          <div className="font-medium text-slate-900 dark:text-white">{item.applicant_name}</div>
+          <div className="text-[10px] text-slate-400">{item.project}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'value_impact',
+      label: strings.colAmountQuantity,
+      render: (item: ApprovalRequest) => (
+        <span className="font-bold text-slate-900 dark:text-white">{item.value_impact}</span>
+      ),
+    },
+    {
+      key: 'maker_name',
+      label: strings.colRequestedBy,
+      render: (item: ApprovalRequest) => (
+        <div>
+          <span className="font-medium text-slate-800 dark:text-slate-200">{item.maker_name}</span>
+          <span className="text-[10px] text-slate-400 block">{item.maker_role}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'status',
+      label: strings.colStatus,
+      render: (item: ApprovalRequest) => (
+        <span
+          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+            item.status === 'Approved'
+              ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300'
+              : item.status === 'Rejected'
+              ? 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/60 dark:text-rose-300'
+              : 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300'
+          }`}
+        >
+          {item.status}
+        </span>
+      ),
+    },
+  ], [strings]);
+
+  // Visible table columns in ordered sequence
+  const visibleColumns = useMemo(() => {
+    return [...columns].filter((c) => c.visible).sort((a, b) => a.order - b.order);
+  }, [columns]);
+
+  // Total pages
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3.5">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 px-4 py-2.5 bg-slate-900 text-white text-xs font-semibold rounded-xl shadow-xl border border-slate-700 animate-slide-up flex items-center gap-2">
-          <CheckCircle2 size={15} className="text-emerald-400" />
+        <div className="fixed bottom-6 right-6 z-50 px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-xl shadow-xl border border-slate-700 animate-slide-up flex items-center gap-2">
+          <CheckCircle2 size={14} className="text-emerald-400" />
           <span>{toastMessage}</span>
         </div>
       )}
 
-      {/* Summary KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-        <div className="bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 rounded-2xl p-4 shadow-xs">
-          <div className="flex items-center justify-between text-amber-700 dark:text-amber-300 text-xs font-semibold">
-            <span>{strings.pending}</span>
-            <Clock size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-black text-amber-900 dark:text-amber-100">{summary.pending}</div>
-          <div className="text-[11px] text-amber-600/80 dark:text-amber-400/80 mt-1">{strings.pendingSubtitle}</div>
-        </div>
-
-        <div className="bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-2xl p-4 shadow-xs">
-          <div className="flex items-center justify-between text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
-            <span>{strings.approved}</span>
-            <CheckCircle2 size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-black text-emerald-900 dark:text-emerald-100">{summary.approved}</div>
-          <div className="text-[11px] text-emerald-600/80 dark:text-emerald-400/80 mt-1">{strings.approvedSubtitle}</div>
-        </div>
-
-        <div className="bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/60 rounded-2xl p-4 shadow-xs">
-          <div className="flex items-center justify-between text-rose-700 dark:text-rose-300 text-xs font-semibold">
-            <span>{strings.rejected}</span>
-            <XCircle size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-black text-rose-900 dark:text-rose-100">{summary.rejected}</div>
-          <div className="text-[11px] text-rose-600/80 dark:text-rose-400/80 mt-1">{strings.rejectedSubtitle}</div>
-        </div>
-
-        <div className="bg-sky-50/70 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800/60 rounded-2xl p-4 shadow-xs">
+      {/* 1. Summary Cards (4 compact cards in one horizontal row) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        {/* Total Requests */}
+        <button
+          type="button"
+          onClick={() => handleCardClick('total')}
+          className="text-left bg-sky-50/70 hover:bg-sky-50 dark:bg-sky-950/30 dark:hover:bg-sky-950/50 border border-sky-200 dark:border-sky-800/60 rounded-xl p-3 shadow-2xs transition-all hover:scale-[1.01] cursor-pointer"
+        >
           <div className="flex items-center justify-between text-sky-700 dark:text-sky-300 text-xs font-semibold">
             <span>{strings.total}</span>
-            <ShieldAlert size={16} />
+            <ShieldAlert size={14} />
           </div>
-          <div className="mt-2 text-2xl font-black text-sky-900 dark:text-sky-100">{summary.total}</div>
-          <div className="text-[11px] text-sky-600/80 dark:text-sky-400/80 mt-1">{strings.totalSubtitle}</div>
-        </div>
+          <div className="mt-1 text-xl font-black text-sky-900 dark:text-sky-100">{summary.total}</div>
+          <div className="text-[10px] text-sky-600/80 dark:text-sky-400/80 mt-0.5">{strings.totalSubtitle}</div>
+        </button>
+
+        {/* Pending Approvals */}
+        <button
+          type="button"
+          onClick={() => handleCardClick('pending')}
+          className="text-left bg-amber-50/70 hover:bg-amber-50 dark:bg-amber-950/30 dark:hover:bg-amber-950/50 border border-amber-200 dark:border-amber-800/60 rounded-xl p-3 shadow-2xs transition-all hover:scale-[1.01] cursor-pointer"
+        >
+          <div className="flex items-center justify-between text-amber-700 dark:text-amber-300 text-xs font-semibold">
+            <span>{strings.pending}</span>
+            <Clock size={14} />
+          </div>
+          <div className="mt-1 text-xl font-black text-amber-900 dark:text-amber-100">{summary.pending}</div>
+          <div className="text-[10px] text-amber-600/80 dark:text-amber-400/80 mt-0.5">{strings.pendingSubtitle}</div>
+        </button>
+
+        {/* Approved */}
+        <button
+          type="button"
+          onClick={() => handleCardClick('approved')}
+          className="text-left bg-emerald-50/70 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:hover:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/60 rounded-xl p-3 shadow-2xs transition-all hover:scale-[1.01] cursor-pointer"
+        >
+          <div className="flex items-center justify-between text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
+            <span>{strings.approved}</span>
+            <CheckCircle2 size={14} />
+          </div>
+          <div className="mt-1 text-xl font-black text-emerald-900 dark:text-emerald-100">{summary.approved}</div>
+          <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 mt-0.5">{strings.approvedSubtitle}</div>
+        </button>
+
+        {/* Rejected */}
+        <button
+          type="button"
+          onClick={() => handleCardClick('rejected')}
+          className="text-left bg-rose-50/70 hover:bg-rose-50 dark:bg-rose-950/30 dark:hover:bg-rose-950/50 border border-rose-200 dark:border-rose-800/60 rounded-xl p-3 shadow-2xs transition-all hover:scale-[1.01] cursor-pointer"
+        >
+          <div className="flex items-center justify-between text-rose-700 dark:text-rose-300 text-xs font-semibold">
+            <span>{strings.rejected}</span>
+            <XCircle size={14} />
+          </div>
+          <div className="mt-1 text-xl font-black text-rose-900 dark:text-rose-100">{summary.rejected}</div>
+          <div className="text-[10px] text-rose-600/80 dark:text-rose-400/80 mt-0.5">{strings.rejectedSubtitle}</div>
+        </button>
       </div>
 
-      {/* Module Navigation Tabs */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar border-b border-slate-200 dark:border-slate-800 text-xs">
-        {APPROVAL_MODULES.map((mod) => (
-          <button
-            key={mod}
-            type="button"
-            onClick={() => setActiveModule(mod)}
-            className={`px-3 py-2 font-semibold whitespace-nowrap rounded-lg border-b-2 transition-all ${
-              activeModule === mod
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/40'
-                : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50'
-            }`}
-          >
-            {mod}
-          </button>
-        ))}
+      {/* 2. Simplified Approval Navigation (5 tabs only) */}
+      <div role="tablist" aria-label={strings.tabAllRequests} className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-800 text-xs">
+        <button
+          role="tab"
+          aria-selected={activeTab === 'all'}
+          type="button"
+          onClick={() => handleTabSelect('all')}
+          className={`px-3 py-1.5 font-semibold rounded-t-lg border-b-2 transition-all ${
+            activeTab === 'all'
+              ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/40'
+              : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+          }`}
+        >
+          {strings.tabAllRequests}
+        </button>
+
+        <button
+          role="tab"
+          aria-selected={activeTab === 'pending'}
+          type="button"
+          onClick={() => handleTabSelect('pending')}
+          className={`px-3 py-1.5 font-semibold rounded-t-lg border-b-2 transition-all flex items-center gap-1.5 ${
+            activeTab === 'pending'
+              ? 'border-amber-600 text-amber-700 dark:text-amber-400 bg-amber-50/50 dark:bg-amber-950/40'
+              : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+          }`}
+        >
+          <span>{strings.tabPendingApprovals}</span>
+          {summary.pending > 0 && (
+            <span className="px-1.5 py-0.2 bg-amber-200 text-amber-900 dark:bg-amber-800 dark:text-amber-100 rounded-full text-[10px] font-bold">
+              {summary.pending}
+            </span>
+          )}
+        </button>
+
+        <button
+          role="tab"
+          aria-selected={activeTab === 'approved'}
+          type="button"
+          onClick={() => handleTabSelect('approved')}
+          className={`px-3 py-1.5 font-semibold rounded-t-lg border-b-2 transition-all ${
+            activeTab === 'approved'
+              ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/40'
+              : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+          }`}
+        >
+          {strings.tabApproved}
+        </button>
+
+        <button
+          role="tab"
+          aria-selected={activeTab === 'rejected'}
+          type="button"
+          onClick={() => handleTabSelect('rejected')}
+          className={`px-3 py-1.5 font-semibold rounded-t-lg border-b-2 transition-all ${
+            activeTab === 'rejected'
+              ? 'border-rose-600 text-rose-600 dark:text-rose-400 bg-rose-50/50 dark:bg-rose-950/40'
+              : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+          }`}
+        >
+          {strings.tabRejected}
+        </button>
+
+        <button
+          role="tab"
+          aria-selected={activeTab === 'my_approvals'}
+          type="button"
+          onClick={() => handleTabSelect('my_approvals')}
+          className={`px-3 py-1.5 font-semibold rounded-t-lg border-b-2 transition-all ${
+            activeTab === 'my_approvals'
+              ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/40'
+              : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+          }`}
+        >
+          {strings.tabMyApprovals}
+        </button>
       </div>
 
-      {/* Control Filter Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs text-xs">
-        <div className="flex flex-wrap items-center gap-2 flex-1">
-          <select
-            value={projectFilter}
-            onChange={(e) => setProjectFilter(e.target.value)}
-            className="p-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300"
-          >
-            <option value="all">All Projects</option>
-            <option value="Tata">Tata Steel</option>
-            <option value="JSW">JSW Steel</option>
-            <option value="Larsen">L&T Heavy Eng</option>
-            <option value="BHEL">BHEL</option>
-          </select>
+      {/* 3. Single-Row Filter Toolbar */}
+      <div className="flex flex-wrap lg:flex-nowrap items-center gap-2 p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xs text-xs">
+        {/* 1. All Projects dropdown */}
+        <select
+          value={projectFilter}
+          onChange={(e) => {
+            setProjectFilter(e.target.value);
+            setCurrentPage(1);
+          }}
+          className="h-8 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 shrink-0 font-medium focus:outline-none"
+        >
+          <option value="all">{strings.allProjects}</option>
+          <option value="Tata">Tata Steel</option>
+          <option value="JSW">JSW Steel</option>
+          <option value="Larsen">L&T Heavy Eng</option>
+          <option value="BHEL">BHEL</option>
+        </select>
 
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="p-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300"
-          >
-            <option value="all">All Statuses</option>
-            <option value="Pending">Pending</option>
-            <option value="Approved">Approved</option>
-            <option value="Rejected">Rejected</option>
-          </select>
+        {/* 2. Request Type dropdown */}
+        <select
+          value={requestTypeFilter}
+          onChange={(e) => {
+            setRequestTypeFilter(e.target.value);
+            setCurrentPage(1);
+          }}
+          className="h-8 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 shrink-0 font-medium focus:outline-none"
+        >
+          <option value="all">{strings.allRequestTypes}</option>
+          {APPROVAL_REQUEST_TYPES.map((type) => (
+            <option key={type} value={type}>
+              {type}
+            </option>
+          ))}
+        </select>
 
-          <div className="relative flex-1 min-w-[200px]">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by request ID, applicant, maker..."
-              className="w-full pl-8 pr-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg"
-            />
-          </div>
-        </div>
+        {/* 3. All Statuses dropdown */}
+        <select
+          value={statusFilter}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setCurrentPage(1);
+            if (e.target.value === 'Pending') setActiveTab('pending');
+            else if (e.target.value === 'Approved') setActiveTab('approved');
+            else if (e.target.value === 'Rejected') setActiveTab('rejected');
+            else setActiveTab('all');
+          }}
+          className="h-8 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 shrink-0 font-medium focus:outline-none"
+        >
+          <option value="all">{strings.allStatuses}</option>
+          <option value="Pending">Pending</option>
+          <option value="Approved">Approved</option>
+          <option value="Rejected">Rejected</option>
+        </select>
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              void loadSummary();
-              void loadApprovals();
+        {/* 4. Search input (takes remaining available width) */}
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={13} />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setCurrentPage(1);
             }}
-            className="p-1.5 text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50"
-            title="Refresh"
-          >
-            <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
-          </button>
+            placeholder={strings.searchPlaceholder}
+            className="w-full h-8 pl-8 pr-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
         </div>
+
+        {/* 5. Refresh button */}
+        <button
+          type="button"
+          onClick={() => {
+            void loadSummary();
+            void loadApprovals();
+          }}
+          className="h-8 w-8 inline-flex items-center justify-center text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 shrink-0 transition"
+          title={strings.refreshTooltip}
+          aria-label={strings.refreshTooltip}
+        >
+          <RefreshCw size={13} className={isLoading ? 'animate-spin text-indigo-600' : ''} />
+        </button>
+
+        {/* 6. Gear icon (Column Settings) */}
+        <button
+          type="button"
+          onClick={() => setIsColumnSettingsOpen(true)}
+          className="h-8 w-8 inline-flex items-center justify-center text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 shrink-0 transition"
+          title={strings.columnSettingsTooltip}
+          aria-label={strings.columnSettingsTooltip}
+        >
+          <Settings size={13} />
+        </button>
       </div>
 
-      {/* Approvals Table */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-xs">
+      {/* 4. Main Approval Table */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-2xs">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                <th className="py-3 px-3.5">Request ID / Time</th>
-                <th className="py-3 px-3.5">Module</th>
-                <th className="py-3 px-3.5">Unit / Project</th>
-                <th className="py-3 px-3.5">Applicant / Customer</th>
-                <th className="py-3 px-3.5">Value / Impact</th>
-                <th className="py-3 px-3.5">Maker (Requester)</th>
-                <th className="py-3 px-3.5">Status</th>
-                <th className="py-3 px-3.5 text-right">Action</th>
+                {visibleColumns.map((col) => {
+                  if (col.key === 'request_id') {
+                    return (
+                      <th
+                        key={col.key}
+                        onClick={() => handleSort('request_number')}
+                        className="py-2.5 px-3 whitespace-nowrap cursor-pointer hover:text-slate-900 dark:hover:text-white"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>{strings.colRequestId}</span>
+                          {sortField === 'request_number' ? (
+                            sortOrder === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
+                          ) : (
+                            <ArrowUpDown size={11} className="text-slate-400" />
+                          )}
+                        </div>
+                      </th>
+                    );
+                  }
+                  if (col.key === 'request_type') {
+                    return (
+                      <th
+                        key={col.key}
+                        onClick={() => handleSort('module')}
+                        className="py-2.5 px-3 whitespace-nowrap cursor-pointer hover:text-slate-900 dark:hover:text-white"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>{strings.colRequestType}</span>
+                          {sortField === 'module' ? (
+                            sortOrder === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
+                          ) : (
+                            <ArrowUpDown size={11} className="text-slate-400" />
+                          )}
+                        </div>
+                      </th>
+                    );
+                  }
+                  if (col.key === 'requested_by') {
+                    return (
+                      <th key={col.key} className="py-2.5 px-3 whitespace-nowrap">
+                        {strings.colRequestedBy}
+                      </th>
+                    );
+                  }
+                  if (col.key === 'project_account') {
+                    return (
+                      <th
+                        key={col.key}
+                        onClick={() => handleSort('project')}
+                        className="py-2.5 px-3 whitespace-nowrap cursor-pointer hover:text-slate-900 dark:hover:text-white"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>{strings.colProjectAccount}</span>
+                          {sortField === 'project' ? (
+                            sortOrder === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
+                          ) : (
+                            <ArrowUpDown size={11} className="text-slate-400" />
+                          )}
+                        </div>
+                      </th>
+                    );
+                  }
+                  if (col.key === 'amount_quantity') {
+                    return (
+                      <th
+                        key={col.key}
+                        onClick={() => handleSort('value_impact')}
+                        className="py-2.5 px-3 whitespace-nowrap cursor-pointer hover:text-slate-900 dark:hover:text-white"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>{strings.colAmountQuantity}</span>
+                          {sortField === 'value_impact' ? (
+                            sortOrder === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
+                          ) : (
+                            <ArrowUpDown size={11} className="text-slate-400" />
+                          )}
+                        </div>
+                      </th>
+                    );
+                  }
+                  if (col.key === 'request_date') {
+                    return (
+                      <th
+                        key={col.key}
+                        onClick={() => handleSort('created_at')}
+                        className="py-2.5 px-3 whitespace-nowrap cursor-pointer hover:text-slate-900 dark:hover:text-white"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>{strings.colRequestDate}</span>
+                          {sortField === 'created_at' ? (
+                            sortOrder === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
+                          ) : (
+                            <ArrowUpDown size={11} className="text-slate-400" />
+                          )}
+                        </div>
+                      </th>
+                    );
+                  }
+                  if (col.key === 'assigned_approver') {
+                    return (
+                      <th key={col.key} className="py-2.5 px-3 whitespace-nowrap">
+                        {strings.colAssignedApprover}
+                      </th>
+                    );
+                  }
+                  if (col.key === 'status') {
+                    return (
+                      <th
+                        key={col.key}
+                        onClick={() => handleSort('status')}
+                        className="py-2.5 px-3 whitespace-nowrap cursor-pointer hover:text-slate-900 dark:hover:text-white"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>{strings.colStatus}</span>
+                          {sortField === 'status' ? (
+                            sortOrder === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
+                          ) : (
+                            <ArrowUpDown size={11} className="text-slate-400" />
+                          )}
+                        </div>
+                      </th>
+                    );
+                  }
+                  return (
+                    <th key={col.key} className="py-2.5 px-3 whitespace-nowrap text-right">
+                      {strings.colActions}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
               {isLoading ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-500">
+                  <td colSpan={visibleColumns.length} className="py-10 text-center text-slate-500">
                     <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-500" />
-                    <span>Loading approval requests...</span>
+                    <span>{strings.loading}</span>
                   </td>
                 </tr>
               ) : approvals.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
-                    <FileCheck className="w-8 h-8 mx-auto mb-2 text-slate-300 dark:text-slate-700" />
+                  <td colSpan={visibleColumns.length} className="py-10 text-center text-slate-400">
+                    <FileCheck className="w-7 h-7 mx-auto mb-2 text-slate-300 dark:text-slate-700" />
                     <p className="font-semibold text-slate-600 dark:text-slate-300">{strings.noApprovalsFound}</p>
                   </td>
                 </tr>
               ) : (
                 approvals.map((req) => (
                   <tr key={req.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30 transition-colors">
-                    <td className="py-3 px-3.5 whitespace-nowrap">
-                      <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 block">
-                        {req.request_number}
-                      </span>
-                      <span className="text-[10px] text-slate-400">{new Date(req.created_at).toLocaleString()}</span>
-                    </td>
-
-                    <td className="py-3 px-3.5 whitespace-nowrap font-medium text-slate-700 dark:text-slate-300">
-                      {req.module}
-                    </td>
-
-                    <td className="py-3 px-3.5 whitespace-nowrap text-slate-800 dark:text-slate-200">
-                      {req.project}
-                    </td>
-
-                    <td className="py-3 px-3.5 whitespace-nowrap">
-                      <div className="font-semibold text-slate-900 dark:text-white">{req.applicant_name}</div>
-                      <div className="text-[10px] text-slate-400">{req.applicant_email}</div>
-                    </td>
-
-                    <td className="py-3 px-3.5 whitespace-nowrap font-semibold text-slate-900 dark:text-white">
-                      {req.value_impact}
-                    </td>
-
-                    <td className="py-3 px-3.5 whitespace-nowrap">
-                      <div className="font-medium text-slate-800 dark:text-slate-200">{req.maker_name}</div>
-                      <div className="text-[10px] text-slate-400">{req.maker_role}</div>
-                    </td>
-
-                    <td className="py-3 px-3.5 whitespace-nowrap">
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                          req.status === 'Approved'
-                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300'
-                            : req.status === 'Rejected'
-                            ? 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/60 dark:text-rose-300'
-                            : 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300'
-                        }`}
-                      >
-                        {req.status}
-                      </span>
-                    </td>
-
-                    <td className="py-3 px-3.5 whitespace-nowrap text-right">
-                      {req.status === 'Pending' ? (
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedRequest(req);
-                              setPendingAction('APPROVE');
-                            }}
-                            className="px-2.5 py-1 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center gap-1"
-                          >
-                            <Check size={12} />
-                            <span>{strings.approveBtn}</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedRequest(req);
-                              setPendingAction('REJECT');
-                            }}
-                            className="px-2.5 py-1 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg flex items-center gap-1"
-                          >
-                            <X size={12} />
-                            <span>{strings.rejectBtn}</span>
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-[11px] text-slate-400 font-medium">Decided</span>
-                      )}
-                    </td>
+                    {visibleColumns.map((col) => {
+                      if (col.key === 'request_id') {
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setDetailsRequest(req)}
+                              className="font-mono font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer block text-left"
+                            >
+                              {req.request_number}
+                            </button>
+                            <span className="text-[10px] text-slate-400">
+                              {new Date(req.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </td>
+                        );
+                      }
+                      if (col.key === 'request_type') {
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap font-medium text-slate-700 dark:text-slate-300">
+                            {req.module || req.request_type}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'requested_by') {
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap">
+                            <div className="font-medium text-slate-900 dark:text-white">{req.maker_name}</div>
+                            <div className="text-[10px] text-slate-400">{req.maker_role}</div>
+                          </td>
+                        );
+                      }
+                      if (col.key === 'project_account') {
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap">
+                            <div className="font-medium text-slate-900 dark:text-white">{req.applicant_name}</div>
+                            <div className="text-[10px] text-slate-400">{req.project}</div>
+                          </td>
+                        );
+                      }
+                      if (col.key === 'amount_quantity') {
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap font-semibold text-slate-900 dark:text-white">
+                            {req.value_impact}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'request_date') {
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap text-slate-500 text-[11px]">
+                            {new Date(req.created_at).toLocaleDateString()}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'assigned_approver') {
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap font-medium text-slate-800 dark:text-slate-200">
+                            {req.assigned_approver || req.approver_name || 'Senior Director'}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'status') {
+                        return (
+                          <td key={col.key} className="py-2 px-3 whitespace-nowrap">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                                req.status === 'Approved'
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                  : req.status === 'Rejected'
+                                  ? 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/60 dark:text-rose-300'
+                                  : 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300'
+                              }`}
+                            >
+                              {req.status}
+                            </span>
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={col.key} className="py-2 px-3 whitespace-nowrap text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setDetailsRequest(req)}
+                              className="px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:text-indigo-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded flex items-center gap-1 transition"
+                              title={strings.actionView}
+                            >
+                              <Eye size={11} />
+                              <span>{strings.actionView}</span>
+                            </button>
+                            {req.status === 'Pending' && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedRequest(req);
+                                    setPendingAction('APPROVE');
+                                  }}
+                                  className="px-2 py-0.5 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded flex items-center gap-0.5 transition"
+                                  title={strings.approveBtn}
+                                >
+                                  <Check size={11} />
+                                  <span>{strings.approveBtn}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedRequest(req);
+                                    setPendingAction('REJECT');
+                                  }}
+                                  className="px-2 py-0.5 text-[11px] font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded flex items-center gap-0.5 transition"
+                                  title={strings.rejectBtn}
+                                >
+                                  <X size={11} />
+                                  <span>{strings.rejectBtn}</span>
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
+
+        {/* Pagination & Export Toolbar Footer */}
+        <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900 text-xs text-slate-500">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleExportCsv}
+              className="px-2.5 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 flex items-center gap-1.5 transition"
+            >
+              <Download size={12} />
+              <span>{strings.exportCsvBtn}</span>
+            </button>
+
+            <span>
+              {formatString(strings.paginationShowing, {
+                from: total === 0 ? 0 : (currentPage - 1) * pageSize + 1,
+                to: Math.min(currentPage * pageSize, total),
+                total,
+              })}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
+              <span className="text-[11px]">{strings.rowsPerPage}</span>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                className="p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-xs"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                disabled={currentPage <= 1}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                className="px-2 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <span className="px-2 font-medium">
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                type="button"
+                disabled={currentPage >= totalPages}
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                className="px-2 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Action Confirmation Modal */}
+      {/* 5. Column Settings Modal */}
+      {isColumnSettingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-4 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <h3 className="font-bold text-slate-900 dark:text-white text-sm">
+                  {strings.columnSettingsTitle}
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">{strings.columnSettingsSubtitle}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsColumnSettingsOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+                aria-label={strings.closeModal}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+              {columns.map((col, idx) => (
+                <div
+                  key={col.key}
+                  className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 text-xs"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span className="font-mono font-bold text-[10px] text-slate-400 w-4 text-center">
+                      {idx + 1}
+                    </span>
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={col.visible}
+                        disabled={col.locked}
+                        onChange={() => handleToggleColumn(col.key)}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-50"
+                      />
+                      <span className={`font-medium ${col.locked ? 'text-slate-900 dark:text-white' : 'text-slate-700 dark:text-slate-300'}`}>
+                        {col.label}
+                      </span>
+                    </label>
+                    {col.locked && (
+                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded text-[9px] font-bold">
+                        <Lock size={9} />
+                        {strings.lockedColumnBadge}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={idx === 0}
+                      onClick={() => handleMoveColumn(idx, 'up')}
+                      className="p-1 text-slate-500 hover:text-slate-900 dark:hover:text-white disabled:opacity-20"
+                      title={strings.moveUp}
+                    >
+                      <ArrowUp size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={idx === columns.length - 1}
+                      onClick={() => handleMoveColumn(idx, 'down')}
+                      className="p-1 text-slate-500 hover:text-slate-900 dark:hover:text-white disabled:opacity-20"
+                      title={strings.moveDown}
+                    >
+                      <ArrowDown size={12} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={handleResetColumns}
+                className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-semibold"
+              >
+                {strings.resetToDefault}
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsColumnSettingsOpen(false)}
+                  className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+                >
+                  {strings.closeModal}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveColumns}
+                  className="px-3.5 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-2xs"
+                >
+                  {strings.saveDone}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 6. Approval Request Details Popup */}
+      {detailsRequest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-xl w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                  {strings.detailsTitle}
+                </h3>
+                <span className="font-mono font-bold text-xs text-indigo-600 dark:text-indigo-400">
+                  {detailsRequest.request_number}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDetailsRequest(null)}
+                className="text-slate-400 hover:text-slate-600"
+                aria-label={strings.dismissModal}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Request Summary Grid */}
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] text-slate-400 block font-semibold">{strings.requestTypeLabel}</span>
+                <span className="font-bold text-slate-800 dark:text-slate-200 mt-0.5 block">
+                  {detailsRequest.module || detailsRequest.request_type}
+                </span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] text-slate-400 block font-semibold">{strings.currentStatusLabel}</span>
+                <span
+                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border mt-0.5 ${
+                    detailsRequest.status === 'Approved'
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                      : detailsRequest.status === 'Rejected'
+                      ? 'bg-rose-100 text-rose-800 border-rose-300'
+                      : 'bg-amber-100 text-amber-800 border-amber-300'
+                  }`}
+                >
+                  {detailsRequest.status}
+                </span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] text-slate-400 block font-semibold">{strings.requestedByLabel}</span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <User size={13} className="text-slate-400" />
+                  <span className="font-semibold text-slate-900 dark:text-white">{detailsRequest.maker_name}</span>
+                </div>
+                <span className="text-[10px] text-slate-400 block mt-0.5">{detailsRequest.maker_role}</span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] text-slate-400 block font-semibold">{strings.assignedApproverLabel}</span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <User size={13} className="text-indigo-500" />
+                  <span className="font-semibold text-indigo-700 dark:text-indigo-300">
+                    {detailsRequest.assigned_approver || detailsRequest.approver_name || 'Srinu Sir'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] text-slate-400 block font-semibold">{strings.projectAccountLabel}</span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <Building2 size={13} className="text-slate-400" />
+                  <span className="font-semibold text-slate-900 dark:text-white">{detailsRequest.applicant_name}</span>
+                </div>
+                <span className="text-[10px] text-slate-400 block mt-0.5">{detailsRequest.project}</span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] text-slate-400 block font-semibold">{strings.amountQuantityLabel}</span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <Coins size={13} className="text-amber-500" />
+                  <span className="font-bold text-slate-900 dark:text-white">{detailsRequest.value_impact}</span>
+                </div>
+                {detailsRequest.available_balance !== undefined && (
+                  <span className="text-[10px] text-slate-400 block mt-0.5">
+                    {strings.availableBalanceLabel}: {detailsRequest.available_balance}
+                  </span>
+                )}
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 col-span-2">
+                <span className="text-[10px] text-slate-400 block font-semibold">{strings.dateTimeLabel}</span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <Calendar size={13} className="text-slate-400" />
+                  <span className="text-slate-700 dark:text-slate-300">
+                    {new Date(detailsRequest.created_at).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Business Justification */}
+            <div className="text-xs">
+              <span className="text-[10px] text-slate-400 block font-semibold mb-1">
+                {strings.reasonLabel}
+              </span>
+              <div className="p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200">
+                {detailsRequest.details || 'No justification remarks specified.'}
+              </div>
+            </div>
+
+            {/* Supporting Documents & Attachments */}
+            <div className="text-xs">
+              <span className="text-[10px] text-slate-400 block font-semibold mb-1">
+                {strings.documentsLabel}
+              </span>
+              {detailsRequest.attachments && detailsRequest.attachments.length > 0 ? (
+                <div className="space-y-1">
+                  {detailsRequest.attachments.map((doc, docIdx) => (
+                    <div
+                      key={docIdx}
+                      className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                    >
+                      <div className="flex items-center gap-2">
+                        <FileText size={13} className="text-indigo-500" />
+                        <span className="font-medium text-slate-800 dark:text-slate-200">{doc.name}</span>
+                      </div>
+                      {doc.url && (
+                        <a
+                          href={doc.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                        >
+                          View
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-400 italic">{strings.noDocuments}</p>
+              )}
+            </div>
+
+            {/* Previous Approver Remarks */}
+            {detailsRequest.approver_remarks && (
+              <div className="text-xs">
+                <span className="text-[10px] text-slate-400 block font-semibold mb-1">
+                  {strings.previousRemarksLabel}
+                </span>
+                <div className="p-2.5 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-200/60 dark:border-indigo-800/60 rounded-lg text-indigo-900 dark:text-indigo-200">
+                  <span className="font-semibold block text-[11px]">
+                    {detailsRequest.approver_name || 'Approver'}:
+                  </span>
+                  <p className="mt-0.5">{detailsRequest.approver_remarks}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Approval History Timeline */}
+            <div className="text-xs">
+              <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-400 font-semibold">
+                <History size={12} />
+                <span>{strings.historyLabel}</span>
+              </div>
+              {detailsRequest.history && detailsRequest.history.length > 0 ? (
+                <div className="space-y-1.5 border-l-2 border-indigo-200 dark:border-indigo-800 ml-2 pl-3">
+                  {detailsRequest.history.map((hist, hIdx) => (
+                    <div key={hIdx} className="text-[11px]">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-900 dark:text-white">{hist.action}</span>
+                        <span className="text-[10px] text-slate-400">
+                          {new Date(hist.timestamp).toLocaleString()}
+                        </span>
+                      </div>
+                      <span className="text-slate-600 dark:text-slate-300">
+                        {hist.actor_name} ({hist.actor_role || 'User'}): {hist.remarks || 'No notes'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-400 italic">{strings.noHistory}</p>
+              )}
+            </div>
+
+            {/* Bottom Actions */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setDetailsRequest(null)}
+                className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+              >
+                {strings.closeDetails}
+              </button>
+
+              {detailsRequest.status === 'Pending' && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedRequest(detailsRequest);
+                      setPendingAction('REJECT');
+                    }}
+                    className="px-3 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg flex items-center gap-1"
+                  >
+                    <X size={12} />
+                    <span>{strings.rejectBtn}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedRequest(detailsRequest);
+                      setPendingAction('APPROVE');
+                    }}
+                    className="px-3.5 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg flex items-center gap-1 shadow-2xs"
+                  >
+                    <Check size={12} />
+                    <span>{strings.approveBtn}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7. Action Confirmation Modal (Approve / Reject Workflow) */}
       {selectedRequest && pendingAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fade-in">
           <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <h3 className="font-bold text-slate-900 dark:text-white text-base">
-                Confirm {pendingAction === 'APPROVE' ? 'Approval' : 'Rejection'}
+                {pendingAction === 'APPROVE' ? strings.confirmApprovalTitle : strings.confirmRejectionTitle}
               </h3>
               <button
                 type="button"
-                onClick={handleCloseModal}
+                onClick={handleCloseActionModal}
                 className="text-slate-400 hover:text-slate-600"
-                aria-label="Close Modal"
+                aria-label={strings.dismissModal}
               >
                 <X size={18} />
               </button>
             </div>
 
             <p className="text-xs text-slate-600 dark:text-slate-300">
-              Are you sure you want to mark request <span className="font-mono font-bold text-indigo-600">{selectedRequest.request_number}</span> ({selectedRequest.value_impact}) as <span className="font-bold">{pendingAction === 'APPROVE' ? 'Approved' : 'Rejected'}</span>?
+              {pendingAction === 'APPROVE'
+                ? formatString(strings.confirmApprovalPrompt, {
+                    id: selectedRequest.request_number,
+                    type: selectedRequest.module || selectedRequest.request_type || '',
+                    account: selectedRequest.applicant_name,
+                  })
+                : formatString(strings.confirmRejectionPrompt, {
+                    id: selectedRequest.request_number,
+                    type: selectedRequest.module || selectedRequest.request_type || '',
+                    account: selectedRequest.applicant_name,
+                  })}
             </p>
+
+            <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 text-xs space-y-1">
+              <div className="flex justify-between">
+                <span className="text-slate-400">{strings.colAmountQuantity}:</span>
+                <span className="font-bold text-slate-900 dark:text-white">{selectedRequest.value_impact}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">{strings.colRequestedBy}:</span>
+                <span className="font-medium text-slate-800 dark:text-slate-200">{selectedRequest.maker_name}</span>
+              </div>
+            </div>
 
             <div>
               <label className="block text-slate-700 dark:text-slate-300 font-semibold text-xs mb-1">
-                Executive Remarks (Optional)
+                {strings.executiveRemarksLabel}
               </label>
               <textarea
                 rows={2}
                 value={actionRemarks}
                 onChange={(e) => setActionRemarks(e.target.value)}
-                placeholder="Add audit justification or notes..."
-                className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs"
+                placeholder={strings.executiveRemarksPlaceholder}
+                className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={handleCloseModal}
+                onClick={handleCloseActionModal}
                 className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
               >
-                Cancel
+                {strings.cancelBtn}
               </button>
               <button
                 type="button"
                 disabled={isProcessing}
                 onClick={handleActionConfirm}
-                className={`px-4 py-1.5 text-xs font-bold text-white rounded-lg shadow-xs ${
-                  pendingAction === 'APPROVE' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'
+                className={`px-4 py-1.5 text-xs font-bold text-white rounded-lg shadow-2xs ${
+                  pendingAction === 'APPROVE'
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-rose-600 hover:bg-rose-700'
                 }`}
               >
-                {isProcessing ? 'Processing...' : `Confirm ${pendingAction === 'APPROVE' ? 'Approval' : 'Rejection'}`}
+                {isProcessing
+                  ? strings.processing
+                  : pendingAction === 'APPROVE'
+                  ? strings.confirmApproveBtn
+                  : strings.confirmRejectBtn}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* 8. Summary Card Popups (using ActionCenterSummaryPopupModal) */}
+      <ActionCenterSummaryPopupModal<ApprovalRequest>
+        isOpen={summaryModalState.isOpen}
+        onClose={() => setSummaryModalState((prev) => ({ ...prev, isOpen: false }))}
+        title={summaryModalState.title}
+        subtitle={summaryModalState.subtitle}
+        totalCount={summaryModalState.totalCount}
+        columns={summaryPopupColumns}
+        records={summaryModalState.records}
+      />
     </div>
   );
 }
 
-export { ApprovalsDashboard };
+export default ApprovalsDashboard;

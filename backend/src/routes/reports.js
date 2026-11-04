@@ -18,4 +18,7 @@ router.get('/rfq-report', reportsController.getRfqReports);
 // GET /api/reports/daily-activity
 router.get('/daily-activity', reportsController.getDailyActivityReport);
 
+// POST /api/reports/send-daily-rfq-email (trigger daily email report on-demand)
+router.post('/send-daily-rfq-email', reportsController.triggerDailyRfqReportEmail);
+
 module.exports = router;
