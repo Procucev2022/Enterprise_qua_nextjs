@@ -140,7 +140,7 @@ async function migrate() {
   // Auto-seed category taxonomy if empty
   try {
     const catCountRes = await d1Query('SELECT COUNT(*) AS total FROM category_division');
-    const catTotal = (catCountRes.result && catCountRes.result[0] && catCountRes.result[0].results && catCountRes.result[0].results[0] && catCountRes.result[0].results[0].total) || 0;
+    const catTotal = catCountRes?.result?.[0]?.results?.[0]?.total || 0;
     if (catTotal === 0) {
       console.log('\n[migrate-d1] Seeding procurement category taxonomy into category_division...');
       const { DEFAULT_CATEGORY_TAXONOMY } = require('../src/config/constants');
