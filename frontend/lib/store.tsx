@@ -964,6 +964,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       tasks.push(refreshVendorCredits());
       tasks.push(ensureRFQs());
       tasks.push(ensureVendors());
+      tasks.push(ensureCategoryTaxonomy());
     } else if (r === 'category_manager' || r === 'admin') {
       tasks.push(ensureRFQs());
       tasks.push(ensureVendors());
