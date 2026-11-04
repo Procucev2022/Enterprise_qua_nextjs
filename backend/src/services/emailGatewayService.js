@@ -2527,51 +2527,54 @@ async function processMessage(rawSource, config = resolveConfig()) {
       ? attribution.eligibleNotificationRecipients
       : [{ email: message.fromAddress, buyer: attribution.primaryBuyerAccount, isPrimary: true }];
 
-    for (const recipient of notificationRecipients) {
-      if (!recipient.email) continue;
-      const isAutoRegisteredPrimary = Boolean(
-        groupIndex === 0 &&
-        recipient.isPrimary &&
-        attribution.shouldAutoRegisterSender &&
-        authorisation.tempPassword
-      );
+    await Promise.allSettled(
+      notificationRecipients
+        .filter((recipient) => Boolean(recipient?.email))
+        .map(async (recipient) => {
+          const isAutoRegisteredPrimary = Boolean(
+            groupIndex === 0 &&
+            recipient.isPrimary &&
+            attribution.shouldAutoRegisterSender &&
+            authorisation.tempPassword
+          );
 
-      const ack = {
-        to: recipient.email,
-        buyerName: buyerDisplayName(recipient.buyer, message),
-        rfqNumber: created.rfqNumber,
-        rfqTitle: created.title,
-        deliveryDate: created.targetDeliveryDate,
-        tempPassword: isAutoRegisteredPrimary ? authorisation.tempPassword : null,
-        mobileNumber: resolvedMobile,
-        category: created.category,
-        itemCount: normalizedLineItems.length || 1,
-        deliveryLocation: created.deliveryLocation,
-        requiredBy: created.targetDeliveryDate,
-        quoteDeadline: created.deadline,
-        deadline: created.deadline,
-        suppliersInvited: resolvedSuppliersCount,
-        items: normalizedLineItems,
-      };
+          const ack = {
+            to: recipient.email,
+            buyerName: buyerDisplayName(recipient.buyer, message),
+            rfqNumber: created.rfqNumber,
+            rfqTitle: created.title,
+            deliveryDate: created.targetDeliveryDate,
+            tempPassword: isAutoRegisteredPrimary ? authorisation.tempPassword : null,
+            mobileNumber: resolvedMobile,
+            category: created.category,
+            itemCount: normalizedLineItems.length || 1,
+            deliveryLocation: created.deliveryLocation,
+            requiredBy: created.targetDeliveryDate,
+            quoteDeadline: created.deadline,
+            deadline: created.deadline,
+            suppliersInvited: resolvedSuppliersCount,
+            items: normalizedLineItems,
+          };
 
-      const ackDedupKey = recipient.isPrimary ? (groupKey || created.id) : (groupKey ? `${groupKey}#${recipient.email}` : `${created.id}#${recipient.email}`);
+          const ackDedupKey = recipient.isPrimary ? (groupKey || created.id) : (groupKey ? `${groupKey}#${recipient.email}` : `${created.id}#${recipient.email}`);
 
-      if (isAutoRegisteredPrimary) {
-        try {
-          await mailerService.sendBuyerOnboardingWithRfqEmail(ack);
-        } catch (onboardErr) {
-          logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');
-          await emailGateway.queueAcknowledgement(ackDedupKey, ack);
-        }
-      } else {
-        try {
-          await mailerService.sendRfqAcknowledgementEmail(ack);
-        } catch (ackErr) {
-          logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
-          await emailGateway.queueAcknowledgement(ackDedupKey, ack);
-        }
-      }
-    }
+          if (isAutoRegisteredPrimary) {
+            try {
+              await mailerService.sendBuyerOnboardingWithRfqEmail(ack);
+            } catch (onboardErr) {
+              logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');
+              await emailGateway.queueAcknowledgement(ackDedupKey, ack);
+            }
+          } else {
+            try {
+              await mailerService.sendRfqAcknowledgementEmail(ack);
+            } catch (ackErr) {
+              logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
+              await emailGateway.queueAcknowledgement(ackDedupKey, ack);
+            }
+          }
+        })
+    );
 
     logger.audit(
       `RFQ ${created.rfqNumber} raised from inbound email under scenario ${attribution.scenario}`,
