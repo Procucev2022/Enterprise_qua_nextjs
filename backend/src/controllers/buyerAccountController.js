@@ -262,7 +262,8 @@ async function createSubscriptionPaymentLink(req, res, next) {
     // this id up against GET .../payment-links on return to show the link's
     // real status (PAID/CANCELED/EXPIRED/still CREATED).
     const linkId = `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const returnUrl = `${ZOHO_CONFIG.RETURN_URL_BASE}/buyer/subscription-center?linkId=${linkId}`;
+    const returnBase = String(ZOHO_CONFIG.RETURN_URL_BASE || '').replace(/\/+$/, '');
+    const returnUrl = `${returnBase}/buyer/subscription-center?linkId=${linkId}`;
 
     const result = await zohoPaymentService.createPaymentLink({
       planId: plan,
