@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import PaymentDuesDashboard from '@/app/category-manager/components/PaymentDuesDashboard';
 import * as paymentDuesClient from '@/lib/paymentDuesClient';
 import type { PaymentDuesAccount, PaymentDuesSummary } from '@/lib/types';
@@ -15,6 +15,7 @@ jest.mock('@/lib/paymentDuesClient', () => {
     sendPaymentDuesWhatsApp: jest.fn(),
     updatePaymentDuesAcknowledgement: jest.fn(),
     fetchPaymentDuesHistory: jest.fn(),
+    fetchPaymentDuesAccounts: jest.fn().mockImplementation(() => Promise.resolve({ accounts: mockAccounts, total: mockAccounts.length, page: 1, limit: 100 })),
     getPaymentDuesExportUrl: jest.fn().mockReturnValue('/api/payment-dues/export'),
   };
 });
@@ -1213,4 +1214,140 @@ describe('PaymentDuesDashboard', () => {
     expect(mockEventHandler).toHaveBeenCalled();
     window.removeEventListener('qua_payment_dues_updated', mockEventHandler);
   });
+
+    describe('Summary Cards Click and Modal Popup', () => {
+    it('opens modal on clicking Low-Credit Accounts summary card and shows accounts', async () => {
+      render(<PaymentDuesDashboard />);
+      await waitFor(() => {
+        expect(screen.getByText('Apex Industries')).toBeInTheDocument();
+      });
+
+      const kpiGrid = screen.getByText(/Low-Credit Accounts/i).closest('.grid');
+      expect(kpiGrid).toBeInTheDocument();
+      const kpiButtons = within(kpiGrid as HTMLElement).getAllByRole('button');
+      fireEvent.click(kpiButtons[0]);
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByText('acc-buyer-1')).toBeInTheDocument();
+
+      // Verify column renders
+      expect(within(dialog).getAllByText('Buyer').length).toBeGreaterThan(0);
+      expect(within(dialog).getAllByText('Seller').length).toBeGreaterThan(0);
+
+      // Close modal
+      const closeButtons = within(dialog).getAllByRole('button', { name: /close/i });
+      fireEvent.click(closeButtons[0]);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('opens modal on clicking Buyers, Sellers, 0 Credits, 1-2 Credits, and Ack Pending cards', async () => {
+      render(<PaymentDuesDashboard />);
+      await waitFor(() => {
+        expect(screen.getByText('Apex Industries')).toBeInTheDocument();
+      });
+
+      const kpiGrid = screen.getByText(/Low-Credit Accounts/i).closest('.grid');
+      expect(kpiGrid).toBeInTheDocument();
+      const kpiButtons = within(kpiGrid as HTMLElement).getAllByRole('button');
+
+      // 1. Buyers card
+      fireEvent.click(kpiButtons[1]);
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
+
+      // 2. Sellers card
+      fireEvent.click(kpiButtons[2]);
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
+
+      // 3. 0 Credits card
+      fireEvent.click(kpiButtons[3]);
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
+
+      // 4. 1-2 Credits card
+      fireEvent.click(kpiButtons[4]);
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
+
+      // 5. Ack Pending card
+      fireEvent.click(kpiButtons[5]);
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
+    });
+
+    it('falls back to local accounts when fetchPaymentDues throws', async () => {
+      render(<PaymentDuesDashboard />);
+      await waitFor(() => {
+        expect(screen.getByText('Apex Industries')).toBeInTheDocument();
+      });
+
+      const kpiGrid = screen.getByText(/Low-Credit Accounts/i).closest('.grid');
+      expect(kpiGrid).toBeInTheDocument();
+      const kpiButtons = within(kpiGrid as HTMLElement).getAllByRole('button');
+
+      // Fallback for buyer
+      (paymentDuesClient.fetchPaymentDues as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+      fireEvent.click(kpiButtons[1]);
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
+
+      // Fallback for seller
+      (paymentDuesClient.fetchPaymentDues as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+      fireEvent.click(kpiButtons[2]);
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
+
+      // Fallback for 0
+      (paymentDuesClient.fetchPaymentDues as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+      fireEvent.click(kpiButtons[3]);
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
+
+      // Fallback for 1-2
+      (paymentDuesClient.fetchPaymentDues as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+      fireEvent.click(kpiButtons[4]);
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
+
+      // Fallback for ackPending
+      (paymentDuesClient.fetchPaymentDues as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+      fireEvent.click(kpiButtons[5]);
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
+
+      // Fallback for all
+      (paymentDuesClient.fetchPaymentDues as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+      fireEvent.click(kpiButtons[0]);
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(within(screen.getByRole('dialog')).getAllByRole('button', { name: /close/i })[0]);
+    });
+  });
+
 });

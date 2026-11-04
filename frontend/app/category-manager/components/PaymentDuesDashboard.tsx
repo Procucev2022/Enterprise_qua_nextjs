@@ -50,10 +50,12 @@ import type {
   PaymentDuesFilterParams,
   PaymentDuesAcknowledgementStatus,
   PaymentDuesAccountType,
+  ActionCenterSummaryPopupColumn,
 } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import BuyerDetailsModal from '../BuyerDetailsModal';
 import VendorDetailsModal from '../VendorDetailsModal';
+import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
 
 const DEFAULT_COLUMNS: PaymentDuesColumnConfig[] = [
   { key: 'accountId', label: 'Account ID', visible: true },
@@ -150,6 +152,17 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
   });
   const [historyList, setHistoryList] = useState<PaymentDuesCommunication[]>([]);
   const [isSubmittingAction, setIsSubmittingAction] = useState<boolean>(false);
+  const [summaryModalState, setSummaryModalState] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle?: string;
+    records: PaymentDuesAccount[];
+  }>({
+    isOpen: false,
+    title: '',
+    subtitle: '',
+    records: [],
+  });
 
   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
@@ -688,6 +701,134 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
     }
   };
 
+  const handleSummaryCardClick = async (type: 'all' | 'buyer' | 'seller' | '0' | '1-2' | 'ackPending') => {
+    let cardTitle = strings.kpi.totalLowCreditAccounts;
+    let cardSubtitle = strings.kpi.totalLowCreditSubtitle;
+
+    if (type === 'all') {
+      setAccountTypeFilter('all');
+      setCreditsFilter('all');
+      setStatusFilter('all');
+      cardTitle = strings.kpi.totalLowCreditAccounts;
+      cardSubtitle = strings.kpi.totalLowCreditSubtitle;
+    } else if (type === 'buyer') {
+      setAccountTypeFilter('buyer');
+      cardTitle = `${strings.kpi.totalBuyers} (${strings.kpi.totalBuyersSubtitle})`;
+      cardSubtitle = strings.kpi.totalBuyersSubtitle;
+    } else if (type === 'seller') {
+      setAccountTypeFilter('seller');
+      cardTitle = `${strings.kpi.totalSellers} (${strings.kpi.totalSellersSubtitle})`;
+      cardSubtitle = strings.kpi.totalSellersSubtitle;
+    } else if (type === '0') {
+      setCreditsFilter('0');
+      cardTitle = strings.kpi.zeroCredits;
+      cardSubtitle = strings.kpi.zeroCreditsSubtitle;
+    } else if (type === '1-2') {
+      setCreditsFilter('1-2');
+      cardTitle = strings.kpi.oneToTwoCredits;
+      cardSubtitle = strings.kpi.oneToTwoCreditsSubtitle;
+    } else if (type === 'ackPending') {
+      setStatusFilter('Acknowledgement Pending');
+      cardTitle = strings.kpi.acknowledgementPending;
+      cardSubtitle = strings.kpi.acknowledgementPendingSubtitle;
+    }
+    setPage(1);
+
+    try {
+      const res = await fetchPaymentDues({
+        search,
+        accountType: type === 'buyer' ? 'buyer' : type === 'seller' ? 'seller' : type === 'all' ? 'all' : accountTypeFilter,
+        credits: type === '0' ? '0' : type === '1-2' ? '1-2' : type === 'all' ? 'all' : creditsFilter,
+        acknowledgementStatus: type === 'ackPending' ? 'Acknowledgement Pending' : type === 'all' ? 'all' : statusFilter,
+        limit: 100,
+        page: 1,
+      });
+      setSummaryModalState({
+        isOpen: true,
+        title: cardTitle,
+        subtitle: cardSubtitle,
+        records: res.accounts || [],
+      });
+    } catch {
+      const fallbackRecords = accounts.filter((a) => {
+        if (type === 'buyer') return a.accountType === 'buyer';
+        if (type === 'seller') return a.accountType === 'seller';
+        if (type === '0') return a.availableCredits === 0;
+        if (type === '1-2') return a.availableCredits >= 1 && a.availableCredits <= 2;
+        if (type === 'ackPending') return a.acknowledgementStatus === 'Acknowledgement Pending';
+        return true;
+      });
+      setSummaryModalState({
+        isOpen: true,
+        title: cardTitle,
+        subtitle: cardSubtitle,
+        records: fallbackRecords,
+      });
+    }
+  };
+
+  const summaryPopupColumns = useMemo<ActionCenterSummaryPopupColumn<PaymentDuesAccount>[]>(() => [
+    {
+      key: 'accountId',
+      label: strings.columns.accountId,
+      render: (a) => (
+        <span className="font-mono font-medium text-indigo-600 dark:text-indigo-400">
+          {a.accountId}
+        </span>
+      ),
+    },
+    {
+      key: 'accountType',
+      label: strings.columns.accountType,
+      render: (a) =>
+        a.accountType === 'buyer' ? (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
+            <Building2 size={11} /> Buyer
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+            <Truck size={11} /> Seller
+          </span>
+        ),
+    },
+    {
+      key: 'companyName',
+      label: strings.columns.companyName,
+      render: (a) => (
+        <span className="font-semibold text-slate-900 dark:text-white">
+          {a.companyName}
+        </span>
+      ),
+    },
+    {
+      key: 'contactPerson',
+      label: strings.columns.contactPerson,
+      render: (a) => <span className="text-slate-700 dark:text-slate-300">{a.contactPerson}</span>,
+    },
+    {
+      key: 'email',
+      label: strings.columns.email,
+      render: (a) => (
+        <div className="flex flex-col">
+          <span className="font-mono text-[11px] text-slate-700 dark:text-slate-300">{a.email}</span>
+          {a.phoneNumber && a.phoneNumber !== '–' && (
+            <span className="font-mono text-[10px] text-slate-400">{a.phoneNumber}</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'availableCredits',
+      label: strings.columns.availableCredits,
+      render: (a) => renderCreditBadge(a.availableCredits),
+    },
+    {
+      key: 'acknowledgementStatus',
+      label: strings.columns.acknowledgementStatus,
+      render: (a) => renderAckBadge(a.acknowledgementStatus),
+    },
+  ], [strings]);
+
   const totalPages = Math.ceil(totalAccounts / pageSize) || 1;
 
   return (
@@ -707,152 +848,151 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
         </div>
       )}
 
-      {/* 6 Dynamic Summary KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3 w-full">
+      {/* 6 Dynamic Summary KPI Cards (Compact & Clickable) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-2.5 w-full">
         {/* Low-Credit Accounts */}
-        <div
-          onClick={() => {
-            setAccountTypeFilter('all');
-            setCreditsFilter('all');
-            setPage(1);
-          }}
-          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-400 transition cursor-pointer flex flex-col justify-between h-full"
+        <button
+          type="button"
+          onClick={() => handleSummaryCardClick('all')}
+          className="bg-white dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
         >
-          <div className="flex items-center justify-between gap-1">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
+          <div className="flex items-center justify-between gap-1 w-full">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
               {strings.kpi.totalLowCreditAccounts}
             </span>
-            <div className="p-1.5 rounded-md bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 shrink-0">
-              <CreditCard className="w-3.5 h-3.5" />
+            <div className="p-1 rounded bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 shrink-0">
+              <CreditCard className="w-3 h-3" />
             </div>
           </div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">
-            {summary.totalLowCreditAccounts}
+          <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
+            <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none">
+              {summary.totalLowCreditAccounts}
+            </span>
+            <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap">
+              ≤ 2 credits
+            </span>
           </div>
-          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            {strings.kpi.totalLowCreditSubtitle}
-          </div>
-        </div>
+        </button>
 
         {/* Buyers */}
-        <div
-          onClick={() => {
-            setAccountTypeFilter('buyer');
-            setPage(1);
-          }}
-          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-sky-400 transition cursor-pointer flex flex-col justify-between h-full"
+        <button
+          type="button"
+          onClick={() => handleSummaryCardClick('buyer')}
+          className="bg-white dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-sky-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
         >
-          <div className="flex items-center justify-between gap-1">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
+          <div className="flex items-center justify-between gap-1 w-full">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
               {strings.kpi.totalBuyers}
             </span>
-            <div className="p-1.5 rounded-md bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400 shrink-0">
-              <Building2 className="w-3.5 h-3.5" />
+            <div className="p-1 rounded bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400 shrink-0">
+              <Building2 className="w-3 h-3" />
             </div>
           </div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold text-sky-700 dark:text-sky-300">
-            {summary.totalBuyers}
+          <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
+            <span className="text-base sm:text-lg font-bold text-sky-700 dark:text-sky-300 leading-none">
+              {summary.totalBuyers}
+            </span>
+            <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap">
+              Top-up needed
+            </span>
           </div>
-          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            {strings.kpi.totalBuyersSubtitle}
-          </div>
-        </div>
+        </button>
 
         {/* Sellers */}
-        <div
-          onClick={() => {
-            setAccountTypeFilter('seller');
-            setPage(1);
-          }}
-          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-purple-400 transition cursor-pointer flex flex-col justify-between h-full"
+        <button
+          type="button"
+          onClick={() => handleSummaryCardClick('seller')}
+          className="bg-white dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-purple-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
         >
-          <div className="flex items-center justify-between gap-1">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
+          <div className="flex items-center justify-between gap-1 w-full">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
               {strings.kpi.totalSellers}
             </span>
-            <div className="p-1.5 rounded-md bg-purple-50 text-purple-600 dark:bg-purple-950/40 dark:text-purple-400 shrink-0">
-              <Truck className="w-3.5 h-3.5" />
+            <div className="p-1 rounded bg-purple-50 text-purple-600 dark:bg-purple-950/40 dark:text-purple-400 shrink-0">
+              <Truck className="w-3 h-3" />
             </div>
           </div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold text-purple-700 dark:text-purple-300">
-            {summary.totalSellers}
+          <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
+            <span className="text-base sm:text-lg font-bold text-purple-700 dark:text-purple-300 leading-none">
+              {summary.totalSellers}
+            </span>
+            <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap">
+              Quote credits
+            </span>
           </div>
-          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            {strings.kpi.totalSellersSubtitle}
-          </div>
-        </div>
+        </button>
 
         {/* 0 Credits (Critical) */}
-        <div
-          onClick={() => {
-            setCreditsFilter('0');
-            setPage(1);
-          }}
-          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/60 shadow-sm hover:border-rose-400 transition cursor-pointer bg-rose-50/20 flex flex-col justify-between h-full"
+        <button
+          type="button"
+          onClick={() => handleSummaryCardClick('0')}
+          className="bg-rose-50/20 dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-rose-200 dark:border-rose-900/60 shadow-xs hover:border-rose-400 hover:bg-rose-50/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
         >
-          <div className="flex items-center justify-between gap-1">
-            <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 uppercase tracking-wider truncate">
+          <div className="flex items-center justify-between gap-1 w-full">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-rose-700 dark:text-rose-400 uppercase tracking-tight whitespace-nowrap">
               {strings.kpi.zeroCredits}
             </span>
-            <div className="p-1.5 rounded-md bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400 shrink-0">
-              <AlertTriangle className="w-3.5 h-3.5" />
+            <div className="p-1 rounded bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400 shrink-0">
+              <AlertTriangle className="w-3 h-3" />
             </div>
           </div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold text-rose-600 dark:text-rose-400">
-            {summary.zeroCredits}
+          <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
+            <span className="text-base sm:text-lg font-bold text-rose-600 dark:text-rose-400 leading-none">
+              {summary.zeroCredits}
+            </span>
+            <span className="text-[10px] text-rose-500 dark:text-rose-400 whitespace-nowrap">
+              Exhausted
+            </span>
           </div>
-          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            {strings.kpi.zeroCreditsSubtitle}
-          </div>
-        </div>
+        </button>
 
         {/* 1-2 Credits (Attention) */}
-        <div
-          onClick={() => {
-            setCreditsFilter('1-2');
-            setPage(1);
-          }}
-          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-amber-200 dark:border-amber-900/60 shadow-sm hover:border-amber-400 transition cursor-pointer bg-amber-50/20 flex flex-col justify-between h-full"
+        <button
+          type="button"
+          onClick={() => handleSummaryCardClick('1-2')}
+          className="bg-amber-50/20 dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-amber-200 dark:border-amber-900/60 shadow-xs hover:border-amber-400 hover:bg-amber-50/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
         >
-          <div className="flex items-center justify-between gap-1">
-            <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider truncate">
+          <div className="flex items-center justify-between gap-1 w-full">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-tight whitespace-nowrap">
               {strings.kpi.oneToTwoCredits}
             </span>
-            <div className="p-1.5 rounded-md bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400 shrink-0">
-              <Clock className="w-3.5 h-3.5" />
+            <div className="p-1 rounded bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400 shrink-0">
+              <Clock className="w-3 h-3" />
             </div>
           </div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold text-amber-600 dark:text-amber-400">
-            {summary.oneToTwoCredits}
+          <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
+            <span className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400 leading-none">
+              {summary.oneToTwoCredits}
+            </span>
+            <span className="text-[10px] text-amber-600 dark:text-amber-400 whitespace-nowrap">
+              Low balance
+            </span>
           </div>
-          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            {strings.kpi.oneToTwoCreditsSubtitle}
-          </div>
-        </div>
+        </button>
 
         {/* Acknowledgement Pending */}
-        <div
-          onClick={() => {
-            setStatusFilter('Acknowledgement Pending');
-            setPage(1);
-          }}
-          className="bg-white dark:bg-slate-900 p-3 sm:p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-indigo-400 transition cursor-pointer flex flex-col justify-between h-full"
+        <button
+          type="button"
+          onClick={() => handleSummaryCardClick('ackPending')}
+          className="bg-white dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-orange-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
         >
-          <div className="flex items-center justify-between gap-1">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider truncate">
+          <div className="flex items-center justify-between gap-1 w-full">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
               {strings.kpi.acknowledgementPending}
             </span>
-            <div className="p-1.5 rounded-md bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400 shrink-0">
-              <HelpCircle className="w-3.5 h-3.5" />
+            <div className="p-1 rounded bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400 shrink-0">
+              <HelpCircle className="w-3 h-3" />
             </div>
           </div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold text-orange-600 dark:text-orange-400">
-            {summary.acknowledgementPending}
+          <div className="mt-1 flex items-baseline justify-between gap-1 w-full">
+            <span className="text-base sm:text-lg font-bold text-orange-600 dark:text-orange-400 leading-none">
+              {summary.acknowledgementPending}
+            </span>
+            <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap">
+              Awaiting client
+            </span>
           </div>
-          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
-            {strings.kpi.acknowledgementPendingSubtitle}
-          </div>
-        </div>
+        </button>
       </div>
 
       {/* TOOLBAR: SEARCH, ACCOUNT TYPE, CREDIT FILTER, ACKNOWLEDGEMENT STATUS, REFRESH, EXPORT CSV & GEAR ICON IN ONE HORIZONTAL ROW */}
@@ -1731,6 +1871,19 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
         }}
         vendorId={selectedVendorId}
         vendorName={selectedVendorName}
+      />
+
+      {/* ========================================================================= */}
+      {/* SUMMARY CARD RECORDS POPUP MODAL */}
+      {/* ========================================================================= */}
+      <ActionCenterSummaryPopupModal
+        isOpen={summaryModalState.isOpen}
+        onClose={() => setSummaryModalState((prev) => ({ ...prev, isOpen: false }))}
+        title={summaryModalState.title}
+        subtitle={summaryModalState.subtitle}
+        totalCount={summaryModalState.records.length}
+        columns={summaryPopupColumns}
+        records={summaryModalState.records}
       />
     </div>
   );
