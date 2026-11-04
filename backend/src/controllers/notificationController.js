@@ -12,7 +12,7 @@ const { logger } = require('../services/loggerService');
  * than an error — a shared notification bell can call this for any role.
  */
 async function resolveRecipient(req) {
-  if (!req.user) return null;
+  if (!req || !req.user) return null;
   if (req.user.role === 'vendor') {
     if (req.user.vendorId) return { type: 'vendor', id: req.user.vendorId };
     const vendor = storeService.getVendorById(req.user.email, 'all');

@@ -273,7 +273,13 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     : await pool.query(
         `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
         [...params],
-        { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}`, useCache: true, tag: 'vendors', ttlMs: 300000 }
+        {
+          d1: true,
+          d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}`,
+          useCache: true,
+          tag: 'vendors',
+          ttlMs: 300000,
+        }
       );
   const total = countResult.rows[0]?.total || 0;
 
@@ -286,6 +292,9 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     {
       d1: true,
       d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 120000,
     }
   );
   const response = {

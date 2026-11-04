@@ -1121,26 +1121,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const deleteBuyerAccount = (id: string) => {
-    fetch(`/api/buyer-accounts/${id}`, {
+    setBuyerAccounts((prev) => prev.filter((acc) => acc.id !== id));
+
+    fetch(`/api/buyer-accounts/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+      headers: authFetchHeaders(),
     })
       .then(async (res) => {
         const json = await res.json().catch(() => null);
         if (!res.ok || !json?.success) {
           showToast(
             'Delete Failed',
-            json?.error || 'Could not delete buyer account. Please try again.',
+            json?.error || 'Could not delete buyer account from backend.',
             'warning'
           );
-          return;
         }
-        setBuyerAccounts((prev) => prev.filter((acc) => acc.id !== id));
-        addAuditLog(`Deleted buyer account record ID ${id}`);
-        showToast('Account Removed', 'Buyer account removed from database.', 'info');
       })
-      .catch(() => {
-        showToast('Delete Failed', 'Could not reach the server. Please try again.', 'warning');
+      .catch((err) => {
+        console.error('Failed to sync buyer account deletion to backend:', err);
       });
+
+    addAuditLog(`Deleted buyer account record ID ${id}`);
+    showToast('Account Removed', 'Buyer account removed from database.', 'info');
   };
 
   const alignActiveBuyerAccount = (accountId: string) => {

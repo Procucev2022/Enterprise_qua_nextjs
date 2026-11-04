@@ -45,10 +45,15 @@ describe('API Route Endpoints', () => {
     // GET /api/buyer-accounts/active, and this list only holds accounts created
     // at runtime.
     test('GET /api/buyer-accounts returns an array', async () => {
-      const res = await request(app).get('/api/buyer-accounts');
+      const res = await request(app).get('/api/buyer-accounts').set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(Array.isArray(res.body.data)).toBe(true);
+    });
+
+    test('GET /api/buyer-accounts requires authentication', async () => {
+      const res = await request(app).get('/api/buyer-accounts');
+      expect(res.statusCode).toBe(401);
     });
 
     test('POST /api/buyer-accounts creates new buyer account', async () => {

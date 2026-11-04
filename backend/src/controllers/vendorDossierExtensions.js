@@ -77,12 +77,11 @@ async function getCreditHistory(req, res, next) {
 
       const unlockedIds = creditInfo.unlockedRfqIds || [];
       let runningBal = alloc;
-      const unlockPromises = [];
       for (const rfqId of unlockedIds) {
         if (runningBal > 0) {
           runningBal = Math.max(0, runningBal - 1);
-          unlockPromises.push(
-            domainQueries.recordCreditTransactionInDB({
+          try {
+            await domainQueries.recordCreditTransactionInDB({
               id: `vtx-rfq-${vendor.id.slice(0, 5)}-${String(rfqId).slice(0, 8)}`,
               vendorId: vendor.id,
               rfqId: String(rfqId),
@@ -90,12 +89,11 @@ async function getCreditHistory(req, res, next) {
               amount: -1,
               balanceAfter: runningBal,
               idempotencyKey: `unlock-${vendor.id}-${rfqId}`,
-            })
-          );
+            });
+          } catch (err) {
+            logger.warn('Failed to record initial unlock transaction for vendor', { vendorId: vendor.id, rfqId, error: err.message }, 'VENDOR_DOSSIER');
+          }
         }
-      }
-      if (unlockPromises.length > 0) {
-        await Promise.all(unlockPromises);
       }
 
       transactions = await domainQueries.getVendorCreditTransactionsFromDB(vendor.id, 100);
