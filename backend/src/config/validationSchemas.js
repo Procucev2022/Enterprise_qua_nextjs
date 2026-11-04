@@ -277,6 +277,8 @@ const VALIDATION_SCHEMAS = {
       pattern: EMAIL_REGEX,
       message: 'Source email must be a valid email address.',
     },
+    sharedBuyerAccountIds: { type: 'array', required: false },
+    sharedBuyerEmails: { type: 'array', required: false },
   },
 
   // Edit of an existing RFQ (PUT /api/rfqs/:id).

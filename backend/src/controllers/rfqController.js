@@ -163,7 +163,15 @@ async function canAccessRfq(req, rfq) {
   const scope = await resolveRfqReadScope(req);
   if (!scope.restricted) return true;
   if (scope.role === 'vendor') return canVendorViewRfq(scope.vendor, rfq);
-  return !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId;
+  if (scope.role === 'buyer') {
+    if (!scope.buyerAccountId) return false;
+    if (rfq.buyerAccountId === scope.buyerAccountId) return true;
+    if (Array.isArray(rfq.sharedBuyerAccountIds) && rfq.sharedBuyerAccountIds.includes(scope.buyerAccountId)) {
+      return true;
+    }
+    return false;
+  }
+  return false;
 }
 
 /**
@@ -285,7 +293,14 @@ function scopedRfqList(scope) {
       .filter((rfq) => canVendorViewRfq(scope.vendor, rfq))
       .map((rfq) => applyVendorBuyerPrivacy(rfq, scope.vendor));
   }
-  const buyerRfqs = all.filter((rfq) => !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId);
+  const buyerRfqs = all.filter((rfq) => {
+    if (!scope.buyerAccountId) return false;
+    if (rfq.buyerAccountId === scope.buyerAccountId) return true;
+    if (Array.isArray(rfq.sharedBuyerAccountIds) && rfq.sharedBuyerAccountIds.includes(scope.buyerAccountId)) {
+      return true;
+    }
+    return false;
+  });
   return buyerRfqs.map((rfq) => applyQuotesVisibility(rfq, scope.role));
 }
 

@@ -5811,3 +5811,107 @@ create a branch and raise the pr to test-v3 upcoming pr also raise to test-v3  o
 ```text
 All are fails only check and fix the all the issue and AI review also
 ```
+
+
+---
+
+### Prompt 45
+
+**Timestamp**: 2026-11-03T22:20:00+05:30
+
+```text
+Tell me about create rfq via email for registration buyer and unregisteration buyer?
+```
+
+---
+
+### Prompt 46
+
+**Timestamp**: 2026-11-03T22:23:43+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 47
+
+**Timestamp**: 2026-11-03T22:33:03+05:30
+
+```text
+# Feature Enhancement: CC-Based Buyer Identification & Multi-Buyer RFQ Creation
+
+Enhance the existing Procucev Enterprise Email-to-RFQ Gateway to support buyer identification through both TO sender and CC email addresses.
+
+**Objective:**
+
+Implement four new business scenarios for registered and unregistered buyers while preserving all existing Email-to-RFQ functionality.
+
+### Business Scenarios
+
+1. **Registered Buyer in CC:** When an email is sent to the RFQ gateway and a registered buyer is included in CC, create the RFQ under the registered CC buyer's account.
+
+2. **Registered TO + Registered CC:** When both the TO sender and CC buyer are registered, create one logical RFQ accessible through both buyer accounts. Maintain a shared RFQ reference and separate account-level ownership/access mappings.
+
+3. **Unregistered TO + Registered CC:** When the TO sender is unregistered but a CC recipient is registered, create the RFQ only under the registered CC buyer's account. Do not auto-create an account or RFQ for the unregistered TO sender.
+
+4. **Unregistered TO + Unregistered CC:** When both the TO sender and CC recipient are unregistered, follow the existing unregistered buyer workflow for the TO sender only. Create the TO sender's account and RFQ. Do not create an account or RFQ for the CC recipient.
+
+### Technical Requirements
+
+- Extract sender, TO and CC email addresses from inbound email metadata.
+- Identify registered buyers using the existing PostgreSQL identity and buyer_accounts records.
+- Apply the four scenarios using explicit buyer-identification and ownership-priority rules.
+- Reuse existing account creation, sourcing mode, credit validation, Gemini extraction, RFQ categorization, delivery location resolution, vendor matching and email notification services.
+- For shared RFQs, ensure both registered buyers can access the same logical RFQ without creating duplicate vendor invitations or duplicate procurement requests.
+- Maintain appropriate account-level credit validation and transaction consistency.
+- Send acknowledgements only to eligible buyer accounts.
+- Maintain audit logs for sender, recipients, buyer identification and RFQ ownership.
+- Handle multiple CC recipients, duplicate addresses, retries, concurrency and invalid email addresses safely.
+
+### Backward Compatibility
+
+Do not break or modify the existing standalone registered buyer and unregistered buyer workflows.
+
+Do not change existing:
+- Gemini multimodal extraction.
+- Excel, PDF and drawing processing.
+- RFQ line-item grouping and 49-item limit.
+- Sourcing modes (Mode 0, V1, V2, V3).
+- Free-trial and subscription credit rules.
+- Vendor auto-assignment.
+- RFQ statuses and notification templates.
+- Buyer onboarding and quote-masking security.
+
+### Implementation Instructions
+
+First inspect the existing `emailGatewayService.js`, `resolveSenderAuthorisation()`, `getOrCreateBuyerAccount()`, `rfqIngestionService.js`, `storeService.js` and related database schemas.
+
+Understand the existing architecture before making changes. Reuse existing services wherever possible instead of introducing duplicate implementations.
+
+Implement all four scenarios, update the database mappings only if required, and add comprehensive unit and integration tests for every scenario.
+
+**Acceptance Criteria:** All four scenarios must work correctly, existing email-to-RFQ flows must remain unaffected, and no unintended buyer account, duplicate RFQ, duplicate vendor invitation or unauthorized RFQ access should occur.
+```
+
+---
+
+### Prompt 48
+
+**Timestamp**: 2026-11-04T07:16:38+05:30
+
+```text
+continue
+```
+
+
+---
+
+### Prompt 49
+
+**Timestamp**: 2026-11-04T08:06:53+05:30
+
+```text
+create a new branch and raise pr to test-v3
+```

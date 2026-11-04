@@ -36,6 +36,7 @@ const pool = require('../db/pool');
 const { logger } = require('./loggerService');
 const {
   EMAIL_GATEWAY_CONFIG,
+  EMAIL_RFQ_SCENARIOS,
   GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
@@ -348,6 +349,343 @@ function resolveConnectionState(config, { lastError, watching } = {}) {
  * Returns `{ allowed, reason, buyerAccount }`. `buyerAccount` is needed by the
  * caller regardless, to scope the RFQ.
  */
+
+/**
+ * Normalizes email addresses from various formats (string, array of strings, array of objects).
+ * Strips whitespace, casefolds to lowercase, and filters out non-email strings.
+ */
+function normalizeRecipientList(input) {
+  if (!input) return [];
+  const rawList = Array.isArray(input)
+    ? input
+    : (typeof input === 'string' ? input.split(/[,;]/) : [input]);
+
+  const seen = new Set();
+  const result = [];
+
+  for (const item of rawList) {
+    if (!item) continue;
+    let entries = [];
+    if (typeof item === 'string') {
+      entries = item.split(/[,;]/).map((s) => s.trim().toLowerCase());
+    } else if (typeof item === 'object') {
+      const addr = String(item.address || item.value || item.email || '').trim().toLowerCase();
+      entries = addr.split(/[,;]/).map((s) => s.trim().toLowerCase());
+    }
+    for (let addr of entries) {
+      if (!addr) continue;
+      const bracketMatch = addr.match(/<([^>]+)>/);
+      if (bracketMatch) {
+        addr = bracketMatch[1].trim().toLowerCase();
+      }
+      if (addr && addr.includes('@') && !seen.has(addr)) {
+        seen.add(addr);
+        result.push(addr);
+      }
+    }
+  }
+  return result;
+}
+
+function isGatewayOrSystemEmail(email, config = {}) {
+  if (!email) return true;
+  const lower = String(email).trim().toLowerCase();
+  const gatewayAddresses = [
+    config.address,
+    config.user,
+    process.env.EMAIL_GATEWAY_USER,
+    process.env.EMAIL_GATEWAY_ADDRESS,
+    process.env.SMTP_USER,
+    process.env.SMTP_FROM,
+    process.env.GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_EMAIL_GATEWAY_USER,
+    process.env.VENDOR_EMAIL_GATEWAY_ADDRESS,
+    process.env.VENDOR_SMTP_USER,
+    process.env.VENDOR_SMTP_FROM,
+    process.env.VENDOR_GMAIL_SENDER_EMAIL,
+    process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL,
+    'srinu20252026@gmail.com',
+    'rfqprocucev@gmail.com',
+    'rfq@procucev.com',
+  ]
+    .filter(Boolean)
+    .map((a) => {
+      const match = String(a).match(/<([^>]+)>/);
+      return (match ? match[1] : a).trim().toLowerCase();
+    });
+
+  if (gatewayAddresses.includes(lower)) return true;
+  if (isSystemOrAutomatedSender(lower)) return true;
+  return false;
+}
+
+/**
+ * Look up a registered buyer account by email address.
+ * An account is considered "registered" if it exists in storeService or identity DB
+ * and is NOT an unverified auto-registered placeholder waiting for initial onboarding.
+ */
+async function resolveRegisteredBuyerAccount(email) {
+  if (!email) return null;
+  const address = String(email).trim().toLowerCase();
+  if (!address || !address.includes('@')) return null;
+
+  let account = await storeService.getBuyerAccountByEmail(address);
+  if (!account) {
+    const linked = await linkExistingIdentityBuyer(address);
+    if (linked && linked.buyerAccount) {
+      account = linked.buyerAccount;
+    }
+  }
+
+  if (!account) return null;
+
+  const isPendingOnboarding = Boolean(
+    account.status === 'PENDING_ONBOARDING' ||
+    account.onboardingRequired === true ||
+    account.tempPasswordRequired === true ||
+    account.isAutoRegistered === true
+  );
+
+  return isPendingOnboarding ? null : account;
+}
+
+/**
+ * Resolves the buyer attribution and multi-buyer routing for an inbound email.
+ * Evaluates TO sender and CC recipients across the 4 business scenarios:
+ *
+ * 1. Registered Buyer in CC: Handled when TO is unregistered but CC is registered.
+ * 2. Registered TO + Registered CC: Creates one logical shared RFQ accessible to both.
+ * 3. Unregistered TO + Registered CC: Creates RFQ only under registered CC buyer.
+ * 4. Unregistered TO + Unregistered CC: Follows existing unregistered flow for TO only.
+ *
+ * @param {Object} message The parsed email message
+ * @param {Object} config The email gateway configuration
+ * @param {Object|null} preloadedSenderAccount Optional preloaded account for sender
+ * @returns {Promise<Object>} Attribution result object
+ */
+async function resolveMultiBuyerAttribution(message, config = resolveConfig(), preloadedSenderAccount = undefined) {
+  const senderAddress = String(message?.fromAddress || '').trim().toLowerCase();
+
+  const rawToList = [
+    ...(Array.isArray(message?.toAddresses) ? message.toAddresses : []),
+    ...(message?.toAddress ? [message.toAddress] : []),
+    ...(message?.to ? [message.to] : []),
+  ];
+  const toRecipients = normalizeRecipientList(rawToList).filter(
+    (addr) => addr !== senderAddress && !isGatewayOrSystemEmail(addr, config)
+  );
+
+  const rawCcList = [
+    ...(Array.isArray(message?.ccAddresses) ? message.ccAddresses : []),
+    ...(Array.isArray(message?.cc) ? message.cc : [message?.cc]),
+  ];
+  const ccRecipients = normalizeRecipientList(rawCcList).filter(
+    (addr) => addr !== senderAddress && !toRecipients.includes(addr) && !isGatewayOrSystemEmail(addr, config)
+  );
+
+  const allowedSenders = Array.isArray(config?.allowedSenders) ? config.allowedSenders : [];
+  const allowedDomains = Array.isArray(config?.allowedDomains) ? config.allowedDomains : [];
+
+  if (allowedSenders.length > 0 && !allowedSenders.includes(senderAddress)) {
+    return {
+      allowed: false,
+      reason: EMAIL_GATEWAY_MESSAGES.SENDER_NOT_LISTED.replace('{address}', senderAddress),
+      scenario: null,
+      primaryBuyerAccount: null,
+      sharedBuyerAccounts: [],
+      sharedBuyerAccountIds: [],
+      sharedBuyerEmails: [],
+      shouldAutoRegisterSender: false,
+    };
+  }
+
+  if (allowedDomains.length > 0) {
+    const domain = senderAddress.split('@')[1] || '';
+    if (!allowedDomains.includes(domain)) {
+      return {
+        allowed: false,
+        reason: EMAIL_GATEWAY_MESSAGES.DOMAIN_NOT_LISTED.replace('{domain}', domain || senderAddress),
+        scenario: null,
+        primaryBuyerAccount: null,
+        sharedBuyerAccounts: [],
+        sharedBuyerAccountIds: [],
+        sharedBuyerEmails: [],
+        shouldAutoRegisterSender: false,
+      };
+    }
+  }
+
+  let senderAccount = preloadedSenderAccount !== undefined
+    ? preloadedSenderAccount
+    : (await storeService.getBuyerAccountByEmail(senderAddress));
+
+  if (!senderAccount) {
+    const linked = await linkExistingIdentityBuyer(senderAddress);
+    if (linked && linked.buyerAccount) {
+      senderAccount = linked.buyerAccount;
+    }
+  }
+
+  const isSenderRegistered = Boolean(
+    senderAccount &&
+    !senderAccount.isAutoRegistered &&
+    senderAccount.status !== 'PENDING_ONBOARDING' &&
+    !senderAccount.onboardingRequired &&
+    !senderAccount.tempPasswordRequired
+  );
+
+  const registeredCcBuyers = [];
+  for (const ccEmail of ccRecipients) {
+    const ccAccount = await resolveRegisteredBuyerAccount(ccEmail);
+    if (ccAccount && (!senderAccount || ccAccount.id !== senderAccount.id)) {
+      if (!registeredCcBuyers.some((b) => b.id === ccAccount.id)) {
+        registeredCcBuyers.push(ccAccount);
+      }
+    }
+  }
+
+  // Scenario 2: Registered TO + Registered CC
+  if (isSenderRegistered && registeredCcBuyers.length > 0) {
+    return {
+      allowed: true,
+      reason: null,
+      scenario: EMAIL_RFQ_SCENARIOS.REGISTERED_TO_REGISTERED_CC,
+      primaryBuyerAccount: senderAccount,
+      sharedBuyerAccounts: registeredCcBuyers,
+      sharedBuyerAccountIds: registeredCcBuyers.map((b) => b.id),
+      sharedBuyerEmails: registeredCcBuyers.map((b) => b.corporateEmail).filter(Boolean),
+      isSharedRfq: true,
+      shouldAutoRegisterSender: false,
+      authorisation: {
+        allowed: true,
+        reason: null,
+        buyerAccount: senderAccount,
+        isOnboardingPending: false,
+        tempPassword: null,
+      },
+      eligibleNotificationRecipients: [
+        { email: senderAccount.corporateEmail || senderAddress, buyer: senderAccount, isPrimary: true },
+        ...registeredCcBuyers.map((b) => ({ email: b.corporateEmail, buyer: b, isPrimary: false })),
+      ],
+      senderAddress,
+      toAddresses: toRecipients,
+      ccAddresses: ccRecipients,
+    };
+  }
+
+  // Scenario 3 (and 1): Unregistered TO + Registered CC
+  if (!isSenderRegistered && registeredCcBuyers.length > 0) {
+    const primaryCcBuyer = registeredCcBuyers[0];
+    const additionalCcBuyers = registeredCcBuyers.slice(1);
+    return {
+      allowed: true,
+      reason: null,
+      scenario: EMAIL_RFQ_SCENARIOS.UNREGISTERED_TO_REGISTERED_CC,
+      primaryBuyerAccount: primaryCcBuyer,
+      sharedBuyerAccounts: additionalCcBuyers,
+      sharedBuyerAccountIds: additionalCcBuyers.map((b) => b.id),
+      sharedBuyerEmails: additionalCcBuyers.map((b) => b.corporateEmail).filter(Boolean),
+      isSharedRfq: additionalCcBuyers.length > 0,
+      shouldAutoRegisterSender: false,
+      authorisation: {
+        allowed: true,
+        reason: null,
+        buyerAccount: primaryCcBuyer,
+        isOnboardingPending: false,
+        tempPassword: null,
+      },
+      eligibleNotificationRecipients: [
+        { email: primaryCcBuyer.corporateEmail, buyer: primaryCcBuyer, isPrimary: true },
+        ...additionalCcBuyers.map((b) => ({ email: b.corporateEmail, buyer: b, isPrimary: false })),
+      ],
+      senderAddress,
+      toAddresses: toRecipients,
+      ccAddresses: ccRecipients,
+    };
+  }
+
+  // Scenario 4: Unregistered TO + Unregistered CC
+  if (!isSenderRegistered && registeredCcBuyers.length === 0) {
+    const isDomainOrSenderRestricted =
+      (allowedSenders.length > 0 && !allowedSenders.includes(senderAddress)) ||
+      (allowedDomains.length > 0 && !allowedDomains.includes((senderAddress.split('@')[1] || '').toLowerCase())) ||
+      !senderAddress;
+
+    const isUnregisteredSender =
+      !isDomainOrSenderRestricted &&
+      !message?.automatedReason &&
+      !isSystemOrAutomatedSender(senderAddress) &&
+      !config?.isVendorMailbox &&
+      config?.autoRegisterUnregisteredBuyers !== false;
+
+    if (!isUnregisteredSender) {
+      return {
+        allowed: false,
+        reason: EMAIL_GATEWAY_MESSAGES.SENDER_NO_ACCOUNT.replace('{address}', senderAddress),
+        scenario: EMAIL_RFQ_SCENARIOS.UNREGISTERED_TO_UNREGISTERED_CC,
+        primaryBuyerAccount: null,
+        sharedBuyerAccounts: [],
+        sharedBuyerAccountIds: [],
+        sharedBuyerEmails: [],
+        shouldAutoRegisterSender: false,
+      };
+    }
+
+    const onboardResult = await emailGateway.getOrCreateBuyerAccount(senderAddress);
+    return {
+      allowed: true,
+      reason: null,
+      scenario: EMAIL_RFQ_SCENARIOS.UNREGISTERED_TO_UNREGISTERED_CC,
+      primaryBuyerAccount: onboardResult.buyerAccount,
+      sharedBuyerAccounts: [],
+      sharedBuyerAccountIds: [],
+      sharedBuyerEmails: [],
+      isSharedRfq: false,
+      shouldAutoRegisterSender: true,
+      authorisation: {
+        allowed: true,
+        reason: null,
+        buyerAccount: onboardResult.buyerAccount,
+        isAutoRegistered: Boolean(onboardResult.isNew || onboardResult.isAutoRegistered),
+        isOnboardingPending: Boolean(onboardResult.isNew || onboardResult.isOnboardingPending),
+        tempPassword: onboardResult.tempPassword,
+      },
+      eligibleNotificationRecipients: [
+        { email: senderAddress, buyer: onboardResult.buyerAccount, isPrimary: true },
+      ],
+      senderAddress,
+      toAddresses: toRecipients,
+      ccAddresses: ccRecipients,
+    };
+  }
+
+  // Baseline Scenario: Registered TO + Unregistered CC (or no CC)
+  return {
+    allowed: true,
+    reason: null,
+    scenario: EMAIL_RFQ_SCENARIOS.REGISTERED_TO_ONLY,
+    primaryBuyerAccount: senderAccount,
+    sharedBuyerAccounts: [],
+    sharedBuyerAccountIds: [],
+    sharedBuyerEmails: [],
+    isSharedRfq: false,
+    shouldAutoRegisterSender: false,
+    authorisation: {
+      allowed: true,
+      reason: null,
+      buyerAccount: senderAccount,
+      isOnboardingPending: false,
+      tempPassword: null,
+    },
+    eligibleNotificationRecipients: [
+      { email: senderAccount.corporateEmail || senderAddress, buyer: senderAccount, isPrimary: true },
+    ],
+    senderAddress,
+    toAddresses: toRecipients,
+    ccAddresses: ccRecipients,
+  };
+}
+
 async function resolveSenderAuthorisation(fromAddress, config = resolveConfig(), preloadedBuyerAccount = undefined) {
   const address = String(fromAddress || '').trim().toLowerCase();
   if (!address) {
@@ -1850,21 +2188,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
-  const gatewayOwnAddresses = new Set(
-    [config.address, config.user].filter(Boolean).map((a) => String(a).trim().toLowerCase())
-  );
-  if (message.fromAddress && gatewayOwnAddresses.has(String(message.fromAddress).trim().toLowerCase())) {
-    logger.warn(
-      `Ignoring inbound message from the gateway's own address (${message.fromAddress}) — processing it would risk an outbound-notification loop`,
-      { fromAddress: message.fromAddress, subject: message.subject },
-      'EMAIL_GATEWAY'
-    );
-    return {
-      status: INGESTION_OUTCOME.SKIPPED_OUTBOUND,
-      detail: 'Message originated from the gateway\'s own configured address; ignored to avoid a notification loop.',
-      message,
-    };
-  }
+
 
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
   const { targetRfq, referencedNumber } = await extractRfqReferenceFromEmail(message);
@@ -1939,44 +2263,22 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
-  let authorisation = await resolveSenderAuthorisation(message.fromAddress, config, buyerAccount);
-  if (!authorisation.allowed) {
-    const isDomainOrSenderRestricted =
-      (Array.isArray(config?.allowedSenders) && config.allowedSenders.length > 0 && !config.allowedSenders.includes(String(message.fromAddress || '').toLowerCase())) ||
-      (Array.isArray(config?.allowedDomains) && config.allowedDomains.length > 0 && !config.allowedDomains.includes((String(message.fromAddress || '').split('@')[1] || '').toLowerCase())) ||
-      !message.fromAddress;
+  const attribution = await emailGateway.resolveMultiBuyerAttribution(message, config, buyerAccount);
+  let authorisation = attribution.authorisation;
 
-    const isUnregisteredSender =
-      !isDomainOrSenderRestricted &&
-      !message.automatedReason &&
-      !isSystemOrAutomatedSender(message.fromAddress) &&
-      !authorisation.buyerAccount &&
-      !config?.isVendorMailbox &&
-      config?.autoRegisterUnregisteredBuyers !== false;
-
-    if (isUnregisteredSender) {
-      const onboardResult = await emailGateway.getOrCreateBuyerAccount(message.fromAddress);
-      authorisation = {
-        allowed: true,
-        reason: null,
-        buyerAccount: onboardResult.buyerAccount,
-        isAutoRegistered: Boolean(onboardResult.isNew || onboardResult.isAutoRegistered),
-        isOnboardingPending: Boolean(onboardResult.isNew || onboardResult.isOnboardingPending),
-        tempPassword: onboardResult.tempPassword,
-      };
-    } else {
-      await sendAutoReply(
-        message,
-        AUTO_REPLY_KIND.UNAUTHORIZED_SENDER,
-        () =>
-          mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
-            subject: message.subject,
-            gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
-          }),
-        { config, failureLog: 'Failed to dispatch registration notification to unauthorized sender' }
-      );
-      return { status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED, detail: authorisation.reason, message };
-    }
+  if (!authorisation || !authorisation.allowed) {
+    const reason = (attribution && attribution.reason) || EMAIL_GATEWAY_MESSAGES.SENDER_NO_ACCOUNT.replace('{address}', message.fromAddress || 'unknown');
+    await sendAutoReply(
+      message,
+      AUTO_REPLY_KIND.UNAUTHORIZED_SENDER,
+      () =>
+        mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
+          subject: message.subject,
+          gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+        }),
+      { config, failureLog: 'Failed to dispatch registration notification to unauthorized sender' }
+    );
+    return { status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED, detail: reason, message };
   }
 
   // A transient Gemini failure (timeout, rate limit, outage, missing key) says
@@ -2129,7 +2431,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
         status: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
         source: 'email_gateway',
         sourceEmail: message.fromAddress,
-        buyerEmail: message.fromAddress,
+        buyerEmail: attribution.primaryBuyerAccount?.corporateEmail || message.fromAddress,
         sourceFileName: draft.title || message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
         raisedByEmail: message.fromAddress,
         budget: draft.estimatedBudget || 0,
@@ -2140,9 +2442,18 @@ async function processMessage(rawSource, config = resolveConfig()) {
         deliveryState: draft.deliveryState,
         deliveryPincode: draft.deliveryPincode,
         attachments: await emailAttachments(),
+        sharedBuyerAccountIds: attribution.sharedBuyerAccountIds || [],
+        sharedBuyerEmails: attribution.sharedBuyerEmails || [],
+        isSharedRfq: Boolean(attribution.isSharedRfq),
+        emailRfqScenario: attribution.scenario || null,
       },
-      authorisation.buyerAccount
+      attribution.primaryBuyerAccount
     );
+
+    storeService.addAuditLog({
+      userEmail: attribution.primaryBuyerAccount?.corporateEmail || message.fromAddress,
+      action: `Email-to-RFQ [${attribution.scenario}]: Raised RFQ ${created.rfqNumber} for ${attribution.primaryBuyerAccount?.organizationName || 'Buyer'} (${attribution.primaryBuyerAccount?.corporateEmail}), sender ${message.fromAddress}, CC: [${attribution.ccAddresses.join(', ')}], shared: [${attribution.sharedBuyerEmails.join(', ')}]`,
+    });
 
     if (typeof storeService.autoAssignVendorsFromDB === 'function') {
       try {
@@ -2187,45 +2498,51 @@ async function processMessage(rawSource, config = resolveConfig()) {
       logger.warn('Email RFQ persistence confirmation caught non-fatal warning', { error: persistErr.message, rfqNumber: created.rfqNumber }, 'EMAIL_GATEWAY');
     }
 
-    // Dispatch RFQ creation acknowledgement email to the buyer
-    if (message.fromAddress) {
-      const shouldSendOnboardingCredentials = Boolean(
+    // Dispatch RFQ creation acknowledgement email to eligible buyer accounts only
+    const rawMobile =
+      authorisation?.buyerAccount?.mobileNumber ||
+      authorisation?.buyerAccount?.phone ||
+      authorisation?.user?.phone ||
+      '9999999999';
+    const resolvedMobile = String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || '9999999999';
+
+    const rawEntities = Array.isArray(created.extractedEntities) && created.extractedEntities.length > 0
+      ? created.extractedEntities
+      : Array.isArray(created.items)
+        ? created.items
+        : [];
+
+    const normalizedLineItems = rawEntities.map((it) => ({
+      item_name: it.itemName || it.name || it.item_name || 'Line Item',
+      item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || 'Standard Specification',
+      qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : 1),
+      uom: it.unit || it.uom || 'Nos',
+    }));
+
+    const resolvedSuppliersCount = created.assignedVendors && created.assignedVendors.length > 0
+      ? created.assignedVendors.length
+      : (created.procucevVendorCount || 5);
+
+    const notificationRecipients = Array.isArray(attribution.eligibleNotificationRecipients) && attribution.eligibleNotificationRecipients.length > 0
+      ? attribution.eligibleNotificationRecipients
+      : [{ email: message.fromAddress, buyer: attribution.primaryBuyerAccount, isPrimary: true }];
+
+    for (const recipient of notificationRecipients) {
+      if (!recipient.email) continue;
+      const isAutoRegisteredPrimary = Boolean(
         groupIndex === 0 &&
-        (authorisation.isAutoRegistered || authorisation.isOnboardingPending) &&
+        recipient.isPrimary &&
+        attribution.shouldAutoRegisterSender &&
         authorisation.tempPassword
       );
 
-      const rawMobile =
-        authorisation?.buyerAccount?.mobileNumber ||
-        authorisation?.buyerAccount?.phone ||
-        authorisation?.user?.phone ||
-        '9999999999';
-      const resolvedMobile = String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || '9999999999';
-
-      const rawEntities = Array.isArray(created.extractedEntities) && created.extractedEntities.length > 0
-        ? created.extractedEntities
-        : Array.isArray(created.items)
-          ? created.items
-          : [];
-
-      const normalizedLineItems = rawEntities.map((it) => ({
-        item_name: it.itemName || it.name || it.item_name || 'Line Item',
-        item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || 'Standard Specification',
-        qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : 1),
-        uom: it.unit || it.uom || 'Nos',
-      }));
-
-      const resolvedSuppliersCount = created.assignedVendors && created.assignedVendors.length > 0
-        ? created.assignedVendors.length
-        : (created.procucevVendorCount || 5);
-
       const ack = {
-        to: message.fromAddress,
-        buyerName: buyerDisplayName(authorisation.buyerAccount, message),
+        to: recipient.email,
+        buyerName: buyerDisplayName(recipient.buyer, message),
         rfqNumber: created.rfqNumber,
         rfqTitle: created.title,
         deliveryDate: created.targetDeliveryDate,
-        tempPassword: shouldSendOnboardingCredentials ? authorisation.tempPassword : null,
+        tempPassword: isAutoRegisteredPrimary ? authorisation.tempPassword : null,
         mobileNumber: resolvedMobile,
         category: created.category,
         itemCount: normalizedLineItems.length || 1,
@@ -2237,27 +2554,42 @@ async function processMessage(rawSource, config = resolveConfig()) {
         items: normalizedLineItems,
       };
 
-      if (shouldSendOnboardingCredentials) {
+      const ackDedupKey = recipient.isPrimary ? (groupKey || created.id) : (groupKey ? `${groupKey}#${recipient.email}` : `${created.id}#${recipient.email}`);
+
+      if (isAutoRegisteredPrimary) {
         try {
           await mailerService.sendBuyerOnboardingWithRfqEmail(ack);
         } catch (onboardErr) {
           logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');
-          await queueAcknowledgement(groupKey || created.id, ack);
+          await emailGateway.queueAcknowledgement(ackDedupKey, ack);
         }
       } else {
         try {
           await mailerService.sendRfqAcknowledgementEmail(ack);
         } catch (ackErr) {
           logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
-          await queueAcknowledgement(groupKey || created.id, ack);
+          await emailGateway.queueAcknowledgement(ackDedupKey, ack);
         }
       }
     }
 
     logger.audit(
-      `RFQ ${created.rfqNumber} raised from inbound email`,
+      `RFQ ${created.rfqNumber} raised from inbound email under scenario ${attribution.scenario}`,
       message.fromAddress,
-      { rfqId: created.id, messageId: message.messageId, accepted: classification.accepted }
+      {
+        rfqId: created.id,
+        rfqNumber: created.rfqNumber,
+        scenario: attribution.scenario,
+        primaryBuyerAccountId: attribution.primaryBuyerAccount?.id,
+        primaryBuyerEmail: attribution.primaryBuyerAccount?.corporateEmail,
+        sharedBuyerAccountIds: attribution.sharedBuyerAccountIds,
+        sharedBuyerEmails: attribution.sharedBuyerEmails,
+        fromAddress: message.fromAddress,
+        toAddresses: attribution.toAddresses,
+        ccAddresses: attribution.ccAddresses,
+        messageId: message.messageId,
+        accepted: classification.accepted,
+      }
     );
   }
 
@@ -2987,6 +3319,9 @@ const emailGateway = {
   stopPolling,
   getStatus,
   getOrCreateBuyerAccount,
+  normalizeRecipientList,
+  resolveRegisteredBuyerAccount,
+  resolveMultiBuyerAttribution,
   getOrCreateLabelId,
   clearLabelCache,
   recordRecentError,
