@@ -56,7 +56,7 @@ const REPORTED_TABLES = [
   'vendor_credit_transactions', 'buyer_credit_transactions',
   'tickets', 'ticket_activities', 'internal_task_types',
   'internal_tasks', 'internal_task_activities', 'approvals',
-  'system_error_logs', 'vendor_categories_indexed', 'document_vault',
+  'system_error_logs', 'vendor_categories_indexed', 'document_vault', 'account_documents',
 ];
 
 async function d1Query(sql, params = []) {

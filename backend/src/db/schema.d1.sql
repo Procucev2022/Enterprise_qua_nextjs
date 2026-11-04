@@ -927,6 +927,29 @@ CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email ON vendor_directory_sessions 
 CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status ON vendor_directory_sessions (status);
 
 -- ==============================================================================
+-- ACCOUNT DOCUMENTS (Buyer & Seller Dossier Associated Documents)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS account_documents (
+  id TEXT PRIMARY KEY,
+  account_type TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  document_name TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_size INTEGER DEFAULT 0,
+  mime_type TEXT DEFAULT 'application/pdf',
+  category TEXT NOT NULL DEFAULT 'Other',
+  file_url TEXT NOT NULL,
+  description TEXT,
+  uploaded_by TEXT DEFAULT 'Category Manager',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_account_documents_account ON account_documents (account_type, account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_account_documents_category ON account_documents (category);
+CREATE INDEX IF NOT EXISTS idx_account_documents_active ON account_documents (is_active);
+
+-- ==============================================================================
 -- IDENTITY MASTER LOOKUP DATA (Idempotent Seeds)
 -- ==============================================================================
 INSERT OR IGNORE INTO role (uuid, role_name, is_active) VALUES ('role-client-initiator', 'ClientInitiator', 1);
@@ -944,6 +967,7 @@ INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-st
 INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-active', 'Active', 1);
 INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-pending', 'Pending', 1);
 INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-inactive', 'Inactive', 1);
+
 
 
 
