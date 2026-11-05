@@ -2931,7 +2931,42 @@ const CREDIT_APPROVAL_INITIATORS = Object.freeze([
 
 const SELLER_QUOTE_CREDITS_ALLOWED = Object.freeze([1, 2, 3, 4, 5]);
 
+const APPROVAL_REQUEST_TYPES = Object.freeze([
+  'Buyer Credit Addition',
+  'Seller Credit Addition',
+  'Credit Notes',
+  'Purchase Requests',
+  'Payment Approvals',
+  'Discounts',
+  'Account Approvals',
+  'Trial Periods',
+  'Offline Payments',
+  'Unit Bookings',
+  'Cancellations & Refunds',
+  'Packages',
+  'Milestones',
+]);
+
+const APPROVAL_STATUSES = Object.freeze(['Pending', 'Approved', 'Rejected']);
+
+
+const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
+  DEFAULT_RECIPIENTS: Object.freeze(['veerababu.v@procucev.com']),
+  DEFAULT_SCHEDULE_HOUR: 6, // 6:00 AM
+  DEFAULT_SCHEDULE_MINUTE: 0,
+  DEFAULT_TIMEZONE: 'Asia/Kolkata',
+  DEFAULT_ENABLED: true,
+  INGESTION_CHANNEL_LABELS: Object.freeze({
+    web_portal: 'Web Portal',
+    email_gateway: 'Email Gateway',
+    email_upload: 'Email Upload',
+    manual_entry: 'Manual Entry',
+    ai_extraction: 'AI Extraction',
+  }),
+});
+
 module.exports = {
+  DAILY_RFQ_REPORT_CONFIG,
   ACCOUNT_DOCUMENT_CATEGORIES,
   ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES,
   ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS,
@@ -2939,6 +2974,8 @@ module.exports = {
   CREDIT_APPROVAL_APPROVERS,
   CREDIT_APPROVAL_INITIATORS,
   SELLER_QUOTE_CREDITS_ALLOWED,
+  APPROVAL_REQUEST_TYPES,
+  APPROVAL_STATUSES,
   INTERNAL_TASK_CATEGORIES,
   INTERNAL_TASK_CATEGORY_LABELS,
   INTERNAL_TASK_CATEGORY_TYPES,

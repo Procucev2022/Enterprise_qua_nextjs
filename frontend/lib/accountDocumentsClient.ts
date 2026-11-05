@@ -35,6 +35,13 @@ export interface RequestBuyerCreditApprovalPayload {
   initiatorName: string;
 }
 
+export interface RequestSellerQuoteCreditApprovalPayload {
+  amount: number;
+  reason?: string;
+  approverName: string;
+  initiatorName: string;
+}
+
 export interface AddSellerQuoteCreditsPayload {
   amount: number;
   reason?: string;
@@ -190,6 +197,38 @@ export async function requestBuyerCreditApproval(
   } catch (err) {
     const errorMsg = (err as Error).message || 'Network error during credit request.';
     logger.error('requestBuyerCreditApproval network error', { error: errorMsg }, 'ACCOUNT_DOCS_CLIENT');
+    return { success: false, error: errorMsg };
+  }
+}
+
+/**
+ * Request seller quote credit addition via the approval workflow.
+ * Creates an internal task with status = 'Pending Approval' and links to the approvals module.
+ */
+export async function requestSellerQuoteCreditApproval(
+  sellerId: string,
+  payload: RequestSellerQuoteCreditApprovalPayload
+): Promise<{ success: boolean; message?: string; task?: unknown; error?: string }> {
+  try {
+    const url = `/api/vendors/${encodeURIComponent(sellerId)}/request-credit-approval`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+
+    const json = await res.json();
+    if (!res.ok || !json?.success) {
+      const errorMsg = json?.error || 'Failed to submit quote credit approval request.';
+      logger.error('Quote credit approval request rejected', { status: res.status, error: errorMsg }, 'ACCOUNT_DOCS_CLIENT');
+      return { success: false, error: errorMsg };
+    }
+
+    logger.info('Quote credit approval request submitted', { sellerId, taskId: json.task?.id }, 'ACCOUNT_DOCS_CLIENT');
+    return { success: true, message: json.message, task: json.task };
+  } catch (err) {
+    const errorMsg = (err as Error).message || 'Network error during quote credit request.';
+    logger.error('requestSellerQuoteCreditApproval network error', { error: errorMsg }, 'ACCOUNT_DOCS_CLIENT');
     return { success: false, error: errorMsg };
   }
 }

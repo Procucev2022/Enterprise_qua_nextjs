@@ -1585,3 +1585,47 @@ export const CREDIT_APPROVAL_INITIATORS = [
 export type CreditApprovalInitiator = (typeof CREDIT_APPROVAL_INITIATORS)[number];
 
 export const SELLER_QUOTE_CREDITS_ALLOWED = [1, 2, 3, 4, 5] as const;
+
+export const APPROVAL_REQUEST_TYPES = [
+  'Buyer Credit Addition',
+  'Seller Credit Addition',
+  'Credit Notes',
+  'Purchase Requests',
+  'Payment Approvals',
+  'Discounts',
+  'Account Approvals',
+  'Trial Periods',
+  'Offline Payments',
+  'Unit Bookings',
+  'Cancellations & Refunds',
+  'Packages',
+  'Milestones',
+] as const;
+
+export const DEFAULT_APPROVAL_COLUMNS: Array<{
+  key:
+    | 'request_id'
+    | 'request_type'
+    | 'requested_by'
+    | 'project_account'
+    | 'amount_quantity'
+    | 'request_date'
+    | 'assigned_approver'
+    | 'status'
+    | 'actions';
+  label: string;
+  visible: boolean;
+  locked?: boolean;
+  order: number;
+}> = [
+  { key: 'request_id', label: 'Request ID', visible: true, locked: true, order: 1 },
+  { key: 'request_type', label: 'Request Type', visible: true, order: 2 },
+  { key: 'requested_by', label: 'Requested By', visible: true, order: 3 },
+  { key: 'project_account', label: 'Project / Buyer / Supplier', visible: true, order: 4 },
+  { key: 'amount_quantity', label: 'Amount / Quantity', visible: true, order: 5 },
+  { key: 'request_date', label: 'Request Date', visible: true, order: 6 },
+  { key: 'assigned_approver', label: 'Assigned Approver', visible: true, order: 7 },
+  { key: 'status', label: 'Status', visible: true, order: 8 },
+  { key: 'actions', label: 'Actions', visible: true, locked: true, order: 9 },
+];
+

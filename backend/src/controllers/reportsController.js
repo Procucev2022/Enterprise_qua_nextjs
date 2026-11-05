@@ -1,3 +1,5 @@
+const dailyRfqReportService = require('../services/dailyRfqReportService');
+const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const storeService = require('../services/storeService');
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
@@ -639,6 +641,21 @@ async function getRfqReports(req, res, next) {
           }
         }
       }
+        } else if (requestType === 'dailyRfqInflow') {
+      const inflowData = await dailyRfqReportService.getDailyRfqReportData({
+        targetDate: req.query.date || req.query.targetDate,
+        fromDate,
+        toDate,
+      });
+      return res.json({
+        success: true,
+        reportType: 'dailyRfqInflow',
+        reportDate: inflowData.reportDate,
+        reportDateFormatted: inflowData.reportDateFormatted,
+        summary: inflowData.summary,
+        totalRecords: inflowData.summary.totalRFQs,
+        data: inflowData.rfqs,
+      });
     } else if (requestType === 'dailyRfqDispatchReport') {
       for (const rfq of allRfqs) {
         const rDate = rfq.createdAt ? new Date(rfq.createdAt) : null;
@@ -759,7 +776,35 @@ async function getDailyActivityReport(req, res, next) {
   }
 }
 
+
+/**
+ * POST /api/reports/send-daily-rfq-email
+ */
+async function triggerDailyRfqReportEmail(req, res, next) {
+  try {
+    const validation = validatePayload(VALIDATION_SCHEMAS.sendDailyRfqReport, req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({ success: false, errors: validation.errors });
+    }
+    const { targetDate, recipients, dryRun } = req.body || {};
+    const result = await dailyRfqReportService.sendDailyRfqReport({
+      date: targetDate,
+      recipients,
+      dryRun: Boolean(dryRun),
+    });
+    return res.json({
+      success: true,
+      message: 'Daily RFQ report dispatched successfully',
+      result,
+    });
+  } catch (err) {
+    logger.error('Error in triggerDailyRfqReportEmail', err, LOG_CATEGORY);
+    return next(err);
+  }
+}
+
 module.exports = {
+  triggerDailyRfqReportEmail,
   getSellerReports,
   getBuyerReports,
   getRfqReports,

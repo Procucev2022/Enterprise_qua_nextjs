@@ -54,6 +54,15 @@ export const REPORT_OPTIONS: ReportConfig[] = [
 
   // RFQ Reports
   {
+    id: 'rfq_daily_inflow',
+    category: 'rfq',
+    label: 'Daily RFQ Inflow & Sourcing Mode Report',
+    description: 'Manifest of yesterday and daily inbound RFQs, classified by sourcing mode, ingestion channel, and category.',
+    endpoint: '/api/reports/rfq-report',
+    requestType: 'dailyRfqInflow',
+    defaultFileName: 'Daily_RFQ_Inflow_Report',
+  },
+  {
     id: 'rfq_detailed',
     category: 'rfq',
     label: 'RFQ Performance & Turnaround Report',
