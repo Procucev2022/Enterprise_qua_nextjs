@@ -506,13 +506,13 @@ export async function validatePincode(
     };
   }
 
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    timeout = setTimeout(() => controller.abort(), 6000);
     const response = await fetch(`https://api.postalpincode.in/pincode/${pin}`, {
       signal: controller.signal,
     });
-    clearTimeout(timeout);
 
     if (!response.ok) {
       return { isValid: true }; // Network fallback
@@ -534,6 +534,8 @@ export async function validatePincode(
     }
   } catch (error) {
     return { isValid: true }; // Network fallback
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 

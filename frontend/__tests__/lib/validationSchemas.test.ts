@@ -359,6 +359,7 @@ describe('validatePincode async postal API validator', () => {
   afterEach(() => {
     global.fetch = originalFetch;
     jest.restoreAllMocks();
+    jest.useRealTimers();
   });
 
   test('returns invalid for empty or non-string input', async () => {
@@ -468,6 +469,16 @@ describe('validatePincode async postal API validator', () => {
 
     const res = await validatePincode('400701');
     expect(res.isValid).toBe(true);
+  });
+
+  test('clears the request timeout after a network failure', async () => {
+    jest.useFakeTimers();
+    global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+
+    const result = await validatePincode('400701');
+
+    expect(result.isValid).toBe(true);
+    expect(jest.getTimerCount()).toBe(0);
   });
 
   test('handles empty, non-Indian, and dummy pincode validation branches', async () => {
