@@ -6,18 +6,15 @@ const dotenv = require('dotenv');
 // Load environment variables (from working directory and backend directory)
 dotenv.config();
 try {
-  // eslint-disable-next-line no-undef
-  if (typeof __dirname !== 'undefined') {
-    const fs = require('fs');
-    const targetEnv = process.env.APP_ENV || (process.env.NODE_ENV === 'production' ? 'prod' : 'dev');
-    const envSpecificPath = path.resolve(__dirname, `../.env.${targetEnv}`);
-    if (fs.existsSync(envSpecificPath)) {
-      dotenv.config({ path: envSpecificPath });
-    }
-    dotenv.config({ path: path.resolve(__dirname, '../.env') });
+  const fs = require('fs');
+  const targetEnv = process.env.APP_ENV || (process.env.NODE_ENV === 'production' ? 'prod' : 'dev');
+  const envSpecificPath = path.resolve(__dirname, `../.env.${targetEnv}`);
+  if (fs.existsSync(envSpecificPath)) {
+    dotenv.config({ path: envSpecificPath });
   }
+  dotenv.config({ path: path.resolve(__dirname, '../.env') });
 } catch {
-  // Ignored in Cloudflare Workers / ESM bundles where __dirname does not exist
+  // Environment files are optional; Worker bindings and process configuration remain authoritative.
 }
 
 const apiRoutes = require('./routes');
@@ -27,45 +24,19 @@ const errorHandler = require('./middleware/errorHandler');
 const storeService = require('./services/storeService');
 const pool = require('./db/pool');
 const { logger } = require('./services/loggerService');
+const { GRAPHQL_CONFIG, STORE_HYDRATION_CONFIG } = require('./config/constants');
 
 const app = express();
 
-// Cloudflare Workers' entry point (worker.mjs) only calls app.listen() — it
-// skips server.js's bootstrapServer(), which is what normally hydrates
-// storeService from the database before the first request on Node/Render.
-// Workers also can't do that hydration eagerly at module load: I/O (a D1/pg
-// call) is only permitted once a request is being handled, not at top-level
-// script evaluation. So it happens here instead, lazily, once, on whichever
-// request happens to arrive first — same effect as the boot-time call on
-// Node, just deferred to inside a request context where it's actually
-// allowed to run. A concurrent second request while the first hydration is
-// still in flight reuses the same in-flight promise rather than issuing a
-// second one.
-// Guarded on pool.hasStorage(): with nothing configured (as in the Jest
-// suite, where jest.setup.js blanks DATABASE_URL and there's no D1 binding)
-// there's nothing to hydrate from, so this stays a no-op rather than calling
-// into hydrateFromDB()'s own logging on every single request/test.
-// The WhatsApp bot bridge (/api/bot) reads accounts straight from the database
-// and loads any vendor it touches on demand, so it skips this: a cold isolate
-// would otherwise hold the bot's reply until every table above had loaded.
-const BOT_BRIDGE_PATH = '/api/bot';
-let hydrationPromise = null;
-app.use((req, res, next) => {
-  if (storeService.isHydratedFromDB || !pool.hasStorage()) return next();
-  if (req.path === BOT_BRIDGE_PATH || req.path.startsWith(`${BOT_BRIDGE_PATH}/`)) return next();
-  if (!hydrationPromise) {
-    hydrationPromise = storeService
-      .hydrateFromDB()
-      .catch((err) => logger.error('Lazy on-request hydration failed', err, 'APP'))
-      .finally(() => {
-        hydrationPromise = null;
-      });
-  }
-  hydrationPromise.then(() => next());
-});
-
 // Security & Parsing Middlewares
 app.use(cors());
+app.use(requestLogger);
+// GraphQL accepts only bounded JSON bodies even though selected file-ingestion
+// APIs need the larger workspace upload limit below.
+app.use('/graphql', express.json({ limit: GRAPHQL_CONFIG.MAX_REQUEST_BODY_BYTES }));
+app.use('/api/graphql', express.json({ limit: GRAPHQL_CONFIG.MAX_REQUEST_BODY_BYTES }));
+app.use('/graphql', express.urlencoded({ extended: true, limit: GRAPHQL_CONFIG.MAX_REQUEST_BODY_BYTES }));
+app.use('/api/graphql', express.urlencoded({ extended: true, limit: GRAPHQL_CONFIG.MAX_REQUEST_BODY_BYTES }));
 // `verify` captures the exact request bytes onto req.rawBody alongside the
 // parsed body express.json() already produces — needed only by the Zoho
 // webhook route, whose signature covers the raw wire bytes, not a
@@ -80,7 +51,50 @@ app.use(
   })
 );
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-app.use(requestLogger);
+
+function pathMatchesPrefix(requestPath, prefix) {
+  return requestPath === prefix || requestPath.startsWith(`${prefix}/`);
+}
+
+function shouldSkipStoreHydration(requestPath = '/') {
+  return STORE_HYDRATION_CONFIG.SKIP_PATHS.some((prefix) => pathMatchesPrefix(requestPath, prefix));
+}
+
+// Worker isolates may need storeService's legacy in-memory projection for a
+// subset of domain routes. Do not pay the multi-table hydration cost for
+// database-only APIs, health checks, or external integrations. Failed hydration
+// is a retryable outage for legacy routes; never continue with stale seed state.
+let hydrationPromise = null;
+app.use((req, res, next) => {
+  if (storeService.isHydratedFromDB || !pool.hasStorage() || shouldSkipStoreHydration(req.path)) return next();
+  if (!hydrationPromise) {
+    hydrationPromise = storeService.hydrateFromDB()
+      .then((result) => {
+        if (result && result.hydrated) return result;
+        const error = new Error(result?.error || STORE_HYDRATION_CONFIG.UNAVAILABLE_MESSAGE);
+        error.code = 'STORE_HYDRATION_UNAVAILABLE';
+        throw error;
+      })
+      .catch((error) => {
+        logger.error('Lazy on-request hydration failed; rejecting store-backed request', {
+          error,
+          path: req.path,
+        }, 'APP');
+        throw error;
+      })
+      .finally(() => {
+        hydrationPromise = null;
+      });
+  }
+  hydrationPromise.then(() => next()).catch(() => {
+    if (res.headersSent) return next();
+    return res.status(503).json({
+      success: false,
+      retryable: true,
+      error: STORE_HYDRATION_CONFIG.UNAVAILABLE_MESSAGE,
+    });
+  });
+});
 
 // API Health & Root Endpoints
 app.get('/health', (req, res) => {
