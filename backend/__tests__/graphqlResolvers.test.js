@@ -67,9 +67,11 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
 
   test('rfq resolver searches by id and rfqNumber or returns null', async () => {
     const context = contextFor('buyer');
+    const publicRFQ = { ...seededRfq };
+    delete publicRFQ.vendorInvitationTargets;
 
-    expect(await rootResolvers.rfq({ id: seededRfq.id }, context)).toEqual(seededRfq);
-    expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, context)).toEqual(seededRfq);
+    expect(await rootResolvers.rfq({ id: seededRfq.id }, context)).toEqual(publicRFQ);
+    expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, context)).toEqual(publicRFQ);
     expect(await rootResolvers.rfq({ id: 'non-existent-id' }, context)).toBeNull();
     expect(await rootResolvers.rfq({}, context)).toBeNull();
   });

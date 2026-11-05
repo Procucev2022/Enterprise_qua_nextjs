@@ -878,6 +878,62 @@ async function getRFQByIdFromDB(idOrNumber) {
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
+async function getRFQSnapshotByIdFromDB(idOrNumber) {
+  if (!pool.hasStorage()) return null;
+  const result = await pool.query(
+    'SELECT id, raw FROM rfqs WHERE id = $1 OR rfq_number = $1 LIMIT 1',
+    [idOrNumber],
+    { d1: true }
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    rfq: parseRaw(row.raw),
+    raw: row.raw,
+  };
+}
+
+/**
+ * Compare-and-swap an RFQ raw record. Partial service updates are merged with
+ * the latest persisted snapshot before this call; the raw equality predicate
+ * prevents another isolate from replacing that snapshot between the read and
+ * write. A null result means the caller should reload and retry the merge.
+ */
+async function updateRFQIfUnchangedInDB(snapshot, rfq) {
+  if (!pool.hasStorage()) return null;
+  const { id, rfqNumber, category, status, sourcingMode, budget } = rfq;
+  const expectedRaw = typeof snapshot.raw === 'string' ? snapshot.raw : JSON.stringify(snapshot.raw);
+  const result = await pool.query(
+    `UPDATE rfqs
+     SET rfq_number = $2, category = $3, status = $4, sourcing_mode = $5,
+         budget = $6, raw = $7, updated_at = now()
+     WHERE id = $1 AND raw = $8::jsonb
+     RETURNING raw`,
+    [
+      id,
+      rfqNumber || null,
+      category || null,
+      status || null,
+      sourcingMode || null,
+      Number.isFinite(Number(budget)) ? Number(budget) : null,
+      JSON.stringify(rfq),
+      expectedRaw,
+    ],
+    {
+      d1: true,
+      d1Text: `UPDATE rfqs
+       SET rfq_number = $2, category = $3, status = $4, sourcing_mode = $5,
+           budget = $6, raw = $7, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND raw = $8
+       RETURNING raw`,
+    }
+  );
+  if (!result.rows[0]) return null;
+  queryCache.invalidate('rfqs');
+  return parseRaw(result.rows[0].raw);
+}
+
 async function upsertRFQInDB(rfq) {
   if (!pool.hasStorage()) return null;
   const { id, rfqNumber, category, status, sourcingMode, budget } = rfq;
@@ -2075,6 +2131,8 @@ module.exports = {
   getRFQsByBuyerFromDB,
   getRFQByNumberFromDB,
   getRFQByIdFromDB,
+  getRFQSnapshotByIdFromDB,
+  updateRFQIfUnchangedInDB,
   upsertRFQInDB,
   extendRFQOnceInDB,
   deleteRFQInDB,

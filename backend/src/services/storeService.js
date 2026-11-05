@@ -11,6 +11,7 @@ const {
   VENDOR_FREE_CREDITS_LIMIT,
   VENDOR_PLAN_RFQ_QUOTA,
   VENDOR_ASSIGNMENT_LIMITS,
+  RFQ_STATE_WRITE_RETRIES,
   MAJOR_CATEGORY_ALIASES,
   DEFAULT_CATEGORY_TAXONOMY,
   INQUIRIES_PERSISTENCE_FILE,
@@ -39,6 +40,7 @@ const smsService = require('./smsService');
 const rfqChaserScheduler = require('./rfqChaserScheduler');
 const rfqIngestionService = require('./rfqIngestionService');
 const purchaseOrderService = require('./purchaseOrderService');
+const eventOutboxService = require('./eventOutboxService');
 const { logger } = require('./loggerService');
 
 // Bound on the vendors table read at boot hydration (see hydrateFromDB) —
@@ -82,6 +84,19 @@ function resolveCanonicalCategory(cat) {
   const alias = MAJOR_CATEGORY_ALIASES && MAJOR_CATEGORY_ALIASES[lower];
   if (alias) return alias;
   return trimmed;
+}
+
+function normalizeRFQForRead(rfq) {
+  const normalized = { ...rfq };
+  delete normalized.vendorInvitationTargets;
+  if ((normalized.poFinalised || normalized.poNumber) && normalized.status === 'Closed') {
+    normalized.status = 'PO Generated';
+    normalized.poFinalised = true;
+  }
+  if (normalized.source === 'ai_extraction' && !normalized.sourceFileName) {
+    normalized.source = 'manual_entry';
+  }
+  return normalized;
 }
 
 const SEEDED_INQUIRIES = [
@@ -387,6 +402,24 @@ class StoreService {
   _persistRFQ(rfq) {
     this._lastRfqSyncTime = 0;
     this._background(domainQueries.upsertRFQInDB(rfq), 'Failed to persist RFQ');
+  }
+
+  async persistRFQDurably(rfq) {
+    try {
+      const storageConfigured = pool.hasStorage();
+      const persistedRFQ = await domainQueries.upsertRFQInDB(rfq);
+      if (storageConfigured && !persistedRFQ) {
+        throw new Error('RFQ upsert completed without a persisted row');
+      }
+      this._lastRfqSyncTime = 0;
+      return { persisted: storageConfigured ? true : null };
+    } catch (error) {
+      logger.error('Failed to persist RFQ mutation', error, 'STORE_SERVICE');
+      const persistError = new Error('The RFQ could not be saved to storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
   }
 
   _removeRFQ(id) {
@@ -2663,13 +2696,7 @@ class StoreService {
       list = list.filter((r) => String(r.buyerAccountId || '').toLowerCase() === targetId);
     }
     return list.map((r) => {
-      let item = r;
-      if (item && (item.poFinalised || item.poNumber) && item.status === 'Closed') {
-        item = { ...item, status: 'PO Generated', poFinalised: true };
-      }
-      if (item && item.source === 'ai_extraction' && !item.sourceFileName) {
-        item = { ...item, source: 'manual_entry' };
-      }
+      const item = normalizeRFQForRead(r);
       return item.quotes ? { ...item, quotes: evaluateQuotes(item.quotes) } : item;
     });
   }
@@ -2763,13 +2790,7 @@ class StoreService {
     this.checkAndClose48HourRFQs();
     const found = this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
     if (!found) return undefined;
-    let rfq = found;
-    if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
-      rfq = { ...rfq, status: 'PO Generated', poFinalised: true };
-    }
-    if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
-      rfq = { ...rfq, source: 'manual_entry' };
-    }
+    const rfq = normalizeRFQForRead(found);
     return rfq.quotes
       ? {
         ...rfq,
@@ -3285,6 +3306,14 @@ class StoreService {
       newRFQ.status = 'Quotes Pending';
     }
 
+    const initialInviteCandidates = newRFQ.status === 'Draft'
+      ? []
+      : [
+        ...this.selectVendorsForRFQEmail(newRFQ),
+        ...(Array.isArray(newRFQ.assignedVendors) ? newRFQ.assignedVendors : []),
+      ];
+    newRFQ.vendorInvitationTargets = this._buildRFQVendorInviteTargets(newRFQ, initialInviteCandidates);
+
     this.rfqs.unshift(newRFQ);
     if (!deferPersistence) this._persistRFQ(newRFQ);
     if (!deferSideEffects) this.dispatchRFQCreationSideEffects(newRFQ, requestingBuyerAccount);
@@ -3335,7 +3364,7 @@ class StoreService {
             if (existingIndex === -1) this.rfqs.unshift(result.rfq);
             else this.rfqs[existingIndex] = result.rfq;
             if (result.account) this.updateBuyerAccountCache(result.account);
-            return result.rfq;
+            return normalizeRFQForRead(result.rfq);
           } catch (error) {
             logger.error('Failed to verify buyer ownership for the existing RFQ idempotency key', {
               error,
@@ -3353,7 +3382,7 @@ class StoreService {
         const existingIndex = this.rfqs.findIndex((rfq) => rfq.id === existing.id);
         if (existingIndex === -1) this.rfqs.unshift(existing);
         else this.rfqs[existingIndex] = { ...this.rfqs[existingIndex], ...existing };
-        return existing;
+        return normalizeRFQForRead(existing);
       }
 
       // A configured database is authoritative. Drop a stale local row when
@@ -3416,7 +3445,7 @@ class StoreService {
           remainingCredits: result.credit?.remaining,
           replayed: Boolean(result.replayed),
         }, 'BUYER_RFQ_CREDIT');
-        return savedRFQ;
+        return normalizeRFQForRead(savedRFQ);
       } catch (error) {
         this.rfqs = this.rfqs.filter((rfq) => rfq.id !== created.id);
         if (error.code === 'FREE_RFQ_CREDITS_EXHAUSTED' || (error.statusCode && error.statusCode < 500)) {
@@ -3474,7 +3503,7 @@ class StoreService {
         error,
       }, 'STORE_SERVICE');
     }
-    return created;
+    return normalizeRFQForRead(created);
   }
 
   updateBuyerAccountCache(account) {
@@ -3565,9 +3594,167 @@ class StoreService {
     };
     this.rfqs[idx] = updated;
     if (persist) this._persistRFQ(updated);
+
     if (notify) this._notifyRFQUpdate(updated, oldStatus, updates);
+
     return updated;
   }
+
+  async updateRFQDurably(id, updates) {
+    const idx = this.rfqs.findIndex((rfq) => rfq.id === id || rfq.rfqNumber === id);
+    const resolveUpdates = typeof updates === 'function' ? updates : () => updates;
+    if (!pool.hasStorage()) {
+      if (idx === -1) return null;
+      const previous = this.rfqs[idx];
+      const resolvedUpdates = resolveUpdates(previous);
+      const previousQuotes = Array.isArray(previous.quotes) ? previous.quotes : [];
+      const quotes = Array.isArray(resolvedUpdates.quotes) ? evaluateQuotes(resolvedUpdates.quotes) : previousQuotes;
+      const updated = { ...previous, ...resolvedUpdates, id: previous.id, quotes, quotesCount: quotes.length };
+      const publicUpdated = normalizeRFQForRead(updated);
+      this.rfqs[idx] = publicUpdated;
+      this._notifyRFQUpdate(publicUpdated, previous.status, resolvedUpdates);
+      return publicUpdated;
+    }
+
+    let snapshot;
+    let updated = null;
+    let previous = null;
+    let appliedUpdates = updates;
+    try {
+      snapshot = await domainQueries.getRFQSnapshotByIdFromDB(id);
+      if (!snapshot) return null;
+
+      for (let attempt = 0; attempt < RFQ_STATE_WRITE_RETRIES; attempt += 1) {
+        previous = snapshot.rfq;
+        appliedUpdates = resolveUpdates(previous);
+        const previousQuotes = Array.isArray(previous.quotes) ? previous.quotes : [];
+        const quotes = Array.isArray(appliedUpdates.quotes) ? evaluateQuotes(appliedUpdates.quotes) : previousQuotes;
+        const candidate = { ...previous, ...appliedUpdates, id: previous.id, quotes, quotesCount: quotes.length };
+        // eslint-disable-next-line no-await-in-loop
+        updated = await domainQueries.updateRFQIfUnchangedInDB(snapshot, candidate);
+        if (updated) break;
+        // Another isolate changed the row after the snapshot read. Reload and
+        // reapply this patch so disjoint updates are not lost.
+        // eslint-disable-next-line no-await-in-loop
+        snapshot = await domainQueries.getRFQSnapshotByIdFromDB(id);
+        if (!snapshot) return null;
+      }
+      if (!updated) throw new Error('RFQ changed repeatedly while applying a durable update.');
+    } catch (error) {
+      logger.error('Failed to persist RFQ mutation', {
+        error,
+        rfqId: id,
+        operation: 'update-rfq-compare-and-swap',
+      }, 'STORE_SERVICE');
+      const persistError = new Error('The RFQ could not be saved to storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      persistError.cause = error;
+      throw persistError;
+    }
+
+    const publicUpdated = normalizeRFQForRead(updated);
+    const updatedIndex = this.rfqs.findIndex((rfq) => rfq.id === publicUpdated.id);
+    if (updatedIndex >= 0) this.rfqs[updatedIndex] = publicUpdated;
+    else this.rfqs.unshift(publicUpdated);
+    this._notifyRFQUpdate(publicUpdated, previous.status, appliedUpdates);
+    return publicUpdated;
+  }
+
+  _buildRFQVendorInviteTargets(rfq, vendors, { includeBuyerEmail = false } = {}) {
+    const targetsByEmail = new Map();
+    for (const vendor of Array.isArray(vendors) ? vendors : []) {
+      const recipientEmail = String((vendor && vendor.email) || '').trim();
+      if (!recipientEmail) continue;
+
+      const emailKey = recipientEmail.toLowerCase();
+      if (targetsByEmail.has(emailKey)) continue;
+
+      const resolvedVendor = (vendor.id ? this.getVendorById(vendor.id, 'all') : null) || vendor;
+      const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
+      const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
+      const vendorContext = {
+        id: resolvedVendor.id || vendor.id,
+        email: recipientEmail,
+        name: resolvedVendor.name || vendor.name,
+        contactPerson: resolvedVendor.contactPerson || vendor.contactPerson,
+        source: resolvedVendor.source || vendor.source,
+        isBuyerUploaded,
+      };
+      const key = crypto.createHash('sha256').update(`${rfq.id}:${emailKey}`).digest('hex');
+
+      targetsByEmail.set(emailKey, {
+        key,
+        vendorId: vendorContext.id,
+        recipientEmail,
+        recipientName: vendorContext.contactPerson || vendorContext.name,
+        freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+        isSubscribed: creditInfo.isSubscribed,
+        buyerEmail: includeBuyerEmail ? this.resolveBuyerEmailForRFQ(rfq) : null,
+        vendor: vendorContext,
+      });
+    }
+    return Array.from(targetsByEmail.values());
+  }
+
+  _dispatchRFQVendorInviteOutbox(rfq, operation) {
+    if (!pool.hasStorage()) return false;
+    this._background(
+      eventOutboxService.dispatchDueEventOutboxJobs(),
+      'Failed to dispatch durable RFQ vendor invitation events',
+      {
+        operation,
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+      }
+    );
+    return true;
+  }
+
+  async _appendRFQAssignmentsDurably(id, additions, {
+    ensureFollowUpData = false,
+    clearCategoryManagerAssignment = false,
+    advanceStatus = false,
+    includeBuyerEmailInInvite = false,
+  } = {}) {
+    let committedAdditions = [];
+    const updatedRFQ = await this.updateRFQDurably(id, (current) => {
+      const existing = Array.isArray(current.assignedVendors) ? current.assignedVendors : [];
+      const assignedIds = new Set(existing.map((vendor) => vendor.id));
+      committedAdditions = [];
+      for (const vendor of additions) {
+        if (assignedIds.has(vendor.id)) continue;
+        assignedIds.add(vendor.id);
+        committedAdditions.push(vendor);
+      }
+
+      const assignedVendors = [...existing, ...committedAdditions];
+      const updates = {
+        assignedVendors,
+        procucevVendorCount: assignedVendors.length,
+        vendorInvitationTargets: this._buildRFQVendorInviteTargets(
+          { ...current, assignedVendors },
+          committedAdditions,
+          { includeBuyerEmail: includeBuyerEmailInInvite }
+        ),
+      };
+      if (current.followUpData || ensureFollowUpData) {
+        updates.followUpData = {
+          ...(current.followUpData || {}),
+          totalInvited: assignedVendors.length,
+          vendors: assignedVendors,
+        };
+      }
+      if (clearCategoryManagerAssignment) updates.needsCategoryManagerAssignment = false;
+      if (advanceStatus && (current.status === 'Parsing' || current.status === 'Draft' || !current.status)) {
+        updates.status = 'Quotes Pending';
+      }
+      return updates;
+    });
+
+    return { updatedRFQ, committedAdditions };
+  }
+
   _notifyRFQUpdate(updated, oldStatus, updates) {
     if (updates.status === 'Closed' && oldStatus !== 'Closed') {
       this.notifyOfRFQClosure(updated);
@@ -4987,19 +5174,12 @@ class StoreService {
 
     if (additions.length === 0) return rfq;
 
-    const merged = [...existing, ...additions];
-    const followUpData = rfq.followUpData
-      ? { ...rfq.followUpData, totalInvited: merged.length, vendors: merged }
-      : rfq.followUpData;
-
-    const updated = this.updateRFQ(rfq.id, {
-      assignedVendors: merged,
-      procucevVendorCount: merged.length,
-      ...(followUpData ? { followUpData } : {}),
-    }) || { ...rfq, assignedVendors: merged, procucevVendorCount: merged.length, followUpData };
+    const { updatedRFQ: updated, committedAdditions } = await this._appendRFQAssignmentsDurably(rfq.id, additions);
+    if (!updated) return rfq;
+    if (committedAdditions.length === 0) return updated;
 
     // Schedule multi-channel / 5-minute SMS chasers for newly assigned V0 vendors
-    const resolvedAdditions = additions.map((v) => {
+    const resolvedAdditions = committedAdditions.map((v) => {
       const full = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
       return {
         ...v,
@@ -5034,7 +5214,7 @@ class StoreService {
    * @param {Object} rfq The RFQ to assign vendors to.
    * @returns {Promise<Object>} The updated RFQ with assigned vendors.
    */
-  async autoAssignVendorsFromDB(rfq) {
+  async autoAssignVendorsFromDB(rfq, { deferChasers = false } = {}) {
     if (!rfq) return rfq;
     const mode = String(rfq.sourcingMode || '');
     const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
@@ -5042,7 +5222,7 @@ class StoreService {
 
     const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
     if (isV0) {
-      return await this.augmentV0AssignmentsFromDB(rfq);
+      return await this.augmentV0AssignmentsFromDB(rfq, { deferChasers });
     }
 
     const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY || 5;
@@ -5128,19 +5308,17 @@ class StoreService {
 
     if (additions.length === 0) return rfq;
 
-    const merged = [...existing, ...additions];
-    const followUpData = rfq.followUpData
-      ? { ...rfq.followUpData, totalInvited: merged.length, vendors: merged }
-      : { totalInvited: merged.length, vendors: merged };
+    const { updatedRFQ: updated, committedAdditions } = await this._appendRFQAssignmentsDurably(
+      rfq.id,
+      additions,
+      { ensureFollowUpData: true }
+    );
+    if (!updated) return rfq;
+    if (committedAdditions.length === 0) return updated;
 
-    const updated = this.updateRFQ(rfq.id, {
-      assignedVendors: merged,
-      procucevVendorCount: merged.length,
-      followUpData,
-    }) || { ...rfq, assignedVendors: merged, procucevVendorCount: merged.length, followUpData };
-
-    try {
-      const resolvedAdditions = additions.map((v) => {
+    if (!deferChasers) {
+      try {
+      const resolvedAdditions = committedAdditions.map((v) => {
         const full = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
         return {
           ...v,
@@ -5155,21 +5333,14 @@ class StoreService {
         resolvedAdditions,
         (vendor) => this.checkVendorQuotationEligibility(vendor)
       );
-    } catch (err) {
-      logger.warn('Failed to schedule chasers for auto-assigned vendors', { error: err.message }, 'STORE_SERVICE');
-    }
-
-    if (pool.hasStorage()) {
-      try {
-        await domainQueries.upsertRFQInDB(updated);
-      } catch (dbErr) {
-        logger.warn('Failed to persist auto-assigned RFQ to DB', { rfqNumber: rfq.rfqNumber, error: dbErr.message }, 'STORE_SERVICE');
+      } catch (err) {
+        logger.warn('Failed to schedule chasers for auto-assigned vendors', { error: err.message }, 'STORE_SERVICE');
       }
     }
 
     logger.info(
-      `RFQ ${rfq.rfqNumber}: auto-assigned ${merged.length} vendors from DB (${additions.length} added)`,
-      { rfqNumber: rfq.rfqNumber, assigned: merged.length },
+      `RFQ ${rfq.rfqNumber}: auto-assigned ${updated.assignedVendors.length} vendors from DB (${committedAdditions.length} added)`,
+      { rfqNumber: rfq.rfqNumber, assigned: updated.assignedVendors.length },
       'STORE_SERVICE'
     );
     return updated;
@@ -5338,7 +5509,9 @@ class StoreService {
    * invitation emails. Category mismatch emails are disabled.
    */
   async inviteVendorsToRFQ(rfqId, vendorIds, actorEmail) {
-    const rfq = this.getRFQById(rfqId);
+    // Load the authoritative row before merging assignments. Isolate-local RFQ
+    // state can lag behind another Worker or Node process.
+    const rfq = await this.getRFQByIdAsync(rfqId);
     if (!rfq) return null;
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
@@ -5409,26 +5582,35 @@ class StoreService {
       location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
       pincode: v.pincode || null,
     }));
-    const allAssigned = [...existing, ...entries];
-    const updatePayload = {
-      assignedVendors: allAssigned,
-      needsCategoryManagerAssignment: false,
-      procucevVendorCount: allAssigned.length,
-    };
-    if (rfq.status === 'Parsing' || rfq.status === 'Draft' || !rfq.status) {
-      updatePayload.status = 'Quotes Pending';
-    }
-    if (rfq.followUpData) {
-      updatePayload.followUpData = {
-        ...rfq.followUpData,
-        totalInvited: allAssigned.length,
-        vendors: allAssigned,
+    // Persist the assignment before emitting any invitation side effects or
+    // acknowledging the request. A configured database failure must not leave
+    // vendors notified about an invitation that disappears after restart.
+    const { updatedRFQ, committedAdditions } = await this._appendRFQAssignmentsDurably(rfq.id, entries, {
+      clearCategoryManagerAssignment: true,
+      advanceStatus: true,
+      includeBuyerEmailInInvite: true,
+    });
+    if (!updatedRFQ) return null;
+    const committedIds = new Set(committedAdditions.map((vendor) => vendor.id));
+    const dispatchedInvites = newlyInvited.filter((vendor) => {
+      if (!committedIds.has(vendor.id)) return false;
+      committedIds.delete(vendor.id);
+      return true;
+    });
+    const dispatchedIds = new Set(dispatchedInvites.map((vendor) => vendor.id));
+    const dispatchedOverrides = overrideVendors.filter((vendor) => dispatchedIds.has(vendor.id));
+    if (dispatchedInvites.length === 0) {
+      return {
+        updatedRFQ,
+        invitedCount: 0,
+        overrideCount: 0,
+        excludedCount: excludedVendors.length,
+        excludedVendors,
       };
     }
-    const updatedRFQ = this.updateRFQ(rfq.id, updatePayload);
 
-    for (const vendor of newlyInvited) {
-      const isOverride = overrideVendors.some((ov) => ov.id === vendor.id);
+    for (const vendor of dispatchedInvites) {
+      const isOverride = dispatchedOverrides.some((ov) => ov.id === vendor.id);
       this.addAuditLog({
         userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
         action: isOverride
@@ -5483,14 +5665,18 @@ class StoreService {
       }
     }
 
+    if (pool.hasStorage()) {
+      this._dispatchRFQVendorInviteOutbox(updatedRFQ, 'manual-vendor-assignment');
+    }
+
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
-      action: `Invited ${newlyInvited.length} vendor(s) to ${rfq.rfqNumber}`,
+      action: `Invited ${dispatchedInvites.length} vendor(s) to ${rfq.rfqNumber}`,
       rfqNumber: rfq.rfqNumber,
     });
 
     // Schedule multi-channel / 5-minute SMS chasers for newly invited vendors
-    const resolvedNewlyInvited = newlyInvited.map((v) => {
+    const resolvedNewlyInvited = dispatchedInvites.map((v) => {
       const full = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
       return {
         ...v,
@@ -5509,8 +5695,8 @@ class StoreService {
 
     return {
       updatedRFQ,
-      invitedCount: newlyInvited.length,
-      overrideCount: overrideVendors.length,
+      invitedCount: dispatchedInvites.length,
+      overrideCount: dispatchedOverrides.length,
       excludedCount: excludedVendors.length,
       excludedVendors,
     };
@@ -5559,7 +5745,7 @@ class StoreService {
   getRFQsForVendor(vendorIdOrEmail) {
     const vendor = this.getVendorById(vendorIdOrEmail);
     if (!vendor) return [];
-    return this.rfqs.filter((rfq) => this.vendorCoversRFQ(vendor, rfq));
+    return this.rfqs.filter((rfq) => this.vendorCoversRFQ(vendor, rfq)).map(normalizeRFQForRead);
   }
 
   /**

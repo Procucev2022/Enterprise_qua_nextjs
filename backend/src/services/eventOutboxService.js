@@ -414,6 +414,48 @@ async function dispatchEvent(job) {
       }, 'EVENT_OUTBOX');
       return;
     }
+    case EVENT_OUTBOX_TYPES.RFQ_VENDOR_INVITE_EMAIL: {
+      const rfqId = job.raw?.rfqId;
+      const target = job.raw?.target;
+      if (
+        typeof rfqId !== 'string' || !rfqId
+        || typeof target?.key !== 'string' || !target.key
+        || typeof target.recipientEmail !== 'string' || !target.recipientEmail.trim()
+        || !target.vendor || typeof target.vendor !== 'object'
+      ) {
+        const error = new Error('RFQ vendor invitation retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+      if (!rfq) {
+        const error = new Error('RFQ vendor invitation retry references a missing RFQ.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const delivery = await mailerService.sendRfqInviteEmail(target.recipientEmail, {
+        rfq,
+        recipientName: target.recipientName,
+        buyerEmail: target.buyerEmail,
+        freeCreditsRemaining: target.freeCreditsRemaining,
+        isSubscribed: target.isSubscribed,
+        isBuyerUploaded: target.isBuyerUploaded,
+        vendor: target.vendor,
+      });
+      if (!delivery?.sent) {
+        const error = new Error('RFQ vendor invitation email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('RFQ vendor invitation email accepted by a provider', {
+        rfqId,
+        rfqNumber: rfq.rfqNumber,
+        vendorId: target.vendorId,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
     default: {
       const error = new Error(`Unsupported persisted event-outbox type: ${job.event_type}`);
       error.code = 'INVALID_EVENT_OUTBOX_TYPE';

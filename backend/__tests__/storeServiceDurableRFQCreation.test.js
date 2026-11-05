@@ -132,8 +132,14 @@ describe('Store service durable buyer RFQ creation', () => {
       });
 
       expect(domainQueries.upsertRFQInDB).toHaveBeenCalledTimes(1);
-      expect(domainQueries.upsertRFQInDB).toHaveBeenCalledWith(created);
-      expect(dispatchSpy).toHaveBeenCalledWith(created, null);
+      expect(domainQueries.upsertRFQInDB).toHaveBeenCalledWith(expect.objectContaining({
+        ...created,
+        vendorInvitationTargets: [],
+      }));
+      expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
+        ...created,
+        vendorInvitationTargets: [],
+      }), null);
       expect(freshStore.getRFQById(created.id)).toEqual(created);
     });
 
@@ -252,7 +258,10 @@ describe('Store service durable buyer RFQ creation', () => {
       const created = await freshStore.createRFQDurably({ id: 'rfq-memory-create', rfqNumber: 'RFQ-MEMORY-CREATE' });
 
       expect(freshStore.getRFQById(created.id)).toEqual(created);
-      expect(dispatchSpy).toHaveBeenCalledWith(created, null);
+      expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
+        ...created,
+        vendorInvitationTargets: [],
+      }), null);
     });
 
     test('createRFQDurably logs post-create dispatch failures after storage succeeds', async () => {

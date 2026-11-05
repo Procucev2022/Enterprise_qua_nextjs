@@ -1855,7 +1855,8 @@ describe('Store Service & Business Operations', () => {
     test('vendorIds that is not an array is treated as empty — invitedCount 0', async () => {
       const rfq = storeService.createRFQ({ title: 'Non-Array Invite RFQ', category: 'Non-Array-Cat' , sourcingMode: 'mode_3' });
       const result = await storeService.inviteVendorsToRFQ(rfq.id, null, 'cm@ex.com');
-      expect(result.updatedRFQ).toEqual(rfq);
+      expect(result.updatedRFQ).toMatchObject({ id: rfq.id, title: 'Non-Array Invite RFQ' });
+      expect(result.updatedRFQ).not.toHaveProperty('vendorInvitationTargets');
       expect(result.invitedCount).toBe(0);
       expect(result.excludedCount).toBe(0);
       expect(result.excludedVendors).toEqual([]);
