@@ -3657,14 +3657,44 @@ class StoreService {
    * alone would route nothing.
    */
   _rfqCategorySignals(rfq) {
-    const signals = [];
-    if (rfq.category) signals.push(rfq.category);
+    const rawSignals = [];
+    if (rfq.category) rawSignals.push(rfq.category);
     for (const ent of Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []) {
-      if (ent.majorCategory) signals.push(ent.majorCategory);
-      if (ent.minorCategory) signals.push(ent.minorCategory);
-      if (ent.category) signals.push(ent.category);
+      if (ent.majorCategory) rawSignals.push(ent.majorCategory);
+      if (ent.minorCategory) rawSignals.push(ent.minorCategory);
+      if (ent.category) rawSignals.push(ent.category);
     }
-    return signals;
+    for (const item of Array.isArray(rfq.lineItems) ? rfq.lineItems : []) {
+      if (item.majorCategory) rawSignals.push(item.majorCategory);
+      if (item.minorCategory) rawSignals.push(item.minorCategory);
+      if (item.category) rawSignals.push(item.category);
+    }
+
+    const expanded = new Set();
+    for (const sig of rawSignals) {
+      if (!sig || typeof sig !== 'string') continue;
+      const trimmed = sig.trim();
+      if (!trimmed) continue;
+      expanded.add(trimmed);
+
+      const canonical = resolveCanonicalCategory(trimmed);
+      if (canonical) expanded.add(canonical);
+
+      const lower = trimmed.toLowerCase();
+      const minors = MAJOR_TO_MINORS_MAP.get(lower) || (canonical ? MAJOR_TO_MINORS_MAP.get(canonical.toLowerCase()) : null);
+      if (minors) {
+        for (const m of minors) {
+          if (m) expanded.add(m);
+        }
+      }
+
+      const parentMajor = MINOR_TO_MAJOR_MAP.get(lower);
+      if (parentMajor) {
+        expanded.add(parentMajor);
+      }
+    }
+
+    return Array.from(expanded);
   }
 
   /**
@@ -3959,7 +3989,6 @@ class StoreService {
           );
         }
       }
-
       // 2. Fallback: if category matching in DB returned nothing, fetch public vendors page
       if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
         try {
@@ -4072,6 +4101,38 @@ class StoreService {
       (vendor) => this.checkVendorQuotationEligibility(vendor)
     );
 
+    const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+    for (const vendor of resolvedAdditions) {
+      const isBuyerUploaded = this.isBuyerUploaded(vendor);
+      const buyerDisplayName = isBuyerUploaded && updated.buyerAccountName ? updated.buyerAccountName : 'A buyer';
+      const notification = this._buildNotification({
+        recipientType: 'vendor',
+        recipientId: vendor.id,
+        kind: 'rfq_category_match',
+        rfq: updated,
+        title: 'New RFQ in ' + categoryLabel,
+        message: buyerDisplayName + ' invited you to ' + updated.rfqNumber + ' — ' + updated.title + '.',
+        meta: { category: categoryLabel, buyerAccountName: isBuyerUploaded ? (updated.buyerAccountName || null) : null },
+      });
+      this.notifications.unshift(notification);
+      this._persistNotification(notification);
+
+      if (vendor.email) {
+        const creditInfo = this.checkVendorQuotationEligibility(vendor);
+        this._background(
+          mailerService.sendRfqInviteEmail(vendor.email, {
+            rfq: updated,
+            recipientName: vendor.contactPerson || vendor.name,
+            freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+            isSubscribed: creditInfo.isSubscribed,
+            vendor,
+            isBuyerUploaded,
+          }),
+          'Failed to email RFQ invite to DB-augmented vendor'
+        );
+      }
+    }
+
     logger.info(
       `V0 RFQ ${rfq.rfqNumber}: assigned ${merged.length} Procucev vendors from DB match (${additions.length} added)`,
       { rfqNumber: rfq.rfqNumber, assigned: merged.length },
@@ -4122,7 +4183,6 @@ class StoreService {
           'STORE_SERVICE'
         );
       }
-
       if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
         try {
           const page = await domainQueries.getVendorsPageFromDB({
@@ -4211,6 +4271,38 @@ class StoreService {
         resolvedAdditions,
         (vendor) => this.checkVendorQuotationEligibility(vendor)
       );
+
+      const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+      for (const vendor of resolvedAdditions) {
+        const isBuyerUploaded = this.isBuyerUploaded(vendor);
+        const buyerDisplayName = isBuyerUploaded && updated.buyerAccountName ? updated.buyerAccountName : 'A buyer';
+        const notification = this._buildNotification({
+          recipientType: 'vendor',
+          recipientId: vendor.id,
+          kind: 'rfq_category_match',
+          rfq: updated,
+          title: 'New RFQ in ' + categoryLabel,
+        message: buyerDisplayName + ' invited you to ' + updated.rfqNumber + ' — ' + updated.title + '.',
+          meta: { category: categoryLabel, buyerAccountName: isBuyerUploaded ? (updated.buyerAccountName || null) : null },
+        });
+        this.notifications.unshift(notification);
+        this._persistNotification(notification);
+
+        if (vendor.email) {
+          const creditInfo = this.checkVendorQuotationEligibility(vendor);
+          this._background(
+            mailerService.sendRfqInviteEmail(vendor.email, {
+              rfq: updated,
+              recipientName: vendor.contactPerson || vendor.name,
+              freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+              isSubscribed: creditInfo.isSubscribed,
+              vendor,
+              isBuyerUploaded,
+            }),
+            'Failed to email RFQ invite to DB auto-assigned vendor'
+          );
+        }
+      }
     } catch (err) {
       logger.warn('Failed to schedule chasers for auto-assigned vendors', { error: err.message }, 'STORE_SERVICE');
     }
@@ -4507,7 +4599,7 @@ class StoreService {
         kind: 'rfq_category_match',
         rfq: updatedRFQ,
         title: `New RFQ in ${categoryLabel}`,
-        message: `${buyerDisplayName} invited you to ${updatedRFQ.rfqNumber} — ${updatedRFQ.title}.`,
+        message: buyerDisplayName + ' invited you to ' + updatedRFQ.rfqNumber + ' — ' + updatedRFQ.title + '.',
         meta: { category: categoryLabel, buyerAccountName: isBuyerUploaded ? (updatedRFQ.buyerAccountName || null) : null },
       });
       this.notifications.unshift(notification);
