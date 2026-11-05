@@ -18,6 +18,7 @@ const {
 const crypto = require('crypto');
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
+const auditLogQueries = require('../db/auditLogQueries');
 const identityQueries = require('../db/identityQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
@@ -42,6 +43,7 @@ const { logger } = require('./loggerService');
 // below), reused here rather than invented separately: this.vendors is one
 // shared in-memory cache used by both paths, so they should stay consistent.
 const MAX_HYDRATION_VENDORS = 500;
+let auditLogWriteQueue = Promise.resolve();
 const path = require('path');
 
 const MINOR_TO_MAJOR_MAP = new Map();
@@ -405,7 +407,50 @@ class StoreService {
   }
 
   _persistAuditLog(entry) {
-    this._background(domainQueries.upsertAuditLogInDB(entry), 'Failed to persist audit log entry');
+    const write = this._queueAuditLogPersistence(entry).catch((error) => {
+      this.auditLogs = this.auditLogs.filter((candidate) => candidate.id !== entry.id);
+      throw error;
+    });
+    this._background(write, 'Failed to persist audit log entry');
+  }
+
+  _queueAuditLogPersistence(entry) {
+    const pendingWrite = auditLogWriteQueue.then(async () => {
+      const requestedPreviousHash = entry.previousHash || '';
+      const persisted = await auditLogQueries.appendAuditLogInDB(entry);
+      if (pool.hasStorage() && !persisted) {
+        throw new Error('Audit-chain append completed without a persisted row');
+      }
+      if (persisted) Object.assign(entry, persisted);
+
+      const existingIndex = this.auditLogs.findIndex((candidate) => candidate.id === entry.id);
+      if (existingIndex === -1) this.auditLogs.unshift(entry);
+      else this.auditLogs[existingIndex] = entry;
+
+      if (persisted && (persisted.previousHash || '') !== requestedPreviousHash) {
+        try {
+          const persistedLogs = await domainQueries.getAuditLogsFromDB(500, { fresh: true });
+          const persistedIds = new Set(persistedLogs.map((candidate) => candidate.id));
+          const notYetPersisted = this.auditLogs.filter((candidate) => !persistedIds.has(candidate.id));
+          this.auditLogs = [...notYetPersisted, ...persistedLogs].slice(0, 500);
+        } catch (error) {
+          logger.error('Audit log was saved but the local chain cache could not be refreshed', {
+            error,
+            entryId: entry.id,
+          }, 'STORE_SERVICE');
+        }
+      }
+
+      logger.audit(
+        entry.action,
+        entry.userEmail || SYSTEM_ACTOR_EMAIL,
+        { rfqNumber: entry.rfqNumber, ipAddress: entry.ipAddress, shaSignature: entry.shaSignature },
+        entry.rfqNumber
+      );
+      return entry;
+    });
+    auditLogWriteQueue = pendingWrite.catch(() => undefined);
+    return pendingWrite;
   }
 
   _persistNotification(notification) {
@@ -5322,14 +5367,39 @@ class StoreService {
     const entry = createAuditEntry({ userEmail, action, rfqNumber, ipAddress, previousHash });
     this.auditLogs.unshift(entry);
     this._persistAuditLog(entry);
-
-    logger.audit(action, userEmail || 'system@procucev.ai', { rfqNumber, ipAddress, shaSignature: entry.shaSignature }, rfqNumber);
-
     return entry;
   }
 
   verifyAuditIntegrity() {
     return verifyAuditTrail(this.auditLogs);
+  }
+
+  async addAuditLogDurably({ userEmail, action, rfqNumber, ipAddress }) {
+    const previousHash = this.auditLogs.length > 0 ? this.auditLogs[0].shaSignature : '';
+    const entry = createAuditEntry({ userEmail, action, rfqNumber, ipAddress, previousHash });
+    try {
+      return await this._queueAuditLogPersistence(entry);
+    } catch (error) {
+      logger.error('Failed to durably append audit log entry', error, 'STORE_SERVICE');
+      const persistError = new Error('The audit log entry could not be saved to storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = error.code || 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+  }
+
+  async verifyAuditIntegrityDurably() {
+    if (!pool.hasStorage()) {
+      return {
+        ...this.verifyAuditIntegrity(),
+        valid: null,
+        complete: false,
+        source: 'in_memory',
+        expectedCount: null,
+        reason: 'Persistent storage is not configured; the capped process cache cannot verify the full audit chain.',
+      };
+    }
+    return auditLogQueries.verifyAuditChainInDB();
   }
 
   // ==========================================

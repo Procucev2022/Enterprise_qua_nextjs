@@ -23,10 +23,11 @@ describe('Audit Service & SHA-256 Cryptographic Chain', () => {
   });
 
   test('verifyAuditTrail detects compromised or missing hashes', () => {
-    const validLogs = [
-      createAuditEntry({ userEmail: 'user1@corp.com', action: 'Action 1' }),
-      createAuditEntry({ userEmail: 'user2@corp.com', action: 'Action 2' }),
-    ];
+    const older = createAuditEntry({ userEmail: 'user1@corp.com', action: 'Action 1' });
+    const newer = createAuditEntry({
+      userEmail: 'user2@corp.com', action: 'Action 2', previousHash: older.shaSignature,
+    });
+    const validLogs = [newer, older];
 
     const validReport = verifyAuditTrail(validLogs);
     expect(validReport.valid).toBe(true);
@@ -40,12 +41,73 @@ describe('Audit Service & SHA-256 Cryptographic Chain', () => {
 
     const tamperedReport = verifyAuditTrail(tamperedLogs);
     expect(tamperedReport.valid).toBe(false);
-    expect(tamperedReport.compromisedEntries.length).toBe(1);
+    expect(tamperedReport.compromisedEntries.length).toBeGreaterThan(0);
+    expect(tamperedReport.compromisedEntries.map(({ id }) => id)).toContain('bad-log');
   });
 
   test('verifyAuditTrail handles empty list gracefully', () => {
     const report = verifyAuditTrail([]);
     expect(report.valid).toBe(true);
     expect(report.verifiedCount).toBe(0);
+  });
+
+  test('verifies persisted head, root, and entry count anchors', () => {
+    const oldest = createAuditEntry({ userEmail: 'user1@corp.com', action: 'Oldest' });
+    const newest = createAuditEntry({
+      userEmail: 'user2@corp.com', action: 'Newest', previousHash: oldest.shaSignature,
+    });
+    const report = verifyAuditTrail([newest, oldest], {
+      expectedHeadHash: newest.shaSignature,
+      expectedRootHash: oldest.shaSignature,
+      expectedEntryCount: 2,
+    });
+    expect(report.valid).toBe(true);
+
+    const truncated = verifyAuditTrail([newest], {
+      expectedHeadHash: newest.shaSignature,
+      expectedRootHash: oldest.shaSignature,
+      expectedEntryCount: 2,
+    });
+    expect(truncated.valid).toBe(false);
+    expect(truncated.compromisedEntries.map(({ reason }) => reason)).toContain(
+      'Persisted audit entry count does not match the verified records'
+    );
+  });
+
+  test('detects an empty previous hash inside a multi-entry chain', () => {
+    const newest = createAuditEntry({ userEmail: 'user1@corp.com', action: 'Newest' });
+    const oldest = createAuditEntry({ userEmail: 'user2@corp.com', action: 'Oldest' });
+    const report = verifyAuditTrail([newest, oldest]);
+    expect(report.valid).toBe(false);
+    expect(report.compromisedEntries[0].reason).toContain('chain broken');
+  });
+
+  test('does not treat legacy entries without persisted chain links as verified', () => {
+    const entry = createAuditEntry({ userEmail: 'user1@corp.com', action: 'Legacy entry' });
+    const { previousHash, ...legacyEntry } = entry;
+
+    expect(previousHash).toBe('');
+    const report = verifyAuditTrail([legacyEntry]);
+    expect(report.valid).toBe(false);
+    expect(report.compromisedEntries[0].reason).toContain('Missing previousHash link');
+  });
+
+  test('normalizes non-array trails and reports missing anchor identifiers', () => {
+    expect(verifyAuditTrail().valid).toBe(true);
+    expect(verifyAuditTrail(null).valid).toBe(true);
+    expect(verifyAuditTrail([null, 'primitive']).valid).toBe(false);
+
+    const entry = createAuditEntry({ userEmail: 'user1@corp.com', action: 'Anchor mismatch' });
+    const missingId = { ...entry, id: undefined };
+    const report = verifyAuditTrail([missingId], {
+      expectedHeadHash: 'different-head',
+      expectedRootHash: 'different-root',
+    });
+
+    expect(report.valid).toBe(false);
+    expect(report.compromisedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: null, reason: 'Newest audit entry does not match the persisted chain head' }),
+      expect.objectContaining({ id: null, reason: 'Oldest audit entry does not match the persisted chain root' }),
+    ]));
   });
 });

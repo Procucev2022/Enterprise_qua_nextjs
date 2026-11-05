@@ -752,6 +752,11 @@ const VALIDATION_SCHEMAS = {
   },
 
   // Public vendor directory — unauthenticated search/filter parameters
+  auditLogEntry: {
+    action: { type: 'string', required: true, minLength: 1, maxLength: 5000 },
+    rfqNumber: { type: 'string', required: false, maxLength: 100 },
+  },
+
   vendorPublicSearch: {
     page: { type: 'number', required: false, min: 1 },
     pageSize: { type: 'number', required: false, min: 1, max: 100 },

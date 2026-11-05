@@ -1180,18 +1180,27 @@ describe('API Route Endpoints', () => {
       const getRes = await request(app).get('/api/audit').set(authHeader('admin'));
       expect(getRes.statusCode).toBe(200);
 
+      const buyerRead = await request(app).get('/api/audit').set(authHeader('buyer'));
+      expect(buyerRead.statusCode).toBe(403);
+
       const verifyRes = await request(app).get('/api/audit/verify').set(authHeader('admin'));
       expect(verifyRes.statusCode).toBe(200);
-      expect(verifyRes.body.report.valid).toBe(true);
+      expect(verifyRes.body.report).toMatchObject({ valid: null, complete: false, source: 'in_memory' });
+
+      const buyerVerify = await request(app).get('/api/audit/verify').set(authHeader('buyer'));
+      expect(buyerVerify.statusCode).toBe(403);
     });
 
     test('POST /api/audit creates new log entry', async () => {
       const res = await request(app).post('/api/audit').set(authHeader('buyer')).send({
         userEmail: 'auditor@enterprise.com',
+        ipAddress: 'spoofed-ip',
         action: 'Manual compliance check performed',
       });
       expect(res.statusCode).toBe(201);
       expect(res.body.data).toHaveProperty('shaSignature');
+      expect(res.body.data.userEmail).toBe('buyer@procucev.com');
+      expect(res.body.data.ipAddress).not.toBe('spoofed-ip');
     });
   });
 

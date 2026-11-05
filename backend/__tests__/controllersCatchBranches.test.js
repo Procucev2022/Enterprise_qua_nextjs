@@ -54,13 +54,11 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     const next = jest.fn();
     const res = mockRes();
 
-    jest.spyOn(storeService, 'addAuditLog').mockImplementationOnce(() => {
-      throw new Error('Audit add fail');
-    });
-    await auditController.createAuditLog({ body: { action: 'Test' } }, res, next);
+    jest.spyOn(storeService, 'addAuditLogDurably').mockRejectedValueOnce(new Error('Audit add fail'));
+    await auditController.createAuditLog({ user: { email: 'admin@procucev.com' }, body: { action: 'Test' } }, res, next);
     expect(next).toHaveBeenCalled();
 
-    jest.spyOn(storeService, 'verifyAuditIntegrity').mockImplementationOnce(() => {
+    jest.spyOn(storeService, 'verifyAuditIntegrityDurably').mockImplementationOnce(() => {
       throw new Error('Audit verify fail');
     });
     await auditController.verifyIntegrity({}, res, next);

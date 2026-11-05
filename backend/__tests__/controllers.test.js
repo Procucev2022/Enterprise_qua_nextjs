@@ -67,10 +67,13 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     await auditController.getAuditLogs({}, res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await auditController.createAuditLog({ body: { action: 'TEST_ACTION', userEmail: 'test@user.com' } }, res, next);
+    await auditController.createAuditLog({
+      user: { email: 'test@user.com', role: 'admin' },
+      body: { action: 'TEST_ACTION', userEmail: 'forged@user.com' },
+    }, res, next);
     expect(res.status).toHaveBeenCalledWith(201);
 
-    await auditController.createAuditLog({ body: {} }, res, next);
+    await auditController.createAuditLog({ user: { email: 'test@user.com' }, body: {} }, res, next);
     expect(res.status).toHaveBeenCalledWith(400);
 
     await auditController.verifyIntegrity({}, res, next);

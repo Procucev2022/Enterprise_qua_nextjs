@@ -725,12 +725,32 @@ export interface VendorOpportunity {
 export interface AuditLogEntry {
   id: string;
   timestamp: string;
-  user: string;
+  user?: string;
+  userEmail?: string;
   action: string;
   rfqNumber?: string;
   shaSignature: string;
-  status: 'VERIFIED' | 'TAMPER_CHECK_OK';
-  ipAddress: string;
+  previousHash?: string;
+  status?: 'VERIFIED' | 'TAMPER_CHECK_OK';
+  ipAddress?: string;
+}
+
+export interface AuditVerificationIssue {
+  id: string | null;
+  index: number;
+  reason: string;
+}
+
+export interface AuditVerificationReport {
+  valid: boolean | null;
+  complete: boolean;
+  source: 'persisted' | 'in_memory';
+  expectedCount: number | null;
+  verifiedCount: number;
+  compromisedEntries: AuditVerificationIssue[];
+  timestamp?: string;
+  chainRevision?: number;
+  reason?: string;
 }
 
 export interface AzureServiceHealth {
