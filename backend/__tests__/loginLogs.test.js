@@ -4,14 +4,48 @@ const loginLogsRoutes = require('../src/routes/loginLogs');
 const loginLogsQueries = require('../src/db/loginLogsQueries');
 const loginLogsController = require('../src/controllers/loginLogsController');
 const pool = require('../src/db/pool');
+const authService = require('../src/services/authService');
+
+const adminToken = authService.generateSessionToken({
+  id: 'cm-admin',
+  uuid: 'cm-admin',
+  email: 'admin@procucev.com',
+  role: 'category_manager',
+});
 
 const app = express();
 app.use(express.json());
+app.use((req, res, next) => {
+  if (!req.headers.authorization && !req.headers['x-skip-auth']) {
+    req.headers.authorization = `Bearer ${adminToken}`;
+  }
+  next();
+});
 app.use('/api/login-logs', loginLogsRoutes);
 
 describe('Login Logs API & Controller', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  describe('Authentication & Authorization Gate', () => {
+    test('rejects unauthenticated requests with 401', async () => {
+      const res = await request(app).get('/api/login-logs').set('x-skip-auth', 'true');
+      expect(res.status).toBe(401);
+    });
+
+    test('rejects unauthorized roles with 403 on summary and logs', async () => {
+      const buyerToken = authService.generateSessionToken({
+        id: 'buyer-user',
+        email: 'buyer@example.com',
+        role: 'buyer',
+      });
+      const resLogs = await request(app).get('/api/login-logs').set('Authorization', `Bearer ${buyerToken}`);
+      expect(resLogs.status).toBe(403);
+
+      const resSummary = await request(app).get('/api/login-logs/summary').set('Authorization', `Bearer ${buyerToken}`);
+      expect(resSummary.status).toBe(403);
+    });
   });
 
   describe('GET /api/login-logs (HTTP Endpoint)', () => {
