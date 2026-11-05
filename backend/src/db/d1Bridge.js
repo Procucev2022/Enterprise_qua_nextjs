@@ -13,10 +13,9 @@
 //      CLOUDFLARE_API_TOKEN are set, queries are forwarded to the
 //      Cloudflare REST endpoint:
 //        POST /accounts/:account/d1/database/:db/query
-//      getD1HttpClient() returns a pseudo-binding shaped like a Workers
-//      D1 binding so queryD1() / batchD1() work unchanged.  The HTTP
-//      client is initialised lazily on first call and cached for the
-//      process lifetime.
+//      getD1HttpClient() returns a pseudo-binding for single-query reads and
+//      writes. Its multi-request helper is not transactional, so batchD1()
+//      rejects multi-statement use through this adapter.
 //
 //   3. pg (PostgreSQL via DATABASE_URL)
 //      Handled entirely in pool.js — this file is not involved.
@@ -26,6 +25,8 @@
 // Real ESM `import { env } from 'cloudflare:workers'` only exists in
 // worker.mjs, which stashes it on `globalThis.__CF_ENV__` at module load.
 // ==============================================================================
+
+const { logger } = require('../services/loggerService');
 
 /** Returns the D1 binding (env.DB) when running on Workers with it configured, else null. */
 function getD1Binding() {
@@ -46,9 +47,8 @@ let _d1HttpClient = undefined; // undefined = not yet resolved, null = not confi
  * API via `fetch`.  Works from any Node.js host (local dev, Render, etc.).
  *
  * The returned object exposes `prepare(sql)` whose result has `.bind(...args)`
- * and `.all()` — exactly the surface that queryD1() / batchD1() call — so
- * both helpers work without modification whether the caller has a real Workers
- * binding or this HTTP shim.
+ * and `.all()` — the surface queryD1() needs. Multi-statement batches are
+ * rejected by batchD1() because this HTTP API has no transaction.
  *
  * Returns null when the required env vars are absent.
  */
@@ -72,7 +72,7 @@ function getD1HttpClient() {
 
   /**
    * Execute one SQL statement via the REST API.
-   * Returns `{ rows, rowCount }` shaped like pg / the Workers binding.
+   * Returns rows, modified-row count, and D1 query metadata.
    */
   async function execHttp(sql, params = []) {
     const body = JSON.stringify({ sql, params });
@@ -91,9 +91,11 @@ function getD1HttpClient() {
 
     // The REST API wraps results in json.result[0]
     const result = Array.isArray(json.result) ? json.result[0] : json.result;
+    const meta = result && result.meta ? result.meta : {};
     return {
       rows:     (result && result.results) || [],
-      rowCount: (result && result.meta && result.meta.changes) ?? undefined,
+      rowCount: meta.changes ?? undefined,
+      ...(result && result.meta ? { meta: result.meta } : {}),
     };
   }
 
@@ -109,7 +111,7 @@ function getD1HttpClient() {
 
   // The real Workers D1 binding's `.all()` resolves to `{results, success,
   // meta}` — queryD1()/batchD1() below read exactly that shape. execHttp
-  // returns a different, pg-like `{rows, rowCount}` shape instead (kept as-is
+  // returns a different, pg-like `{rows, rowCount, meta}` shape instead (kept as-is
   // since scripts/test-rfq-sms.js calls `_execHttp` directly and already
   // depends on that shape) — this adapter translates one into the other, so
   // the prepare().bind().all() path queryD1() actually calls returns what it
@@ -119,8 +121,8 @@ function getD1HttpClient() {
   // error — `result.results` was always undefined, so `result.results ||
   // []` just resolved to an empty array every single time.
   async function allAsNativeShape(sql, params) {
-    const { rows, rowCount } = await execHttp(sql, params);
-    return { results: rows, success: true, meta: { changes: rowCount } };
+    const { rows, rowCount, meta } = await execHttp(sql, params);
+    return { results: rows, success: true, meta: { ...(meta || {}), changes: rowCount } };
   }
 
   // Build a shim that looks like a Workers D1 binding to queryD1() / batchD1()
@@ -201,7 +203,26 @@ async function queryD1(db, text, params = []) {
   const boundParams = expandD1Params(text, params);
   const bound = boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
   const result = await bound.all();
-  return { rows: result.results || [], rowCount: result.meta ? result.meta.changes : undefined };
+  const rawMeta = result && result.meta && typeof result.meta === 'object' ? result.meta : {};
+  const metadataFields = [
+    ['rowsRead', 'rows_read', 'rowsRead'],
+    ['rowsWritten', 'rows_written', 'rowsWritten'],
+    ['durationMs', 'duration', 'durationMs'],
+    ['sizeAfterBytes', 'size_after', 'sizeAfterBytes'],
+    ['servedByRegion', 'served_by_region', 'servedByRegion'],
+    ['servedByPrimary', 'served_by_primary', 'servedByPrimary'],
+    ['servedByColo', 'served_by_colo', 'servedByColo'],
+  ];
+  const meta = {};
+  metadataFields.forEach(([normalizedName, snakeName, camelName]) => {
+    const value = rawMeta[snakeName] ?? rawMeta[camelName];
+    if (value !== undefined && value !== null) meta[normalizedName] = value;
+  });
+  return {
+    rows: result && Array.isArray(result.results) ? result.results : [],
+    rowCount: rawMeta.changes,
+    ...(Object.keys(meta).length > 0 ? { meta } : {}),
+  };
 }
 
 /**
@@ -229,6 +250,16 @@ async function queryD1(db, text, params = []) {
  * `{ rows, rowCount }`-shaped result per statement, in the same order.
  */
 async function batchD1(db, statements) {
+  if (db && db._isHttpClient && statements.length > 1) {
+    const error = new Error('The D1 HTTP adapter cannot guarantee atomicity for a multi-statement batch. Use a Workers D1 binding.');
+    logger.error('Multi-statement D1 batch rejected by the non-atomic HTTP adapter', {
+      error,
+      operation: 'batchD1',
+      statementCount: statements.length,
+    }, 'DATABASE_D1_BATCH');
+    throw error;
+  }
+
   const prepared = statements.map(({ text, params = [] }) => {
     const stmt = db.prepare(toD1Sql(text));
     const boundParams = expandD1Params(text, params);

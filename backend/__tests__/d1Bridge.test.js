@@ -70,7 +70,18 @@ describe('d1Bridge', () => {
 
   describe('queryD1', () => {
     it('binds params and returns rows from D1 .all()', async () => {
-      const all = jest.fn().mockResolvedValue({ results: [{ id: 1 }] });
+      const all = jest.fn().mockResolvedValue({
+        results: [{ id: 1 }],
+        meta: {
+          rows_read: 12,
+          rows_written: 1,
+          duration: 3,
+          size_after: 4096,
+          served_by_region: 'ENAM',
+          served_by_primary: false,
+          served_by_colo: 'IAD',
+        },
+      });
       const bind = jest.fn().mockReturnValue({ all });
       const prepare = jest.fn().mockReturnValue({ bind });
       const db = { prepare };
@@ -80,7 +91,19 @@ describe('d1Bridge', () => {
 
       expect(prepare).toHaveBeenCalledWith('select * from t where a = ?');
       expect(bind).toHaveBeenCalledWith('x');
-      expect(result).toEqual({ rows: [{ id: 1 }] });
+      expect(result).toEqual({
+        rows: [{ id: 1 }],
+        rowCount: undefined,
+        meta: {
+          rowsRead: 12,
+          rowsWritten: 1,
+          durationMs: 3,
+          sizeAfterBytes: 4096,
+          servedByRegion: 'ENAM',
+          servedByPrimary: false,
+          servedByColo: 'IAD',
+        },
+      });
     });
 
     // Found live against the deployed Worker: the Invite Vendors "All
@@ -196,7 +219,11 @@ describe('d1Bridge', () => {
           Promise.resolve(
             JSON.stringify({
               success: true,
-              result: [{ results: [{ email: 'a@b.com' }], success: true, meta: { changes: 0 } }],
+              result: [{
+                results: [{ email: 'a@b.com' }],
+                success: true,
+                meta: { changes: 0, rows_read: 4, rows_written: 0, duration: 2 },
+              }],
             })
           ),
       });
@@ -205,10 +232,14 @@ describe('d1Bridge', () => {
       const client = getD1HttpClient();
       const result = await queryD1(client, 'select email from "user" where a = $1', ['x']);
 
-      expect(result).toEqual({ rows: [{ email: 'a@b.com' }], rowCount: 0 });
+      expect(result).toEqual({
+        rows: [{ email: 'a@b.com' }],
+        rowCount: 0,
+        meta: { rowsRead: 4, rowsWritten: 0, durationMs: 2 },
+      });
     });
 
-    it('_execHttp (used directly by scripts/test-rfq-sms.js) still returns its own {rows, rowCount} shape', async () => {
+    it('_execHttp (used directly by scripts/test-rfq-sms.js) retains the raw metadata with its rows', async () => {
       process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
       process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-1';
       process.env.CLOUDFLARE_API_TOKEN = 'token-1';
@@ -227,7 +258,7 @@ describe('d1Bridge', () => {
       const client = getD1HttpClient();
       const result = await client._execHttp('select id from rfqs where rfq_number = ?', ['RFQ-1']);
 
-      expect(result).toEqual({ rows: [{ id: 'rfq-1' }], rowCount: 0 });
+      expect(result).toEqual({ rows: [{ id: 'rfq-1' }], rowCount: 0, meta: { changes: 0 } });
     });
 
     it('handles non-JSON error response from D1 HTTP API', async () => {
@@ -291,7 +322,7 @@ describe('d1Bridge', () => {
 
       const batchRes = await client.batch([client.prepare('update t set a = 1')]);
       expect(batchRes).toHaveLength(1);
-      expect(batchRes[0]).toEqual({ rows: [{ ok: 1 }], rowCount: 1 });
+      expect(batchRes[0]).toEqual({ rows: [{ ok: 1 }], rowCount: 1, meta: { changes: 1 } });
     });
   });
 
@@ -320,6 +351,28 @@ describe('d1Bridge', () => {
       ]);
     });
 
+    it('binds reordered and repeated placeholders in SQL occurrence order', async () => {
+      const bind = jest.fn().mockReturnValue({});
+      const prepare = jest.fn().mockReturnValue({ bind });
+      const db = {
+        prepare,
+        batch: jest.fn().mockResolvedValue([
+          { results: [], meta: { changes: 1 } },
+        ]),
+      };
+
+      const { batchD1 } = require('../src/db/d1Bridge');
+      await batchD1(db, [{
+        text: 'UPDATE t SET value = $3 WHERE owner_id = $2 AND EXISTS (SELECT 1 FROM links WHERE id = $1 OR fallback_id = $1)',
+        params: ['link-id', 'owner-id', 'plan'],
+      }]);
+
+      expect(prepare).toHaveBeenCalledWith(
+        'UPDATE t SET value = ? WHERE owner_id = ? AND EXISTS (SELECT 1 FROM links WHERE id = ? OR fallback_id = ?)'
+      );
+      expect(bind).toHaveBeenCalledWith('plan', 'owner-id', 'link-id', 'link-id');
+    });
+
     it('handles batch results that already have rows/rowCount (HTTP client)', async () => {
       const batchMock = jest.fn().mockResolvedValue([
         { rows: [{ id: 10 }], rowCount: 1 },
@@ -332,6 +385,30 @@ describe('d1Bridge', () => {
       const { batchD1 } = require('../src/db/d1Bridge');
       const results = await batchD1(db, [{ text: 'select 1' }]);
       expect(results).toEqual([{ rows: [{ id: 10 }], rowCount: 1 }]);
+    });
+
+    it('rejects multi-statement use of the non-atomic D1 HTTP adapter before requests are sent', async () => {
+      const batchMock = jest.fn();
+      const db = {
+        _isHttpClient: true,
+        prepare: jest.fn(),
+        batch: batchMock,
+      };
+      const { batchD1 } = require('../src/db/d1Bridge');
+      const { logger } = require('../src/services/loggerService');
+      const logSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await expect(batchD1(db, [
+        { text: 'delete from t where id = $1', params: [1] },
+        { text: 'insert into t (id) values ($1)', params: [1] },
+      ])).rejects.toThrow('cannot guarantee atomicity');
+      expect(db.prepare).not.toHaveBeenCalled();
+      expect(batchMock).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(
+        'Multi-statement D1 batch rejected by the non-atomic HTTP adapter',
+        expect.objectContaining({ operation: 'batchD1', statementCount: 2 }),
+        'DATABASE_D1_BATCH'
+      );
     });
   });
 
@@ -365,7 +442,7 @@ describe('d1Bridge', () => {
       resetD1HttpClientCache();
       const client = getD1HttpClient();
       const res1 = await client._execHttp('select 1');
-      expect(res1).toEqual({ rows: [{ x: 1 }], rowCount: 1 });
+      expect(res1).toEqual({ rows: [{ x: 1 }], rowCount: 1, meta: { changes: 1 } });
 
       const res2 = await client._execHttp('select 2');
       expect(res2).toEqual({ rows: [], rowCount: undefined });
