@@ -787,34 +787,35 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       const next = jest.fn();
 
       // 404
-      jest.spyOn(storeService, 'getRFQById').mockReturnValue(null);
+      jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue(null);
       const res404 = mockRes();
       await rfqController.extendRFQ({ params: { id: 'rfq-none' }, user: { role: 'admin' } }, res404, next);
       expect(res404.statusCode).toBe(404);
 
       // Invalid payload
-      storeService.getRFQById.mockReturnValue({ id: 'rfq-ext-1' });
+      storeService.getRFQByIdAsync.mockResolvedValue({ id: 'rfq-ext-1' });
       const resBad = mockRes();
       await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { hours: 'invalid' }, user: { role: 'admin' } }, resBad, next);
       expect(resBad.statusCode).toBe(400);
 
       // extendRFQ returns failure
-      jest.spyOn(storeService, 'extendRFQ').mockReturnValue({ success: false, reason: 'ALREADY_EXTENDED', error: 'Already extended' });
+      jest.spyOn(storeService, 'extendRFQDurably').mockResolvedValue({ success: false, reason: 'ALREADY_EXTENDED', error: 'Already extended' });
       const resFail = mockRes();
       await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { hours: 24 }, user: { role: 'admin' } }, resFail, next);
       expect(resFail.statusCode).toBe(400);
 
       // extendRFQ returns success
-      storeService.extendRFQ.mockReturnValue({
+      storeService.extendRFQDurably.mockResolvedValue({
         success: true,
         rfq: { id: 'rfq-ext-1', closingDeadline: '2026-12-01' },
       });
       const resOk = mockRes();
       await rfqController.extendRFQ({ params: { id: 'rfq-ext-1' }, body: { hours: 24 }, user: { role: 'admin', email: 'b@test.com' } }, resOk, next);
       expect(resOk.statusCode).toBe(200);
+      expect(storeService.getRFQByIdAsync).toHaveBeenCalledWith('rfq-ext-1');
 
-      storeService.getRFQById.mockRestore();
-      storeService.extendRFQ.mockRestore();
+      storeService.getRFQByIdAsync.mockRestore();
+      storeService.extendRFQDurably.mockRestore();
     });
   });
 

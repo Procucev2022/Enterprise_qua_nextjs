@@ -1573,7 +1573,7 @@ async function updateRFQ(req, res, next) {
 async function extendRFQ(req, res, next) {
   const { id } = req.params;
   try {
-    const existing = storeService.getRFQById(id);
+    const existing = await storeService.getRFQByIdAsync(id);
     if (!existing || !(await canAccessRfq(req, existing))) {
       logger.warn(`RFQ not found for extension: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
@@ -1587,7 +1587,7 @@ async function extendRFQ(req, res, next) {
 
     const hours = Number(req.body.hours);
     const userEmail = req.user && req.user.email;
-    const result = storeService.extendRFQ(existing.id, { hours, userEmail });
+    const result = await storeService.extendRFQDurably(existing.id, { hours, userEmail });
 
     if (!result.success) {
       const statusCode = result.reason === 'NOT_FOUND' ? 404 : 400;

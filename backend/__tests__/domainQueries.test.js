@@ -689,6 +689,39 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       expect(params).toEqual(['rfq-3', null, null, null, null, null, JSON.stringify(rfq)]);
     });
 
+    test('extendRFQOnceInDB applies a conditional update and returns the persisted RFQ', async () => {
+      const updates = { isExtended: true, extensionHours: 24, deadline: '2026-11-05T00:00:00.000Z' };
+      const updated = { id: 'rfq-extend', ...updates };
+      pool.pool = {};
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ raw: updated }] });
+      const invalidateSpy = jest.spyOn(pool.queryCache, 'invalidate');
+
+      await expect(domainQueries.extendRFQOnceInDB('rfq-extend', updates)).resolves.toEqual(updated);
+      const [sql, params, options] = querySpy.mock.calls[0];
+      expect(sql).toContain("COALESCE(raw->>'isExtended', 'false') <> 'true'");
+      expect(sql).toContain("COALESCE(raw->>'status', status, '') NOT IN ('Closed', 'Expired')");
+      expect(sql).toContain('RETURNING raw');
+      expect(params).toEqual(['rfq-extend', JSON.stringify(updates)]);
+      expect(options.d1).toBe(true);
+      expect(options.d1Text).toContain('json_set(');
+      expect(options.d1Text).toContain("COALESCE(json_extract(raw, '$.isExtended'), 0) NOT IN (1, 'true')");
+      expect(sql).toContain("COALESCE(raw->>'extendedAt', '') = ''");
+      expect(sql).toContain("COALESCE(raw->>'extensionHours', '') = ''");
+      expect(options.d1Text).toContain("COALESCE(json_extract(raw, '$.extendedAt'), '') = ''");
+      expect(options.d1Text).toContain("COALESCE(json_extract(raw, '$.extensionHours'), '') = ''");
+      expect(invalidateSpy).toHaveBeenCalledWith('rfqs');
+    });
+
+    test('extendRFQOnceInDB returns null when a concurrent extension already won', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.extendRFQOnceInDB('rfq-extend', { isExtended: true })).resolves.toBeNull();
+    });
+
+    test('extendRFQOnceInDB is a no-op without configured storage', async () => {
+      pool.pool = null;
+      await expect(domainQueries.extendRFQOnceInDB('rfq-extend', { isExtended: true })).resolves.toBeNull();
+    });
+
     test('deleteRFQInDB reports whether a row was actually removed', async () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 1 }) };
       await expect(domainQueries.deleteRFQInDB('rfq-1')).resolves.toBe(true);

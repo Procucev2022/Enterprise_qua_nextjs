@@ -923,6 +923,43 @@ async function upsertRFQInDB(rfq) {
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
+async function extendRFQOnceInDB(id, updates) {
+  if (!pool.hasStorage()) return null;
+  const result = await pool.query(
+    `UPDATE rfqs
+     SET raw = raw || $2::jsonb, updated_at = now()
+     WHERE id = $1
+       AND COALESCE(raw->>'status', status, '') NOT IN ('Closed', 'Expired')
+       AND COALESCE(raw->>'isExtended', 'false') <> 'true'
+       AND COALESCE(raw->>'extendedAt', '') = ''
+       AND COALESCE(raw->>'extensionHours', '') = ''
+     RETURNING raw`,
+    [id, JSON.stringify(updates)],
+    {
+      d1: true,
+      d1Text: `UPDATE rfqs
+       SET raw = json_set(
+         raw,
+         '$.closingDeadline', json_extract($2, '$.closingDeadline'),
+         '$.deadline', json_extract($2, '$.deadline'),
+         '$.isExtended', json_extract($2, '$.isExtended'),
+         '$.extensionHours', json_extract($2, '$.extensionHours'),
+         '$.extendedAt', json_extract($2, '$.extendedAt'),
+         '$.extendedByEmail', json_extract($2, '$.extendedByEmail'),
+         '$.updatedAt', json_extract($2, '$.updatedAt')
+       ), updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+         AND COALESCE(json_extract(raw, '$.status'), status, '') NOT IN ('Closed', 'Expired')
+         AND COALESCE(json_extract(raw, '$.isExtended'), 0) NOT IN (1, 'true')
+         AND COALESCE(json_extract(raw, '$.extendedAt'), '') = ''
+         AND COALESCE(json_extract(raw, '$.extensionHours'), '') = ''
+       RETURNING raw`,
+    }
+  );
+  if (result.rows[0]) queryCache.invalidate('rfqs');
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
 async function deleteRFQInDB(id) {
   if (!pool.hasStorage()) return false;
   const result = await pool.query(
@@ -2039,6 +2076,7 @@ module.exports = {
   getRFQByNumberFromDB,
   getRFQByIdFromDB,
   upsertRFQInDB,
+  extendRFQOnceInDB,
   deleteRFQInDB,
   getEvaluationsFromDB,
   upsertEvaluationInDB,

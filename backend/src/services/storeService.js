@@ -2715,28 +2715,35 @@ class StoreService {
   }
 
   async getRFQByIdAsync(id) {
-    if (pool.hasStorage()) {
-      try {
-        const dbRfq = await domainQueries.getRFQByIdFromDB(id);
-        if (dbRfq) {
-          const idx = this.rfqs.findIndex((r) => r.id === dbRfq.id || r.rfqNumber === dbRfq.rfqNumber);
-          if (idx !== -1) {
-            this.rfqs[idx] = { ...this.rfqs[idx], ...dbRfq };
-          } else {
-            this.rfqs.unshift(dbRfq);
-          }
-          return this.getRFQById(id);
-        }
-      } catch (err) {
-        logger.warn('Failed to load RFQ from DB in getRFQByIdAsync', { id, error: err.message }, 'STORE_SERVICE');
+    if (!pool.hasStorage()) return this.getRFQById(id);
+
+    try {
+      const dbRfq = await domainQueries.getRFQByIdFromDB(id);
+      if (!dbRfq) {
+        this.rfqs = this.rfqs.filter((rfq) => rfq.id !== id && rfq.rfqNumber !== id);
+        return undefined;
       }
+
+      const idx = this.rfqs.findIndex((rfq) => rfq.id === dbRfq.id || rfq.rfqNumber === dbRfq.rfqNumber);
+      if (idx !== -1) {
+        this.rfqs[idx] = { ...this.rfqs[idx], ...dbRfq };
+      } else {
+        this.rfqs.unshift(dbRfq);
+      }
+      return this.getRFQById(id);
+    } catch (error) {
+      logger.error('RFQ lookup failed against authoritative storage; refusing cached fallback', {
+        error,
+        rfqId: id,
+        operation: 'get-rfq-by-id',
+      }, 'STORE_SERVICE');
+      const unavailable = new Error(PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE);
+      unavailable.status = 503;
+      unavailable.statusCode = 503;
+      unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+      unavailable.cause = error;
+      throw unavailable;
     }
-    let rfq = this.getRFQById(id);
-    if (!rfq && pool.hasStorage()) {
-      await this.syncRFQsFromDB(true);
-      rfq = this.getRFQById(id);
-    }
-    return rfq;
   }
 
   getRFQById(id) {
@@ -3639,6 +3646,100 @@ class StoreService {
     };
 
     const updated = this.updateRFQ(rfq.id, updates);
+    return { success: true, rfq: updated };
+  }
+
+  async extendRFQDurably(id, { hours, userEmail } = {}) {
+    const storageConfigured = pool.hasStorage();
+    let rfq;
+    try {
+      rfq = storageConfigured
+        ? await domainQueries.getRFQByIdFromDB(id)
+        : this.getRFQById(id);
+    } catch (error) {
+      logger.error('Failed to load RFQ before deadline extension', { error, rfqId: id }, 'STORE_SERVICE');
+      const persistError = new Error('The RFQ could not be loaded from storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+    if (!rfq) return { success: false, reason: 'NOT_FOUND', error: `RFQ with ID ${id} not found.` };
+
+    const extensionFailure = (current) => {
+      if (current.status === 'Closed' || current.status === 'Expired') {
+        return { success: false, reason: 'INVALID_STATUS', error: 'Cannot extend a closed or expired RFQ.' };
+      }
+      if (current.isExtended || current.extendedAt || current.extensionHours) {
+        return { success: false, reason: 'ALREADY_EXTENDED', error: 'This RFQ has already received its one-time deadline extension.' };
+      }
+      return null;
+    };
+    const initialFailure = extensionFailure(rfq);
+    if (initialFailure) return initialFailure;
+
+    const extHours = Number(hours);
+    if (![24, 48].includes(extHours)) {
+      return { success: false, reason: 'VALIDATION', error: 'Extension duration must be either 24 or 48 hours.' };
+    }
+    const now = new Date();
+    const currentDeadlineStr = rfq.closingDeadline || rfq.deadline || rfq.targetDeliveryDate;
+    let baseMs = now.getTime();
+    if (currentDeadlineStr && !isNaN(Date.parse(currentDeadlineStr))) {
+      baseMs = Math.max(Date.parse(currentDeadlineStr), now.getTime());
+    } else if (rfq.createdAt && !isNaN(Date.parse(rfq.createdAt))) {
+      baseMs = Math.max(new Date(rfq.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000, now.getTime());
+    }
+    const newDeadlineIso = new Date(baseMs + extHours * 60 * 60 * 1000).toISOString();
+    const updates = {
+      closingDeadline: newDeadlineIso,
+      deadline: newDeadlineIso,
+      isExtended: true,
+      extensionHours: extHours,
+      extendedAt: now.toISOString(),
+      extendedByEmail: userEmail || rfq.raisedByEmail || null,
+      updatedAt: now.toISOString(),
+    };
+
+    if (!storageConfigured) {
+      const updated = this.updateRFQ(rfq.id, updates);
+      return updated
+        ? { success: true, rfq: updated }
+        : { success: false, reason: 'NOT_FOUND', error: `RFQ with ID ${id} not found.` };
+    }
+
+    let updated;
+    try {
+      updated = await domainQueries.extendRFQOnceInDB(rfq.id, updates);
+    } catch (error) {
+      logger.error('Failed to persist RFQ deadline extension', { error, rfqId: rfq.id, extensionHours: extHours }, 'STORE_SERVICE');
+      const persistError = new Error('The RFQ deadline extension could not be saved. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+    if (!updated) {
+      let current;
+      try {
+        current = await domainQueries.getRFQByIdFromDB(rfq.id);
+      } catch (error) {
+        logger.error('Failed to verify a rejected RFQ deadline extension', { error, rfqId: rfq.id }, 'STORE_SERVICE');
+        const persistError = new Error('The RFQ extension could not be verified. Try again.');
+        persistError.statusCode = 503;
+        persistError.code = 'PERSISTENCE_UNAVAILABLE';
+        throw persistError;
+      }
+      if (!current) return { success: false, reason: 'NOT_FOUND', error: `RFQ with ID ${id} not found.` };
+      const currentFailure = extensionFailure(current);
+      if (currentFailure) return currentFailure;
+      return { success: false, reason: 'CONCURRENT_UPDATE', error: 'This RFQ changed while the extension was being saved. Reload and try again.' };
+    }
+
+    const cachedIndex = this.rfqs.findIndex((item) => item.id === updated.id);
+    const oldStatus = cachedIndex === -1 ? updated.status : this.rfqs[cachedIndex].status;
+    if (cachedIndex === -1) this.rfqs.push(updated);
+    else this.rfqs[cachedIndex] = updated;
+    this._lastRfqSyncTime = 0;
+    this._notifyRFQUpdate(updated, oldStatus, updates);
     return { success: true, rfq: updated };
   }
 
