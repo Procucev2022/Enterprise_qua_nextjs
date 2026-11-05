@@ -218,9 +218,8 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
     clickExtract();
 
-    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-    expect(screen.getByText(/Extraction Complete/i)).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Pump Requirement')).toBeInTheDocument();
+    expect(await screen.findByText(/Extraction Complete/i)).toBeInTheDocument();
+    expect(await screen.findByDisplayValue('Pump Requirement')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
   });
 
@@ -242,9 +241,8 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     uploadFile(new File(['binary content'], 'Bulk_200_Worksheet_Items.xlsx', { type: '' }));
     clickExtract();
 
-    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-    expect(screen.getByText(/Extraction Complete/i)).toBeInTheDocument();
-    expect(screen.getByText(/Successfully extracted/i)).toHaveTextContent('100 line items');
+    expect(await screen.findByText(/Extraction Complete/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Successfully extracted/i)).toHaveTextContent('100 line items');
     expect(screen.getByDisplayValue('Procurement Valve 1')).toBeInTheDocument();
   });
 

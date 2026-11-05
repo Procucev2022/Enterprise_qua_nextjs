@@ -36,6 +36,7 @@ const whatsAppService = require('./whatsAppService');
 const smsService = require('./smsService');
 const rfqChaserScheduler = require('./rfqChaserScheduler');
 const rfqIngestionService = require('./rfqIngestionService');
+const purchaseOrderService = require('./purchaseOrderService');
 const { logger } = require('./loggerService');
 
 // Bound on the vendors table read at boot hydration (see hydrateFromDB) —
@@ -6256,6 +6257,18 @@ class StoreService {
       })),
       shaSignature: auditRecord.shaSignature,
     };
+  }
+
+  async approvePurchaseOrderDurably(rfqNumber, vendorId, vendorName, totalAmount, approverNotes = '', approverEmail = null) {
+    return purchaseOrderService.approvePurchaseOrderDurably(
+      this,
+      rfqNumber,
+      vendorId,
+      vendorName,
+      totalAmount,
+      approverNotes,
+      approverEmail
+    );
   }
 
   // ==========================================

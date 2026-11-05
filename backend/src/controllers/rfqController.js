@@ -1914,7 +1914,7 @@ function triggerBatchChaser(req, res, next) {
   }
 }
 
-function approvePO(req, res, next) {
+async function approvePO(req, res, next) {
   try {
     const { id } = req.params;
     // Awarding a PO is a buyer-side decision — a vendor has no business
@@ -1928,7 +1928,14 @@ function approvePO(req, res, next) {
       return res.status(400).json({ success: false, error: 'vendorName and totalAmount are required.' });
     }
     logger.info(`Approving Pre-Purchase Order for RFQ ${id}`, { id, vendorId, vendorName, totalAmount, approverNotes }, 'RFQ_CONTROLLER');
-    const result = storeService.approvePurchaseOrder(id, vendorId, vendorName, totalAmount, approverNotes, req.user.email);
+    const result = await storeService.approvePurchaseOrderDurably(
+      id,
+      vendorId,
+      vendorName,
+      totalAmount,
+      approverNotes,
+      req.user.email
+    );
     if (!result) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }

@@ -1947,7 +1947,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       // Line 1895: approvePO success
       jest.spyOn(storeService, 'approvePurchaseOrder').mockReturnValue({ success: true, poNumber: 'PO-2026-001' });
       const resPoOk = mockRes();
-      rfqController.approvePO(
+      await rfqController.approvePO(
         {
           params: { id: 'rfq-po-ok' },
           user: { role: 'buyer', email: 'b@po.com' },
