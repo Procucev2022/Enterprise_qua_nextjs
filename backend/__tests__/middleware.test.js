@@ -6,11 +6,12 @@ describe('Middleware Unit Tests', () => {
     const originalEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'development';
 
-    const req = { method: 'GET', originalUrl: '/api/test' };
+    const req = { method: 'GET', originalUrl: '/api/test', headers: { 'x-request-id': 'request-fixture-1' } };
     let finishHandler;
     const res = {
       statusCode: 200,
       writableEnded: true,
+      setHeader: jest.fn(),
       on: jest.fn((event, handler) => {
         if (event === 'finish') finishHandler = handler;
       }),
@@ -19,6 +20,8 @@ describe('Middleware Unit Tests', () => {
 
     logger(req, res, next);
     expect(next).toHaveBeenCalled();
+    expect(req.requestId).toBe('request-fixture-1');
+    expect(res.setHeader).toHaveBeenCalledWith('X-Request-Id', 'request-fixture-1');
     expect(finishHandler).toBeDefined();
 
     finishHandler();
@@ -64,7 +67,87 @@ describe('Middleware Unit Tests', () => {
     process.env.NODE_ENV = 'production';
     errorHandler(new Error(), req, res, next);
     expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenLastCalledWith(
+      expect.objectContaining({ error: 'Internal Server Error' })
+    );
 
+    process.env.NODE_ENV = originalEnv;
+  });
+
+  test('errorHandler preserves parser status codes and strips query data from logs', () => {
+    const { logger: structuredLogger } = require('../src/services/loggerService');
+    const errorSpy = jest.spyOn(structuredLogger, 'error').mockImplementation(() => undefined);
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const req = {
+      method: 'POST',
+      originalUrl: '/graphql?query=private-value',
+      path: '/graphql',
+      requestId: 'request-test-1',
+    };
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    errorHandler(Object.assign(new Error('request entity too large'), { status: 413 }), req, res, jest.fn());
+
+    expect(res.status).toHaveBeenCalledWith(413);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'request entity too large' }));
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ url: '/graphql', requestId: 'request-test-1' }),
+      'GLOBAL_ERROR_HANDLER'
+    );
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('private-value');
+    expect(consoleSpy).not.toHaveBeenCalled();
+
+    consoleSpy.mockRestore();
+    errorSpy.mockRestore();
+    process.env.NODE_ENV = originalEnv;
+  });
+
+  test('uses a safe console fallback only when structured error logging fails', () => {
+    const { logger: structuredLogger } = require('../src/services/loggerService');
+    const errorSpy = jest.spyOn(structuredLogger, 'error').mockImplementation(() => {
+      throw { message: 'logger unavailable' };
+    });
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const req = { method: 'POST', path: '/api/test', requestId: 'request-fallback-1' };
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    errorHandler(new Error('database failed for private@example.com'), req, res, jest.fn());
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[GLOBAL_ERROR_HANDLER] Structured logging failed',
+      expect.objectContaining({ requestId: 'request-fallback-1', statusCode: 500, loggingErrorName: 'Error' })
+    );
+    expect(JSON.stringify(consoleSpy.mock.calls)).not.toContain('private@example.com');
+
+    consoleSpy.mockRestore();
+    errorSpy.mockRestore();
+    process.env.NODE_ENV = originalEnv;
+  });
+
+  test('uses a safe client-error message when the status and request path are sparse', () => {
+    const { logger: structuredLogger } = require('../src/services/loggerService');
+    const errorSpy = jest.spyOn(structuredLogger, 'error').mockImplementation(() => undefined);
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    errorHandler(Object.assign(new Error(''), { status: 400 }), { method: 'GET' }, res, jest.fn());
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Request failed.' }));
+    expect(errorSpy).toHaveBeenCalledWith(
+      'API Error 400: Request failed.',
+      expect.objectContaining({ url: '', statusCode: 400 }),
+      'GLOBAL_ERROR_HANDLER'
+    );
+
+    errorSpy.mockRestore();
     process.env.NODE_ENV = originalEnv;
   });
 });
@@ -112,6 +195,33 @@ describe('requestLogger connection-close reporting', () => {
     expect(message).toContain('closed with no response');
     expect(metadata.url).toBe('/api/rfqs/extract');
     expect(category).toBe('HTTP_REQUEST');
+  });
+
+  test('omits query string secrets from request logs', () => {
+    const logSpy = jest.spyOn(structuredLogger, 'log').mockImplementation(() => {});
+    let finishHandler;
+    const req = {
+      method: 'GET',
+      originalUrl: '/api/auth/verify?code=654321&email=person%40example.com',
+    };
+    const res = {
+      statusCode: 200,
+      writableEnded: true,
+      on: jest.fn((event, handler) => {
+        if (event === 'finish') finishHandler = handler;
+      }),
+    };
+
+    logger(req, res, jest.fn());
+    finishHandler();
+
+    const [level, message, metadata] = logSpy.mock.calls[0];
+    expect(level).toBe('INFO');
+    expect(message).toContain('/api/auth/verify');
+    expect(message).not.toContain('654321');
+    expect(message).not.toContain('person%40example.com');
+    expect(metadata.url).toBe('/api/auth/verify');
+    expect(JSON.stringify(metadata)).not.toContain('654321');
   });
 
   // 'close' always follows 'finish', so a completed response must not be reported
