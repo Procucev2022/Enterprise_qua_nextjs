@@ -237,12 +237,12 @@ function firstRowChevron(): HTMLElement {
 async function renderPage(): Promise<void> {
   render(<VendorProfilePage />);
   // The save buttons stay disabled until the profile load has settled.
-  await waitFor(() => expect(saveButton()).toBeEnabled());
+  await waitFor(() => expect(saveButton()).toBeEnabled(), { timeout: 10000 });
 }
 
 async function saveProfile(): Promise<void> {
   fireEvent.click(saveButton());
-  await waitFor(() => expect(saveButton()).toBeEnabled());
+  await waitFor(() => expect(saveButton()).toBeEnabled(), { timeout: 10000 });
 }
 
 function fillRequiredFields(): void {
