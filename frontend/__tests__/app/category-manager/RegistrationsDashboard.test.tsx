@@ -626,4 +626,89 @@ describe('RegistrationsDashboard', () => {
       expect(global.fetch).toHaveBeenCalled();
     });
   });
+  test('filters by client view (Buyers / Sellers)', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const clientTypeSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.clientTypeLabel);
+    fireEvent.change(clientTypeSelect, { target: { value: 'buyer' } });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('clientType=buyer')
+      );
+    });
+
+    fireEvent.change(clientTypeSelect, { target: { value: 'seller' } });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('clientType=seller')
+      );
+    });
+  });
+
+  test('opens column settings modal, reorders columns via drag and drop, and toggles visibility', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTooltip);
+    fireEvent.click(gearBtn);
+
+    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).toBeInTheDocument();
+
+    // Toggle column visibility
+    const companyCheckbox = document.getElementById('col-toggle-companyName') as HTMLInputElement;
+    expect(companyCheckbox).toBeInTheDocument();
+    expect(companyCheckbox.checked).toBe(true);
+
+    fireEvent.click(companyCheckbox);
+    expect(companyCheckbox.checked).toBe(false);
+
+    // Test drag and drop reordering
+    const firstBadge = screen.getByText('#1');
+    const secondBadge = screen.getByText('#2');
+    const firstRow = firstBadge.closest('[draggable="true"]') as HTMLElement;
+    const secondRow = secondBadge.closest('[draggable="true"]') as HTMLElement;
+
+    const dataTransfer = { effectAllowed: '', dropEffect: '' };
+    fireEvent.dragStart(firstRow, { dataTransfer });
+    fireEvent.dragOver(secondRow, { dataTransfer });
+    fireEvent.drop(secondRow, { dataTransfer });
+
+    // Test Reset to Default
+    const resetBtn = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.resetToDefault);
+    fireEvent.click(resetBtn);
+
+    // Test Done button closes modal
+    const doneBtn = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.doneBtn);
+    fireEvent.click(doneBtn);
+
+    expect(screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).not.toBeInTheDocument();
+  });
+
+  test('closes column settings modal using the close X button', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTooltip);
+    fireEvent.click(gearBtn);
+
+    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).toBeInTheDocument();
+
+    const closeBtn = screen.getByLabelText('Close column settings');
+    fireEvent.click(closeBtn);
+
+    expect(screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).not.toBeInTheDocument();
+  });
+
 });

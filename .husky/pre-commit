@@ -4,7 +4,8 @@
 
 echo "🛡️  [PRE-COMMIT GATE] Executing full workspace quality check..."
 
-FAST_PRECOMMIT=true npm run check:quality
+export FAST_PRECOMMIT=true
+npm run check:quality
 
 EXIT_CODE=$?
 

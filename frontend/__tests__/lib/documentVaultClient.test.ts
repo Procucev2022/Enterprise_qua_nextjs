@@ -70,6 +70,33 @@ describe('Document Vault Client', () => {
       expect(global.fetch).toHaveBeenCalledWith('/api/document-vault', expect.any(Object));
     });
 
+    test('fetches documents with source and accountType filters', async () => {
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ documents: [] }),
+      } as unknown as Response);
+
+      await fetchDocuments({ source: 'buyer' });
+      expect(global.fetch).toHaveBeenCalledWith('/api/document-vault?source=buyer', expect.any(Object));
+
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ documents: [] }),
+      } as unknown as Response);
+
+      await fetchDocuments({ accountType: 'seller' });
+      expect(global.fetch).toHaveBeenCalledWith('/api/document-vault?source=seller', expect.any(Object));
+
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ documents: [] }),
+      } as unknown as Response);
+
+      await fetchDocuments({ source: 'all' });
+      expect(global.fetch).toHaveBeenCalledWith('/api/document-vault', expect.any(Object));
+    });
+
+
     test('throws structured error when response is not ok', async () => {
       global.fetch = jest.fn().mockResolvedValueOnce({
         ok: false,

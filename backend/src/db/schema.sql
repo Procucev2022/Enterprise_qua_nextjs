@@ -1101,3 +1101,30 @@ CREATE INDEX IF NOT EXISTS idx_account_documents_account ON account_documents (a
 CREATE INDEX IF NOT EXISTS idx_account_documents_category ON account_documents (category);
 CREATE INDEX IF NOT EXISTS idx_account_documents_active ON account_documents (is_active);
 
+-- ==============================================================================
+-- USER LOGIN LOGS (Real-time Buyer & Seller Session Telemetry)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS user_login_logs (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64),
+  user_name VARCHAR(255) NOT NULL,
+  email VARCHAR(255) NOT NULL,
+  phone_number VARCHAR(64),
+  company_name VARCHAR(255) NOT NULL,
+  user_type VARCHAR(32) NOT NULL,
+  login_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  logout_at TIMESTAMPTZ,
+  duration_seconds INTEGER DEFAULT 0,
+  status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+  ip_address VARCHAR(64),
+  user_agent TEXT,
+  device_info VARCHAR(128),
+  location VARCHAR(128),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_user_login_logs_user_type ON user_login_logs (user_type);
+CREATE INDEX IF NOT EXISTS idx_user_login_logs_login_at ON user_login_logs (login_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_login_logs_status ON user_login_logs (status);
+CREATE INDEX IF NOT EXISTS idx_user_login_logs_email ON user_login_logs (email);
+

@@ -17,7 +17,7 @@ import {
   FileCheck,
 } from 'lucide-react';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import { DOCUMENT_VAULT_CATEGORIES, DOCUMENT_VAULT_CONFIG } from '@/lib/constants';
+import { DOCUMENT_VAULT_CATEGORIES, DOCUMENT_VAULT_SOURCES, DOCUMENT_VAULT_CONFIG } from '@/lib/constants';
 import type { DocumentVaultItem, DocumentVaultSummary } from '@/lib/types';
 import {
   fetchDocuments,
@@ -40,6 +40,7 @@ export default function DocumentVaultDashboard() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [selectedSource, setSelectedSource] = useState<string>('all');
   const [activeFilter, setActiveFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
   // Modal states
@@ -71,6 +72,7 @@ export default function DocumentVaultDashboard() {
       const [docsData, summaryData] = await Promise.all([
         fetchDocuments({
           category: selectedCategory === 'all' ? undefined : selectedCategory,
+          source: selectedSource === 'all' ? undefined : selectedSource,
           search: searchQuery.trim() || undefined,
         }),
         fetchDocumentVaultSummary(),
@@ -83,7 +85,7 @@ export default function DocumentVaultDashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedCategory, searchQuery, showToast]);
+  }, [selectedCategory, selectedSource, searchQuery, showToast]);
 
   useEffect(() => {
     loadData();
@@ -253,32 +255,7 @@ export default function DocumentVaultDashboard() {
         </div>
       )}
 
-      {/* Header Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-sm">
-        <div className="flex items-start gap-3">
-          <div className="p-3 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-xl">
-            <FolderOpen size={24} />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white">
-              {strings.title}
-            </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-2xl">
-              {strings.subtitle}
-            </p>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={handleOpenUploadModal}
-          data-testid="upload-document-btn"
-          className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer self-start md:self-auto"
-        >
-          <Upload size={14} />
-          <span>{strings.actions.uploadDocument}</span>
-        </button>
-      </div>
+      
 
       {/* KPI Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -337,12 +314,28 @@ export default function DocumentVaultDashboard() {
           />
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Source Dropdown */}
+          <select
+            value={selectedSource}
+            onChange={(e) => setSelectedSource(e.target.value)}
+            data-testid="vault-source-filter"
+            aria-label={strings.actions.filterSource}
+            className="px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          >
+            {DOCUMENT_VAULT_SOURCES.map((src) => (
+              <option key={src.id} value={src.id}>
+                {src.label}
+              </option>
+            ))}
+          </select>
+
           {/* Category Dropdown */}
           <select
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
             data-testid="vault-category-filter"
+            aria-label={strings.actions.filterCategory}
             className="px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           >
             {DOCUMENT_VAULT_CATEGORIES.map((cat) => (
@@ -363,6 +356,17 @@ export default function DocumentVaultDashboard() {
             <option value="active">Active Only</option>
             <option value="inactive">Inactive Only</option>
           </select>
+
+          {/* Upload Button */}
+          <button
+            type="button"
+            onClick={handleOpenUploadModal}
+            data-testid="upload-document-btn"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer shrink-0"
+          >
+            <Upload size={13} />
+            <span>{strings.actions.uploadDocument}</span>
+          </button>
         </div>
       </div>
 
@@ -394,6 +398,7 @@ export default function DocumentVaultDashboard() {
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                   <th className="py-3 px-4">{strings.table.documentName}</th>
+                  <th className="py-3 px-3">{strings.table.source}</th>
                   <th className="py-3 px-3">{strings.table.category}</th>
                   <th className="py-3 px-3">{strings.table.fileDetails}</th>
                   <th className="py-3 px-3">{strings.table.uploadedBy}</th>

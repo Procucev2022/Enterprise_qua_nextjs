@@ -1,4 +1,5 @@
 import type {
+  RegistrationColumnConfig,
   BuyerDirectoryColumnConfig,
   SellerDirectoryColumnConfig,
   SellerDirectoryColumnKey,
@@ -1348,6 +1349,26 @@ export function parseSearchTokens(search?: string | null): string[] {
 }
 
 
+export const REGISTRATION_CLIENT_TYPES = [
+  { id: 'all', label: 'All (Buyers & Sellers)' },
+  { id: 'buyer', label: 'Buyers' },
+  { id: 'seller', label: 'Sellers' },
+] as const;
+
+export const REGISTRATION_COLUMN_PREF_KEY = 'registration_columns_pref';
+
+export const DEFAULT_REGISTRATION_COLUMNS: RegistrationColumnConfig[] = [
+  { key: 'userName', label: 'User Name', visible: true, required: true },
+  { key: 'clientType', label: 'Client View', visible: true },
+  { key: 'companyName', label: 'Company Name', visible: true },
+  { key: 'phoneNumber', label: 'Phone Number', visible: true },
+  { key: 'userEmail', label: 'User Email', visible: true },
+  { key: 'regDate', label: 'Reg. Date', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'sourceType', label: 'Source Type', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
 export const BUYER_DIRECTORY_COLUMN_PREF_KEY = 'buyer_directory_columns_pref';
 
 export const DEFAULT_BUYER_DIRECTORY_COLUMNS: BuyerDirectoryColumnConfig[] = [
@@ -1535,6 +1556,13 @@ export const ONBOARDING_STAGES = {
   5: 'Live Onboarded',
 } as const;
 
+
+export const DOCUMENT_VAULT_SOURCES = [
+  { id: 'all', label: 'All Sources' },
+  { id: 'vault', label: 'Platform Collateral' },
+  { id: 'buyer', label: 'Buyer Documents' },
+  { id: 'seller', label: 'Seller Documents' },
+] as const;
 
 export const DOCUMENT_VAULT_CATEGORIES = [
   { id: 'all', label: 'All Documents' },

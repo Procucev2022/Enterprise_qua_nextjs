@@ -17,10 +17,14 @@ import {
   Users,
   RefreshCw,
   X,
+  Settings,
+  GripVertical,
+  RotateCcw,
 } from 'lucide-react';
 import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import type { RegisteredClient, ActionCenterSummaryPopupColumn } from '@/lib/types';
+import type { RegisteredClient, ActionCenterSummaryPopupColumn, RegistrationColumnConfig, RegistrationColumnKey } from '@/lib/types';
+import { REGISTRATION_CLIENT_TYPES, REGISTRATION_COLUMN_PREF_KEY, DEFAULT_REGISTRATION_COLUMNS } from '@/lib/constants';
 
 export interface RegistrationsDashboardProps {
   onTotalCountChange?: (count: number) => void;
@@ -33,10 +37,79 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
   const [totalCount, setTotalCount] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-
   // Filters & Search
   const [search, setSearch] = useState<string>('');
   const [sourceType, setSourceType] = useState<string>('all');
+  const [clientType, setClientType] = useState<string>('all');
+
+  // Column Reordering & Visibility state
+  const [columns, setColumns] = useState<RegistrationColumnConfig[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(REGISTRATION_COLUMN_PREF_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
+        }
+      } catch {
+        // fallback
+      }
+    }
+    return DEFAULT_REGISTRATION_COLUMNS;
+  });
+
+  const [showColumnSettings, setShowColumnSettings] = useState<boolean>(false);
+  const [draggedColIndex, setDraggedColIndex] = useState<number | null>(null);
+
+  const saveColumns = useCallback((newCols: RegistrationColumnConfig[]) => {
+    setColumns(newCols);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(REGISTRATION_COLUMN_PREF_KEY, JSON.stringify(newCols));
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
+
+  const handleToggleColumn = (key: RegistrationColumnKey) => {
+    const updated = columns.map((col) => {
+      if (col.key === key && !col.required) {
+        return { ...col, visible: !col.visible };
+      }
+      return col;
+    });
+    saveColumns(updated);
+  };
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedColIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    if (draggedColIndex === null || draggedColIndex === targetIndex) return;
+    const reordered = [...columns];
+    const [moved] = reordered.splice(draggedColIndex, 1);
+    reordered.splice(targetIndex, 0, moved);
+    setDraggedColIndex(null);
+    saveColumns(reordered);
+  };
+
+  const handleResetColumns = () => {
+    saveColumns(DEFAULT_REGISTRATION_COLUMNS);
+  };
+
+  const visibleColumns = useMemo(() => columns.filter((c) => c.visible), [columns]);
+
 
   // Pagination
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -76,6 +149,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
       const params = new URLSearchParams();
       if (search.trim()) params.append('search', search.trim());
       if (sourceType !== 'all') params.append('sourceType', sourceType);
+      if (clientType !== 'all') params.append('clientType', clientType);
       params.append('limit', String(pageSize));
       params.append('offset', String((currentPage - 1) * pageSize));
 
@@ -104,7 +178,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
     } finally {
       setLoading(false);
     }
-  }, [search, sourceType, currentPage, pageSize, onTotalCountChange, strings.noClientsFound, strings.actionError]);
+  }, [search, sourceType, clientType, currentPage, pageSize, onTotalCountChange, strings.noClientsFound, strings.actionError]);
 
   useEffect(() => {
     fetchRegistrations();
@@ -387,7 +461,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
         </div>
       )}
 
-      {/* Unified Horizontal Toolbar: Search Bar + Source Type Filter + Refresh */}
+      {/* Unified Horizontal Toolbar: Search Bar + Client View Filter + Source Type Filter + Column Settings + Refresh */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-xs flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto no-scrollbar">
         {/* Fully visible search field with non-overlapping icon */}
         <div className="relative flex-1 min-w-[200px] max-w-md">
@@ -419,6 +493,29 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
           )}
         </div>
 
+        {/* Client View Filter Dropdown */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <label htmlFor="client-type-select" className="text-xs font-semibold text-slate-600 dark:text-slate-400 whitespace-nowrap hidden sm:inline">
+            {strings.clientTypeLabel}
+          </label>
+          <select
+            id="client-type-select"
+            value={clientType}
+            onChange={(e) => {
+              setClientType(e.target.value);
+              setCurrentPage(1);
+            }}
+            aria-label={strings.clientTypeLabel}
+            className="h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0"
+          >
+            {REGISTRATION_CLIENT_TYPES.map((ct) => (
+              <option key={ct.id} value={ct.id}>
+                {ct.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
         {/* Source Type Filter Dropdown */}
         <div className="flex items-center gap-1.5 shrink-0">
           <label htmlFor="source-type-select" className="text-xs font-semibold text-slate-600 dark:text-slate-400 whitespace-nowrap hidden sm:inline">
@@ -441,37 +538,129 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
           </select>
         </div>
 
+        {/* Column Settings Gear Button */}
+        <button
+          type="button"
+          onClick={() => setShowColumnSettings(true)}
+          title={strings.columnSettingsTooltip}
+          aria-label={strings.columnSettingsTooltip}
+          className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer ml-auto"
+        >
+          <Settings className="w-3.5 h-3.5" />
+        </button>
+
         {/* Refresh Button */}
         <button
           type="button"
           onClick={() => fetchRegistrations()}
           title={strings.refreshTooltip}
           aria-label={strings.refreshTooltip}
-          className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer ml-auto"
+          className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
         </button>
       </div>
+
+      {/* Column Customization Modal */}
+      {showColumnSettings && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={strings.columnSettingsTitle}
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4 text-orange-600 dark:text-orange-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">{strings.columnSettingsTitle}</h3>
+                  <p className="text-[11px] text-slate-500">{strings.columnSettingsSubtitle}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowColumnSettings(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                aria-label="Close column settings"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto space-y-1 divide-y divide-slate-100 dark:divide-slate-800/60 flex-1">
+              {columns.map((col, idx) => (
+                <div
+                  key={col.key}
+                  draggable={true}
+                  onDragStart={(e) => handleDragStart(e, idx)}
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(e, idx)}
+                  className="flex items-center justify-between py-2 px-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded-lg transition-colors cursor-move group"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-200 shrink-0" />
+                    <input
+                      type="checkbox"
+                      id={`col-toggle-${col.key}`}
+                      checked={col.visible}
+                      disabled={col.required}
+                      onChange={() => handleToggleColumn(col.key)}
+                      className="rounded border-slate-300 text-orange-600 focus:ring-orange-500 cursor-pointer disabled:opacity-50"
+                    />
+                    <label
+                      htmlFor={`col-toggle-${col.key}`}
+                      className="text-xs font-medium text-slate-800 dark:text-slate-200 cursor-pointer select-none"
+                    >
+                      {col.label}
+                      {col.required && <span className="ml-1 text-[10px] text-slate-400">({strings.lockedBadge})</span>}
+                    </label>
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-400">#{idx + 1}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={handleResetColumns}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>{strings.resetToDefault}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowColumnSettings(false)}
+                className="px-4 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
+              >
+                {strings.doneBtn}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Data Table */}
       <div className="w-full overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
         <table className="w-full text-left text-xs border-collapse">
           <thead>
             <tr className="bg-slate-100/80 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-700">
-              <th className="py-3 px-3.5 whitespace-nowrap">{strings.colUserName}</th>
-              <th className="py-3 px-3.5 whitespace-nowrap">{strings.colCompanyName}</th>
-              <th className="py-3 px-3.5 whitespace-nowrap">{strings.colPhoneNumber}</th>
-              <th className="py-3 px-3.5 whitespace-nowrap">{strings.colUserEmail}</th>
-              <th className="py-3 px-3.5 whitespace-nowrap">{strings.colRegDate}</th>
-              <th className="py-3 px-3.5 whitespace-nowrap">{strings.colStatus}</th>
-              <th className="py-3 px-3.5 whitespace-nowrap">{strings.colSourceType}</th>
-              <th className="py-3 px-3.5 text-center whitespace-nowrap">{strings.colActions}</th>
+              {visibleColumns.map((col) => (
+                <th
+                  key={col.key}
+                  className={`py-3 px-3.5 whitespace-nowrap ${col.key === 'actions' ? 'text-center' : ''}`}
+                >
+                  {col.label}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
             {loading ? (
               <tr>
-                <td colSpan={8} className="py-16 text-center text-slate-400">
+                <td colSpan={visibleColumns.length} className="py-16 text-center text-slate-400">
                   <div className="flex flex-col items-center justify-center gap-2">
                     <Loader2 className="w-6 h-6 animate-spin text-orange-500" />
                     <span>{strings.loadingClients}</span>
@@ -480,7 +669,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
               </tr>
             ) : error ? (
               <tr>
-                <td colSpan={8} className="py-12 text-center text-rose-500 font-semibold">
+                <td colSpan={visibleColumns.length} className="py-12 text-center text-rose-500 font-semibold">
                   <div className="flex flex-col items-center justify-center gap-2">
                     <AlertCircle className="w-6 h-6" />
                     <span>{error}</span>
@@ -489,7 +678,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
               </tr>
             ) : clients.length === 0 ? (
               <tr>
-                <td colSpan={8} className="py-12 text-center text-slate-400 font-semibold">
+                <td colSpan={visibleColumns.length} className="py-12 text-center text-slate-400 font-semibold">
                   {strings.noClientsFound}
                 </td>
               </tr>
@@ -509,80 +698,131 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                     key={client.id}
                     className={`${rowBg} hover:opacity-90 transition-opacity text-slate-800 dark:text-slate-200`}
                   >
-                    <td className="py-2.5 px-3.5 font-semibold text-slate-900 dark:text-white max-w-[150px] truncate" title={client.userName}>
-                      {client.userName}
-                    </td>
-                    <td className="py-2.5 px-3.5 font-semibold text-slate-700 dark:text-slate-300 max-w-[180px] truncate" title={client.companyName}>
-                      {client.companyName}
-                    </td>
-                    <td className="py-2.5 px-3.5 font-mono text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                      {client.phoneNumber}
-                    </td>
-                    <td className="py-2.5 px-3.5 text-slate-600 dark:text-slate-400 max-w-[180px] truncate" title={client.userEmail}>
-                      {client.userEmail}
-                    </td>
-                    <td className="py-2.5 px-3.5 whitespace-nowrap text-slate-600 dark:text-slate-400">
-                      {formatDate(client.regDate)}
-                    </td>
-                    <td className="py-2.5 px-3.5 whitespace-nowrap">
-                      <span
-                        className={`font-semibold ${
-                          isAccepted
-                            ? 'text-indigo-600 dark:text-indigo-400'
-                            : isNew
-                            ? 'text-slate-800 dark:text-slate-200'
-                            : 'text-rose-600 dark:text-rose-400'
-                        }`}
-                      >
-                        {client.status}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3.5 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5 font-medium">
-                        {client.sourceType === 'WhatsApp' ? (
-                          <MessageSquare className="w-4 h-4 text-emerald-500 shrink-0" />
-                        ) : client.sourceType === 'Email' ? (
-                          <Mail className="w-4 h-4 text-sky-500 shrink-0" />
-                        ) : (
-                          <Globe className="w-4 h-4 text-sky-600 shrink-0" />
-                        )}
-                        <span className="text-slate-700 dark:text-slate-300">{client.sourceType}</span>
-                      </div>
-                    </td>
-                    <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
-                      {isNew ? (
-                        <div className="flex items-center justify-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleAction(client.id, 'accept')}
-                            disabled={processingId === client.id}
-                            title={strings.acceptTooltip}
-                            aria-label={`${strings.acceptTooltip} for ${client.userName}`}
-                            className="p-1 rounded-full text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 transition-colors disabled:opacity-40 cursor-pointer"
-                          >
-                            <CheckCircle className="w-5 h-5 fill-emerald-600 text-white" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleAction(client.id, 'reject')}
-                            disabled={processingId === client.id}
-                            title={strings.rejectTooltip}
-                            aria-label={`${strings.rejectTooltip} for ${client.userName}`}
-                            className="p-1 rounded-full text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors disabled:opacity-40 cursor-pointer"
-                          >
-                            <XCircle className="w-5 h-5 fill-rose-600 text-white" />
-                          </button>
-                        </div>
-                      ) : isAccepted ? (
-                        <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40">
-                          {strings.statusAccepted}
-                        </span>
-                      ) : (
-                        <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950/40">
-                          {strings.statusRejected}
-                        </span>
-                      )}
-                    </td>
+                    {visibleColumns.map((col) => {
+                      if (col.key === 'userName') {
+                        return (
+                          <td key={col.key} className="py-2.5 px-3.5 font-semibold text-slate-900 dark:text-white max-w-[150px] truncate" title={client.userName}>
+                            {client.userName}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'clientType') {
+                        const isSeller = client.clientType === 'Seller';
+                        return (
+                          <td key={col.key} className="py-2.5 px-3.5 whitespace-nowrap">
+                            {isSeller ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                                {strings.sellers}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
+                                {strings.buyers}
+                              </span>
+                            )}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'companyName') {
+                        return (
+                          <td key={col.key} className="py-2.5 px-3.5 font-semibold text-slate-700 dark:text-slate-300 max-w-[180px] truncate" title={client.companyName}>
+                            {client.companyName}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'phoneNumber') {
+                        return (
+                          <td key={col.key} className="py-2.5 px-3.5 font-mono text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                            {client.phoneNumber}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'userEmail') {
+                        return (
+                          <td key={col.key} className="py-2.5 px-3.5 text-slate-600 dark:text-slate-400 max-w-[180px] truncate" title={client.userEmail}>
+                            {client.userEmail}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'regDate') {
+                        return (
+                          <td key={col.key} className="py-2.5 px-3.5 whitespace-nowrap text-slate-600 dark:text-slate-400">
+                            {formatDate(client.regDate)}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'status') {
+                        return (
+                          <td key={col.key} className="py-2.5 px-3.5 whitespace-nowrap">
+                            <span
+                              className={`font-semibold ${
+                                isAccepted
+                                  ? 'text-indigo-600 dark:text-indigo-400'
+                                  : isNew
+                                  ? 'text-slate-800 dark:text-slate-200'
+                                  : 'text-rose-600 dark:text-rose-400'
+                              }`}
+                            >
+                              {client.status}
+                            </span>
+                          </td>
+                        );
+                      }
+                      if (col.key === 'sourceType') {
+                        return (
+                          <td key={col.key} className="py-2.5 px-3.5 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5 font-medium">
+                              {client.sourceType === 'WhatsApp' ? (
+                                <MessageSquare className="w-4 h-4 text-emerald-500 shrink-0" />
+                              ) : client.sourceType === 'Email' ? (
+                                <Mail className="w-4 h-4 text-sky-500 shrink-0" />
+                              ) : (
+                                <Globe className="w-4 h-4 text-sky-600 shrink-0" />
+                              )}
+                              <span className="text-slate-700 dark:text-slate-300">{client.sourceType}</span>
+                            </div>
+                          </td>
+                        );
+                      }
+                      if (col.key === 'actions') {
+                        return (
+                          <td key={col.key} className="py-2.5 px-3.5 text-center whitespace-nowrap">
+                            {isNew ? (
+                              <div className="flex items-center justify-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleAction(client.id, 'accept')}
+                                  disabled={processingId === client.id}
+                                  title={strings.acceptTooltip}
+                                  aria-label={`${strings.acceptTooltip} for ${client.userName}`}
+                                  className="p-1 rounded-full text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 transition-colors disabled:opacity-40 cursor-pointer"
+                                >
+                                  <CheckCircle className="w-5 h-5 fill-emerald-600 text-white" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAction(client.id, 'reject')}
+                                  disabled={processingId === client.id}
+                                  title={strings.rejectTooltip}
+                                  aria-label={`${strings.rejectTooltip} for ${client.userName}`}
+                                  className="p-1 rounded-full text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors disabled:opacity-40 cursor-pointer"
+                                >
+                                  <XCircle className="w-5 h-5 fill-rose-600 text-white" />
+                                </button>
+                              </div>
+                            ) : isAccepted ? (
+                              <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40">
+                                {strings.statusAccepted}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950/40">
+                                {strings.statusRejected}
+                              </span>
+                            )}
+                          </td>
+                        );
+                      }
+                      return null;
+                    })}
                   </tr>
                 );
               })

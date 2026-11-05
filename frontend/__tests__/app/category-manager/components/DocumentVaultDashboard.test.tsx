@@ -646,4 +646,72 @@ describe('DocumentVaultDashboard', () => {
       expect(screen.getByText('No documents match the selected filters.')).toBeInTheDocument();
     });
   });
+  test('filters by source and displays appropriate source badges for buyer, seller, and vault', async () => {
+    const multiSourceDocs: DocumentVaultItem[] = [
+      {
+        id: 'doc_vault_1',
+        documentName: 'Platform Overview',
+        fileName: 'platform.pdf',
+        fileSize: 100000,
+        mimeType: 'application/pdf',
+        category: 'marketing_overview',
+        fileUrl: '/docs/platform.pdf',
+        description: 'Deck',
+        accountType: 'vault',
+        isActive: true,
+        createdAt: '2026-02-01T10:00:00Z',
+      },
+      {
+        id: 'doc_buyer_1',
+        documentName: 'Buyer GST Certificate',
+        fileName: 'gst.pdf',
+        fileSize: 150000,
+        mimeType: 'application/pdf',
+        category: 'compliance',
+        fileUrl: '/docs/gst.pdf',
+        description: 'GST',
+        accountType: 'buyer',
+        accountId: 'BUY-123',
+        isActive: true,
+        createdAt: '2026-02-02T10:00:00Z',
+      },
+      {
+        id: 'doc_seller_1',
+        documentName: 'Seller ISO Audit',
+        fileName: 'iso.pdf',
+        fileSize: 200000,
+        mimeType: 'application/pdf',
+        category: 'compliance',
+        fileUrl: '/docs/iso.pdf',
+        description: 'ISO',
+        accountType: 'seller',
+        accountId: 'SEL-456',
+        isActive: true,
+        createdAt: '2026-02-03T10:00:00Z',
+      },
+    ];
+
+    mockFetchDocuments.mockResolvedValueOnce(multiSourceDocs);
+
+    render(<DocumentVaultDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Platform Overview')).toBeInTheDocument();
+      expect(screen.getByText('Platform Collateral')).toBeInTheDocument();
+      expect(screen.getByText('Buyer Documents')).toBeInTheDocument();
+      expect(screen.getByText('Seller Documents')).toBeInTheDocument();
+    });
+
+    mockFetchDocuments.mockResolvedValueOnce([multiSourceDocs[1]]);
+    fireEvent.change(screen.getByTestId('vault-source-filter'), {
+      target: { value: 'buyer' },
+    });
+
+    await waitFor(() => {
+      expect(mockFetchDocuments).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'buyer' })
+      );
+    });
+  });
+
 });

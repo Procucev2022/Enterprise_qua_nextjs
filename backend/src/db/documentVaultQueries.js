@@ -6,6 +6,7 @@
 // ==============================================================================
 
 const pool = require('./pool');
+const accountDocumentQueries = require('./accountDocumentQueries');
 const crypto = require('crypto');
 const { logger } = require('../services/loggerService');
 
@@ -29,10 +30,45 @@ function mapRow(row) {
     isActive: row.is_active !== undefined ? Boolean(row.is_active) : (row.isActive !== undefined ? Boolean(row.isActive) : true),
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : (row.createdAt || new Date().toISOString()),
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : (row.updatedAt || new Date().toISOString()),
+    accountType: row.account_type || row.accountType || 'vault',
+    accountId: row.account_id || row.accountId || null,
   };
 }
 
 const DEFAULT_DOCUMENTS = [
+  {
+    id: 'doc_buyer_sample_1',
+    documentName: 'Enterprise Buyer Statutory GST & KYC Dossier',
+    fileName: 'Buyer_Statutory_KYC_Dossier.pdf',
+    fileSize: 1420000,
+    mimeType: 'application/pdf',
+    category: 'compliance',
+    fileUrl: '/documents/Buyer_Statutory_KYC_Dossier.pdf',
+    description: 'Verified statutory incorporation and GSTIN registration certificate for ProcureHub Buyer Account.',
+    uploadedBy: 'Enterprise Buyer (ProcureHub)',
+    isActive: true,
+    createdAt: new Date('2026-02-01T10:00:00Z').toISOString(),
+    updatedAt: new Date('2026-02-01T10:00:00Z').toISOString(),
+    accountType: 'buyer',
+    accountId: 'BUYER-001',
+  },
+  {
+    id: 'doc_seller_sample_1',
+    documentName: 'Verified Supplier MSME & ISO 9001 Quality Certificate',
+    fileName: 'Supplier_MSME_ISO9001_Dossier.pdf',
+    fileSize: 2150000,
+    mimeType: 'application/pdf',
+    category: 'compliance',
+    fileUrl: '/documents/Supplier_MSME_ISO9001_Dossier.pdf',
+    description: 'Audited MSME manufacturing and quality assurance dossier for Apex Industrial Supplies.',
+    uploadedBy: 'Apex Industrial Supplies (Seller)',
+    isActive: true,
+    createdAt: new Date('2026-02-05T12:30:00Z').toISOString(),
+    updatedAt: new Date('2026-02-05T12:30:00Z').toISOString(),
+    accountType: 'seller',
+    accountId: 'SELLER-001',
+  },
+
   {
     id: 'doc_buyer_roi',
     documentName: 'Enterprise Buyer ROI & Cost Savings Benchmark 2026',
@@ -41,6 +77,7 @@ const DEFAULT_DOCUMENTS = [
     mimeType: 'application/pdf',
     category: 'marketing_overview',
     fileUrl: '/documents/Buyer_ROI_Benchmark_2026.pdf',
+    accountType: 'vault',
     description: 'Comprehensive financial justification model and benchmark metrics for enterprise procurement teams.',
     uploadedBy: 'Enterprise Growth Team',
     isActive: true,
@@ -55,6 +92,7 @@ const DEFAULT_DOCUMENTS = [
     mimeType: 'application/pdf',
     category: 'marketing_overview',
     fileUrl: '/documents/Procucev_Enterprise_Platform_Overview.pdf',
+    accountType: 'vault',
     description: 'Executive introductory deck highlighting reverse auctioning, vendor diligence, and ERP integrations.',
     uploadedBy: 'Corporate Sales',
     isActive: true,
@@ -69,6 +107,7 @@ const DEFAULT_DOCUMENTS = [
     mimeType: 'application/pdf',
     category: 'rate_cards',
     fileUrl: '/documents/Procucev_Rate_Card_2026.pdf',
+    accountType: 'vault',
     description: 'Transparent tier schedules, annual platform licensing, and GMV tier rebate scales.',
     uploadedBy: 'Finance & Monetization',
     isActive: true,
@@ -83,6 +122,7 @@ const DEFAULT_DOCUMENTS = [
     mimeType: 'application/pdf',
     category: 'templates',
     fileUrl: '/documents/Supplier_Compliance_Onboarding_Packet.pdf',
+    accountType: 'vault',
     description: 'Statutory compliance checklists, GSTIN validation steps, and banking authentication forms.',
     uploadedBy: 'Vendor Operations',
     isActive: true,
@@ -97,6 +137,7 @@ const DEFAULT_DOCUMENTS = [
     mimeType: 'application/pdf',
     category: 'legal_compliance',
     fileUrl: '/documents/Enterprise_SLA_Master_Agreement.pdf',
+    accountType: 'vault',
     description: '99.9% uptime commitments, escrow settlement rules, and supplier penalty framework.',
     uploadedBy: 'Legal Counsel',
     isActive: true,
@@ -112,8 +153,10 @@ function resetInMemoryStore() {
 }
 
 async function listDocuments(filters = {}) {
-  const { category, search, activeOnly } = filters;
+  const { category, search, activeOnly, source, accountType } = filters;
+  const targetSource = (source || accountType || 'all').toLowerCase();
 
+  let vaultDocs = [];
   if (pool.hasStorage()) {
     try {
       const conditions = [];
@@ -138,33 +181,81 @@ async function listDocuments(filters = {}) {
       const queryText = `SELECT id, document_name, file_name, file_size, mime_type, category, file_url, description, uploaded_by, is_active, created_at, updated_at FROM document_vault ${whereClause} ORDER BY created_at DESC`;
 
       const result = await pool.query(queryText, values, { d1: true });
-      return result.rows.map(mapRow);
+      vaultDocs = result.rows.map(mapRow);
     } catch (err) {
       logger.error('documentVaultQueries: PostgreSQL listDocuments query failed, falling back to memory', { error: err.message });
+      vaultDocs = inMemoryDocuments.slice();
     }
+  } else {
+    vaultDocs = inMemoryDocuments.slice();
   }
 
-  let list = inMemoryDocuments.slice();
+  // Also retrieve account documents from buyer & seller accounts (Auto-sync)
+  let accountDocs = [];
+  try {
+    accountDocs = await accountDocumentQueries.getAllAccountDocuments({
+      category,
+      search,
+      activeOnly,
+      accountType: (targetSource === 'vault' || targetSource === 'platform') ? null : (targetSource !== 'all' ? targetSource : undefined),
+    });
+  } catch (err) {
+    logger.warn('documentVaultQueries: Failed to load account documents for vault auto-sync', { error: err.message });
+  }
 
+  const mappedAccountDocs = (accountDocs || []).map((ad) => ({
+    ...ad,
+    accountType: ad.accountType || 'buyer',
+  }));
+
+  // Combine vaultDocs and mappedAccountDocs
+  let combined = [...vaultDocs, ...mappedAccountDocs];
+
+  // Apply in-memory category filter if needed
   if (category && category !== 'all') {
-    list = list.filter((d) => d.category === category);
+    combined = combined.filter((d) => d.category === category);
   }
 
+  // Apply in-memory activeOnly filter if needed
   if (activeOnly) {
-    list = list.filter((d) => d.isActive === true);
+    combined = combined.filter((d) => d.isActive === true);
   }
 
+  // Apply in-memory search filter if needed
   if (search && search.trim()) {
     const term = search.trim().toLowerCase();
-    list = list.filter((d) => {
+    combined = combined.filter((d) => {
       const name = (d.documentName || '').toLowerCase();
       const file = (d.fileName || '').toLowerCase();
       const desc = (d.description || '').toLowerCase();
-      return name.includes(term) || file.includes(term) || desc.includes(term);
+      const uploader = (d.uploadedBy || '').toLowerCase();
+      return name.includes(term) || file.includes(term) || desc.includes(term) || uploader.includes(term);
     });
   }
 
-  return list;
+  // Filter by source / accountType
+  if (targetSource === 'vault' || targetSource === 'platform') {
+    combined = combined.filter((d) => !d.accountType || d.accountType === 'vault');
+  } else if (targetSource === 'buyer') {
+    combined = combined.filter((d) => d.accountType === 'buyer');
+  } else if (targetSource === 'seller') {
+    combined = combined.filter((d) => d.accountType === 'seller');
+  }
+
+  // Deduplicate by ID
+  const seen = new Set();
+  const deduplicated = [];
+  for (const doc of combined) {
+    if (!seen.has(doc.id)) {
+      seen.add(doc.id);
+      deduplicated.push(doc);
+    }
+  }
+
+  // Sort by createdAt descending
+  deduplicated.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  return deduplicated;
 }
 
 async function getDocumentById(id) {
@@ -204,6 +295,8 @@ async function createDocument(payload = {}, actor) {
     (actor && (actor.name || actor.corporateEmail || actor.email)) ||
     (typeof actor === 'string' ? actor : 'System Admin');
   const isActive = payload.isActive !== undefined ? Boolean(payload.isActive) : true;
+  const accountType = payload.accountType || 'vault';
+  const accountId = payload.accountId || null;
 
   if (pool.hasStorage()) {
     try {
@@ -244,6 +337,8 @@ async function createDocument(payload = {}, actor) {
     description,
     uploadedBy,
     isActive,
+    accountType,
+    accountId,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
   };
@@ -353,17 +448,23 @@ async function deleteDocument(id) {
 }
 
 async function getDocumentVaultSummary() {
-  const docs = await listDocuments();
+  const docs = await listDocuments({ activeOnly: false });
   const totalDocuments = docs.length;
   const activeDocuments = docs.filter((d) => d.isActive).length;
   const totalSizeBytes = docs.reduce((sum, d) => sum + (d.fileSize || 0), 0);
   const categories = new Set(docs.map((d) => d.category));
+  const buyerDocuments = docs.filter((d) => d.accountType === 'buyer').length;
+  const sellerDocuments = docs.filter((d) => d.accountType === 'seller').length;
+  const vaultDocuments = docs.filter((d) => !d.accountType || d.accountType === 'vault').length;
 
   return {
     totalDocuments,
     activeDocuments,
     totalSizeBytes,
     categoriesCount: categories.size,
+    buyerDocuments,
+    sellerDocuments,
+    vaultDocuments,
   };
 }
 
