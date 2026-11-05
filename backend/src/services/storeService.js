@@ -313,10 +313,23 @@ class StoreService {
    * completes after the response goes out; a plain no-op wrapper on
    * Node/Render, where the process just keeps running regardless.
    */
-  _background(promise, errorMessage) {
-    const tracked = promise.catch((err) => logger.error(errorMessage, err, 'STORE_SERVICE'));
+  _background(promise, errorMessage, metadata = {}) {
+    const tracked = Promise.resolve(promise).catch((error) => logger.error(
+      errorMessage,
+      Object.keys(metadata).length > 0 ? { ...metadata, error } : error,
+      'STORE_SERVICE'
+    ));
     const waitUntil = getWaitUntil();
-    if (waitUntil) waitUntil(tracked);
+    if (waitUntil) {
+      try {
+        waitUntil(tracked);
+      } catch (error) {
+        logger.error('Could not register background work with the Worker lifecycle', {
+          ...metadata,
+          error,
+        }, 'STORE_SERVICE');
+      }
+    }
     return tracked;
   }
 
@@ -5874,7 +5887,13 @@ class StoreService {
             vendor: resolvedVendor,
             isBuyerUploaded,
           }),
-          'Failed to email RFQ invite to matched vendor'
+          'Failed to email RFQ invite to matched vendor',
+          {
+            operation: 'rfq-matched-vendor-invite',
+            rfqId: rfq.id,
+            rfqNumber: rfq.rfqNumber,
+            vendorId: vendor.id,
+          }
         );
       }
     }
@@ -5894,7 +5913,13 @@ class StoreService {
             vendor: resolvedVendor,
             isBuyerUploaded,
           }),
-          'Failed to email RFQ invite to assigned vendor'
+          'Failed to email RFQ invite to assigned vendor',
+          {
+            operation: 'rfq-assigned-vendor-invite',
+            rfqId: rfq.id,
+            rfqNumber: rfq.rfqNumber,
+            vendorId: vendor.id,
+          }
         );
       }
     }

@@ -267,3 +267,7 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - PostgreSQL migration `0018_rfq_created_email_outbox` and D1 migration `0020_rfq_created_email_outbox` add an `AFTER INSERT` trigger that creates one stable event-outbox row in the same transaction as RFQ persistence. The dispatcher reloads the saved RFQ, reconstructs the acknowledgement from persisted line items and assignment state, and retries provider rejection through the existing lease/backoff/dead-letter machinery.
 - When database storage is configured, the controller no longer relies on `waitUntil` for this acknowledgement. Unconfigured local/test operation keeps the direct provider path. Delivery remains at-least-once if the provider accepts and the outbox completion write is lost.
 - The D1 mock setup applied migration `0020` and reseeded one buyer, one vendor, and one RFQ. A local SQLite smoke insert produced exactly one event for an opted-in manual RFQ; email-gateway and opt-out RFQs produced none. Temporary RFQ and outbox rows were deleted. Production PostgreSQL/D1 migration and delivery remain unverified while the intended production D1 account is unavailable.
+
+## Background delivery failure context
+
+- The shared store background-task wrapper now logs rejected work as structured metadata and catches failures to register a task with the Cloudflare Worker lifecycle. RFQ matched-vendor and assigned-vendor invitation failures include RFQ ID/number, vendor ID, and operation label without logging recipient email addresses.
