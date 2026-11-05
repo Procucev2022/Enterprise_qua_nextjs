@@ -1296,6 +1296,7 @@ const OWN_NOTICE_SUBJECT_PREFIXES = [
   'enterprise qua - buyer registration required',
   'action required – quotation could not be processed',
   'action required – 5 free quotation credits exhausted',
+  'action required – subscription required to quote on rfq',
   'portal bidding required for rfq',
   'inquiry logged for rfq',
   'action required: category mismatch',

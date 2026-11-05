@@ -815,4 +815,43 @@ describe('Deduplication & Duplicate Prevention', () => {
 
     process.env.NODE_ENV = origEnv;
   });
+  describe('_updateLiveFollowUpStats coverage', () => {
+    test('updates follow-up stats for whatsapp, sms, and email', () => {
+      const storeService = require('../src/services/storeService');
+      const mockRfq = {
+        rfqNumber: 'RFQ-FUP-TEST',
+        followUpData: {
+          vendors: [{ vendorId: 'v-001', vendorName: 'Apex Supplies' }],
+        },
+      };
+      jest.spyOn(storeService, 'getRFQById').mockReturnValue(mockRfq);
+
+      // Null check
+      scheduler._updateLiveFollowUpStats(null, 'sms', null);
+
+      // WhatsApp update
+      scheduler._updateLiveFollowUpStats('RFQ-FUP-TEST', 'whatsapp', VENDOR);
+      expect(mockRfq.followUpData.whatsappStats.delivered).toBe(1);
+
+      // SMS update
+      scheduler._updateLiveFollowUpStats('RFQ-FUP-TEST', 'sms', VENDOR);
+      expect(mockRfq.followUpData.smsStats.delivered).toBe(1);
+      expect(mockRfq.followUpData.smsStats.total).toBe(1);
+      expect(mockRfq.followUpData.vendors[0].sms.status).toBe('delivered');
+
+      // Email update
+      scheduler._updateLiveFollowUpStats('RFQ-FUP-TEST', 'email', VENDOR);
+      expect(mockRfq.followUpData.emailStats.delivered).toBe(1);
+      expect(mockRfq.followUpData.emailStats.sent24h).toBe(1);
+
+      // Missing followUpData
+      const rfqNoFup = { rfqNumber: 'NO-FUP' };
+      storeService.getRFQById.mockReturnValue(rfqNoFup);
+      scheduler._updateLiveFollowUpStats('NO-FUP', 'sms', VENDOR);
+
+      // Non-existent RFQ
+      storeService.getRFQById.mockReturnValue(null);
+      scheduler._updateLiveFollowUpStats('UNKNOWN-RFQ', 'sms', VENDOR);
+    });
+  });
 });

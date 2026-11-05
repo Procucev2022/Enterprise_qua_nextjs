@@ -31,6 +31,8 @@ describe('ActionCenterSubNav', () => {
     expect(screen.getByText(UI_STRINGS.actionCenter.tabs.sellersDirectory)).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.actionCenter.tabs.registrations)).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.actionCenter.tabs.paymentDues)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.actionCenter.tabs.documentVault)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.actionCenter.tabs.loginLogs)).toBeInTheDocument();
 
     // Verify removed features are explicitly NOT present in the Action Center navigation
     expect(screen.queryByText('Document Tracker')).not.toBeInTheDocument();
@@ -73,6 +75,14 @@ describe('ActionCenterSubNav', () => {
     const paymentDuesTab = screen.getByText(UI_STRINGS.actionCenter.tabs.paymentDues);
     fireEvent.click(paymentDuesTab);
     expect(mockOnSelectTab).toHaveBeenCalledWith('payment_dues');
+
+    const documentVaultTab = screen.getByText(UI_STRINGS.actionCenter.tabs.documentVault);
+    fireEvent.click(documentVaultTab);
+    expect(mockOnSelectTab).toHaveBeenCalledWith('document_vault');
+
+    const loginLogsTab = screen.getByText(UI_STRINGS.actionCenter.tabs.loginLogs);
+    fireEvent.click(loginLogsTab);
+    expect(mockOnSelectTab).toHaveBeenCalledWith('login_logs');
   });
 
   it('applies active styling to the currently active tab', () => {

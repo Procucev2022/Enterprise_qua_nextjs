@@ -75,6 +75,7 @@ const REPORTED_TABLES = [
   'vendor_credit_transactions',
   'buyer_credit_transactions',
   'document_vault',
+  'user_login_logs',
 ];
 
 async function reportRowCounts() {

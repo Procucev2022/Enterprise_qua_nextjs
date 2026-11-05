@@ -12,6 +12,7 @@
  */
 
 const { execSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 const rootDir = path.resolve(__dirname, '..');
@@ -38,6 +39,10 @@ function runStep(title, command, cwd = rootDir, extraEnv = {}) {
 console.log('\n🚀 Starting Procucev Enterprise Workspace Quality Check Pipeline...\n');
 
 // 1. Build Verification
+const qcDir = path.resolve(rootDir, 'frontend', '.next-qc');
+if (!fs.existsSync(qcDir)) {
+  try { fs.mkdirSync(qcDir, { recursive: true }); } catch (_) {}
+}
 // Built into a dedicated directory so the gate never contends with a running
 // `next dev` server over `.next` (concurrent access causes EPERM on Windows).
 // NODE_ENV is pinned: a shell left on NODE_ENV=development makes `next build`
@@ -65,7 +70,6 @@ runStep('Step 3: TypeScript Static Typecheck Verification', 'npm run typecheck -
 runStep('Step 4: Linter & Static Code Analysis Verification', 'npm run lint --prefix frontend');
 
 // 5. Database Schema & Migration Health Check
-const fs = require('fs');
 const schemaPath = path.resolve(rootDir, 'backend/src/db/schema.sql');
 // A commit gate must not write to the shared database. DATABASE_URL alone used
 // to trigger a live migration, and VS Code injects the root .env into terminals

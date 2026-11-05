@@ -453,6 +453,19 @@ function ensureFutureDeliveryDate(dateInput, offsetDays = DELIVERY_DATE_OFFSET_D
 
   const todayStr = new Date().toISOString().slice(0, 10);
 
+  // Handle Excel Julian serial numbers (e.g. 46351 for 2026-11-25)
+  if (/^\d{5}(?:\.\d+)?$/.test(str)) {
+    const num = parseFloat(str);
+    if (num >= 35000 && num <= 65000) {
+      // Use midday (+0.5) to avoid timezone boundary shifts
+      const dateObj = new Date(Math.round((num - 25569 + 0.5) * 86400 * 1000));
+      if (!isNaN(dateObj.getTime())) {
+        const iso = dateObj.toISOString().slice(0, 10);
+        return iso >= todayStr ? iso : fallback;
+      }
+    }
+  }
+
   // Check DD/MM/YYYY or DD-MM-YYYY (common in UK/India/EU procurements)
   const dmyMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
   if (dmyMatch) {
@@ -768,11 +781,11 @@ async function buildRFQDraft(payload = {}, options = {}) {
     targetDeliveryDate: (options.ensureFutureDate || payload.ensureFutureDate)
       ? ensureFutureDeliveryDate(
           payload.targetDeliveryDate ||
-          (entities.length > 0 && entities[0].targetDate ? entities[0].targetDate : null),
+          (entities.find((e) => e && e.targetDate)?.targetDate || null),
           DELIVERY_DATE_OFFSET_DAYS
         )
       : (payload.targetDeliveryDate ||
-         (entities.length > 0 && entities[0].targetDate ? entities[0].targetDate : defaultTargetDate())),
+         (entities.find((e) => e && e.targetDate)?.targetDate || defaultTargetDate())),
     // Null rather than a placeholder figure: the wizard shows an empty budget
     // field so the buyer supplies the number the document did not state.
     estimatedBudget,

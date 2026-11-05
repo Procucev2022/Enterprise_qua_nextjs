@@ -201,8 +201,8 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     // Case-insensitive exact category filter matching both table column and raw JSON:
     params.push(category.trim());
     const p = params.length;
-    conditions.push(`(major_category = $${p} OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}))`);
-    d1Conditions.push(`(lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}))`);
+    conditions.push(`(major_category = $${p} OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}) OR (raw->'minorCategories')::text ILIKE ('%"' || $${p} || '"%'))`);
+    d1Conditions.push(`(lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || lower($${p}) || '"%'))`);
   }
   if (state) {
     params.push(`%${state.trim()}%`);
@@ -498,7 +498,7 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
  * @param {number} maxPerCategory Max vendors per category.
  * @returns {Promise<object[]>}
  */
-async function getPublicVendorsPerCategoryFromDB(categories, maxPerCategory = 5) {
+async function getPublicVendorsPerCategoryFromDB(categories, maxPerCategory = 25) {
   if (!pool.hasStorage()) return [];
   const cleaned = Array.from(
     new Set((Array.isArray(categories) ? categories : []).map((s) => String(s || '').trim()).filter(Boolean))

@@ -26,6 +26,7 @@ const {
   hasUnlimitedDownloadAccess,
   resolveBuyerSourcingMode,
   MAX_INVITE_VENDORS_PER_REQUEST,
+  VENDOR_FREE_CREDITS_LIMIT,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
@@ -1220,6 +1221,10 @@ async function extractRFQFromDocument(req, res, next) {
     const isGenericDocumentTitle = !extraction.documentTitle || /^(request for quotation|rfq|inquiry|requisition)$/i.test(String(extraction.documentTitle).trim());
     const draftTitle = body.title ? String(body.title).trim() : (!isEmail && !isGenericDocumentTitle ? extraction.documentTitle : null);
 
+    const derivedDeliveryDate = extraction.deliveryDate ||
+      (Array.isArray(extraction.lineItems) && extraction.lineItems.find((it) => it && it.targetDate)?.targetDate) ||
+      null;
+
     // Reuse the shared normalisation + taxonomy classification so an AI-extracted
     // RFQ is shaped identically to one keyed by hand.
     const { draft, classification } = await rfqIngestionService.buildRFQDraft({
@@ -1227,7 +1232,7 @@ async function extractRFQFromDocument(req, res, next) {
       title: draftTitle,
       category: extraction.category,
       estimatedBudget: extraction.estimatedBudget,
-      targetDeliveryDate: extraction.deliveryDate,
+      targetDeliveryDate: derivedDeliveryDate,
       source: 'ai_extraction',
       sourceFileName: body.fileName,
       ...(sourceEmail ? { sourceEmail } : {}),
@@ -1771,13 +1776,13 @@ async function addQuote(req, res, next) {
     const eligibility = storeService.checkVendorQuotationEligibility(vendorRecord, targetRfq);
     if (!eligibility.eligible && !isUnlimitedVendor) {
       logger.warn(
-        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but 5 free quotation credits are exhausted`,
+        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits are exhausted`,
         { id, vendorId: vendorRecord.id, freeCreditsRemaining: eligibility.freeCreditsRemaining, subscriptionPlan: eligibility.subscriptionPlan },
         'RFQ_CONTROLLER'
       );
       return res.status(403).json({
         success: false,
-        error: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
+        error: `Your ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.`,
         upgradeRequired: true,
         freeCreditsRemaining: 0,
         subscriptionPlan: eligibility.subscriptionPlan,

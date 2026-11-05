@@ -60,6 +60,7 @@ import {
   formatCurrency,
   hasUnlimitedAccess,
   VENDOR_PLAN_RFQ_QUOTA,
+  VENDOR_FREE_CREDITS_LIMIT,
 } from './constants';
 
 // Backend write endpoints now require a session token (Phase 4 authorization
@@ -646,8 +647,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const res = await fetchVendorRfqCredits();
       if (res.success && res.data) {
         const isUnlimited = hasUnlimitedAccess(currentUserSession) || res.data.subscriptionPlan === 'unlimited';
-        setVendorFreeCreditsRemaining(isUnlimited ? 999999 : (res.data.freeCreditsRemaining ?? 0));
-        setVendorFreeCreditsAllocated(isUnlimited ? 999999 : (res.data.freeCreditsAllocated ?? 0));
+        setVendorFreeCreditsRemaining(isUnlimited ? 999999 : (res.data.freeCreditsRemaining ?? VENDOR_FREE_CREDITS_LIMIT));
+        setVendorFreeCreditsAllocated(isUnlimited ? 999999 : (res.data.freeCreditsAllocated ?? VENDOR_FREE_CREDITS_LIMIT));
         setVendorFreeCreditsUsed(res.data.freeCreditsUsed ?? 0);
         setVendorUnlockedRfqIds(res.data.unlockedRfqIds || []);
       }
@@ -662,7 +663,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (res.freeCreditsRemaining !== undefined) {
         const remaining = res.freeCreditsRemaining;
         setVendorFreeCreditsRemaining(remaining);
-        setVendorFreeCreditsUsed(Math.max(0, (vendorFreeCreditsAllocated ?? 0) - remaining));
+        setVendorFreeCreditsUsed(Math.max(0, (vendorFreeCreditsAllocated ?? VENDOR_FREE_CREDITS_LIMIT) - remaining));
         // Keep the Subscription page's "used / quota" in step with the header.
         const quota = VENDOR_PLAN_RFQ_QUOTA[vendorSubscription];
         if (quota !== undefined) setVendorRfqDownloadsUsed(Math.max(0, quota - remaining));
@@ -2351,14 +2352,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             return v;
           });
 
-          const callTotal = channel === 'call' ? baseFollowUp.callStats.total + 1 : baseFollowUp.callStats.total;
+          const targetTotal = r.assignedVendors?.length || baseFollowUp.totalInvited || (baseFollowUp.vendors?.length ?? 0);
+          const callTotal = channel === 'call' ? Math.max(baseFollowUp.callStats.total + 1, targetTotal) : Math.max(baseFollowUp.callStats.total, targetTotal);
           const callConnected = channel === 'call' ? baseFollowUp.callStats.connected + 1 : baseFollowUp.callStats.connected;
-          const waTotal = channel === 'whatsapp' ? baseFollowUp.whatsappStats.total + 1 : baseFollowUp.whatsappStats.total;
+          const waTotal = Math.max(baseFollowUp.whatsappStats.total, targetTotal);
           const waDelivered = channel === 'whatsapp' ? baseFollowUp.whatsappStats.delivered + 1 : baseFollowUp.whatsappStats.delivered;
           const waRead = channel === 'whatsapp' ? baseFollowUp.whatsappStats.read + 1 : baseFollowUp.whatsappStats.read;
-          const smsTotal = channel === 'sms' ? baseFollowUp.smsStats.total + 1 : baseFollowUp.smsStats.total;
+          const smsTotal = Math.max(baseFollowUp.smsStats.total, targetTotal);
           const smsDelivered = channel === 'sms' ? baseFollowUp.smsStats.delivered + 1 : baseFollowUp.smsStats.delivered;
+          const emailTotal = Math.max(baseFollowUp.emailStats?.total || 0, targetTotal);
           const emailSent24h = channel === 'email' ? (baseFollowUp.emailStats?.sent24h || 0) + 1 : (baseFollowUp.emailStats?.sent24h || 0);
+          const emailDelivered = channel === 'email' ? ((baseFollowUp.emailStats?.delivered ?? targetTotal) + 1) : (baseFollowUp.emailStats?.delivered ?? targetTotal);
 
           const updatedRfq: RFQItem = {
             ...r,
@@ -2368,7 +2372,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               callStats: { ...baseFollowUp.callStats, total: callTotal, connected: callConnected },
               whatsappStats: { ...baseFollowUp.whatsappStats, total: waTotal, delivered: waDelivered, read: waRead },
               smsStats: { ...baseFollowUp.smsStats, total: smsTotal, delivered: smsDelivered },
-              emailStats: { total: baseFollowUp.emailStats?.total || 5, sent24h: emailSent24h, opened: (baseFollowUp.emailStats?.opened || 1) },
+              emailStats: { total: emailTotal, delivered: emailDelivered, sent24h: emailSent24h, opened: (baseFollowUp.emailStats?.opened || 1) },
               vendors: updatedVendors,
             },
           };

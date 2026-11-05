@@ -176,7 +176,7 @@ describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
       const res6 = await storeService.unlockRFQForVendor(vendor.id, rfq6.id);
       expect(res6.success).toBe(false);
       expect(res6.creditsExhausted).toBe(true);
-      expect(res6.error).toContain('You have no free RFQ download credits available');
+      expect(res6.error).toContain('You have used all 5 free RFQ download credits');
 
       // Previously unlocked RFQs remain unlocked
       expect(storeService.isRfqUnlockedForVendor(vendor.id, rfq1.id)).toBe(true);
@@ -323,9 +323,9 @@ describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
         .set(authHeader('vendor'));
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
-      // New vendors receive no free credits.
-      expect(res.body.data.freeCreditsAllocated).toBe(0);
-      expect(res.body.data.freeCreditsRemaining).toBe(0);
+      // New vendors start with 5 free credits.
+      expect(res.body.data.freeCreditsAllocated).toBe(5);
+      expect(res.body.data.freeCreditsRemaining).toBe(5);
     });
 
     test('POST /api/rfqs/:id/invite-vendors performs Category Manager assignment & override', async () => {
