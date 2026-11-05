@@ -212,6 +212,22 @@ describe('D1 migration SQL handling', () => {
     expect(statements[0]).toContain("json_object('communicationId', NEW.id)");
   });
 
+  test('atomically queues explicitly requested buyer RFQ acknowledgements in D1', () => {
+    const migrationPath = path.resolve(
+      __dirname,
+      '../src/db/migrations/0020_rfq_created_email_outbox.d1.sql'
+    );
+    const statements = splitStatements(fs.readFileSync(migrationPath, 'utf8'));
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toMatch(/CREATE TRIGGER IF NOT EXISTS rfqs_enqueue_created_email_event/i);
+    expect(statements[0]).toContain("'$.creationAcknowledgementRequested'");
+    expect(statements[0]).toContain("lower(COALESCE(json_extract(NEW.raw, '$.source'), '')) <> 'email_gateway'");
+    expect(statements[0]).toContain("'rfq_created_email'");
+    expect(statements[0]).toContain("'rfq-created-email:' || NEW.id");
+    expect(statements[0]).toContain("json_object('rfqId', NEW.id)");
+  });
+
   test('repairs missing D1 anchor columns and records the local migration', () => {
     const calls = [];
     const run = jest.fn((args) => {

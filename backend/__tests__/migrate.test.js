@@ -337,6 +337,7 @@ describe('PostgreSQL migration runner', () => {
         '0015_audit_chain_integrity_anchors',
         '0016_vendor_rating_revision_email_outbox',
         '0017_communication_delivery_outbox',
+        '0018_rfq_created_email_outbox',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

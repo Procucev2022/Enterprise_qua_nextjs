@@ -8,6 +8,8 @@ const rfqAttachmentService = require('../services/rfqAttachmentService');
 const quoteAttachmentService = require('../services/quoteAttachmentService');
 const rfqSummaryService = require('../services/rfqSummaryService');
 const { logger } = require('../services/loggerService');
+const { getWaitUntil } = require('../db/d1Bridge');
+const pool = require('../db/pool');
 const emailGatewayService = require('../services/emailGatewayService');
 const emailIngestionService = require('../services/emailIngestionService');
 const mailerService = require('../services/mailerService');
@@ -31,6 +33,26 @@ const {
 
 // A newly created RFQ is awaiting vendor quotations.
 const RFQ_DEFAULT_STATUS = 'Quotes Pending';
+
+function trackBackgroundRfqEmail(sendEmail, failureMessage, rfqNumber) {
+  const tracked = Promise.resolve()
+    .then(sendEmail)
+    .catch((error) => {
+      logger.error(failureMessage, { rfqNumber, error }, 'RFQ_CONTROLLER');
+    });
+  const waitUntil = getWaitUntil();
+  if (waitUntil) {
+    try {
+      waitUntil(tracked);
+    } catch (error) {
+      logger.error('Could not register RFQ email delivery with the Worker lifecycle', {
+        rfqNumber,
+        error,
+      }, 'RFQ_CONTROLLER');
+    }
+  }
+  return tracked;
+}
 
 // Which sourcing modes each buyer subscription plan includes. Cumulative —
 // each paid tier adds one mode on top of the last, matching store.tsx's
@@ -825,7 +847,18 @@ async function createRFQ(req, res, next) {
 
     logger.info(`Creating new RFQ: ${body.title}`, { title: body.title, category: body.category, budget: body.budget }, 'RFQ_CONTROLLER');
 
-    const created = await storeService.createRFQDurably({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
+    const buyerAcknowledgementRecipient = req.user && req.user.email ? req.user.email : body.sourceEmail;
+    const shouldSendBuyerAcknowledgement = Boolean(
+      buyerAcknowledgementRecipient && body.source !== 'email_gateway'
+    );
+    const created = await storeService.createRFQDurably({
+      ...body,
+      extractedEntities: lineItems,
+      aiSummary,
+      ...(buyerAcknowledgementRecipient ? { buyerEmail: buyerAcknowledgementRecipient } : {}),
+      ...(req.user && req.user.name ? { raisedByName: req.user.name } : {}),
+      creationAcknowledgementRequested: shouldSendBuyerAcknowledgement,
+    }, requestingBuyerAccount);
 
     // createRFQ counts matched Procucev vendors against the capped in-memory
     // vendor subset, which undercounts (often to 0) once the directory grows
@@ -874,16 +907,20 @@ async function createRFQ(req, res, next) {
     // Dispatch real email notification to target gateway address (e.g. RFQ@procucev.com)
     if (body.source === 'email_gateway' || body.targetGatewayEmail) {
       const recipientEmail = body.targetGatewayEmail || 'RFQ@procucev.com';
-      void mailerService.sendRequisitionNotificationEmail(
-        recipientEmail,
-        finalRFQ,
-        body.sourceEmail || (req.user && req.user.email)
+      trackBackgroundRfqEmail(
+        () => mailerService.sendRequisitionNotificationEmail(
+          recipientEmail,
+          finalRFQ,
+          body.sourceEmail || (req.user && req.user.email)
+        ),
+        'Failed to deliver RFQ gateway notification email',
+        finalRFQ.rfqNumber
       );
     }
 
     // Qua AI Email 2: Send RFQ created acknowledgement to registered buyer
-    const buyerEmail = req.user && req.user.email ? req.user.email : body.sourceEmail;
-    if (buyerEmail && body.source !== 'email_gateway') {
+    const buyerEmail = buyerAcknowledgementRecipient;
+    if (shouldSendBuyerAcknowledgement && !pool.hasStorage()) {
       try {
         const rawEntities = Array.isArray(finalRFQ.extractedEntities) && finalRFQ.extractedEntities.length > 0
           ? finalRFQ.extractedEntities
@@ -903,21 +940,25 @@ async function createRFQ(req, res, next) {
           ? finalRFQ.assignedVendors.length
           : (finalRFQ.procucevVendorCount || 5);
 
-        void mailerService.sendRfqAcknowledgementEmail({
-          to: buyerEmail,
-          buyerName,
-          rfqNumber: finalRFQ.rfqNumber,
-          rfqTitle: finalRFQ.title,
-          category: finalRFQ.category,
-          itemCount: normalizedLineItems.length || 1,
-          deliveryLocation: finalRFQ.deliveryLocation,
-          deliveryDate: finalRFQ.targetDeliveryDate,
-          requiredBy: finalRFQ.targetDeliveryDate,
-          quoteDeadline: finalRFQ.deadline,
-          deadline: finalRFQ.deadline,
-          suppliersInvited: suppliersCount,
-          items: normalizedLineItems,
-        });
+        trackBackgroundRfqEmail(
+          () => mailerService.sendRfqAcknowledgementEmail({
+            to: buyerEmail,
+            buyerName,
+            rfqNumber: finalRFQ.rfqNumber,
+            rfqTitle: finalRFQ.title,
+            category: finalRFQ.category,
+            itemCount: normalizedLineItems.length || 1,
+            deliveryLocation: finalRFQ.deliveryLocation,
+            deliveryDate: finalRFQ.targetDeliveryDate,
+            requiredBy: finalRFQ.targetDeliveryDate,
+            quoteDeadline: finalRFQ.deadline,
+            deadline: finalRFQ.deadline,
+            suppliersInvited: suppliersCount,
+            items: normalizedLineItems,
+          }),
+          'Failed to deliver RFQ creation acknowledgement email',
+          finalRFQ.rfqNumber
+        );
       } catch (buyerMailErr) {
         logger.warn('Could not dispatch buyer RFQ created email', { error: buyerMailErr.message }, 'RFQ_CONTROLLER');
       }

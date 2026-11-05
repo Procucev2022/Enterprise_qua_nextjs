@@ -357,6 +357,63 @@ async function dispatchEvent(job) {
       }, 'EVENT_OUTBOX');
       return;
     }
+    case EVENT_OUTBOX_TYPES.RFQ_CREATED_EMAIL: {
+      const rfqId = job.raw?.rfqId;
+      if (typeof rfqId !== 'string' || !rfqId) {
+        const error = new Error('RFQ creation acknowledgement retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+      if (!rfq || rfq.creationAcknowledgementRequested !== true) {
+        const error = new Error('RFQ creation acknowledgement retry references a missing or ineligible RFQ.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const recipient = String(rfq.buyerEmail || rfq.raisedByEmail || '').trim();
+      if (!recipient) {
+        const error = new Error('RFQ creation acknowledgement has no persisted buyer recipient.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const lineItems = Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [];
+      const items = lineItems.map((item) => ({
+        item_name: item.itemName || item.name || item.item_name || 'Line Item',
+        item_spec: item.technicalSpecs || item.specifications || item.specs || item.description || item.item_spec || 'Standard Specification',
+        qty: item.quantity != null ? item.quantity : (item.qty != null ? item.qty : 1),
+        uom: item.unit || item.uom || 'Nos',
+      }));
+      const delivery = await mailerService.sendRfqAcknowledgementEmail({
+        to: recipient,
+        buyerName: rfq.raisedByName || rfq.buyerAccountName || 'Valued Buyer',
+        rfqNumber: rfq.rfqNumber,
+        rfqTitle: rfq.title,
+        category: rfq.category,
+        itemCount: items.length || 1,
+        deliveryLocation: rfq.deliveryLocation,
+        deliveryDate: rfq.targetDeliveryDate,
+        requiredBy: rfq.targetDeliveryDate,
+        quoteDeadline: rfq.deadline,
+        deadline: rfq.deadline,
+        suppliersInvited: Array.isArray(rfq.assignedVendors) && rfq.assignedVendors.length > 0
+          ? rfq.assignedVendors.length
+          : (rfq.procucevVendorCount || 5),
+        items,
+      });
+      if (!delivery?.sent) {
+        const error = new Error('RFQ creation acknowledgement email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('RFQ creation acknowledgement accepted by a provider', {
+        rfqId,
+        rfqNumber: rfq.rfqNumber,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
     default: {
       const error = new Error(`Unsupported persisted event-outbox type: ${job.event_type}`);
       error.code = 'INVALID_EVENT_OUTBOX_TYPE';

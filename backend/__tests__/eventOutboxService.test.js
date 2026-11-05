@@ -676,6 +676,116 @@ describe('background event retry outbox', () => {
     });
   });
 
+  test('dispatches RFQ creation acknowledgements from the persisted RFQ after restarts', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const rfq = {
+      id: 'rfq-created-ack-1',
+      rfqNumber: 'RFQ-ACK-1',
+      title: 'Hydraulic pump',
+      category: 'Pumps',
+      buyerEmail: 'buyer@example.test',
+      buyerAccountName: 'Buyer Co',
+      creationAcknowledgementRequested: true,
+      extractedEntities: [
+        { itemName: 'Pump', technicalSpecs: 'SS316', quantity: 3, unit: 'Each' },
+        { name: 'Valve', specifications: 'DIN', qty: 2, uom: 'Piece' },
+        { item_name: 'Seal', specs: 'NBR', quantity: null, qty: 4, unit: 'Set' },
+        { description: 'Housing', quantity: null },
+        { item_spec: 'Replacement part' },
+        {},
+      ],
+      deliveryLocation: 'Mumbai',
+      targetDeliveryDate: '2026-12-01',
+      deadline: '2026-11-20',
+      assignedVendors: [{ id: 'vendor-1' }],
+      procucevVendorCount: 4,
+    };
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'rfq-created-email:rfq-created-ack-1',
+      event_type: EVENT_OUTBOX_TYPES.RFQ_CREATED_EMAIL,
+      raw: { rfqId: rfq.id },
+      attempts: 1,
+      lease_token: 'lease-rfq-ack',
+    }]);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(rfq);
+    const sendSpy = jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue({ sent: true });
+    jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(domainQueries.getRFQByIdFromDB).toHaveBeenCalledWith(rfq.id);
+    expect(sendSpy).toHaveBeenCalledWith({
+      to: 'buyer@example.test',
+      buyerName: 'Buyer Co',
+      rfqNumber: 'RFQ-ACK-1',
+      rfqTitle: 'Hydraulic pump',
+      category: 'Pumps',
+      itemCount: 6,
+      deliveryLocation: 'Mumbai',
+      deliveryDate: '2026-12-01',
+      requiredBy: '2026-12-01',
+      quoteDeadline: '2026-11-20',
+      deadline: '2026-11-20',
+      suppliersInvited: 1,
+      items: [
+        { item_name: 'Pump', item_spec: 'SS316', qty: 3, uom: 'Each' },
+        { item_name: 'Valve', item_spec: 'DIN', qty: 2, uom: 'Piece' },
+        { item_name: 'Seal', item_spec: 'NBR', qty: 4, uom: 'Set' },
+        { item_name: 'Line Item', item_spec: 'Housing', qty: 1, uom: 'Nos' },
+        { item_name: 'Line Item', item_spec: 'Replacement part', qty: 1, uom: 'Nos' },
+        { item_name: 'Line Item', item_spec: 'Standard Specification', qty: 1, uom: 'Nos' },
+      ],
+    });
+  });
+
+  test.each([
+    [{ rfqId: '' }, null],
+    [{ rfqId: 'rfq-ack-missing' }, null],
+    [{ rfqId: 'rfq-ack-no-recipient' }, { id: 'rfq-ack-no-recipient', creationAcknowledgementRequested: true }],
+  ])('dead-letters malformed or ineligible RFQ acknowledgement events', async (raw, rfq) => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'rfq-created-email:invalid',
+      event_type: EVENT_OUTBOX_TYPES.RFQ_CREATED_EMAIL,
+      raw,
+      attempts: 1,
+      lease_token: 'lease-rfq-ack-invalid',
+    }]);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(rfq);
+    const retrySpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ dead: 1 });
+    expect(retrySpy).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'rfq-created-email:invalid',
+      status: 'dead',
+      lastError: 'INVALID_PERSISTED_RECORD:Error',
+    }));
+  });
+
+  test('reschedules RFQ acknowledgement emails that providers do not accept', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'rfq-created-email:rfq-ack-retry',
+      event_type: EVENT_OUTBOX_TYPES.RFQ_CREATED_EMAIL,
+      raw: { rfqId: 'rfq-ack-retry' },
+      attempts: 1,
+      lease_token: 'lease-rfq-ack-retry',
+    }]);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue({
+      id: 'rfq-ack-retry',
+      buyerEmail: 'buyer@example.test',
+      creationAcknowledgementRequested: true,
+    });
+    jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue({ sent: false });
+    const retrySpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ retried: 1 });
+    expect(retrySpy).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'rfq-created-email:rfq-ack-retry',
+      status: 'pending',
+      lastError: 'EMAIL_DELIVERY_NOT_ACCEPTED:Error',
+    }));
+  });
+
   test('skips already-delivered generic communications and dead-letters ineligible records', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     const claimSpy = jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{

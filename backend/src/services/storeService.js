@@ -2859,6 +2859,8 @@ class StoreService {
       sourceFileName: rfqData.sourceFileName || null,
       sourceEmail: rfqData.sourceEmail || null,
       buyerEmail,
+      raisedByName: rfqData.raisedByName || null,
+      creationAcknowledgementRequested: rfqData.creationAcknowledgementRequested === true,
       raisedByEmail: resolvedBuyer ? resolvedBuyer.corporateEmail : (rfqData.raisedByEmail || buyerEmail || null),
       status: rfqData.status || 'Quotes Pending',
       // Stamped from the authenticated caller's own buyer account (resolved

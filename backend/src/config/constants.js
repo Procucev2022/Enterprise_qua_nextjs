@@ -245,6 +245,7 @@ const EVENT_OUTBOX_TYPES = Object.freeze({
   VENDOR_RATING_REVISION_EMAIL: 'vendor_rating_revision_email',
   PAYMENT_DUES_EMAIL: 'payment_dues_email',
   COMMUNICATION_DELIVERY: 'communication_delivery',
+  RFQ_CREATED_EMAIL: 'rfq_created_email',
 });
 const EVENT_OUTBOX_MAX_ATTEMPTS = 8;
 const EVENT_OUTBOX_MAX_BATCH_SIZE = 10;
