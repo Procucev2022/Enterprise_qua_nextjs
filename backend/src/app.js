@@ -78,6 +78,8 @@ app.use((req, res, next) => {
       .catch((error) => {
         logger.error('Lazy on-request hydration failed; rejecting store-backed request', {
           error,
+          requestId: req.requestId || req.id || null,
+          method: req.method,
           path: req.path,
         }, 'APP');
         throw error;
