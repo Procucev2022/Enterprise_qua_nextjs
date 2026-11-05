@@ -10,20 +10,30 @@
 --   • BOOLEAN      → INTEGER (0/1)
 --   • NUMERIC      → REAL
 --   • VARCHAR(n)   → TEXT   (SQLite ignores length constraints)
---   • No pg_trgm / GIN indexes (SQLite has no extension system)
+--   • FTS5 trigram virtual tables replace PostgreSQL pg_trgm for D1 substring
+--     search; their storage and write cost are documented in the audit.
 --   • No CREATE EXTENSION
 --   • ON CONFLICT … DO UPDATE uses SQLite UPSERT syntax (identical to pg for
 --     our use-case — `ON CONFLICT (col) DO UPDATE SET …` — no changes needed)
 --   • UNIQUE constraints on NULLable columns: SQLite treats each NULL as
 --     distinct, so UNIQUE on a nullable column works correctly.
 --
--- Every statement is idempotent (CREATE TABLE IF NOT EXISTS).
--- Never ALTER or DROP — this is applied automatically against the live DB.
+-- Initial schema is additive and safe to apply to a new database. Once the
+-- baseline is recorded, schema edits belong in immutable numbered migrations
+-- under migrations/*.d1.sql; migrate-d1.js rejects unversioned schema drift.
 -- =============================================================================
 
 -- =============================================================================
 -- IDENTITY & ACCESS
 -- =============================================================================
+
+-- Applied D1-compatible migration ledger used by the remote migration runner.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  checksum TEXT,
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS role (
   uuid TEXT PRIMARY KEY,
@@ -227,11 +237,37 @@ CREATE TABLE IF NOT EXISTS vendors (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   raw TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_vendors_email ON vendors (email);
 CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category);
 CREATE INDEX IF NOT EXISTS idx_vendors_created_at ON vendors (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vendors_source ON vendors (source);
 CREATE INDEX IF NOT EXISTS idx_vendors_status ON vendors (status);
+
+-- FTS5 trigram narrows substring candidates for the D1 vendor directory. The
+-- external-content design avoids storing a second copy of each vendor record;
+-- triggers keep the index in step with inserts, deletes, and updates. Migration
+-- 0001 backfills existing rows once after the table and triggers exist.
+CREATE VIRTUAL TABLE IF NOT EXISTS vendors_search_fts
+USING fts5(email, major_category, raw, content='vendors', content_rowid='rowid', tokenize='trigram');
+
+CREATE TRIGGER IF NOT EXISTS vendors_search_fts_insert
+AFTER INSERT ON vendors BEGIN
+  INSERT INTO vendors_search_fts(rowid, email, major_category, raw)
+  VALUES (new.rowid, new.email, new.major_category, new.raw);
+END;
+
+CREATE TRIGGER IF NOT EXISTS vendors_search_fts_delete
+AFTER DELETE ON vendors BEGIN
+  INSERT INTO vendors_search_fts(vendors_search_fts, rowid, email, major_category, raw)
+  VALUES ('delete', old.rowid, old.email, old.major_category, old.raw);
+END;
+
+CREATE TRIGGER IF NOT EXISTS vendors_search_fts_update
+AFTER UPDATE ON vendors BEGIN
+  INSERT INTO vendors_search_fts(vendors_search_fts, rowid, email, major_category, raw)
+  VALUES ('delete', old.rowid, old.email, old.major_category, old.raw);
+  INSERT INTO vendors_search_fts(rowid, email, major_category, raw)
+  VALUES (new.rowid, new.email, new.major_category, new.raw);
+END;
 
 CREATE TABLE IF NOT EXISTS rfqs (
   id TEXT PRIMARY KEY,
@@ -244,7 +280,6 @@ CREATE TABLE IF NOT EXISTS rfqs (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   raw TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_rfqs_rfq_number ON rfqs (rfq_number);
 CREATE INDEX IF NOT EXISTS idx_rfqs_category ON rfqs (category);
 CREATE INDEX IF NOT EXISTS idx_rfqs_status ON rfqs (status);
 CREATE INDEX IF NOT EXISTS idx_rfqs_status_created ON rfqs (status, created_at DESC);
@@ -285,7 +320,6 @@ CREATE TABLE IF NOT EXISTS buyer_accounts (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   raw TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_buyer_accounts_corporate_email ON buyer_accounts (corporate_email);
 CREATE INDEX IF NOT EXISTS idx_buyer_accounts_is_active ON buyer_accounts (is_active);
 CREATE INDEX IF NOT EXISTS idx_buyer_accounts_status ON buyer_accounts (status);
 
@@ -638,6 +672,24 @@ CREATE TABLE IF NOT EXISTS chaser_queue (
 CREATE INDEX IF NOT EXISTS idx_chaser_queue_status_fire_at ON chaser_queue (status, fire_at);
 CREATE INDEX IF NOT EXISTS idx_chaser_queue_rfq_number ON chaser_queue (rfq_number);
 
+-- Durable five-minute buyer comparison follow-up after automatic RFQ closure.
+CREATE TABLE IF NOT EXISTS rfq_comparison_queue (
+  id TEXT PRIMARY KEY,
+  rfq_id TEXT NOT NULL UNIQUE,
+  rfq_number TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  fire_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  email_completed_at TEXT,
+  sms_completed_at TEXT,
+  last_error TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_rfq_comparison_queue_status_fire_at
+  ON rfq_comparison_queue (status, fire_at);
+
 -- =============================================================================
 -- VENDOR RFQ UNLOCKS & CREDIT TRANSACTIONS (V0 Free Starter & Entitlements)
 -- =============================================================================
@@ -766,3 +818,50 @@ CREATE TABLE IF NOT EXISTS internal_task_activities (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_internal_task_activities_task ON internal_task_activities (task_id, created_at DESC);
+
+-- ============================================================================
+-- DOCUMENT VAULT (Corporate Sales Collateral, Pitch Decks, Rate Cards & Attachments)
+-- Keep this equivalent to schema.sql for PostgreSQL/D1 feature parity.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS document_vault (
+  id TEXT PRIMARY KEY,
+  document_name TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_size INTEGER DEFAULT 0,
+  mime_type TEXT DEFAULT 'application/pdf',
+  category TEXT NOT NULL,
+  file_url TEXT NOT NULL,
+  description TEXT,
+  uploaded_by TEXT DEFAULT 'System Admin',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_document_vault_category ON document_vault (category);
+CREATE INDEX IF NOT EXISTS idx_document_vault_active ON document_vault (is_active);
+
+-- Persistent delivery and acknowledgement history used by payment dues.
+CREATE TABLE IF NOT EXISTS payment_dues_communications (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  account_type TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  subject TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL,
+  notification_status TEXT NOT NULL DEFAULT 'Notification Sent',
+  delivery_status TEXT NOT NULL DEFAULT 'Delivered',
+  acknowledgement_status TEXT NOT NULL DEFAULT 'Acknowledgement Pending',
+  communicated_by TEXT NOT NULL DEFAULT 'Category Manager',
+  sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  acknowledged_at TEXT,
+  acknowledged_by TEXT,
+  notes TEXT NOT NULL DEFAULT '',
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_communications_account_sent
+  ON payment_dues_communications (account_id, sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_communications_sent
+  ON payment_dues_communications (sent_at DESC);
