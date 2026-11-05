@@ -496,10 +496,15 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           </span>
         );
       case 'Notification Sent':
-      case 'Delivery Pending':
         return (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
             <Send size={12} className="text-blue-600" /> Sent
+          </span>
+        );
+      case 'Delivery Pending':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+            <Clock size={12} className="text-amber-600" /> {strings.statuses.deliveryPending}
           </span>
         );
       case 'Failed':

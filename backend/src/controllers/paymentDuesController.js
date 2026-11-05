@@ -11,6 +11,19 @@ const mailerService = require('../services/mailerService');
 const storeService = require('../services/storeService');
 const whatsAppService = require('../services/whatsAppService');
 const { logger } = require('../services/loggerService');
+const { PERSISTENCE_MESSAGES } = require('../config/constants');
+
+function sendControllerError(res, error, fallbackMessage) {
+  if (error?.code === 'PERSISTENCE_UNAVAILABLE') {
+    return res.status(503).json({
+      success: false,
+      retryable: true,
+      error: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
+    });
+  }
+
+  return res.status(500).json({ success: false, error: fallbackMessage });
+}
 
 /**
  * List low-credit accounts with filtering, sorting, pagination, and summary.
@@ -61,11 +74,8 @@ async function listPaymentDues(req, res) {
       limit: result.limit,
     });
   } catch (error) {
-    logger.error('Failed to list payment dues accounts', { error: error.message, stack: error.stack });
-    return res.status(500).json({
-      success: false,
-      error: 'An internal server error occurred while retrieving low-credit accounts.',
-    });
+    logger.error('Failed to list payment dues accounts', { error });
+    return sendControllerError(res, error, 'An internal server error occurred while retrieving low-credit accounts.');
   }
 }
 
@@ -77,11 +87,8 @@ async function getSummary(req, res) {
     const summary = await paymentDuesQueries.getPaymentDuesSummary();
     return res.status(200).json({ success: true, summary });
   } catch (error) {
-    logger.error('Failed to get payment dues summary', { error: error.message, stack: error.stack });
-    return res.status(500).json({
-      success: false,
-      error: 'An internal server error occurred while retrieving payment dues summary.',
-    });
+    logger.error('Failed to get payment dues summary', { error });
+    return sendControllerError(res, error, 'An internal server error occurred while retrieving payment dues summary.');
   }
 }
 
@@ -102,56 +109,119 @@ async function sendEmailNotification(req, res) {
     const { accountId, accountType, recipientEmail, subject, message, notes } = validation.sanitizedData;
     const sender = req.user?.name || req.user?.email || 'Category Manager';
 
-    // Dispatch email via mailerService transporter if available
+    // Write pending history first so a crash or provider outage cannot leave an
+    // externally sent email with no durable communication record.
+    let communication;
     try {
-      const transporter = mailerService.getTransporter ? mailerService.getTransporter() : null;
-      if (transporter && typeof transporter.sendMail === 'function') {
-        await transporter.sendMail({
-          to: recipientEmail,
-          subject,
-          text: message,
-        });
+      communication = await paymentDuesQueries.recordCommunication({
+        accountId,
+        accountType,
+        channel: 'email',
+        recipient: recipientEmail,
+        subject,
+        message,
+        communicatedBy: sender,
+        notificationStatus: 'Pending',
+        deliveryStatus: 'Pending',
+        acknowledgementStatus: 'Acknowledgement Pending',
+        notes: notes || '',
+      });
+    } catch (error) {
+      logger.error('Could not persist pending low-credit email before dispatch', {
+        error,
+        accountId,
+      });
+      return sendControllerError(
+        res,
+        error,
+        'The email was not sent because its communication history could not be saved.'
+      );
+    }
+
+    logger.info('Low-credit email dispatch started', {
+      communicationId: communication.id,
+      accountId,
+      sender,
+      deliveryStatus: communication.deliveryStatus,
+    });
+
+    // Use the shared provider router so Node, Worker, Gmail, SMTP, and HTTP
+    // transports follow the same retry, failover, cooldown, and logging rules.
+    let deliveryError = null;
+    let providerAvailable = true;
+    try {
+      const result = await mailerService.deliver({
+        to: recipientEmail,
+        subject,
+        text: message,
+      }, 'PAYMENT_DUES_NOTIFICATION');
+      if (!result?.sent) {
+        providerAvailable = false;
+        throw new Error(result?.reason || 'No outbound email provider accepted the message.');
       }
     } catch (mailErr) {
-      logger.warn('Failed to dispatch external email, continuing with audit recording', {
-        error: mailErr.message,
-        recipient: recipientEmail,
+      deliveryError = mailErr;
+      logger.error('Failed to dispatch low-credit email', {
+        error: mailErr,
+        accountId,
+        providerAvailable,
       });
     }
 
-    // Record communication in database
-    const communication = await paymentDuesQueries.recordCommunication({
-      accountId,
-      accountType,
-      channel: 'email',
-      recipient: recipientEmail,
-      subject,
-      message,
-      communicatedBy: sender,
-      notificationStatus: 'Notification Sent',
-      deliveryStatus: 'Delivered',
-      acknowledgementStatus: 'Acknowledgement Pending',
-      notes: notes || '',
-    });
+    let finalizedCommunication;
+    try {
+      finalizedCommunication = await paymentDuesQueries.updateCommunicationDeliveryStatus({
+        communicationId: communication.id,
+        notificationStatus: deliveryError ? 'Failed' : 'Notification Sent',
+        deliveryStatus: deliveryError ? 'Failed' : 'Delivered',
+        acknowledgementStatus: 'Acknowledgement Pending',
+      });
+      if (!finalizedCommunication) {
+        const missingHistory = new Error('Pending low-credit communication disappeared before delivery status was saved.');
+        missingHistory.code = 'PERSISTENCE_UNAVAILABLE';
+        throw missingHistory;
+      }
+    } catch (error) {
+      logger.error('Low-credit email was attempted but its final delivery status could not be persisted', {
+        error,
+        communicationId: communication.id,
+        accountId,
+        providerAccepted: !deliveryError,
+      });
+      return res.status(503).json({
+        success: false,
+        retryable: false,
+        error: PERSISTENCE_MESSAGES.PAYMENT_DUES_DELIVERY_STATUS_FAILED,
+        communication,
+      });
+    }
 
     logger.info('Low-credit email communication logged', {
-      communicationId: communication.id,
+      communicationId: finalizedCommunication.id,
       accountId,
-      recipient: recipientEmail,
       sender,
+      deliveryStatus: finalizedCommunication.deliveryStatus,
     });
+
+    if (deliveryError) {
+      return res.status(providerAvailable ? 502 : 503).json({
+        success: false,
+        retryable: !providerAvailable,
+        error: providerAvailable
+          ? 'Email delivery failed. Review communication history before retrying.'
+          : 'Email service is not configured. The failed delivery has been recorded; contact support.',
+        communication: finalizedCommunication,
+      });
+    }
 
     return res.status(200).json({
       success: true,
       message: 'Email notification sent and recorded successfully.',
-      communication,
+      communication: finalizedCommunication,
     });
   } catch (error) {
-    logger.error('Error sending low-credit email', { error: error.message, stack: error.stack });
-    return res.status(500).json({
-      success: false,
-      error: 'An internal server error occurred while sending email notification.',
-    });
+    logger.error('Error sending low-credit email', { error });
+    return sendControllerError(res, error, 'An internal server error occurred while sending email notification.');
   }
 }
 
@@ -173,25 +243,27 @@ async function sendMessageNotification(req, res) {
     const sender = req.user?.name || req.user?.email || 'Category Manager';
     const msgTitle = title || 'Action Required: Low Credit Balance Alert';
 
-    // Queue in-app notification in storeService if available
+    // Persist the recipient notification before recording a successful delivery.
     try {
-      if (typeof storeService.createNotification === 'function') {
-        const notif = storeService.createNotification({
-          title: msgTitle,
-          message,
-          type: 'low_credit_alert',
-          meta: { accountId, accountType, sentBy: sender },
-        });
-        if (Array.isArray(storeService.notifications)) {
-          storeService.notifications.unshift(notif);
-        }
-        storeService._persistNotification?.(notif);
-      }
-    } catch (notifErr) {
-      logger.warn('Failed to queue in-app store notification, continuing with audit recording', {
-        error: notifErr.message,
-        accountId,
+      await storeService.createNotificationDurably({
+        recipientType: accountType === 'seller' ? 'vendor' : 'buyer',
+        recipientId: accountId,
+        kind: 'low_credit_alert',
+        title: msgTitle,
+        message,
+        meta: { accountId, accountType, sentBy: sender },
       });
+    } catch (notifErr) {
+      logger.error('Failed to persist in-app low-credit notification', {
+        error: notifErr,
+        accountId,
+        accountType,
+      });
+      return sendControllerError(
+        res,
+        notifErr,
+        'The in-app notification could not be saved. Please retry shortly.'
+      );
     }
 
     // Record communication in database
@@ -221,11 +293,8 @@ async function sendMessageNotification(req, res) {
       communication,
     });
   } catch (error) {
-    logger.error('Error sending in-app message', { error: error.message, stack: error.stack });
-    return res.status(500).json({
-      success: false,
-      error: 'An internal server error occurred while sending in-app notification.',
-    });
+    logger.error('Error sending in-app message', { error });
+    return sendControllerError(res, error, 'An internal server error occurred while sending in-app notification.');
   }
 }
 
@@ -260,9 +329,11 @@ async function sendWhatsAppNotification(req, res) {
       subject: 'WhatsApp Low-Credit Alert',
       message,
       communicatedBy: sender,
-      notificationStatus: 'Notification Sent',
-      deliveryStatus: 'Delivered',
-      acknowledgementStatus: 'Acknowledgement Pending',
+      // A wa.me link only prepares the message. Delivery starts after a staff
+      // member opens WhatsApp and sends it, so do not mark it delivered here.
+      notificationStatus: 'Delivery Pending',
+      deliveryStatus: 'Pending',
+      acknowledgementStatus: 'Delivery Pending',
       notes: notes || '',
       metadata: { directLink },
     });
@@ -281,11 +352,8 @@ async function sendWhatsAppNotification(req, res) {
       directLink,
     });
   } catch (error) {
-    logger.error('Error sending WhatsApp notification', { error: error.message, stack: error.stack });
-    return res.status(500).json({
-      success: false,
-      error: 'An internal server error occurred while initiating WhatsApp notification.',
-    });
+    logger.error('Error sending WhatsApp notification', { error });
+    return sendControllerError(res, error, 'An internal server error occurred while initiating WhatsApp notification.');
   }
 }
 
@@ -327,11 +395,8 @@ async function updateAcknowledgement(req, res) {
       communication: updated,
     });
   } catch (error) {
-    logger.error('Error updating acknowledgement status', { error: error.message, stack: error.stack });
-    return res.status(500).json({
-      success: false,
-      error: 'An internal server error occurred while updating acknowledgement status.',
-    });
+    logger.error('Error updating acknowledgement status', { error });
+    return sendControllerError(res, error, 'An internal server error occurred while updating acknowledgement status.');
   }
 }
 
@@ -351,11 +416,8 @@ async function getHistory(req, res) {
     const history = await paymentDuesQueries.getCommunicationHistory(accountId, { isCrossAccount: false });
     return res.status(200).json({ success: true, history });
   } catch (error) {
-    logger.error('Error fetching communication history', { error: error.message, stack: error.stack });
-    return res.status(500).json({
-      success: false,
-      error: 'An internal server error occurred while retrieving communication history.',
-    });
+    logger.error('Error fetching communication history', { error });
+    return sendControllerError(res, error, 'An internal server error occurred while retrieving communication history.');
   }
 }
 
@@ -440,11 +502,8 @@ async function exportCsv(req, res) {
     res.setHeader('Content-Disposition', 'attachment; filename="payment_dues_report.csv"');
     return res.status(200).send(csvContent);
   } catch (error) {
-    logger.error('Error exporting payment dues CSV', { error: error.message, stack: error.stack });
-    return res.status(500).json({
-      success: false,
-      error: 'An internal server error occurred while exporting CSV report.',
-    });
+    logger.error('Error exporting payment dues CSV', { error });
+    return sendControllerError(res, error, 'An internal server error occurred while exporting CSV report.');
   }
 }
 

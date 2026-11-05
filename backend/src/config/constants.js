@@ -1,12 +1,8 @@
-const path = require('path');
+const { logger } = require('../services/loggerService');
 
 // ==============================================================================
 // PROCUCEV ENTERPRISE (QUA AI 2.0) - CONSTANTS, TAXONOMIES & SYSTEM DEFAULTS
 // ==============================================================================
-
-const INQUIRIES_PERSISTENCE_FILE = typeof __dirname !== 'undefined'
-  ? path.join(__dirname, '../../data/enterprise_inquiries.json')
-  : './data/enterprise_inquiries.json';
 
 /**
  * Centralized RFQ Modes Enum / Constants
@@ -234,6 +230,45 @@ const RFQ_DEFAULTS = {
 };
 const ALLOWED_EXTENSION_HOURS = Object.freeze([24, 48]);
 const DEFAULT_EXTENSION_HOURS = 24;
+const RFQ_QUOTE_WRITE_RETRIES = 5;
+const RFQ_STATE_WRITE_RETRIES = 5;
+const PERSISTED_RECORD_WRITE_RETRIES = 5;
+const AUDIT_CHAIN_WRITE_MAX_ATTEMPTS = 5;
+const AUDIT_CHAIN_VERIFY_PAGE_SIZE = 500;
+const AUDIT_CHAIN_VERIFY_MAX_ROWS = 20000;
+const AUDIT_CHAIN_VERIFY_SNAPSHOT_ATTEMPTS = 3;
+const EVENT_OUTBOX_TYPES = Object.freeze({
+  AI_FEED: 'ai_feed',
+  NOTIFICATION: 'notification',
+  NOTIFICATION_BATCH: 'notification_batch',
+  ENTERPRISE_INQUIRY_EMAIL: 'enterprise_inquiry_email',
+  VENDOR_RATING_REVISION_EMAIL: 'vendor_rating_revision_email',
+});
+const EVENT_OUTBOX_MAX_ATTEMPTS = 8;
+const EVENT_OUTBOX_MAX_BATCH_SIZE = 10;
+const EVENT_OUTBOX_LEASE_MS = 5 * 60 * 1000;
+const EVENT_OUTBOX_RETRY_BASE_MS = 1000;
+const EVENT_OUTBOX_RETRY_MAX_MS = 15 * 60 * 1000;
+const EVENT_OUTBOX_ENQUEUE_ATTEMPTS = 3;
+const EVENT_OUTBOX_ENQUEUE_RETRY_MS = 50;
+const EVENT_OUTBOX_POLL_INTERVAL_MS = 60 * 1000;
+const EVENT_OUTBOX_RETENTION_DAYS = 30;
+const D1_NOTIFICATION_INSERT_BATCH_SIZE = 14;
+const EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE = D1_NOTIFICATION_INSERT_BATCH_SIZE;
+const RFQ_AUTO_CLOSE_AFTER_MS = 48 * 60 * 60 * 1000;
+const RFQ_AUTO_CLOSE_POLL_INTERVAL_MS = 60 * 1000;
+const RFQ_AUTO_CLOSE_REASON = 'Official closure 48 hours after release';
+const RFQ_COMPARISON_NOTIFICATION_DELAY_MS = 5 * 60 * 1000;
+const RFQ_COMPARISON_RETRY_DELAY_MS = 60 * 1000;
+const RFQ_COMPARISON_MAX_ATTEMPTS = 5;
+const RFQ_COMPARISON_STALE_CLAIM_MS = 15 * 60 * 1000;
+const RFQ_COMPARISON_QUEUE_MAX_LIMIT = 100;
+const RFQ_COMPARISON_ERROR_MAX_LENGTH = 2000;
+const RFQ_COMPARISON_MEMORY_DEDUPE_LIMIT = 1000;
+const RFQ_CHASER_MAX_ATTEMPTS = 5;
+const RFQ_CHASER_RETRY_BASE_MS = 30 * 1000;
+const RFQ_CHASER_RETRY_MAX_MS = 15 * 60 * 1000;
+const RFQ_CHASER_ERROR_MAX_LENGTH = 2000;
 // Infrastructure rows the admin screen renders. The database row is replaced at
 // runtime with the live result of pool.checkDatabaseHealth() (see
 // storeService.refreshInfrastructureHealth), so the entry below is only the
@@ -243,6 +278,48 @@ const DEFAULT_EXTENSION_HOURS = 24;
 // Schema)' as ONLINE with an 18ms latency and 99.99% uptime. That database is no
 // longer part of this application at all.
 const DATABASE_HEALTH_SERVICE_LABEL = 'PostgreSQL Database (Neon)';
+const DATABASE_QUERY_LOGGING = Object.freeze({
+  SLOW_QUERY_THRESHOLD_MS_DEFAULT: 200,
+  D1_SUCCESS_SAMPLE_RATE_DEFAULT: 0.01,
+  D1_HIGH_READ_ROWS_THRESHOLD_DEFAULT: 1000,
+});
+const DATABASE_QUERY_CACHE = Object.freeze({
+  VENDOR_PAGE_COUNT_TTL_MS: 30 * 1000,
+});
+const GRAPHQL_CONFIG = Object.freeze({
+  MAX_BATCH_OPERATIONS: 5,
+  MAX_QUERY_LENGTH: 20000,
+  MAX_QUERY_FIELDS: 100,
+  MAX_QUERY_DEPTH: 10,
+  MAX_REQUEST_BODY_BYTES: '1mb',
+  ERROR_BATCH_EMPTY: 'Batched query array must not be empty.',
+  ERROR_BATCH_LIMIT: 'A GraphQL batch can contain at most 5 operations.',
+  ERROR_QUERY_LIMIT: 'GraphQL request exceeds the configured query complexity limit.',
+  ERROR_INVALID_VARIABLES: 'GraphQL variables must be a valid JSON object.',
+});
+const STORE_HYDRATION_CONFIG = Object.freeze({
+  SKIP_PATHS: Object.freeze([
+    '/',
+    '/health',
+    '/api/action-center/communications',
+    '/api/approvals',
+    '/api/auth',
+    '/api/bot',
+    '/api/buyer-profile',
+    '/api/crypto',
+    '/api/db',
+    '/api/document-vault',
+    '/api/enterprise-inquiries',
+    '/api/internal-tasks',
+    '/api/payment-dues',
+    '/api/pincode',
+    '/api/subscriptions',
+    '/api/tickets',
+    '/api/vendor-ingestion',
+    '/api/zoho',
+  ]),
+  UNAVAILABLE_MESSAGE: 'The application data store is temporarily unavailable. Please retry shortly.',
+});
 const INITIAL_AZURE_HEALTH = [
   {
     service: DATABASE_HEALTH_SERVICE_LABEL,
@@ -369,6 +446,8 @@ const AUTH_MESSAGES = {
     'Your session could not be confirmed because the database is unreachable. Try again in a moment; if it persists, sign in again.',
   OTP_STORAGE_FAILED:
     'The verification code could not be saved, so it has not been sent. Try requesting a new code in a moment.',
+  AUTH_STORAGE_UNAVAILABLE:
+    'Authentication is temporarily unavailable because session storage could not be reached. Please retry shortly.',
   // Delivery is confirmed before "sent" is reported, so a failed send is told to
   // the visitor instead of leaving them waiting for a code that never arrives.
   OTP_DELIVERY_FAILED:
@@ -395,9 +474,39 @@ const AUTH_MESSAGES = {
     'Maximum verification attempts exceeded. Please request a new code.',
   VENDOR_DIRECTORY_OTP_INVALID:
     'Invalid verification code. Please check and try again.',
+  VENDOR_DIRECTORY_SESSION_STORAGE_UNAVAILABLE:
+    'Vendor Directory sign-in is temporarily unavailable because session storage could not be reached. Please retry in a few minutes.',
   VENDOR_DIRECTORY_INACTIVITY_TIMEOUT:
     'Your directory session ended due to 5 minutes of inactivity. Please sign in again.',
 };
+
+const DOCUMENT_VAULT_MESSAGES = Object.freeze({
+  STORAGE_UNAVAILABLE:
+    'Document storage is temporarily unavailable. Your change was not saved. Please retry shortly.',
+});
+
+const PERSISTENCE_MESSAGES = Object.freeze({
+  DATABASE_UNAVAILABLE:
+    'Database storage is temporarily unavailable. No operation completed. Please retry shortly.',
+  PAYMENT_LINK_TRACKING_FAILED:
+    'Zoho created the payment link, but its tracking record could not be saved. Do not create another link; contact support before retrying.',
+  PAYMENT_STATUS_UPDATE_FAILED:
+    'Payment status could not be saved. Please retry webhook delivery.',
+  PAYMENT_DUES_DELIVERY_STATUS_FAILED:
+    'The email was attempted, but its delivery status could not be saved. Check communication history before retrying.',
+});
+
+const APPROVAL_MESSAGES = Object.freeze({
+  DATABASE_UNAVAILABLE: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
+  ALREADY_DECIDED: 'This approval was already decided. Refresh the list before taking another action.',
+});
+
+const REGISTRATION_MESSAGES = Object.freeze({
+  DATABASE_UNAVAILABLE: 'Registration storage is temporarily unavailable. No action was completed. Please retry shortly.',
+  ALREADY_PROCESSED: 'This registration has already been processed. Refresh the list before taking another action.',
+  NOT_FOUND: 'Registration record not found.',
+  ACTION_INVALID: 'Choose accept or reject for this registration.',
+});
 
 // ==============================================================================
 // IDENTITY DATABASE (shared Procucev MySQL) - role + master-data mapping
@@ -457,6 +566,7 @@ const IDENTITY_MASTER_DATA = {
 const IDENTITY_PHONE_CONFIG = {
   DEFAULT_COUNTRY_CODE: '+91',
   NATIONAL_NUMBER_LENGTH: 10,
+  PLACEHOLDER_NATIONAL_NUMBER: '9999999999',
   // Bare dialling digits, used to detect an already-prefixed 91XXXXXXXXXX value.
   COUNTRY_DIALLING_DIGITS: '91',
 };
@@ -1240,6 +1350,18 @@ const ZOHO_CONFIG = new Proxy({}, {
   },
 });
 
+const ZOHO_WEBHOOK_RECEIPT_POLICY = Object.freeze({
+  LEASE_MS: 120000,
+  RETENTION_DAYS: 90,
+});
+
+const ZOHO_WEBHOOK_MESSAGES = Object.freeze({
+  INVALID_SIGNATURE: 'Invalid signature.',
+  ACCOUNT_MISMATCH: 'Account mismatch.',
+  RETRY_DELIVERY: 'Webhook processing could not be durably confirmed. Please retry delivery.',
+  PAYMENT_ACTIVATION_RETRY: 'Payment activation could not be saved. Please retry delivery.',
+});
+
 function getSellerSubscriptionPricing() {
   const gstRate = (zohoConfigOverrides.GST_RATE !== undefined)
     ? zohoConfigOverrides.GST_RATE
@@ -1545,6 +1667,9 @@ const CHASER_DELAYS = {
 };
 
 const PRESENCE_ONLINE_THRESHOLD_MS = 10 * 60 * 1000;
+const PRESENCE_MIN_WRITE_INTERVAL_MS = 2 * 60 * 1000;
+const VENDOR_PRESENCE_MAX_IDENTIFIERS = 100;
+const VENDOR_PRESENCE_VENDOR_ID_MAX_LENGTH = 64;
 
 // ==============================================================================
 // SMS DLT TEMPLATE REGISTRY
@@ -1652,7 +1777,12 @@ function unwrapAccountData(obj) {
       try {
         const parsed = JSON.parse(obj.raw);
         return { ...parsed, ...obj };
-      } catch (_) {}
+      } catch (error) {
+        logger.warn('Buyer account raw payload was not valid JSON', {
+          error,
+          operation: 'unwrap-account-data',
+        }, 'CONFIG_CONSTANTS');
+      }
     } else if (typeof obj.raw === 'object') {
       return { ...obj.raw, ...obj };
     }
@@ -1922,6 +2052,21 @@ const RFQ_NOT_CREATED_NOTIFICATION = {
  * none: quoting needs a subscription, a buyer mapping or unlimited access.
  */
 const VENDOR_FREE_CREDITS_LIMIT = 0;
+
+const RFQ_DOWNLOAD_ERRORS = Object.freeze({
+  VENDOR_NOT_FOUND: 'Vendor record not found.',
+  VENDOR_STORAGE_MISSING: 'Vendor record not found in persistent storage.',
+  RFQ_NOT_FOUND: 'RFQ {rfqId} not found.',
+  UNAUTHORIZED: 'You do not have permission to access this RFQ.',
+  CREDITS_EXHAUSTED: 'You have no free RFQ download credits available. Please upgrade your subscription to download this RFQ.',
+  VENDOR_STORAGE_UNAVAILABLE: 'Vendor account storage is temporarily unavailable. Try the download again.',
+  UNLOCK_STORAGE_UNAVAILABLE: 'The RFQ download could not be recorded safely. Please retry in a moment.',
+  UNKNOWN_FAILURE: 'The RFQ download could not be authorized or recorded. Please retry.',
+});
+
+const RFQ_CREATION_ERRORS = Object.freeze({
+  FREE_CREDITS_EXHAUSTED: 'Your 5 free trial RFQ credits for V1/V2/V3 have been fully used. Upgrade to a paid plan to raise more V1/V2/V3 RFQs, or continue using V0 Free Starter for Procucev Network RFQs.',
+});
 
 /** Notification email content for vendor credit exhaustion */
 const VENDOR_CREDITS_EXHAUSTED_NOTIFICATION = {
@@ -2233,6 +2378,11 @@ const BUYER_PROFILE_MESSAGES = {
     'The buyer organization profile could not be read from the identity database. The record was not changed. Please retry in a moment.',
   PROFILE_SAVE_FAILED:
     'The buyer organization profile could not be saved to the identity database. No changes were applied. Please retry in a moment.',
+  DETAILS_IDENTIFIER_REQUIRED: 'Provide a buyer email, organization name, or account ID to look up profile details.',
+  DETAILS_INVALID_QUERY: 'Correct the highlighted buyer lookup fields and try again.',
+  DETAILS_NOT_FOUND: 'No buyer profile matched the supplied email, organization name, or account ID.',
+  DETAILS_LOAD_FAILED:
+    'Buyer profile details could not be verified because the identity database is temporarily unavailable. Please retry in a moment.',
   TAXONOMY_LOAD_FAILED:
     'The procurement category taxonomy could not be read from the identity database. Please retry in a moment.',
   PROFILE_SAVED: 'Buyer organization profile updated successfully.',
@@ -2929,11 +3079,19 @@ module.exports = {
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
   DATABASE_HEALTH_SERVICE_LABEL,
+  DATABASE_QUERY_LOGGING,
+  DATABASE_QUERY_CACHE,
+  GRAPHQL_CONFIG,
+  STORE_HYDRATION_CONFIG,
   SYSTEM_ACTOR_EMAIL,
   RFQ_DEFAULTS,
   QUALIFICATION_PILLARS,
   AES_CONFIG,
   AUTH_MESSAGES,
+  DOCUMENT_VAULT_MESSAGES,
+  PERSISTENCE_MESSAGES,
+  APPROVAL_MESSAGES,
+  REGISTRATION_MESSAGES,
   IDENTITY_ROLE_MAP,
   IDENTITY_MASTER_DATA,
   IDENTITY_PHONE_CONFIG,
@@ -2960,8 +3118,12 @@ module.exports = {
   RFQ_ACKNOWLEDGEMENT_NOTIFICATION,
   RFQ_NOT_CREATED_NOTIFICATION,
   VENDOR_FREE_CREDITS_LIMIT,
+  RFQ_DOWNLOAD_ERRORS,
+  RFQ_CREATION_ERRORS,
   VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
   ZOHO_CONFIG,
+  ZOHO_WEBHOOK_RECEIPT_POLICY,
+  ZOHO_WEBHOOK_MESSAGES,
   ZOHO_SUBSCRIPTION_PRICING,
   computeZohoPlanAmount,
   ZOHO_BUYER_SUBSCRIPTION_PRICING,
@@ -3002,6 +3164,9 @@ module.exports = {
   CHASER_DELAYS,
   SMS_DLT_TEMPLATES,
   PRESENCE_ONLINE_THRESHOLD_MS,
+  PRESENCE_MIN_WRITE_INTERVAL_MS,
+  VENDOR_PRESENCE_MAX_IDENTIFIERS,
+  VENDOR_PRESENCE_VENDOR_ID_MAX_LENGTH,
   VENDOR_ASSIGNMENT_LIMITS,
   MAX_INVITE_VENDORS_PER_REQUEST,
   RFQ_MODES,
@@ -3009,6 +3174,39 @@ module.exports = {
   RFQ_MODE_MAP,
   ALLOWED_EXTENSION_HOURS,
   DEFAULT_EXTENSION_HOURS,
+  RFQ_QUOTE_WRITE_RETRIES,
+  RFQ_STATE_WRITE_RETRIES,
+  PERSISTED_RECORD_WRITE_RETRIES,
+  AUDIT_CHAIN_WRITE_MAX_ATTEMPTS,
+  AUDIT_CHAIN_VERIFY_PAGE_SIZE,
+  AUDIT_CHAIN_VERIFY_MAX_ROWS,
+  AUDIT_CHAIN_VERIFY_SNAPSHOT_ATTEMPTS,
+  EVENT_OUTBOX_TYPES,
+  EVENT_OUTBOX_MAX_ATTEMPTS,
+  EVENT_OUTBOX_MAX_BATCH_SIZE,
+  EVENT_OUTBOX_LEASE_MS,
+  EVENT_OUTBOX_RETRY_BASE_MS,
+  EVENT_OUTBOX_RETRY_MAX_MS,
+  EVENT_OUTBOX_ENQUEUE_ATTEMPTS,
+  EVENT_OUTBOX_ENQUEUE_RETRY_MS,
+  EVENT_OUTBOX_POLL_INTERVAL_MS,
+  EVENT_OUTBOX_RETENTION_DAYS,
+  D1_NOTIFICATION_INSERT_BATCH_SIZE,
+  EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE,
+  RFQ_AUTO_CLOSE_AFTER_MS,
+  RFQ_AUTO_CLOSE_POLL_INTERVAL_MS,
+  RFQ_AUTO_CLOSE_REASON,
+  RFQ_COMPARISON_NOTIFICATION_DELAY_MS,
+  RFQ_COMPARISON_RETRY_DELAY_MS,
+  RFQ_COMPARISON_MAX_ATTEMPTS,
+  RFQ_COMPARISON_STALE_CLAIM_MS,
+  RFQ_COMPARISON_QUEUE_MAX_LIMIT,
+  RFQ_COMPARISON_ERROR_MAX_LENGTH,
+  RFQ_COMPARISON_MEMORY_DEDUPE_LIMIT,
+  RFQ_CHASER_MAX_ATTEMPTS,
+  RFQ_CHASER_RETRY_BASE_MS,
+  RFQ_CHASER_RETRY_MAX_MS,
+  RFQ_CHASER_ERROR_MAX_LENGTH,
   DEFAULT_CATEGORY_TAXONOMY,
   MAJOR_CATEGORY_ALIASES: RFQ_CATEGORY_CLASSIFICATION.MAJOR_CATEGORY_ALIASES,
   QUA_AI_EMAIL_TEMPLATES,
@@ -3018,7 +3216,6 @@ module.exports = {
   getIndianStates,
   getCitiesForState,
   parseSearchTokens,
-  INQUIRIES_PERSISTENCE_FILE,
   PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES,
   PAYMENT_DUES_CHANNELS,
   DEFAULT_LOW_CREDIT_NOTIFICATION,
