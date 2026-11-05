@@ -439,8 +439,8 @@ export default function KanbanBoard({
                   const followUp = rfq.followUpData;
                   const totalVendors = followUp?.totalInvited || rfq.assignedVendors?.length || (Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0);
                   const waTotal = followUp?.whatsappStats?.total || totalVendors;
-                  const waCount = followUp?.whatsappStats?.read || followUp?.whatsappStats?.delivered ||
-                    (Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v.whatsapp?.status === 'read' || v.whatsapp?.status === 'delivered').length : 0);
+                  const waDelivered = followUp?.whatsappStats?.delivered ||
+                    (Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v.whatsapp?.status === 'delivered' || v.whatsapp?.status === 'read').length : 0);
                   
                   const smsTotal = followUp?.smsStats?.total || totalVendors;
                   const vendorSmsCount = Array.isArray(followUp?.vendors)
@@ -470,7 +470,7 @@ export default function KanbanBoard({
                       </div>
                       <div className="flex justify-between items-center text-emerald-700 dark:text-emerald-300 font-semibold">
                         <span>💬 WhatsApp Bot:</span>
-                        <span className="mono">{waCount}/{waTotal} Read</span>
+                        <span className="mono">{waDelivered}/{waTotal} Delivered</span>
                       </div>
                       <div className="flex justify-between items-center text-sky-700 dark:text-cyan-300 font-semibold">
                         <span>📱 SMS Direct:</span>
