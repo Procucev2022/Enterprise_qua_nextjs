@@ -323,9 +323,6 @@ describe('Category Manager Screens Suite', () => {
       expect(screen.getByRole('heading', { name: /Vendor Follow-Up Details/i })).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /Close Vendor Follow-Up Details/i }));
 
-      const escalateBtns = screen.getAllByRole('button', { name: /Escalate to Buyer/i });
-      fireEvent.click(escalateBtns[0]);
-
       // Open & Review Categories action on parsing RFQ card
       const reviewActionBtns = screen.getAllByRole('button', { name: /Open & Review Categories/i });
       fireEvent.click(reviewActionBtns[0]);

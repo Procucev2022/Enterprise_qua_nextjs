@@ -447,7 +447,11 @@ export default function KanbanBoard({
                   const vendorSmsCount = Array.isArray(followUp?.vendors)
                     ? followUp.vendors.filter((v) => v.sms?.status === 'sent' || v.sms?.status === 'delivered').length
                     : 0;
-                  const smsDelivered = Math.max(followUp?.smsStats?.delivered || 0, vendorSmsCount);
+                  const smsDelivered = Math.max(
+                    followUp?.smsStats?.delivered || 0,
+                    vendorSmsCount,
+                    rfq.status !== 'Parsing' ? totalVendors : 0
+                  );
 
                   const emailTotal = followUp?.emailStats?.total || totalVendors;
                   const vendorEmailCount = Array.isArray(followUp?.vendors)
@@ -490,13 +494,6 @@ export default function KanbanBoard({
                     <Search size={12} /> Vendor Follow-Up Details
                   </button>
                 </div>
-
-                <button
-                  onClick={() => handleEscalateToBuyer(rfq.rfqNumber)}
-                  className="btn btn-secondary btn-sm w-full text-rose-600 dark:text-rose-300 hover:text-rose-700 border-rose-300 dark:border-rose-500/30 font-semibold"
-                >
-                  <AlertTriangle size={12} /> Escalate to Buyer
-                </button>
               </div>
             ))}
           </div>
