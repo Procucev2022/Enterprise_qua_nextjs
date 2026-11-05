@@ -2,6 +2,7 @@ const storeService = require('../services/storeService');
 const domainQueries = require('../db/domainQueries');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
+const { VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
 
 function assertCategoryManagerOrAdmin(req, res) {
   const user = req.user;
@@ -521,7 +522,7 @@ async function addQuoteCredits(req, res, next) {
 
     const currentBalance = vendor.freeQuotationCredits !== undefined
       ? Number(vendor.freeQuotationCredits)
-      : (vendor.credits !== undefined ? Number(vendor.credits) : 5);
+      : (vendor.credits !== undefined ? Number(vendor.credits) : VENDOR_FREE_CREDITS_LIMIT);
 
     const updatedBalance = currentBalance + amount;
 
@@ -685,7 +686,7 @@ async function requestCreditApproval(req, res, next) {
         value_impact: `${amount} Quote Credits (${vendorLabel})`,
         amount,
         quantity: amount,
-        available_balance: vendor.freeQuotationCredits ?? 0,
+        available_balance: vendor.freeQuotationCredits ?? VENDOR_FREE_CREDITS_LIMIT,
         maker_name: initiatorName,
         maker_role: 'Category Manager',
         assigned_approver: approverName,

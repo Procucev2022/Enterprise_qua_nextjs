@@ -330,11 +330,14 @@ export const VENDOR_SUBSCRIPTION_PLANS = [
 /** RFQ downloads included per paid vendor plan per 3-month period (mirrors backend VENDOR_PLAN_RFQ_QUOTA). */
 export const VENDOR_PLAN_RFQ_QUOTA: Record<string, number> = { connect: 50, select: 100 };
 
+/** Free RFQ credits every vendor starts with (mirrors backend VENDOR_FREE_CREDITS_LIMIT). */
+export const VENDOR_FREE_CREDITS_LIMIT = 5;
+
 /**
  * A vendor's displayable credit balance: plan quota less downloads used for a
- * Connect/Select subscriber, otherwise their free-tier balance (0 unless the
- * vendor still holds free credits). Reading the free-tier field alone
- * rendered every subscriber as "0 Credits".
+ * Connect/Select subscriber, otherwise their free-tier balance (the default
+ * VENDOR_FREE_CREDITS_LIMIT until the vendor's record stores a balance).
+ * Reading the free-tier field alone rendered every subscriber as "0 Credits".
  */
 export function getVendorCreditBalance(vendor: {
   subscriptionPlan?: string;
@@ -343,6 +346,7 @@ export function getVendorCreditBalance(vendor: {
 }): number {
   const quota = vendor.subscriptionPlan ? VENDOR_PLAN_RFQ_QUOTA[vendor.subscriptionPlan] : undefined;
   if (quota !== undefined) return Math.max(0, quota - (Number(vendor.rfqDownloadsUsed) || 0));
+  if (vendor.freeQuotationCredits == null) return VENDOR_FREE_CREDITS_LIMIT;
   return Math.max(0, Number(vendor.freeQuotationCredits) || 0);
 }
 

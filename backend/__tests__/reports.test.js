@@ -369,7 +369,7 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(res.body.data[0].QuotedRFQsCount).toBe(2);
       expect(res.body.data[0].CompanyLocation).toBeTruthy();
       expect(res.body.data[0].LastLogin).toBeDefined();
-      expect(res.body.data[1].FreeQuotationCredits).toBe(0);
+      expect(res.body.data[1].FreeQuotationCredits).toBe(5);
       expect(res.body.data[1].QuotedRFQsCount).toBe(0);
     });
 

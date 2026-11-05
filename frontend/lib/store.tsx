@@ -60,6 +60,7 @@ import {
   formatCurrency,
   hasUnlimitedAccess,
   VENDOR_PLAN_RFQ_QUOTA,
+  VENDOR_FREE_CREDITS_LIMIT,
 } from './constants';
 
 // Backend write endpoints now require a session token (Phase 4 authorization
@@ -646,8 +647,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const res = await fetchVendorRfqCredits();
       if (res.success && res.data) {
         const isUnlimited = hasUnlimitedAccess(currentUserSession) || res.data.subscriptionPlan === 'unlimited';
-        setVendorFreeCreditsRemaining(isUnlimited ? 999999 : (res.data.freeCreditsRemaining ?? 0));
-        setVendorFreeCreditsAllocated(isUnlimited ? 999999 : (res.data.freeCreditsAllocated ?? 0));
+        setVendorFreeCreditsRemaining(isUnlimited ? 999999 : (res.data.freeCreditsRemaining ?? VENDOR_FREE_CREDITS_LIMIT));
+        setVendorFreeCreditsAllocated(isUnlimited ? 999999 : (res.data.freeCreditsAllocated ?? VENDOR_FREE_CREDITS_LIMIT));
         setVendorFreeCreditsUsed(res.data.freeCreditsUsed ?? 0);
         setVendorUnlockedRfqIds(res.data.unlockedRfqIds || []);
       }
@@ -662,7 +663,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (res.freeCreditsRemaining !== undefined) {
         const remaining = res.freeCreditsRemaining;
         setVendorFreeCreditsRemaining(remaining);
-        setVendorFreeCreditsUsed(Math.max(0, (vendorFreeCreditsAllocated ?? 0) - remaining));
+        setVendorFreeCreditsUsed(Math.max(0, (vendorFreeCreditsAllocated ?? VENDOR_FREE_CREDITS_LIMIT) - remaining));
         // Keep the Subscription page's "used / quota" in step with the header.
         const quota = VENDOR_PLAN_RFQ_QUOTA[vendorSubscription];
         if (quota !== undefined) setVendorRfqDownloadsUsed(Math.max(0, quota - remaining));

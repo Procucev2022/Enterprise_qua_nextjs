@@ -2017,7 +2017,7 @@ sellerDirectory: {
 
   vendorSubscriptionModal: {
     upgradeTitle: '🔒 Upgrade Plan to Submit Quotations',
-    creditsExhaustedWarning: '⚠️ No Free Quotation Credits: Free quotation credits are not available for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.',
+    creditsExhaustedWarning: '⚠️ 5 Free Quotation Credits Exhausted: You have used your 5 free quotation credits for network and external buyers. Quotations for your inviting/owning buyer remain unlimited. To submit quotes to other buyers across V0, V2, and V3, please upgrade to a paid subscription plan.',
     connectTitle: 'Connect Model (₹2 / 3 mo)',
     connectDesc: 'Quote and download up to 50 RFQs in 3 months from Marketplace.',
     selectTitle: 'Select Model (₹5 / 3 mo)',
@@ -2027,9 +2027,9 @@ sellerDirectory: {
     closeAction: 'Close',
     upgradeToBidAction: '🔒 Upgrade to Bid',
     subscriptionRequiredToastTitle: 'Subscription Required',
-    subscriptionRequiredToastDesc: 'You have no free quotation credits. Please upgrade your subscription to continue quoting on external buyer RFQs.',
+    subscriptionRequiredToastDesc: 'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
     creditsExhaustedToastTitle: 'Quotation Credits Exhausted',
-    creditsExhaustedToastDesc: 'You have no free quotation credits available. Please upgrade your subscription plan to continue submitting quotations.',
+    creditsExhaustedToastDesc: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
   },
 
   publicVendorDirectory: {

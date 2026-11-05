@@ -47,7 +47,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       );
     });
 
-    test('returns zero default credits when vendor profile is not found', async () => {
+    test('returns the default 5 free credits when vendor profile is not found', async () => {
       const res = mockRes();
       const next = jest.fn();
       jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
@@ -62,8 +62,8 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
         expect.objectContaining({
           success: true,
           data: expect.objectContaining({
-            freeCreditsAllocated: 0,
-            freeCreditsRemaining: 0,
+            freeCreditsAllocated: 5,
+            freeCreditsRemaining: 5,
           }),
         })
       );
