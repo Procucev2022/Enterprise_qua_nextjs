@@ -26,6 +26,7 @@ const {
   hasUnlimitedDownloadAccess,
   resolveBuyerSourcingMode,
   MAX_INVITE_VENDORS_PER_REQUEST,
+  VENDOR_FREE_CREDITS_LIMIT,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
@@ -1771,13 +1772,13 @@ async function addQuote(req, res, next) {
     const eligibility = storeService.checkVendorQuotationEligibility(vendorRecord, targetRfq);
     if (!eligibility.eligible && !isUnlimitedVendor) {
       logger.warn(
-        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but 5 free quotation credits are exhausted`,
+        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits are exhausted`,
         { id, vendorId: vendorRecord.id, freeCreditsRemaining: eligibility.freeCreditsRemaining, subscriptionPlan: eligibility.subscriptionPlan },
         'RFQ_CONTROLLER'
       );
       return res.status(403).json({
         success: false,
-        error: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
+        error: `Your ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.`,
         upgradeRequired: true,
         freeCreditsRemaining: 0,
         subscriptionPlan: eligibility.subscriptionPlan,

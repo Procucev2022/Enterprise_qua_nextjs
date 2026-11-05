@@ -1533,7 +1533,7 @@ class StoreService {
    * a subscription or consuming the vendor's 5 free bid credits.
    *
    * Otherwise (for other buyers' RFQs or network RFQs):
-   * Initial allowance: Each vendor starts with 5 free quotation credits.
+   * Initial allowance: Each vendor starts with VENDOR_FREE_CREDITS_LIMIT (5) free quotation credits.
    * Once free credits are exhausted, an active paid subscription ('connect' or 'select')
    * is strictly required.
    */
@@ -1588,7 +1588,7 @@ class StoreService {
         vendorId: vendorIdOrEmail,
         freeCreditsAllocated: VENDOR_FREE_CREDITS_LIMIT,
         freeCreditsUsed: 0,
-        freeCreditsRemaining: 0,
+        freeCreditsRemaining: VENDOR_FREE_CREDITS_LIMIT,
         isSubscribed: false,
         subscriptionPlan: 'none',
         unlockedRfqIds: [],
@@ -1786,7 +1786,7 @@ class StoreService {
       });
       return {
         success: false,
-        error: 'You have no free RFQ download credits available. Please upgrade your subscription to download this RFQ.',
+        error: `You have used all ${VENDOR_FREE_CREDITS_LIMIT} free RFQ download credits. Please upgrade your subscription to download this RFQ.`,
         creditsExhausted: true,
         freeCreditsRemaining: 0,
       };

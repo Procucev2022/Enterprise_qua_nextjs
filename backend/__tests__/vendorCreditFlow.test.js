@@ -31,7 +31,7 @@ describe('Vendor Free-Credit and Subscription Validation Flow', () => {
       phone: '+91 98765 43210',
       majorCategory: 'Industrial Machinery',
       subscriptionPlan: 'premium',
-      // An explicit balance: vendors get VENDOR_FREE_CREDITS_LIMIT (0) by
+      // An explicit balance: vendors get VENDOR_FREE_CREDITS_LIMIT (5) by
       // default, but these scenarios exercise the credit mechanics.
       freeQuotationCredits: 5,
       quotedRfqIds: [],
@@ -78,13 +78,13 @@ describe('Vendor Free-Credit and Subscription Validation Flow', () => {
   });
 
   describe('Eligibility and Credit Consumption Unit Rules', () => {
-    test('vendors get no free quotation credits by default', () => {
-      expect(VENDOR_FREE_CREDITS_LIMIT).toBe(0);
-      const added = storeService.addVendor({ name: 'Zero Credit Co', email: 'zero.credit@vendor.com' });
-      expect(added.freeQuotationCredits).toBe(0);
+    test('vendors get 5 free quotation credits by default', () => {
+      expect(VENDOR_FREE_CREDITS_LIMIT).toBe(5);
+      const added = storeService.addVendor({ name: 'Default Credit Co', email: 'default.credit@vendor.com' });
+      expect(added.freeQuotationCredits).toBe(5);
       const eligibility = storeService.checkVendorQuotationEligibility(added);
-      expect(eligibility.eligible).toBe(false);
-      expect(eligibility.freeCreditsRemaining).toBe(0);
+      expect(eligibility.eligible).toBe(true);
+      expect(eligibility.freeCreditsRemaining).toBe(5);
     });
 
     test('vendor holding free quotation credits is eligible', () => {
@@ -484,7 +484,7 @@ Remarks: Post-upgrade quotation
         freeCreditsRemaining: 3,
         isSubscribed: false,
       });
-      expect(creditsLeftInvite.html).toContain('Available Free Quotation Credits:</strong> 3 remaining');
+      expect(creditsLeftInvite.html).toContain('Available Free Quotation Credits:</strong> 3 / 5 remaining');
 
       // 3. Free credits remaining = 0
       const exhaustedInvite = mailerService.buildRfqInviteEmail(vendorEmail, {
