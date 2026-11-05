@@ -1717,14 +1717,9 @@ async function addQuote(req, res, next) {
     // Workers-specific reason: each isolate hydrates its own copy of `rfqs`
     // once, lazily, on its first request, and nothing re-syncs it afterward
     // except this async path's own D1 fallback. A vendor quoting an RFQ some
-    // *other* isolate created got a guaranteed, permanent 404 on whichever
-    // isolate served their POST until that isolate happened to restart —
-    // confirmed live: 10/10 attempts against a real RFQ failed with "not
-    // found" even immediately after a full hydrateFromDB() refresh, because
-    // that refresh ran on a different isolate than the one serving the next
-    // request. getRFQByIdAsync's DB fallback also backfills this.rfqs, so
-    // the addQuoteToRFQ call below (which still uses the sync, in-memory
-    // getRFQById) finds it too.
+    // other isolate created must use the persisted row as the source of truth;
+    // submitVendorQuoteDurably repeats that read and commits the RFQ, vendor
+    // credit, and idempotency ledger together before acknowledging the quote.
     const targetRfq = await storeService.getRFQByIdAsync(id);
     if (!targetRfq || !(await canAccessRfq(req, targetRfq))) {
       logger.warn(`RFQ not found or out of scope for quote submission: ${id}`, { id }, 'RFQ_CONTROLLER');
@@ -1748,7 +1743,10 @@ async function addQuote(req, res, next) {
     }
 
     const eligibility = storeService.checkVendorQuotationEligibility(vendorRecord, targetRfq);
-    if (!eligibility.eligible && !isUnlimitedVendor) {
+    const isResubmission =
+      (Array.isArray(targetRfq.quotes) && targetRfq.quotes.some((quote) => String(quote.vendorId) === String(vendorRecord.id))) ||
+      (Array.isArray(vendorRecord.quotedRfqIds) && vendorRecord.quotedRfqIds.some((quotedRfqId) => String(quotedRfqId) === String(targetRfq.id)));
+    if (!eligibility.eligible && !isUnlimitedVendor && !isResubmission) {
       logger.warn(
         `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but 5 free quotation credits are exhausted`,
         { id, vendorId: vendorRecord.id, freeCreditsRemaining: eligibility.freeCreditsRemaining, subscriptionPlan: eligibility.subscriptionPlan },
@@ -1798,12 +1796,11 @@ async function addQuote(req, res, next) {
       ...(bidAttachments.length > 0 ? { attachments: bidAttachments } : {}),
     };
     logger.info(`Adding quote from ${quote.vendorName} to RFQ ${id}`, { id, vendorName: quote.vendorName, price: quote.unitPrice }, 'RFQ_CONTROLLER');
-    const updatedRFQ = storeService.addQuoteToRFQ(id, quote);
+    const updatedRFQ = await storeService.submitVendorQuoteDurably(targetRfq.id, quote);
     if (!updatedRFQ) {
       logger.warn(`RFQ not found for quote submission: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    storeService.consumeVendorQuotationCredit(vendorRecord.id, targetRfq.id);
     const finalData = applyVendorBuyerPrivacy(updatedRFQ, vendorRecord);
     res.json({ success: true, data: finalData });
   } catch (err) {

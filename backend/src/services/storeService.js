@@ -14,6 +14,7 @@ const {
   MAJOR_CATEGORY_ALIASES,
   DEFAULT_CATEGORY_TAXONOMY,
   INQUIRIES_PERSISTENCE_FILE,
+  RFQ_QUOTE_WRITE_RETRIES,
 } = require('../config/constants');
 const crypto = require('crypto');
 const pool = require('../db/pool');
@@ -1944,6 +1945,93 @@ class StoreService {
   }
 
 
+  async consumeVendorQuotationCreditDurably(vendorId, rfqId) {
+    if (!pool.hasStorage()) return this.consumeVendorQuotationCredit(vendorId, rfqId);
+
+    let vendor;
+    let rfq;
+    try {
+      [vendor, rfq] = await Promise.all([
+        domainQueries.getVendorByIdFromDB(vendorId, { fresh: true }),
+        domainQueries.getRFQByIdFromDB(rfqId),
+      ]);
+    } catch (error) {
+      logger.error('Failed to load authoritative records before quotation credit update', { error, vendorId, rfqId }, 'STORE_SERVICE');
+      const persistError = new Error('Quotation eligibility could not be verified from storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+    if (!vendor) {
+      const persistError = new Error('The vendor could not be verified in storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+    if (!rfq) {
+      const persistError = new Error('The RFQ could not be found in storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+
+    const isResubmission = Array.isArray(rfq.quotes) && rfq.quotes.some((quote) => String(quote.vendorId) === String(vendor.id));
+    const eligibility = this.checkVendorQuotationEligibility(vendor, rfq);
+    if (!eligibility.eligible && !isResubmission) {
+      const error = new Error('Your free quotation credits have been used. Upgrade your subscription to submit another quote.');
+      error.statusCode = 403;
+      error.code = 'VENDOR_QUOTE_CREDITS_EXHAUSTED';
+      error.freeCreditsRemaining = eligibility.freeCreditsRemaining;
+      throw error;
+    }
+
+    let result;
+    try {
+      result = await domainQueries.recordVendorQuoteCreditInDB({
+        vendorId: vendor.id,
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber || null,
+        transactionId: `qtx-${crypto.randomUUID()}`,
+        idempotencyKey: `rfq-quote:${vendor.id}:${rfq.id}`,
+        isBuyerMapped: this.isVendorMappedToRfqBuyer(vendor, rfq),
+        isResubmission,
+      });
+    } catch (error) {
+      logger.error('Failed to persist vendor quotation credit and ledger together', { error, vendorId: vendor.id, rfqId: rfq.id }, 'STORE_SERVICE');
+      if (error.statusCode === 400 || error.statusCode === 403 || error.statusCode === 409) throw error;
+      const persistError = new Error('Quotation credits could not be saved. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      persistError.cause = error;
+      throw persistError;
+    }
+    if (!result) {
+      const persistError = new Error('Quotation credit update returned no persisted vendor.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+    if (result.creditsExhausted) {
+      const error = new Error('Your free quotation credits have been used. Upgrade your subscription to submit another quote.');
+      error.statusCode = 403;
+      error.code = 'VENDOR_QUOTE_CREDITS_EXHAUSTED';
+      error.freeCreditsRemaining = result.freeCreditsRemaining;
+      throw error;
+    }
+
+    const cachedIndex = this.vendors.findIndex((item) => item.id === result.vendor.id);
+    if (cachedIndex === -1) this.vendors.unshift(result.vendor);
+    else this.vendors[cachedIndex] = result.vendor;
+    logger.info('Vendor quotation credit update confirmed by durable storage', {
+      vendorId: vendor.id,
+      rfqId: rfq.id,
+      creditCharged: result.creditCharged,
+      freeCreditsRemaining: result.vendor.freeQuotationCredits,
+      alreadyQuoted: result.alreadyQuoted,
+    }, 'STORE_SERVICE');
+    return result.vendor;
+  }
+
   // ==========================================
   // ZOHO PAYMENT LINKS
   // ==========================================
@@ -2967,13 +3055,12 @@ class StoreService {
     return newRFQ;
   }
 
-  updateRFQ(id, updates) {
+  updateRFQ(id, updates, { persist = true, notify = true } = {}) {
     const idx = this.rfqs.findIndex((r) => r.id === id || r.rfqNumber === id);
     if (idx === -1) return null;
 
     const oldStatus = this.rfqs[idx].status;
-    let quotes = updates.quotes ? evaluateQuotes(updates.quotes) : this.rfqs[idx].quotes;
-
+    const quotes = updates.quotes ? evaluateQuotes(updates.quotes) : this.rfqs[idx].quotes;
     const updated = {
       ...this.rfqs[idx],
       ...updates,
@@ -2981,8 +3068,11 @@ class StoreService {
       quotesCount: quotes.length,
     };
     this.rfqs[idx] = updated;
-    this._persistRFQ(updated);
-
+    if (persist) this._persistRFQ(updated);
+    if (notify) this._notifyRFQUpdate(updated, oldStatus, updates);
+    return updated;
+  }
+  _notifyRFQUpdate(updated, oldStatus, updates) {
     if (updates.status === 'Closed' && oldStatus !== 'Closed') {
       this.notifyOfRFQClosure(updated);
     } else if (
@@ -2992,8 +3082,6 @@ class StoreService {
     ) {
       this.notifyBuyerOfFinalComparison(updated);
     }
-
-    return updated;
   }
 
   extendRFQ(id, { hours, userEmail } = {}) {
@@ -3038,7 +3126,49 @@ class StoreService {
     return { success: true, rfq: updated };
   }
 
-  addQuoteToRFQ(rfqId, quote) {
+  extendRFQ(id, { hours, userEmail } = {}) {
+    const rfq = this.getRFQById(id);
+    if (!rfq) return { success: false, reason: 'NOT_FOUND', error: `RFQ with ID ${id} not found.` };
+
+    if (rfq.status === 'Closed' || rfq.status === 'Expired') {
+      return { success: false, reason: 'INVALID_STATUS', error: 'Cannot extend a closed or expired RFQ.' };
+    }
+
+    if (rfq.isExtended || rfq.extendedAt || rfq.extensionHours) {
+      return { success: false, reason: 'ALREADY_EXTENDED', error: 'This RFQ has already received its one-time deadline extension.' };
+    }
+
+    const extHours = Number(hours);
+    if (![24, 48].includes(extHours)) {
+      return { success: false, reason: 'VALIDATION', error: 'Extension duration must be either 24 or 48 hours.' };
+    }
+
+    const currentDeadlineStr = rfq.closingDeadline || rfq.deadline || rfq.targetDeliveryDate;
+    let baseMs = Date.now();
+    if (currentDeadlineStr && !isNaN(Date.parse(currentDeadlineStr))) {
+      baseMs = Math.max(Date.parse(currentDeadlineStr), Date.now());
+    } else if (rfq.createdAt && !isNaN(Date.parse(rfq.createdAt))) {
+      baseMs = Math.max(new Date(rfq.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000, Date.now());
+    }
+
+    const newDeadlineMs = baseMs + extHours * 60 * 60 * 1000;
+    const newDeadlineIso = new Date(newDeadlineMs).toISOString();
+
+    const updates = {
+      closingDeadline: newDeadlineIso,
+      deadline: newDeadlineIso,
+      isExtended: true,
+      extensionHours: extHours,
+      extendedAt: new Date().toISOString(),
+      extendedByEmail: userEmail || rfq.raisedByEmail || null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const updated = this.updateRFQ(rfq.id, updates);
+    return { success: true, rfq: updated };
+  }
+
+  addQuoteToRFQ(rfqId, quote, { persist = true, notify = true } = {}) {
     const rfq = this.getRFQById(rfqId);
     if (!rfq) return null;
 
@@ -3050,7 +3180,12 @@ class StoreService {
       : [...existingQuotes, quote];
 
     // Update followUpData telemetry if present
-    let followUpData = rfq.followUpData;
+    let followUpData = rfq.followUpData
+      ? {
+          ...rfq.followUpData,
+          ...(Array.isArray(rfq.followUpData.vendors) ? { vendors: [...rfq.followUpData.vendors] } : {}),
+        }
+      : rfq.followUpData;
     if (followUpData && Array.isArray(followUpData.vendors)) {
       const vIdx = followUpData.vendors.findIndex(
         (v) => v.vendorId === quote.vendorId || (quote.vendorName && v.vendorName === quote.vendorName)
@@ -3073,9 +3208,6 @@ class StoreService {
       rfq.sourcingMode === 'mode_0' ||
       rfq.sourcingMode === 'v0' ||
       rfq.sourcingMode === 'version_0';
-
-    rfq.quotes = quotes;
-    rfq.quotesCount = quotes.length;
 
     const nextStatus = isV0 ? 'Quotes Received' : (rfq.status === 'PO Generated' ? 'PO Generated' : 'In Evaluation');
 
@@ -3117,18 +3249,213 @@ class StoreService {
       status: finalStatus,
       ...(autoClosed ? { quotesHidden: false, closedAt: new Date().toISOString(), autoClosedReason: 'All invited vendors submitted quotes' } : {}),
       followUpData,
-    });
+    }, { persist, notify });
 
-    if (autoClosed) {
-      this.cancelDelayedQuoteTimers(rfq.id);
-      this.notifyBuyerOfAutoClosureAndScheduleComparison(updated, quotes);
-    } else {
-      // Tell the RFQ's owning buyer a quote has landed — in-app and by email.
-      this.notifyBuyerOfQuote(rfq, quote);
-      this.emailQuoteToBuyer(rfq, quote);
-    }
+    if (notify) this._dispatchQuoteSubmissionSideEffects(rfq, updated, quote, autoClosed);
 
     return updated;
+  }
+
+  _dispatchQuoteSubmissionSideEffects(rfq, updated, quote, autoClosed) {
+    if (autoClosed) {
+      this.cancelDelayedQuoteTimers(rfq.id);
+      this.notifyBuyerOfAutoClosureAndScheduleComparison(updated, updated.quotes || []);
+      return;
+    }
+    this.notifyBuyerOfQuote(rfq, quote);
+    this.emailQuoteToBuyer(rfq, quote);
+  }
+
+  async addQuoteToRFQDurably(rfqId, quote) {
+    if (!pool.hasStorage()) return this.addQuoteToRFQ(rfqId, quote);
+
+    let rfq;
+    try {
+      rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+    } catch (error) {
+      logger.error('Failed to load RFQ before quote submission', { error, rfqId }, 'STORE_SERVICE');
+      const persistError = new Error('The RFQ could not be loaded from storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+    if (!rfq) return null;
+
+    const cachedIndex = this.rfqs.findIndex((item) => item.id === rfq.id);
+    const previousCached = cachedIndex === -1 ? null : this.rfqs[cachedIndex];
+    if (cachedIndex === -1) this.rfqs.unshift(rfq);
+    else this.rfqs[cachedIndex] = rfq;
+
+    const updated = this.addQuoteToRFQ(rfq.id, quote, { persist: false, notify: false });
+    if (!updated) {
+      if (cachedIndex === -1) this.rfqs = this.rfqs.filter((item) => item.id !== rfq.id);
+      else this.rfqs[cachedIndex] = previousCached;
+      return null;
+    }
+
+    let persisted;
+    try {
+      persisted = await domainQueries.upsertRFQInDB(updated);
+      if (!persisted) throw new Error('RFQ quote update completed without a persisted row.');
+    } catch (error) {
+      if (cachedIndex === -1) this.rfqs = this.rfqs.filter((item) => item.id !== rfq.id);
+      else this.rfqs[cachedIndex] = previousCached;
+      logger.error('Failed to persist RFQ quote before acknowledgement', {
+        error,
+        rfqId: rfq.id,
+        vendorId: quote.vendorId,
+      }, 'STORE_SERVICE');
+      const persistError = new Error('The quote could not be saved. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+
+    const currentIndex = this.rfqs.findIndex((item) => item.id === persisted.id);
+    if (currentIndex === -1) this.rfqs.unshift(persisted);
+    else this.rfqs[currentIndex] = persisted;
+    this._lastRfqSyncTime = 0;
+    this._notifyRFQUpdate(persisted, rfq.status, { status: persisted.status });
+    const autoClosed = persisted.status === 'Closed' && rfq.status !== 'Closed';
+    this._dispatchQuoteSubmissionSideEffects(rfq, persisted, quote, autoClosed);
+    return persisted;
+  }
+
+  async submitVendorQuoteDurably(rfqId, quote) {
+    if (!pool.hasStorage()) {
+      const updated = this.addQuoteToRFQ(rfqId, quote);
+      if (!updated) return null;
+      if (quote && quote.vendorId) this.consumeVendorQuotationCredit(quote.vendorId, rfqId);
+      return updated;
+    }
+
+    for (let attempt = 0; attempt < RFQ_QUOTE_WRITE_RETRIES; attempt += 1) {
+      let rfq;
+      let vendor;
+      try {
+        [rfq, vendor] = await Promise.all([
+          domainQueries.getRFQByIdFromDB(rfqId),
+          domainQueries.getVendorByIdFromDB(quote.vendorId, { fresh: true }),
+        ]);
+      } catch (error) {
+        logger.error('Failed to load authoritative records before atomic vendor quote submission', {
+          error,
+          rfqId,
+          vendorId: quote.vendorId,
+          attempt: attempt + 1,
+        }, 'STORE_SERVICE');
+        const persistError = new Error('Quotation eligibility could not be verified from storage. Try again.');
+        persistError.statusCode = 503;
+        persistError.code = 'PERSISTENCE_UNAVAILABLE';
+        throw persistError;
+      }
+
+      if (!rfq) return null;
+      if (!vendor) {
+        const persistError = new Error('The vendor could not be verified in storage. Try again.');
+        persistError.statusCode = 503;
+        persistError.code = 'PERSISTENCE_UNAVAILABLE';
+        throw persistError;
+      }
+
+      const vendorHasSubmitted = Array.isArray(rfq.quotes) && rfq.quotes.some(
+        (existingQuote) => String(existingQuote.vendorId) === String(vendor.id)
+      );
+      const vendorHasCreditMarker = Array.isArray(vendor.quotedRfqIds) && vendor.quotedRfqIds.some(
+        (quotedRfqId) => String(quotedRfqId) === String(rfq.id)
+      );
+      const isResubmission = vendorHasSubmitted || vendorHasCreditMarker;
+      const eligibility = this.checkVendorQuotationEligibility(vendor, rfq);
+      if (!eligibility.eligible && !isResubmission) {
+        const error = new Error('Your free quotation credits have been used. Upgrade your subscription to submit another quote.');
+        error.statusCode = 403;
+        error.code = 'VENDOR_QUOTE_CREDITS_EXHAUSTED';
+        error.freeCreditsRemaining = eligibility.freeCreditsRemaining;
+        throw error;
+      }
+
+      const cachedIndex = this.rfqs.findIndex((item) => item.id === rfq.id);
+      const previousCached = cachedIndex === -1 ? null : this.rfqs[cachedIndex];
+      if (cachedIndex === -1) this.rfqs.unshift(rfq);
+      else this.rfqs[cachedIndex] = rfq;
+      const updatedRFQ = this.addQuoteToRFQ(rfq.id, quote, { persist: false, notify: false });
+      if (cachedIndex === -1) this.rfqs = this.rfqs.filter((item) => item.id !== rfq.id);
+      else this.rfqs[cachedIndex] = previousCached;
+      if (!updatedRFQ) return null;
+
+      const idempotencyKey = `rfq-quote:${vendor.id}:${rfq.id}`;
+      let saved;
+      try {
+        saved = await domainQueries.submitVendorQuoteInDB({
+          vendorId: vendor.id,
+          rfqId: rfq.id,
+          rfqNumber: rfq.rfqNumber,
+          transactionId: `tx-${crypto.randomUUID()}`,
+          idempotencyKey,
+          isBuyerMapped: eligibility.isBuyerMapped,
+          isResubmission,
+          expectedVendor: vendor,
+          expectedRFQ: rfq,
+          updatedRFQ,
+        });
+      } catch (error) {
+        logger.error('Atomic quote and vendor credit write failed', {
+          error,
+          rfqId: rfq.id,
+          vendorId: vendor.id,
+          attempt: attempt + 1,
+        }, 'STORE_SERVICE');
+        const persistError = new Error('The quote could not be saved. Try again.');
+        persistError.statusCode = error.statusCode || 503;
+        persistError.code = error.code || 'PERSISTENCE_UNAVAILABLE';
+        throw persistError;
+      }
+
+      if (saved && saved.creditsExhausted) {
+        const error = new Error('Your free quotation credits have been used. Upgrade your subscription to submit another quote.');
+        error.statusCode = 403;
+        error.code = 'VENDOR_QUOTE_CREDITS_EXHAUSTED';
+        error.freeCreditsRemaining = saved.freeCreditsRemaining;
+        throw error;
+      }
+      if (saved && saved.notFound) return null;
+      if (saved && saved.conflict) continue;
+      if (!saved || !saved.rfq || !saved.vendor) {
+        const persistError = new Error('The quote transaction returned no saved vendor and RFQ rows. Try again.');
+        persistError.statusCode = 503;
+        persistError.code = 'PERSISTENCE_UNAVAILABLE';
+        throw persistError;
+      }
+
+      const savedRFQ = saved.rfq;
+      const vendorIndex = this.vendors.findIndex((item) => item.id === saved.vendor.id);
+      if (vendorIndex === -1) this.vendors.unshift(saved.vendor);
+      else this.vendors[vendorIndex] = saved.vendor;
+      const currentRFQIndex = this.rfqs.findIndex((item) => item.id === savedRFQ.id);
+      if (currentRFQIndex === -1) this.rfqs.unshift(savedRFQ);
+      else this.rfqs[currentRFQIndex] = savedRFQ;
+      this._lastRfqSyncTime = 0;
+      this._notifyRFQUpdate(savedRFQ, rfq.status, { status: savedRFQ.status });
+      const autoClosed = savedRFQ.status === 'Closed' && rfq.status !== 'Closed';
+      this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, quote, autoClosed);
+      logger.info('Vendor quote submission committed with credit accounting', {
+        rfqId: rfq.id,
+        vendorId: vendor.id,
+        creditCharged: saved.creditCharged,
+        attempt: attempt + 1,
+      }, 'STORE_SERVICE');
+      return savedRFQ;
+    }
+
+    const conflictError = new Error('This RFQ changed while the quote was being submitted. Please retry your submission.');
+    conflictError.statusCode = 409;
+    conflictError.code = 'RFQ_QUOTE_WRITE_CONFLICT';
+    logger.warn('Vendor quote could not commit after bounded RFQ conflict retries', {
+      rfqId,
+      vendorId: quote && quote.vendorId,
+      retries: RFQ_QUOTE_WRITE_RETRIES,
+    }, 'STORE_SERVICE');
+    throw conflictError;
   }
 
   cancelDelayedQuoteTimers(rfqId) {

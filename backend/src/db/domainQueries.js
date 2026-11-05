@@ -13,6 +13,8 @@
 
 const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
+const vendorQuoteCreditQueries = require('./vendorQuoteCreditQueries');
+const vendorQuoteSubmissionQueries = require('./vendorQuoteSubmissionQueries');
 const { queryCache } = require('./queryCache');
 const { INDIAN_STATES } = require('../config/constants');
 const { parseSearchTokens } = require('../config/constants');
@@ -2063,10 +2065,13 @@ module.exports = {
   getRFQUnlockFromDB,
   getVendorUnlocksFromDB,
   recordCreditTransactionInDB,
+  recordVendorQuoteCreditInDB: vendorQuoteCreditQueries.recordVendorQuoteCreditInDB,
+  makeD1VendorQuoteCreditStatements: vendorQuoteCreditQueries.makeD1VendorQuoteCreditStatements,
+  submitVendorQuoteInDB: vendorQuoteSubmissionQueries.submitVendorQuoteInDB,
+  makeD1VendorQuoteSubmissionStatements: vendorQuoteSubmissionQueries.makeD1VendorQuoteSubmissionStatements,
   getVendorCreditTransactionsFromDB,
   recordBuyerCreditTransactionInDB,
   getBuyerCreditTransactionsFromDB,
   getPublicVendorsPageFromDB,
   getPublicVendorFiltersFromDB,
 };
-
