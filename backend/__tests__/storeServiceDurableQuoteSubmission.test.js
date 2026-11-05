@@ -1,6 +1,7 @@
 const storeService = require('../src/services/storeService');
 const domainQueries = require('../src/db/domainQueries');
 const pool = require('../src/db/pool');
+const mailerService = require('../src/services/mailerService');
 
 const RFQ_ID = 'rfq-durable-quote-test';
 const VENDOR_ID = 'vendor-durable-quote-test';
@@ -219,6 +220,67 @@ describe('durable quote submission and credit synchronization', () => {
       expect.objectContaining({ vendorId: VENDOR_ID }),
       false
     );
+  });
+
+  test('persists an auto-closure acknowledgement with the closing quote transaction', async () => {
+    const currentRFQ = rfq({
+      buyerAccountId: 'buyer-auto-close',
+      buyerEmail: 'buyer@example.test',
+      assignedVendors: [{ id: VENDOR_ID, email: 'durable-quote@example.com', name: 'Atomic Vendor' }],
+    });
+    const currentVendor = vendor({ subscriptionPlan: 'connect' });
+    const savedRFQ = {
+      ...currentRFQ,
+      status: 'Closed',
+      quotes: [{ id: 'quote-auto-close-1', vendorId: VENDOR_ID, unitPrice: 300 }],
+    };
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(currentRFQ);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(currentVendor);
+    jest.spyOn(storeService, '_buildBuyerQuoteEmailPlan').mockReturnValue({
+      buyer: { organizationName: 'Buyer Organization' },
+      buyerEmail: 'buyer@example.test',
+      requiresProfileCompletion: false,
+    });
+    const submit = jest.spyOn(domainQueries, 'submitVendorQuoteInDB').mockResolvedValue({
+      rfq: savedRFQ,
+      vendor: currentVendor,
+      creditCharged: 0,
+    });
+    jest.spyOn(storeService, '_notifyRFQUpdate').mockImplementation(() => {});
+    const sideEffects = jest.spyOn(storeService, '_dispatchQuoteSubmissionSideEffects').mockImplementation(() => {});
+
+    await storeService.submitVendorQuoteDurably(RFQ_ID, { id: 'quote-auto-close-1', vendorId: VENDOR_ID, unitPrice: 300 });
+
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      autoClosureEmailEventId: expect.stringContaining('rfq_auto_closure_ack_email'),
+      autoClosureRecipientEmail: 'buyer@example.test',
+      autoClosureRecipientName: 'Buyer Organization',
+    }));
+    expect(submit).toHaveBeenCalledWith(expect.not.objectContaining({ quoteNotificationEventId: expect.anything() }));
+    expect(sideEffects).toHaveBeenCalledWith(
+      currentRFQ,
+      savedRFQ,
+      expect.objectContaining({ id: 'quote-auto-close-1' }),
+      true,
+      { skipAutoClosureEmail: true }
+    );
+  });
+
+  test('does not send a direct auto-closure email when durable delivery owns the acknowledgement', () => {
+    const rfq = { id: RFQ_ID, rfqNumber: 'RFQ-AUTO-CLOSE', buyerAccountId: 'buyer-auto-close' };
+    jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@example.test');
+    jest.spyOn(storeService, '_buildNotification').mockReturnValue({ id: 'notification-auto-close' });
+    jest.spyOn(storeService, '_persistNotification').mockImplementation(() => {});
+    const email = jest.spyOn(mailerService, 'sendRfqAutoClosureAcknowledgementEmail');
+
+    storeService.notifyBuyerOfAutoClosureAndScheduleComparison(
+      rfq,
+      [{ id: 'quote-auto-close-1' }],
+      { skipEmail: true }
+    );
+
+    expect(email).not.toHaveBeenCalled();
   });
 
   test('rebuilds the quote from fresh RFQ state after a concurrent writer wins', async () => {

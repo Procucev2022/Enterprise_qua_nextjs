@@ -126,6 +126,14 @@ function makeD1VendorQuoteSubmissionStatements(options) {
     error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
     throw error;
   }
+  if (options.autoClosureEmailEventId && (
+    typeof options.quoteId !== 'string' || !options.quoteId
+    || typeof options.autoClosureRecipientEmail !== 'string' || !options.autoClosureRecipientEmail
+  )) {
+    const error = new Error('An RFQ auto-closure email event requires a quote ID and persisted recipient.');
+    error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
+    throw error;
+  }
 
   return {
     expectedVendor,
@@ -230,6 +238,27 @@ function makeD1VendorQuoteSubmissionStatements(options) {
         options.quoteNotificationRecipient,
         options.quoteNotificationRecipientName || null,
       ],
+    }] : []).concat(options.autoClosureEmailEventId ? [{
+      text: `INSERT OR IGNORE INTO event_outbox
+        (id, event_type, raw, status, available_at, created_at, updated_at)
+        SELECT $1, $2, json_object('rfqId', $3, 'quoteId', $4, 'recipientEmail', $5, 'recipientName', $6), 'pending',
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        FROM rfqs r
+        WHERE r.id = $3 AND r.status = 'Closed' AND EXISTS (
+          SELECT 1 FROM json_each(CASE
+            WHEN json_type(r.raw, '$.quotes') = 'array' THEN json_extract(r.raw, '$.quotes')
+            ELSE '[]'
+          END) AS submitted_quote
+          WHERE CAST(json_extract(submitted_quote.value, '$.id') AS TEXT) = CAST($4 AS TEXT)
+        )`,
+      params: [
+        options.autoClosureEmailEventId,
+        EVENT_OUTBOX_TYPES.RFQ_AUTO_CLOSURE_ACK_EMAIL,
+        options.rfqId,
+        options.quoteId,
+        options.autoClosureRecipientEmail,
+        options.autoClosureRecipientName || null,
+      ],
     }] : []),
   };
 }
@@ -314,6 +343,29 @@ async function submitVendorQuoteOnPostgres(options) {
             quoteId: options.quoteId,
             recipientEmail: options.quoteNotificationRecipient,
             recipientName: options.quoteNotificationRecipientName || null,
+          }),
+        ]
+      );
+    }
+    if (options.autoClosureEmailEventId) {
+      if (typeof options.quoteId !== 'string' || !options.quoteId
+        || typeof options.autoClosureRecipientEmail !== 'string' || !options.autoClosureRecipientEmail) {
+        const error = new Error('An RFQ auto-closure email event requires a quote ID and persisted recipient.');
+        error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
+        throw error;
+      }
+      await client.query(
+        `INSERT INTO event_outbox (id, event_type, raw, status, available_at, created_at, updated_at)
+         VALUES ($1, $2, $3::jsonb, 'pending', now(), now(), now())
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          options.autoClosureEmailEventId,
+          EVENT_OUTBOX_TYPES.RFQ_AUTO_CLOSURE_ACK_EMAIL,
+          JSON.stringify({
+            rfqId: options.rfqId,
+            quoteId: options.quoteId,
+            recipientEmail: options.autoClosureRecipientEmail,
+            recipientName: options.autoClosureRecipientName || null,
           }),
         ]
       );

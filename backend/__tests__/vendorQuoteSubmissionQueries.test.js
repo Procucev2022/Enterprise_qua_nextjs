@@ -101,6 +101,37 @@ describe('atomic vendor quote submission queries', () => {
     }))).toThrow(expect.objectContaining({ code: 'INVALID_VENDOR_QUOTE_SUBMISSION' }));
   });
 
+  test('adds an auto-closure acknowledgement to the same D1 batch as the closing quote', () => {
+    const built = queries.makeD1VendorQuoteSubmissionStatements(baseOptions({
+      quoteId: 'quote-closing-1',
+      autoClosureEmailEventId: 'outbox-auto-close-1',
+      autoClosureRecipientEmail: 'buyer@example.test',
+      autoClosureRecipientName: 'Buyer Org',
+      updatedRFQ: rfq({ status: 'Closed', quotes: [{ id: 'quote-closing-1', vendorId: VENDOR_ID }] }),
+    }));
+    const event = built.statements[6];
+
+    expect(built.statements).toHaveLength(7);
+    expect(event.text).toContain('INSERT OR IGNORE INTO event_outbox');
+    expect(event.text).toContain("r.status = 'Closed'");
+    expect(event.text).toContain("json_each(CASE");
+    expect(event.params).toEqual([
+      'outbox-auto-close-1',
+      'rfq_auto_closure_ack_email',
+      RFQ_ID,
+      'quote-closing-1',
+      'buyer@example.test',
+      'Buyer Org',
+    ]);
+  });
+
+  test('rejects an incomplete durable auto-closure acknowledgement intent', () => {
+    expect(() => queries.makeD1VendorQuoteSubmissionStatements(baseOptions({
+      autoClosureEmailEventId: 'outbox-auto-close-invalid',
+      autoClosureRecipientEmail: 'buyer@example.test',
+    }))).toThrow(expect.objectContaining({ code: 'INVALID_VENDOR_QUOTE_SUBMISSION' }));
+  });
+
   test('builds a zero-charge resubmission when the vendor already has an RFQ marker', () => {
     const options = baseOptions({ expectedVendor: vendor({ freeQuotationCredits: 0, quotedRfqIds: [RFQ_ID] }) });
     const built = queries.makeD1VendorQuoteSubmissionStatements(options);
@@ -203,6 +234,44 @@ describe('atomic vendor quote submission queries', () => {
       JSON.stringify({
         rfqId: RFQ_ID,
         quoteId: 'quote-pg-1',
+        recipientEmail: 'buyer@example.test',
+        recipientName: 'Buyer Org',
+      }),
+    ]);
+  });
+
+  test('queues an auto-closure acknowledgement in the same PostgreSQL transaction', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+    const savedVendor = vendor({ freeQuotationCredits: 1, freeRfqDownloadCredits: 1 });
+    const savedRFQ = rfq({ status: 'Closed', quotes: [{ id: 'quote-pg-close-1', vendorId: VENDOR_ID }] });
+    const client = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [{ raw: vendor() }] })
+      .mockResolvedValueOnce({ rows: [{ raw: rfq() }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ raw: savedVendor }] })
+      .mockResolvedValueOnce({ rows: [{ raw: savedRFQ }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'tx-atomic-quote', amount: -1 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'outbox-auto-close-pg-1' }] }) };
+    jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback(client));
+
+    await queries.submitVendorQuoteInDB(baseOptions({
+      quoteId: 'quote-pg-close-1',
+      autoClosureEmailEventId: 'outbox-auto-close-pg-1',
+      autoClosureRecipientEmail: 'buyer@example.test',
+      autoClosureRecipientName: 'Buyer Org',
+      updatedRFQ: rfq({ status: 'Closed', quotes: [{ id: 'quote-pg-close-1', vendorId: VENDOR_ID }] }),
+    }));
+
+    expect(client.query).toHaveBeenCalledTimes(7);
+    expect(client.query.mock.calls[6][0]).toContain('INSERT INTO event_outbox');
+    expect(client.query.mock.calls[6][1]).toEqual([
+      'outbox-auto-close-pg-1',
+      'rfq_auto_closure_ack_email',
+      JSON.stringify({
+        rfqId: RFQ_ID,
+        quoteId: 'quote-pg-close-1',
         recipientEmail: 'buyer@example.test',
         recipientName: 'Buyer Org',
       }),

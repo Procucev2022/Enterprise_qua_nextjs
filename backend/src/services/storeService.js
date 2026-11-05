@@ -4043,10 +4043,15 @@ class StoreService {
     return updated;
   }
 
-  _dispatchQuoteSubmissionSideEffects(rfq, updated, quote, autoClosed, { skipQuoteEmail = false } = {}) {
+  _dispatchQuoteSubmissionSideEffects(rfq, updated, quote, autoClosed, {
+    skipQuoteEmail = false,
+    skipAutoClosureEmail = false,
+  } = {}) {
     if (autoClosed) {
       this.cancelDelayedQuoteTimers(rfq.id);
-      this.notifyBuyerOfAutoClosureAndScheduleComparison(updated, updated.quotes || []);
+      this.notifyBuyerOfAutoClosureAndScheduleComparison(updated, updated.quotes || [], {
+        skipEmail: skipAutoClosureEmail,
+      });
       return;
     }
     this.notifyBuyerOfQuote(rfq, quote);
@@ -4173,10 +4178,16 @@ class StoreService {
       if (!updatedRFQ) return null;
 
       const autoClosedByQuote = updatedRFQ.status === 'Closed' && rfq.status !== 'Closed';
-      const buyerEmailPlan = autoClosedByQuote ? null : this._buildBuyerQuoteEmailPlan(rfq);
-      const quoteNotificationEventId = buyerEmailPlan && !buyerEmailPlan.requiresProfileCompletion
+      const buyerEmailPlan = this._buildBuyerQuoteEmailPlan(rfq);
+      const quoteNotificationEventId = !autoClosedByQuote && buyerEmailPlan && !buyerEmailPlan.requiresProfileCompletion
         ? eventOutboxService.buildEventOutboxId(
           EVENT_OUTBOX_TYPES.RFQ_QUOTE_RECEIVED_EMAIL,
+          `${rfq.id}:${durableQuoteId}`
+        )
+        : null;
+      const autoClosureEmailEventId = autoClosedByQuote && buyerEmailPlan
+        ? eventOutboxService.buildEventOutboxId(
+          EVENT_OUTBOX_TYPES.RFQ_AUTO_CLOSURE_ACK_EMAIL,
           `${rfq.id}:${durableQuoteId}`
         )
         : null;
@@ -4196,6 +4207,11 @@ class StoreService {
           ...(quoteNotificationEventId ? {
             quoteNotificationRecipient: buyerEmailPlan.buyerEmail,
             quoteNotificationRecipientName: buyerEmailPlan.buyer.organizationName,
+          } : {}),
+          autoClosureEmailEventId,
+          ...(autoClosureEmailEventId ? {
+            autoClosureRecipientEmail: buyerEmailPlan.buyerEmail,
+            autoClosureRecipientName: buyerEmailPlan.buyer.organizationName,
           } : {}),
           expectedVendor: vendor,
           expectedRFQ: rfq,
@@ -4240,8 +4256,11 @@ class StoreService {
       this._lastRfqSyncTime = 0;
       this._notifyRFQUpdate(savedRFQ, rfq.status, { status: savedRFQ.status });
       const autoClosed = savedRFQ.status === 'Closed' && rfq.status !== 'Closed';
-      if (quoteNotificationEventId) {
-        this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed, { skipQuoteEmail: true });
+      if (quoteNotificationEventId || autoClosureEmailEventId) {
+        this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed, {
+          ...(quoteNotificationEventId ? { skipQuoteEmail: true } : {}),
+          ...(autoClosureEmailEventId ? { skipAutoClosureEmail: true } : {}),
+        });
       } else {
         this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed);
       }
@@ -4274,7 +4293,7 @@ class StoreService {
     }
   }
 
-  notifyBuyerOfAutoClosureAndScheduleComparison(rfq, quotes) {
+  notifyBuyerOfAutoClosureAndScheduleComparison(rfq, quotes, { skipEmail = false } = {}) {
     if (!rfq) return;
     const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
     const buyer = (rfq.buyerAccountId && this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId)) || {
@@ -4303,7 +4322,7 @@ class StoreService {
     }
 
     // 2. Immediate RFQ Auto-Closure Acknowledgement Email to buyer
-    if (buyer.corporateEmail) {
+    if (buyer.corporateEmail && !skipEmail) {
       this._background(
         mailerService.sendRfqAutoClosureAcknowledgementEmail(buyer.corporateEmail, {
           rfq,

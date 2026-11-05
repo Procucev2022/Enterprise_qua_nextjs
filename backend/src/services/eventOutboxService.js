@@ -538,6 +538,51 @@ async function dispatchEvent(job) {
       }, 'EVENT_OUTBOX');
       return;
     }
+    case EVENT_OUTBOX_TYPES.RFQ_AUTO_CLOSURE_ACK_EMAIL: {
+      const rfqId = job.raw?.rfqId;
+      const quoteId = job.raw?.quoteId;
+      const recipientEmail = typeof job.raw?.recipientEmail === 'string' ? job.raw.recipientEmail.trim() : '';
+      const recipientName = typeof job.raw?.recipientName === 'string' && job.raw.recipientName.trim()
+        ? job.raw.recipientName.trim()
+        : null;
+      if (
+        typeof rfqId !== 'string' || !rfqId
+        || typeof quoteId !== 'string' || !quoteId
+        || !EMAIL_REGEX.test(recipientEmail)
+      ) {
+        const error = new Error('RFQ auto-closure acknowledgement retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+      const quoteExists = Array.isArray(rfq?.quotes)
+        && rfq.quotes.some((candidate) => String(candidate.id || '') === quoteId);
+      if (!rfq || !quoteExists) {
+        const error = new Error('RFQ auto-closure acknowledgement references a missing persisted RFQ or quote.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const delivery = await mailerService.sendRfqAutoClosureAcknowledgementEmail(recipientEmail, {
+        rfq,
+        quotesCount: rfq.quotes.length,
+        recipientName: recipientName || rfq.buyerAccountName || rfq.buyerName || 'Buyer',
+      });
+      if (!delivery?.sent) {
+        const error = new Error('RFQ auto-closure acknowledgement provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('RFQ auto-closure acknowledgement accepted by a provider', {
+        rfqId,
+        rfqNumber: rfq.rfqNumber,
+        quoteId,
+        quotesCount: rfq.quotes.length,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
     default: {
       const error = new Error(`Unsupported persisted event-outbox type: ${job.event_type}`);
       error.code = 'INVALID_EVENT_OUTBOX_TYPE';
