@@ -6,6 +6,7 @@
 
 const pool = require('./pool');
 const crypto = require('crypto');
+const { VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
 
 function parseJsonSafe(val, fallback = null) {
   if (val === null || val === undefined) return fallback;
@@ -1050,12 +1051,12 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
           const vRow = dbVendorRes.rows[0];
           targetVendorId = vRow.id;
           const vRaw = typeof vRow.raw === 'string' ? JSON.parse(vRow.raw || '{}') : (vRow.raw || {});
-          prevBal = Number(vRaw.freeQuotationCredits ?? vRaw.freeRfqDownloadCredits ?? vRow.credits ?? 0);
+          prevBal = Number(vRaw.freeQuotationCredits ?? vRaw.freeRfqDownloadCredits ?? vRow.credits ?? VENDOR_FREE_CREDITS_LIMIT);
         } else {
           const vendor = (storeService.getVendorById && storeService.getVendorById(accountId)) || null;
           if (vendor) {
             targetVendorId = vendor.id;
-            prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? 0);
+            prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? VENDOR_FREE_CREDITS_LIMIT);
           }
         }
         const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;

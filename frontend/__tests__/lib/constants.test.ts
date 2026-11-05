@@ -567,9 +567,10 @@ describe('getVendorCreditBalance', () => {
     expect(getVendorCreditBalance({ subscriptionPlan: 'select', rfqDownloadsUsed: 150 })).toBe(0);
   });
 
-  it('falls back to the free-tier balance, 0 when there is none, for vendors without a subscription', () => {
+  it('falls back to the free-tier balance, the default 5 when none is stored, for vendors without a subscription', () => {
     expect(getVendorCreditBalance({ subscriptionPlan: 'premium', freeQuotationCredits: 3 })).toBe(3);
     expect(getVendorCreditBalance({ freeQuotationCredits: -2 })).toBe(0);
-    expect(getVendorCreditBalance({})).toBe(0);
+    expect(getVendorCreditBalance({})).toBe(5);
+    expect(getVendorCreditBalance({ freeQuotationCredits: 0 })).toBe(0);
   });
 });
