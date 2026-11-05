@@ -1133,7 +1133,7 @@ async function getVendorsPresence(req, res, next) {
     if (!isValid) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
-    const result = vendorPresenceService.getPresence(identifiers);
+    const result = await vendorPresenceService.getPresenceDurably(identifiers);
     res.json(result);
   } catch (err) {
     logger.error('Error fetching vendor presence', err, 'VENDOR_CONTROLLER');
@@ -1142,6 +1142,13 @@ async function getVendorsPresence(req, res, next) {
 }
 
 async function recordVendorHeartbeat(req, res, next) {
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'An authenticated vendor session is required.' });
+    }
+    if (user.role !== 'vendor') {
+      return res.status(403).json({ success: false, error: 'Only a vendor session can update vendor presence.' });
+    }
+
   try {
     const user = req.user;
     const body = req.body || {};
@@ -1149,13 +1156,22 @@ async function recordVendorHeartbeat(req, res, next) {
     if (!isValid) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
-    const identifier = body.identifier || (user && (user.email || user.sub));
+    const identifier = user.email;
     if (!identifier) {
-      return res.status(400).json({ success: false, error: 'Identifier is required for heartbeat.' });
+      return res.status(400).json({ success: false, error: 'The authenticated vendor session has no email identity.' });
     }
-    const role = body.role || (user && user.role) || 'vendor';
+    if (body.identifier && body.identifier.trim().toLowerCase() !== identifier.trim().toLowerCase()) {
+      logger.warn('Ignored client-supplied vendor presence identity that did not match the session', {
+        sessionSubject: user.sub || user.id || null,
+      }, 'VENDOR_CONTROLLER');
+    }
     const status = body.status || 'online';
-    const result = vendorPresenceService.recordHeartbeat({ identifier, role, status });
+    const result = await vendorPresenceService.recordHeartbeatDurably({
+      identifier,
+      role: 'vendor',
+      vendorId: user.vendorId || null,
+      status,
+    });
     res.json(result);
   } catch (err) {
     logger.error('Error recording vendor heartbeat', err, 'VENDOR_CONTROLLER');
