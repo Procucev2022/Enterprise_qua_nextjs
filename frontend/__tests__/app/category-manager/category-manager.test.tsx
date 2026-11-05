@@ -317,11 +317,7 @@ describe('Category Manager Screens Suite', () => {
       expect(screen.getByText('RFQ-2026-00906')).toBeInTheDocument();
       expect(screen.getByText(/1 quote evaluated/i)).toBeInTheDocument();
 
-      // Vendor Follow-Up Details opens with the specific real RFQ the card belongs to
-      const deepDiveBtns = screen.getAllByRole('button', { name: /Vendor Follow-Up Details/i });
-      fireEvent.click(deepDiveBtns[0]);
-      expect(screen.getByRole('heading', { name: /Vendor Follow-Up Details/i })).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: /Close Vendor Follow-Up Details/i }));
+
 
       // Open & Review Categories action on parsing RFQ card
       const reviewActionBtns = screen.getAllByRole('button', { name: /Open & Review Categories/i });
@@ -510,8 +506,7 @@ describe('Category Manager Screens Suite', () => {
       });
       expect(screen.getByText('Pending RFQ With Follow-Up Started But No Vendors Yet')).toBeInTheDocument();
 
-      const detailsBtns = screen.getAllByRole('button', { name: /Vendor Follow-Up Details/i });
-      expect(() => fireEvent.click(detailsBtns[0])).not.toThrow();
+
 
       global.fetch = baseImpl as unknown as typeof global.fetch;
     });

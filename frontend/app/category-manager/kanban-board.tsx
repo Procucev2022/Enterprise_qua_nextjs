@@ -12,7 +12,6 @@ import {
   ChevronRight,
   Sliders,
   TrendingUp,
-  Search,
   Sparkles,
   Zap,
   X,
@@ -485,15 +484,7 @@ export default function KanbanBoard({
                   );
                 })()}
 
-                {/* Action Buttons */}
-                <div className="pt-1">
-                  <button
-                    onClick={() => openRFQDeepDive(rfq)}
-                    className="btn btn-secondary btn-sm w-full text-[10px] flex items-center justify-center gap-1.5 font-semibold"
-                  >
-                    <Search size={12} /> Vendor Follow-Up Details
-                  </button>
-                </div>
+
               </div>
             ))}
           </div>
