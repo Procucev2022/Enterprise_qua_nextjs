@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import SellersDirectory from '@/app/category-manager/sellers-directory';
 import CategoryManagerSellersDirectoryPage from '@/app/category-manager/sellers-directory/page';
 import { useApp } from '@/lib/store';
@@ -624,4 +624,258 @@ describe('SellersDirectory Component Suite', () => {
     window.localStorage.clear();
   });
 
+
+  describe('Summary Cards Click and Modal Popup', () => {
+    test('opens modal on clicking Total Suppliers and exercises columns', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        buyerVendors: [
+          {
+            id: 'v-1',
+            name: 'Apex Fasteners Ltd',
+            contactPerson: 'Arun Kumar',
+            email: 'arun@apexfasteners.com',
+            phone: '9876543210',
+            location: 'Pune',
+            deliveryLocation: 'Maharashtra',
+            source: 'buyer_uploaded',
+            majorCategory: 'Fasteners',
+            score: 88,
+            rating: 4.5,
+            status: 'ACTIVE_VERIFIED',
+            freeQuotationCredits: 5,
+            createdAt: '2026-01-10T10:00:00Z',
+          },
+        ],
+        rfqs: [
+          {
+            id: 'rfq-1',
+            rfqNumber: 'RFQ-001',
+            title: 'Hex Bolts',
+            quotes: [{ vendorId: 'v-1', id: 'q-1' }],
+          },
+        ],
+        categoryTaxonomy: [{ id: 'cat-1', name: 'Fasteners' }],
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        auditLogs: [],
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      render(<SellersDirectory />);
+      await waitFor(() => {
+        expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+      });
+
+      const totalCard = screen.getByText('Total Suppliers', { selector: 'p' }).closest('[role="group"]');
+      if (totalCard) {
+        fireEvent.click(totalCard);
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toBeInTheDocument();
+        expect(within(dialog).getByText('Total Suppliers')).toBeInTheDocument();
+        expect(within(dialog).getByText('arun@apexfasteners.com')).toBeInTheDocument();
+
+        // Close modal
+        const closeBtn = screen.getAllByRole('button', { name: /close/i })[0];
+        fireEvent.click(closeBtn);
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      }
+    });
+
+    test('opens modal for Network Suppliers, Buyer Uploaded, Avg Score, and Quoted Opportunities with keyboard support', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        buyerVendors: [
+          {
+            id: 'v-1',
+            name: 'Apex Fasteners Ltd',
+            source: 'buyer_uploaded',
+            majorCategory: 'Fasteners',
+            score: 88,
+            rating: 4.5,
+          },
+        ],
+        rfqs: [
+          {
+            id: 'rfq-1',
+            rfqNumber: 'RFQ-001',
+            title: 'Hex Bolts',
+            quotes: [{ vendorId: 'v-1' }],
+          },
+        ],
+        categoryTaxonomy: [],
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        auditLogs: [],
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      render(<SellersDirectory />);
+      await waitFor(() => {
+        expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
+      });
+
+      // Network Suppliers with Enter
+      const networkCard = screen.getByText('Network Suppliers', { selector: 'p' }).closest('[role="group"]');
+      if (networkCard) {
+        fireEvent.keyDown(networkCard, { key: 'Enter' });
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+
+      // Buyer Uploaded with Space
+      const buyerCard = screen.getByText('Buyer Uploaded', { selector: 'p' }).closest('[role="group"]');
+      if (buyerCard) {
+        fireEvent.keyDown(buyerCard, { key: ' ' });
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+
+      // Avg Score
+      const scoreCard = screen.getByText('Average 360° Score', { selector: 'p' }).closest('[role="group"]');
+      if (scoreCard) {
+        fireEvent.click(scoreCard);
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+
+      // Quoted Opportunities
+      const quotesCard = screen.getByText('Quoted Opportunities', { selector: 'p' }).closest('[role="group"]');
+      if (quotesCard) {
+        fireEvent.click(quotesCard);
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toBeInTheDocument();
+        expect(within(dialog).getByText('RFQ-001')).toBeInTheDocument();
+        expect(within(dialog).getByText('Hex Bolts')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+    });
+  
+
+    test('exercises initialSellerId match and non-match, row click propagation, column sorting branches, and card key events', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        buyerVendors: [
+          {
+            id: 'v-complete',
+            name: 'Alpha Supplier',
+            majorCategory: 'Electronics',
+            category: 'Hardware',
+            freeQuotationCredits: 10,
+            rating: 4.8,
+            score: 95,
+            lastLogin: '2026-04-01T10:00:00Z',
+            createdAt: '2026-01-01T10:00:00Z',
+            status: 'ACTIVE_VERIFIED',
+            contactPerson: 'Alice',
+            email: 'alice@alpha.com',
+            phone: '9876543210',
+            deliveryLocation: 'Mumbai',
+            source: 'procucev_network',
+          },
+          {
+            id: 'v-sparse',
+            name: 'Beta Supplier',
+            majorCategory: null,
+            category: 'Software',
+            freeQuotationCredits: null,
+            rating: null,
+            score: null,
+            lastLogin: null,
+            createdAt: null,
+            status: null,
+            contactPerson: null,
+            email: null,
+            phone: null,
+            deliveryLocation: null,
+            source: 'buyer_uploaded',
+          },
+          {
+            id: 'v-empty',
+            name: '',
+            majorCategory: null,
+            category: null,
+            freeQuotationCredits: 0,
+            rating: 0,
+            score: 0,
+            lastLogin: null,
+            createdAt: null,
+            status: '',
+            contactPerson: '',
+            email: '',
+            phone: '',
+            deliveryLocation: '',
+            source: 'other',
+          },
+        ],
+        rfqs: [
+          {
+            id: 'rfq-no-quotes',
+            rfqNumber: 'RFQ-NQ-1',
+            quotes: null,
+          },
+        ],
+        categoryTaxonomy: [],
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        auditLogs: [],
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      // 1. Test initialSellerId non-match
+      render(<SellersDirectory initialSellerId="non-existent-seller" />);
+      await waitFor(() => {
+        expect(screen.getByText('Beta Supplier')).toBeInTheDocument();
+      });
+
+      // 2. Open column settings and enable all columns
+      const settingsBtn = screen.getByTitle('Customize Columns');
+      fireEvent.click(settingsBtn);
+      const checkboxes = screen.getAllByRole('checkbox');
+      checkboxes.forEach((cb) => {
+        if (!(cb as HTMLInputElement).checked) {
+          fireEvent.click(cb);
+        }
+      });
+      fireEvent.click(settingsBtn);
+
+      // Verify column renders for sparse/empty rows
+      expect(screen.getAllByText('Never').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+
+      // 3. Test column headers sorting branches (asc & desc with sparse/complete data)
+      const columnNames = [
+        'Supplier',
+        'Category',
+        'Credits',
+        'Rating',
+        '360° Score',
+        'Last Login',
+        'Registration Date',
+      ];
+
+      for (const colName of columnNames) {
+        const thCol = screen.queryByRole('columnheader', { name: new RegExp(colName, 'i') });
+        if (thCol) {
+          fireEvent.click(thCol);
+          fireEvent.click(thCol);
+          fireEvent.click(thCol);
+        }
+      }
+
+      // 4. Test summary cards keyboard events (Enter, Space, Escape)
+      const cards = screen.getAllByRole('group');
+      for (const card of cards) {
+        fireEvent.keyDown(card, { key: ' ' });
+        fireEvent.keyDown(card, { key: 'Escape' });
+        fireEvent.keyDown(card, { key: 'Enter' });
+      }
+
+      // 5. Test row click when clicking on child button vs row
+      const firstRow = screen.getByText('Alpha Supplier').closest('tr');
+      if (firstRow) {
+        const btnInsideRow = within(firstRow).getByRole('button', { name: /360° Dossier/i });
+        fireEvent.click(btnInsideRow);
+        fireEvent.click(firstRow);
+      }
+    });
+
+  });
 });

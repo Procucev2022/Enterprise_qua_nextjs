@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import ActionCenterComposeModal from '@/app/category-manager/components/ActionCenterComposeModal';
 import * as actionCenterCommClient from '@/lib/actionCenterCommClient';
+import { fetchDocuments } from '@/lib/documentVaultClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { DEFAULT_INTERNAL_MEMBERS } from '@/lib/constants';
 
@@ -9,11 +10,16 @@ jest.mock('@/lib/actionCenterCommClient', () => ({
   dispatchActionCenterCommunication: jest.fn(),
 }));
 
+jest.mock('@/lib/documentVaultClient', () => ({
+  fetchDocuments: jest.fn().mockReturnValue(new Promise(() => {})),
+}));
+
 describe('ActionCenterComposeModal', () => {
   const strings = UI_STRINGS.actionCenter.communicationModal;
   const mockOnClose = jest.fn();
   const mockOnSuccess = jest.fn();
   const mockDispatch = actionCenterCommClient.dispatchActionCenterCommunication as jest.Mock;
+  const mockFetchDocuments = fetchDocuments as jest.Mock;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -632,6 +638,320 @@ describe('ActionCenterComposeModal', () => {
       ).toBeInTheDocument();
       expect(mockOnSuccess).toHaveBeenCalled();
       expect(testOnClose).not.toHaveBeenCalled();
+    });
+  });
+  it('selects commercial conversion scenarios and call outcome drafts with auto-attachments', async () => {
+    const { fetchDocuments } = require('@/lib/documentVaultClient');
+    (fetchDocuments as jest.Mock).mockResolvedValueOnce([
+      {
+        id: 'doc_vault_1',
+        documentName: 'Enterprise Sourcing ROI Deck',
+        fileName: 'roi.pdf',
+        fileSize: 1024000,
+        mimeType: 'application/pdf',
+        category: 'marketing_overview',
+        isActive: true,
+      },
+    ]);
+
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-test-123"
+        defaultRecipientName="Acme Industrial"
+        defaultRecipientEmail="procurement@acme.com"
+        defaultChannel="EMAIL"
+      />
+    );
+
+    const scenarioSelect = container.querySelector('#compose-scenario') as HTMLSelectElement;
+    expect(scenarioSelect).toBeInTheDocument();
+
+    // Select conversion scenario
+    fireEvent.change(scenarioSelect, { target: { value: 'buyer_conversion_followup' } });
+
+    await waitFor(() => {
+      const subjectInput = container.querySelector('#compose-subject') as HTMLInputElement;
+      expect(subjectInput.value).toContain('Procurement Optimization & Commercial Plan for Acme Industrial');
+    });
+
+    // Select call outcome scenario
+    fireEvent.change(scenarioSelect, { target: { value: 'buyer_call_outcome_connected' } });
+
+    await waitFor(() => {
+      const subjectInput = container.querySelector('#compose-subject') as HTMLInputElement;
+      expect(subjectInput.value).toContain('Discussion Recap & Commercial Proposal for Acme Industrial');
+    });
+  });
+
+  it('supports attaching local files directly and removing attachment chips', async () => {
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-test-123"
+        defaultRecipientEmail="procurement@acme.com"
+        defaultChannel="EMAIL"
+        defaultAttachments={[
+          {
+            id: 'existing-att-1',
+            documentName: 'Initial Spec Sheet',
+            fileName: 'spec.pdf',
+            category: 'compliance',
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText('Initial Spec Sheet')).toBeInTheDocument();
+
+    // Attach local file
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    if (fileInput) {
+      const localFile = new File(['local data'], 'one_off_doc.pdf', { type: 'application/pdf' });
+      fireEvent.change(fileInput, { target: { files: [localFile] } });
+      await waitFor(() => {
+        expect(screen.getByText(/one off doc/i)).toBeInTheDocument();
+      });
+    }
+
+    // Remove attachment chip
+    const removeBtns = screen.getAllByTitle(strings.removeAttachmentTooltip || 'Remove attachment');
+    fireEvent.click(removeBtns[0]!);
+    expect(screen.queryByText('Initial Spec Sheet')).not.toBeInTheDocument();
+  });
+
+  it('interacts with document vault dropdown to attach and detach documents', async () => {
+    const mockVaultDocs = [
+      {
+        id: 'vault-doc-1',
+        documentName: 'Enterprise SLA Contract',
+        fileName: 'sla_contract.pdf',
+        fileSize: 1024,
+        mimeType: 'application/pdf',
+        category: 'legal_compliance',
+        fileUrl: '/docs/sla.pdf',
+        isActive: true,
+      },
+    ];
+    mockFetchDocuments.mockResolvedValueOnce(mockVaultDocs);
+
+    render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-vault-test"
+        defaultRecipientEmail="buyer@example.com"
+        defaultChannel="EMAIL"
+      />
+    );
+
+    const dropdownToggle = screen.getByText('Select from Document Vault...');
+    fireEvent.click(dropdownToggle);
+
+    await waitFor(() => {
+      expect(screen.getByText('Enterprise SLA Contract')).toBeInTheDocument();
+    });
+
+    const docOption = screen.getByText('Enterprise SLA Contract');
+    fireEvent.click(docOption);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('1 document(s) attached').length).toBeGreaterThan(0);
+    });
+
+    const docOptionInDropdown = screen.getAllByText('Enterprise SLA Contract')[0]!;
+    fireEvent.click(docOptionInDropdown);
+    await waitFor(() => {
+      expect(screen.getByText('Select from Document Vault...')).toBeInTheDocument();
+    });
+  });
+
+  it('renders empty dropdown message when vault has no active documents or fetch rejects', async () => {
+    mockFetchDocuments.mockResolvedValueOnce([]);
+
+    render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-empty-vault"
+        defaultRecipientEmail="empty@example.com"
+        defaultChannel="EMAIL"
+      />
+    );
+
+    fireEvent.click(screen.getByText('Select from Document Vault...'));
+
+    await waitFor(() => {
+      expect(screen.getByText('No active documents available in Document Vault.')).toBeInTheDocument();
+    });
+
+    mockFetchDocuments.mockRejectedValueOnce(new Error('Network error'));
+    render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-fail-vault"
+        defaultRecipientEmail="fail@example.com"
+        defaultChannel="EMAIL"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Select from Document Vault...').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('initializes with defaultScenarioId and interpolates content on load', async () => {
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-scenario-init"
+        defaultRecipientName="Global Corp"
+        defaultRecipientEmail="global@corp.com"
+        defaultScenarioId="buyer_call_outcome_no_answer"
+        defaultChannel="EMAIL"
+      />
+    );
+
+    await waitFor(() => {
+      const select = container.querySelector('#compose-scenario') as HTMLSelectElement;
+      expect(select).not.toBeNull();
+      expect(select.value).toBe('buyer_call_outcome_no_answer');
+    });
+
+    // Change to empty option
+    const select = container.querySelector('#compose-scenario') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: '' } });
+    expect(select.value).toBe('');
+
+    // Change to custom
+    fireEvent.change(select, { target: { value: 'custom' } });
+    expect(select.value).toBe('custom');
+  });
+
+  it('displays SMS character counter warning when message exceeds 160 characters', () => {
+    const longMessage = 'A'.repeat(165);
+    render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-sms-counter"
+        defaultRecipientPhone="9876543210"
+        defaultChannel="SMS"
+        defaultMessage={longMessage}
+      />
+    );
+
+    expect(screen.getByText(/165 characters \(2 SMS units\)/i)).toBeInTheDocument();
+  });
+
+  it('validates invalid email format and handles scenario selection with fallback tokens and matching vault collateral', async () => {
+    const matchingDocs = [
+      {
+        id: 'vault-marketing-1',
+        documentName: 'Enterprise Marketing Deck',
+        fileName: 'marketing.pdf',
+        fileSize: 2048,
+        mimeType: 'application/pdf',
+        category: 'marketing_overview',
+        fileUrl: '/docs/marketing.pdf',
+        isActive: true,
+      },
+    ];
+    mockFetchDocuments.mockResolvedValueOnce(matchingDocs);
+
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-fallback-tokens"
+        defaultChannel="EMAIL"
+        defaultRecipientName=""
+        defaultRecipientEmail="not-an-email"
+        defaultMessage="Valid message content"
+      />
+    );
+
+    // Try submit with invalid email format (missing @)
+    const form = container.querySelector('form')!;
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+    });
+
+    // Select scenario when recipientName is empty and matching vault collateral exists
+    const select = container.querySelector('#compose-scenario') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'buyer_conversion_followup' } });
+
+    await waitFor(() => {
+      const subjectInput = container.querySelector('#compose-subject') as HTMLInputElement;
+      expect(subjectInput.value).toContain('Follow-up: Procurement Optimization & Commercial Plan for byr-fallback-tokens');
+    });
+
+    // Verify auto-attached document appears
+    await waitFor(() => {
+      expect(screen.getByText('Enterprise Marketing Deck')).toBeInTheDocument();
+    });
+  });
+
+  it('submits form with scenario, attachments, and scheduleFollowup without notes', async () => {
+    mockDispatch.mockResolvedValueOnce({ success: true });
+
+    const { container } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-full-submit"
+        defaultChannel="EMAIL"
+        defaultRecipientName="Acme Corp"
+        defaultRecipientEmail="acme@example.com"
+        defaultMessage="Ready to submit"
+        defaultScenarioId="buyer_conversion_followup"
+        defaultAttachments={[
+          {
+            id: 'att-1',
+            documentName: 'Att Doc',
+            fileName: 'doc.pdf',
+            category: 'rate_cards',
+          },
+        ]}
+      />
+    );
+
+    // Enable followup without notes
+    const followupCheckbox = screen.getByRole('checkbox');
+    fireEvent.click(followupCheckbox);
+
+    const dateInput = container.querySelector('#compose-followup-date') as HTMLInputElement;
+    fireEvent.change(dateInput, { target: { value: '2026-12-01' } });
+
+    const form = container.querySelector('form')!;
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(mockDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scenarioId: 'buyer_conversion_followup',
+          attachments: expect.arrayContaining([expect.objectContaining({ id: 'att-1' })]),
+          scheduleFollowup: expect.objectContaining({
+            dueDate: '2026-12-01',
+            notes: undefined,
+          }),
+        })
+      );
     });
   });
 });

@@ -63,6 +63,18 @@ const REPORTED_TABLES = [
   'ai_classification_logs',
   'vendor_directory_sessions',
   'payment_dues_communications',
+  'tickets',
+  'ticket_activities',
+  'internal_task_types',
+  'internal_tasks',
+  'internal_task_activities',
+  'approvals',
+  'system_error_logs',
+  'vendor_categories_indexed',
+  'rfq_unlocks',
+  'vendor_credit_transactions',
+  'buyer_credit_transactions',
+  'document_vault',
 ];
 
 async function reportRowCounts() {

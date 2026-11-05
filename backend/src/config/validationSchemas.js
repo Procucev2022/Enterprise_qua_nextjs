@@ -112,7 +112,84 @@ const ORGANIZATION_TYPES = [
   'Sole Proprietorship',
 ];
 
+const INTERNAL_TASK_CATEGORY_ENUM = Object.freeze([
+  'COMMUNICATION',
+  'DEMO_SCHEDULING',
+  'CREDIT_MANAGEMENT',
+  'BUSINESS_DEVELOPMENT',
+  'INTERNAL_OPERATIONS',
+  'ONBOARDING',
+]);
+
+const INTERNAL_TASK_TYPE_ENUM = Object.freeze([
+  'Phone Call',
+  'SMS',
+  'WhatsApp',
+  'Email',
+  'New Follow-up',
+  'Existing Follow-up',
+  'Schedule Demo',
+  'Demo Scheduling',
+  'Add Credits',
+  'Delete Credits',
+  'Delete / Deduct Credits',
+  'Send Proposal',
+  'Send Corporate Email',
+  'Operational Task',
+  'Internal Operations',
+  'Custom Task',
+  'Client Onboarding',
+  'Onboarding Process',
+  'Quotation Review',
+]);
+
 const VALIDATION_SCHEMAS = {
+  accountDocumentUpload: {
+    documentName: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'Document name is required.' },
+    category: { type: 'string', required: true, minLength: 1, maxLength: 64, message: 'Valid document category is required.' },
+    fileName: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'File name is required.' },
+    fileSize: { type: 'number', required: false, min: 0, max: 26214400, message: 'File size must not exceed 25MB.' },
+    description: { type: 'string', required: false, maxLength: 2000 },
+    fileUrl: { type: 'string', required: false },
+    mimeType: { type: 'string', required: false },
+  },
+
+  sellerAddQuoteCredits: {
+    amount: {
+      type: 'number',
+      required: true,
+      min: 1,
+      max: 5,
+      custom: (val) => (!Number.isInteger(Number(val)) || Number(val) < 1 || Number(val) > 5 ? 'Quote credits must be an integer between 1 and 5.' : null),
+      message: 'Quote credits must be an integer between 1 and 5.',
+    },
+    reason: { type: 'string', required: false, maxLength: 500 },
+  },
+
+  buyerCreditApprovalRequest: {
+    amount: {
+      type: 'number',
+      required: true,
+      min: 1,
+      max: 100000,
+      custom: (val) => (!Number.isInteger(Number(val)) || Number(val) < 1 ? 'Credit amount must be a positive integer.' : null),
+      message: 'Credit amount must be a positive integer.',
+    },
+    reason: { type: 'string', required: false, maxLength: 1000 },
+    approverName: {
+      type: 'string',
+      required: true,
+      enum: ['Srinu Sir', 'Sudheer Sir'],
+      message: 'Approver must be Srinu Sir or Sudheer Sir.',
+    },
+    initiatorName: {
+      type: 'string',
+      required: true,
+      enum: ['Govardhan', 'Krishna', 'Chandhan'],
+      message: 'Initiator must be Govardhan, Krishna, or Chandhan.',
+    },
+  },
+
   sendPaymentDuesEmail: {
     accountId: { type: 'string', required: true, minLength: 1 },
     accountType: { type: 'string', required: true, enum: ['buyer', 'seller'] },
@@ -200,6 +277,8 @@ const VALIDATION_SCHEMAS = {
       pattern: EMAIL_REGEX,
       message: 'Source email must be a valid email address.',
     },
+    sharedBuyerAccountIds: { type: 'array', required: false },
+    sharedBuyerEmails: { type: 'array', required: false },
   },
 
   // Edit of an existing RFQ (PUT /api/rfqs/:id).
@@ -858,6 +937,148 @@ const VALIDATION_SCHEMAS = {
     channel: { type: 'string', required: false, maxLength: 32 },
     page: { type: 'number', required: false, min: 1 },
     pageSize: { type: 'number', required: false, min: 1, max: 100 },
+  },
+
+  createInternalTask: {
+    title: {
+      type: 'string',
+      required: true,
+      minLength: 2,
+      maxLength: 512,
+      message: 'Task title must be between 2 and 512 characters.',
+    },
+    taskCategory: {
+      type: 'string',
+      required: false,
+      enum: INTERNAL_TASK_CATEGORY_ENUM,
+      message: 'Invalid taskCategory. Must be one of the defined internal task categories.',
+    },
+    taskType: {
+      type: 'string',
+      required: false,
+      enum: INTERNAL_TASK_TYPE_ENUM,
+      message: 'Invalid taskType. Must be one of the defined task types.',
+    },
+    priority: {
+      type: 'string',
+      required: false,
+      enum: ['Low', 'Medium', 'High', 'Critical'],
+    },
+    status: {
+      type: 'string',
+      required: false,
+      enum: [
+        'New',
+        'Assigned',
+        'In Progress',
+        'Pending Approval',
+        'Completed',
+        'Rejected',
+        'Cancelled',
+        'Pending',
+        'Blocked',
+        'Escalated',
+      ],
+    },
+    assignedToName: {
+      type: 'string',
+      required: false,
+    },
+    dueDate: {
+      type: 'string',
+      required: false,
+    },
+    creditQuantity: {
+      type: 'number',
+      required: false,
+      min: 0,
+    },
+  },
+
+  updateInternalTask: {
+    title: {
+      type: 'string',
+      required: false,
+      minLength: 2,
+      maxLength: 512,
+    },
+    taskCategory: {
+      type: 'string',
+      required: false,
+      enum: INTERNAL_TASK_CATEGORY_ENUM,
+      message: 'Invalid taskCategory. Must be one of the defined internal task categories.',
+    },
+    taskType: {
+      type: 'string',
+      required: false,
+      enum: INTERNAL_TASK_TYPE_ENUM,
+      message: 'Invalid taskType. Must be one of the defined task types.',
+    },
+    status: {
+      type: 'string',
+      required: false,
+      enum: [
+        'New',
+        'Assigned',
+        'In Progress',
+        'Pending Approval',
+        'Completed',
+        'Rejected',
+        'Cancelled',
+        'Pending',
+        'Blocked',
+        'Escalated',
+      ],
+    },
+    priority: {
+      type: 'string',
+      required: false,
+      enum: ['Low', 'Medium', 'High', 'Critical'],
+    },
+  },
+
+  approveInternalTask: {
+    remarks: {
+      type: 'string',
+      required: false,
+      maxLength: 2000,
+    },
+  },
+
+  rejectInternalTask: {
+    remarks: {
+      type: 'string',
+      required: false,
+      maxLength: 2000,
+    },
+  },
+
+  addInternalTaskActivity: {
+    comment: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 5000,
+      message: 'Comment or note cannot be blank.',
+    },
+  },
+
+  sendDailyRfqReport: {
+    targetDate: {
+      type: 'string',
+      required: false,
+      pattern: /^\d{4}-\d{2}-\d{2}$/,
+      message: 'targetDate must be a valid date in YYYY-MM-DD format if provided.',
+    },
+    recipients: {
+      type: 'array',
+      required: false,
+      message: 'recipients must be an array of email strings.',
+    },
+    dryRun: {
+      type: 'boolean',
+      required: false,
+    },
   },
 };
 

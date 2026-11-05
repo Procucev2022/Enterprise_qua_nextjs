@@ -211,7 +211,7 @@ class StoreService {
           // (getVendorByIdWithDBFallback) as "a capped, bootstrap-time
           // subset" that individual DB fallbacks paper over — hydration
           // should actually honor that instead of loading everything.
-          domainQueries.getVendorsPageFromDB({ limit: MAX_HYDRATION_VENDORS, offset: 0 }),
+          domainQueries.getVendorsPageFromDB({ limit: MAX_HYDRATION_VENDORS, offset: 0, skipCount: true, publicOnly: true }),
           domainQueries.getRFQsFromDB(null, 100),
           domainQueries.getEvaluationsFromDB(100),
           domainQueries.getVendorCatalogueFromDB(100),
@@ -223,16 +223,13 @@ class StoreService {
         ]);
 
       this.vendors = vendorPage.rows;
-      this.vendorsTotal = vendorPage.total;
+      this.vendorsTotal = vendorPage.total || vendorPage.rows.length;
       this.rfqs = rfqs.map((rfq) => {
         if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
-          rfq = { ...rfq, status: 'PO Generated', poFinalised: true };
-          this._persistRFQ(rfq);
+          return { ...rfq, status: 'PO Generated', poFinalised: true };
         }
         if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
-          const corrected = { ...rfq, source: 'manual_entry' };
-          this._persistRFQ(corrected);
-          return corrected;
+          return { ...rfq, source: 'manual_entry' };
         }
         return rfq;
       });
@@ -364,6 +361,18 @@ class StoreService {
 
   _persistPaymentLink(link) {
     this._background(domainQueries.upsertPaymentLinkInDB(link), 'Failed to persist payment link');
+  }
+
+  async confirmRfqPersisted(rfq) {
+    this._lastRfqSyncTime = 0;
+    if (!pool.hasStorage()) return { persisted: null };
+    try {
+      await domainQueries.upsertRFQInDB(rfq);
+      return { persisted: true };
+    } catch (err) {
+      logger.error('Failed to confirm RFQ persisted in database', err, 'STORE_SERVICE');
+      throw err;
+    }
   }
 
   _persistRFQ(rfq) {
@@ -2238,7 +2247,13 @@ class StoreService {
     let list = this.rfqs;
     if (buyerAccountId) {
       const targetId = String(buyerAccountId).toLowerCase();
-      list = list.filter((r) => String(r.buyerAccountId || '').toLowerCase() === targetId);
+      list = list.filter((r) => {
+        if (String(r.buyerAccountId || '').toLowerCase() === targetId) return true;
+        if (Array.isArray(r.sharedBuyerAccountIds) && r.sharedBuyerAccountIds.some((id) => String(id).toLowerCase() === targetId)) {
+          return true;
+        }
+        return false;
+      });
     }
     return list.map((r) => {
       let item = r;
@@ -2457,6 +2472,10 @@ class StoreService {
       buyerAccountName: resolvedBuyer
         ? resolvedBuyer.organizationName
         : this.activeBuyerAccount ? this.activeBuyerAccount.organizationName : null,
+      sharedBuyerAccountIds: Array.isArray(rfqData.sharedBuyerAccountIds) ? rfqData.sharedBuyerAccountIds : [],
+      sharedBuyerEmails: Array.isArray(rfqData.sharedBuyerEmails) ? rfqData.sharedBuyerEmails : [],
+      isSharedRfq: Boolean(Array.isArray(rfqData.sharedBuyerAccountIds) && rfqData.sharedBuyerAccountIds.length > 0),
+      emailRfqScenario: rfqData.emailRfqScenario || null,
       sourcingMode: rfqData.source === 'email_gateway'
         ? (resolvedBuyer ? resolveBuyerSourcingMode(resolvedBuyer) : (rfqData.sourcingMode || 'mode_0'))
         : (rfqData.sourcingMode || (resolvedBuyer && resolvedBuyer.subscriptionPlan && resolvedBuyer.subscriptionPlan !== 'free_trial' ? resolveBuyerSourcingMode(resolvedBuyer) : 'mode_1')),
@@ -3638,14 +3657,44 @@ class StoreService {
    * alone would route nothing.
    */
   _rfqCategorySignals(rfq) {
-    const signals = [];
-    if (rfq.category) signals.push(rfq.category);
+    const rawSignals = [];
+    if (rfq.category) rawSignals.push(rfq.category);
     for (const ent of Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []) {
-      if (ent.majorCategory) signals.push(ent.majorCategory);
-      if (ent.minorCategory) signals.push(ent.minorCategory);
-      if (ent.category) signals.push(ent.category);
+      if (ent.majorCategory) rawSignals.push(ent.majorCategory);
+      if (ent.minorCategory) rawSignals.push(ent.minorCategory);
+      if (ent.category) rawSignals.push(ent.category);
     }
-    return signals;
+    for (const item of Array.isArray(rfq.lineItems) ? rfq.lineItems : []) {
+      if (item.majorCategory) rawSignals.push(item.majorCategory);
+      if (item.minorCategory) rawSignals.push(item.minorCategory);
+      if (item.category) rawSignals.push(item.category);
+    }
+
+    const expanded = new Set();
+    for (const sig of rawSignals) {
+      if (!sig || typeof sig !== 'string') continue;
+      const trimmed = sig.trim();
+      if (!trimmed) continue;
+      expanded.add(trimmed);
+
+      const canonical = resolveCanonicalCategory(trimmed);
+      if (canonical) expanded.add(canonical);
+
+      const lower = trimmed.toLowerCase();
+      const minors = MAJOR_TO_MINORS_MAP.get(lower) || (canonical ? MAJOR_TO_MINORS_MAP.get(canonical.toLowerCase()) : null);
+      if (minors) {
+        for (const m of minors) {
+          if (m) expanded.add(m);
+        }
+      }
+
+      const parentMajor = MINOR_TO_MAJOR_MAP.get(lower);
+      if (parentMajor) {
+        expanded.add(parentMajor);
+      }
+    }
+
+    return Array.from(expanded);
   }
 
   /**
@@ -3940,7 +3989,6 @@ class StoreService {
           );
         }
       }
-
       // 2. Fallback: if category matching in DB returned nothing, fetch public vendors page
       if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
         try {
@@ -4053,6 +4101,38 @@ class StoreService {
       (vendor) => this.checkVendorQuotationEligibility(vendor)
     );
 
+    const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+    for (const vendor of resolvedAdditions) {
+      const isBuyerUploaded = this.isBuyerUploaded(vendor);
+      const buyerDisplayName = isBuyerUploaded && updated.buyerAccountName ? updated.buyerAccountName : 'A buyer';
+      const notification = this._buildNotification({
+        recipientType: 'vendor',
+        recipientId: vendor.id,
+        kind: 'rfq_category_match',
+        rfq: updated,
+        title: 'New RFQ in ' + categoryLabel,
+        message: buyerDisplayName + ' invited you to ' + updated.rfqNumber + ' — ' + updated.title + '.',
+        meta: { category: categoryLabel, buyerAccountName: isBuyerUploaded ? (updated.buyerAccountName || null) : null },
+      });
+      this.notifications.unshift(notification);
+      this._persistNotification(notification);
+
+      if (vendor.email) {
+        const creditInfo = this.checkVendorQuotationEligibility(vendor);
+        this._background(
+          mailerService.sendRfqInviteEmail(vendor.email, {
+            rfq: updated,
+            recipientName: vendor.contactPerson || vendor.name,
+            freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+            isSubscribed: creditInfo.isSubscribed,
+            vendor,
+            isBuyerUploaded,
+          }),
+          'Failed to email RFQ invite to DB-augmented vendor'
+        );
+      }
+    }
+
     logger.info(
       `V0 RFQ ${rfq.rfqNumber}: assigned ${merged.length} Procucev vendors from DB match (${additions.length} added)`,
       { rfqNumber: rfq.rfqNumber, assigned: merged.length },
@@ -4103,7 +4183,6 @@ class StoreService {
           'STORE_SERVICE'
         );
       }
-
       if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
         try {
           const page = await domainQueries.getVendorsPageFromDB({
@@ -4192,6 +4271,38 @@ class StoreService {
         resolvedAdditions,
         (vendor) => this.checkVendorQuotationEligibility(vendor)
       );
+
+      const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+      for (const vendor of resolvedAdditions) {
+        const isBuyerUploaded = this.isBuyerUploaded(vendor);
+        const buyerDisplayName = isBuyerUploaded && updated.buyerAccountName ? updated.buyerAccountName : 'A buyer';
+        const notification = this._buildNotification({
+          recipientType: 'vendor',
+          recipientId: vendor.id,
+          kind: 'rfq_category_match',
+          rfq: updated,
+          title: 'New RFQ in ' + categoryLabel,
+        message: buyerDisplayName + ' invited you to ' + updated.rfqNumber + ' — ' + updated.title + '.',
+          meta: { category: categoryLabel, buyerAccountName: isBuyerUploaded ? (updated.buyerAccountName || null) : null },
+        });
+        this.notifications.unshift(notification);
+        this._persistNotification(notification);
+
+        if (vendor.email) {
+          const creditInfo = this.checkVendorQuotationEligibility(vendor);
+          this._background(
+            mailerService.sendRfqInviteEmail(vendor.email, {
+              rfq: updated,
+              recipientName: vendor.contactPerson || vendor.name,
+              freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+              isSubscribed: creditInfo.isSubscribed,
+              vendor,
+              isBuyerUploaded,
+            }),
+            'Failed to email RFQ invite to DB auto-assigned vendor'
+          );
+        }
+      }
     } catch (err) {
       logger.warn('Failed to schedule chasers for auto-assigned vendors', { error: err.message }, 'STORE_SERVICE');
     }
@@ -4488,7 +4599,7 @@ class StoreService {
         kind: 'rfq_category_match',
         rfq: updatedRFQ,
         title: `New RFQ in ${categoryLabel}`,
-        message: `${buyerDisplayName} invited you to ${updatedRFQ.rfqNumber} — ${updatedRFQ.title}.`,
+        message: buyerDisplayName + ' invited you to ' + updatedRFQ.rfqNumber + ' — ' + updatedRFQ.title + '.',
         meta: { category: categoryLabel, buyerAccountName: isBuyerUploaded ? (updatedRFQ.buyerAccountName || null) : null },
       });
       this.notifications.unshift(notification);
@@ -6223,9 +6334,14 @@ class StoreService {
     // performance disaster the CM's "Load more" pagination hit, just
     // triggered by something as ordinary as loading the app.
     if (!scopedBuyerId && pool.hasStorage()) {
-      const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true });
-      vendors = page.rows;
-      vendorsTotal = page.total;
+      if (this.isHydratedFromDB && Array.isArray(this.vendors) && this.vendors.length > 0) {
+        vendors = this.vendors.slice(0, MAX_BOOTSTRAP_VENDORS);
+        vendorsTotal = this.vendorsTotal || vendors.length;
+      } else {
+        const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true });
+        vendors = page.rows;
+        vendorsTotal = page.total;
+      }
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();
         if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {

@@ -5199,3 +5199,1444 @@ Footer navigation
 Manage cookies
 Do not share my personal information
 ```
+
+---
+
+### Prompt 26
+
+**Timestamp**: 2026-11-02T07:59:00Z
+
+`	ext
+### Action Center – Internal Tasks Module Implementation
+
+Implement a complete **Internal Task Management System** under Action Center. All the activities listed below are internal tasks created by employees or admins to track work, assign responsibilities, monitor progress, and complete tasks.
+
+### 1. Internal Task Categories
+
+Create the following task types:
+
+1. **Communication Tasks**
+   - Phone Call
+   - SMS
+   - WhatsApp
+   - Email
+   - Follow-up (New Follow-up / Existing Follow-up)
+
+2. **Demo Scheduling**
+   - Schedule product demonstrations.
+   - Record demo date, time, client details, assigned employee, and demo status.
+
+3. **Credit Management**
+   - Add Credits
+   - Delete / Deduct Credits
+   - Capture account details, credit quantity, reason, and requested by.
+
+4. **Business Development Tasks**
+   - Send Proposal
+   - Send Corporate Email
+   - Track whether the proposal or email was sent and completed.
+
+5. **Internal Operations**
+   - Other internal operational activities.
+   - Allow users to enter a custom task title and description.
+
+6. **Onboarding Process**
+   - Track client onboarding activities.
+   - Assign tasks and monitor onboarding progress.
+
+### 2. Task Creation and Assignment
+
+Provide a Create Task option with:
+- Task Category and Task Type
+- Task Title
+- Description / Instructions
+- Related Buyer, Seller, or Client (where applicable)
+- Assigned Employee
+- Priority (Low, Medium, High, Critical)
+- Due Date and Time
+- Attachments
+- Additional Notes
+
+Automatically capture the task creator, creation date, and task reference ID.
+
+### 3. Task Status and Tracking
+
+Every task should have these statuses:
+- New
+- Assigned
+- In Progress
+- Pending Approval
+- Completed
+- Rejected
+- Cancelled
+
+Employees should be able to update progress, add remarks, and attach supporting documents. When a task is completed, record the completion date and completed by.
+
+### 4. Credit Add/Delete Approval Workflow
+
+For Add Credits and Delete Credits tasks, implement a separate approval workflow:
+
+**Requester:**
+- Creates an Add Credit or Delete Credit request.
+- Enters the buyer/seller account, credit quantity, and reason.
+- Tracks the request status.
+
+**Admin / Approver:**
+- Views pending credit requests.
+- Reviews account details, requested credits, and reason.
+- Approves or rejects the request with remarks.
+- Only after approval should the actual credit balance be updated in the database.
+- Maintain a complete credit transaction and approval history.
+
+### 5. Internal Task Dashboard
+
+Display summary cards:
+- Total Tasks
+- New Tasks
+- In Progress
+- Pending Approval
+- Completed
+- Overdue Tasks
+
+Provide filters for Task Type, Assigned Employee, Created By, Priority, Status, and Date Range.
+
+### 6. Task Details and History
+
+When clicking a task, open a detailed view showing:
+- Task information
+- Requester and assigned employee
+- Related buyer/seller details
+- Status history
+- Comments and remarks
+- Attachments
+- Approval history, where applicable
+- Created and completed timestamps
+
+### 7. Notifications and Reminders
+
+- Notify assigned employees when a task is created or assigned.
+- Notify requesters when task status changes.
+- Notify approvers when credit requests are submitted.
+- Send reminders for approaching deadlines and overdue tasks.
+
+### 8. Important Implementation Requirements
+
+- All tasks and task histories must be stored in the database.
+- Implement role-based access for employees, admins, and approvers.
+- Maintain a complete audit trail.
+- Use existing email, SMS, WhatsApp, notification, buyer, seller, and credit services wherever available.
+- Do not automatically mark communication tasks as completed unless the required action is successfully performed or completion is explicitly confirmed.
+- Do not update credits before approval.
+- Reuse existing APIs, components, database models, and authentication.
+- Do not break existing Action Center modules, especially Tickets, Approvals, Scorecard, Buyer Directory, Seller Directory, and Registrations.
+
+**Expected Result:** Internal Tasks should function as a centralized employee task-management and approval system, where every internal activity can be created, assigned, tracked, approved when required, and marked completed with a complete history.
+```
+
+---
+
+### Prompt 27
+
+**Timestamp**: 2026-11-02T09:43:24Z
+
+```text
+Please do a detailed analysis, what all features are pending or missing, & then continue adding the remaining missing features & functionalities & tell apart from these what else is pending
+```
+
+---
+
+### Prompt 28
+
+**Timestamp**: 2026-11-02T10:48:45Z
+
+```text
+Create the branch from main and raise the pr
+```
+
+
+---
+
+### Prompt 29
+
+**Timestamp**: 2026-11-02T11:47:00Z
+
+```text
+Run if [ -z "$GEMINI_API_KEY" ]; then
+Attempting review with model: gemini-3.5-flash (diff size: 120053 bytes)...
+=== gemini-3.5-flash: HTTP 200 ===
+Attempting review with model: gemini-3.8-flash (diff size: 120053 bytes)...
+=== gemini-3.8-flash: HTTP 503 ===
+Attempting review with model: gemini-3.5-flash-lite (diff size: 120053 bytes)...
+=== gemini-3.5-flash-lite: HTTP 200 ===
+Error: The endpoint `approveCreditTask` and `rejectCreditTask` rely on `req.user` falling back to an admin role if undefined, but they never verify if the authenticated user actually possesses admin privileges or financial approver permissions. Any authenticated user could potentially approve or reject credit modifications.
+Error: Blocked: 1 critical/high issue(s) found by AI review.
+Error: Process completed with exit code 1.
+
+[feat(action-center): internal task management system with multi-categ…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/commits/3802dc9a8309d057f43327f4b1a1a8b04cf94884)
+[3802dc9](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/commits/3802dc9a8309d057f43327f4b1a1a8b04cf94884)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [22 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#event-34903560858)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [22 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#pullrequestreview-5735812960)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+Copilot was unable to review this pull request because the user who requested the review has insufficient remaining quota. Try requesting a review at a lower effort level.
+[Procucev2022](https://github.com/Procucev2022) reviewed [21 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#pullrequestreview-5735820636)
+[Procucev2022](https://github.com/Procucev2022)left a comment
+Owner
+🤖 AI Code Review
+Risk level: medium | Findings: 2
+The PR implements a comprehensive internal task management system with multi-category workflows, approvals, and reminders. While robustly tested, there is a missing authorization check on credit task approvals, a potential division-by-zero or NaN issue, and missing validation for specific task endpoints.
+What changedAdded internal task categories, dynamic types, and backend query support.
+Introduced credit approval workflows allowing admins to add/delete credits.
+Implemented automated task summaries, filters, and deadline check/reminder endpoints.
+Added comprehensive unit and integration tests covering various success and fallback paths.
+[backend/src/controllers/internalTaskController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/files/3802dc9a8309d057f43327f4b1a1a8b04cf94884#diff-dd7655e7348dfa34ffe8514fae11f20ee4a157fb9f6dbd2df0725f51fc851812)
+/**
+* Approve a Credit Add/Delete task.
+*/
+async function approveCreditTask(req, res) {
+[Procucev2022](https://github.com/Procucev2022)[21 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#discussion_r4441793207)
+Owner
+🔴 CRITICAL · security — Missing Authorization Check for Credit Task Approvals
+The endpoint approveCreditTask and rejectCreditTask rely on req.user falling back to an admin role if undefined, but they never verify if the authenticated user actually possesses admin privileges or financial approver permissions. Any authenticated user could potentially approve or reject credit modifications.
+Reply...
+[backend/src/db/internalTaskQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/files/3802dc9a8309d057f43327f4b1a1a8b04cf94884#diff-d0202b121f9ba9ea3ecb37421c1412b12be624e9f5322db7340dbdd111239271)
+} else if (accountType === 'SELLER' || accountType === 'VENDOR') {
+const vendor = (storeService.getVendorById && storeService.getVendorById(accountId)) || null;
+if (vendor) {
+const prevBal = Number(vendor.freeQuotationCredits || vendor.freeRfqDownloadCredits) || 0;
+[Procucev2022](https://github.com/Procucev2022)[21 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#discussion_r4441793221)
+Owner
+🟡 MEDIUM · bug — Unsafe Balance Calculation with Fallback Fields
+When calculating prevBal for vendors, the code evaluates vendor.freeQuotationCredits || vendor.freeRfqDownloadCredits. If both are undefined or falsy (e.g., zero), it evaluates to 0, but if one field is missing while the other is present or NaN, it could lead to unexpected balance computations or NaNs during credit deductions.
+Suggested change
+const prevBal = Number(vendor.freeQuotationCredits || vendor.freeRfqDownloadCredits) || 0;
+const prevBal = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? 0);
+Reply...
+[github-actions](https://github.com/apps/github-actions) Botcommented[13 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#issuecomment-6576099552)
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: PASSED
+292 / 292 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+4379
+4379
+0
+0
+frontend
+3515
+3515
+0
+0
+Workspace
+7894
+7894
+0
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.82%
+92.50%
+99.13%
+```
+
+---
+
+### Prompt 30
+
+**Timestamp**: 2026-11-02T12:24:22Z
+
+```text
+continue
+```
+
+
+---
+
+### Prompt 31
+
+**Timestamp**: 2026-11-02T13:11:45Z
+
+```text
+continue
+```
+
+
+---
+
+### Prompt 32
+
+**Timestamp**: 2026-11-02T13:23:23Z
+
+```text
+In the category manager portal, in the action center, now that you understand the internal task scenarios and communication logs i nthe buyers detail page and sellers detail page, I want to give an option to create an email option where i pick the scenario and click on the attachment from the dropdown and can send it by click of a button. 
+
+For example; for buyers/sellers detail page; in the call log we have an option for followup call. So i want to send an email with the followup call schedule date and time. This is one of the scenario. Please give me all such scenarios which we can use in internal task scenarios and email drafts and give me the scenarios and email drafts in buyers/sellers detail page. 
+
+Also to display the attachments, i want to create a new page named document vault and any documents uploaded and named here can be shown for attachments while sending an email.
+
+Did you understand? Please tell me. Donot make any code changes yet.
+```
+
+
+---
+
+### Prompt 32
+
+**Timestamp**: 2026-11-02T13:58:10Z
+
+```text
+continue
+```
+
+
+---
+
+### Prompt 34
+
+**Timestamp**: 2026-11-02T14:55:09Z
+
+```text
+remove B3 ;B4 S4 S5 remove
+ I need email drafts to send to customers and not to category manager or myself or my staff
+
+Ask questions for cllarification?
+```
+
+
+---
+
+### Prompt 35
+
+**Timestamp**: 2026-11-02T15:17:05Z
+
+```text
+1. I just want to add scenarios that are important to convert them to paid cusotmers. SO please avoid giving all operations email scenarios
+2. Auto-select suggested documents from the vault with the option to remove or add more
+3. Both: select from Document Vault dropdown OR upload a one-off document directly in the email modal
+```
+
+
+---
+
+### Prompt 36
+
+**Timestamp**: 2026-11-02T15:31:12Z
+
+```text
+Ask questions do u really understand or need any clarification?
+```
+
+
+---
+
+### Prompt 37
+
+**Timestamp**: 2026-11-02T15:39:09Z
+
+```text
+continue  Also create email drafts for all call outcomes too
+```
+
+
+---
+
+### Prompt 34
+
+**Timestamp**: 2026-11-02T14:55:09Z
+
+```text
+remove B3 ;B4 S4 S5 remove
+ I need email drafts to send to customers and not to category manager or myself or my staff
+
+Ask questions for cllarification?
+```
+
+
+---
+
+### Prompt 37
+
+**Timestamp**: 2026-11-02T15:39:09Z
+
+```text
+continue  Also create email drafts for all call outcomes too
+```
+
+---
+
+### Prompt 38
+
+**Timestamp**: 2026-11-03T02:00:15Z
+
+```text
+create the pr and solve all the ai review and gemiini pr review and merge the pr
+```
+
+
+---
+
+### Prompt 39
+
+**Timestamp**: 2026-11-03T05:28:11Z
+
+```text
+Remove the Template A and Template B sections from Step 5 after the buyer vendor data upload is completed. Keep the remaining setup summary and completion functionality unchanged.  
+```
+
+
+---
+
+### Prompt 40
+
+**Timestamp**: 2026-11-03T05:41:22Z
+
+```text
+create the new branch and raise the pr
+```
+
+
+---
+
+### Prompt 41
+
+**Timestamp**: 2026-11-03T05:56:09Z
+
+```text
+2s
+1s
+8s
+38s
+35s
+1m 58s
+0s
+Run npm run check:coverage --prefix frontend
+> procucev-enterprise-frontend@2.1.0 check:coverage
+> node scripts/verify-coverage.cjs
+frontend: 162/163 executable application files meet 90% in statements, branches, functions and lines.
+frontend: 1 inventoried declaration-only file(s) have no executable coverage metrics; TypeScript typecheck verifies their declarations.
+app/category-manager/components/SupplierDossierDrawer.tsx: statements 84.14% < 90%.
+app/category-manager/components/SupplierDossierDrawer.tsx: branches 81.46% < 90%.
+app/category-manager/components/SupplierDossierDrawer.tsx: functions 78.52% < 90%.
+app/category-manager/components/SupplierDossierDrawer.tsx: lines 87.37% < 90%.
+(node:2737) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+lib/types.ts: Type declarations erase completely: no executable statements, branches, functions or lines. Checked by TypeScript typecheck.
+Error: Process completed with exit code 1.
+13s
+1s
+3s
+0s
+0s
+0s
+Footer
+© 2026 GitHub, Inc.
+Footer navigation
+[Terms](https://docs.github.com/site-policy/github-terms/github-terms-of-service)
+[Privacy](https://docs.github.com/site-policy/privacy-policies/github-privacy-statement)
+[Security](https://github.com/security)
+[Status](https://www.githubstatus.com/)
+[Community](https://github.community/)
+[Docs](https://docs.github.com/)
+[Contact](https://support.github.com/?tags=dotcom-footer)
+Manage cookies
+Do not share my personal information
+
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.83%
+92.51%
+99.14%
+99.46%
+135 / 135
+frontend
+97.72%
+92.99%
+97.60%
+98.59%
+163 / 164
+Workspace
+98.27%
+92.74%
+98.14%
+99.03%
+298 / 299
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+PASSED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+FAILED
+Frontend per-file coverage
+FAILED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+Coverage failures
+frontend: app/category-manager/components/SupplierDossierDrawer.tsx: statements 84.14% < 90%.
+frontend: app/category-manager/components/SupplierDossierDrawer.tsx: branches 81.46% < 90%.
+frontend: app/category-manager/components/SupplierDossierDrawer.tsx: functions 78.52% < 90%.
+frontend: app/category-manager/components/SupplierDossierDrawer.tsx: lines 87.37% < 90%.
+This branch has not been deployed
+No deployments
+Merge info
+Some checks were not successful
+2 failing, 3 successful checks
+failing checks
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41585703938/job/125750551942?pr=400)
+Failing after 3m
+Required
+[Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41585703938/job/125751728218?pr=400)
+Failing after 8s
+```
+
+
+---
+
+### Prompt 42
+
+**Timestamp**: 2026-11-03T07:15:00Z
+
+```text
+# Buyer & Seller Directory – Documents Section Implementation
+
+Implement a new Documents section in both Buyer 360° Dossier and Seller 360° Dossier. The Documents tab must display all documents associated with the respective buyer or seller account.
+
+## 1. Documents Tab Placement
+Add the Documents tab immediately after the Payments tab in both profiles.
+
+Required tab order:
+
+Buyer 360° Dossier:
+1. Profile
+2. RFQs
+3. Credit
+4. Communications
+5. Payments
+6. Documents
+
+Seller 360° Dossier:
+1. Profile
+2. Quotes
+3. Credit
+4. Communications
+5. Payments
+6. Documents
+
+Keep the existing tabs and their functionality unchanged.
+
+## 2. Display Associated Documents
+When opening a buyer's or seller's Documents tab:
+- Fetch and display all documents associated with that specific account.
+- Retrieve documents from the existing database and document storage.
+- Include documents uploaded through registration, onboarding, RFQ, quotation, and other existing workflows wherever they are associated with that account.
+- Display only documents belonging to the selected buyer or seller.
+- Avoid duplicate document entries.
+
+## 3. Document Information
+Display the following fields for each document:
+- Document Name: Original document/file name
+- Document Type: PDF, Image, Excel, Word, etc.
+- Category: Registration, Company Profile, GST, PAN, RFQ, Quotation, Other, etc.
+- Uploaded By: User or employee who uploaded it
+- Upload Date: Date and time of upload
+- File Size: Actual file size
+- Description: Document description, if available
+- Actions: Preview, Download, Delete
+
+## 4. Document Actions
+- Preview: Open supported documents such as PDF and images in an in-app preview.
+- Download: Download the original document.
+- Open: Open the document using its stored file link where applicable.
+- Upload: Allow authorized users to upload additional documents.
+- Delete: Allow authorized users to delete documents after confirmation.
+
+## Additional Requirements – Buyer Credit Approval & Seller Quote Credits
+1. Buyer Profile – Add Credit with Approval Workflow
+- In the Buyer 360° Dossier, display an + Add Credit button next to the buyer's profile information.
+- Open a popup showing Buyer Name, Available Credits, Requested Credits, and Reason.
+- Initiated By options: Govardhan, Krishna, Chandhan.
+- Approver options: Srinu Sir, Sudheer Sir.
+- Submit request as Pending Approval, tracked in Action Center → Internal Tasks.
+
+2. Seller Profile – Add Quote Credits
+- In the Seller 360° Dossier, provide a + Add Quote Credits button.
+- Restrict to 1 to 5 credits per request.
+- Display seller's available quote credits before and after transaction.
+- Authorize and update balance immediately with full transaction history.
+```
+
+---
+
+### Prompt 43
+
+**Timestamp**: 2026-11-03T11:29:45Z
+
+```text
+create a branch and raise the pr to test-v3 upcoming pr also raise to test-v3  only not for main
+```
+
+
+---
+
+### Prompt 44
+
+**Timestamp**: 2026-11-03T12:03:39Z
+
+```text
+All are fails only check and fix the all the issue and AI review also
+```
+
+
+---
+
+### Prompt 45
+
+**Timestamp**: 2026-11-03T22:20:00+05:30
+
+```text
+Tell me about create rfq via email for registration buyer and unregisteration buyer?
+```
+
+---
+
+### Prompt 46
+
+**Timestamp**: 2026-11-03T22:23:43+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 47
+
+**Timestamp**: 2026-11-03T22:33:03+05:30
+
+```text
+# Feature Enhancement: CC-Based Buyer Identification & Multi-Buyer RFQ Creation
+
+Enhance the existing Procucev Enterprise Email-to-RFQ Gateway to support buyer identification through both TO sender and CC email addresses.
+
+**Objective:**
+
+Implement four new business scenarios for registered and unregistered buyers while preserving all existing Email-to-RFQ functionality.
+
+### Business Scenarios
+
+1. **Registered Buyer in CC:** When an email is sent to the RFQ gateway and a registered buyer is included in CC, create the RFQ under the registered CC buyer's account.
+
+2. **Registered TO + Registered CC:** When both the TO sender and CC buyer are registered, create one logical RFQ accessible through both buyer accounts. Maintain a shared RFQ reference and separate account-level ownership/access mappings.
+
+3. **Unregistered TO + Registered CC:** When the TO sender is unregistered but a CC recipient is registered, create the RFQ only under the registered CC buyer's account. Do not auto-create an account or RFQ for the unregistered TO sender.
+
+4. **Unregistered TO + Unregistered CC:** When both the TO sender and CC recipient are unregistered, follow the existing unregistered buyer workflow for the TO sender only. Create the TO sender's account and RFQ. Do not create an account or RFQ for the CC recipient.
+
+### Technical Requirements
+
+- Extract sender, TO and CC email addresses from inbound email metadata.
+- Identify registered buyers using the existing PostgreSQL identity and buyer_accounts records.
+- Apply the four scenarios using explicit buyer-identification and ownership-priority rules.
+- Reuse existing account creation, sourcing mode, credit validation, Gemini extraction, RFQ categorization, delivery location resolution, vendor matching and email notification services.
+- For shared RFQs, ensure both registered buyers can access the same logical RFQ without creating duplicate vendor invitations or duplicate procurement requests.
+- Maintain appropriate account-level credit validation and transaction consistency.
+- Send acknowledgements only to eligible buyer accounts.
+- Maintain audit logs for sender, recipients, buyer identification and RFQ ownership.
+- Handle multiple CC recipients, duplicate addresses, retries, concurrency and invalid email addresses safely.
+
+### Backward Compatibility
+
+Do not break or modify the existing standalone registered buyer and unregistered buyer workflows.
+
+Do not change existing:
+- Gemini multimodal extraction.
+- Excel, PDF and drawing processing.
+- RFQ line-item grouping and 49-item limit.
+- Sourcing modes (Mode 0, V1, V2, V3).
+- Free-trial and subscription credit rules.
+- Vendor auto-assignment.
+- RFQ statuses and notification templates.
+- Buyer onboarding and quote-masking security.
+
+### Implementation Instructions
+
+First inspect the existing `emailGatewayService.js`, `resolveSenderAuthorisation()`, `getOrCreateBuyerAccount()`, `rfqIngestionService.js`, `storeService.js` and related database schemas.
+
+Understand the existing architecture before making changes. Reuse existing services wherever possible instead of introducing duplicate implementations.
+
+Implement all four scenarios, update the database mappings only if required, and add comprehensive unit and integration tests for every scenario.
+
+**Acceptance Criteria:** All four scenarios must work correctly, existing email-to-RFQ flows must remain unaffected, and no unintended buyer account, duplicate RFQ, duplicate vendor invitation or unauthorized RFQ access should occur.
+```
+
+---
+
+### Prompt 48
+
+**Timestamp**: 2026-11-04T07:16:38+05:30
+
+```text
+continue
+```
+
+
+---
+
+### Prompt 49
+
+**Timestamp**: 2026-11-04T08:06:53+05:30
+
+```text
+create a new branch and raise pr to test-v3
+```
+
+
+---
+
+### Prompt 50
+
+**Timestamp**: 2026-11-04T08:40:48+05:30
+
+```text
+Risk level: medium | Findings: 1
+The PR successfully implements CC-based buyer identification and multi-buyer RFQ routing across four distinct scenarios. Core services, validation schemas, and database queries have been updated cleanly, with strong test coverage. One minor SQL injection vector was identified in a fallback D1 query.
+What changedAdded EMAIL_RFQ_SCENARIOS enum constants for multi-buyer routing workflows.
+Upgraded email extraction and recipient normalization logic to handle diverse input types (strings, arrays, objects).
+Implemented resolveMultiBuyerAttribution in emailGatewayService to support 4 core business scenarios.
+Extended domain queries and controller access checks to support shared buyer account IDs on RFQs.
+Added comprehensive unit and integration test coverage for all scenarios.
+[backend/src/db/domainQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/405/files/4f57637fe0d8400a23aae4e4fa0e8a4bbc5364c6#diff-0efee782c4c1ae7272a5c82de70e40449f8dc4c3df87db08664a460e1eb95de2)
+conditions.push(`raw->>'buyerAccountId' = $${p}`);
+d1Conditions.push(`json_extract(raw, '$.buyerAccountId') = $${p}`);
+conditions.push(`(raw->>'buyerAccountId' = $${p} OR raw->'sharedBuyerAccountIds' ? $${p} OR raw->>'buyerId' = $${p})`);
+d1Conditions.push(`(json_extract(raw, '$.buyerAccountId') = $${p} OR instr(json_extract(raw, '$.sharedBuyerAccountIds'), $${p}) > 0)`);
+[Procucev2022](https://github.com/Procucev2022)[29 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/405#discussion_r4462956484)
+Owner
+🟠 HIGH · security — Potential SQL injection or incorrect parameter binding in SQLite/D1 shared buyer query
+Using string interpolation (instr(json_extract(raw, '$.sharedBuyerAccountIds'), $${p}) > 0) on a JSON array stored as text can lead to false-positive partial string matches (e.g., searching for ID '1' matches ID '10') or injection risks if parameters are improperly handled. Use proper JSON array containment or exact matching instead of instr with unescaped substrings.
+Reply...
+[github-actions](https://github.com/apps/github-actions) Botcommented[25 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/405#issuecomment-6621137629)
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: PASSED
+304 / 304 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+4534
+4534
+0
+0
+frontend
+3622
+3622
+0
+0
+Workspace
+8156
+8156
+0
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.73%
+92.35%
+99.12%
+99.41%
+138 / 138
+frontend
+97.97%
+93.13%
+98.04%
+98.78%
+166 / 166
+Workspace
+98.35%
+92.71%
+98.43%
+99.10%
+304 / 304
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+PASSED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+PASSED
+Frontend per-file coverage
+PASSED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+This branch has not been deployed
+No deployments
+Merge info
+Some checks were not successful
+1 failing, 4 successful checks
+failing checks
+[Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41762327767/job/126352632112?pr=405)
+Failing after 18s
+successful checks
+[Request Copilot Review / request-copilot-review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41762327772/job/126352632248?pr=405)
+Successful in 4s
+Required
+[Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41762327799/job/126352632486?pr=405)
+Successful in 2m
+Required
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41762327799/job/126352632733?pr=405)
+Successful in 4m
+Required
+[Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41762327799/job/126354076974?pr=405)
+Successful in 11s
+Merging is blocked
+A conversation must be resolved before this pull request can be merged.
+You can also merge this with the command line.
+
+gemini is fail check and pass that
+```
+
+
+---
+
+### Prompt 51
+
+**Timestamp**: 2026-11-04T10:58:24+05:30
+
+```text
+# Action Center – UI Size, Search Visibility & Clickable Summary Cards
+
+Please update the Action Center UI based on the attached screenshots. The main objective is to make all navigation tabs, summary cards, search fields, and filters compact, properly aligned, and fully functional.
+
+### 1. Reduce Summary Card Sizes
+
+Currently, the summary cards are too large and occupy unnecessary screen space.
+
+Apply the following changes:
+- Reduce the width, height, padding, font size, and gaps of all summary cards.
+- Make all cards compact, similar in visual size to the main Action Center navigation tabs such as Approvals, Buyers Directory, Sellers Directory, and Payments Due.
+- Keep all cards in one horizontal row wherever screen space allows.
+- Display the complete card title and count without unnecessary truncation.
+- Maintain consistent card dimensions, alignment, and spacing.
+
+Apply this consistently to:
+- Payment Dues
+- Buyer Directory
+- Seller Directory
+- Registrations
+- Internal Tasks
+
+### 2. Make Summary Cards Clickable
+
+Every summary card must work as a filter, not just display a count.
+
+When a user clicks a card:
+- Apply the corresponding filter automatically.
+- Open a centered popup/modal displaying the matching records.
+- Show the relevant records in a table inside the popup.
+- Include appropriate columns based on the selected module.
+- Display the total matching record count.
+- Provide search, sorting, and pagination where applicable.
+- Include a clear Close button.
+- Closing the popup must return the user to the same page without losing existing filters, search, or scroll position.
+
+Examples:
+
+**Payment Dues:**
+- Low-Credit Accounts → Show all accounts with 2 or fewer credits.
+- Buyers → Show low-credit buyer accounts.
+- Sellers → Show low-credit seller accounts.
+- 0 Credits (Critical) → Show accounts with zero credits.
+- 1–2 Credits (Attention) → Show accounts with 1 or 2 credits.
+- Acknowledgement Pending → Show accounts awaiting acknowledgement.
+
+**Buyer Directory:**
+- Total Buyers → Show all buyers.
+- Subscription Buyers → Show subscription buyers.
+- Total RFQs → Show relevant buyer RFQ records.
+- Free RFQs → Show free RFQ records.
+- Paid RFQs → Show paid RFQ records.
+
+**Seller Directory:**
+- Apply the same clickable-card behaviour to existing seller summary cards and their corresponding categories.
+
+**Registrations:**
+- Registered Clients → Show all registered clients.
+- If source-wise summary cards are available, clicking them should show Web App, WhatsApp, or Email registrations respectively.
+
+**Internal Tasks:**
+- Total Tasks, New Tasks, In Progress, Pending Approval, Completed, and Overdue → Show the respective task records.
+
+### 3. Fix Search Visibility and Toolbar Layout
+
+The search field in the Registered Clients and other directory sections is not displaying properly.
+
+Fix the following:
+- Ensure the complete search input and placeholder are visible.
+- Display the search icon correctly without overlapping the placeholder or text.
+- Give the search field sufficient width.
+- Align search, dropdown filters, Refresh, Export, and Gear controls in one horizontal toolbar.
+- Prevent clipping, overlapping, and unwanted horizontal movement.
+- Keep toolbar spacing compact and consistent across modules.
+
+### 4. Standardize Buyer and Seller Directory Sizes
+
+Reduce the overall UI dimensions in both Buyer and Seller Directories:
+- Summary cards should be smaller.
+- Search fields and dropdowns should have compact heights.
+- Table row heights and cell padding should be optimized.
+- Reduce excessive margins and empty spaces.
+- Keep column headings readable.
+- Ensure Export Directory and Gear icons are properly aligned.
+- Maintain consistent font sizes, button heights, and spacing.
+
+Use the existing Action Center navigation buttons as the reference for the compact sizing and styling.
+
+### 5. Registrations – Source Type Filter
+
+Keep the Source Type dropdown with:
+- All
+- Web App
+- WhatsApp
+- Email
+
+Ensure the search field and Source Type filter work together and display the correct database records. Preserve existing registration approval and rejection functionality.
+
+### 6. Popup Behaviour
+
+All clickable summary cards must open their respective data popup without navigating away from the current page.
+
+- Popup should be centered and fully visible.
+- Use a background overlay.
+- Clicking inside the popup must not close it.
+- Close only through the Close/X button or supported outside-click action.
+- Preserve the current page state when closing.
+- Ensure popup tables display actual database records, not dummy data.
+
+### 7. Important Implementation Rules
+
+- Fetch all summary counts and popup records from the existing database/API.
+- Ensure card counts match the actual records shown in their popups.
+- Apply the selected card filter correctly without affecting unrelated filters.
+- Reuse existing components, APIs, database queries, and business logic.
+- Do not introduce hardcoded counts or static records.
+- Do not break existing search, sorting, filters, pagination, export, column settings, or navigation.
+- Test all clickable cards and popups in Buyer Directory, Seller Directory, Payment Dues, Registrations, and Internal Tasks.
+
+### Expected Result
+
+All summary cards should be compact, similar in size to the main navigation buttons. Search fields must be fully visible. Clicking any summary card should open a centered popup containing the actual records matching that card's filter. Apply the same clean, compact design consistently across Buyer and Seller Directories and the entire Action Center.
+```
+
+---
+
+### Prompt 52
+
+**Timestamp**: 2026-11-04T13:07:18+05:30
+
+```text
+create new branch and raise the pr to test-v3 and pass all the gemini stage and AI review also
+```
+
+
+---
+
+### Prompt 53
+
+**Timestamp**: 2026-11-04T14:36:05+05:30
+
+```text
+Run if [ -z "$GEMINI_API_KEY" ]; then
+Attempting review with model: gemini-3.5-flash (diff size: 120053 bytes)...
+=== gemini-3.5-flash: HTTP 503 ===
+Attempting review with model: gemini-3.8-flash (diff size: 120053 bytes)...
+=== gemini-3.8-flash: HTTP 503 ===
+Attempting review with model: gemini-3.5-flash-lite (diff size: 120053 bytes)...
+=== gemini-3.5-flash-lite: HTTP 200 ===
+Error: The fetch URL requests '/api/internal-tasks/registrations', which does not match standard registration endpoints or existing client fetch paths in this module. This will cause 404 Not Found errors in production when users click summary cards, forcing the app to fall back to local state.
+Error: Blocked: 1 critical/high issue(s) found by AI review.
+Error: Process completed with exit code 1.
+```
+
+---
+
+### Prompt 54
+
+**Timestamp**: 2026-11-04T15:10:16+05:30
+
+```text
+do it fast
+```
+
+---
+
+### Prompt 55
+
+**Timestamp**: 2026-11-04T15:11:53+05:30
+
+```text
+i want to merge that pr right now please check and  fix the coveragges and review
+```
+
+---
+
+### Prompt 56
+
+**Timestamp**: 2026-11-04T15:33:34+05:30
+
+```text
+continue
+```
+
+
+---
+
+### Prompt 57
+
+**Timestamp**: 2026-11-04T16:33:11+05:30
+
+```text
+# Action Center – Complete Approval Module Implementation
+
+Redesign and implement the **Approvals module** under Action Center as a professional Procurement Approval Management Dashboard. The objective is to simplify the existing interface, centralize approval requests, and allow authorized approvers to review, approve, reject, and track requests efficiently.
+
+Use the attached screenshots as UI references.
+
+## 1. Approval Navigation
+
+Simplify the existing approval navigation.
+
+Display only these five tabs:
+
+1. All Requests
+2. Pending Approvals
+3. Approved
+4. Rejected
+5. My Approvals
+
+Remove unnecessary individual module tabs from the main navigation, such as Credit Notes, Account Approvals, Discounts, Trial Periods, Offline Payments, Unit Bookings, Cancellations & Refunds, Packages, and Milestones.
+
+Important:
+- Do not delete or disable these existing approval types.
+- Retain their backend workflows and records.
+- Make them accessible through the Request Type filter.
+- All existing approval functionality must continue working.
+
+## 2. Summary Cards
+
+Display four compact summary cards at the top:
+
+| Card | Description |
+|---|---|
+| Total Requests | All approval requests |
+| Pending Approvals | Requests awaiting approval |
+| Approved | Successfully approved requests |
+| Rejected | Rejected requests |
+
+Requirements:
+- Fetch counts dynamically from the database.
+- Keep all cards in one horizontal row.
+- Reduce card height, width, padding, and font size.
+- Use consistent dimensions and compact styling.
+- Avoid unnecessary spacing and horizontal overflow.
+
+**Clickable Card Functionality:**
+
+When clicking a summary card:
+- Automatically apply its corresponding status filter.
+- Open a centered popup/modal displaying matching approval records.
+- Show the record count and relevant request details.
+- Provide search, sorting, and pagination.
+- Close the popup without resetting the current page, filters, or scroll position.
+
+## 3. Approval Table – Essential Columns
+
+Keep the main approval table simple and relevant to procurement operations.
+
+Display only these columns:
+
+| Column | Description |
+|---|---|
+| Request ID | Unique approval reference |
+| Request Type | Credit Addition, Purchase Request, Payment, Discount, etc. |
+| Requested By | Employee who initiated the request |
+| Project / Buyer / Supplier | Related project or account |
+| Amount / Quantity | Requested amount or credit quantity |
+| Request Date | Request submission date |
+| Assigned Approver | Person responsible for approval |
+| Status | Pending, Approved, Rejected |
+| Actions | View, Approve, Reject |
+
+Requirements:
+- Fetch all information from the database.
+- Display actual request information.
+- Use readable column widths.
+- Support ascending and descending sorting.
+- Use status indicators with consistent colours.
+- Keep the Actions column visible.
+- Avoid unnecessary technical fields in the main table.
+
+## 4. Single-Row Filter Toolbar
+
+Arrange all filters and controls in one horizontal row.
+
+**Required order:**
+
+1. All Projects dropdown
+2. Request Type dropdown
+3. All Statuses dropdown
+4. Search input
+5. Refresh button
+6. Gear icon (Column Settings)
+
+Search placeholder:
+
+`Search by Request ID, requester, buyer, supplier, or project...`
+
+Requirements:
+- All controls must appear in one horizontal row on desktop.
+- Give Search the remaining available width.
+- Keep dropdowns compact but wide enough to display selected values.
+- Keep Refresh and Gear icons compact.
+- Maintain consistent height, padding, and spacing.
+- Prevent overlapping, clipping, and unwanted horizontal scrolling.
+- On smaller screens, use a responsive layout without hiding controls.
+
+All filters must work together correctly.
+
+## 5. Gear Icon – Table Column Settings
+
+Add a Gear icon at the right end of the filter toolbar.
+
+When clicked, open a properly visible, centered Column Settings popup.
+
+The popup must contain:
+- List of all available approval table columns.
+- Checkbox to show or hide each column.
+- Drag-and-drop handles to reorder columns.
+- Position numbers showing the current column order.
+- Reset to Default option.
+- Save / Done button.
+- Close icon.
+
+**Column Settings Behaviour:**
+- Apply selected visibility and ordering to the approval table.
+- Persist preferences separately for each logged-in user.
+- Restore preferences after page refresh and login.
+- Allow users to reset to default settings.
+- Keep essential columns such as Request ID and Actions visible and locked.
+- Ensure the popup is not clipped by parent containers or screen boundaries.
+
+## 6. Approval Request Details Popup
+
+When clicking a Request ID or View action, open a detailed approval popup.
+
+Display:
+
+- Request ID
+- Request Type
+- Requested By
+- Assigned Approver
+- Project / Buyer / Supplier Details
+- Request Date and Time
+- Requested Amount or Quantity
+- Available Balance, where applicable
+- Business Justification / Reason
+- Supporting Documents and Attachments
+- Current Approval Status
+- Approval History
+- Previous Approver Remarks
+- Last Updated Date
+
+Allow authorized approvers to review the complete request before taking action.
+
+## 7. Approve and Reject Workflow
+
+For pending requests, provide:
+
+- View Details
+- Approve
+- Reject
+
+When clicking Approve or Reject:
+
+1. Open a confirmation popup.
+2. Display the complete request summary.
+3. Provide an optional remarks field.
+4. Require confirmation before submitting the decision.
+5. Save the decision to the database.
+6. Record the approver's identity and date/time.
+7. Update the request status immediately.
+8. Notify the requester about the decision.
+
+Only authorized approvers should be able to approve or reject requests.
+
+Prevent duplicate approvals, unauthorized modifications, and repeated submissions.
+
+## 8. Buyer Credit Addition Approval Integration
+
+Integrate the existing Buyer Add Credit workflow with the Approval module.
+
+When a Category Manager submits a buyer credit request:
+
+- Create an approval record.
+- Assign the selected senior approver: Srinu Sir or Sudheer Sir.
+- Display the request under Pending Approvals.
+- Show Buyer Name, Requested Credits, Initiated By, Assigned Approver, and Reason.
+- Allow the authorized approver to approve or reject.
+
+**If Approved:**
+- Update the buyer's actual available credit balance.
+- Create a credit transaction record.
+- Update the approval status to Approved.
+- Update the corresponding Internal Task status to Completed.
+- Notify the requester.
+
+**If Rejected:**
+- Do not modify the buyer's credit balance.
+- Save rejection remarks.
+- Update the approval status to Rejected.
+- Update the corresponding Internal Task.
+- Notify the requester.
+
+## 9. Other Procurement Approval Types
+
+Support existing approval types through the Request Type filter, including:
+
+- Buyer Credit Addition
+- Seller Credit Addition, if approval is required by its existing workflow
+- Credit Notes
+- Purchase Requests
+- Payment Approvals
+- Discounts
+- Account Approvals
+- Trial Periods
+- Offline Payments
+- Unit Bookings
+- Cancellations and Refunds
+- Packages
+- Milestones
+- Other existing approval workflows
+
+Do not introduce new approval rules without checking the existing business logic.
+
+## 10. My Approvals
+
+The My Approvals tab should display requests assigned to the currently logged-in approver.
+
+Show:
+- Assigned requests
+- Pending requests
+- Approved requests
+- Rejected requests
+
+Ensure users can only take actions permitted by their assigned roles and permissions.
+
+## 11. Notifications and Approval History
+
+- Notify approvers when a new request is assigned.
+- Notify requesters when their request is approved or rejected.
+- Maintain complete approval history.
+- Record request creation, assignment, approval, rejection, remarks, and status changes.
+- Display previous decisions and approver details.
+- Avoid duplicate notifications.
+
+## 12. Search, Sorting and Pagination
+
+- Search by Request ID, requester, buyer, supplier, and project.
+- Filter by Request Type.
+- Filter by Status.
+- Filter by Project.
+- Filter by Assigned Approver.
+- Filter by Date Range.
+- Support ascending and descending sorting.
+- Add pagination and page-size selection.
+- Ensure Export CSV downloads the currently filtered records.
+
+## 13. UI/UX Requirements
+
+- Follow the existing Action Center design.
+- Keep the interface compact and professional.
+- Use consistent colours, typography, spacing, and button sizes.
+- Ensure summary cards fit horizontally.
+- Keep the filter toolbar in one row on desktop.
+- Ensure the table uses available screen width.
+- Provide loading, empty, and error states.
+- Use centered popups for request details and confirmation actions.
+- Preserve the user's page state when closing popups.
+
+## 14. Technical and Database Requirements
+
+Before implementation:
+1. Inspect existing approval components and workflows.
+2. Identify all existing approval APIs, database tables, and relationships.
+3. Understand the current role-based authorization.
+4. Identify how Internal Tasks and Buyer Credit Approval are connected.
+5. Reuse existing services and components wherever possible.
+
+Implementation rules:
+- Do not use static or hardcoded data.
+- Do not create duplicate approval records.
+- Do not delete existing approval records or historical data.
+- Validate all approval actions on the backend.
+- Use database transactions for approval operations that update credit balances.
+- Prevent duplicate submissions and race conditions.
+- Preserve existing authentication and authorization.
+- Ensure all counts and records are database-driven.
+
+## 15. Testing and Acceptance Criteria
+
+Test the following scenarios:
+
+1. Create a buyer credit addition request from Buyer Directory.
+2. Verify that it appears under Pending Approvals.
+3. Verify the assigned approver can view the request.
+4. Approve the request and confirm that buyer credits are updated exactly once.
+5. Reject another request and confirm that credits remain unchanged.
+6. Verify Internal Tasks reflect the correct status.
+7. Verify My Approvals shows only requests assigned to the logged-in approver.
+8. Test all five navigation tabs.
+9. Test all filters together.
+10. Test summary-card popups.
+11. Test column visibility and drag-and-drop ordering.
+12. Refresh the page and confirm column preferences are preserved.
+13. Test search, sorting, and pagination.
+14. Test Export CSV.
+15. Verify notifications and approval history.
+16. Verify role-based permissions prevent unauthorized actions.
+17. Ensure existing approval workflows continue functioning normally.
+
+Deliver a production-ready Procurement Approval Management Dashboard adhering to all requirements.
+```
+
+
+---
+
+### Prompt 58
+
+**Timestamp**: 2026-11-04T19:35:48+05:30
+
+```text
+# Urgent: Action Center UI Fix – Previous Changes Not Applied
+
+The previous UI changes have not resolved the issues. The attached screenshot shows the same problems again. Please inspect the actual frontend implementation and fix the root cause instead of applying another temporary CSS adjustment.
+
+### 1. Remove Action Center Heading and Description
+- Remove the large "Action Center" heading and its descriptive subtitle.
+- Do not leave unnecessary empty space where the heading was displayed.
+- Align the summary cards in the available header area.
+
+### 2. Fix Summary Cards – Compact Layout
+- Reduce the width, height, padding, font size, and gaps of all task summary cards.
+- Make all six cards fit in one horizontal row within the available content width.
+- Do not allow cards to extend beyond the right screen boundary.
+- Remove the horizontal scrollbar appearing below the summary cards.
+- Display complete labels and counts without clipping.
+- Use the same compact sizing as the main navigation tabs: Internal Tasks, Tickets, Approvals, Scorecard, Buyers Directory, and Sellers Directory.
+
+### 3. Fix Internal Tasks Search Toolbar
+- The search field is currently appearing as a small icon separately instead of a complete search input.
+- Restore the complete visible search input with its placeholder.
+- Give it sufficient width.
+- Keep All Categories, My Tasks, All Users, Filter, Export CSV, Reminders, Send SMS / Email, Create Internal Task, and Refresh properly aligned.
+- Use a clean responsive layout with consistent heights and spacing.
+- Do not let buttons overlap or get clipped.
+
+### 4. Correct Layout and Responsive Behaviour
+- Use the full available content width.
+- Remove unnecessary left/right margins and excessive padding.
+- Prevent nested containers from creating unwanted horizontal scrolling.
+- Keep the main page scrollbar separate from the toolbar and summary-card layout.
+- At smaller screen widths, wrap cards or controls cleanly instead of clipping them.
+
+### 5. Technical Investigation – Mandatory
+Before modifying the code:
+1. Identify the actual Action Center page and summary-card components.
+2. Inspect their parent containers, CSS/Tailwind classes, widths, min-width values, flex/grid settings, and overflow properties.
+3. Check for conflicting styles or duplicate CSS rules overriding the previous changes.
+4. Inspect the search component to identify why the input field is hidden or collapsed.
+5. Fix the actual layout and component behaviour, not just individual margins.
+
+### 6. Preserve Existing Functionality
+- Keep all summary counts dynamic from the database.
+- Preserve clickable summary cards and their filtered-record popups.
+- Preserve task creation, task filters, reminders, SMS/email actions, approvals, and CSV export.
+- Do not break Buyer Directory, Seller Directory, Registrations, or Payment Dues.
+- Reuse existing components and functionality wherever possible.
+
+### Acceptance Criteria
+- No large Action Center heading or subtitle.
+- All six summary cards fit in one row without horizontal overflow at the target desktop resolution.
+- Search input is fully visible and usable.
+- All toolbar controls are properly aligned.
+- No clipped buttons, overlapping elements, or unnecessary horizontal scrollbars.
+- All existing functionality continues to work.
+
+**Important:** Test the actual rendered page after implementation at the same desktop resolution as the attached screenshot. Do not mark this task as completed until the visual issues are verified as fixed.
+
+-  like that buyer credit i want for quotes in seller Asitis as buyer name change to quote for seller and must be lin to approval section and internal task
+```
+
+
+---
+
+### Prompt 59
+
+**Timestamp**: 2026-11-05T08:12:33+05:30
+
+```text
+In approval page the heading same as button remove the small 5 heading  All requests , pending approvals  ,approved etc and the line alligment is not good for All projects all request type amd all it is movinng the horizontal row not moving like buyer directory please fix both changed
+```
+
+---
+
+### Prompt 60
+
+**Timestamp**: 2026-11-05T09:08:21+05:30
+
+```text
+continue
+```
+

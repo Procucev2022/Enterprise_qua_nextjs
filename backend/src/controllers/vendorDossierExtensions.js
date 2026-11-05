@@ -3,6 +3,17 @@ const domainQueries = require('../db/domainQueries');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
 
+function assertCategoryManagerOrAdmin(req, res) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  if (user.role === 'category_manager' || user.role === 'admin') return true;
+  res.status(403).json({ success: false, error: 'Unauthorized: Only category managers and admins can allocate quote credits.' });
+  return false;
+}
+
 function assertCategoryManagerOrVendor(req, res, vendorOrEmail = null) {
   const user = req.user;
   if (!user) {
@@ -69,15 +80,19 @@ async function getCreditHistory(req, res, next) {
       for (const rfqId of unlockedIds) {
         if (runningBal > 0) {
           runningBal = Math.max(0, runningBal - 1);
-          await domainQueries.recordCreditTransactionInDB({
-            id: `vtx-rfq-${vendor.id.slice(0, 5)}-${String(rfqId).slice(0, 8)}`,
-            vendorId: vendor.id,
-            rfqId: String(rfqId),
-            transactionType: 'RFQ_UNLOCK',
-            amount: -1,
-            balanceAfter: runningBal,
-            idempotencyKey: `unlock-${vendor.id}-${rfqId}`,
-          });
+          try {
+            await domainQueries.recordCreditTransactionInDB({
+              id: `vtx-rfq-${vendor.id.slice(0, 5)}-${String(rfqId).slice(0, 8)}`,
+              vendorId: vendor.id,
+              rfqId: String(rfqId),
+              transactionType: 'RFQ_UNLOCK',
+              amount: -1,
+              balanceAfter: runningBal,
+              idempotencyKey: `unlock-${vendor.id}-${rfqId}`,
+            });
+          } catch (err) {
+            logger.warn('Failed to record initial unlock transaction for vendor', { vendorId: vendor.id, rfqId, error: err.message }, 'VENDOR_DOSSIER');
+          }
         }
       }
 
@@ -91,16 +106,16 @@ async function getCreditHistory(req, res, next) {
 
     for (const t of transactions) {
       const type = String(t.transaction_type || '').toUpperCase();
-      const amt = Number(t.amount || 0);
-      if (type.includes('INITIAL') || type.includes('ALLOCATION') || type.includes('ADDITION')) {
-        totalAllocated += Math.abs(amt);
-      } else if (type.includes('PURCHASE') || type.includes('UPGRADE')) {
-        purchasedCredits += Math.abs(amt);
-        totalAllocated += Math.abs(amt);
-      } else if (type.includes('ADJUSTMENT') || type.includes('REFUND')) {
-        adjustedCredits += Math.abs(amt);
-      } else if (amt < 0 || type.includes('UNLOCK')) {
-        totalConsumed += Math.abs(amt);
+      const amt = Math.abs(Number(t.amount || 0));
+      if (/INITIAL|ALLOCATION|ADDITION/.test(type)) {
+        totalAllocated += amt;
+      } else if (/PURCHASE|UPGRADE/.test(type)) {
+        purchasedCredits += amt;
+        totalAllocated += amt;
+      } else if (/ADJUSTMENT|REFUND/.test(type)) {
+        adjustedCredits += amt;
+      } else if (Number(t.amount || 0) < 0 || type.includes('UNLOCK')) {
+        totalConsumed += amt;
       }
     }
 
@@ -108,17 +123,18 @@ async function getCreditHistory(req, res, next) {
       totalAllocated = alloc;
     }
 
-    if (totalConsumed === 0 && creditInfo.freeCreditsUsed > 0) {
-      totalConsumed = creditInfo.freeCreditsUsed;
+    if (totalConsumed === 0 && Number(creditInfo.freeCreditsUsed || 0) > 0) {
+      totalConsumed = Number(creditInfo.freeCreditsUsed);
     }
 
+    const curBal = creditInfo.freeCreditsRemaining ?? Math.max(0, totalAllocated - totalConsumed);
     const summary = {
       totalCreditsAllocated: totalAllocated,
       totalCreditsConsumed: totalConsumed,
-      remainingFreeCredits: creditInfo.freeCreditsRemaining ?? Math.max(0, totalAllocated - totalConsumed),
+      remainingFreeCredits: curBal,
       purchasedCredits,
       adjustedCredits,
-      currentCreditBalance: creditInfo.freeCreditsRemaining ?? Math.max(0, totalAllocated - totalConsumed),
+      currentCreditBalance: curBal,
       isSubscribed: Boolean(creditInfo.isSubscribed),
       subscriptionPlan: creditInfo.subscriptionPlan || vendor.subscriptionPlan || 'Free Tier',
     };
@@ -473,11 +489,253 @@ async function getVendorPaymentHistory(req, res, next) {
   }
 }
 
+
+/**
+ * POST /api/vendors/:id/add-quote-credits
+ * Category Manager / Admin allows adding quote credits strictly in range 1 to 5.
+ */
+async function addQuoteCredits(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: `Seller "${id}" not found.` });
+    }
+
+    const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
+    const pool = require('../db/pool');
+    const crypto = require('crypto');
+
+    const validation = validatePayload(VALIDATION_SCHEMAS.sellerAddQuoteCredits, req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: validation.errors.amount || 'Quote credits must be an integer between 1 and 5.',
+        details: validation.errors,
+      });
+    }
+
+    const amount = Number(validation.sanitizedData.amount);
+    const reason = validation.sanitizedData.reason || 'Manual quote credit addition by Category Manager';
+
+    const currentBalance = vendor.freeQuotationCredits !== undefined
+      ? Number(vendor.freeQuotationCredits)
+      : (vendor.credits !== undefined ? Number(vendor.credits) : 5);
+
+    const updatedBalance = currentBalance + amount;
+
+    const txId = `vtx_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+    const tx = {
+      id: txId,
+      vendorId: vendor.id,
+      rfqId: null,
+      transactionType: 'Quote Credit Addition',
+      amount,
+      balanceAfter: updatedBalance,
+      idempotencyKey: `quote-credit-${txId}`,
+      description: reason,
+      createdAt: new Date().toISOString(),
+    };
+
+    // Authoritative database update and audit trail within an atomic transaction block
+    if (pool.hasStorage()) {
+      const client = (pool.pool && typeof pool.pool.connect === 'function')
+        ? await pool.pool.connect()
+        : (typeof pool.connect === 'function' ? await pool.connect() : pool);
+      let inTx = false;
+      try {
+        if (typeof client.query === 'function') {
+          await client.query('BEGIN');
+          inTx = true;
+          await client.query(
+            "UPDATE vendors SET credits = $1, raw = jsonb_set(COALESCE(raw, '{}'::jsonb), '{freeQuotationCredits}', $2) WHERE id = $3",
+            [updatedBalance, JSON.stringify(updatedBalance), vendor.id]
+          );
+          await client.query(
+            `INSERT INTO vendor_credit_transactions (id, vendor_id, rfq_id, transaction_type, amount, balance_after, idempotency_key, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+             ON CONFLICT (idempotency_key) DO NOTHING`,
+            [tx.id, tx.vendorId, tx.rfqId, tx.transactionType, tx.amount, tx.balanceAfter, tx.idempotencyKey]
+          );
+          await client.query('COMMIT');
+          inTx = false;
+        }
+      } catch (dbErr) {
+        if (inTx && typeof client.query === 'function') {
+          try {
+            await client.query('ROLLBACK');
+          } catch (_) {}
+        }
+        logger.error('Failed to update vendor credits atomically in PostgreSQL transaction', dbErr, 'VENDOR_CONTROLLER');
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to update vendor quote credits due to a database error.',
+        });
+      } finally {
+        if (client && typeof client.release === 'function') {
+          client.release();
+        }
+      }
+    }
+
+    try {
+      const { queryCache } = require('../db/queryCache');
+      if (queryCache && typeof queryCache.invalidate === 'function') {
+        queryCache.invalidate('vendor_credits');
+        queryCache.invalidate('vendors');
+      }
+    } catch (_) {}
+
+    // Update in-memory vendor balance only after database transaction succeeds
+    storeService.updateVendor(vendor.id, {
+      freeQuotationCredits: updatedBalance,
+      freeRfqDownloadCredits: updatedBalance,
+      credits: updatedBalance,
+    });
+
+    const actor = req.user
+      ? (req.user.fullName || req.user.name || req.user.email || 'Category Manager')
+      : 'Category Manager';
+
+    logger.info(`Quote credits added to vendor ${vendor.id}: +${amount} (New Balance: ${updatedBalance}) by ${actor}`, { vendorId: vendor.id, amount }, 'VENDOR_CONTROLLER');
+
+    return res.json({
+      success: true,
+      message: `Successfully allocated ${amount} quote credits to ${vendor.name || vendor.id}.`,
+      previousBalance: currentBalance,
+      updatedBalance,
+      transaction: tx,
+    });
+  } catch (err) {
+    logger.error('Error adding vendor quote credits', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * POST /api/vendors/:id/request-credit-approval
+ * Submits quote credit allocation request for senior approver authorization.
+ * Creates an internal task in CREDIT_MANAGEMENT and links to the approvals module.
+ */
+async function requestCreditApproval(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: `Seller "${id}" not found.` });
+    }
+
+    const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
+    const internalTaskQueries = require('../db/internalTaskQueries');
+    const approvalQueries = require('../db/approvalQueries');
+
+    const validation = validatePayload(VALIDATION_SCHEMAS.buyerCreditApprovalRequest, req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation failed on quote credit approval request.',
+        details: validation.errors,
+      });
+    }
+
+    const { amount, reason, approverName, initiatorName } = validation.sanitizedData;
+
+    const vendorLabel = vendor.name || vendor.id;
+    const taskReason = reason || `Requested quote credit top-up for ${vendorLabel}`;
+
+    const task = await internalTaskQueries.createInternalTask(
+      {
+        taskCategory: 'CREDIT_MANAGEMENT',
+        taskType: 'Add Credits',
+        title: `Quote Credit Allocation Request: ${amount} Credits for ${vendorLabel}`,
+        description: taskReason,
+        priority: 'High',
+        status: 'Pending Approval',
+        approvalStatus: 'PENDING',
+        assignedToName: approverName,
+        assignedTeam: 'Management Approvers',
+        creditAccountType: 'seller',
+        creditAccountId: vendor.id,
+        creditAccountName: vendorLabel,
+        creditQuantity: amount,
+        creditReason: reason,
+        notes: `Initiated By: ${initiatorName}. Requires review and approval by ${approverName}.`,
+        relatedEntityType: 'SELLER',
+        relatedEntityId: vendor.id,
+        relatedEntityLabel: vendorLabel,
+      },
+      {
+        fullName: initiatorName,
+        name: initiatorName,
+        email: req.user?.email || 'cm@procucev.com',
+        role: 'category_manager',
+      }
+    );
+
+    // Link to Approvals section
+    await approvalQueries.createApproval(
+      {
+        module: 'Seller Credit Addition',
+        request_type: 'Seller Credit Addition',
+        project: vendorLabel,
+        applicant_name: vendorLabel,
+        applicant_email: vendor.email || '',
+        value_impact: `${amount} Quote Credits (${vendorLabel})`,
+        amount,
+        quantity: amount,
+        available_balance: vendor.freeQuotationCredits ?? 0,
+        maker_name: initiatorName,
+        maker_role: 'Category Manager',
+        assigned_approver: approverName,
+        status: 'Pending',
+        details: taskReason,
+        internal_task_id: task.id,
+        seller_id: vendor.id,
+        history: [
+          {
+            action: 'SUBMITTED',
+            actor_name: initiatorName,
+            actor_role: 'Category Manager',
+            timestamp: new Date().toISOString(),
+            remarks: reason || `Submitted quote credit addition for approval (${approverName}).`,
+          },
+        ],
+      },
+      {
+        fullName: initiatorName,
+        name: initiatorName,
+        email: req.user?.email || 'cm@procucev.com',
+        role: 'category_manager',
+      }
+    );
+
+    logger.info(
+      `Quote credit approval request created: ${task.task_number} (${amount} credits for ${vendor.name || vendor.id}) assigned to ${approverName}`,
+      { sellerId: id, amount, approverName },
+      'VENDOR_DOSSIER_EXTENSIONS'
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: `Quote credit request submitted for approval by ${approverName}. Status: Pending Approval.`,
+      task,
+    });
+  } catch (err) {
+    logger.error('Error requesting quote credit approval for seller', err, 'VENDOR_DOSSIER_EXTENSIONS');
+    next(err);
+  }
+}
+
 module.exports = {
+  assertCategoryManagerOrAdmin,
   assertCategoryManagerOrVendor,
   resolveVendor,
   getCreditHistory,
   getVendorCommunications,
   recordVendorCommunication,
   getVendorPaymentHistory,
+  addQuoteCredits,
+  requestCreditApproval,
 };

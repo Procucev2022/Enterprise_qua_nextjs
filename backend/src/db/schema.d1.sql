@@ -684,3 +684,290 @@ CREATE TABLE IF NOT EXISTS buyer_credit_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_buyer_credit_transactions_buyer ON buyer_credit_transactions (buyer_id, created_at DESC);
 
+-- =============================================================================
+-- ACTION CENTER: TICKETS, APPROVALS, INTERNAL TASKS & DOCUMENT VAULT (D1 SQLite)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS tickets (
+  id TEXT PRIMARY KEY,
+  ticket_number TEXT UNIQUE,
+  customer_name TEXT,
+  customer_email TEXT,
+  customer_phone TEXT,
+  customer_company TEXT,
+  subject TEXT NOT NULL,
+  description TEXT,
+  category TEXT,
+  project TEXT,
+  priority TEXT NOT NULL DEFAULT 'Medium',
+  status TEXT NOT NULL DEFAULT 'Open',
+  assigned_to_user_id TEXT,
+  assigned_to_name TEXT,
+  assigned_team TEXT,
+  source TEXT,
+  created_by_user_id TEXT,
+  created_by_name TEXT,
+  due_date TEXT,
+  resolution_notes TEXT,
+  resolved_at TEXT,
+  resolved_by_name TEXT,
+  last_edited_by_name TEXT,
+  tags TEXT,
+  attachments TEXT,
+  raw TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets (status);
+CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets (priority);
+CREATE INDEX IF NOT EXISTS idx_tickets_created_at ON tickets (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tickets_assigned_to ON tickets (assigned_to_user_id);
+
+CREATE TABLE IF NOT EXISTS ticket_activities (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL,
+  action_type TEXT NOT NULL,
+  actor_id TEXT,
+  actor_name TEXT,
+  comment TEXT,
+  from_value TEXT,
+  to_value TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_activities_ticket_id ON ticket_activities (ticket_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS internal_task_types (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  code TEXT UNIQUE NOT NULL,
+  default_module TEXT NOT NULL DEFAULT 'GENERAL',
+  description TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS internal_tasks (
+  id TEXT PRIMARY KEY,
+  task_number TEXT UNIQUE NOT NULL,
+  task_category TEXT NOT NULL DEFAULT 'INTERNAL_OPERATIONS',
+  task_type TEXT NOT NULL DEFAULT 'General',
+  task_type_id TEXT,
+  title TEXT NOT NULL,
+  description TEXT,
+  priority TEXT NOT NULL DEFAULT 'Medium',
+  status TEXT NOT NULL DEFAULT 'New',
+  assigned_to_user_id TEXT,
+  assigned_to_name TEXT,
+  assigned_team TEXT,
+  created_by_user_id TEXT,
+  created_by_name TEXT,
+  due_date TEXT,
+  due_time TEXT,
+  completed_at TEXT,
+  completed_by_user_id TEXT,
+  completed_by_name TEXT,
+  completion_remarks TEXT,
+  related_entity_type TEXT NOT NULL DEFAULT 'GENERAL',
+  related_entity_id TEXT,
+  related_entity_label TEXT,
+  notes TEXT,
+  attachments TEXT,
+  approval_status TEXT,
+  approver_id TEXT,
+  approver_name TEXT,
+  approved_at TEXT,
+  approval_remarks TEXT,
+  demo_date TEXT,
+  demo_time TEXT,
+  demo_status TEXT,
+  credit_account_type TEXT,
+  credit_account_id TEXT,
+  credit_account_name TEXT,
+  credit_quantity NUMERIC DEFAULT 0,
+  credit_reason TEXT,
+  raw TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_category ON internal_tasks (task_category);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_type ON internal_tasks (task_type);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_status ON internal_tasks (status);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_priority ON internal_tasks (priority);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_related ON internal_tasks (related_entity_type, related_entity_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_due_date ON internal_tasks (due_date);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_assigned_to ON internal_tasks (assigned_to_user_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_by ON internal_tasks (created_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_internal_tasks_created_at ON internal_tasks (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS internal_task_activities (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  action_type TEXT NOT NULL,
+  actor_id TEXT,
+  actor_name TEXT,
+  from_value TEXT,
+  to_value TEXT,
+  comment TEXT,
+  metadata TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_internal_task_activities_task ON internal_task_activities (task_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS payment_dues_communications (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  account_type TEXT NOT NULL,
+  account_name TEXT,
+  channel TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  subject TEXT,
+  message TEXT,
+  sent_by_user_id TEXT,
+  sent_by_name TEXT,
+  status TEXT NOT NULL DEFAULT 'SENT',
+  metadata TEXT,
+  sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pd_comm_account ON payment_dues_communications (account_id, sent_at DESC);
+
+CREATE TABLE IF NOT EXISTS approvals (
+  id TEXT PRIMARY KEY,
+  request_number TEXT UNIQUE NOT NULL,
+  module TEXT NOT NULL,
+  project TEXT,
+  applicant_name TEXT,
+  applicant_email TEXT,
+  value_impact TEXT,
+  maker_name TEXT,
+  maker_role TEXT,
+  status TEXT NOT NULL DEFAULT 'Pending',
+  details TEXT,
+  approver_name TEXT,
+  approver_remarks TEXT,
+  raw TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals (status);
+CREATE INDEX IF NOT EXISTS idx_approvals_module ON approvals (module);
+CREATE INDEX IF NOT EXISTS idx_approvals_created_at ON approvals (created_at DESC);
+
+-- =============================================================================
+-- LOGGING OBSERVABILITY & SEARCH INDEXING
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS system_error_logs (
+  id TEXT PRIMARY KEY,
+  level TEXT NOT NULL,
+  category TEXT NOT NULL,
+  message TEXT NOT NULL,
+  error_name TEXT,
+  stack_trace TEXT,
+  user_email TEXT,
+  request_path TEXT,
+  correlation_id TEXT,
+  metadata TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sys_error_level ON system_error_logs (level, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sys_error_category ON system_error_logs (category);
+
+CREATE TABLE IF NOT EXISTS vendor_categories_indexed (
+  vendor_id TEXT NOT NULL,
+  category_name TEXT NOT NULL COLLATE NOCASE,
+  category_type TEXT NOT NULL DEFAULT 'major',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (vendor_id, category_name, category_type)
+);
+CREATE INDEX IF NOT EXISTS idx_vci_cat_name ON vendor_categories_indexed (category_name);
+CREATE INDEX IF NOT EXISTS idx_vci_vendor_id ON vendor_categories_indexed (vendor_id);
+
+-- ==============================================================================
+-- DOCUMENT VAULT (D1 SQLite)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS document_vault (
+  id TEXT PRIMARY KEY,
+  document_name TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_size INTEGER DEFAULT 0,
+  mime_type TEXT DEFAULT 'application/pdf',
+  category TEXT NOT NULL,
+  file_url TEXT NOT NULL,
+  description TEXT,
+  uploaded_by TEXT DEFAULT 'System Admin',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_document_vault_category ON document_vault (category);
+CREATE INDEX IF NOT EXISTS idx_document_vault_active ON document_vault (is_active);
+
+-- ==============================================================================
+-- VENDOR DIRECTORY SESSIONS (D1 SQLite)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS vendor_directory_sessions (
+  id TEXT PRIMARY KEY,
+  user_uuid TEXT NOT NULL,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'category_manager',
+  auth_method TEXT NOT NULL DEFAULT 'EMAIL_OTP',
+  login_at TEXT NOT NULL,
+  last_activity_at TEXT NOT NULL,
+  logout_at TEXT,
+  duration_seconds INTEGER DEFAULT 0,
+  logout_reason TEXT,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  ip_address TEXT,
+  user_agent TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_user ON vendor_directory_sessions (user_uuid);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email ON vendor_directory_sessions (email);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status ON vendor_directory_sessions (status);
+
+-- ==============================================================================
+-- ACCOUNT DOCUMENTS (Buyer & Seller Dossier Associated Documents)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS account_documents (
+  id TEXT PRIMARY KEY,
+  account_type TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  document_name TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_size INTEGER DEFAULT 0,
+  mime_type TEXT DEFAULT 'application/pdf',
+  category TEXT NOT NULL DEFAULT 'Other',
+  file_url TEXT NOT NULL,
+  description TEXT,
+  uploaded_by TEXT DEFAULT 'Category Manager',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_account_documents_account ON account_documents (account_type, account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_account_documents_category ON account_documents (category);
+CREATE INDEX IF NOT EXISTS idx_account_documents_active ON account_documents (is_active);
+
+-- ==============================================================================
+-- IDENTITY MASTER LOOKUP DATA (Idempotent Seeds)
+-- ==============================================================================
+INSERT OR IGNORE INTO role (uuid, role_name, is_active) VALUES ('role-client-initiator', 'ClientInitiator', 1);
+INSERT OR IGNORE INTO role (uuid, role_name, is_active) VALUES ('role-vendor', 'Vendor', 1);
+INSERT OR IGNORE INTO role (uuid, role_name, is_active) VALUES ('role-category-manager', 'CategoryManager', 1);
+INSERT OR IGNORE INTO role (uuid, role_name, is_active) VALUES ('role-superuser', 'SuperUser', 1);
+
+INSERT OR IGNORE INTO org_types (uuid, type_name, is_active) VALUES ('orgtype-client', 'CLIENT', 1);
+INSERT OR IGNORE INTO org_types (uuid, type_name, is_active) VALUES ('orgtype-vendor', 'VENDOR', 1);
+INSERT OR IGNORE INTO org_types (uuid, type_name, is_active) VALUES ('orgtype-internal', 'INTERNAL', 1);
+
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-client-new', 'CLIENT_NEW', 1);
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-vendor-new', 'VENDOR_NEW', 1);
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-staff-active', 'STAFF_ACTIVE', 1);
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-active', 'Active', 1);
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-pending', 'Pending', 1);
+INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-inactive', 'Inactive', 1);
+
+
+
+

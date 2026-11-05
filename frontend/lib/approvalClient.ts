@@ -31,8 +31,11 @@ export async function fetchApprovals(filters: {
   status?: string;
   project?: string;
   search?: string;
+  assigned_approver?: string;
   limit?: number;
   offset?: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
 } = {}): Promise<{ data: ApprovalRequest[]; total: number }> {
   try {
     const params = new URLSearchParams();
@@ -40,8 +43,11 @@ export async function fetchApprovals(filters: {
     if (filters.status && filters.status !== 'all') params.set('status', filters.status);
     if (filters.project && filters.project !== 'all') params.set('project', filters.project);
     if (filters.search) params.set('search', filters.search);
+    if (filters.assigned_approver) params.set('assigned_approver', filters.assigned_approver);
     if (filters.limit) params.set('limit', String(filters.limit));
     if (filters.offset !== undefined) params.set('offset', String(filters.offset));
+    if (filters.sortBy) params.set('sortBy', filters.sortBy);
+    if (filters.sortOrder) params.set('sortOrder', filters.sortOrder);
 
     const res = await fetch(`/api/approvals?${params.toString()}`, { headers: authHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -76,4 +82,3 @@ export async function processApprovalAction(
     return { success: false, error: msg };
   }
 }
-

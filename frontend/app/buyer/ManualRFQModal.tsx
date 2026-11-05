@@ -2272,9 +2272,29 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                   Approved
                                 </span>
                               </div>
-                              <div className="text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                              <div className="space-y-0.5 text-[10px] text-slate-500 dark:text-gray-400">
+                                {vendor.contactPerson && (
+                                  <div className="flex items-center gap-1 text-slate-700 dark:text-gray-300">
+                                    <Users size={10} className="text-slate-400 shrink-0" />
+                                    <span className="truncate">{vendor.contactPerson}</span>
+                                  </div>
+                                )}
+                                {vendor.email && (
+                                  <div className="flex items-center gap-1">
+                                    <Mail size={10} className="text-blue-500 shrink-0" />
+                                    <span className="font-mono truncate">{vendor.email}</span>
+                                  </div>
+                                )}
+                                {vendor.phone && (
+                                  <div className="flex items-center gap-1">
+                                    <Phone size={10} className="text-emerald-500 shrink-0" />
+                                    <span className="font-mono">{vendor.phone}</span>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="pt-1 border-t border-indigo-100 dark:border-indigo-900/40 text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
                                 <span className="truncate font-semibold text-indigo-700 dark:text-indigo-300">{vendor.majorCategory || 'General Industrial'}</span>
-                                <span className="text-indigo-600 dark:text-indigo-400 font-semibold">🔒 Double-Blind</span>
+                                <span className="truncate">{vendor.city || vendor.state || vendor.location || 'India'}</span>
                               </div>
                             </div>
                           ))}

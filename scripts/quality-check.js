@@ -46,6 +46,7 @@ console.log('\n🚀 Starting Procucev Enterprise Workspace Quality Check Pipelin
 runStep('Step 1: Production Build Verification', 'npm run build --prefix frontend', rootDir, {
   NEXT_DIST_DIR: '.next-qc',
   NODE_ENV: 'production',
+  NODE_OPTIONS: process.env.NODE_OPTIONS || '--max-old-space-size=6144',
 });
 
 // 2. Unit Test & Per-File Coverage (Backend + Frontend)

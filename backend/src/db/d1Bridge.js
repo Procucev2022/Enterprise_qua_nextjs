@@ -155,7 +155,7 @@ function resetD1HttpClientCache() {
  * so this converts rather than requiring two copies of every query string.
  */
 function toD1Sql(text) {
-  return text.replace(/\$(\d+)/g, '?');
+  return text.replace(/\$(\d+)/g, '?').replace(/\bILIKE\b/g, 'LIKE');
 }
 
 /**

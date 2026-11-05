@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import BuyersDirectory from '@/app/category-manager/buyers-directory';
 import CategoryManagerBuyersDirectoryPage from '@/app/category-manager/buyers-directory/page';
 import { useApp } from '@/lib/store';
@@ -676,5 +676,358 @@ describe('BuyersDirectory Component Suite', () => {
     render(<BuyersDirectory initialBuyerId="non-matching-id" />);
     expect(screen.queryByText('Close Dossier')).toBeNull();
   });
-});
 
+  describe('Summary Cards Click and Modal Popup', () => {
+    test('opens modal on clicking Total Buyers summary card and exercises columns', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        buyerAccounts: mockBuyerAccounts,
+        rfqs: mockRfqs,
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        auditLogs: [],
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      render(<BuyersDirectory />);
+      expect(screen.getByText('Total Buyers')).toBeInTheDocument();
+
+      const totalCard = screen.getByText('Total Buyers').closest('[role="group"]');
+      if (totalCard) {
+        fireEvent.click(totalCard);
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toBeInTheDocument();
+        expect(within(dialog).getByText('Tata Motors Corp')).toBeInTheDocument();
+        expect(within(dialog).getByText('suresh@tatamotors.com')).toBeInTheDocument();
+
+        // Close modal
+        const closeBtn = screen.getAllByRole('button', { name: /close/i })[0];
+        fireEvent.click(closeBtn);
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      }
+    });
+
+    test('opens modal for subscriptionBuyers, totalRfqs, freeRfqs, and paidRfqs with keyboard support', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        buyerAccounts: mockBuyerAccounts,
+        rfqs: mockRfqs,
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        auditLogs: [],
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      render(<BuyersDirectory />);
+
+      // Subscription Buyers
+      const subCard = screen.getByText('Subscription Buyers').closest('[role="group"]');
+      if (subCard) {
+        fireEvent.click(subCard);
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+
+      // Total RFQs with Enter key
+      const rfqCard = screen.getByText('Total RFQs').closest('[role="group"]');
+      if (rfqCard) {
+        fireEvent.keyDown(rfqCard, { key: 'Enter' });
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toBeInTheDocument();
+        expect(within(dialog).getByText('RFQ-TM-001')).toBeInTheDocument();
+        expect(within(dialog).getByText('Precision Alloy Wheels')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+
+      // Free RFQs with Space key
+      const freeCard = screen.getByText('Free RFQs').closest('[role="group"]');
+      if (freeCard) {
+        fireEvent.keyDown(freeCard, { key: ' ' });
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+
+      // Paid RFQs
+      const paidCard = screen.getByText('Paid RFQs').closest('[role="group"]');
+      if (paidCard) {
+        fireEvent.click(paidCard);
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      }
+    });
+  });
+
+
+  describe('Summary Cards Additional Branch Coverage', () => {
+    test('exercises keyboard handlers with Enter, Space, and ignored keys across all 5 cards', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        buyerAccounts: [
+          {
+            id: 'b-empty',
+            organizationName: '',
+            contactPerson: '',
+            corporateEmail: '',
+            city: '',
+            primaryPlantLocation: '',
+            sourcingMode: '',
+            subscriptionPlan: '',
+            status: '',
+          },
+        ],
+        rfqs: [
+          {
+            id: 'rfq-empty',
+            rfqNumber: '',
+            title: '',
+            buyerAccountId: 'b-empty',
+            buyerAccountName: '',
+            raisedByName: '',
+            sourcingMode: '',
+            budget: 0,
+            status: '',
+            quotes: [],
+          },
+        ],
+        auditLogs: [],
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      render(<BuyersDirectory />);
+
+      const cards = [
+        screen.getByText('Total Buyers', { selector: 'p' }).closest('[role="group"]'),
+        screen.getByText('Subscription Buyers', { selector: 'p' }).closest('[role="group"]'),
+        screen.getByText('Total RFQs', { selector: 'p' }).closest('[role="group"]'),
+        screen.getByText('Free RFQs', { selector: 'p' }).closest('[role="group"]'),
+        screen.getByText('Paid RFQs', { selector: 'p' }).closest('[role="group"]'),
+      ];
+
+      // Ignored key (Escape) on all cards
+      cards.forEach((c) => { if (c) fireEvent.keyDown(c, { key: 'Escape' }); });
+
+      // Enter key
+      cards.forEach((c) => {
+        if (c) {
+          fireEvent.keyDown(c, { key: 'Enter' });
+          const closeBtn = screen.getAllByRole('button', { name: /close/i })[0];
+          if (closeBtn) fireEvent.click(closeBtn);
+        }
+      });
+
+      // Space key
+      cards.forEach((c) => {
+        if (c) {
+          fireEvent.keyDown(c, { key: ' ' });
+          const closeBtn = screen.getAllByRole('button', { name: /close/i })[0];
+          if (closeBtn) fireEvent.click(closeBtn);
+        }
+      });
+    });
+
+    test('exercises sessionStorage with empty object to cover false branches', () => {
+      window.sessionStorage.setItem('buyer_directory_state', JSON.stringify({}));
+      render(<BuyersDirectory />);
+      expect(screen.getByText('Total Buyers', { selector: 'p' })).toBeInTheDocument();
+      window.sessionStorage.clear();
+    });
+
+    test('exercises all sorting branches, fallback fields, pagination ellipsis, and active buyer dossier branches', async () => {
+      const mockBuyers = [
+        {
+          id: 'b-full',
+          organizationName: 'Alpha Corp',
+          contactPerson: 'Alice',
+          corporateEmail: 'alice@alpha.com',
+          mobileNumber: '+919999999999',
+          city: 'Mumbai',
+          primaryPlantLocation: 'Mumbai Plant',
+          sourcingMode: 'MODE_1',
+          subscriptionPlan: 'custom enterprise',
+          remainingFreeRFQs: 10,
+          totalRFQsCreated: 20,
+          totalSpend: '$50,000',
+          status: 'ACTIVE_VERIFIED',
+          createdDate: '2026-05-01T10:00:00Z',
+          unlimitedAccess: true,
+        },
+        {
+          id: 'b-sparse',
+          organizationName: 'Beta Inc',
+          contactPerson: null,
+          corporateEmail: 'beta@domain.com',
+          mobileNumber: null,
+          city: null,
+          primaryPlantLocation: 'Delhi Plant',
+          sourcingMode: null,
+          subscriptionPlan: 'version_1',
+          remainingFreeRFQs: null,
+          totalRFQsCreated: null,
+          totalSpend: null,
+          status: null,
+          createdDate: null,
+          unlimitedRfqAccess: true,
+        },
+        {
+          id: 'b-empty',
+          organizationName: '',
+          contactPerson: '',
+          corporateEmail: '',
+          mobileNumber: '',
+          city: '',
+          primaryPlantLocation: '',
+          sourcingMode: '',
+          subscriptionPlan: 'version_2',
+          remainingFreeRFQs: 0,
+          totalRFQsCreated: 0,
+          totalSpend: '0',
+          status: '',
+          createdDate: '2026-01-01T10:00:00Z',
+        },
+        {
+          id: 'b-v3',
+          organizationName: 'Gamma Ltd',
+          subscriptionPlan: 'version_3',
+        },
+        {
+          id: 'b-unlimited',
+          organizationName: 'Delta Ltd',
+          subscriptionPlan: 'unlimited',
+        },
+        {
+          id: 'b-growth',
+          organizationName: 'Epsilon Ltd',
+          subscriptionPlan: 'growth_tier',
+          createdDate: '2026-02-01T10:00:00Z',
+        },
+        // Add more items to reach > 70 items so pagination totalPages > 7 with pageSize 10
+        ...Array.from({ length: 75 }, (_, i) => ({
+          id: `b-bulk-${i}`,
+          organizationName: `Bulk Buyer ${i}`,
+          corporateEmail: `bulk${i}@test.com`,
+          sourcingMode: 'MODE_0',
+          subscriptionPlan: 'standard',
+          status: 'ACTIVE',
+        })),
+      ];
+
+      const mockRfqsExtended = [
+        {
+          id: 'rfq-budget',
+          rfqNumber: 'RFQ-B1',
+          title: 'Budget RFQ',
+          buyerAccountId: 'b-full',
+          budget: 200000,
+          createdAt: '2026-04-01T10:00:00Z',
+          assignedVendors: [{}],
+          sourcingMode: 'MODE_1',
+        },
+        {
+          id: 'rfq-awarded',
+          rfqNumber: 'RFQ-B2',
+          title: 'Awarded RFQ',
+          buyerAccountId: 'b-full',
+          budget: 0,
+          awardedAmount: 150000,
+          createdAt: '2026-04-02T10:00:00Z',
+          assignedVendors: [],
+          sourcingMode: 'UNKNOWN_MODE',
+        },
+        {
+          id: 'rfq-quotes',
+          rfqNumber: 'RFQ-B3',
+          title: 'Quotes RFQ',
+          raisedByEmail: 'beta@domain.com',
+          budget: 0,
+          quotes: [{ totalPrice: 75000 }],
+        },
+        {
+          id: 'rfq-name',
+          rfqNumber: 'RFQ-B4',
+          title: 'Name RFQ',
+          buyerAccountName: 'Gamma Ltd',
+          isPaid: true,
+        },
+        {
+          id: 'rfq-paid-plan',
+          rfqNumber: 'RFQ-B5',
+          title: 'Paid Plan RFQ',
+          buyerAccountId: 'b-unlimited',
+          isPaidPlan: true,
+        },
+        {
+          id: 'rfq-paid-rfq',
+          rfqNumber: 'RFQ-B6',
+          title: 'Paid RFQ Flag',
+          isPaidRfq: true,
+        },
+      ];
+
+      const mockAuditLogs = [
+        {
+          id: 'log-1',
+          actorEmail: 'alice@alpha.com',
+          details: 'Updated buyer profile for Alpha Corp',
+          timestamp: '2026-05-01T11:00:00Z',
+        },
+        {
+          id: 'log-2',
+          user: 'operator@procucev.com',
+          action: 'Checked Alpha Corp compliance',
+          timestamp: '2026-05-01T12:00:00Z',
+        },
+      ];
+
+      (useApp as jest.Mock).mockReturnValue({
+        buyerAccounts: mockBuyers,
+        rfqs: mockRfqsExtended,
+        auditLogs: mockAuditLogs,
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      render(<BuyersDirectory />);
+
+      // Test pagination with > 7 pages and clicking page 2, page 3
+      const page2Btn = screen.queryByRole('button', { name: 'Page 2' });
+      if (page2Btn) {
+        fireEvent.click(page2Btn);
+      }
+      expect(screen.getByText('...')).toBeInTheDocument();
+
+      // Test export directory with null/sparse/fallback values
+      const exportBtn = screen.getByRole('button', { name: /export directory/i });
+      fireEvent.click(exportBtn);
+      expect(reportsClient.exportReportToExcel).toHaveBeenCalled();
+
+      // Test sorting through all column headers (asc and desc)
+      const columnHeaders = screen.getAllByRole('columnheader');
+      for (const th of columnHeaders) {
+        fireEvent.click(th);
+        fireEvent.click(th);
+      }
+
+      // Test clicking table row (not button) to open drawer
+      const rows = screen.getAllByRole('row');
+      // Click a data row directly
+      if (rows.length > 1) {
+        fireEvent.click(rows[1]);
+      }
+
+      // Test clicking on a button inside row does not trigger row click
+      const dossierButtons = screen.queryAllByText(/360° Dossier/i);
+      if (dossierButtons.length > 0) {
+        fireEvent.click(dossierButtons[0]);
+      }
+
+      // Open drawer for b-growth and b-sparse to exercise payment amount and fallback branches
+      const allRows = screen.getAllByRole('row');
+      if (allRows.length > 2) {
+        fireEvent.click(allRows[2]);
+      }
+      if (allRows.length > 3) {
+        fireEvent.click(allRows[3]);
+      }
+    });
+  });
+});

@@ -43,7 +43,7 @@ const HEADERS = {
 // Tables to report row-counts for after migration
 const REPORTED_TABLES = [
   'role', 'org_types', 'master_status', 'organization', 'user',
-  'category_division', 'org_division_category',
+  'category_division', 'org_division_category', 'vendor_dispatch_templates',
   'auth_otp_codes', 'auth_revoked_tokens',
   'vendors', 'rfqs', 'evaluations', 'vendor_catalogue',
   'buyer_accounts', 'ai_feed', 'audit_logs', 'notifications',
@@ -52,7 +52,11 @@ const REPORTED_TABLES = [
   'po_line_items', 'vendor_category_mappings', 'vendor_category_dispatches',
   'vendor_email_dispatch_log', 'vendor_ingestion_audit', 'ai_classification_logs',
   'bulk_vendor_import_sessions', 'vendor_directory_sessions',
-  'payment_dues_communications',
+  'payment_dues_communications', 'chaser_queue', 'rfq_unlocks',
+  'vendor_credit_transactions', 'buyer_credit_transactions',
+  'tickets', 'ticket_activities', 'internal_task_types',
+  'internal_tasks', 'internal_task_activities', 'approvals',
+  'system_error_logs', 'vendor_categories_indexed', 'document_vault', 'account_documents',
 ];
 
 async function d1Query(sql, params = []) {
@@ -132,6 +136,39 @@ async function migrate() {
   }
 
   console.log(`\n[migrate-d1] Applied: ${applied}  Skipped/already-exists: ${skipped}`);
+
+  // Auto-seed category taxonomy if empty
+  try {
+    const catCountRes = await d1Query('SELECT COUNT(*) AS total FROM category_division');
+    const catTotal = catCountRes?.result?.[0]?.results?.[0]?.total || 0;
+    if (catTotal === 0) {
+      console.log('\n[migrate-d1] Seeding procurement category taxonomy into category_division...');
+      const { DEFAULT_CATEGORY_TAXONOMY } = require('../src/config/constants');
+      const crypto = require('crypto');
+      const baseTime = new Date('2026-01-01T00:00:00Z').getTime();
+      const insertStmts = [];
+      DEFAULT_CATEGORY_TAXONOMY.forEach((group, groupIdx) => {
+        const division = group.majorCategory;
+        group.minorCategories.forEach((minor, minorIdx) => {
+          const uuid = crypto.randomUUID();
+          const time = new Date(baseTime + groupIdx * 100000 + minorIdx * 1000).toISOString();
+          const escDiv = String(division).replace(/'/g, "''");
+          const escMin = String(minor).replace(/'/g, "''");
+          insertStmts.push(
+            `INSERT INTO category_division (uuid, division, category, division_name, is_active, created_ts, last_modified_ts) VALUES ('${uuid}', '${escDiv}', '${escMin}', '${escDiv}', 1, '${time}', '${time}');`
+          );
+        });
+      });
+      const chunkSize = 50;
+      for (let i = 0; i < insertStmts.length; i += chunkSize) {
+        const chunk = insertStmts.slice(i, i + chunkSize);
+        await d1Query(chunk.join('\n'));
+      }
+      console.log(`[migrate-d1] Seeded ${insertStmts.length} category_division rows successfully.`);
+    }
+  } catch (seedErr) {
+    console.warn(`[migrate-d1] Category seeding check warning: ${seedErr.message}`);
+  }
 
   // Row counts
   console.log('\n[migrate-d1] Row counts:');

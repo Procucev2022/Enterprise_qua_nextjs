@@ -1172,7 +1172,7 @@ function zohoLiveCredentials() {
     PAYMENTS_BASE_URL: getZohoEnv('ZOHO_LIVE_PAYMENTS_BASE_URL', 'https://payments.zoho.in/api/v1'),
     ACCOUNT_ID: getZohoEnv('ZOHO_LIVE_PAYMENTS_ACCOUNT_ID') || getZohoEnv('ZOHO_PAYMENTS_ACCOUNT_ID'),
     WEBHOOK_SIGNING_KEY: getZohoEnv('ZOHO_LIVE_WEBHOOK_SIGNING_KEY') || getZohoEnv('ZOHO_WEBHOOK_SIGNING_KEY'),
-    RETURN_URL_BASE: getZohoEnv('ZOHO_LIVE_RETURN_URL_BASE') || getZohoEnv('ZOHO_PAYMENTS_RETURN_URL_BASE') || getZohoEnv('PUBLIC_FRONTEND_URL', 'http://localhost:3000'),
+    RETURN_URL_BASE: String(getZohoEnv('ZOHO_LIVE_RETURN_URL_BASE') || getZohoEnv('ZOHO_PAYMENTS_RETURN_URL_BASE') || getZohoEnv('PUBLIC_FRONTEND_URL', 'http://localhost:3000')).replace(/\/+$/, ''),
   };
 }
 
@@ -1185,7 +1185,7 @@ function zohoSandboxCredentials() {
     PAYMENTS_BASE_URL: getZohoEnv('ZOHO_SANDBOX_PAYMENTS_BASE_URL', 'https://paymentssandbox.zoho.in/api/v1'),
     ACCOUNT_ID: getZohoEnv('ZOHO_SANDBOX_PAYMENTS_ACCOUNT_ID') || getZohoEnv('ZOHO_PAYMENTS_ACCOUNT_ID'),
     WEBHOOK_SIGNING_KEY: getZohoEnv('ZOHO_SANDBOX_WEBHOOK_SIGNING_KEY'),
-    RETURN_URL_BASE: getZohoEnv('ZOHO_SANDBOX_RETURN_URL_BASE') || getZohoEnv('ZOHO_PAYMENTS_RETURN_URL_BASE') || getZohoEnv('PUBLIC_FRONTEND_URL', 'http://localhost:3000'),
+    RETURN_URL_BASE: String(getZohoEnv('ZOHO_SANDBOX_RETURN_URL_BASE') || getZohoEnv('ZOHO_PAYMENTS_RETURN_URL_BASE') || getZohoEnv('PUBLIC_FRONTEND_URL', 'http://localhost:3000')).replace(/\/+$/, ''),
   };
 }
 
@@ -1490,6 +1490,13 @@ const EMAIL_GATEWAY_CONFIG = {
   LABEL_PROCESSED: 'Processed',
   LABEL_ERROR: 'Error',
 };
+
+const EMAIL_RFQ_SCENARIOS = Object.freeze({
+  REGISTERED_TO_ONLY: 'REGISTERED_TO_ONLY',
+  REGISTERED_TO_REGISTERED_CC: 'REGISTERED_TO_REGISTERED_CC',
+  UNREGISTERED_TO_REGISTERED_CC: 'UNREGISTERED_TO_REGISTERED_CC',
+  UNREGISTERED_TO_UNREGISTERED_CC: 'UNREGISTERED_TO_UNREGISTERED_CC',
+});
 
 const GMAIL_GATEWAY_LABELS = Object.freeze({
   PROCESSED: 'Processed',
@@ -2764,7 +2771,224 @@ const DEFAULT_INTERNAL_MEMBERS = Object.freeze([
   { id: 'exec-5', name: 'Srinivas Mukku', role: 'Commercial Director', email: 'srinivas.mukku@procucev.com', project: 'Industrial Capital' },
 ]);
 
+const INTERNAL_TASK_CATEGORIES = Object.freeze({
+  COMMUNICATION: 'COMMUNICATION',
+  DEMO_SCHEDULING: 'DEMO_SCHEDULING',
+  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
+  BUSINESS_DEVELOPMENT: 'BUSINESS_DEVELOPMENT',
+  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
+  ONBOARDING: 'ONBOARDING',
+});
+
+const INTERNAL_TASK_CATEGORY_LABELS = Object.freeze({
+  COMMUNICATION: 'Communication Tasks',
+  DEMO_SCHEDULING: 'Demo Scheduling',
+  CREDIT_MANAGEMENT: 'Credit Management',
+  BUSINESS_DEVELOPMENT: 'Business Development Tasks',
+  INTERNAL_OPERATIONS: 'Internal Operations',
+  ONBOARDING: 'Onboarding Process',
+});
+
+const INTERNAL_TASK_CATEGORY_TYPES = Object.freeze({
+  COMMUNICATION: Object.freeze([
+    'Phone Call',
+    'SMS',
+    'WhatsApp',
+    'Email',
+    'New Follow-up',
+    'Existing Follow-up',
+  ]),
+  DEMO_SCHEDULING: Object.freeze([
+    'Schedule Demo',
+  ]),
+  CREDIT_MANAGEMENT: Object.freeze([
+    'Add Credits',
+    'Delete Credits',
+  ]),
+  BUSINESS_DEVELOPMENT: Object.freeze([
+    'Send Proposal',
+    'Send Corporate Email',
+  ]),
+  INTERNAL_OPERATIONS: Object.freeze([
+    'Operational Task',
+  ]),
+  ONBOARDING: Object.freeze([
+    'Client Onboarding',
+  ]),
+});
+
+const INTERNAL_TASK_STATUSES = Object.freeze([
+  'New',
+  'Assigned',
+  'In Progress',
+  'Pending Approval',
+  'Completed',
+  'Rejected',
+  'Cancelled',
+]);
+
+const INTERNAL_TASK_PRIORITIES = Object.freeze([
+  'Low',
+  'Medium',
+  'High',
+  'Critical',
+]);
+
+const DEMO_STATUSES = Object.freeze([
+  'Scheduled',
+  'Completed',
+  'Rescheduled',
+  'Cancelled',
+]);
+
+const CREDIT_ACCOUNT_TYPES = Object.freeze([
+  'BUYER',
+  'SELLER',
+]);
+
+/**
+ * Roles permitted to approve or reject credit add/delete requests.
+ * Checked in approveCreditTask / rejectCreditTask controller handlers.
+ */
+const CREDIT_APPROVER_ROLES = Object.freeze([
+  'admin',
+  'category_manager',
+]);
+
+const DEFAULT_CREDIT_APPROVER_EMAIL = Object.freeze(
+  process.env.CREDIT_APPROVER_EMAIL || process.env.ADMIN_NOTIFICATION_EMAIL || 'admin@procucev.com'
+);
+
+const CALL_OUTCOMES = Object.freeze([
+  'Connected - Interested',
+  'Connected - Follow-up Requested',
+  'Connected - Not Interested',
+  'No Answer / Ringing',
+  'Busy / Callback Later',
+  'Wrong / Invalid Number',
+]);
+
+const PROPOSAL_STATUSES = Object.freeze([
+  'Draft',
+  'Sent to Client',
+  'Under Negotiation',
+  'Accepted',
+  'Declined',
+]);
+
+const ONBOARDING_STAGES = Object.freeze({
+  1: 'Registration & Initial Contact',
+  2: 'KYC & Document Collection',
+  3: 'Compliance & Verification',
+  4: 'Agreement & Terms',
+  5: 'Live Onboarded',
+});
+
+
+const ACCOUNT_DOCUMENT_CATEGORIES = Object.freeze([
+  'Registration',
+  'Company Profile',
+  'GST',
+  'PAN',
+  'RFQ',
+  'Quotation',
+  'Other',
+]);
+
+const ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES = Object.freeze([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+const ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS = Object.freeze([
+  '.pdf',
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.doc',
+  '.docx',
+  '.xls',
+  '.xlsx',
+]);
+
+const ACCOUNT_DOCUMENT_MAX_BYTES = 25 * 1024 * 1024;
+
+const CREDIT_APPROVAL_APPROVERS = Object.freeze([
+  'Srinu Sir',
+  'Sudheer Sir',
+]);
+
+const CREDIT_APPROVAL_INITIATORS = Object.freeze([
+  'Govardhan',
+  'Krishna',
+  'Chandhan',
+]);
+
+const SELLER_QUOTE_CREDITS_ALLOWED = Object.freeze([1, 2, 3, 4, 5]);
+
+const APPROVAL_REQUEST_TYPES = Object.freeze([
+  'Buyer Credit Addition',
+  'Seller Credit Addition',
+  'Credit Notes',
+  'Purchase Requests',
+  'Payment Approvals',
+  'Discounts',
+  'Account Approvals',
+  'Trial Periods',
+  'Offline Payments',
+  'Unit Bookings',
+  'Cancellations & Refunds',
+  'Packages',
+  'Milestones',
+]);
+
+const APPROVAL_STATUSES = Object.freeze(['Pending', 'Approved', 'Rejected']);
+
+
+const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
+  DEFAULT_RECIPIENTS: Object.freeze(['veerababu.v@procucev.com']),
+  DEFAULT_SCHEDULE_HOUR: 6, // 6:00 AM
+  DEFAULT_SCHEDULE_MINUTE: 0,
+  DEFAULT_TIMEZONE: 'Asia/Kolkata',
+  DEFAULT_ENABLED: true,
+  INGESTION_CHANNEL_LABELS: Object.freeze({
+    web_portal: 'Web Portal',
+    email_gateway: 'Email Gateway',
+    email_upload: 'Email Upload',
+    manual_entry: 'Manual Entry',
+    ai_extraction: 'AI Extraction',
+  }),
+});
+
 module.exports = {
+  DAILY_RFQ_REPORT_CONFIG,
+  ACCOUNT_DOCUMENT_CATEGORIES,
+  ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES,
+  ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS,
+  ACCOUNT_DOCUMENT_MAX_BYTES,
+  CREDIT_APPROVAL_APPROVERS,
+  CREDIT_APPROVAL_INITIATORS,
+  SELLER_QUOTE_CREDITS_ALLOWED,
+  APPROVAL_REQUEST_TYPES,
+  APPROVAL_STATUSES,
+  INTERNAL_TASK_CATEGORIES,
+  INTERNAL_TASK_CATEGORY_LABELS,
+  INTERNAL_TASK_CATEGORY_TYPES,
+  INTERNAL_TASK_STATUSES,
+  INTERNAL_TASK_PRIORITIES,
+  DEMO_STATUSES,
+  CREDIT_ACCOUNT_TYPES,
+  CREDIT_APPROVER_ROLES,
+  DEFAULT_CREDIT_APPROVER_EMAIL,
+  CALL_OUTCOMES,
+  PROPOSAL_STATUSES,
+  ONBOARDING_STAGES,
+
   DEFAULT_INTERNAL_MEMBERS,
   VENDOR_DIRECTORY_SESSION_STATUS,
   VENDOR_DIRECTORY_LOGOUT_REASONS,
@@ -2824,6 +3048,7 @@ module.exports = {
   EMAIL_INGESTION_STATUS,
   EMAIL_INGESTION_MESSAGES,
   EMAIL_GATEWAY_CONFIG,
+  EMAIL_RFQ_SCENARIOS,
   GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,

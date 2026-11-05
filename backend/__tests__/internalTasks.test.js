@@ -1,6 +1,7 @@
 const request = require('supertest');
 const app = require('../src/app');
 const internalTaskQueries = require('../src/db/internalTaskQueries');
+const authService = require('../src/services/authService');
 
 describe('Internal Tasks API & Controller', () => {
   test('GET /api/internal-tasks/assignees returns team members and handles failure', async () => {
@@ -33,6 +34,7 @@ describe('Internal Tasks API & Controller', () => {
       criticalCount: 0,
     });
 
+    await request(app).get('/api/internal-tasks/summary?taskCategory=CREDIT_MANAGEMENT');
     const res = await request(app).get('/api/internal-tasks/summary?assignedTo=Pavani');
     expect(res.status).toBe(200);
     expect(res.body.summary.total).toBe(3);
@@ -332,7 +334,7 @@ describe('Internal Tasks API & Controller', () => {
     expect(createRes.status).toBe(500);
 
     jest.spyOn(internalTaskQueries, 'updateInternalTask').mockRejectedValue(new Error('DB failure'));
-    const updateRes = await request(app).put('/api/internal-tasks/123').send({ status: 'Done' });
+    const updateRes = await request(app).put('/api/internal-tasks/123').send({ status: 'In Progress' });
     expect(updateRes.status).toBe(500);
 
     jest.spyOn(internalTaskQueries, 'deleteInternalTask').mockRejectedValue(new Error('DB failure'));
@@ -346,5 +348,584 @@ describe('Internal Tasks API & Controller', () => {
     jest.spyOn(internalTaskQueries, 'getInternalTasks').mockRejectedValue(new Error('DB failure'));
     const expRes = await request(app).get('/api/internal-tasks/export');
     expect(expRes.status).toBe(500);
+  });
+
+  test('POST /api/internal-tasks/:id/approve rejects unauthenticated and unauthorized users', async () => {
+    // Unauthenticated (no token → authenticate returns 401)
+    const noAuthRes = await request(app)
+      .post('/api/internal-tasks/tsk_cred_1/approve')
+      .send({ remarks: 'Attempted approval' });
+    expect(noAuthRes.status).toBe(401);
+    expect(noAuthRes.body.success).toBe(false);
+
+    // Authenticated with unauthorized role (buyer → requireRole returns 403)
+    jest.spyOn(authService, 'assertSessionActive').mockResolvedValueOnce({
+      valid: true,
+      user: { sub: 'buyer-1', role: 'buyer' },
+    });
+    const forbiddenRes = await request(app)
+      .post('/api/internal-tasks/tsk_cred_1/approve')
+      .set('Authorization', 'Bearer buyer-token')
+      .send({ remarks: 'Attempted approval' });
+    expect(forbiddenRes.status).toBe(403);
+    expect(forbiddenRes.body.success).toBe(false);
+
+    // Direct controller invocation without user or with wrong role
+    const internalTaskController = require('../src/controllers/internalTaskController');
+    const mockReq = {
+      params: { id: 'tsk_cred_role_check' },
+      user: { sub: 'buyer-1', name: 'Regular Buyer', role: 'buyer' },
+      body: { remarks: 'Trying to approve' },
+    };
+    const mockRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(mockReq, mockRes);
+    expect(mockRes.status).toHaveBeenCalledWith(403);
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, error: expect.stringContaining('Insufficient permissions') })
+    );
+
+    // Direct controller invocation with undefined req.user
+    const noUserReq = {
+      params: { id: 'tsk_cred_no_user' },
+      body: { remarks: 'Trying to approve' },
+    };
+    const noUserRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(noUserReq, noUserRes);
+    expect(noUserRes.status).toHaveBeenCalledWith(403);
+  });
+
+  test('POST /api/internal-tasks/:id/approve approves credit request when user has admin role', async () => {
+    const internalTaskController = require('../src/controllers/internalTaskController');
+
+    jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue({
+      id: 'tsk_cred_1',
+      task_number: 'TASK-9901',
+      task_category: 'CREDIT_MANAGEMENT',
+      status: 'Pending Approval',
+    });
+    jest.spyOn(internalTaskQueries, 'approveCreditTask').mockResolvedValue({
+      id: 'tsk_cred_1',
+      task_number: 'TASK-9901',
+      status: 'Completed',
+    });
+
+    // Success path with admin role
+    const mockReq = {
+      params: { id: 'tsk_cred_1' },
+      user: { sub: 'admin-1', name: 'Admin Approver', role: 'admin' },
+      body: { remarks: 'Approved by Financial Controller' },
+    };
+    const mockRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(mockReq, mockRes);
+    expect(mockRes.status).toHaveBeenCalledWith(200);
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, task: expect.objectContaining({ status: 'Completed' }) })
+    );
+
+    // 404 branch
+    jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue(null);
+    const notFoundReq = {
+      params: { id: 'unknown' },
+      user: { sub: 'admin-1', name: 'Admin', role: 'admin' },
+      body: {},
+    };
+    const notFoundRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(notFoundReq, notFoundRes);
+    expect(notFoundRes.status).toHaveBeenCalledWith(404);
+
+    // 500 error branch
+    jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockRejectedValue(new Error('Approve error'));
+    const errReq = {
+      params: { id: 'tsk_cred_1' },
+      user: { sub: 'admin-1', name: 'Admin', role: 'category_manager' },
+      body: {},
+    };
+    const errRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(errReq, errRes);
+    expect(errRes.status).toHaveBeenCalledWith(500);
+
+    // Falsy updated branch
+    jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue({ id: 'tsk_cred_falsy' });
+    jest.spyOn(internalTaskQueries, 'approveCreditTask').mockResolvedValue(null);
+    const falsyReq = {
+      params: { id: 'tsk_cred_falsy' },
+      user: { sub: 'admin-1', name: 'Admin', role: 'admin' },
+      body: {},
+    };
+    const falsyRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.approveCreditTask(falsyReq, falsyRes);
+    expect(falsyRes.status).toHaveBeenCalledWith(500);
+  });
+
+  test('POST /api/internal-tasks/:id/reject rejects unauthenticated and unauthorized users', async () => {
+    // Unauthenticated (no token → authenticate returns 401)
+    const noAuthRes = await request(app)
+      .post('/api/internal-tasks/tsk_cred_2/reject')
+      .send({ remarks: 'Attempted rejection' });
+    expect(noAuthRes.status).toBe(401);
+    expect(noAuthRes.body.success).toBe(false);
+
+    // Authenticated with unauthorized role (vendor → requireRole returns 403)
+    jest.spyOn(authService, 'assertSessionActive').mockResolvedValueOnce({
+      valid: true,
+      user: { sub: 'vendor-1', role: 'vendor' },
+    });
+    const forbiddenRes = await request(app)
+      .post('/api/internal-tasks/tsk_cred_2/reject')
+      .set('Authorization', 'Bearer vendor-token')
+      .send({ remarks: 'Attempted rejection' });
+    expect(forbiddenRes.status).toBe(403);
+    expect(forbiddenRes.body.success).toBe(false);
+
+    // Direct controller invocation with wrong role
+    const internalTaskController = require('../src/controllers/internalTaskController');
+    const mockReq = {
+      params: { id: 'tsk_cred_role_check' },
+      user: { sub: 'vendor-1', name: 'Some Vendor', role: 'vendor' },
+      body: { remarks: 'Trying to reject' },
+    };
+    const mockRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(mockReq, mockRes);
+    expect(mockRes.status).toHaveBeenCalledWith(403);
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, error: expect.stringContaining('Insufficient permissions') })
+    );
+
+    // Direct controller invocation with undefined req.user
+    const noUserReq = {
+      params: { id: 'tsk_cred_no_user_rej' },
+      body: { remarks: 'Trying to reject' },
+    };
+    const noUserRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(noUserReq, noUserRes);
+    expect(noUserRes.status).toHaveBeenCalledWith(403);
+  });
+
+  test('POST /api/internal-tasks/:id/reject rejects credit request when user has category_manager role', async () => {
+    const internalTaskController = require('../src/controllers/internalTaskController');
+
+    jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue({
+      id: 'tsk_cred_2',
+      task_number: 'TASK-9902',
+      task_category: 'CREDIT_MANAGEMENT',
+      status: 'Pending Approval',
+    });
+    jest.spyOn(internalTaskQueries, 'rejectCreditTask').mockResolvedValue({
+      id: 'tsk_cred_2',
+      task_number: 'TASK-9902',
+      status: 'Rejected',
+    });
+
+    // Success path with category_manager role
+    const mockReq = {
+      params: { id: 'tsk_cred_2' },
+      user: { sub: 'cm-1', name: 'Category Manager', role: 'category_manager' },
+      body: { remarks: 'Duplicate request' },
+    };
+    const mockRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(mockReq, mockRes);
+    expect(mockRes.status).toHaveBeenCalledWith(200);
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, task: expect.objectContaining({ status: 'Rejected' }) })
+    );
+
+    // 404 branch
+    jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue(null);
+    const notFoundReq = {
+      params: { id: 'unknown' },
+      user: { sub: 'cm-1', name: 'CM', role: 'category_manager' },
+      body: {},
+    };
+    const notFoundRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(notFoundReq, notFoundRes);
+    expect(notFoundRes.status).toHaveBeenCalledWith(404);
+
+    // 500 error branch
+    jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockRejectedValue(new Error('Reject error'));
+    const errReq = {
+      params: { id: 'tsk_cred_2' },
+      user: { sub: 'admin-1', name: 'Admin', role: 'admin' },
+      body: {},
+    };
+    const errRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(errReq, errRes);
+    expect(errRes.status).toHaveBeenCalledWith(500);
+
+    // Falsy updated branch
+    jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockResolvedValue({ id: 'tsk_cred_rej_falsy' });
+    jest.spyOn(internalTaskQueries, 'rejectCreditTask').mockResolvedValue(null);
+    const falsyReq = {
+      params: { id: 'tsk_cred_rej_falsy' },
+      user: { sub: 'admin-1', name: 'Admin', role: 'admin' },
+      body: {},
+    };
+    const falsyRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    await internalTaskController.rejectCreditTask(falsyReq, falsyRes);
+    expect(falsyRes.status).toHaveBeenCalledWith(500);
+  });
+
+  test('POST /api/internal-tasks/:id/activities logs remarks and progress', async () => {
+    // Validation failure: blank comment
+    const blankRes = await request(app)
+      .post('/api/internal-tasks/tsk_101/activities')
+      .send({ comment: '   ' });
+    expect(blankRes.status).toBe(400);
+
+    jest.spyOn(internalTaskQueries, 'addTaskActivity').mockResolvedValue({
+      id: 'act_101',
+      task_id: 'tsk_101',
+      comment: 'Vendor negotiation ongoing',
+    });
+
+    const res = await request(app)
+      .post('/api/internal-tasks/tsk_101/activities')
+      .send({ comment: 'Vendor negotiation ongoing' });
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.activity.comment).toBe('Vendor negotiation ongoing');
+
+    // 404 branch
+    jest.spyOn(internalTaskQueries, 'addTaskActivity').mockResolvedValue(null);
+    const notFound = await request(app)
+      .post('/api/internal-tasks/unknown/activities')
+      .send({ comment: 'Valid comment' });
+    expect(notFound.status).toBe(404);
+
+    // 500 branch
+    jest.spyOn(internalTaskQueries, 'addTaskActivity').mockRejectedValue(new Error('Activity error'));
+    const errRes = await request(app)
+      .post('/api/internal-tasks/tsk_101/activities')
+      .send({ comment: 'Valid comment' });
+    expect(errRes.status).toBe(500);
+  });
+
+  test('POST /api/internal-tasks/check-reminders dispatches approaching/overdue alerts', async () => {
+    jest.spyOn(internalTaskQueries, 'getOverdueAndUpcomingTasks').mockResolvedValue([
+      {
+        id: 'tsk_overdue_1',
+        task_number: 'TASK-7701',
+        title: 'Review Solar Inverter Quotes',
+        due_date: '2026-11-01',
+        assigned_to_name: 'Pavani',
+        priority: 'High',
+      },
+      {
+        id: 'tsk_overdue_2',
+        task_number: 'TASK-7702',
+        title: 'Unassigned task',
+        assigned_to_name: 'Unassigned',
+      },
+      {
+        id: 'tsk_overdue_3',
+        task_number: 'TASK-7703',
+        title: 'No name task',
+        assigned_to_name: '',
+      },
+      {
+        id: 'tsk_overdue_4',
+        task_number: 'TASK-7704',
+        title: 'Unknown member task',
+        assigned_to_name: 'Ghost Employee',
+      },
+      {
+        id: 'tsk_overdue_5',
+        task_number: 'TASK-7705',
+        title: 'No email member task',
+        assigned_to_name: 'NoEmail Person',
+      },
+    ]);
+    jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValue([
+      { id: 'exec-1', name: 'Pavani', email: 'pavani@procucev.com' },
+      { id: 'exec-2', name: 'NoEmail Person', email: '' },
+    ]);
+
+    const res = await request(app).post('/api/internal-tasks/check-reminders').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.count).toBe(5);
+
+    // Error branch
+    jest.spyOn(internalTaskQueries, 'getOverdueAndUpcomingTasks').mockRejectedValue(new Error('Reminders error'));
+    const errRes = await request(app).post('/api/internal-tasks/check-reminders').send({});
+    expect(errRes.status).toBe(500);
+  });
+
+  test('enforces explicit confirmation rule for communication tasks before completion', async () => {
+    const unconfirmedRes = await request(app)
+      .put('/api/internal-tasks/tsk_comm_1')
+      .send({
+        status: 'Completed',
+        taskCategory: 'COMMUNICATION',
+      });
+    expect(unconfirmedRes.status).toBe(400);
+    expect(unconfirmedRes.body.error).toContain('Communication tasks require explicit confirmation');
+
+    jest.spyOn(internalTaskQueries, 'updateInternalTask').mockResolvedValue({
+      id: 'tsk_comm_1',
+      status: 'Completed',
+    });
+
+    const confirmedRes = await request(app)
+      .put('/api/internal-tasks/tsk_comm_1')
+      .send({
+        status: 'Completed',
+        taskCategory: 'COMMUNICATION',
+        completionConfirmed: true,
+        completionRemarks: 'Call completed successfully with client procurement head',
+      });
+    expect(confirmedRes.status).toBe(200);
+    expect(confirmedRes.body.success).toBe(true);
+
+    const outcomeRes = await request(app)
+      .put('/api/internal-tasks/tsk_comm_1')
+      .send({
+        status: 'Completed',
+        taskCategory: 'COMMUNICATION',
+        actionOutcome: 'Call completed successfully with positive response',
+      });
+    expect(outcomeRes.status).toBe(200);
+
+    const activityRes = await request(app)
+      .put('/api/internal-tasks/tsk_comm_1')
+      .send({
+        status: 'Completed',
+        taskCategory: 'COMMUNICATION',
+        activityComment: 'Verified requirement with client over call',
+      });
+    expect(activityRes.status).toBe(200);
+  });
+
+  test('POST /api/internal-tasks returns 400 when schema validation fails', async () => {
+    const res = await request(app)
+      .post('/api/internal-tasks')
+      .send({
+        title: 'Valid Title',
+        priority: 'INVALID_PRIORITY_XYZ',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
+
+  test('POST /api/internal-tasks dispatches notifications for assigned employee and credit approver', async () => {
+    const actionCenterNotificationService = require('../src/services/actionCenterNotificationService');
+    const notifySpy = jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication').mockResolvedValue({ success: true });
+    jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValue([
+      { id: 'exec-1', name: 'Pavani', email: 'pavani@procucev.com' },
+    ]);
+    jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({
+      id: 'tsk_cred_101',
+      task_number: 'TASK-101',
+      title: 'Credit Increase for Acme',
+      task_category: 'CREDIT_MANAGEMENT',
+      status: 'Pending Approval',
+      priority: 'High',
+      assigned_to_user_id: 'exec-1',
+      assigned_to_name: 'Pavani',
+      credit_account_name: 'Acme Corp',
+      credit_quantity: 100,
+    });
+
+    const res = await request(app)
+      .post('/api/internal-tasks')
+      .send({
+        title: 'Credit Increase for Acme',
+        taskCategory: 'CREDIT_MANAGEMENT',
+        assignedToName: 'Pavani',
+      });
+
+    expect(res.status).toBe(201);
+    expect(notifySpy).toHaveBeenCalledTimes(2);
+  });
+
+  test('PUT /api/internal-tasks/:id returns 400 when schema validation fails', async () => {
+    const res = await request(app)
+      .put('/api/internal-tasks/tsk_101')
+      .send({
+        priority: 'SUPER_URGENT_NOT_ALLOWED',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
+
+  test('PUT /api/internal-tasks/:id dispatches status update notification to requester', async () => {
+    const actionCenterNotificationService = require('../src/services/actionCenterNotificationService');
+    const notifySpy = jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication').mockResolvedValue({ success: true });
+
+    jest.spyOn(internalTaskQueries, 'updateInternalTask').mockResolvedValue({
+      id: 'tsk_101',
+      task_number: 'TASK-101',
+      title: 'Update Vendor Documentation',
+      status: 'In Progress',
+      created_by_user_id: 'usr-requester-1',
+      created_by_name: 'Operations Manager',
+      raw: { created_by_email: 'ops@procucev.com' },
+    });
+
+    const res = await request(app)
+      .put('/api/internal-tasks/tsk_101')
+      .send({
+        status: 'In Progress',
+      });
+
+    expect(res.status).toBe(200);
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipientEmail: 'ops@procucev.com',
+        subject: expect.stringContaining('Task Status Update'),
+      }),
+      expect.any(Object)
+    );
+  });
+
+  test('GET /api/internal-tasks/export handles tasks with fallback attributes', async () => {
+    jest.spyOn(internalTaskQueries, 'getInternalTasks').mockResolvedValue({
+      rows: [
+        {
+          id: 'tsk_fallback_row',
+          task_number: null,
+          title: 'Fallback Task',
+          description: null,
+          task_type_name: null,
+          task_type: 'Quotation Review',
+          priority: null,
+          status: null,
+          assigned_to_name: null,
+          related_entity_type: null,
+          related_entity_label: null,
+          due_date: null,
+          created_at: null,
+          notes: null,
+        },
+        {
+          id: 'tsk_fallback_row_2',
+          task_number: 'TASK-FALLBACK-2',
+          title: 'Fallback Task 2',
+          task_type_name: null,
+          task_type: null,
+          task_type_id: 'itt_custom_code',
+        },
+      ],
+      total: 2,
+    });
+
+    const res = await request(app).get('/api/internal-tasks/export');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('tsk_fallback_row');
+    expect(res.text).toContain('itt_custom_code');
+  });
+
+
+  test('covers controller fallback branches for notifications and actor overrides', async () => {
+    const internalTaskController = require('../src/controllers/internalTaskController');
+    const actionCenterNotificationService = require('../src/services/actionCenterNotificationService');
+    const notifySpy = jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication').mockResolvedValue({ success: true });
+
+    // 1. createTask assignee lookup by name without user_id
+    jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValue([
+      { id: 'exec-1', name: 'Pavani', email: 'pavani@procucev.com' },
+    ]);
+    jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({
+      id: 'tsk_boost_1',
+      task_number: 'TASK-BOOST-1',
+      title: 'Task Boost 1',
+      status: 'Assigned',
+      assigned_to_user_id: null,
+      assigned_to_name: 'Pavani',
+    });
+
+    const res1 = await request(app)
+      .post('/api/internal-tasks')
+      .send({
+        title: 'Task Boost 1',
+        assignedToName: 'Pavani',
+      });
+    expect(res1.status).toBe(201);
+
+    // 2. updateTask with no raw email or name fallbacks
+    jest.spyOn(internalTaskQueries, 'updateInternalTask').mockResolvedValue({
+      id: 'tsk_boost_2',
+      task_number: 'TASK-BOOST-2',
+      title: 'Task Boost 2',
+      status: 'Assigned',
+      created_by_user_id: 'usr-boost-2',
+      created_by_name: null,
+      raw: null,
+    });
+
+    const res2 = await request(app)
+      .put('/api/internal-tasks/tsk_boost_2')
+      .send({ status: 'Assigned' });
+    expect(res2.status).toBe(200);
+
+    // 3. Direct invocation with req.user defined
+    const mockReq = {
+      params: { id: 'tsk_boost_3' },
+      user: { name: 'Direct User', role: 'manager' },
+      body: { comment: 'Direct note' },
+    };
+    const mockRes = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn().mockReturnThis(),
+    };
+    jest.spyOn(internalTaskQueries, 'addTaskActivity').mockResolvedValue({ id: 'act_boost_3' });
+    await internalTaskController.addTaskActivity(mockReq, mockRes);
+    expect(mockRes.status).toHaveBeenCalledWith(201);
+  });
+
+
+  test('POST /api/internal-tasks and PUT /api/internal-tasks handle notification dispatch errors gracefully', async () => {
+    const actionCenterNotificationService = require('../src/services/actionCenterNotificationService');
+    jest.spyOn(actionCenterNotificationService, 'dispatchActionCenterCommunication').mockRejectedValue(new Error('Notification service down'));
+    jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValue([
+      { id: 'exec-1', name: 'Pavani', email: 'pavani@procucev.com' },
+    ]);
+    jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({
+      id: 'tsk_cred_fail',
+      task_number: 'TASK-102',
+      title: 'Credit Increase Fail',
+      task_category: 'CREDIT_MANAGEMENT',
+      status: 'Pending Approval',
+      assigned_to_user_id: 'exec-1',
+      assigned_to_name: 'Pavani',
+    });
+
+    const createRes = await request(app)
+      .post('/api/internal-tasks')
+      .send({
+        title: 'Credit Increase Fail',
+        taskCategory: 'CREDIT_MANAGEMENT',
+        assignedToName: 'Pavani',
+      });
+    expect(createRes.status).toBe(201);
+
+    jest.spyOn(internalTaskQueries, 'updateInternalTask').mockResolvedValue({
+      id: 'tsk_101',
+      task_number: 'TASK-101',
+      title: 'Update Vendor Documentation',
+      status: 'In Progress',
+      created_by_user_id: 'usr-requester-1',
+      created_by_name: 'Operations Manager',
+      created_by_email: 'ops@procucev.com',
+    });
+
+    const updateRes = await request(app)
+      .put('/api/internal-tasks/tsk_101')
+      .send({
+        status: 'In Progress',
+      });
+    expect(updateRes.status).toBe(200);
+
+    // Also test check-reminders when notification fails
+    jest.spyOn(internalTaskQueries, 'getOverdueAndUpcomingTasks').mockResolvedValue([
+      {
+        id: 'tsk_rem_fail',
+        task_number: 'TASK-7799',
+        title: 'Reminder Fail Task',
+        assigned_to_name: 'Pavani',
+      },
+    ]);
+    const remRes = await request(app).post('/api/internal-tasks/check-reminders').send({});
+    expect(remRes.status).toBe(200);
+    expect(remRes.body.dispatched).toBe(0);
   });
 });

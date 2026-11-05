@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 export type UserRole = 'buyer' | 'category_manager' | 'vendor' | 'admin';
 
 export type SourcingMode = 'mode_0' | 'mode_1' | 'mode_2' | 'mode_3';
@@ -1830,7 +1832,7 @@ export interface DBHealthStatus {
   providerLabel?: string;
   latencyMs?: number;
   poolStatus?: {
-    totalCount: number;
+    totalCount?: number;
     idleCount: number;
     waitingCount: number;
   };
@@ -2329,9 +2331,42 @@ export type ActionCenterTabKey =
   | 'buyers'
   | 'sellers'
   | 'registrations'
-  | 'payment_dues';
+  | 'payment_dues'
+  | 'document_vault';
 
 export type ActionCenterCommChannel = 'EMAIL' | 'SMS' | 'BOTH';
+
+export interface ActionCenterAttachment {
+  id: string;
+  documentName: string;
+  fileName: string;
+  fileSize?: number;
+  fileUrl?: string;
+  mimeType?: string;
+  category?: string;
+}
+
+export interface DocumentVaultItem {
+  id: string;
+  documentName: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  category: string;
+  fileUrl?: string;
+  description?: string;
+  uploadedBy?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface DocumentVaultSummary {
+  totalDocuments: number;
+  activeDocuments: number;
+  totalSizeBytes: number;
+  categoriesCount: number;
+}
 
 export type ActionCenterEntityType =
   | 'internal_task'
@@ -2361,6 +2396,8 @@ export interface ActionCenterCommunicationPayload {
   message: string;
   linkUrl?: string;
   notes?: string;
+  scenarioId?: string;
+  attachments?: ActionCenterAttachment[];
   scheduleFollowup?: {
     dueDate: string;
     priority: 'Critical' | 'High' | 'Medium' | 'Low';
@@ -2474,23 +2511,69 @@ export interface TicketFilterParams {
   offset?: number;
 }
 
+export interface ApprovalHistoryItem {
+  action: string;
+  actor_name: string;
+  actor_role?: string;
+  timestamp: string;
+  remarks?: string;
+}
+
+export interface ApprovalAttachmentItem {
+  name: string;
+  url?: string;
+  size?: number;
+}
+
 export interface ApprovalRequest {
   id: string;
   request_number: string;
   module: string;
+  request_type?: string;
   project: string;
   applicant_name: string;
   applicant_email: string;
   value_impact: string;
+  amount?: number;
+  quantity?: number;
+  available_balance?: number;
   maker_name: string;
   maker_role: string;
+  assigned_approver?: string;
   status: 'Pending' | 'Approved' | 'Rejected';
   details?: string;
   approver_name?: string;
   approver_remarks?: string;
+  history?: ApprovalHistoryItem[];
+  attachments?: ApprovalAttachmentItem[];
+  internal_task_id?: string;
+  buyer_id?: string;
+  seller_id?: string;
+  raw?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
+
+export type ApprovalTableColumnKey =
+  | 'request_id'
+  | 'request_type'
+  | 'requested_by'
+  | 'project_account'
+  | 'amount_quantity'
+  | 'request_date'
+  | 'assigned_approver'
+  | 'status'
+  | 'actions';
+
+export interface ApprovalTableColumnConfig {
+  key: ApprovalTableColumnKey;
+  label: string;
+  visible: boolean;
+  locked?: boolean;
+  order: number;
+}
+
+export type ApprovalTabKey = 'all' | 'pending' | 'approved' | 'rejected' | 'my_approvals';
 
 export interface ApprovalSummary {
   pending: number;
@@ -2801,6 +2884,8 @@ export interface RecordCommunicationPayload {
   followupAssigneeId?: string;
   followupAssigneeName?: string;
   followupNotes?: string;
+  scenarioId?: string;
+  attachments?: ActionCenterAttachment[];
 }
 
 export interface BuyerPaymentSummary {
@@ -2827,6 +2912,25 @@ export interface BuyerPaymentTransaction {
   status: string;
   gatewayRef?: string;
   receiptUrl?: string;
+}
+
+export interface AccountDocument {
+  id: string;
+  accountType: 'buyer' | 'seller';
+  accountId: string;
+  documentName: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  category: string;
+  fileUrl: string;
+  description?: string;
+  uploadedBy: string;
+  uploadDate: string;
+  createdAt?: string;
+  updatedAt?: string;
+  isActive?: boolean;
+  sourceWorkflow?: string;
 }
 
 // --- Seller Directory & Supplier 360° Dossier Types -----------------------------
@@ -2954,4 +3058,147 @@ export interface InternalTeamMember {
   role: string;
   email: string;
   project?: string;
+}
+
+
+// ==============================================================================
+// ACTION CENTER: INTERNAL TASKS MODULE TYPES
+// ==============================================================================
+
+export type InternalTaskCategory =
+  | 'COMMUNICATION'
+  | 'DEMO_SCHEDULING'
+  | 'CREDIT_MANAGEMENT'
+  | 'BUSINESS_DEVELOPMENT'
+  | 'INTERNAL_OPERATIONS'
+  | 'ONBOARDING';
+
+export type InternalTaskStatus =
+  | 'New'
+  | 'Assigned'
+  | 'In Progress'
+  | 'Pending Approval'
+  | 'Completed'
+  | 'Rejected'
+  | 'Cancelled'
+  | 'Pending'
+  | 'Blocked'
+  | 'Escalated';
+
+export type InternalTaskPriority = 'Low' | 'Medium' | 'High' | 'Critical';
+
+export type DemoStatus = 'Scheduled' | 'Completed' | 'Rescheduled' | 'Cancelled';
+
+export type CreditAccountType = 'BUYER' | 'SELLER';
+
+export interface InternalTaskAttachment {
+  name: string;
+  url?: string;
+  size?: number;
+  uploadedAt?: string;
+}
+
+export interface InternalTaskActivity {
+  id: string;
+  task_id: string;
+  action_type: string;
+  actor_id?: string;
+  actor_name?: string;
+  from_value?: string;
+  to_value?: string;
+  comment?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface InternalTask {
+  id: string;
+  task_number: string;
+  task_category?: InternalTaskCategory;
+  task_type?: string;
+  task_type_id?: string;
+  task_type_name?: string;
+  task_type_code?: string;
+  title: string;
+  description?: string;
+  priority: InternalTaskPriority;
+  status: InternalTaskStatus;
+  assigned_to_user_id?: string;
+  assigned_to_name?: string;
+  assigned_team?: string;
+  created_by_user_id?: string;
+  created_by_name?: string;
+  due_date?: string;
+  due_time?: string;
+  completed_at?: string;
+  completed_by_user_id?: string;
+  completed_by_name?: string;
+  completion_remarks?: string;
+  related_entity_type?: string;
+  related_entity_id?: string;
+  related_entity_label?: string;
+  notes?: string;
+  attachments?: InternalTaskAttachment[];
+  approval_status?: 'PENDING' | 'APPROVED' | 'REJECTED' | null;
+  approver_id?: string;
+  approver_name?: string;
+  approved_at?: string;
+  approval_remarks?: string;
+  demo_date?: string;
+  demo_time?: string;
+  demo_status?: DemoStatus;
+  credit_account_type?: CreditAccountType;
+  credit_account_id?: string;
+  credit_account_name?: string;
+  credit_quantity?: number;
+  credit_reason?: string;
+  current_account_credits?: number;
+  onboarding_stage?: number;
+  proposal_value?: number;
+  proposal_url?: string;
+  proposal_status?: string;
+  call_outcome?: string;
+  recipient_phone?: string;
+  recipient_email?: string;
+  raw?: Record<string, unknown>;
+  activities?: InternalTaskActivity[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskSummary {
+  total: number;
+  newTasks?: number;
+  assigned?: number;
+  inProgress: number;
+  pendingApproval?: number;
+  completed: number;
+  rejected?: number;
+  cancelled?: number;
+  overdueCount?: number;
+  criticalCount: number;
+  pending?: number;
+  blocked?: number;
+  escalated?: number;
+}
+
+
+export interface ActionCenterSummaryPopupColumn<T = Record<string, unknown>> {
+  key: string;
+  label: string;
+  render?: (item: T) => ReactNode;
+  sortable?: boolean;
+}
+
+export interface ActionCenterSummaryPopupModalProps<T = Record<string, unknown>> {
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle?: string;
+  totalCount?: number;
+  columns: ActionCenterSummaryPopupColumn<T>[];
+  records: T[];
+  searchPlaceholder?: string;
+  searchKeys?: string[];
+  initialPageSize?: number;
 }
