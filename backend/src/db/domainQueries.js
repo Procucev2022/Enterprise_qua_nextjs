@@ -13,6 +13,7 @@
 
 const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
+const buyerRfqCreationQueries = require('./buyerRfqCreationQueries');
 const vendorRfqUnlockQueries = require('./vendorRfqUnlockQueries');
 const vendorQuoteCreditQueries = require('./vendorQuoteCreditQueries');
 const vendorQuoteSubmissionQueries = require('./vendorQuoteSubmissionQueries');
@@ -2077,6 +2078,7 @@ module.exports = {
   submitVendorQuoteInDB: vendorQuoteSubmissionQueries.submitVendorQuoteInDB,
   makeD1VendorQuoteSubmissionStatements: vendorQuoteSubmissionQueries.makeD1VendorQuoteSubmissionStatements,
   getVendorCreditTransactionsFromDB,
+  createRFQWithCreditInDB: buyerRfqCreationQueries.createRFQWithCreditInDB,
   recordBuyerCreditTransactionInDB,
   getBuyerCreditTransactionsFromDB,
   getPublicVendorsPageFromDB,

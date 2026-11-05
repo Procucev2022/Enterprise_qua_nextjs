@@ -2742,7 +2742,7 @@ class StoreService {
     return candidate;
   }
 
-  createRFQ(rfqData, requestingBuyerAccount = null) {
+  createRFQ(rfqData, requestingBuyerAccount = null, { deferPersistence = false, deferSideEffects = false } = {}) {
     const hadExplicitVendors = Array.isArray(rfqData.assignedVendors) && rfqData.assignedVendors.length > 0;
     const rfqNumber = rfqData.rfqNumber || this.generateRFQNumber();
     const id = rfqData.id || `rfq-${Date.now()}`;
@@ -3219,8 +3219,209 @@ class StoreService {
     }
 
     this.rfqs.unshift(newRFQ);
-    this._persistRFQ(newRFQ);
+    if (!deferPersistence) this._persistRFQ(newRFQ);
+    if (!deferSideEffects) this.dispatchRFQCreationSideEffects(newRFQ, requestingBuyerAccount);
 
+    return newRFQ;
+  }
+
+  async createRFQDurably(rfqData, requestingBuyerAccount = null) {
+    const requestedId = rfqData && rfqData.id;
+    const storageConfigured = pool.hasStorage();
+    if (requestedId) {
+      let existing = null;
+      if (storageConfigured) {
+        try {
+          existing = await domainQueries.getRFQByIdFromDB(requestedId);
+        } catch (error) {
+          logger.error('Failed to check the durable RFQ idempotency key', {
+            error,
+            rfqId: requestedId,
+          }, 'STORE_SERVICE');
+          const lookupError = new Error('The RFQ could not be checked for an existing save. Try again.');
+          lookupError.statusCode = 503;
+          lookupError.code = 'PERSISTENCE_UNAVAILABLE';
+          throw lookupError;
+        }
+      } else {
+        existing = this.rfqs.find((rfq) => rfq.id === requestedId) || null;
+      }
+
+      if (existing) {
+        if (storageConfigured && requestingBuyerAccount && requestingBuyerAccount.id) {
+          try {
+            const result = await domainQueries.createRFQWithCreditInDB({
+              rfq: existing,
+              buyerId: requestingBuyerAccount.id,
+            });
+            if (!result?.success || !result.rfq) {
+              if (result?.creditsExhausted) {
+                const exhaustedError = new Error(RFQ_CREATION_ERRORS.FREE_CREDITS_EXHAUSTED);
+                exhaustedError.statusCode = 403;
+                exhaustedError.code = 'FREE_RFQ_CREDITS_EXHAUSTED';
+                exhaustedError.remaining = result.remaining;
+                throw exhaustedError;
+              }
+              throw new Error('The existing RFQ could not be verified against the buyer credit ledger.');
+            }
+            const existingIndex = this.rfqs.findIndex((rfq) => rfq.id === result.rfq.id);
+            if (existingIndex === -1) this.rfqs.unshift(result.rfq);
+            else this.rfqs[existingIndex] = result.rfq;
+            if (result.account) this.updateBuyerAccountCache(result.account);
+            return result.rfq;
+          } catch (error) {
+            logger.error('Failed to verify buyer ownership for the existing RFQ idempotency key', {
+              error,
+              rfqId: requestedId,
+              buyerId: requestingBuyerAccount.id,
+            }, 'BUYER_RFQ_CREDIT');
+            if (error.statusCode && error.statusCode < 500) throw error;
+            const lookupError = new Error('The RFQ could not be verified for this buyer. Try again.');
+            lookupError.statusCode = 503;
+            lookupError.code = error.code || 'PERSISTENCE_UNAVAILABLE';
+            lookupError.cause = error;
+            throw lookupError;
+          }
+        }
+        const existingIndex = this.rfqs.findIndex((rfq) => rfq.id === existing.id);
+        if (existingIndex === -1) this.rfqs.unshift(existing);
+        else this.rfqs[existingIndex] = { ...this.rfqs[existingIndex], ...existing };
+        return existing;
+      }
+
+      // A configured database is authoritative. Drop a stale local row when
+      // the durable lookup confirms that the requested ID does not exist.
+      if (storageConfigured) {
+        this.rfqs = this.rfqs.filter((rfq) => rfq.id !== requestedId);
+      }
+    }
+
+    const created = this.createRFQ(rfqData, requestingBuyerAccount, {
+      deferPersistence: true,
+      deferSideEffects: true,
+    });
+
+    if (storageConfigured && requestingBuyerAccount && requestingBuyerAccount.id) {
+      try {
+        const result = await domainQueries.createRFQWithCreditInDB({
+          rfq: created,
+          buyerId: requestingBuyerAccount.id,
+        });
+        if (!result || !result.success) {
+          this.rfqs = this.rfqs.filter((rfq) => rfq.id !== created.id);
+          if (result?.account) this.updateBuyerAccountCache(result.account);
+          if (result?.creditsExhausted) {
+            const exhaustedError = new Error(RFQ_CREATION_ERRORS.FREE_CREDITS_EXHAUSTED);
+            exhaustedError.statusCode = 403;
+            exhaustedError.code = 'FREE_RFQ_CREDITS_EXHAUSTED';
+            exhaustedError.remaining = result.remaining;
+            logger.warn('Durable RFQ creation rejected because free credits are exhausted', {
+              buyerId: requestingBuyerAccount.id,
+              rfqId: created.id,
+              remaining: result.remaining,
+            }, 'BUYER_RFQ_CREDIT');
+            throw exhaustedError;
+          }
+          throw new Error('The atomic RFQ and buyer-credit write returned no durable RFQ.');
+        }
+
+        const savedRFQ = result.rfq;
+        const savedIndex = this.rfqs.findIndex((rfq) => rfq.id === savedRFQ.id);
+        if (savedIndex === -1) this.rfqs.unshift(savedRFQ);
+        else this.rfqs[savedIndex] = savedRFQ;
+        if (result.account) this.updateBuyerAccountCache(result.account);
+
+        if (!result.replayed) {
+          try {
+            this.dispatchRFQCreationSideEffects(savedRFQ, requestingBuyerAccount);
+          } catch (error) {
+            logger.error('RFQ persisted atomically but post-create dispatch failed', {
+              rfqNumber: savedRFQ.rfqNumber,
+              error,
+            }, 'STORE_SERVICE');
+          }
+        }
+        logger.info('RFQ creation and buyer credit update committed atomically', {
+          rfqId: savedRFQ.id,
+          rfqNumber: savedRFQ.rfqNumber,
+          buyerId: requestingBuyerAccount.id,
+          creditConsumed: result.credit?.consumed || false,
+          remainingCredits: result.credit?.remaining,
+          replayed: Boolean(result.replayed),
+        }, 'BUYER_RFQ_CREDIT');
+        return savedRFQ;
+      } catch (error) {
+        this.rfqs = this.rfqs.filter((rfq) => rfq.id !== created.id);
+        if (error.code === 'FREE_RFQ_CREDITS_EXHAUSTED' || (error.statusCode && error.statusCode < 500)) {
+          throw error;
+        }
+        logger.error('Atomic RFQ and buyer-credit persistence failed', {
+          error,
+          rfqId: created.id,
+          buyerId: requestingBuyerAccount.id,
+        }, 'BUYER_RFQ_CREDIT');
+        const persistError = new Error('The RFQ and buyer credit could not be saved together. Try again.');
+        persistError.statusCode = 503;
+        persistError.code = error.code || 'PERSISTENCE_UNAVAILABLE';
+        persistError.retryable = true;
+        persistError.cause = error;
+        throw persistError;
+      }
+    }
+
+    let locallyConsumedCredit = false;
+    if (!storageConfigured && requestingBuyerAccount && requestingBuyerAccount.id) {
+      const plan = String(requestingBuyerAccount.subscriptionPlan || 'free_trial').toLowerCase();
+      const isPaidPlan = ['version_1', 'version_2', 'version_3', 'unlimited'].includes(plan);
+      const creditSourcingMode = created.sourcingMode || rfqData.sourcingMode;
+      const requiresCredit = !this.isV0SourcingMode(creditSourcingMode)
+        && !isPaidPlan
+        && !hasUnlimitedRfqAccess(requestingBuyerAccount);
+      const creditResult = this.consumeRFQCreditIfApplicable(requestingBuyerAccount, creditSourcingMode);
+      locallyConsumedCredit = creditResult.consumed;
+      if (requiresCredit && !creditResult.consumed) {
+        this.rfqs = this.rfqs.filter((rfq) => rfq.id !== created.id);
+        const exhaustedError = new Error(RFQ_CREATION_ERRORS.FREE_CREDITS_EXHAUSTED);
+        exhaustedError.statusCode = 403;
+        exhaustedError.code = 'FREE_RFQ_CREDITS_EXHAUSTED';
+        exhaustedError.remaining = creditResult.remaining;
+        throw exhaustedError;
+      }
+    }
+
+    try {
+      await this.persistRFQDurably(created);
+    } catch (error) {
+      this.rfqs = this.rfqs.filter((rfq) => rfq.id !== created.id);
+      if (locallyConsumedCredit && requestingBuyerAccount) {
+        this.refundFreeRFQ(requestingBuyerAccount.id);
+      }
+      throw error;
+    }
+
+    try {
+      this.dispatchRFQCreationSideEffects(created, requestingBuyerAccount);
+    } catch (error) {
+      logger.error('RFQ persisted but post-create dispatch failed', {
+        rfqNumber: created.rfqNumber,
+        error,
+      }, 'STORE_SERVICE');
+    }
+    return created;
+  }
+
+  updateBuyerAccountCache(account) {
+    const existingIndex = this.buyerAccounts.findIndex((candidate) => candidate.id === account.id);
+    if (existingIndex === -1) this.buyerAccounts.unshift(account);
+    else this.buyerAccounts[existingIndex] = account;
+    if (this.activeBuyerAccount && this.activeBuyerAccount.id === account.id) {
+      this.activeBuyerAccount = account;
+    }
+    return account;
+  }
+
+  dispatchRFQCreationSideEffects(newRFQ, requestingBuyerAccount = null) {
+    const rfqNumber = newRFQ.rfqNumber;
     this.addAuditLog({
       // Attributed to the buyer account the controller resolved from the session.
       userEmail: requestingBuyerAccount
@@ -3281,8 +3482,6 @@ class StoreService {
         (vendor) => this.checkVendorQuotationEligibility(vendor)
       );
     }
-
-    return newRFQ;
   }
 
   updateRFQ(id, updates, { persist = true, notify = true } = {}) {

@@ -455,12 +455,12 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       );
       expect(resV2Err.statusCode).toBe(201);
 
-      // refundFreeRFQ on failure
+      // A failed durable create must not trigger a second controller-side credit operation.
       const buyerAcc = { id: 'buyer-refund-1', remainingFreeRFQs: 5, subscriptionPlan: 'free' };
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(buyerAcc);
-      jest.spyOn(storeService, 'consumeRFQCreditIfApplicable').mockReturnValue({ consumed: true });
+      const consumeSpy = jest.spyOn(storeService, 'consumeRFQCreditIfApplicable').mockReturnValue({ consumed: true });
       const refundSpy = jest.spyOn(storeService, 'refundFreeRFQ').mockImplementation(() => {});
-      jest.spyOn(storeService, 'createRFQ').mockImplementation(() => { throw new Error('create throw'); });
+      jest.spyOn(storeService, 'createRFQDurably').mockRejectedValue(new Error('create throw'));
 
       const resFail = mockRes();
       await rfqController.createRFQ(
@@ -480,7 +480,8 @@ describe('rfqController Comprehensive Branch Coverage', () => {
         resFail,
         next
       );
-      expect(refundSpy).toHaveBeenCalledWith('buyer-refund-1');
+      expect(consumeSpy).not.toHaveBeenCalled();
+      expect(refundSpy).not.toHaveBeenCalled();
       expect(next).toHaveBeenCalledWith(expect.any(Error));
     });
   });
@@ -1378,9 +1379,15 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(resUnentitled.statusCode).toBe(403);
       expect(resUnentitled.data.error).toContain('does not include mode_2');
 
-      // Free trial exhausted (remainingCredits <= 0)
+      // Persisted credit state is authoritative when requests race or retry.
       const buyerExhausted = { id: 'buyer-exh', subscriptionPlan: 'free', remainingFreeRFQs: 0 };
       storeService.getBuyerAccountByEmail.mockReturnValue(buyerExhausted);
+      const creditExhaustedError = Object.assign(new Error('Free RFQ credits exhausted'), {
+        statusCode: 403,
+        code: 'FREE_RFQ_CREDITS_EXHAUSTED',
+      });
+      const createDurably = jest.spyOn(storeService, 'createRFQDurably').mockRejectedValueOnce(creditExhaustedError);
+      const consumeSpy = jest.spyOn(storeService, 'consumeRFQCreditIfApplicable').mockReturnValue({ consumed: true });
 
       const resExhausted = mockRes();
       await rfqController.createRFQ(
@@ -1398,36 +1405,11 @@ describe('rfqController Comprehensive Branch Coverage', () => {
         resExhausted,
         next
       );
-      expect(resExhausted.statusCode).toBe(403);
-      expect(resExhausted.data.error).toContain('fully used');
-
-      // consumeRFQCreditIfApplicable returns consumed = false
-      const buyerAlmostExhausted = { id: 'buyer-almost', subscriptionPlan: 'free', remainingFreeRFQs: 1 };
-      storeService.getBuyerAccountByEmail.mockReturnValue(buyerAlmostExhausted);
-      jest.spyOn(storeService, 'consumeRFQCreditIfApplicable').mockReturnValue({ consumed: false });
-
-      const resConsumeFail = mockRes();
-      await rfqController.createRFQ(
-        {
-          body: {
-            title: 'Test',
-            category: 'Pumps & Motors',
-            sourcingMode: 'mode_1',
-            targetDeliveryDate: '2099-01-01',
-            deliveryLocation: 'Mumbai',
-            deliveryPincode: '400001',
-          },
-          user: { role: 'buyer', email: 'b@almost.com' },
-        },
-        resConsumeFail,
-        next
-      );
-      expect(resConsumeFail.statusCode).toBe(403);
-      expect(resConsumeFail.data.error).toContain('free trial RFQs are used up');
+      expect(next).toHaveBeenCalledWith(creditExhaustedError);
+      expect(consumeSpy).not.toHaveBeenCalled();
 
       // Catch block when mailerService.sendRfqAcknowledgementEmail throws inside createRFQ
-      storeService.consumeRFQCreditIfApplicable.mockReturnValue({ consumed: true });
-      jest.spyOn(storeService, 'createRFQ').mockReturnValue({
+      createDurably.mockResolvedValue({
         id: 'rfq-created-mailfail',
         rfqNumber: 'RFQ-MAIL-FAIL',
         title: 'Test',
@@ -1462,7 +1444,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(resMailFail.data.data.id).toBe('rfq-created-mailfail');
 
       // Failure during createRFQ after credit consumed refunds credit
-      storeService.createRFQ.mockImplementation(() => { throw new Error('DB creation crash'); });
+      createDurably.mockRejectedValueOnce(new Error('DB creation crash'));
       const refundSpy = jest.spyOn(storeService, 'refundFreeRFQ').mockReturnValue(true);
       await rfqController.createRFQ(
         {
@@ -1479,14 +1461,14 @@ describe('rfqController Comprehensive Branch Coverage', () => {
         mockRes(),
         next
       );
-      expect(refundSpy).toHaveBeenCalledWith('buyer-almost');
+      expect(refundSpy).not.toHaveBeenCalled();
       expect(next).toHaveBeenCalledWith(expect.any(Error));
 
       rfqIngestionService.canonicalMajor.mockRestore();
       rfqIngestionService.isMinorUnderMajor.mockRestore();
       storeService.getBuyerAccountByEmail.mockRestore();
-      storeService.consumeRFQCreditIfApplicable.mockRestore();
-      storeService.createRFQ.mockRestore();
+      consumeSpy.mockRestore();
+      createDurably.mockRestore();
       mailerService.sendRfqAcknowledgementEmail.mockRestore();
       refundSpy.mockRestore();
     });

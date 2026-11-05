@@ -650,7 +650,6 @@ async function getRFQById(req, res, next) {
  * Create an RFQ owned by the signed-in buyer's account.
  */
 async function createRFQ(req, res, next) {
-  let consumedFreeTrial = false;
   let requestingBuyerAccount = null;
   try {
     const body = req.body || {};
@@ -791,15 +790,10 @@ async function createRFQ(req, res, next) {
     if (requestingBuyerAccount) {
       const isUnlimited = hasUnlimitedRfqAccess(requestingBuyerAccount) || hasUnlimitedRfqAccess(req.user);
       const plan = requestingBuyerAccount.subscriptionPlan || 'free_trial';
-      const isPaidPlan = ['version_1', 'version_2', 'version_3', 'unlimited'].includes(plan) || isUnlimited;
       const entitledModes = isUnlimited
         ? SUBSCRIPTION_MODE_ENTITLEMENTS.unlimited
         : (SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.free_trial);
       const requestedMode = body.sourcingMode || 'mode_0';
-      const remainingCredits =
-        requestingBuyerAccount.remainingFreeRFQs !== undefined
-          ? requestingBuyerAccount.remainingFreeRFQs
-          : 5;
 
       const isV0 = requestedMode === 'mode_0' || requestedMode === 'v0' || requestedMode === 'version_0';
 
@@ -817,37 +811,7 @@ async function createRFQ(req, res, next) {
         });
       }
 
-      // Enterprise QUA – V0 (Free Starter Trial) Flow:
-      // V0 RFQ = No credit deduction (0 credits consumed). Allowed unconditionally even when remaining credits are 0.
-      // V1 / V2 / V3 RFQ = 1 credit deducted per RFQ from buyer's 5 free RFQ credits (if on free trial).
-      // Once 5 free credits are 0, V1/V2/V3 RFQs require paid subscription.
-      // Unlimited RFQ accounts are exempt from all credit deductions across all modes.
-      if (isV0 || isUnlimited) {
-        // V0 RFQ or unlimited account: No credit deduction
-        consumedFreeTrial = false;
-      } else {
-        // V1, V2, or V3:
-        if (!isPaidPlan) {
-          if (remainingCredits <= 0) {
-            logger.warn('Rejected RFQ creation: free credits exhausted for V1/V2/V3', { buyerAccountId: requestingBuyerAccount.id, requestedMode }, 'RFQ_CONTROLLER');
-            return res.status(403).json({
-              success: false,
-              error: 'Your 5 free trial RFQ credits for V1/V2/V3 have been fully used. Upgrade to a paid plan to raise more V1/V2/V3 RFQs, or continue using V0 Free Starter for Procucev Network RFQs.',
-            });
-          }
-          // Same credit rule the email-ingestion path applies — kept in one
-          // place on the store so both RFQ-creation methods stay in agreement.
-          const consumeResult = storeService.consumeRFQCreditIfApplicable(requestingBuyerAccount, requestedMode);
-          if (!consumeResult.consumed) {
-            logger.warn('Rejected RFQ creation: free trial exhausted', { buyerAccountId: requestingBuyerAccount.id }, 'RFQ_CONTROLLER');
-            return res.status(403).json({
-              success: false,
-              error: 'Your free trial RFQs are used up. Upgrade to a paid plan to raise more.',
-            });
-          }
-          consumedFreeTrial = true;
-        }
-      }
+      // The persisted RFQ and any trial-credit debit are checked and committed together.
     }
 
     // Generated from the line items the buyer confirmed, so the summary
@@ -861,7 +825,7 @@ async function createRFQ(req, res, next) {
 
     logger.info(`Creating new RFQ: ${body.title}`, { title: body.title, category: body.category, budget: body.budget }, 'RFQ_CONTROLLER');
 
-    const created = storeService.createRFQ({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
+    const created = await storeService.createRFQDurably({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
 
     // createRFQ counts matched Procucev vendors against the capped in-memory
     // vendor subset, which undercounts (often to 0) once the directory grows
@@ -961,9 +925,6 @@ async function createRFQ(req, res, next) {
 
     res.status(201).json({ success: true, data: finalRFQ });
   } catch (err) {
-    if (consumedFreeTrial && requestingBuyerAccount) {
-      storeService.refundFreeRFQ(requestingBuyerAccount.id);
-    }
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
     next(err);
   }
