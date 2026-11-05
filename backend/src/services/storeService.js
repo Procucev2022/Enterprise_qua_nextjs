@@ -2512,8 +2512,8 @@ class StoreService {
         respondedCount: 0,
         callStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, connected: 0, avgDuration: '0s' },
         whatsappStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, read: 0, replied: 0 },
-        smsStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, clicked: 0 },
-        emailStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, sent24h: 0, opened: 0 },
+        smsStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, clicked: 0 },
+        emailStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, sent24h: 0, opened: 0 },
         autoChasingEnabled: true,
       },
     };
@@ -2909,7 +2909,6 @@ class StoreService {
     // In-app alert to every vendor whose category covers this RFQ, and an email
     // to the top matched vendors (same category, ranked by pincode + tier).
     this.notifyVendorsOfNewRFQ(newRFQ);
-    this.smsRFQToMatchedVendors(newRFQ);
     this.emailRFQToMatchedVendors(newRFQ);
 
     // Timed multi-channel chaser sequence for every assigned vendor:
@@ -5014,63 +5013,6 @@ class StoreService {
   }
 
   /** Email a newly-created RFQ to its top matched vendors and assigned vendors. Fired from createRFQ. */
-  /**
-   * Dispatches initial SMS alert to assigned vendors upon RFQ creation.
-   * Follows the rule: first goes SMS, then email is going.
-   */
-  smsRFQToMatchedVendors(rfq) {
-    if (!rfq || rfq.status === 'Draft' || rfq.status === 'Parsing') {
-      return 0;
-    }
-    const assigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-    const allPhones = new Set();
-    let sentCount = 0;
-
-    for (const v of assigned) {
-      const vendor = (v && v.id ? this.getVendorById(v.id, 'all') : null) || v;
-      if (!vendor) continue;
-      const phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
-      if (phone && !allPhones.has(phone)) {
-        allPhones.add(phone);
-        sentCount++;
-        const bidUrl = whatsAppService.generateOneClickBidUrl(rfq.rfqNumber, vendor.email);
-        this._background(
-          smsService.sendRFQChaserSms({
-            mobile: phone,
-            vendorName: vendor.name,
-            rfqNumber: rfq.rfqNumber,
-            rfqTitle: rfq.title,
-            bidLink: bidUrl,
-          }).then((res) => {
-            logger.info(
-              `[RFQ_CREATE] Initial SMS alert to ${vendor.name} (${phone}) for ${rfq.rfqNumber}: ${res.success ? 'sent' : res.error || 'failed'}`,
-              { rfqNumber: rfq.rfqNumber, vendorId: vendor.id },
-              'STORE_SERVICE'
-            );
-          }),
-          'Failed to send initial RFQ SMS alert to vendor'
-        );
-      }
-    }
-
-    if (rfq.followUpData) {
-      if (!rfq.followUpData.smsStats) {
-        rfq.followUpData.smsStats = { total: assigned.length, delivered: 0, clicked: 0 };
-      }
-      rfq.followUpData.smsStats.delivered = Math.max(rfq.followUpData.smsStats.delivered || 0, sentCount || assigned.length);
-      rfq.followUpData.smsStats.total = Math.max(rfq.followUpData.smsStats.total || 0, assigned.length);
-      if (Array.isArray(rfq.followUpData.vendors)) {
-        rfq.followUpData.vendors.forEach((vendorRecord) => {
-          if (vendorRecord) {
-            vendorRecord.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
-          }
-        });
-      }
-    }
-
-    return sentCount;
-  }
-
   emailRFQToMatchedVendors(rfq) {
     if (!rfq || rfq.status === 'Draft') {
       return 0;
