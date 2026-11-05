@@ -247,6 +247,7 @@ const EVENT_OUTBOX_TYPES = Object.freeze({
   COMMUNICATION_DELIVERY: 'communication_delivery',
   RFQ_CREATED_EMAIL: 'rfq_created_email',
   RFQ_VENDOR_INVITE_EMAIL: 'rfq_vendor_invite_email',
+  RFQ_GATEWAY_NOTIFICATION_EMAIL: 'rfq_gateway_notification_email',
 });
 const EVENT_OUTBOX_MAX_ATTEMPTS = 8;
 const EVENT_OUTBOX_MAX_BATCH_SIZE = 10;

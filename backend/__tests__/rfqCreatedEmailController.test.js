@@ -68,4 +68,56 @@ describe('RFQ creation acknowledgement persistence', () => {
     }), buyer);
     expect(emailSpy).not.toHaveBeenCalled();
   });
+
+  test('persists RFQ gateway delivery intent and avoids direct delivery when storage is configured', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const buyer = {
+      id: 'buyer-gateway-1',
+      corporateEmail: 'buyer@example.test',
+      organizationName: 'Buyer Co',
+      subscriptionPlan: 'version_1',
+    };
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue(buyer);
+    const rfq = {
+      id: 'rfq-gateway-controller-1',
+      rfqNumber: 'RFQ-GATEWAY-CONTROLLER-1',
+      title: 'Pump spares',
+      category: 'Pumps & Motors',
+      sourcingMode: 'mode_1',
+      procucevVendorCount: 0,
+      assignedVendors: [],
+      extractedEntities: [],
+    };
+    const createSpy = jest.spyOn(storeService, 'createRFQDurably').mockResolvedValue(rfq);
+    jest.spyOn(storeService, 'resolveProcucevVendorCountFromDB').mockResolvedValue(0);
+    jest.spyOn(rfqSummaryService, 'buildRFQSummary').mockResolvedValue({ summary: 'Pump requirement' });
+    const gatewayEmailSpy = jest.spyOn(mailerService, 'sendRequisitionNotificationEmail');
+    const res = createResponse();
+
+    await rfqController.createRFQ({
+      body: {
+        title: 'Pump spares',
+        category: 'Pumps & Motors',
+        sourcingMode: 'mode_1',
+        budget: 1000,
+        targetDeliveryDate: '2099-01-01',
+        deliveryLocation: 'Mumbai',
+        deliveryPincode: '400001',
+        source: 'email_gateway',
+        sourceEmail: 'buyer@example.test',
+        targetGatewayEmail: 'gateway@example.test',
+      },
+      user: { role: 'buyer', email: buyer.corporateEmail, name: 'Buyer Contact' },
+    }, res, jest.fn());
+
+    expect(res.statusCode).toBe(201);
+    expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({
+      gatewayNotificationTarget: {
+        recipientEmail: 'gateway@example.test',
+        sourceEmail: 'buyer@example.test',
+      },
+    }), buyer);
+    expect(gatewayEmailSpy).not.toHaveBeenCalled();
+    expect(res.data.data).not.toHaveProperty('gatewayNotificationTarget');
+  });
 });

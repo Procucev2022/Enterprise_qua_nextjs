@@ -29,6 +29,7 @@ const {
   hasUnlimitedDownloadAccess,
   resolveBuyerSourcingMode,
   MAX_INVITE_VENDORS_PER_REQUEST,
+  EVENT_OUTBOX_TYPES,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
@@ -851,6 +852,13 @@ async function createRFQ(req, res, next) {
     const shouldSendBuyerAcknowledgement = Boolean(
       buyerAcknowledgementRecipient && body.source !== 'email_gateway'
     );
+    const shouldSendGatewayNotification = body.source === 'email_gateway' || body.targetGatewayEmail;
+    const gatewayNotificationTarget = shouldSendGatewayNotification && pool.hasStorage()
+      ? {
+        recipientEmail: String(body.targetGatewayEmail || 'RFQ@procucev.com').trim(),
+        sourceEmail: body.sourceEmail || (req.user && req.user.email) || null,
+      }
+      : null;
     const created = await storeService.createRFQDurably({
       ...body,
       extractedEntities: lineItems,
@@ -858,6 +866,7 @@ async function createRFQ(req, res, next) {
       ...(buyerAcknowledgementRecipient ? { buyerEmail: buyerAcknowledgementRecipient } : {}),
       ...(req.user && req.user.name ? { raisedByName: req.user.name } : {}),
       creationAcknowledgementRequested: shouldSendBuyerAcknowledgement,
+      ...(gatewayNotificationTarget ? { gatewayNotificationTarget } : {}),
     }, requestingBuyerAccount);
 
     // createRFQ counts matched Procucev vendors against the capped in-memory
@@ -905,7 +914,7 @@ async function createRFQ(req, res, next) {
     }
 
     // Dispatch real email notification to target gateway address (e.g. RFQ@procucev.com)
-    if (body.source === 'email_gateway' || body.targetGatewayEmail) {
+    if (shouldSendGatewayNotification && !pool.hasStorage()) {
       const recipientEmail = body.targetGatewayEmail || 'RFQ@procucev.com';
       trackBackgroundRfqEmail(
         () => mailerService.sendRequisitionNotificationEmail(
@@ -916,6 +925,12 @@ async function createRFQ(req, res, next) {
         'Failed to deliver RFQ gateway notification email',
         finalRFQ.rfqNumber
       );
+    } else if (gatewayNotificationTarget) {
+      logger.info('RFQ gateway email intent persisted with RFQ creation', {
+        rfqId: finalRFQ.id,
+        rfqNumber: finalRFQ.rfqNumber,
+        eventType: EVENT_OUTBOX_TYPES.RFQ_GATEWAY_NOTIFICATION_EMAIL,
+      }, 'RFQ_CONTROLLER');
     }
 
     // Qua AI Email 2: Send RFQ created acknowledgement to registered buyer

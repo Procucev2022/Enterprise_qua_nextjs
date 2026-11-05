@@ -285,6 +285,13 @@ const VALIDATION_SCHEMAS = {
       pattern: EMAIL_REGEX,
       message: 'Source email must be a valid email address.',
     },
+    targetGatewayEmail: {
+      type: 'string',
+      required: false,
+      maxLength: 320,
+      pattern: EMAIL_REGEX,
+      message: 'Gateway notification address must be a valid email address.',
+    },
   },
 
   // Edit of an existing RFQ (PUT /api/rfqs/:id).

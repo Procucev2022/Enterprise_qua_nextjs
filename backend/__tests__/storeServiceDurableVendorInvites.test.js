@@ -93,6 +93,27 @@ describe('durable RFQ vendor invitation intents', () => {
     expect(storeService.getRFQById(created.id)).not.toHaveProperty('vendorInvitationTargets');
   });
 
+  test('keeps the persisted RFQ gateway target out of public RFQ reads', () => {
+    const created = storeService.createRFQ({
+      id: 'rfq-private-gateway-target',
+      rfqNumber: 'RFQ-PRIVATE-GATEWAY-TARGET',
+      title: 'Pump spares',
+      source: 'email_gateway',
+      sourcingMode: 'mode_0',
+      status: 'Draft',
+      gatewayNotificationTarget: {
+        recipientEmail: 'gateway@example.test',
+        sourceEmail: 'buyer@example.test',
+      },
+    }, null, { deferPersistence: true, deferSideEffects: true });
+
+    expect(created.gatewayNotificationTarget).toEqual({
+      recipientEmail: 'gateway@example.test',
+      sourceEmail: 'buyer@example.test',
+    });
+    expect(storeService.getRFQById(created.id)).not.toHaveProperty('gatewayNotificationTarget');
+  });
+
   test('keeps invitation targets private in the durable RFQ update response', async () => {
     const rfq = {
       id: 'rfq-private-targets',

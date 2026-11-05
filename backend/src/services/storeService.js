@@ -89,6 +89,7 @@ function resolveCanonicalCategory(cat) {
 function normalizeRFQForRead(rfq) {
   const normalized = { ...rfq };
   delete normalized.vendorInvitationTargets;
+  delete normalized.gatewayNotificationTarget;
   if ((normalized.poFinalised || normalized.poNumber) && normalized.status === 'Closed') {
     normalized.status = 'PO Generated';
     normalized.poFinalised = true;
@@ -2895,6 +2896,14 @@ class StoreService {
       buyerEmail,
       raisedByName: rfqData.raisedByName || null,
       creationAcknowledgementRequested: rfqData.creationAcknowledgementRequested === true,
+      ...(rfqData.gatewayNotificationTarget && typeof rfqData.gatewayNotificationTarget === 'object' ? {
+        gatewayNotificationTarget: {
+          recipientEmail: String(rfqData.gatewayNotificationTarget.recipientEmail || '').trim(),
+          sourceEmail: typeof rfqData.gatewayNotificationTarget.sourceEmail === 'string'
+            ? rfqData.gatewayNotificationTarget.sourceEmail.trim()
+            : null,
+        },
+      } : {}),
       raisedByEmail: resolvedBuyer ? resolvedBuyer.corporateEmail : (rfqData.raisedByEmail || buyerEmail || null),
       status: rfqData.status || 'Quotes Pending',
       // Stamped from the authenticated caller's own buyer account (resolved

@@ -339,6 +339,7 @@ describe('PostgreSQL migration runner', () => {
         '0017_communication_delivery_outbox',
         '0018_rfq_created_email_outbox',
         '0019_rfq_vendor_invitation_email_outbox',
+        '0020_rfq_gateway_notification_email_outbox',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

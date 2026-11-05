@@ -17,6 +17,7 @@ const {
   EVENT_OUTBOX_ENQUEUE_RETRY_MS,
   EVENT_OUTBOX_RETENTION_DAYS,
   EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE,
+  EMAIL_REGEX,
 } = require('../config/constants');
 const { logger } = require('./loggerService');
 
@@ -452,6 +453,41 @@ async function dispatchEvent(job) {
         rfqId,
         rfqNumber: rfq.rfqNumber,
         vendorId: target.vendorId,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
+    case EVENT_OUTBOX_TYPES.RFQ_GATEWAY_NOTIFICATION_EMAIL: {
+      const rfqId = job.raw?.rfqId;
+      if (typeof rfqId !== 'string' || !rfqId) {
+        const error = new Error('RFQ gateway notification retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+      const target = rfq?.gatewayNotificationTarget;
+      const recipientEmail = typeof target?.recipientEmail === 'string' ? target.recipientEmail.trim() : '';
+      const sourceEmail = typeof target?.sourceEmail === 'string' ? target.sourceEmail.trim() : '';
+      if (!rfq || !EMAIL_REGEX.test(recipientEmail) || (sourceEmail && !EMAIL_REGEX.test(sourceEmail))) {
+        const error = new Error('RFQ gateway notification references a missing RFQ or invalid persisted recipient.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const delivery = await mailerService.sendRequisitionNotificationEmail(
+        recipientEmail,
+        rfq,
+        sourceEmail || undefined
+      );
+      if (!delivery?.sent) {
+        const error = new Error('RFQ gateway notification email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('RFQ gateway notification accepted by a provider', {
+        rfqId,
+        rfqNumber: rfq.rfqNumber,
         outboxId: job.id,
       }, 'EVENT_OUTBOX');
       return;
