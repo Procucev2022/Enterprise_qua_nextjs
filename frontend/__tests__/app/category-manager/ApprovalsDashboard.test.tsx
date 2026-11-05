@@ -143,65 +143,79 @@ describe('ApprovalsDashboard', () => {
     expect(screen.getByText(strings.approvedSubtitle)).toBeInTheDocument();
     expect(screen.getByText(strings.rejectedSubtitle)).toBeInTheDocument();
 
-    // 5 Navigation tabs
-    expect(screen.getByRole('tab', { name: strings.tabAllRequests })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: new RegExp(strings.tabPendingApprovals, 'i') })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: strings.tabApproved })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: strings.tabRejected })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: strings.tabMyApprovals })).toBeInTheDocument();
+    // Toolbar controls rendered in single row
+    expect(screen.getByPlaceholderText(strings.searchPlaceholder)).toBeInTheDocument();
+    expect(screen.getByLabelText(strings.allProjects)).toBeInTheDocument();
+    expect(screen.getByLabelText(strings.allRequestTypes)).toBeInTheDocument();
+    expect(screen.getByLabelText(strings.allStatuses)).toBeInTheDocument();
+    expect(screen.getByTestId('toggle-my-approvals')).toBeInTheDocument();
   });
 
-  it('switches between all 5 navigation tabs cleanly', async () => {
+  it('filters by status and toggles my approvals cleanly', async () => {
     render(<ApprovalsDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
     });
 
-    // 1. Pending Approvals tab
-    const pendingTab = screen.getByRole('tab', { name: new RegExp(strings.tabPendingApprovals, 'i') });
-    fireEvent.click(pendingTab);
+    // 1. Pending Approvals Card click
+    const pendingCard = screen.getByTestId('card-pending-approvals');
+    fireEvent.click(pendingCard);
     await waitFor(() => {
       expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'Pending' })
       );
     });
 
-    // 2. Approved tab
-    const approvedTab = screen.getByRole('tab', { name: strings.tabApproved });
-    fireEvent.click(approvedTab);
+    // Close summary popup
+    fireEvent.click(screen.getAllByRole('button', { name: UI_STRINGS.actionCenter.summaryModal.closeBtn })[0]);
+
+    // 2. Approved Card click
+    const approvedCard = screen.getByTestId('card-approved');
+    fireEvent.click(approvedCard);
     await waitFor(() => {
       expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'Approved' })
       );
     });
+    fireEvent.click(screen.getAllByRole('button', { name: UI_STRINGS.actionCenter.summaryModal.closeBtn })[0]);
 
-    // 3. Rejected tab
-    const rejectedTab = screen.getByRole('tab', { name: strings.tabRejected });
-    fireEvent.click(rejectedTab);
+    // 3. Rejected Card click
+    const rejectedCard = screen.getByTestId('card-rejected');
+    fireEvent.click(rejectedCard);
     await waitFor(() => {
       expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'Rejected' })
       );
     });
+    fireEvent.click(screen.getAllByRole('button', { name: UI_STRINGS.actionCenter.summaryModal.closeBtn })[0]);
 
-    // 4. My Approvals tab
-    const myApprovalsTab = screen.getByRole('tab', { name: strings.tabMyApprovals });
-    fireEvent.click(myApprovalsTab);
+    // 4. Toggle My Approvals button
+    const myApprovalsBtn = screen.getByTestId('toggle-my-approvals');
+    fireEvent.click(myApprovalsBtn);
     await waitFor(() => {
       expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
         expect.objectContaining({ assigned_approver: 'Srinu Sir' })
       );
     });
 
-    // 5. All Requests tab
-    const allTab = screen.getByRole('tab', { name: strings.tabAllRequests });
-    fireEvent.click(allTab);
+    // Toggle off My Approvals
+    fireEvent.click(myApprovalsBtn);
+    await waitFor(() => {
+      expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
+        expect.objectContaining({ assigned_approver: undefined })
+      );
+    });
+
+    // 5. Total Requests Card click
+    const totalCard = screen.getByTestId('card-total-requests');
+    fireEvent.click(totalCard);
     await waitFor(() => {
       expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
         expect.objectContaining({ status: undefined })
       );
     });
+    fireEvent.click(screen.getAllByRole('button', { name: UI_STRINGS.actionCenter.summaryModal.closeBtn })[0]);
   });
 
   it('clicking summary cards opens summary popup and applies filter', async () => {
@@ -213,14 +227,11 @@ describe('ApprovalsDashboard', () => {
 
     const summaryCloseBtn = UI_STRINGS.actionCenter.summaryModal.closeBtn;
 
-    // Click Pending Approvals Card
-    const pendingCard = screen.getByText(strings.pendingSubtitle).closest('button');
-    expect(pendingCard).not.toBeNull();
-    if (pendingCard) {
-      await act(async () => {
-        fireEvent.click(pendingCard);
-      });
-    }
+    // Click Pending Approvals Card via Enter key
+    const pendingCard = screen.getByTestId('card-pending-approvals');
+    await act(async () => {
+      fireEvent.keyDown(pendingCard, { key: 'Enter', code: 'Enter' });
+    });
 
     await waitFor(() => {
       expect(screen.getByText(new RegExp(strings.summaryModalTitlePrefix, 'i'))).toBeInTheDocument();
@@ -230,14 +241,11 @@ describe('ApprovalsDashboard', () => {
     const closeButtons = screen.getAllByRole('button', { name: summaryCloseBtn });
     fireEvent.click(closeButtons[0]);
 
-    // Click Approved Card
-    const approvedCard = screen.getByText(strings.approvedSubtitle).closest('button');
-    expect(approvedCard).not.toBeNull();
-    if (approvedCard) {
-      await act(async () => {
-        fireEvent.click(approvedCard);
-      });
-    }
+    // Click Approved Card via Space key
+    const approvedCard = screen.getByTestId('card-approved');
+    await act(async () => {
+      fireEvent.keyDown(approvedCard, { key: ' ', code: 'Space' });
+    });
 
     await waitFor(() => {
       expect(screen.getByText(new RegExp(strings.summaryModalTitlePrefix, 'i'))).toBeInTheDocument();
@@ -245,13 +253,10 @@ describe('ApprovalsDashboard', () => {
     fireEvent.click(screen.getAllByRole('button', { name: summaryCloseBtn })[0]);
 
     // Click Rejected Card
-    const rejectedCard = screen.getByText(strings.rejectedSubtitle).closest('button');
-    expect(rejectedCard).not.toBeNull();
-    if (rejectedCard) {
-      await act(async () => {
-        fireEvent.click(rejectedCard);
-      });
-    }
+    const rejectedCard = screen.getByTestId('card-rejected');
+    await act(async () => {
+      fireEvent.click(rejectedCard);
+    });
 
     await waitFor(() => {
       expect(screen.getByText(new RegExp(strings.summaryModalTitlePrefix, 'i'))).toBeInTheDocument();
@@ -259,13 +264,10 @@ describe('ApprovalsDashboard', () => {
     fireEvent.click(screen.getAllByRole('button', { name: summaryCloseBtn })[0]);
 
     // Click Total Requests Card
-    const totalCard = screen.getByText(strings.totalSubtitle).closest('button');
-    expect(totalCard).not.toBeNull();
-    if (totalCard) {
-      await act(async () => {
-        fireEvent.click(totalCard);
-      });
-    }
+    const totalCard = screen.getByTestId('card-total-requests');
+    await act(async () => {
+      fireEvent.click(totalCard);
+    });
 
     await waitFor(() => {
       expect(screen.getByText(new RegExp(strings.summaryModalTitlePrefix, 'i'))).toBeInTheDocument();
@@ -837,12 +839,10 @@ describe('ApprovalsDashboard', () => {
 
     (approvalClient.fetchApprovals as jest.Mock).mockRejectedValueOnce(new Error('Network error on popup'));
 
-    const pendingCard = screen.getByText(strings.pendingSubtitle).closest('button');
-    if (pendingCard) {
-      await act(async () => {
-        fireEvent.click(pendingCard);
-      });
-    }
+    const pendingCard = screen.getByTestId('card-pending-approvals');
+    await act(async () => {
+      fireEvent.click(pendingCard);
+    });
   });
 
   it('handles user session and localStorage variations (null user, email only, invalid JSON)', async () => {
@@ -857,17 +857,51 @@ describe('ApprovalsDashboard', () => {
       orgName: 'Org One',
     });
 
-    render(<ApprovalsDashboard />);
+    const { unmount: unmount1 } = render(<ApprovalsDashboard />);
     await waitFor(() => {
       expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
     });
+    unmount1();
 
     // 2. Null session user
     jest.spyOn(authClient, 'getSessionUser').mockReturnValue(null);
-    render(<ApprovalsDashboard />);
+    const { unmount: unmount2 } = render(<ApprovalsDashboard />);
     await waitFor(() => {
-      expect(screen.getAllByText('REQ-CR-9041').length).toBeGreaterThan(0);
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
     });
+    unmount2();
+
+    // 3. User with email only, no name
+    jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+      id: 'u-email-only',
+      name: '',
+      email: 'approver@enterprise.com',
+      role: 'buyer',
+      orgId: 'org-1',
+      orgName: 'Org One',
+    });
+    const { unmount: unmount3 } = render(<ApprovalsDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+    const myApprBtn = screen.getByTestId('toggle-my-approvals');
+    fireEvent.click(myApprBtn);
+    await waitFor(() => {
+      expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
+        expect.objectContaining({ assigned_approver: 'approver@enterprise.com' })
+      );
+    });
+
+    // 4. Test ignored key on card
+    const card = screen.getByTestId('card-total-requests');
+    fireEvent.keyDown(card, { key: 'Escape', code: 'Escape' });
+
+    // 5. Test sorting by module
+    const reqTypeHeader = screen.getByText(strings.colRequestType);
+    fireEvent.click(reqTypeHeader);
+    fireEvent.click(reqTypeHeader);
+
+    unmount3();
   });
 
   it('exports CSV with fallback values when approval fields are missing', async () => {

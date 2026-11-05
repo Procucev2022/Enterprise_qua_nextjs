@@ -6550,3 +6550,93 @@ Test the following scenarios:
 
 Deliver a production-ready Procurement Approval Management Dashboard adhering to all requirements.
 ```
+
+
+---
+
+### Prompt 58
+
+**Timestamp**: 2026-11-04T19:35:48+05:30
+
+```text
+# Urgent: Action Center UI Fix – Previous Changes Not Applied
+
+The previous UI changes have not resolved the issues. The attached screenshot shows the same problems again. Please inspect the actual frontend implementation and fix the root cause instead of applying another temporary CSS adjustment.
+
+### 1. Remove Action Center Heading and Description
+- Remove the large "Action Center" heading and its descriptive subtitle.
+- Do not leave unnecessary empty space where the heading was displayed.
+- Align the summary cards in the available header area.
+
+### 2. Fix Summary Cards – Compact Layout
+- Reduce the width, height, padding, font size, and gaps of all task summary cards.
+- Make all six cards fit in one horizontal row within the available content width.
+- Do not allow cards to extend beyond the right screen boundary.
+- Remove the horizontal scrollbar appearing below the summary cards.
+- Display complete labels and counts without clipping.
+- Use the same compact sizing as the main navigation tabs: Internal Tasks, Tickets, Approvals, Scorecard, Buyers Directory, and Sellers Directory.
+
+### 3. Fix Internal Tasks Search Toolbar
+- The search field is currently appearing as a small icon separately instead of a complete search input.
+- Restore the complete visible search input with its placeholder.
+- Give it sufficient width.
+- Keep All Categories, My Tasks, All Users, Filter, Export CSV, Reminders, Send SMS / Email, Create Internal Task, and Refresh properly aligned.
+- Use a clean responsive layout with consistent heights and spacing.
+- Do not let buttons overlap or get clipped.
+
+### 4. Correct Layout and Responsive Behaviour
+- Use the full available content width.
+- Remove unnecessary left/right margins and excessive padding.
+- Prevent nested containers from creating unwanted horizontal scrolling.
+- Keep the main page scrollbar separate from the toolbar and summary-card layout.
+- At smaller screen widths, wrap cards or controls cleanly instead of clipping them.
+
+### 5. Technical Investigation – Mandatory
+Before modifying the code:
+1. Identify the actual Action Center page and summary-card components.
+2. Inspect their parent containers, CSS/Tailwind classes, widths, min-width values, flex/grid settings, and overflow properties.
+3. Check for conflicting styles or duplicate CSS rules overriding the previous changes.
+4. Inspect the search component to identify why the input field is hidden or collapsed.
+5. Fix the actual layout and component behaviour, not just individual margins.
+
+### 6. Preserve Existing Functionality
+- Keep all summary counts dynamic from the database.
+- Preserve clickable summary cards and their filtered-record popups.
+- Preserve task creation, task filters, reminders, SMS/email actions, approvals, and CSV export.
+- Do not break Buyer Directory, Seller Directory, Registrations, or Payment Dues.
+- Reuse existing components and functionality wherever possible.
+
+### Acceptance Criteria
+- No large Action Center heading or subtitle.
+- All six summary cards fit in one row without horizontal overflow at the target desktop resolution.
+- Search input is fully visible and usable.
+- All toolbar controls are properly aligned.
+- No clipped buttons, overlapping elements, or unnecessary horizontal scrollbars.
+- All existing functionality continues to work.
+
+**Important:** Test the actual rendered page after implementation at the same desktop resolution as the attached screenshot. Do not mark this task as completed until the visual issues are verified as fixed.
+
+-  like that buyer credit i want for quotes in seller Asitis as buyer name change to quote for seller and must be lin to approval section and internal task
+```
+
+
+---
+
+### Prompt 59
+
+**Timestamp**: 2026-11-05T08:12:33+05:30
+
+```text
+In approval page the heading same as button remove the small 5 heading  All requests , pending approvals  ,approved etc and the line alligment is not good for All projects all request type amd all it is movinng the horizontal row not moving like buyer directory please fix both changed
+```
+
+---
+
+### Prompt 60
+
+**Timestamp**: 2026-11-05T09:08:21+05:30
+
+```text
+continue
+```
+
