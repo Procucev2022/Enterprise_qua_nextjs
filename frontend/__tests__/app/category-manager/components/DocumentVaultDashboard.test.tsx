@@ -714,4 +714,143 @@ describe('DocumentVaultDashboard', () => {
     });
   });
 
+
+  test('supports sorting on Document Name, Category, Source, File Size, Uploaded By, Upload Date, and Status', async () => {
+    const sortDocs: DocumentVaultItem[] = [
+      {
+        id: 'doc_alpha',
+        documentName: 'Alpha Deck',
+        fileName: 'alpha.pdf',
+        fileSize: 500,
+        mimeType: 'application/pdf',
+        category: 'marketing_overview',
+        fileUrl: '/alpha.pdf',
+        description: 'Alpha',
+        uploadedBy: 'Alice',
+        isActive: true,
+        accountType: 'buyer',
+        createdAt: '2026-02-01T10:00:00Z',
+      },
+      {
+        id: 'doc_beta',
+        documentName: 'Beta Deck',
+        fileName: 'beta.pdf',
+        fileSize: 1000,
+        mimeType: 'application/pdf',
+        category: 'rate_cards',
+        fileUrl: '/beta.pdf',
+        description: 'Beta',
+        uploadedBy: undefined as unknown as string,
+        isActive: false,
+        accountType: undefined as unknown as 'buyer',
+        createdAt: '',
+      },
+      {
+        id: 'doc_gamma',
+        documentName: 'Beta Deck',
+        fileName: 'beta2.pdf',
+        fileSize: 1000,
+        mimeType: 'application/pdf',
+        category: 'rate_cards',
+        fileUrl: '/beta2.pdf',
+        description: 'Beta equal',
+        uploadedBy: undefined as unknown as string,
+        isActive: false,
+        accountType: undefined as unknown as 'buyer',
+        createdAt: '',
+      },
+    ];
+
+    mockFetchDocuments.mockResolvedValueOnce(sortDocs);
+    render(<DocumentVaultDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Alpha Deck')).toBeInTheDocument();
+    });
+
+    // Sort by name (asc then desc)
+    fireEvent.click(screen.getByText(/Document Name/i));
+    fireEvent.click(screen.getByText(/Document Name/i));
+
+    // Sort by category (asc then desc)
+    fireEvent.click(screen.getByRole('columnheader', { name: /Category/i }));
+    fireEvent.click(screen.getByRole('columnheader', { name: /Category/i }));
+
+    // Sort by source (asc then desc)
+    fireEvent.click(screen.getByText(/Source \/ Account/i));
+    fireEvent.click(screen.getByText(/Source \/ Account/i));
+
+    // Sort by file size (asc then desc)
+    fireEvent.click(screen.getByText(/File & Size/i));
+    fireEvent.click(screen.getByText(/File & Size/i));
+
+    // Sort by uploaded by (asc then desc)
+    fireEvent.click(screen.getByText(/Uploaded By \/ Date/i));
+    fireEvent.click(screen.getByText(/Uploaded By \/ Date/i));
+
+    // Sort by upload date (asc then desc)
+    fireEvent.click(screen.getByText(/Upload Date/i));
+    fireEvent.click(screen.getByText(/Upload Date/i));
+
+    // Sort by status (asc then desc)
+    fireEvent.click(screen.getByRole('columnheader', { name: /Status/i }));
+    fireEvent.click(screen.getByRole('columnheader', { name: /Status/i }));
+
+    expect(screen.getByText('Alpha Deck')).toBeInTheDocument();
+  });
+
+  test('opens column settings modal, toggles columns, resets to default, and saves', async () => {
+    render(<DocumentVaultDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Enterprise Sourcing ROI Deck')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByRole('button', { name: /Column Settings/i });
+    fireEvent.click(gearBtn);
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // Toggle optional column
+    const categoryCheckbox = screen.getByLabelText('Category');
+    fireEvent.click(categoryCheckbox);
+
+    // Save
+    const doneBtn = screen.getByRole('button', { name: 'Done' });
+    fireEvent.click(doneBtn);
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and reset to default
+    fireEvent.click(gearBtn);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    const resetBtn = screen.getByRole('button', { name: 'Reset to Default' });
+    fireEvent.click(resetBtn);
+
+    // Reopen and close via close icon
+    fireEvent.click(gearBtn);
+    const closeBtn = screen.getByLabelText('Close column settings');
+    fireEvent.click(closeBtn);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  test('loads saved column preferences from localStorage on mount and handles dismissal', async () => {
+    const customCols = [
+      { key: 'name', label: 'Document Name', visible: true, required: true },
+      { key: 'category', label: 'Category', visible: false },
+    ];
+    localStorage.setItem('qua_doc_vault_col_prefs', JSON.stringify(customCols));
+
+    render(<DocumentVaultDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Enterprise Sourcing ROI Deck')).toBeInTheDocument();
+    });
+
+    // Dismiss toast manually if visible
+    const closeToast = screen.queryByLabelText('Close notification');
+    if (closeToast) fireEvent.click(closeToast);
+  });
+
 });

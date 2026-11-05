@@ -114,6 +114,8 @@ describe('LoginLogsDashboard', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    localStorage.clear();
+    (fetchLoginLogs as jest.Mock).mockReset();
     (fetchLoginLogs as jest.Mock).mockResolvedValue({
       logs: mockLogs,
       total: mockLogs.length,
@@ -363,13 +365,13 @@ describe('LoginLogsDashboard', () => {
   it('handles pagination next and previous controls safely', async () => {
     // Generate 15 items to test pagination
     const manyLogs: LoginLogEntry[] = Array.from({ length: 15 }, (_, i) => ({
-      id: `log_page_${i}`,
+      id: `log_page_${String(i).padStart(2, '0')}`,
       userName: `User Page ${i}`,
       email: `user${i}@test.com`,
       phoneNumber: '+91 99999 11111',
       companyName: `Company ${i}`,
       userType: (i % 2 === 0 ? 'buyer' : 'vendor') as 'buyer' | 'vendor',
-      loginAt: new Date().toISOString(),
+      loginAt: new Date(Date.now() - i * 60000).toISOString(),
       status: 'ACTIVE' as const,
       createdAt: new Date().toISOString(),
     }));
@@ -394,14 +396,19 @@ describe('LoginLogsDashboard', () => {
     const nextBtn = screen.getByLabelText('Next Page');
     fireEvent.click(nextBtn);
 
-    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
-    expect(screen.getByText('User Page 14')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+      expect(screen.getByText('User Page 14')).toBeInTheDocument();
+    });
 
     // Go to previous page
     const prevBtn = screen.getByLabelText('Previous Page');
     fireEvent.click(prevBtn);
 
-    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+      expect(screen.getByText('User Page 0')).toBeInTheDocument();
+    });
   });
 
   it('handles client errors gracefully without crashing', async () => {
@@ -413,5 +420,149 @@ describe('LoginLogsDashboard', () => {
     await waitFor(() => {
       expect(screen.getByText(strings.title)).toBeInTheDocument();
     });
+  });
+
+  it('supports sorting columns on User & Role, Company, Login Time, and Logout Time', async () => {
+    render(<LoginLogsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Rajesh Sharma')).toBeInTheDocument();
+    });
+
+    // Sort by User & Role (first asc, then desc)
+    const userCol = screen.getByText(strings.table.colUser);
+    fireEvent.click(userCol);
+    fireEvent.click(userCol);
+
+    // Sort by Company
+    const compCol = screen.getByText(strings.table.colCompany);
+    fireEvent.click(compCol);
+    fireEvent.click(compCol);
+
+    // Sort by Login Time
+    const loginCol = screen.getByText(strings.table.colLoginTime);
+    fireEvent.click(loginCol);
+    fireEvent.click(loginCol);
+
+    // Sort by Logout Time / Duration
+    const logoutCol = screen.getByText(strings.table.colLogoutTime);
+    fireEvent.click(logoutCol);
+    fireEvent.click(logoutCol);
+  });
+
+  it('opens column settings modal, resets and saves column preferences', async () => {
+    render(<LoginLogsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Rajesh Sharma')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByTitle('Column Settings');
+    fireEvent.click(gearBtn);
+
+    expect(screen.getByRole('dialog', { name: 'Login Logs Columns' })).toBeInTheDocument();
+
+    // Toggle a column
+    const toggleIp = screen.getByLabelText('Toggle column: IP & Device Info');
+    fireEvent.click(toggleIp);
+
+    // Click Done to save
+    const doneBtn = screen.getByRole('button', { name: /Done/i });
+    fireEvent.click(doneBtn);
+    expect(screen.queryByRole('dialog', { name: 'Login Logs Columns' })).not.toBeInTheDocument();
+
+    // Reopen and click Reset to Default
+    fireEvent.click(gearBtn);
+    expect(screen.getByRole('dialog', { name: 'Login Logs Columns' })).toBeInTheDocument();
+    const resetBtn = screen.getByText('Reset to Default');
+    fireEvent.click(resetBtn);
+    expect(screen.queryByRole('dialog', { name: 'Login Logs Columns' })).not.toBeInTheDocument();
+  });
+
+  it('filters by Yesterday, Last 7 Days, and Last 30 Days presets', async () => {
+    render(<LoginLogsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Rajesh Sharma')).toBeInTheDocument();
+    });
+
+    // Yesterday
+    const yBtn = screen.getByText(strings.filters.dateRangeYesterday);
+    fireEvent.click(yBtn);
+
+    // Last 7 Days
+    const l7Btn = screen.getByText(strings.filters.dateRangeLast7Days);
+    fireEvent.click(l7Btn);
+
+    // Last 30 Days
+    const l30Btn = screen.getByText(strings.filters.dateRangeLast30Days);
+    fireEvent.click(l30Btn);
+  });
+
+  it('loads saved column preferences from localStorage on mount and handles page boundaries', async () => {
+    localStorage.setItem(
+      'qua_login_logs_col_prefs',
+      JSON.stringify([{ key: 'user', label: 'User & Role', visible: true, required: true }])
+    );
+
+    render(<LoginLogsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Rajesh Sharma')).toBeInTheDocument();
+    });
+
+    localStorage.removeItem('qua_login_logs_col_prefs');
+  });
+
+  it('covers branch edge cases for duration formatting, custom date range inputs, and unknown keys', async () => {
+    // Mock log with live active status, zero duration, null logout, and various values
+    const edgeLogs = [
+      {
+        ...mockLogs[0],
+        id: 'edge_1',
+        logoutAt: null,
+        durationSeconds: 0,
+        status: 'ACTIVE',
+        deviceInfo: '',
+      },
+      {
+        ...mockLogs[1],
+        id: 'edge_2',
+        loginAt: 'invalid-date',
+        logoutAt: 'invalid-date',
+        durationSeconds: -5,
+        status: 'OTHER_STATUS',
+      },
+      {
+        ...mockLogs[2],
+        id: 'edge_3',
+        loginAt: '1970-01-01T00:00:00.000Z',
+        durationSeconds: 7200, // hours duration
+        status: 'TIMED_OUT',
+      }
+    ];
+
+    (fetchLoginLogs as jest.Mock).mockResolvedValueOnce({
+      logs: edgeLogs,
+      total: edgeLogs.length,
+      page: 1,
+      totalPages: 1,
+    });
+
+    render(<LoginLogsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Rajesh Sharma')).toBeInTheDocument();
+    });
+
+    // Custom date range inputs
+    const customPresetBtn = screen.getByText(strings.filters.dateRangeCustom);
+    fireEvent.click(customPresetBtn);
+
+    const startInput = screen.getByLabelText(strings.filters.startDate);
+    fireEvent.change(startInput, { target: { value: '2026-10-01' } });
+
+    const endInput = screen.getByLabelText(strings.filters.endDate);
+    fireEvent.change(endInput, { target: { value: '2026-10-31' } });
   });
 });

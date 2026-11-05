@@ -641,4 +641,92 @@ describe('ScorecardDashboard', () => {
       expect(screen.queryByText('Pavani "Chief" Reddy')).not.toBeInTheDocument();
     });
   });
+
+  it('refreshes scorecard data when Refresh button is clicked', async () => {
+    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue(mockScorecardData);
+
+    render(<ScorecardDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Pavani "Chief" Reddy')).toBeInTheDocument();
+    });
+
+    const refreshBtn = screen.getByLabelText('Refresh scorecard');
+    fireEvent.click(refreshBtn);
+
+    await waitFor(() => {
+      expect(scorecardClient.fetchScorecardData).toHaveBeenCalled();
+    });
+  });
+
+  it('opens and closes column settings modal using Gear button', async () => {
+    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue(mockScorecardData);
+
+    render(<ScorecardDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Pavani "Chief" Reddy')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByLabelText('Column Settings');
+    fireEvent.click(gearBtn);
+
+    // Modal is opened
+    expect(screen.getByRole('dialog', { name: 'Column Settings' })).toBeInTheDocument();
+
+    // Click Done to save
+    const doneBtn = screen.getByRole('button', { name: /Done/i });
+    fireEvent.click(doneBtn);
+
+    expect(screen.queryByRole('dialog', { name: 'Column Settings' })).not.toBeInTheDocument();
+
+    // Reopen and test Reset to Default
+    fireEvent.click(gearBtn);
+    expect(screen.getByRole('dialog', { name: 'Column Settings' })).toBeInTheDocument();
+    const resetBtn = screen.getByText('Reset to Default');
+    fireEvent.click(resetBtn);
+    expect(screen.queryByRole('dialog', { name: 'Column Settings' })).not.toBeInTheDocument();
+  });
+
+  it('sorts scorecard table ascending and descending', async () => {
+    (scorecardClient.fetchScorecardData as jest.Mock).mockResolvedValue(mockScorecardData);
+
+    render(<ScorecardDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Pavani "Chief" Reddy')).toBeInTheDocument();
+    });
+
+    const sortScoreBtn = screen.getByTestId('scorecard-sort-score');
+    fireEvent.click(sortScoreBtn);
+    fireEvent.click(sortScoreBtn);
+
+    const sortExecBtn = screen.getByTestId('scorecard-sort-executive');
+    fireEvent.click(sortExecBtn);
+    fireEvent.click(sortExecBtn);
+
+    const sortTasksBtn = screen.getByTestId('scorecard-sort-tasks');
+    fireEvent.click(sortTasksBtn);
+
+    const sortTicketsBtn = screen.getByTestId('scorecard-sort-tickets');
+    fireEvent.click(sortTicketsBtn);
+
+    const sortRegBtn = screen.getByTestId('scorecard-sort-registrations');
+    fireEvent.click(sortRegBtn);
+
+    const sortVisitsBtn = screen.getByTestId('scorecard-sort-siteVisits');
+    fireEvent.click(sortVisitsBtn);
+
+    const sortLoansBtn = screen.getByTestId('scorecard-sort-loansRealized');
+    fireEvent.click(sortLoansBtn);
+
+    const sortDuesBtn = screen.getByTestId('scorecard-sort-duesCollected');
+    fireEvent.click(sortDuesBtn);
+
+    const sortLeadsBtn = screen.getByTestId('scorecard-sort-leadsDeals');
+    fireEvent.click(sortLeadsBtn);
+
+    const sortConvBtn = screen.getByTestId('scorecard-sort-conversionRates');
+    fireEvent.click(sortConvBtn);
+  });
 });

@@ -6640,8 +6640,6 @@ In approval page the heading same as button remove the small 5 heading  All requ
 continue
 ```
 
----
-
 ### Prompt 61
 
 **Timestamp**: 2026-11-05T10:53:44+05:30
@@ -6664,6 +6662,180 @@ Add this After the Document valut that category manager also monitors admin only
 
 ### Prompt 63
 
+**Timestamp**: 2026-11-05T15:40:07+05:30
+
+```text
+Lines        : 98.78% ( 17628/17844 )
+
+Summary of all failing tests
+ FAIL  __tests__/app/vendor/vendor-profileCoverage.test.tsx (48.839 s)
+  ● VendorProfilePage extended coverage (mocked store) › loading the vendor profile › profile request sends the session token as a bearer credential
+
+    expect(element).toBeEnabled()
+
+    Received element is not enabled:
+      <button class="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed" disabled="" />
+
+    Ignored nodes: comments, script, style
+    <html>
+      <head />
+      <body>
+        <div>
+          <div
+            class="space-y-6 animate-fade-in pb-4"
+          >
+            <div
+              class="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center"
+            >
+              <div
+                class="space-y-1"
+              >
+                <span
+                  class="badge badge-emerald font-mono uppercase"
+                >
+                  connect
+                   Tier Supplier
+                </span>
+                <p
+                  class="max-w-3xl text-xs leading-relaxed text-slate-500 dark:text-gray-400"  
+                >
+                  Manage company registration, PAN/GSTIN compliance, and define your manufacturing / supply categories for direct buyer RFQs.
+                </p>
+              </div>
+              <div
+                class="flex items-center gap-2.5"
+              >
+                <a
+                  class="btn btn-secondary btn-md font-bold flex items-center gap-1.5 shadow-xs"
+                  href="#account-security"
+                >
+                  <svg
+                    class="lucide lucide-key-round text-emerald-600 dark:text-emerald-400"
+                    fill="none"
+                    height="16"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                    width="16"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"
+                    />
+                    <circle
+                      cx="16.5"
+                      cy="7.5"
+                      fill="currentColor"
+                      r=".5"
+                    />
+                  </svg>
+                  <span>
+                    Update Password
+                  </span>
+                </a>
+                <button
+                  class="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled=""
+                >
+                  <svg
+                    class="lucide lucide-save"
+                    fill="none"
+                    height="16"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                    width="16"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
+                    />
+                    <path
+                      d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"
+                    />
+                    <path
+                      d="M7 3v4a1 1 0 0 0 1 1h7"
+                    />
+                  </svg>
+
+                  Save Supplier Profile
+                </button>
+              </div>
+            </div>
+            <p
+              class="text-xs text-slate-500 dark:text-gray-400 -mt-2"
+            >
+              Loading your supplier profile…
+            </p>
+            <form
+              class="space-y-6"
+            >
+              <div
+                class="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4"
+              >
+                <div
+                  class="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3"
+                >
+                  <h2
+                    class="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2"
+                  >
+                    <svg
+                      class="lucide lucide-shield-check text-emerald-600 dark:text-emerald-400"
+                      fill="none"
+                      height="18"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      viewBox="0 0 24 24"
+                      width="18"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+                      />
+                      <path
+                        d="m9 12 2 2 4-4"
+                      />
+                    </svg>
+                     Section 1: Supplier Tax & Business Details
+                  </h2>
+                  <span
+                    class="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1"
+                  >
+                    <svg
+                      class="lucide lucide-circle-check"
+                      fill="none"
+                      height="12"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+         ...
+
+      at toBeEnabled (__tests__/app/vendor/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/__tests__/app/vendor/vendor-profileCoverage.test.tsx:240:44)
+      at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/config.js:47:12)
+      at checkCallback (node_modules/@testing-library/dom/dist/wait-for.js:124:77)
+      at checkRealTimersCallback (node_modules/@testing-library/dom/dist/wait-for.js:118:16)   
+      at Timeout.task [as _onTimeout] (node_modules/jsdom/lib/jsdom/browser/Window.js:579:19)  
+
+
+Test Suites: 1 failed, 142 passed, 143 total
+Tests:       1 failed, 3670 passed, 3671 total
+Snapshots:   0 total
+Time:        428.989 s, estimated 757 s
+Ran all test suites.
+Test results written to: coverage\test-results.json
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+
+✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
+
+❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
 **Timestamp**: 2026-11-05T12:30:31+05:30
 
 ```text
@@ -6674,6 +6846,26 @@ continue
 
 ### Prompt 64
 
+**Timestamp**: 2026-11-05T11:05:44Z
+
+```text
+ASS  __tests__/controllersCatchBranches.test.js (53.731 s)
+ FAIL  __tests__/internalTasks.test.js (181.518 s)
+  ● Internal Tasks API & Controller › handles 500 error catch branches gracefully
+
+    thrown: "Exceeded timeout of 20000 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
+
+      307 |   });
+      308 |
+    > 309 |   test('handles 500 error catch branches gracefully', async () => {
+          |   ^
+      310 |     jest.spyOn(internalTaskQueries, 'getInternalTasks').mockRejectedValue(new Error('DB failure'));
+      311 |     const res = await request(app).get('/api/internal-tasks');
+      312 |     expect(res.status).toBe(500);
+
+      at test (__tests__/internalTasks.test.js:309:3)
+      at Object.describe (__tests__/internalTasks.test.js:6:1)
 **Timestamp**: 2026-11-05T12:45:12+05:30
 
 ```text
@@ -6687,4 +6879,377 @@ Raise the pr and check all the coverages can pass annd gemini pr check and AI re
 
 ```text
 continue
+```
+
+---
+
+### Prompt 66
+
+**Timestamp**: 2026-11-05T15:00:00+05:30
+
+```text
+# Action Center – Complete UI Standardization, Table Customization & Database Integration
+
+Please review and improve the entire **Action Center** across all modules. Apply the following requirements consistently to every section. Use the attached screenshots as references.
+
+The main objective is to create a compact, professional, consistent interface with real database data, customizable tables, and properly aligned toolbars.
+
+## 1. Standardize the Entire Action Center UI
+
+Apply the same design standards to every Action Center module:
+
+- Internal Tasks
+- Tickets
+- Approvals
+- Scorecard
+- Buyers Directory
+- Sellers Directory
+- Registrations
+- Payment Dues
+- Document Vault
+- Login Logs
+
+**Reduce overall UI dimensions:**
+- Reduce the font size of all section headings and subheadings.
+- Maintain the same heading and subheading sizes across every module.
+- Reduce card heights, widths, padding, margins, and gaps.
+- Reduce table row heights and cell padding.
+- Make dropdowns, search fields, and buttons compact.
+- Maintain consistent button heights, border radius, typography, and spacing.
+- Use the same visual design across all Action Center sections.
+
+Remove unnecessary empty space on the left and right. Use the available screen width effectively.
+
+## 2. Gear Icon – Column Settings for Every Section
+
+Add a Gear icon to the toolbar of every Action Center section.
+
+When clicked, open a properly visible, centered Column Settings popup.
+
+The popup must contain:
+
+- Complete list of available table columns.
+- Checkbox to show or hide columns.
+- Drag-and-drop handles to reorder columns.
+- Position numbers showing the current column order.
+- Reset to Default option.
+- Save / Done button.
+- Close icon.
+
+**Column customization rules:**
+
+1. Users should be able to show or hide optional columns.
+2. Users should be able to drag and drop columns into their preferred order.
+3. The table must immediately reflect the saved column order and visibility.
+4. Save column preferences separately for each logged-in user.
+5. Restore saved preferences after page refresh and login.
+6. Keep essential columns such as unique IDs and Actions visible and locked where required.
+7. Ensure the popup is not clipped by the toolbar, table, or parent containers.
+
+Apply this functionality independently to every Action Center module.
+
+## 3. Column Sorting – Ascending and Descending
+
+Every applicable table column must support sorting.
+
+Requirements:
+- Display a sorting indicator beside sortable column headings.
+- Support ascending and descending sorting.
+- For date columns, provide Newest First and Oldest First sorting.
+- For numerical columns, support low-to-high and high-to-low.
+- For text columns, support A–Z and Z–A.
+- Ensure sorting uses actual database values.
+- Maintain sorting when applying search and filters.
+- Support server-side sorting for large datasets where appropriate.
+
+Do not apply date sorting to columns that do not contain dates.
+
+## 4. Static Single-Row Toolbars
+
+All toolbars must remain fixed in their intended layout and must not move horizontally when users interact with filters or tables.
+
+**Common requirements:**
+- Keep all toolbar controls in one horizontal row on desktop.
+- Prevent controls from moving or wrapping unexpectedly.
+- Search should receive the available remaining width.
+- Keep dropdowns compact but readable.
+- Keep Refresh, Export CSV, and Gear icons properly aligned at the right.
+- Do not allow the toolbar itself to develop a horizontal scrollbar.
+- If the table requires horizontal scrolling, restrict it to the table container only.
+- Make the layout responsive on smaller screens.
+
+The toolbar should remain visually stable when scrolling through table records.
+
+## 5. Internal Tasks – Toolbar Alignment
+
+Arrange Internal Tasks controls in this order:
+
+1. Search
+2. All Categories
+3. My Tasks
+4. All Users
+5. Filter
+6. Export CSV
+7. Reminders
+8. Send SMS / Email
+9. Create Internal Task
+10. Refresh
+11. Gear icon
+
+Requirements:
+- Keep all controls in one horizontal row on desktop.
+- Give Search sufficient width.
+- Reduce unnecessary spacing between buttons.
+- Keep button heights and font sizes consistent.
+- Avoid placing All Users on a separate row.
+- Add Gear-based column settings and sorting.
+- Keep summary cards compact and consistent.
+
+## 6. Registrations – Toolbar and Filter Alignment
+
+Fix the Registrations toolbar.
+
+Required controls:
+1. Search
+2. Client View
+3. Source Type
+4. Refresh
+5. Gear icon
+
+**Client View options:**
+- All (Buyers & Sellers)
+- Buyers
+- Sellers
+
+**Source Type options:**
+- All
+- Web App
+- WhatsApp
+- Email
+
+Requirements:
+- Keep Client View and Source Type as separate filters.
+- Provide sufficient spacing between them so their labels and selected values do not overlap.
+- Keep all controls in one row.
+- Search should have sufficient width.
+- Ensure both filters work together.
+- Apply the selected filters to actual database records.
+- Ensure registration summary counts reflect the correct filtered records.
+
+## 7. Login Logs – Toolbar and Table
+
+Standardize the User Login & Session Logs interface.
+
+Keep these toolbar controls in one row:
+
+- Search by username, email, company, or phone.
+- User Type: All Users, Buyers, Sellers/Vendors.
+- Status filter.
+- Date Range.
+- Refresh.
+- Export CSV.
+- Gear icon.
+
+Date Range options:
+- All Time
+- Today
+- Yesterday
+- Last 7 Days
+- Last 30 Days
+- Custom Range
+
+Table columns:
+- User & Role
+- Company
+- Contact Info
+- Login Time
+- Logout Time / Duration
+- IP & Device Info
+- Status
+- Actions
+
+Requirements:
+- Use actual login and session records.
+- Display correct timestamps.
+- Fix invalid or incorrect date values.
+- Support ascending and descending date sorting.
+- Ensure live session information reflects actual session data.
+- Keep session inspection functionality working.
+
+## 8. Payment Dues – Column Settings and Toolbar
+
+Apply the common Action Center design.
+
+Toolbar order:
+1. Search
+2. Account Type
+3. Credit Filter
+4. Acknowledgement Status
+5. Refresh
+6. Export CSV
+7. Gear
+
+Requirements:
+- Keep all controls in one row.
+- Maintain compact summary cards.
+- Add Gear-based show/hide and drag-and-drop column settings.
+- Support sorting on all applicable columns.
+- Ensure low-credit counts and acknowledgement data come from the database.
+- Remove static notification counts and use dynamic values.
+
+## 9. Buyer Directory and Seller Directory
+
+Apply identical design standards to both directories.
+
+- Compact summary cards.
+- One-row toolbar.
+- Search, dropdown filters, Export Directory, Refresh, and Gear.
+- Gear-based column visibility.
+- Drag-and-drop column ordering.
+- Ascending and descending sorting.
+- Date-based sorting for registration, last login, last activity, and other date fields.
+- Persist user-specific column preferences.
+- Ensure all records and profile information come from the database.
+
+Preserve all existing Buyer and Seller 360° Dossier features, including Credit, Communications, Payments, and Documents.
+
+## 10. Approvals, Tickets and Scorecard
+
+Apply the same design and customization functionality:
+
+- Compact summary cards.
+- Fixed one-row toolbars.
+- Search and filters.
+- Gear icon for column settings.
+- Drag-and-drop column ordering.
+- Show/hide columns.
+- Ascending/descending sorting.
+- Database-driven records.
+- Consistent table layouts and spacing.
+
+Preserve all existing approval workflows, ticket management, scorecard calculations, and permissions.
+
+## 11. Document Vault
+
+Arrange the following controls in one toolbar:
+
+- Search by document name, file name, or tag.
+- Source filter.
+- Document Type filter.
+- Status filter.
+- Upload Document.
+- Refresh.
+- Gear icon.
+
+Requirements:
+- Use actual stored documents and database relationships.
+- Support document filtering, sorting, preview, and download.
+- Apply the same column customization functionality.
+- Maintain document access permissions.
+
+## 12. Remove All Mock and Test Data – Critical Requirement
+
+This is one of the most important requirements.
+
+Inspect every Action Center module and remove all mock, dummy, sample, hardcoded, and test data from the application.
+
+**All displayed data must come from the actual database or connected production data sources.**
+
+Check:
+- Summary card counts.
+- Table records.
+- Buyer and seller information.
+- Registration records.
+- Payment and credit information.
+- Internal tasks.
+- Approval records.
+- Tickets and scorecards.
+- Login and session logs.
+- Documents and communication history.
+
+Technical requirements:
+1. Identify mock arrays, static JSON objects, placeholder records, hardcoded counts, and fallback sample data.
+2. Replace them with actual API/database integrations.
+3. Verify API responses and database queries.
+4. Ensure summary counts match the actual records.
+5. Show proper empty states when no records exist.
+6. Show proper loading and error states when data cannot be retrieved.
+7. Never display fake records to make a table look populated.
+8. Do not silently replace API failures with mock data.
+
+If a database connection or API is unavailable, display a clear error message instead of dummy information.
+
+## 13. Performance and Responsive Layout
+
+- Use server-side pagination and sorting where appropriate.
+- Avoid fetching unnecessary records repeatedly.
+- Prevent duplicate API requests.
+- Keep search and filters responsive.
+- Avoid layout shifts during data loading.
+- Keep the toolbar stable while the table scrolls.
+- Ensure the layout works at different desktop resolutions and smaller screen sizes.
+
+## 14. Important Implementation Rules
+
+Before making changes:
+
+1. Inspect the complete Action Center frontend architecture.
+2. Identify shared components and existing table implementations.
+3. Inspect all API integrations and database queries.
+4. Identify existing Gear settings and column preference implementations.
+5. Reuse existing methods and components wherever possible.
+6. Avoid duplicating functionality across modules.
+
+Do not:
+- Break existing business logic.
+- Delete existing database records.
+- Change existing role permissions.
+- Remove working features.
+- Introduce duplicate APIs or database tables unnecessarily.
+- Use mock data as a fallback.
+
+## 15. Final Testing and Verification
+
+Verify the following after completing the changes:
+
+- Build completes without errors.
+- TypeScript compilation passes with zero type errors.
+- Lint checks pass.
+- Unit tests pass with 90%+ code coverage across all files.
+- Each module has been manually verified against the requirements.
+- The UI matches the reference screenshots in layout, alignment, and styling.
+- All tables display actual database data.
+- Column customization works and persists across reloads.
+- Column sorting works properly in both directions.
+- All toolbars remain in a single row without wrapping or shifting.
+```
+
+---
+
+### Prompt 67
+
+**Timestamp**: 2026-11-05T16:15:00+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 68
+
+**Timestamp**: 2026-11-05T16:36:19+05:30
+
+```text
+reuse the existing functioanlity and methods don't create the dupliacted code for this and do it fast
+```
+
+---
+
+### Prompt 69
+
+**Timestamp**: 2026-11-05T17:22:52+05:30
+
+```text
+raise the pr and pass all the coverages and AI review and Gemini pr check and merge in test-v3
 ```
