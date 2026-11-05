@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   X,
   Building2,
@@ -325,6 +325,7 @@ export default function BuyerDossierDrawer({
   const [addCreditAmount, setAddCreditAmount] = useState<number>(5);
   const [addCreditReason, setAddCreditReason] = useState<string>('');
   const [isSubmittingCredit, setIsSubmittingCredit] = useState<boolean>(false);
+  const addCreditRequestRef = useRef<{ signature: string; idempotencyKey: string } | null>(null);
 
   const loadCreditHistory = useCallback(async () => {
     setLoadingCredit(true);
@@ -350,14 +351,22 @@ export default function BuyerDossierDrawer({
   const handleConfirmAddCredit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (addCreditAmount <= 0) return;
+    const payload = {
+      amount: addCreditAmount,
+      reason: addCreditReason || 'Category Manager console allocation',
+      source: 'Category Manager Console',
+    };
+    const signature = JSON.stringify([buyer.id, payload.amount, payload.reason, payload.source]);
+    let request = addCreditRequestRef.current;
+    if (!request || request.signature !== signature) {
+      request = { signature, idempotencyKey: crypto.randomUUID() };
+      addCreditRequestRef.current = request;
+    }
     setIsSubmittingCredit(true);
     try {
-      const res = await addBuyerCredit(buyer.id, {
-        amount: addCreditAmount,
-        reason: addCreditReason || 'Category Manager console allocation',
-        source: 'Category Manager Console',
-      });
+      const res = await addBuyerCredit(buyer.id, payload, request.idempotencyKey);
       if (res.success) {
+        addCreditRequestRef.current = null;
         showToast(res.message || `Successfully added ${addCreditAmount} credits.`, 'success');
         setIsAddCreditModalOpen(false);
         setAddCreditAmount(5);

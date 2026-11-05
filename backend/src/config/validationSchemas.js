@@ -145,6 +145,20 @@ const INTERNAL_TASK_TYPE_ENUM = Object.freeze([
 ]);
 
 const VALIDATION_SCHEMAS = {
+  enterpriseInquiryIdempotencyKey: {
+    idempotencyKey: {
+      type: 'string', required: true, maxLength: 36, pattern: UUID_REGEX,
+      message: 'Idempotency-Key must be a UUID.',
+    },
+  },
+  addBuyerCredit: {
+    amount: {
+      type: 'number', required: true, min: 1, max: 100000,
+      custom: (value) => Number.isInteger(Number(value)) ? null : 'amount must be a whole number of credits.',
+    },
+    reason: { type: 'string', required: false, maxLength: 500 },
+    source: { type: 'string', required: false, maxLength: 100 },
+  },
   createEnterpriseInquiry: {
     companyName: {
       type: 'string', required: true, minLength: 2, maxLength: 200,

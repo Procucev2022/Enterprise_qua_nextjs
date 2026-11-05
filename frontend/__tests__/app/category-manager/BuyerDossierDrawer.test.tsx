@@ -323,7 +323,8 @@ describe('BuyerDossierDrawer', () => {
     await waitFor(() => {
       expect(buyerProfileClient.addBuyerCredit).toHaveBeenCalledWith(
         'buyer-acc-1789811073812-ux3',
-        expect.objectContaining({ amount: 10, reason: 'Category Manager console allocation' })
+        expect.objectContaining({ amount: 10, reason: 'Category Manager console allocation' }),
+        expect.stringMatching(/^[0-9a-f-]{36}$/i)
       );
     });
   });
@@ -357,6 +358,8 @@ describe('BuyerDossierDrawer', () => {
     await waitFor(() => {
       expect(screen.getByText('Error allocating credits')).toBeInTheDocument();
     });
+    const retryCalls = (buyerProfileClient.addBuyerCredit as jest.Mock).mock.calls;
+    expect(retryCalls[1][2]).toBe(retryCalls[0][2]);
   });
 
   test('4. Profile tab renders categories, allows editing, adding custom category, toggling, backdrop click, Escape, and saving', async () => {
@@ -1335,7 +1338,8 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
         expect.objectContaining({
           amount: 10,
           reason: 'Category Manager console allocation',
-        })
+        }),
+        expect.stringMatching(/^[0-9a-f-]{36}$/i)
       );
     });
 
@@ -1358,6 +1362,8 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     await waitFor(() => {
       expect(buyerProfileClient.addBuyerCredit).toHaveBeenCalledTimes(3);
     });
+    const retryCalls = (buyerProfileClient.addBuyerCredit as jest.Mock).mock.calls;
+    expect(retryCalls[2][2]).toBe(retryCalls[1][2]);
 
     // Close via backdrop click
     fireEvent.click(addCreditHeaderBtn);

@@ -475,14 +475,17 @@ describe('buyerProfileClient', () => {
         ok: true,
         json: async () => ({ success: true, message: 'Credit added' }),
       });
-      const res = await addBuyerCredit('buyer-1', { amount: 5, reason: 'Trial topup' });
+      const res = await addBuyerCredit('buyer-1', { amount: 5, reason: 'Trial topup' }, 'b714f6d8-83a1-4f34-9d89-72ebddb1186d');
       expect(res.success).toBe(true);
       expect(res.message).toBe('Credit added');
+      expect(global.fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        headers: expect.objectContaining({ 'Idempotency-Key': 'b714f6d8-83a1-4f34-9d89-72ebddb1186d' }),
+      }));
     });
 
     test('handles add-credit network error', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Server timeout'));
-      const res = await addBuyerCredit('buyer-1', { amount: 5 });
+      const res = await addBuyerCredit('buyer-1', { amount: 5 }, 'b714f6d8-83a1-4f34-9d89-72ebddb1186d');
       expect(res.success).toBe(false);
       expect(res.error).toBe('Server timeout');
     });

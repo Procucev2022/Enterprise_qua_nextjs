@@ -13,6 +13,7 @@
 
 const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
+const buyerCreditQueries = require('./buyerCreditQueries');
 const buyerRfqCreationQueries = require('./buyerRfqCreationQueries');
 const vendorRfqUnlockQueries = require('./vendorRfqUnlockQueries');
 const vendorQuoteCreditQueries = require('./vendorQuoteCreditQueries');
@@ -1735,6 +1736,10 @@ async function getVendorCreditTransactionsFromDB(vendorId, limit = 50) {
  * so substring ILIKE across 600k+ rows never forces a sequential scan.
  */
 
+async function addBuyerCreditsInDB(options) {
+  return buyerCreditQueries.addBuyerCreditsInDB(options);
+}
+
 async function recordBuyerCreditTransactionInDB({
   id,
   buyerId,
@@ -2080,6 +2085,7 @@ module.exports = {
   getVendorCreditTransactionsFromDB,
   createRFQWithCreditInDB: buyerRfqCreationQueries.createRFQWithCreditInDB,
   recordBuyerCreditTransactionInDB,
+  addBuyerCreditsInDB,
   getBuyerCreditTransactionsFromDB,
   getPublicVendorsPageFromDB,
   getPublicVendorFiltersFromDB,

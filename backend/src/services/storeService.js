@@ -779,6 +779,51 @@ class StoreService {
     return updated;
   }
 
+  async addBuyerCreditsDurably(id, amount, transaction) {
+    const accountIndex = this.buyerAccounts.findIndex((account) => account.id === id);
+    const storageConfigured = pool.hasStorage();
+    if (!storageConfigured) {
+      if (accountIndex === -1) return null;
+      const currentAccount = this.buyerAccounts[accountIndex];
+      const previousBalance = Number(currentAccount.remainingFreeRFQs ?? 5);
+      const updatedBalance = previousBalance + amount;
+      const updatedAccount = {
+        ...currentAccount,
+        remainingFreeRFQs: updatedBalance,
+        syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
+      };
+      this.buyerAccounts[accountIndex] = updatedAccount;
+      if (this.activeBuyerAccount?.id === id) this.activeBuyerAccount = updatedAccount;
+      return {
+        account: updatedAccount,
+        previousBalance,
+        updatedBalance,
+        transaction: { ...transaction, previousBalance, updatedBalance },
+        replayed: false,
+      };
+    }
+
+    try {
+      const saved = await domainQueries.addBuyerCreditsInDB({ buyerId: id, amount, transaction });
+      if (!saved?.account) throw new Error('Atomic buyer credit adjustment returned no account row');
+      const currentIndex = this.buyerAccounts.findIndex((account) => account.id === id);
+      if (currentIndex === -1) {
+        this.buyerAccounts.unshift(saved.account);
+      } else {
+        this.buyerAccounts[currentIndex] = saved.account;
+      }
+      if (this.activeBuyerAccount?.id === id) this.activeBuyerAccount = saved.account;
+      return saved;
+    } catch (error) {
+      logger.error('Failed to add buyer credits durably', error, 'STORE_SERVICE');
+      const persistError = new Error(error.message || 'Buyer credits could not be saved. Try again.');
+      persistError.statusCode = error.statusCode || 503;
+      persistError.code = error.code || 'PERSISTENCE_UNAVAILABLE';
+      persistError.retryable = persistError.statusCode >= 500;
+      throw persistError;
+    }
+  }
+
   deleteBuyerAccount(id) {
     const beforeLen = this.buyerAccounts.length;
     this.buyerAccounts = this.buyerAccounts.filter((a) => a.id !== id);

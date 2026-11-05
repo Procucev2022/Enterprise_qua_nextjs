@@ -4,6 +4,7 @@ const zohoPaymentService = require('../services/zohoPaymentService');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { generateReceiptPdf } = require('../services/invoiceService');
 const { logger } = require('../services/loggerService');
+const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
 const { ZOHO_CONFIG, computeZohoBuyerPlanAmount, BUYER_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig } = require('../config/constants');
 const identityQueries = require('../db/identityQueries');
 
@@ -643,6 +644,81 @@ async function getCreditHistory(req, res, next) {
 }
 
 async function addCredit(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
+    const { id } = req.params;
+    const rawIdempotencyKey = req.headers?.['idempotency-key'] || req.get?.('Idempotency-Key');
+    const bodyValidation = validatePayload(VALIDATION_SCHEMAS.addBuyerCredit, req.body || {});
+    const idempotencyValidation = rawIdempotencyKey
+      ? validatePayload(VALIDATION_SCHEMAS.enterpriseInquiryIdempotencyKey, { idempotencyKey: rawIdempotencyKey })
+      : { isValid: true, errors: {}, sanitizedData: {} };
+    if (!bodyValidation.isValid || !idempotencyValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Credit addition details are invalid. Use a positive whole number and a valid Idempotency-Key UUID.',
+        details: { ...bodyValidation.errors, ...idempotencyValidation.errors },
+      });
+    }
+    const { amount, reason, source } = bodyValidation.sanitizedData;
+    const creditAmount = amount;
+
+    const crypto = require('crypto');
+
+    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
+    }
+
+    const txId = `ctx-add-${crypto.randomBytes(6).toString('hex')}`;
+    const tx = {
+      id: txId,
+      buyerId: id,
+      rfqId: null,
+      transactionType: 'Admin Credit Addition',
+      creditSource: source || 'Category Manager Console',
+      creditsAdded: creditAmount,
+      creditsConsumed: 0,
+      paymentReference: `MANUAL-${req.user?.email || 'ADMIN'}`,
+      status: 'COMPLETED',
+      description: reason || `Admin manual credit addition of ${creditAmount} credits by ${req.user?.email || 'Category Manager'}`,
+      idempotencyKey: idempotencyValidation.sanitizedData.idempotencyKey || `add-${txId}`,
+      createdAt: new Date().toISOString(),
+    };
+
+    const creditUpdate = await storeService.addBuyerCreditsDurably(id, creditAmount, tx);
+    if (!creditUpdate) {
+      return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
+    }
+    const { previousBalance, updatedBalance } = creditUpdate;
+    tx.id = creditUpdate.transaction.id;
+    tx.previousBalance = previousBalance;
+    tx.updatedBalance = updatedBalance;
+
+    if (!creditUpdate.replayed) {
+      storeService.addAuditLog({
+        userEmail: req.user?.email || 'admin@procucev.com',
+        action: `Added ${creditAmount} credits to ${buyer.organizationName} (${buyer.corporateEmail}). New balance: ${updatedBalance}`,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Successfully allocated ${creditAmount} credits to ${buyer.organizationName}.`,
+      data: {
+        buyerId: id,
+        previousBalance,
+        updatedBalance,
+        replayed: Boolean(creditUpdate.replayed),
+        transaction: tx,
+      },
+    });
+  } catch (err) {
+    logger.error('Error adding credit to buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+async function updateSupportedCategories(req, res, next) {
   try {
     if (!assertCategoryManagerOrAdmin(req, res)) return;
     const { id } = req.params;
