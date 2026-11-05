@@ -117,6 +117,16 @@ async function _dispatchWhatsApp(rfq, vendor, jobId) {
       if (result.success) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
       else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error').catch(_ignoreError);
     }
+    if (result.success) {
+      try {
+        const storeService = require('./storeService');
+        const liveRfq = storeService.getRFQById ? storeService.getRFQById(rfq.rfqNumber) : null;
+        if (liveRfq && liveRfq.followUpData) {
+          if (!liveRfq.followUpData.whatsappStats) liveRfq.followUpData.whatsappStats = { total: 0, delivered: 0, read: 0, replied: 0 };
+          liveRfq.followUpData.whatsappStats.delivered = (liveRfq.followUpData.whatsappStats.delivered || 0) + 1;
+        }
+      } catch (_err) {}
+    }
     return { channel: 'whatsapp', success: result.success };
   } catch (err) {
     logger.error(`[CHASER] WhatsApp error for ${vendor.name}: ${err.message}`, err, 'RFQ_CHASER');
@@ -163,6 +173,25 @@ async function _dispatchSms(rfq, vendor, jobId) {
       if (result.success) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
       else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error').catch(_ignoreError);
     }
+    if (result.success) {
+      try {
+        const storeService = require('./storeService');
+        const liveRfq = storeService.getRFQById ? storeService.getRFQById(rfq.rfqNumber) : null;
+        if (liveRfq && liveRfq.followUpData) {
+          if (!liveRfq.followUpData.smsStats) liveRfq.followUpData.smsStats = { total: 0, delivered: 0, clicked: 0 };
+          liveRfq.followUpData.smsStats.delivered = (liveRfq.followUpData.smsStats.delivered || 0) + 1;
+          if (liveRfq.followUpData.smsStats.delivered > (liveRfq.followUpData.smsStats.total || 0)) {
+            liveRfq.followUpData.smsStats.total = liveRfq.followUpData.smsStats.delivered;
+          }
+          if (Array.isArray(liveRfq.followUpData.vendors)) {
+            const vRecord = liveRfq.followUpData.vendors.find((v) => v && (v.vendorId === vendor.id || v.vendorName === vendor.name));
+            if (vRecord) {
+              vRecord.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
+            }
+          }
+        }
+      } catch (_err) {}
+    }
     return { channel: 'sms', success: result.success };
   } catch (err) {
     logger.error(`[CHASER] SMS error for ${vendor.name}: ${err.message}`, err, 'RFQ_CHASER');
@@ -204,6 +233,17 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId) {
     if (jobId) {
       if (result.sent) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
       else await domainQueries.markChaserJobFailedInDB(jobId, result.reason || 'email delivery failed').catch(_ignoreError);
+    }
+    if (result.sent) {
+      try {
+        const storeService = require('./storeService');
+        const liveRfq = storeService.getRFQById ? storeService.getRFQById(rfq.rfqNumber) : null;
+        if (liveRfq && liveRfq.followUpData) {
+          if (!liveRfq.followUpData.emailStats) liveRfq.followUpData.emailStats = { total: 0, delivered: 0, sent24h: 0, opened: 0 };
+          liveRfq.followUpData.emailStats.sent24h = (liveRfq.followUpData.emailStats.sent24h || 0) + 1;
+          liveRfq.followUpData.emailStats.delivered = (liveRfq.followUpData.emailStats.delivered || 0) + 1;
+        }
+      } catch (_err) {}
     }
     return { channel: 'email', sent: result.sent };
   } catch (err) {

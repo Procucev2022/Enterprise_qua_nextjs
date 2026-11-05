@@ -176,6 +176,7 @@ export interface RFQFollowUpBreakdown {
   emailStats?: {
     total: number;
     sent24h: number;
+    delivered?: number;
     opened: number;
   };
   vendors: VendorFollowUpRecord[];

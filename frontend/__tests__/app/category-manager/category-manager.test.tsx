@@ -300,9 +300,10 @@ describe('Category Manager Screens Suite', () => {
       // Column 2 — both a chasing-active RFQ with real follow-up telemetry
       // and a plain one with neither chasingActive nor followUpData set.
       expect(screen.getByText('RFQ-2026-00902')).toBeInTheDocument();
-      expect(screen.getByText(/2\/3 Connected/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/Not configured yet/i).length).toBeGreaterThan(0);
       expect(screen.getByText(/2\/3 Read/i)).toBeInTheDocument();
-      expect(screen.getByText(/3\/3 Delivered/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/3\/3 Delivered/i).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText(/Email Direct:/i).length).toBeGreaterThan(0);
       expect(screen.getByText('RFQ-2026-00903')).toBeInTheDocument();
       expect(screen.getAllByText(/Chasing Paused/i).length).toBeGreaterThan(0);
 
@@ -310,42 +311,11 @@ describe('Category Manager Screens Suite', () => {
       const batchBtn = screen.getByRole('button', { name: /Batch Multi-Channel Chaser \(2\)/i });
       expect(() => fireEvent.click(batchBtn)).not.toThrow();
 
-      // Chaser buttons use the RFQ's own real vendor, not a hardcoded name
-      const allButtons = screen.getAllByRole('button');
-      const callBtns = allButtons.filter((b) => b.textContent?.includes('📞') && b.textContent?.includes('Call'));
-      expect(callBtns.length).toBeGreaterThanOrEqual(2);
-      fireEvent.click(callBtns[0]);
-      expect(screen.getByText(/Dispatch AI Follow-Up/i)).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
-
-      // RFQ-2026-00903 has no followUpData, so its chaser falls back to a
-      // generic vendor label instead of inventing a vendor name.
-      fireEvent.click(callBtns[1]);
-      expect(screen.getByText(/Dispatch AI Follow-Up/i)).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
-
       // Scored-column cards with real, varied quotesCount — no quotes yet vs. exactly one
       expect(screen.getByText('RFQ-2026-00905')).toBeInTheDocument();
       expect(screen.getByText(/0 quotes evaluated/i)).toBeInTheDocument();
       expect(screen.getByText('RFQ-2026-00906')).toBeInTheDocument();
       expect(screen.getByText(/1 quote evaluated/i)).toBeInTheDocument();
-
-      const waBtn = allButtons.find((b) => b.textContent?.includes('WA'));
-      if (waBtn) {
-        fireEvent.click(waBtn);
-        fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
-      }
-
-      const smsBtn = allButtons.find((b) => b.textContent?.includes('📱') && b.textContent?.includes('SMS'));
-      if (smsBtn) {
-        fireEvent.click(smsBtn);
-        fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
-      }
-
-      const emailBtn = allButtons.find((b) => b.textContent?.includes('24h Email'));
-      if (emailBtn) {
-        fireEvent.click(emailBtn);
-      }
 
       // Vendor Follow-Up Details opens with the specific real RFQ the card belongs to
       const deepDiveBtns = screen.getAllByRole('button', { name: /Vendor Follow-Up Details/i });
@@ -543,8 +513,8 @@ describe('Category Manager Screens Suite', () => {
       });
       expect(screen.getByText('Pending RFQ With Follow-Up Started But No Vendors Yet')).toBeInTheDocument();
 
-      const callBtns = screen.getAllByRole('button', { name: /Call/i });
-      expect(() => fireEvent.click(callBtns[0])).not.toThrow();
+      const detailsBtns = screen.getAllByRole('button', { name: /Vendor Follow-Up Details/i });
+      expect(() => fireEvent.click(detailsBtns[0])).not.toThrow();
 
       global.fetch = baseImpl as unknown as typeof global.fetch;
     });

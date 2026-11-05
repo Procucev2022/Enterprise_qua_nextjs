@@ -2510,9 +2510,10 @@ class StoreService {
         rfqNumber,
         totalInvited: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length,
         respondedCount: 0,
-        callStats: { total: 0, connected: 0, avgDuration: '0s' },
-        whatsappStats: { total: 0, delivered: 0, read: 0, replied: 0 },
-        smsStats: { total: 0, delivered: 0, clicked: 0 },
+        callStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, connected: 0, avgDuration: '0s' },
+        whatsappStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, read: 0, replied: 0 },
+        smsStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, clicked: 0 },
+        emailStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, sent24h: 0, opened: 0 },
         autoChasingEnabled: true,
       },
     };
@@ -5060,6 +5061,14 @@ class StoreService {
       }
     }
 
+    if (rfq.followUpData) {
+      if (!rfq.followUpData.emailStats) {
+        rfq.followUpData.emailStats = { total: allEmails.size, delivered: 0, sent24h: 0, opened: 0 };
+      }
+      rfq.followUpData.emailStats.delivered = allEmails.size;
+      rfq.followUpData.emailStats.total = Math.max(rfq.followUpData.emailStats.total || 0, allEmails.size);
+    }
+
     return allEmails.size;
   }
 
@@ -6185,6 +6194,20 @@ class StoreService {
         }
       }
     });
+
+    if (rfq.followUpData) {
+      const vCount = vendors.length;
+      if (channels.includes('sms')) {
+        if (!rfq.followUpData.smsStats) rfq.followUpData.smsStats = { total: vCount, delivered: 0, clicked: 0 };
+        rfq.followUpData.smsStats.total = Math.max(rfq.followUpData.smsStats.total || 0, vCount);
+        rfq.followUpData.smsStats.delivered = vCount;
+      }
+      if (channels.includes('whatsapp')) {
+        if (!rfq.followUpData.whatsappStats) rfq.followUpData.whatsappStats = { total: vCount, delivered: 0, read: 0, replied: 0 };
+        rfq.followUpData.whatsappStats.total = Math.max(rfq.followUpData.whatsappStats.total || 0, vCount);
+        rfq.followUpData.whatsappStats.delivered = vCount;
+      }
+    }
 
     this.aiFeed.unshift(...outreachLogs);
     // This bulk path bypassed addAIFeedItem's 100-item cap entirely before —
