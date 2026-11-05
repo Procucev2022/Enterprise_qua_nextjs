@@ -6,12 +6,14 @@
 // ==============================================================================
 
 const paymentDuesQueries = require('../db/paymentDuesQueries');
+const pool = require('../db/pool');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const mailerService = require('../services/mailerService');
+const eventOutboxService = require('../services/eventOutboxService');
 const storeService = require('../services/storeService');
 const whatsAppService = require('../services/whatsAppService');
 const { logger } = require('../services/loggerService');
-const { PERSISTENCE_MESSAGES } = require('../config/constants');
+const { EVENT_OUTBOX_TYPES, PERSISTENCE_MESSAGES } = require('../config/constants');
 
 function sendControllerError(res, error, fallbackMessage) {
   if (error?.code === 'PERSISTENCE_UNAVAILABLE') {
@@ -144,6 +146,88 @@ async function sendEmailNotification(req, res) {
       sender,
       deliveryStatus: communication.deliveryStatus,
     });
+
+    if (pool.hasStorage()) {
+      try {
+        await eventOutboxService.enqueueEventOutbox(
+          EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL,
+          communication.id,
+          { communicationId: communication.id }
+        );
+      } catch (enqueueError) {
+        logger.error('Could not persist low-credit email delivery intent', {
+          error: enqueueError,
+          accountId,
+          communicationId: communication.id,
+        }, 'PAYMENT_DUES');
+        try {
+          await paymentDuesQueries.updateCommunicationDeliveryStatus({
+            communicationId: communication.id,
+            notificationStatus: 'Failed',
+            deliveryStatus: 'Failed',
+            acknowledgementStatus: 'Failed',
+          });
+        } catch (statusError) {
+          logger.error('Low-credit email intent failure could not be reflected in communication history', {
+            error: statusError,
+            accountId,
+            communicationId: communication.id,
+          }, 'PAYMENT_DUES');
+        }
+        const persistenceError = new Error('The email could not be queued for delivery.');
+        persistenceError.code = 'PERSISTENCE_UNAVAILABLE';
+        persistenceError.cause = enqueueError;
+        return sendControllerError(
+          res,
+          persistenceError,
+          'The email could not be queued for delivery. Please retry.'
+        );
+      }
+
+      try {
+        await eventOutboxService.dispatchDueEventOutboxJobs(1);
+      } catch (dispatchError) {
+        logger.error('Immediate low-credit email dispatch failed; durable recovery will retry', {
+          error: dispatchError,
+          accountId,
+          communicationId: communication.id,
+        }, 'PAYMENT_DUES');
+      }
+
+      let queuedCommunication;
+      try {
+        queuedCommunication = await paymentDuesQueries.getCommunicationById(communication.id);
+      } catch (lookupError) {
+        logger.error('Could not read low-credit email state after queueing', {
+          error: lookupError,
+          accountId,
+          communicationId: communication.id,
+        }, 'PAYMENT_DUES');
+        return sendControllerError(
+          res,
+          lookupError,
+          'The email is queued, but its current delivery status could not be loaded.'
+        );
+      }
+      if (!queuedCommunication) {
+        const missingCommunication = new Error('Queued low-credit email communication could not be found.');
+        missingCommunication.code = 'PERSISTENCE_UNAVAILABLE';
+        return sendControllerError(
+          res,
+          missingCommunication,
+          'The email is queued, but its current delivery status could not be loaded.'
+        );
+      }
+
+      const delivered = queuedCommunication.deliveryStatus === 'Delivered';
+      return res.status(delivered ? 200 : 202).json({
+        success: true,
+        message: delivered
+          ? 'Email notification sent and recorded successfully.'
+          : 'Email delivery is queued and will retry automatically until its status is resolved.',
+        communication: queuedCommunication,
+      });
+    }
 
     // Use the shared provider router so Node, Worker, Gmail, SMTP, and HTTP
     // transports follow the same retry, failover, cooldown, and logging rules.

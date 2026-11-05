@@ -73,6 +73,29 @@ function throwPersistenceUnavailable(operation, cause) {
   throw error;
 }
 
+function mapCommunicationRow(row) {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    accountType: row.account_type,
+    channel: row.channel,
+    recipient: row.recipient,
+    subject: row.subject,
+    message: row.message,
+    notificationStatus: row.notification_status,
+    deliveryStatus: row.delivery_status,
+    acknowledgementStatus: row.acknowledgement_status,
+    communicatedBy: row.communicated_by,
+    sentAt: row.sent_at,
+    acknowledgedAt: row.acknowledged_at,
+    acknowledgedBy: row.acknowledged_by,
+    notes: row.notes,
+    metadata: parseRaw(row.metadata, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 /**
  * Reset in-memory communications (used by unit tests)
  */
@@ -557,26 +580,7 @@ async function updateCommunicationDeliveryStatus({
       ], { d1: true, d1Text: sql });
       const row = result?.rows?.[0];
       if (!row) return null;
-      return {
-        id: row.id,
-        accountId: row.account_id,
-        accountType: row.account_type,
-        channel: row.channel,
-        recipient: row.recipient,
-        subject: row.subject,
-        message: row.message,
-        notificationStatus: row.notification_status,
-        deliveryStatus: row.delivery_status,
-        acknowledgementStatus: row.acknowledgement_status,
-        communicatedBy: row.communicated_by,
-        sentAt: row.sent_at,
-        acknowledgedAt: row.acknowledged_at,
-        acknowledgedBy: row.acknowledged_by,
-        notes: row.notes,
-        metadata: parseRaw(row.metadata, {}),
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      };
+      return mapCommunicationRow(row);
     } catch (error) {
       throwPersistenceUnavailable('delivery status update', error);
     }
@@ -823,26 +827,7 @@ async function getCommunicationHistory(accountId, options = {}) {
         d1Text: sql,
       });
       if (result && Array.isArray(result.rows)) {
-        return result.rows.map((row) => ({
-          id: row.id,
-          accountId: row.account_id,
-          accountType: row.account_type,
-          channel: row.channel,
-          recipient: row.recipient,
-          subject: row.subject,
-          message: row.message,
-          notificationStatus: row.notification_status,
-          deliveryStatus: row.delivery_status,
-          acknowledgementStatus: row.acknowledgement_status,
-          communicatedBy: row.communicated_by,
-          sentAt: row.sent_at,
-          acknowledgedAt: row.acknowledged_at,
-          acknowledgedBy: row.acknowledged_by,
-          notes: row.notes,
-          metadata: parseRaw(row.metadata, {}),
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        }));
+        return result.rows.map(mapCommunicationRow);
       }
     } catch (error) {
       throwPersistenceUnavailable('communication history read', error);
@@ -860,6 +845,26 @@ async function getCommunicationHistory(accountId, options = {}) {
 
   const list = inMemoryCommunications.get(accountId) || [];
   return list.slice(offset, offset + limit);
+}
+
+async function getCommunicationById(communicationId) {
+  if (!communicationId) return null;
+
+  if (pool.hasStorage()) {
+    const sql = 'SELECT * FROM payment_dues_communications WHERE id = $1 LIMIT 1';
+    try {
+      const result = await pool.query(sql, [communicationId], { d1: true, d1Text: sql });
+      return result?.rows?.[0] ? mapCommunicationRow(result.rows[0]) : null;
+    } catch (error) {
+      throwPersistenceUnavailable('communication lookup', error);
+    }
+  }
+
+  for (const communications of inMemoryCommunications.values()) {
+    const record = communications.find((communication) => communication.id === communicationId);
+    if (record) return record;
+  }
+  return null;
 }
 
 
@@ -910,26 +915,7 @@ async function queryCommunications({
       const rows = Array.isArray(dataResult?.rows) ? dataResult.rows : [];
 
       return {
-        items: rows.map((row) => ({
-          id: row.id,
-          accountId: row.account_id,
-          accountType: row.account_type,
-          channel: row.channel,
-          recipient: row.recipient,
-          subject: row.subject,
-          message: row.message,
-          notificationStatus: row.notification_status,
-          deliveryStatus: row.delivery_status,
-          acknowledgementStatus: row.acknowledgement_status,
-          communicatedBy: row.communicated_by,
-          sentAt: row.sent_at,
-          acknowledgedAt: row.acknowledged_at,
-          acknowledgedBy: row.acknowledged_by,
-          notes: row.notes,
-          metadata: parseRaw(row.metadata, {}),
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        })),
+        items: rows.map(mapCommunicationRow),
         total,
       };
     } catch (error) {
@@ -973,6 +959,7 @@ module.exports = {
   updateCommunicationDeliveryStatus,
   updateAcknowledgementStatus,
   getCommunicationHistory,
+  getCommunicationById,
   queryCommunications,
   resetInMemoryCommunications,
   fetchRawBuyers,

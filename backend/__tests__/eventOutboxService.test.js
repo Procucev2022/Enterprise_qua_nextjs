@@ -2,6 +2,7 @@ const pool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
 const eventOutboxQueries = require('../src/db/eventOutboxQueries');
 const enterpriseInquiryQueries = require('../src/db/enterpriseInquiryQueries');
+const paymentDuesQueries = require('../src/db/paymentDuesQueries');
 const eventOutboxService = require('../src/services/eventOutboxService');
 const mailerService = require('../src/services/mailerService');
 const { EVENT_OUTBOX_TYPES } = require('../src/config/constants');
@@ -470,6 +471,126 @@ describe('background event retry outbox', () => {
 
     await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ retried: 1 });
     expect(loggerSpy).toHaveBeenCalledWith('Failed to persist event-outbox retry state', expect.any(Object), 'EVENT_OUTBOX');
+  });
+
+  test('enqueues a durable event with a stable key and requires configured storage', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+    await expect(eventOutboxService.enqueueEventOutbox(
+      EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL,
+      'communication-1',
+      { communicationId: 'communication-1' }
+    )).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+
+    pool.hasStorage.mockReturnValue(true);
+    const saved = { id: 'retry-payment-email', status: 'pending' };
+    const enqueueSpy = jest.spyOn(eventOutboxQueries, 'enqueueEventOutboxInDB').mockResolvedValue(saved);
+    await expect(eventOutboxService.enqueueEventOutbox(
+      EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL,
+      'communication-1',
+      { communicationId: 'communication-1' }
+    )).resolves.toEqual(saved);
+    expect(enqueueSpy).toHaveBeenCalledWith({
+      id: eventOutboxService.buildEventOutboxId(EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL, 'communication-1'),
+      eventType: EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL,
+      payload: { communicationId: 'communication-1' },
+    });
+  });
+
+  test('dispatches a queued payment-dues email from persisted communication data', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'retry-payment-email',
+      event_type: EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL,
+      raw: { communicationId: 'communication-1' },
+      attempts: 1,
+      lease_token: 'lease-payment-email',
+    }]);
+    const communication = {
+      id: 'communication-1', accountId: 'buyer-1', channel: 'email',
+      recipient: 'buyer@example.test', subject: 'Low balance',
+      message: 'Please replenish credits.', deliveryStatus: 'Pending',
+    };
+    jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue(communication);
+    const deliverySpy = jest.spyOn(mailerService, 'deliver').mockResolvedValue({ sent: true, messageId: 'provider-1' });
+    const updateSpy = jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus').mockResolvedValue({
+      ...communication, deliveryStatus: 'Delivered',
+    });
+    jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(deliverySpy).toHaveBeenCalledWith({
+      to: communication.recipient, subject: communication.subject, text: communication.message,
+    }, 'PAYMENT_DUES_NOTIFICATION');
+    expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      communicationId: communication.id, deliveryStatus: 'Delivered',
+    }));
+  });
+
+  test('does not resend a delivered payment-dues communication', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'retry-payment-email-complete',
+      event_type: EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL,
+      raw: { communicationId: 'communication-delivered' },
+      attempts: 2,
+      lease_token: 'lease-delivered',
+    }]);
+    jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+      id: 'communication-delivered', channel: 'email', deliveryStatus: 'Delivered',
+    });
+    const deliverySpy = jest.spyOn(mailerService, 'deliver');
+    jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(deliverySpy).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [{ communicationId: '' }, null],
+    [{ communicationId: 'missing' }, null],
+    [{ communicationId: 'wrong-channel' }, { id: 'wrong-channel', channel: 'sms', deliveryStatus: 'Pending' }],
+    [{ communicationId: 'failed' }, { id: 'failed', channel: 'email', deliveryStatus: 'Failed' }],
+  ])('dead-letters malformed or ineligible payment-dues email intent: %p', async (raw, communication) => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'retry-payment-email-invalid',
+      event_type: EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL,
+      raw,
+      attempts: 1,
+      lease_token: 'lease-invalid-payment-email',
+    }]);
+    jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue(communication);
+    const deliverySpy = jest.spyOn(mailerService, 'deliver');
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ dead: 1 });
+    expect(deliverySpy).not.toHaveBeenCalled();
+    expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'dead' }));
+  });
+
+  test.each([
+    [{ sent: false }, { deliveryStatus: 'Pending' }],
+    [{ sent: true }, null],
+  ])('retries payment-dues email when provider or status persistence fails', async (delivery, savedStatus) => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'retry-payment-email-transient',
+      event_type: EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL,
+      raw: { communicationId: 'communication-transient' },
+      attempts: 1,
+      lease_token: 'lease-transient-payment-email',
+    }]);
+    jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+      id: 'communication-transient', accountId: 'buyer-1', channel: 'email',
+      recipient: 'buyer@example.test', subject: 'Low balance',
+      message: 'Please replenish credits.', deliveryStatus: 'Pending',
+    });
+    jest.spyOn(mailerService, 'deliver').mockResolvedValue(delivery);
+    jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus').mockResolvedValue(savedStatus);
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ retried: 1 });
+    expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending' }));
   });
 
   test('purges retained rows only when storage is configured', async () => {

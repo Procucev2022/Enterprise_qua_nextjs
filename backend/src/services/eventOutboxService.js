@@ -71,6 +71,16 @@ async function enqueueWithRetry(event, operation) {
   throw lastError;
 }
 
+async function enqueueEventOutbox(eventType, idempotencyKey, payload) {
+  if (!pool.hasStorage()) {
+    const error = new Error('A durable event outbox requires configured database storage.');
+    error.code = 'PERSISTENCE_UNAVAILABLE';
+    throw error;
+  }
+  const id = buildEventOutboxId(eventType, idempotencyKey);
+  return enqueueWithRetry({ id, eventType, payload }, `enqueue-${eventType}`);
+}
+
 async function persistWithOutboxFallback({ eventType, idempotencyKey, payload, write, operation }) {
   const storageConfigured = pool.hasStorage();
   const id = buildEventOutboxId(eventType, idempotencyKey);
@@ -219,6 +229,56 @@ async function dispatchEvent(job) {
       }, 'EVENT_OUTBOX');
       return;
     }
+    case EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL: {
+      const paymentDuesQueries = require('../db/paymentDuesQueries');
+      const communicationId = job.raw?.communicationId;
+      if (typeof communicationId !== 'string' || !communicationId) {
+        const error = new Error('Payment dues email retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const communication = await paymentDuesQueries.getCommunicationById(communicationId);
+      if (!communication || String(communication.channel).toLowerCase() !== 'email') {
+        const error = new Error('Payment dues email retry references a missing communication.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      if (communication.deliveryStatus === 'Delivered') return;
+      if (communication.deliveryStatus !== 'Pending') {
+        const error = new Error('Payment dues email retry references a non-pending communication.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const delivery = await mailerService.deliver({
+        to: communication.recipient,
+        subject: communication.subject,
+        text: communication.message,
+      }, 'PAYMENT_DUES_NOTIFICATION');
+      if (!delivery?.sent) {
+        const error = new Error('Payment dues email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+
+      const updated = await paymentDuesQueries.updateCommunicationDeliveryStatus({
+        communicationId,
+        notificationStatus: 'Notification Sent',
+        deliveryStatus: 'Delivered',
+        acknowledgementStatus: 'Acknowledgement Pending',
+      });
+      if (!updated) {
+        const error = new Error('Payment dues email was accepted but its status update was not persisted.');
+        error.code = 'COMMUNICATION_STATUS_NOT_SAVED';
+        throw error;
+      }
+      logger.info('Payment dues email accepted and communication updated', {
+        communicationId,
+        accountId: communication.accountId,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
     default: {
       const error = new Error(`Unsupported persisted event-outbox type: ${job.event_type}`);
       error.code = 'INVALID_EVENT_OUTBOX_TYPE';
@@ -312,6 +372,7 @@ async function purgeExpiredEventOutboxRows() {
 
 module.exports = {
   buildEventOutboxId,
+  enqueueEventOutbox,
   persistWithOutboxFallback,
   dispatchDueEventOutboxJobs,
   purgeExpiredEventOutboxRows,

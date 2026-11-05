@@ -22,7 +22,7 @@ const { logger } = require('../src/services/loggerService');
 const mailerService = require('../src/services/mailerService');
 const whatsAppService = require('../src/services/whatsAppService');
 const eventOutboxService = require('../src/services/eventOutboxService');
-const { PERSISTENCE_MESSAGES } = require('../src/config/constants');
+const { EVENT_OUTBOX_TYPES, PERSISTENCE_MESSAGES } = require('../src/config/constants');
 const app = require('../src/app');
 
 function createMockResponse() {
@@ -620,6 +620,9 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         const history = await paymentDuesQueries.getCommunicationHistory('b-0');
         expect(history.length).toBe(1);
         expect(history[0].id).toBe(comm.id);
+        await expect(paymentDuesQueries.getCommunicationById(comm.id)).resolves.toEqual(comm);
+        await expect(paymentDuesQueries.getCommunicationById('missing-communication')).resolves.toBeNull();
+        await expect(paymentDuesQueries.getCommunicationById('')).resolves.toBeNull();
       });
 
       test('records communication in PostgreSQL / D1 when pool has storage', async () => {
@@ -637,6 +640,38 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         expect(comm.channel).toBe('whatsapp');
         expect(querySpy).toHaveBeenCalled();
       });
+
+    test('loads a persisted communication by id and maps its fields', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{
+        id: 'pdc-by-id', account_id: 'buyer-1', account_type: 'buyer', channel: 'email',
+        recipient: 'buyer@example.test', subject: 'Notice', message: 'Message',
+        notification_status: 'Pending', delivery_status: 'Pending',
+        acknowledgement_status: 'Acknowledgement Pending', communicated_by: 'Staff',
+        sent_at: '2026-11-05T00:00:00.000Z', acknowledged_at: null, acknowledged_by: null,
+        notes: '', metadata: '{"source":"outbox"}', created_at: '2026-11-05T00:00:00.000Z',
+        updated_at: '2026-11-05T00:00:00.000Z',
+      }] });
+
+      await expect(paymentDuesQueries.getCommunicationById('pdc-by-id')).resolves.toMatchObject({
+        id: 'pdc-by-id', accountId: 'buyer-1', channel: 'email',
+        deliveryStatus: 'Pending', metadata: { source: 'outbox' },
+      });
+      expect(querySpy).toHaveBeenCalledWith(
+        'SELECT * FROM payment_dues_communications WHERE id = $1 LIMIT 1',
+        ['pdc-by-id'],
+        expect.objectContaining({ d1: true })
+      );
+    });
+
+    test('fails closed when a persisted communication lookup fails', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('database unavailable'));
+
+      await expect(paymentDuesQueries.getCommunicationById('pdc-query-failure')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
+    });
 
       test('updates in-memory delivery status and returns null for missing IDs', async () => {
         jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
@@ -1542,6 +1577,7 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
     });
 
     test('POST /api/payment-dues/email validates payload and dispatches email', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
       const dispatchOrder = [];
       const pendingCommunication = {
         id: 'pdc-pending-email-1',
@@ -1589,6 +1625,88 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         subject: 'Low Credits Notice',
         text: 'Your credits are low. Please replenish.',
       }, 'PAYMENT_DUES_NOTIFICATION');
+    });
+
+    test('POST /api/payment-dues/email persists a delivery intent before dispatching through the outbox', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const pendingCommunication = {
+        id: 'pdc-outbox-delivered', accountId: 'b-test-1', channel: 'email', deliveryStatus: 'Pending',
+      };
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue(pendingCommunication);
+      const enqueueSpy = jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue({
+        id: 'retry-payment-email', status: 'pending',
+      });
+      jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ completed: 1 });
+      jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+        ...pendingCommunication, deliveryStatus: 'Delivered', notificationStatus: 'Notification Sent',
+      });
+      const directSendSpy = jest.spyOn(mailerService, 'deliver');
+
+      const res = await request(app)
+        .post('/api/payment-dues/email')
+        .send({
+          accountId: 'b-test-1', accountType: 'buyer', recipientEmail: 'alice@test.com',
+          subject: 'Low Credits Notice', message: 'Please replenish credits.',
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.communication.deliveryStatus).toBe('Delivered');
+      expect(enqueueSpy).toHaveBeenCalledWith(
+        EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL,
+        pendingCommunication.id,
+        { communicationId: pendingCommunication.id }
+      );
+      expect(eventOutboxService.dispatchDueEventOutboxJobs).toHaveBeenCalledWith(1);
+      expect(directSendSpy).not.toHaveBeenCalled();
+    });
+
+    test('POST /api/payment-dues/email returns queued state while outbox retries delivery', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const pendingCommunication = {
+        id: 'pdc-outbox-pending', accountId: 'b-test-1', channel: 'email', deliveryStatus: 'Pending',
+      };
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue(pendingCommunication);
+      jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue({ id: 'retry-pending', status: 'pending' });
+      jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ retried: 1 });
+      jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue(pendingCommunication);
+
+      const res = await request(app)
+        .post('/api/payment-dues/email')
+        .send({
+          accountId: 'b-test-1', accountType: 'buyer', recipientEmail: 'alice@test.com',
+          subject: 'Low Credits Notice', message: 'Please replenish credits.',
+        });
+
+      expect(res.status).toBe(202);
+      expect(res.body.success).toBe(true);
+      expect(res.body.communication.deliveryStatus).toBe('Pending');
+      expect(res.body.message).toContain('queued');
+    });
+
+    test('POST /api/payment-dues/email fails closed when the delivery intent cannot be persisted', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const pendingCommunication = {
+        id: 'pdc-outbox-failure', accountId: 'b-test-1', channel: 'email', deliveryStatus: 'Pending',
+      };
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue(pendingCommunication);
+      jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockRejectedValue(new Error('outbox unavailable'));
+      const statusSpy = jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus').mockResolvedValue({
+        ...pendingCommunication, deliveryStatus: 'Failed',
+      });
+      const directSendSpy = jest.spyOn(mailerService, 'deliver');
+
+      const res = await request(app)
+        .post('/api/payment-dues/email')
+        .send({
+          accountId: 'b-test-1', accountType: 'buyer', recipientEmail: 'alice@test.com',
+          subject: 'Low Credits Notice', message: 'Please replenish credits.',
+        });
+
+      expect(res.status).toBe(503);
+      expect(statusSpy).toHaveBeenCalledWith(expect.objectContaining({
+        communicationId: pendingCommunication.id, deliveryStatus: 'Failed',
+      }));
+      expect(directSendSpy).not.toHaveBeenCalled();
     });
 
     test('POST /api/payment-dues/email uses a safe sender label when session claims omit identity fields', async () => {
