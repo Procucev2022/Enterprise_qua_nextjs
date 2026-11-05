@@ -2352,7 +2352,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           });
 
           const targetTotal = r.assignedVendors?.length || baseFollowUp.totalInvited || (baseFollowUp.vendors?.length ?? 0);
-          const callTotal = Math.max(baseFollowUp.callStats.total, targetTotal);
+          const callTotal = channel === 'call' ? Math.max(baseFollowUp.callStats.total + 1, targetTotal) : Math.max(baseFollowUp.callStats.total, targetTotal);
           const callConnected = channel === 'call' ? baseFollowUp.callStats.connected + 1 : baseFollowUp.callStats.connected;
           const waTotal = Math.max(baseFollowUp.whatsappStats.total, targetTotal);
           const waDelivered = channel === 'whatsapp' ? baseFollowUp.whatsappStats.delivered + 1 : baseFollowUp.whatsappStats.delivered;

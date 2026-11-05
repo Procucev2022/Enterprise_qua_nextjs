@@ -89,6 +89,40 @@ function clearScheduledChasers(rfqNumber) {
  * Fire-and-forget WhatsApp invite for one vendor.
  * Returns the Promise so tests can await it; storeService ignores the return.
  */
+/**
+ * Updates in-memory RFQ follow-up stats upon successful chaser dispatch.
+ */
+function _updateLiveFollowUpStats(rfqNumber, channel, vendor) {
+  if (!rfqNumber) return;
+  try {
+    const storeService = require('./storeService');
+    const liveRfq = storeService.getRFQById ? storeService.getRFQById(rfqNumber) : null;
+    if (!liveRfq || !liveRfq.followUpData) return;
+    const fup = liveRfq.followUpData;
+
+    if (channel === 'whatsapp') {
+      if (!fup.whatsappStats) fup.whatsappStats = { total: 0, delivered: 0, read: 0, replied: 0 };
+      fup.whatsappStats.delivered = (fup.whatsappStats.delivered || 0) + 1;
+    } else if (channel === 'sms') {
+      if (!fup.smsStats) fup.smsStats = { total: 0, delivered: 0, clicked: 0 };
+      fup.smsStats.delivered = (fup.smsStats.delivered || 0) + 1;
+      if (fup.smsStats.delivered > (fup.smsStats.total || 0)) {
+        fup.smsStats.total = fup.smsStats.delivered;
+      }
+      if (Array.isArray(fup.vendors) && vendor) {
+        const vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.vendorName === vendor.name));
+        if (vRecord) {
+          vRecord.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        }
+      }
+    } else if (channel === 'email') {
+      if (!fup.emailStats) fup.emailStats = { total: 0, delivered: 0, sent24h: 0, opened: 0 };
+      fup.emailStats.sent24h = (fup.emailStats.sent24h || 0) + 1;
+      fup.emailStats.delivered = (fup.emailStats.delivered || 0) + 1;
+    }
+  } catch (_err) {}
+}
+
 async function _dispatchWhatsApp(rfq, vendor, jobId) {
   if (process.env.NODE_ENV === 'test') return { channel: 'whatsapp', skipped: true };
   const phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
@@ -674,6 +708,7 @@ module.exports = {
   _dispatchSms,
   _dispatchCall,
   _dispatchReminderEmail,
+  _updateLiveFollowUpStats,
   _chaserJobId,
   _vendorKey,
 };
