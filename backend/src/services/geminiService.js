@@ -79,7 +79,7 @@ Return a SINGLE JSON object with this shape and no surrounding prose or markdown
 {
   "documentTitle": "Optional string, short title for overall requirement if stated",
   "category": "String, MANDATORY: Choose the single best-fitting category copied exactly from the CATEGORY LIST. If not explicitly stated in the document, you MUST infer the single best-fitting category from the line items and descriptions. MUST NEVER be null.",
-  "deliveryDate": "Optional string in YYYY-MM-DD if overall delivery date is stated",
+  "deliveryDate": "Optional string in YYYY-MM-DD for the BUYER's target or required delivery date (from Target Delivery Date, Required Delivery Date, or RFQ header). DO NOT use a vendor's quoted delivery date.",
   "deliveryLocation": "Optional destination string if stated",
   "deliveryCity": "Optional destination city if stated",
   "deliveryState": "Optional destination state if stated",
@@ -407,10 +407,59 @@ function toRawLineItems(parsed) {
 /**
  * Match a header cell text to a known line-item field name.
  */
+/**
+ * Parse date values commonly found in spreadsheets (Excel Julian serial numbers, ISO dates, DD/MM/YYYY, etc.)
+ */
+function parseSpreadsheetDate(raw) {
+  if (raw === null || raw === undefined) return '';
+  const str = String(raw).trim();
+  if (!str) return '';
+
+  // Excel Julian serial number (e.g. 46351 or 46351.5)
+  if (/^\d{5}(?:\.\d+)?$/.test(str)) {
+    const num = parseFloat(str);
+    if (num >= 35000 && num <= 65000) {
+      // Use midday (+0.5) to avoid timezone boundary shifts
+      const d = new Date(Math.round((num - 25569 + 0.5) * 86400 * 1000));
+      if (!isNaN(d.getTime())) {
+        return d.toISOString().slice(0, 10);
+      }
+    }
+  }
+
+  // ISO YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    return str;
+  }
+
+  // DD/MM/YYYY, DD-MM-YYYY, or DD.MM.YYYY
+  const dmyMatch = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
+  if (dmyMatch) {
+    const day = Number(dmyMatch[1]);
+    const month = Number(dmyMatch[2]);
+    const year = Number(dmyMatch[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  return str;
+}
+
 function matchHeaderField(headerText) {
   if (typeof headerText !== 'string') return null;
   const clean = headerText.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (!clean) return null;
+  if (!clean || clean.length > 35) return null;
+  // Exclude vendor quote dates from matching as target delivery date
+  if (clean.startsWith('quoted') || clean.startsWith('vendorquoted') || clean.startsWith('supplierquoted')) return null;
   if (/^(?:item|itemname|itemdesc|itemdescription|product|material|description|particulars|lineitem|itemdetails|materialdescription)$/.test(clean)) return 'itemDescription';
   if (/^(?:qty|quantity|purchaseqty|orderqty|count|volume|reqqty|requiredqty|orderquantity)$/.test(clean)) return 'quantity';
   if (/^(?:unit|uom|unitofmeasure|units|measure)$/.test(clean)) return 'unit';
@@ -418,7 +467,10 @@ function matchHeaderField(headerText) {
   if (/^(?:unitprice|rate|unitrate|priceperunit|price|rateperunit)$/.test(clean)) return 'unitPrice';
   if (/^(?:totalprice|totalamount|total|linetotal|amount)$/.test(clean)) return 'totalPrice';
   if (/^(?:brand|make|manufacturer)$/.test(clean)) return 'brand';
-  if (/^(?:deliverydate|targetdate|requiredby|duedate|deliveryby|date)$/.test(clean)) return 'targetDate';
+  if (
+    /^(?:targetdeliverydate|targetdelivery|deliverytargetdate|deliverydate|targetdate|expecteddeliverydate|expecteddelivery|requireddeliverydate|requireddelivery|requireddate|requiredby|duedate|deliveryby|date|deliveryschedule|deliverytimeline|completiondate|targetcompletiondate|deliverydatetarget|targetdateofdelivery)$/.test(clean) ||
+    ((clean.includes('delivery') || clean.includes('target') || clean.includes('due') || clean.includes('required')) && clean.includes('date'))
+  ) return 'targetDate';
   if (/^(?:deliverycity|destinationcity|city)$/.test(clean)) return 'deliveryCity';
   if (/^(?:deliverystate|state)$/.test(clean)) return 'deliveryState';
   if (/^(?:deliverypincode|postalcode|pincode|pincode|zip|zipcode)$/.test(clean)) return 'deliveryPincode';
@@ -471,6 +523,23 @@ function extractSpreadsheetLineItems(text) {
 
   const allItems = [];
 
+  // Look for document-level delivery date metadata in the text (e.g. Target Delivery Date | 2026-11-25)
+  let sheetDeliveryDate = '';
+  const dateMetaPatterns = [
+    /(?:target\s*delivery\s*date|target\s*delivery|delivery\s*date|target\s*date|delivery\s*by|required\s*by|due\s*date|expected\s*delivery)\s*[:|=|-]?\s*([0-9]{4}-[0-9]{1,2}-[0-9]{1,2}|[0-9]{1,2}[\/\-\.[0-9]{1,2}[\/\-\.[0-9]{2,4}|[0-9]{5}(?:\.[0-9]+)?|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2},?\s+[0-9]{4})/i,
+    /(?:target\s*delivery\s*date|target\s*delivery|delivery\s*date|target\s*date|delivery\s*by|required\s*by|due\s*date|expected\s*delivery)\s*\|\s*([^\|\r\n]+)/i
+  ];
+  for (const pat of dateMetaPatterns) {
+    const m = text.match(pat);
+    if (m && m[1]) {
+      const parsedMeta = parseSpreadsheetDate(m[1].trim());
+      if (parsedMeta && /^\d{4}-\d{2}-\d{2}$/.test(parsedMeta)) {
+        sheetDeliveryDate = parsedMeta;
+        break;
+      }
+    }
+  }
+
   for (const sheet of sheetBlocks) {
     const lines = sheet.content.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && l.includes('|'));
     if (lines.length === 0) continue;
@@ -479,7 +548,7 @@ function extractSpreadsheetLineItems(text) {
     let headerIndex = -1;
     let headerColMap = new Map();
 
-    for (let i = 0; i < Math.min(lines.length, 5); i++) {
+    for (let i = 0; i < Math.min(lines.length, 25); i++) {
       const cells = lines[i].split('|').map((c) => c.trim());
       const tempMap = new Map();
       let recognizedCount = 0;
@@ -492,7 +561,7 @@ function extractSpreadsheetLineItems(text) {
         }
       });
 
-      if (recognizedCount >= 2 || (tempMap.has('itemDescription') && tempMap.has('quantity'))) {
+      if (tempMap.has('itemDescription') && (tempMap.has('quantity') || recognizedCount >= 2)) {
         headerIndex = i;
         headerColMap = tempMap;
         break;
@@ -533,6 +602,10 @@ function extractSpreadsheetLineItems(text) {
     const catIdx = headerColMap.get('category');
 
     for (const line of dataLines) {
+      // Stop extracting items if a vendor quote comparison / bid comparison section begins
+      if (/vendor\s*quote|bid\s*comparison|quote\s*comparison|quotes\s*received|vendor\s*comparison/i.test(line.replace(/\|/g, ' '))) {
+        break;
+      }
       const cells = line.split('|').map((c) => c.trim());
       if (cells.length < 2) continue;
 
@@ -552,8 +625,8 @@ function extractSpreadsheetLineItems(text) {
         continue;
       }
 
-      // Skip lines that look like repeating headers
-      if (matchHeaderField(itemName)) continue;
+      // Skip lines that look like repeating headers or units
+      if (matchHeaderField(itemName) || /^(?:nos|units|meters|m|kg|pcs|sets|bags|boxes|mtrs|pairs)$/i.test(itemName)) continue;
 
       let spec = specIdx !== undefined && cells[specIdx] ? cells[specIdx].trim() : '';
       let cleanItemName = itemName;
@@ -576,7 +649,7 @@ function extractSpreadsheetLineItems(text) {
         unit,
         technicalSpecs: spec,
         category: (catIdx !== undefined && cells[catIdx]) ? cells[catIdx].trim() : (sheet.sheetName || ''),
-        targetDate: dateIdx !== undefined && cells[dateIdx] ? cells[dateIdx].trim() : '',
+        targetDate: (dateIdx !== undefined && cells[dateIdx]) ? parseSpreadsheetDate(cells[dateIdx].trim()) : (sheetDeliveryDate || ''),
         unitPrice: unitPriceIdx !== undefined ? normalizeAmount(cells[unitPriceIdx]) : null,
         totalPrice: totalPriceIdx !== undefined ? normalizeAmount(cells[totalPriceIdx]) : null,
       };
@@ -1434,7 +1507,9 @@ async function extractLineItems(input = {}) {
         model,
         documentTitle: typeof parsed.documentTitle === 'string' ? parsed.documentTitle : null,
         category,
-        deliveryDate: typeof parsed.deliveryDate === 'string' ? parsed.deliveryDate : null,
+        deliveryDate: (typeof parsed.deliveryDate === 'string' && parsed.deliveryDate.trim())
+          ? parseSpreadsheetDate(parsed.deliveryDate.trim())
+          : (lineItems.find((it) => it && it.targetDate)?.targetDate || null),
         deliveryLocation: typeof parsed.deliveryLocation === 'string' ? parsed.deliveryLocation : null,
         deliveryCity: typeof parsed.deliveryCity === 'string' ? parsed.deliveryCity : null,
         deliveryState: typeof parsed.deliveryState === 'string' ? parsed.deliveryState : null,

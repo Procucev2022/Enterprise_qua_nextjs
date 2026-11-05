@@ -507,6 +507,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     const failures: string[] = [];
     let derivedTitle = '';
     let derivedBudget: number | null = null;
+    let derivedDate = '';
 
     for (const file of files) {
       if (file.size > RFQ_DOCUMENT_LIMITS.MAX_FILE_SIZE_BYTES) {
@@ -533,7 +534,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       if (derivedBudget === null && result.data.estimatedBudget) {
         derivedBudget = result.data.estimatedBudget;
       }
-      extracted.push(...result.data.extractedEntities.map(fromExtractedEntity));
+      const itemEntities = result.data.extractedEntities.map(fromExtractedEntity);
+      if (!derivedDate) {
+        derivedDate = result.data.targetDeliveryDate || itemEntities.find((e) => e.targetDate)?.targetDate || '';
+      }
+      extracted.push(...itemEntities);
     }
 
     setIsExtracting(false);
@@ -551,6 +556,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       title: prev.title || derivedTitle,
       estimatedBudget: prev.estimatedBudget ?? derivedBudget,
       majorCategory: prev.majorCategory || headerMajor,
+      targetDeliveryDate: prev.targetDeliveryDate || derivedDate,
       lineItems: extracted,
     }));
   };

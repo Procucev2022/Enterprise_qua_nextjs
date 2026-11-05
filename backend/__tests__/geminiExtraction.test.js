@@ -2273,6 +2273,52 @@ describe('geminiService.generateJson', () => {
         expect(gemini.extractSpreadsheetLineItems('   \n  ')).toEqual([]);
         expect(gemini.extractSpreadsheetLineItems(null)).toEqual([]);
       });
+
+      test('extracts Target Delivery Date column header, Julian serial dates and metadata', () => {
+        const text = [
+          'SHEET: Requisition',
+          'Target Delivery Date | 2026-11-25',
+          'Item Description | Quantity | Unit | Target Delivery Date',
+          'Centrifugal Pump | 5 | Nos | 2026-11-25',
+          'Submersible Pump | 3 | Nos | 46351',
+          'Sluice Valve | 10 | Nos | 25/11/2026',
+        ].join('\n');
+
+        const extracted = gemini.extractSpreadsheetLineItems(text);
+        expect(extracted).toHaveLength(3);
+        expect(extracted[0].targetDate).toBe('2026-11-25');
+        expect(extracted[1].targetDate).toBe('2026-11-25');
+        expect(extracted[2].targetDate).toBe('2026-11-25');
+      });
+
+      test('extracts 2026-11-15 target delivery date and ignores vendor quoted delivery date from quote comparison', () => {
+        const text = [
+          'REQUEST FOR QUOTATION (RFQ) – REQUIREMENT SHEET | | |',
+          'RFQ Issue Date | 2026-11-05 | | Target Delivery Date (B9) = 15/11/2026, as provided by user; drives all sheets.',
+          'Quotation Due Date | 2026-11-08 | | Issue & due dates are assumed placeholders – please update.',
+          'Target Delivery Date | 2026-11-15 | |',
+          'Delivery Location | | |',
+          'Payment Terms | | |',
+          'Currency | INR | |',
+          'Days from Issue to Target Delivery | 46341 | |',
+          'Days Remaining from Today | 10 | |',
+          'RFQ REQUIREMENTS & TARGET DELIVERY | | | | | | | | | | |',
+          'Target Delivery Date (from RFQ Header): | | | 2026-11-15 | | Edit yellow cells only. Row 5 is an example – overwrite it. | | | | | |',
+          'Sr No | RFQ No | Item Code | Item Description | Technical Specification | Qty | UoM | Required Delivery Date | Days to Deliver (from Issue) | Delivery Location | Priority | Remarks',
+          '1 | RFQ-2026-001 | ITM-001 | Sample item – replace | Grade / size / standard | 100 | Nos | 2026-11-15 | 10 | 0 | High | Example row',
+          'VENDOR QUOTE COMPARISON vs TARGET DELIVERY | | | | | | | | | | | | | | |',
+          'Target Delivery Date: | | 2026-11-15 | | | | | | | | | | | | |',
+          'Sr No | Item Description | Qty | UoM | Vendor Name | Quoted Unit Price | Total Price | Quoted Delivery Date | Variance (Days) | Meets Target? | Payment Terms | Validity | Remarks | | Summary |',
+          '1 | Sample item – replace | 100 | Nos | Vendor A (example) | 250 | 25000 | 2026-11-14 | -1 | Yes | 30 days | | Example quote – overwrite | | Quotes received | 2',
+          '2 | Sample item – replace | 100 | Nos | Vendor B (example) | 240 | 24000 | 2026-11-18 | 3 | No | 45 days | | Example quote – overwrite | | Meeting target | 1'
+        ].join('\n');
+
+        const extracted = gemini.extractSpreadsheetLineItems(text);
+        expect(extracted).toHaveLength(1);
+        expect(extracted[0].itemName).toBe('Sample item – replace');
+        expect(extracted[0].quantity).toBe(100);
+        expect(extracted[0].targetDate).toBe('2026-11-15');
+      });
     });
 
     describe('extractLineItems integration with large multi-worksheet text', () => {

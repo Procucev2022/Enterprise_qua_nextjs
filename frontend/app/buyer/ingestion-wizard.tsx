@@ -910,7 +910,7 @@ export default function IngestionWizard({
         const derivedMajor = dominantMajorCategory(extracted, [ALL_CATEGORIES_OPTION]);
         const derivedLocation = result.data.deliveryLocation || '';
         const derivedPincode = result.data.deliveryPincode || '';
-        const derivedDate = result.data.targetDeliveryDate || '';
+        const derivedDate = result.data.targetDeliveryDate || extracted.find((e) => e.targetDate)?.targetDate || '';
         const extractedCategory = result.data.category || '';
 
         setForm((prev) => ({
