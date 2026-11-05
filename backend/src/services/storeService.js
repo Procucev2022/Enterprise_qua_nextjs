@@ -2513,7 +2513,7 @@ class StoreService {
         respondedCount: 0,
         callStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, connected: 0, avgDuration: '0s' },
         whatsappStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, read: 0, replied: 0 },
-        smsStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, clicked: 0 },
+        smsStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, clicked: 0 },
         emailStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, sent24h: 0, opened: 0 },
         autoChasingEnabled: true,
       },

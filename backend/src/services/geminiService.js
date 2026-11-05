@@ -445,9 +445,10 @@ function parseSpreadsheetDate(raw) {
 
   const parsed = new Date(str);
   if (!isNaN(parsed.getTime())) {
-    const y = parsed.getFullYear();
-    const m = String(parsed.getMonth() + 1).padStart(2, '0');
-    const d = String(parsed.getDate()).padStart(2, '0');
+    const adjusted = new Date(parsed.getTime() + (str.includes('T') || str.includes('Z') ? 12 * 3600 * 1000 : 0));
+    const y = adjusted.getFullYear();
+    const m = String(adjusted.getMonth() + 1).padStart(2, '0');
+    const d = String(adjusted.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
 
