@@ -448,8 +448,7 @@ export default function KanbanBoard({
                     : 0;
                   const smsDelivered = Math.max(
                     followUp?.smsStats?.delivered || 0,
-                    vendorSmsCount,
-                    rfq.status !== 'Parsing' ? totalVendors : 0
+                    vendorSmsCount
                   );
 
                   const emailTotal = followUp?.emailStats?.total || totalVendors;
@@ -458,8 +457,7 @@ export default function KanbanBoard({
                     : 0;
                   const emailDelivered = Math.max(
                     followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
-                    vendorEmailCount,
-                    rfq.status !== 'Parsing' ? totalVendors : 0
+                    vendorEmailCount
                   );
 
                   return (

@@ -1221,6 +1221,10 @@ async function extractRFQFromDocument(req, res, next) {
     const isGenericDocumentTitle = !extraction.documentTitle || /^(request for quotation|rfq|inquiry|requisition)$/i.test(String(extraction.documentTitle).trim());
     const draftTitle = body.title ? String(body.title).trim() : (!isEmail && !isGenericDocumentTitle ? extraction.documentTitle : null);
 
+    const derivedDeliveryDate = extraction.deliveryDate ||
+      (Array.isArray(extraction.lineItems) && extraction.lineItems.find((it) => it && it.targetDate)?.targetDate) ||
+      null;
+
     // Reuse the shared normalisation + taxonomy classification so an AI-extracted
     // RFQ is shaped identically to one keyed by hand.
     const { draft, classification } = await rfqIngestionService.buildRFQDraft({
@@ -1228,7 +1232,7 @@ async function extractRFQFromDocument(req, res, next) {
       title: draftTitle,
       category: extraction.category,
       estimatedBudget: extraction.estimatedBudget,
-      targetDeliveryDate: extraction.deliveryDate,
+      targetDeliveryDate: derivedDeliveryDate,
       source: 'ai_extraction',
       sourceFileName: body.fileName,
       ...(sourceEmail ? { sourceEmail } : {}),

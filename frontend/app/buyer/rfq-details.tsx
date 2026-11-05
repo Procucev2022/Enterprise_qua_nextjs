@@ -2027,10 +2027,11 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         );
       })()}
 
-      {/* Vendor quotations */}
-      <Panel
-        title={DETAILS.quotesHeading}
-        count={quotes.length}
+      {/* Vendor quotations (hidden for vendors, preserved for buyers & category managers) */}
+      {!isVendor && (
+        <Panel
+          title={DETAILS.quotesHeading}
+          count={quotes.length}
         toolbar={
           quotes.length > 0 && activeRfq && (!isV0 || currentRole !== 'buyer') ? (
             <div className="flex items-center gap-2 flex-wrap">
@@ -2333,6 +2334,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </>
         )}
       </Panel>
+      )}
 
       {/* Vendor Inquiries & Clarifications Chat Desk */}
       {!isV0 && (

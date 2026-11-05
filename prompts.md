@@ -6640,8 +6640,6 @@ In approval page the heading same as button remove the small 5 heading  All requ
 continue
 ```
 
----
-
 ### Prompt 61
 
 **Timestamp**: 2026-11-05T10:53:44+05:30
@@ -6664,6 +6662,180 @@ Add this After the Document valut that category manager also monitors admin only
 
 ### Prompt 63
 
+**Timestamp**: 2026-11-05T15:40:07+05:30
+
+```text
+Lines        : 98.78% ( 17628/17844 )
+
+Summary of all failing tests
+ FAIL  __tests__/app/vendor/vendor-profileCoverage.test.tsx (48.839 s)
+  ● VendorProfilePage extended coverage (mocked store) › loading the vendor profile › profile request sends the session token as a bearer credential
+
+    expect(element).toBeEnabled()
+
+    Received element is not enabled:
+      <button class="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed" disabled="" />
+
+    Ignored nodes: comments, script, style
+    <html>
+      <head />
+      <body>
+        <div>
+          <div
+            class="space-y-6 animate-fade-in pb-4"
+          >
+            <div
+              class="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center"
+            >
+              <div
+                class="space-y-1"
+              >
+                <span
+                  class="badge badge-emerald font-mono uppercase"
+                >
+                  connect
+                   Tier Supplier
+                </span>
+                <p
+                  class="max-w-3xl text-xs leading-relaxed text-slate-500 dark:text-gray-400"  
+                >
+                  Manage company registration, PAN/GSTIN compliance, and define your manufacturing / supply categories for direct buyer RFQs.
+                </p>
+              </div>
+              <div
+                class="flex items-center gap-2.5"
+              >
+                <a
+                  class="btn btn-secondary btn-md font-bold flex items-center gap-1.5 shadow-xs"
+                  href="#account-security"
+                >
+                  <svg
+                    class="lucide lucide-key-round text-emerald-600 dark:text-emerald-400"
+                    fill="none"
+                    height="16"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                    width="16"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"
+                    />
+                    <circle
+                      cx="16.5"
+                      cy="7.5"
+                      fill="currentColor"
+                      r=".5"
+                    />
+                  </svg>
+                  <span>
+                    Update Password
+                  </span>
+                </a>
+                <button
+                  class="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled=""
+                >
+                  <svg
+                    class="lucide lucide-save"
+                    fill="none"
+                    height="16"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                    width="16"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
+                    />
+                    <path
+                      d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"
+                    />
+                    <path
+                      d="M7 3v4a1 1 0 0 0 1 1h7"
+                    />
+                  </svg>
+
+                  Save Supplier Profile
+                </button>
+              </div>
+            </div>
+            <p
+              class="text-xs text-slate-500 dark:text-gray-400 -mt-2"
+            >
+              Loading your supplier profile…
+            </p>
+            <form
+              class="space-y-6"
+            >
+              <div
+                class="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4"
+              >
+                <div
+                  class="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3"
+                >
+                  <h2
+                    class="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2"
+                  >
+                    <svg
+                      class="lucide lucide-shield-check text-emerald-600 dark:text-emerald-400"
+                      fill="none"
+                      height="18"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      viewBox="0 0 24 24"
+                      width="18"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+                      />
+                      <path
+                        d="m9 12 2 2 4-4"
+                      />
+                    </svg>
+                     Section 1: Supplier Tax & Business Details
+                  </h2>
+                  <span
+                    class="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1"
+                  >
+                    <svg
+                      class="lucide lucide-circle-check"
+                      fill="none"
+                      height="12"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+         ...
+
+      at toBeEnabled (__tests__/app/vendor/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/__tests__/app/vendor/vendor-profileCoverage.test.tsx:240:44)
+      at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/config.js:47:12)
+      at checkCallback (node_modules/@testing-library/dom/dist/wait-for.js:124:77)
+      at checkRealTimersCallback (node_modules/@testing-library/dom/dist/wait-for.js:118:16)   
+      at Timeout.task [as _onTimeout] (node_modules/jsdom/lib/jsdom/browser/Window.js:579:19)  
+
+
+Test Suites: 1 failed, 142 passed, 143 total
+Tests:       1 failed, 3670 passed, 3671 total
+Snapshots:   0 total
+Time:        428.989 s, estimated 757 s
+Ran all test suites.
+Test results written to: coverage\test-results.json
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+
+✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
+
+❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
 **Timestamp**: 2026-11-05T12:30:31+05:30
 
 ```text
@@ -6674,6 +6846,26 @@ continue
 
 ### Prompt 64
 
+**Timestamp**: 2026-11-05T11:05:44Z
+
+```text
+ASS  __tests__/controllersCatchBranches.test.js (53.731 s)
+ FAIL  __tests__/internalTasks.test.js (181.518 s)
+  ● Internal Tasks API & Controller › handles 500 error catch branches gracefully
+
+    thrown: "Exceeded timeout of 20000 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
+
+      307 |   });
+      308 |
+    > 309 |   test('handles 500 error catch branches gracefully', async () => {
+          |   ^
+      310 |     jest.spyOn(internalTaskQueries, 'getInternalTasks').mockRejectedValue(new Error('DB failure'));
+      311 |     const res = await request(app).get('/api/internal-tasks');
+      312 |     expect(res.status).toBe(500);
+
+      at test (__tests__/internalTasks.test.js:309:3)
+      at Object.describe (__tests__/internalTasks.test.js:6:1)
 **Timestamp**: 2026-11-05T12:45:12+05:30
 
 ```text
