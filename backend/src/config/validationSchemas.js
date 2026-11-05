@@ -6,6 +6,7 @@
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 const PHONE_REGEX = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // Delivery pincode or zipcode. Broader than an Indian six-digit PIN because the
 // same field carries international zipcodes for export orders, which are
@@ -144,6 +145,45 @@ const INTERNAL_TASK_TYPE_ENUM = Object.freeze([
 ]);
 
 const VALIDATION_SCHEMAS = {
+  createEnterpriseInquiry: {
+    companyName: {
+      type: 'string', required: true, minLength: 2, maxLength: 200,
+      message: 'Company name must be 2 to 200 characters.',
+    },
+    email: {
+      type: 'string', required: true, maxLength: 320, pattern: EMAIL_REGEX,
+      message: 'Enter a valid corporate email address.',
+    },
+    mobile: {
+      type: 'string', required: true, minLength: 8, maxLength: 32, pattern: PHONE_REGEX,
+      message: 'Enter a valid mobile number including country code.',
+    },
+    notes: { type: 'string', required: false, maxLength: 2000 },
+  },
+  updateEnterpriseInquiry: {
+    status: {
+      type: 'string', required: false,
+      enum: ['NEW', 'CONTACTED', 'IN_DISCUSSION', 'CONTRACT_SIGNED', 'CLOSED'],
+      message: 'Choose a valid enterprise inquiry status.',
+    },
+    notes: { type: 'string', required: false, maxLength: 2000 },
+  },
+  listEnterpriseInquiries: {
+    limit: {
+      type: 'number', required: false, min: 1, max: 500,
+      custom: (value) => Number.isInteger(Number(value)) ? null : 'Limit must be a whole number.',
+    },
+  },
+  enterpriseInquiryId: {
+    id: { type: 'string', required: true, minLength: 1, maxLength: 64 },
+  },
+  enterpriseInquiryIdempotencyKey: {
+    idempotencyKey: {
+      type: 'string', required: true, maxLength: 36, pattern: UUID_REGEX,
+      message: 'Idempotency-Key must be a UUID.',
+    },
+  },
+
   sendPaymentDuesEmail: {
     accountId: { type: 'string', required: true, minLength: 1 },
     accountType: { type: 'string', required: true, enum: ['buyer', 'seller'] },
@@ -1120,6 +1160,7 @@ module.exports = {
   GSTIN_REGEX,
   GSTIN_MESSAGE,
   PHONE_REGEX,
+  UUID_REGEX,
   INDIAN_MOBILE_REGEX,
   INDIAN_MOBILE_MESSAGE,
   OTP_CODE_REGEX,

@@ -9,6 +9,35 @@ const {
 } = require('../src/config/validationSchemas');
 
 describe('Backend Validation Schemas Unit Tests', () => {
+  test('validates enterprise inquiry input and management boundaries', () => {
+    const validInquiry = validatePayload(VALIDATION_SCHEMAS.createEnterpriseInquiry, {
+      companyName: 'Demo Buyer',
+      email: 'buyer@example.test',
+      mobile: '+91 98765 43210',
+      notes: 'Annual contract interest',
+    });
+    expect(validInquiry.isValid).toBe(true);
+
+    const invalidInquiry = validatePayload(VALIDATION_SCHEMAS.createEnterpriseInquiry, {
+      companyName: 'X', email: 'invalid', mobile: '123', notes: 'n'.repeat(2001),
+    });
+    expect(invalidInquiry.isValid).toBe(false);
+    expect(Object.keys(invalidInquiry.errors)).toEqual(expect.arrayContaining(['companyName', 'email', 'mobile', 'notes']));
+
+    expect(validatePayload(VALIDATION_SCHEMAS.enterpriseInquiryId, { id: 'ent-inq-1' }).isValid).toBe(true);
+    expect(validatePayload(VALIDATION_SCHEMAS.enterpriseInquiryId, { id: '' }).isValid).toBe(false);
+    expect(validatePayload(VALIDATION_SCHEMAS.enterpriseInquiryIdempotencyKey, {
+      idempotencyKey: 'b714f6d8-83a1-4f34-9d89-72ebddb1186d',
+    }).isValid).toBe(true);
+    expect(validatePayload(VALIDATION_SCHEMAS.enterpriseInquiryIdempotencyKey, {
+      idempotencyKey: 'bad-key',
+    }).isValid).toBe(false);
+    expect(validatePayload(VALIDATION_SCHEMAS.listEnterpriseInquiries, { limit: '500' }).isValid).toBe(true);
+    expect(validatePayload(VALIDATION_SCHEMAS.listEnterpriseInquiries, { limit: '1.5' }).isValid).toBe(false);
+    expect(validatePayload(VALIDATION_SCHEMAS.updateEnterpriseInquiry, { status: 'CLOSED' }).isValid).toBe(true);
+    expect(validatePayload(VALIDATION_SCHEMAS.updateEnterpriseInquiry, { status: 'INVALID' }).isValid).toBe(false);
+  });
+
   describe('login schema mobile number', () => {
     const base = { email: 'buyer@procucev.com', password: 'Pass@123' };
 

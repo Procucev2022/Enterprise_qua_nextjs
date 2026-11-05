@@ -16,6 +16,24 @@ import {
 import { UI_STRINGS } from '../../lib/uiStrings';
 
 describe('Frontend validationSchemas Unit Tests', () => {
+  test('validates enterprise inquiry details against bounded shared client rules', () => {
+    expect(validateFormData(FORM_SCHEMAS.enterpriseInquiry, {
+      companyName: ' Demo Company ',
+      email: 'buyer@example.test',
+      mobile: '+91 98765 43210',
+    }).isValid).toBe(true);
+
+    expect(validateFormData(FORM_SCHEMAS.enterpriseInquiry, {
+      companyName: 'X',
+      email: 'invalid',
+      mobile: '123',
+    }).fieldErrors).toEqual({
+      companyName: expect.any(String),
+      email: expect.any(String),
+      mobile: expect.any(String),
+    });
+  });
+
   describe('loginForm schema (email + mobile + password)', () => {
     const validLogin = {
       email: 'buyer@procucev.com',

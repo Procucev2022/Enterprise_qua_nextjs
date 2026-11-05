@@ -734,6 +734,22 @@ export interface AuditLogEntry {
 }
 
 export interface AzureServiceHealth {
+export type EnterpriseInquiryStatus = 'NEW' | 'CONTACTED' | 'IN_DISCUSSION' | 'CONTRACT_SIGNED' | 'CLOSED';
+
+export interface EnterpriseInquiry {
+  id: string;
+  companyName: string;
+  email: string;
+  mobile: string;
+  buyerAccountId?: string | null;
+  notes?: string;
+  status: EnterpriseInquiryStatus;
+  contactedBy?: string;
+  contactedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
   service: string;
   status: 'ONLINE' | 'HEALTHY' | 'DEGRADED';
   latency: string;

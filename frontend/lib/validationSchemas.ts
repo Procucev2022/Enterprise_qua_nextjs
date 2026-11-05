@@ -97,6 +97,30 @@ export interface FieldRule {
 export type FormSchema = Record<string, FieldRule>;
 
 export const FORM_SCHEMAS: Record<string, FormSchema> = {
+  enterpriseInquiry: {
+    companyName: {
+      required: true,
+      type: 'string',
+      minLength: 2,
+      maxLength: 200,
+      message: 'Company name must be 2 to 200 characters.',
+    },
+    email: {
+      required: true,
+      type: 'string',
+      maxLength: 320,
+      pattern: EMAIL_PATTERN,
+      message: 'Enter a valid corporate email address.',
+    },
+    mobile: {
+      required: true,
+      type: 'string',
+      minLength: 8,
+      maxLength: 32,
+      pattern: PHONE_PATTERN,
+      message: 'Enter a valid mobile number including country code.',
+    },
+  },
   createInternalTask: {
     title: {
       required: true,
