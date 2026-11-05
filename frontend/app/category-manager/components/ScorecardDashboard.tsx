@@ -17,10 +17,16 @@ import {
   X,
   Target,
   Award,
+  Settings,
+  RefreshCw,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import { fetchScorecardData } from '@/lib/scorecardClient';
 import type { ScorecardData, TeamScorecardRow } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
 
 type PeriodType = 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_quarter' | 'financial_year' | 'custom';
 type PillarType = 'all' | 'operations' | 'revenue' | 'sales';
@@ -42,6 +48,24 @@ function formatRate(rate: number | null | undefined): string {
   return `${Math.round(rate)}%`;
 }
 
+
+const SCORECARD_DEFAULT_COLUMNS: ColumnDef[] = [
+  { key: 'rank', label: 'Rank', visible: true, required: true },
+  { key: 'executive', label: 'Executive', visible: true, required: true },
+  { key: 'tasks', label: 'Tasks', visible: true },
+  { key: 'tickets', label: 'Tickets', visible: true },
+  { key: 'registrations', label: 'Registrations', visible: true },
+  { key: 'siteVisits', label: 'Site Visits', visible: true },
+  { key: 'loansRealized', label: 'Loans Realized', visible: true },
+  { key: 'duesCollected', label: 'Dues Collected', visible: true },
+  { key: 'leadsDeals', label: 'Leads & Deals', visible: true },
+  { key: 'conversionRates', label: 'Conversion Rates', visible: true },
+  { key: 'score', label: 'Score %', visible: true },
+  { key: 'performanceStatus', label: 'Performance Status', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+const SCORECARD_COL_PREF_KEY = 'qua_scorecard_col_prefs';
+
 export function ScorecardDashboard() {
   const strings = UI_STRINGS.actionCenter.scorecard;
 
@@ -60,6 +84,36 @@ export function ScorecardDashboard() {
 
   // Drilldown modal for executive
   const [drilldownExecutive, setDrilldownExecutive] = useState<TeamScorecardRow | null>(null);
+
+  // Column customization states
+  const [scorecardColumns, setScorecardColumns] = useState<ColumnDef[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(SCORECARD_COL_PREF_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch {}
+    }
+    return SCORECARD_DEFAULT_COLUMNS;
+  });
+  const [showScorecardColumnSettings, setShowScorecardColumnSettings] = useState<boolean>(false);
+  const [scorecardSortField, setScorecardSortField] = useState<string>('rank');
+  const [scorecardSortOrder, setScorecardSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  const handleScorecardSort = (field: string) => {
+    if (scorecardSortField === field) {
+      setScorecardSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setScorecardSortField(field);
+      setScorecardSortOrder('asc');
+    }
+  };
+
+  const isColVisible = (key: string) =>
+    scorecardColumns.find((c) => c.key === key)?.visible !== false;
+
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -166,14 +220,57 @@ export function ScorecardDashboard() {
   const revenue = scorecardData?.pillarSummary.revenue;
   const sales = scorecardData?.pillarSummary.sales;
 
-  // Filtered rows for team or individual view
+  // Filtered and sorted rows for team or individual view
   const visibleRows = useMemo(() => {
     if (!scorecardData) return [];
-    if (viewMode === 'individual' && selectedExecutiveId !== 'all') {
-      return scorecardData.teamScores.filter((e) => e.id === selectedExecutiveId);
+    const rows = viewMode === 'individual' && selectedExecutiveId !== 'all'
+      ? scorecardData.teamScores.filter((e) => e.id === selectedExecutiveId)
+      : [...scorecardData.teamScores];
+
+    if (scorecardSortField) {
+      rows.sort((a, b) => {
+        let valA: unknown = ((a as unknown) as Record<string, unknown>)[scorecardSortField];
+        let valB: unknown = ((b as unknown) as Record<string, unknown>)[scorecardSortField];
+        if (scorecardSortField === 'tasks') {
+          valA = a.operations.tasksCompleted;
+          valB = b.operations.tasksCompleted;
+        } else if (scorecardSortField === 'tickets') {
+          valA = a.operations.ticketsResolved;
+          valB = b.operations.ticketsResolved;
+        } else if (scorecardSortField === 'registrations') {
+          valA = a.operations.registrationsCompleted;
+          valB = b.operations.registrationsCompleted;
+        } else if (scorecardSortField === 'siteVisits') {
+          valA = a.operations.siteVisitsCompleted;
+          valB = b.operations.siteVisitsCompleted;
+        } else if (scorecardSortField === 'loansRealized') {
+          valA = a.revenue.loanAmountRealized;
+          valB = b.revenue.loanAmountRealized;
+        } else if (scorecardSortField === 'duesCollected') {
+          valA = a.revenue.duesCollected;
+          valB = b.revenue.duesCollected;
+        } else if (scorecardSortField === 'leadsDeals') {
+          valA = a.sales.dealsClosed;
+          valB = b.sales.dealsClosed;
+        } else if (scorecardSortField === 'conversionRates') {
+          valA = a.sales.visitToDealRate;
+          valB = b.sales.visitToDealRate;
+        } else if (scorecardSortField === 'executive') {
+          valA = a.name;
+          valB = b.name;
+        }
+        if (typeof valA === 'string' && typeof valB === 'string') {
+          const cmp = valA.localeCompare(valB);
+          return scorecardSortOrder === 'asc' ? cmp : -cmp;
+        }
+        if (typeof valA === 'number' && typeof valB === 'number') {
+          return scorecardSortOrder === 'asc' ? valA - valB : valB - valA;
+        }
+        return 0;
+      });
     }
-    return scorecardData.teamScores;
-  }, [scorecardData, viewMode, selectedExecutiveId]);
+    return rows;
+  }, [scorecardData, viewMode, selectedExecutiveId, scorecardSortField, scorecardSortOrder]);
 
   return (
     <div className="space-y-6">
@@ -308,15 +405,35 @@ export function ScorecardDashboard() {
           </select>
         </div>
 
-        {/* Right side: Export */}
-        <button
-          type="button"
-          onClick={handleExport}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors"
-        >
-          <Download className="w-3.5 h-3.5 text-slate-500" />
-          <span>{strings.exportBtn}</span>
-        </button>
+        {/* Right side: Export, Refresh, Gear */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={handleExport}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5 text-slate-500" />
+            <span>{strings.exportBtn}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => loadData()}
+            className="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors cursor-pointer"
+            title="Refresh"
+            aria-label="Refresh scorecard"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowScorecardColumnSettings(true)}
+            className="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm transition-colors cursor-pointer"
+            title="Column Settings"
+            aria-label="Column Settings"
+          >
+            <Settings className="w-3.5 h-3.5 text-slate-500" />
+          </button>
+        </div>
       </div>
 
       {/* Top Filter Bar 2: Pillar Filters */}
@@ -637,25 +754,44 @@ export function ScorecardDashboard() {
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
-                    <th className="py-3 px-3 w-12 text-center">{strings.rank}</th>
-                    <th className="py-3 px-4">{strings.executive}</th>
-                    <th className="py-3 px-3 text-center">{strings.tasks}</th>
-                    <th className="py-3 px-3 text-center">{strings.tickets}</th>
-                    <th className="py-3 px-3 text-center">{strings.registrationsCol}</th>
-                    <th className="py-3 px-3 text-center">{strings.siteVisitsCol}</th>
-                    <th className="py-3 px-3">{strings.loansRealizedCol}</th>
-                    <th className="py-3 px-3">{strings.duesCollectedCol}</th>
-                    <th className="py-3 px-3">{strings.leadsDealsCol}</th>
-                    <th className="py-3 px-3">{strings.conversionRatesCol}</th>
-                    <th className="py-3 px-3 text-center">{strings.scoreCol}</th>
-                    <th className="py-3 px-3 text-center">{strings.performanceStatusCol}</th>
-                    <th className="py-3 px-3 text-center">{strings.actionsCol}</th>
+                    {scorecardColumns.filter((c) => c.visible).map((col) => {
+                      const isSortable = col.key !== 'actions';
+                      const isSorted = scorecardSortField === col.key;
+                      return (
+                        <th
+                          key={col.key}
+                          className={`py-3 px-3 ${col.key === 'executive' ? 'px-4' : ''} ${['rank', 'tasks', 'tickets', 'registrations', 'siteVisits', 'score', 'performanceStatus', 'actions'].includes(col.key) ? 'text-center' : ''}`}
+                        >
+                          {isSortable ? (
+                            <button
+                              type="button"
+                              onClick={() => handleScorecardSort(col.key)}
+                              className="inline-flex items-center gap-1 font-semibold hover:text-indigo-600 cursor-pointer"
+                              data-testid={`scorecard-sort-${col.key}`}
+                            >
+                              <span>{col.label}</span>
+                              {isSorted ? (
+                                scorecardSortOrder === 'asc' ? (
+                                  <ArrowUp className="w-3 h-3 text-indigo-600" />
+                                ) : (
+                                  <ArrowDown className="w-3 h-3 text-indigo-600" />
+                                )
+                              ) : (
+                                <ArrowUpDown className="w-3 h-3 opacity-40" />
+                              )}
+                            </button>
+                          ) : (
+                            <span>{col.label}</span>
+                          )}
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {visibleRows.length === 0 ? (
                     <tr>
-                      <td colSpan={13} className="py-8 text-center text-slate-400">
+                      <td colSpan={scorecardColumns.filter((c) => c.visible).length} className="py-8 text-center text-slate-400">
                         {strings.noDataFound}
                       </td>
                     </tr>
@@ -663,149 +799,175 @@ export function ScorecardDashboard() {
                     visibleRows.map((row) => (
                       <tr key={row.id} className="hover:bg-slate-50/80 transition-colors">
                         {/* Rank */}
-                        <td className="py-3 px-3 text-center">
-                          {row.rank === 1 ? (
-                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-amber-100 text-amber-700 font-bold">
-                              🥇
-                            </span>
-                          ) : row.rank === 2 ? (
-                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-slate-200 text-slate-700 font-bold">
-                              🥈
-                            </span>
-                          ) : row.rank === 3 ? (
-                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-amber-50 text-amber-900 font-bold">
-                              🥉
-                            </span>
-                          ) : (
-                            <span className="font-semibold text-slate-600">{row.rank}</span>
-                          )}
-                        </td>
+                        {isColVisible('rank') && (
+                          <td className="py-3 px-3 text-center">
+                            {row.rank === 1 ? (
+                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-amber-100 text-amber-700 font-bold">
+                                🥇
+                              </span>
+                            ) : row.rank === 2 ? (
+                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-slate-200 text-slate-700 font-bold">
+                                🥈
+                              </span>
+                            ) : row.rank === 3 ? (
+                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-amber-50 text-amber-900 font-bold">
+                                🥉
+                              </span>
+                            ) : (
+                              <span className="font-semibold text-slate-600">{row.rank}</span>
+                            )}
+                          </td>
+                        )}
 
                         {/* Executive */}
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-2">
-                            <div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs uppercase">
-                              {row.name.charAt(0)}
+                        {isColVisible('executive') && (
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs uppercase">
+                                {row.name.charAt(0)}
+                              </div>
+                              <div>
+                                <div className="font-medium text-slate-900">{row.name}</div>
+                                <div className="text-[10px] text-slate-400">{row.role}</div>
+                              </div>
                             </div>
-                            <div>
-                              <div className="font-medium text-slate-900">{row.name}</div>
-                              <div className="text-[10px] text-slate-400">{row.role}</div>
-                            </div>
-                          </div>
-                        </td>
+                          </td>
+                        )}
 
                         {/* Tasks */}
-                        <td className="py-3 px-3 text-center">
-                          <div className="font-medium text-slate-900">
-                            {row.operations.tasksCompleted} / {row.operations.tasksAssigned}
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            {formatRate(row.operations.taskCompletionRate)}
-                          </div>
-                        </td>
+                        {isColVisible('tasks') && (
+                          <td className="py-3 px-3 text-center">
+                            <div className="font-medium text-slate-900">
+                              {row.operations.tasksCompleted} / {row.operations.tasksAssigned}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {formatRate(row.operations.taskCompletionRate)}
+                            </div>
+                          </td>
+                        )}
 
                         {/* Tickets */}
-                        <td className="py-3 px-3 text-center">
-                          <div className="font-medium text-slate-900">
-                            {row.operations.ticketsResolved} / {row.operations.ticketsAssigned}
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            {formatRate(row.operations.ticketResolutionRate)}
-                          </div>
-                        </td>
+                        {isColVisible('tickets') && (
+                          <td className="py-3 px-3 text-center">
+                            <div className="font-medium text-slate-900">
+                              {row.operations.ticketsResolved} / {row.operations.ticketsAssigned}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {formatRate(row.operations.ticketResolutionRate)}
+                            </div>
+                          </td>
+                        )}
 
                         {/* Registrations */}
-                        <td className="py-3 px-3 text-center">
-                          <div className="font-medium text-slate-900">
-                            {row.operations.registrationsCompleted} / {row.operations.registrationsTarget}
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            {formatRate(row.operations.registrationAchievementRate)}
-                          </div>
-                        </td>
+                        {isColVisible('registrations') && (
+                          <td className="py-3 px-3 text-center">
+                            <div className="font-medium text-slate-900">
+                              {row.operations.registrationsCompleted} / {row.operations.registrationsTarget}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {formatRate(row.operations.registrationAchievementRate)}
+                            </div>
+                          </td>
+                        )}
 
                         {/* Site Visits */}
-                        <td className="py-3 px-3 text-center">
-                          <div className="font-medium text-slate-900">
-                            {row.operations.siteVisitsCompleted} / {row.operations.siteVisitsPlanned}
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            {formatRate(row.operations.siteVisitAchievementRate)}
-                          </div>
-                        </td>
+                        {isColVisible('siteVisits') && (
+                          <td className="py-3 px-3 text-center">
+                            <div className="font-medium text-slate-900">
+                              {row.operations.siteVisitsCompleted} / {row.operations.siteVisitsPlanned}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {formatRate(row.operations.siteVisitAchievementRate)}
+                            </div>
+                          </td>
+                        )}
 
                         {/* Loans & Realized */}
-                        <td className="py-3 px-3">
-                          <div className="font-medium text-slate-900">
-                            {row.revenue.loansDisbursed} files ({formatCurrency(row.revenue.loanAmountRealized)})
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            Target: {row.revenue.loansTarget} files
-                          </div>
-                        </td>
+                        {isColVisible('loansRealized') && (
+                          <td className="py-3 px-3">
+                            <div className="font-medium text-slate-900">
+                              {row.revenue.loansDisbursed} files ({formatCurrency(row.revenue.loanAmountRealized)})
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              Target: {row.revenue.loansTarget} files
+                            </div>
+                          </td>
+                        )}
 
                         {/* Dues Collected */}
-                        <td className="py-3 px-3">
-                          <div className="font-medium text-emerald-600">
-                            {formatCurrency(row.revenue.duesCollected)}
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            {formatCurrency(row.revenue.pendingDues)} pend. ({formatRate(row.revenue.collectionPercentage)})
-                          </div>
-                        </td>
+                        {isColVisible('duesCollected') && (
+                          <td className="py-3 px-3">
+                            <div className="font-medium text-emerald-600">
+                              {formatCurrency(row.revenue.duesCollected)}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {formatCurrency(row.revenue.pendingDues)} pend. ({formatRate(row.revenue.collectionPercentage)})
+                            </div>
+                          </td>
+                        )}
 
                         {/* Leads & Deals */}
-                        <td className="py-3 px-3">
-                          <div className="font-medium text-slate-900">
-                            {row.sales.leadsContacted} leads / {row.sales.dealsClosed} deals
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            Deals target: {row.sales.dealsTarget}
-                          </div>
-                        </td>
+                        {isColVisible('leadsDeals') && (
+                          <td className="py-3 px-3">
+                            <div className="font-medium text-slate-900">
+                              {row.sales.leadsContacted} leads / {row.sales.dealsClosed} deals
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              Deals target: {row.sales.dealsTarget}
+                            </div>
+                          </td>
+                        )}
 
                         {/* Conversion Rates */}
-                        <td className="py-3 px-3">
-                          <div className="text-slate-700">
-                            Lead-Visit: <span className="font-semibold">{formatRate(row.sales.leadToVisitRate)}</span>
-                          </div>
-                          <div className="text-slate-700">
-                            Visit-Deal: <span className="font-semibold">{formatRate(row.sales.visitToDealRate)}</span>
-                          </div>
-                        </td>
+                        {isColVisible('conversionRates') && (
+                          <td className="py-3 px-3">
+                            <div className="text-slate-700">
+                              Lead-Visit: <span className="font-semibold">{formatRate(row.sales.leadToVisitRate)}</span>
+                            </div>
+                            <div className="text-slate-700">
+                              Visit-Deal: <span className="font-semibold">{formatRate(row.sales.visitToDealRate)}</span>
+                            </div>
+                          </td>
+                        )}
 
                         {/* Score */}
-                        <td className="py-3 px-3 text-center">
-                          <div className="inline-flex items-center justify-center w-8 h-8 rounded-full border-2 border-indigo-500 font-bold text-slate-900">
-                            {row.score}
-                          </div>
-                        </td>
+                        {isColVisible('score') && (
+                          <td className="py-3 px-3 text-center">
+                            <div className="inline-flex items-center justify-center w-8 h-8 rounded-full border-2 border-indigo-500 font-bold text-slate-900">
+                              {row.score}
+                            </div>
+                          </td>
+                        )}
 
                         {/* Performance Status */}
-                        <td className="py-3 px-3 text-center">
-                          <span
-                            className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-semibold ${
-                              row.performanceStatus === 'On Track'
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : row.performanceStatus === 'Average'
-                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                : 'bg-rose-50 text-rose-700 border border-rose-200'
-                            }`}
-                          >
-                            {row.performanceStatus}
-                          </span>
-                        </td>
+                        {isColVisible('performanceStatus') && (
+                          <td className="py-3 px-3 text-center">
+                            <span
+                              className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-semibold ${
+                                row.performanceStatus === 'On Track'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : row.performanceStatus === 'Average'
+                                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                  : 'bg-rose-50 text-rose-700 border border-rose-200'
+                              }`}
+                            >
+                              {row.performanceStatus}
+                            </span>
+                          </td>
+                        )}
 
                         {/* Actions */}
-                        <td className="py-3 px-3 text-center">
-                          <button
-                            type="button"
-                            onClick={() => setDrilldownExecutive(row)}
-                            className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-800"
-                          >
-                            <span>{strings.viewDetails}</span>
-                          </button>
-                        </td>
+                        {isColVisible('actions') && (
+                          <td className="py-3 px-3 text-center">
+                            <button
+                              type="button"
+                              onClick={() => setDrilldownExecutive(row)}
+                              className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-800"
+                            >
+                              <span>{strings.viewDetails}</span>
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     ))
                   )}
@@ -903,6 +1065,24 @@ export function ScorecardDashboard() {
           </div>
         </div>
       )}
+      {/* Column Customization Modal */}
+      <ColumnSettingsPopup
+        isOpen={showScorecardColumnSettings}
+        onClose={() => setShowScorecardColumnSettings(false)}
+        columns={scorecardColumns}
+        onSave={(newCols) => {
+          setScorecardColumns(newCols);
+          try {
+            localStorage.setItem(SCORECARD_COL_PREF_KEY, JSON.stringify(newCols));
+          } catch {}
+        }}
+        onReset={() => {
+          setScorecardColumns(SCORECARD_DEFAULT_COLUMNS);
+          try {
+            localStorage.setItem(SCORECARD_COL_PREF_KEY, JSON.stringify(SCORECARD_DEFAULT_COLUMNS));
+          } catch {}
+        }}
+      />
     </div>
   );
 }
