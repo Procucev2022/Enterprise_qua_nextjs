@@ -72,6 +72,26 @@ describe('Document Vault Controller', () => {
     });
   });
 
+    test('passes source and accountType query parameters to query layer', async () => {
+      const listSpy = jest.spyOn(documentVaultQueries, 'listDocuments').mockResolvedValueOnce([]);
+      const req = { query: { source: 'buyer' } };
+      const res = mockResponse();
+
+      await documentVaultController.listDocuments(req, res);
+
+      expect(listSpy).toHaveBeenCalledWith(expect.objectContaining({ source: 'buyer' }));
+      expect(res.body.success).toBe(true);
+
+      const listSpy2 = jest.spyOn(documentVaultQueries, 'listDocuments').mockResolvedValueOnce([]);
+      const req2 = { query: { accountType: 'seller' } };
+      const res2 = mockResponse();
+
+      await documentVaultController.listDocuments(req2, res2);
+
+      expect(listSpy2).toHaveBeenCalledWith(expect.objectContaining({ source: 'seller' }));
+      expect(res2.body.success).toBe(true);
+    });
+
   describe('getSummary', () => {
     test('returns vault summary statistics', async () => {
       const req = {};

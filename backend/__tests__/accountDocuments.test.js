@@ -1539,4 +1539,105 @@ describe('Account Documents & Credit Workflows API', () => {
         pool.query = origQuery;
       }
     });
+  describe('getAllAccountDocuments and getInMemoryDocuments', () => {
+    it('retrieves all account documents with various filters', async () => {
+      await accountDocumentQueries.createAccountDocument({
+        documentName: 'Buyer GST Certificate',
+        fileName: 'gst.pdf',
+        fileSize: 1000,
+        category: 'GST',
+        accountType: 'buyer',
+        accountId: 'BUY-999',
+        isActive: true,
+      });
+
+      await accountDocumentQueries.createAccountDocument({
+        documentName: 'Seller PAN Card',
+        fileName: 'pan.pdf',
+        fileSize: 2000,
+        category: 'PAN',
+        accountType: 'seller',
+        accountId: 'SEL-999',
+        isActive: false,
+      });
+
+      const all = await accountDocumentQueries.getAllAccountDocuments();
+      expect(all.length).toBeGreaterThan(0);
+
+      const buyersOnly = await accountDocumentQueries.getAllAccountDocuments({ accountType: 'buyer' });
+      expect(buyersOnly.every((d) => d.accountType === 'buyer')).toBe(true);
+
+      const sellersOnly = await accountDocumentQueries.getAllAccountDocuments({ accountType: 'seller' });
+      expect(sellersOnly.every((d) => d.accountType === 'seller')).toBe(true);
+
+      const allTypes = await accountDocumentQueries.getAllAccountDocuments({ accountType: 'all' });
+      expect(allTypes.length).toBe(all.length);
+
+      const gstDocs = await accountDocumentQueries.getAllAccountDocuments({ category: 'GST' });
+      expect(gstDocs.every((d) => d.category === 'GST')).toBe(true);
+
+      const allCats = await accountDocumentQueries.getAllAccountDocuments({ category: 'all' });
+      expect(allCats.length).toBe(all.length);
+
+      const activeDocs = await accountDocumentQueries.getAllAccountDocuments({ activeOnly: true });
+      expect(activeDocs.every((d) => d.isActive !== false)).toBe(true);
+
+      const searched = await accountDocumentQueries.getAllAccountDocuments({ search: 'Certificate' });
+      expect(searched.length).toBeGreaterThan(0);
+
+      const inMem = accountDocumentQueries.getInMemoryDocuments();
+      expect(Array.isArray(inMem)).toBe(true);
+    });
+
+    it('retrieves documents using PostgreSQL pool when storage is enabled and handles error fallback', async () => {
+      const origHasStorage = pool.hasStorage;
+      const origQuery = pool.query;
+
+      try {
+        pool.hasStorage = () => true;
+        pool.query = jest.fn().mockResolvedValue({
+          rows: [
+            {
+              id: 'doc-pg-1',
+              account_type: 'buyer',
+              account_id: 'b-1',
+              document_name: 'PostgreSQL Document',
+              file_name: 'pg.pdf',
+              file_size: 5000,
+              mime_type: 'application/pdf',
+              category: 'GST',
+              file_url: '/docs/pg.pdf',
+              description: 'PG Description',
+              uploaded_by: 'Admin',
+              is_active: 1,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+          ],
+        });
+
+        const pgDocs = await accountDocumentQueries.getAllAccountDocuments({
+          accountType: 'buyer',
+          category: 'GST',
+          search: 'PostgreSQL',
+          activeOnly: true,
+        });
+
+        expect(pool.query).toHaveBeenCalledWith(
+          expect.stringContaining('SELECT id, account_type'),
+          expect.any(Array),
+          { d1: true }
+        );
+        expect(pgDocs.length).toBe(1);
+
+        pool.query = jest.fn().mockRejectedValue(new Error('PG query failure'));
+        const fallbackDocs = await accountDocumentQueries.getAllAccountDocuments();
+        expect(Array.isArray(fallbackDocs)).toBe(true);
+      } finally {
+        pool.hasStorage = origHasStorage;
+        pool.query = origQuery;
+      }
+    });
+  });
+
 });

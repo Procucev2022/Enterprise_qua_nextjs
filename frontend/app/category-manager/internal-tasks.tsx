@@ -105,6 +105,7 @@ import { fetchTicketSummary } from '@/lib/ticketClient';
 import { fetchApprovalSummary } from '@/lib/approvalClient';
 import ActionCenterComposeModal from './components/ActionCenterComposeModal';
 import DocumentVaultDashboard from './components/DocumentVaultDashboard';
+import LoginLogsDashboard from './components/LoginLogsDashboard';
 import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
 
 export default function InternalTasksDashboard() {
@@ -203,6 +204,8 @@ export default function InternalTasksDashboard() {
       'sellers',
       'registrations',
       'payment_dues',
+      'document_vault',
+      'login_logs',
     ];
     if (tabParam && validTabs.includes(tabParam)) {
       setActiveTab(tabParam);
@@ -1113,6 +1116,7 @@ export default function InternalTasksDashboard() {
       {activeTab === 'registrations' && <RegistrationsDashboard />}
       {activeTab === 'payment_dues' && <PaymentDuesDashboard onSummaryChange={setPaymentDuesSummary} />}
       {activeTab === 'document_vault' && <DocumentVaultDashboard />}
+      {activeTab === 'login_logs' && <LoginLogsDashboard />}
 
       {activeTab === 'tasks' && (
         <>

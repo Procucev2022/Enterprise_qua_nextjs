@@ -20,6 +20,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-102',
@@ -31,6 +32,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-103',
@@ -42,6 +44,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-104',
@@ -53,6 +56,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-105',
@@ -64,6 +68,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-106',
@@ -75,6 +80,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-107',
@@ -86,6 +92,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-108',
@@ -97,6 +104,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-109',
@@ -108,6 +116,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-110',
@@ -119,6 +128,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-111',
@@ -130,6 +140,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-112',
@@ -141,6 +152,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-113',
@@ -152,6 +164,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Email',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-114',
@@ -163,6 +176,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Email',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-115',
@@ -174,6 +188,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-116',
@@ -185,6 +200,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-117',
@@ -196,6 +212,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'WhatsApp',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-118',
@@ -207,6 +224,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-119',
@@ -218,6 +236,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Email',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-120',
@@ -229,6 +248,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-121',
@@ -240,6 +260,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-122',
@@ -251,6 +272,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-123',
@@ -262,6 +284,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Email',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-124',
@@ -273,6 +296,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-125',
@@ -284,6 +308,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-126',
@@ -295,6 +320,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-127',
@@ -306,6 +332,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Email',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-128',
@@ -317,6 +344,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-129',
@@ -328,6 +356,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-130',
@@ -339,6 +368,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-131',
@@ -350,6 +380,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-132',
@@ -361,6 +392,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-133',
@@ -372,6 +404,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Email',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-134',
@@ -383,6 +416,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-135',
@@ -394,6 +428,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'WhatsApp',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-136',
@@ -405,6 +440,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-137',
@@ -416,6 +452,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-138',
@@ -427,6 +464,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Email',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-139',
@@ -438,6 +476,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-140',
@@ -449,6 +488,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-141',
@@ -460,6 +500,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-142',
@@ -471,6 +512,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Email',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-143',
@@ -482,6 +524,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-144',
@@ -493,6 +536,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
 ];
 
@@ -509,6 +553,37 @@ function normalizeSourceType(source) {
   return 'Web App';
 }
 
+function normalizeClientType(val, companyName = '', userEmail = '') {
+  if (val) {
+    const s = String(val).toLowerCase().trim();
+    if (s.includes('seller') || s.includes('vendor') || s.includes('supplier')) return 'Seller';
+    if (s.includes('buyer')) return 'Buyer';
+  }
+  const check = `${companyName} ${userEmail}`.toLowerCase();
+  if (
+    check.includes('supplier') ||
+    check.includes('seller') ||
+    check.includes('vendor') ||
+    check.includes('fasteners') ||
+    check.includes('steel') ||
+    check.includes('foundry') ||
+    check.includes('polymer') ||
+    check.includes('pumps') ||
+    check.includes('metals') ||
+    check.includes('hydraulics') ||
+    check.includes('wire') ||
+    check.includes('components') ||
+    check.includes('bearing') ||
+    check.includes('transformer') ||
+    check.includes('cables') ||
+    check.includes('plywood') ||
+    check.includes('furnitures')
+  ) {
+    return 'Seller';
+  }
+  return 'Buyer';
+}
+
 function normalizeStatus(isApproved, verificationStatus) {
   const vs = String(verificationStatus || '').toLowerCase();
   if (vs === 'rejected') return 'Rejected';
@@ -523,6 +598,7 @@ async function getRegisteredClients({
   search = '',
   sourceType = 'all',
   status = 'all',
+  clientType = 'all',
   limit = 100,
   offset = 0,
 } = {}) {
@@ -541,7 +617,9 @@ async function getRegisteredClients({
                u.verification_status as "verificationStatus",
                u.source_type as "sourceTypeRaw",
                u.is_whats_app as "isWhatsApp",
-               u.is_web_app as "isWebApp"
+               u.is_web_app as "isWebApp",
+               u.user_type as "userType",
+               u.role as "role"
           FROM "user" u
           LEFT JOIN organization o ON o.uuid = u.org_uuid
          ORDER BY u.created_ts DESC
@@ -562,6 +640,7 @@ async function getRegisteredClients({
             status: computedStatus,
             sourceType: source,
             isApproved: Boolean(r.isApproved),
+            clientType: normalizeClientType(r.userType || r.role, r.companyName, r.userEmail),
           };
         });
 
@@ -587,6 +666,12 @@ async function getRegisteredClients({
     const targetStatus = status.toLowerCase();
     filtered = filtered.filter((c) => c.status.toLowerCase() === targetStatus);
   }
+
+  if (clientType && clientType.toLowerCase() !== 'all') {
+    const targetType = clientType.toLowerCase();
+    filtered = filtered.filter((c) => (c.clientType || 'Buyer').toLowerCase() === targetType);
+  }
+
 
   if (search && search.trim()) {
     const q = search.toLowerCase().trim();
@@ -684,6 +769,7 @@ async function updateClientRegistrationStatus(id, action, remarks = '') {
 module.exports = {
   INITIAL_CLIENTS,
   resetMemoryClients,
+  normalizeClientType,
   getRegisteredClients,
   updateClientRegistrationStatus,
 };

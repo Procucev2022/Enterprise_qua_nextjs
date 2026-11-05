@@ -574,15 +574,17 @@ async function getRegistrations(req, res) {
       search = '',
       sourceType = 'all',
       status = 'all',
+      clientType = 'all',
       limit = 100,
       offset = 0,
     } = req.query ?? {};
 
-    logger.info('Fetching registered clients', { search, sourceType, status }, 'INTERNAL_TASK_CONTROLLER');
+    logger.info('Fetching registered clients', { search, sourceType, status, clientType }, 'INTERNAL_TASK_CONTROLLER');
     const result = await registrationQueries.getRegisteredClients({
       search,
       sourceType,
       status,
+      clientType,
       limit: parseInt(limit, 10) || 100,
       offset: parseInt(offset, 10) || 0,
     });
