@@ -14,6 +14,12 @@ function escapeLikeWildcards(str) {
   return str.replace(/([%_\\])/g, '\\$1');
 }
 
+function safeIsoDate(val) {
+  if (!val) return null;
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 function mapRow(row) {
   if (!row) return null;
   return {
@@ -165,20 +171,22 @@ async function listLoginLogs(options = {}) {
       }
 
       if (search && typeof search === 'string' && search.trim()) {
-        const escaped = escapeLikeWildcards(search.trim());
-        conditions.push(`(user_name ILIKE $${idx} OR email ILIKE $${idx} OR company_name ILIKE $${idx} OR phone_number ILIKE $${idx})`);
-        values.push(`%${escaped}%`);
-        idx++;
+        const escaped = `%${escapeLikeWildcards(search.trim())}%`;
+        conditions.push(`(user_name ILIKE $${idx} OR email ILIKE $${idx + 1} OR company_name ILIKE $${idx + 2} OR phone_number ILIKE $${idx + 3})`);
+        values.push(escaped, escaped, escaped, escaped);
+        idx += 4;
       }
 
-      if (startDate) {
+      const validStart = safeIsoDate(startDate);
+      if (validStart) {
         conditions.push(`login_at >= $${idx++}`);
-        values.push(new Date(startDate).toISOString());
+        values.push(validStart);
       }
 
-      if (endDate) {
+      const validEnd = safeIsoDate(endDate);
+      if (validEnd) {
         conditions.push(`login_at <= $${idx++}`);
-        values.push(new Date(endDate).toISOString());
+        values.push(validEnd);
       }
 
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -239,8 +247,12 @@ async function listLoginLogs(options = {}) {
     items = items.filter((l) => new Date(l.loginAt).getTime() >= now - 7 * 24 * 3600 * 1000);
   } else if (dateRangePreset === 'last30') {
     items = items.filter((l) => new Date(l.loginAt).getTime() >= now - 30 * 24 * 3600 * 1000);
-  } else if (startDate) {
-    items = items.filter((l) => new Date(l.loginAt).getTime() >= new Date(startDate).getTime());
+  } else {
+    const validStart = safeIsoDate(startDate);
+    if (validStart) {
+      const startTime = new Date(validStart).getTime();
+      items = items.filter((l) => new Date(l.loginAt).getTime() >= startTime);
+    }
   }
 
   items.sort((a, b) => new Date(b.loginAt).getTime() - new Date(a.loginAt).getTime());
@@ -408,6 +420,7 @@ module.exports = {
   recordLoginLog,
   recordLogoutLog,
   escapeLikeWildcards,
+  safeIsoDate,
   mapRow,
   DEFAULT_LOGS,
   inMemoryLogs,

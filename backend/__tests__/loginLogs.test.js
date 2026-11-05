@@ -104,6 +104,10 @@ describe('Login Logs API & Controller', () => {
 
       const resCustom = await request(app).get('/api/login-logs?startDate=2026-01-01');
       expect(resCustom.status).toBe(200);
+
+      const resInvalidDate = await request(app).get('/api/login-logs?startDate=invalid-date&endDate=also-invalid');
+      expect(resInvalidDate.status).toBe(200);
+      expect(resInvalidDate.body.success).toBe(true);
     });
 
     test('handles controller failure gracefully with 500 status', async () => {
@@ -401,6 +405,13 @@ describe('Login Logs API & Controller', () => {
       expect(loginLogsQueries.escapeLikeWildcards('test%_\\str')).toBe('test\\%\\_\\\\str');
       expect(loginLogsQueries.escapeLikeWildcards(null)).toBe('');
       expect(loginLogsQueries.escapeLikeWildcards(123)).toBe('');
+    });
+
+    test('safeIsoDate parses valid dates and safely returns null on invalid dates', () => {
+      expect(loginLogsQueries.safeIsoDate('2026-11-05T10:00:00Z')).toBe('2026-11-05T10:00:00.000Z');
+      expect(loginLogsQueries.safeIsoDate('invalid-date-string')).toBeNull();
+      expect(loginLogsQueries.safeIsoDate(null)).toBeNull();
+      expect(loginLogsQueries.safeIsoDate('')).toBeNull();
     });
 
     test('mapRow returns null on null/undefined input', () => {
