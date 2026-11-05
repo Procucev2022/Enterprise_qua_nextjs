@@ -153,6 +153,23 @@ export default function TicketsDashboard() {
     setTimeout(() => setToastMessage(null), 3500);
   }, []);
 
+  const isColVisible = useCallback(
+    (key: string) => {
+      const col = ticketColumns.find((c) => c.key === key);
+      return col ? col.visible : true;
+    },
+    [ticketColumns]
+  );
+
+  const TicketSortIcon = ({ field }: { field: string }) => {
+    if (ticketSortField !== field) return <ArrowUpDown size={11} className="inline ml-1 text-slate-400" />;
+    return ticketSortOrder === 'asc' ? (
+      <ArrowUp size={11} className="inline ml-1 text-indigo-600" />
+    ) : (
+      <ArrowDown size={11} className="inline ml-1 text-indigo-600" />
+    );
+  };
+
   const handleTicketSort = useCallback((field: string) => {
     setTicketSortField((prev) => {
       if (prev === field) {
@@ -192,6 +209,27 @@ export default function TicketsDashboard() {
       setIsLoading(false);
     }
   }, [search, statusFilter, priorityFilter, categoryFilter, projectFilter, dateFrom, dateTo, page]);
+
+  const sortedTickets = useMemo(() => {
+    const list = [...tickets];
+    list.sort((a, b) => {
+      let cmp = 0;
+      if (ticketSortField === 'createdAt') {
+        cmp = new Date(a.created_at || '').getTime() - new Date(b.created_at || '').getTime();
+      } else if (ticketSortField === 'priority') {
+        const order: Record<string, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 };
+        cmp = (order[a.priority] || 0) - (order[b.priority] || 0);
+      } else if (ticketSortField === 'status') {
+        cmp = (a.status || '').localeCompare(b.status || '');
+      } else if (ticketSortField === 'subject') {
+        cmp = (a.subject || '').localeCompare(b.subject || '');
+      } else if (ticketSortField === 'sla') {
+        cmp = (a.sla_hours || 0) - (b.sla_hours || 0);
+      }
+      return ticketSortOrder === 'asc' ? cmp : -cmp;
+    });
+    return list;
+  }, [tickets, ticketSortField, ticketSortOrder]);
 
   useEffect(() => {
     void loadSummary();
@@ -575,15 +613,47 @@ export default function TicketsDashboard() {
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                <th className="py-3 px-3.5">Status</th>
-                <th className="py-3 px-3.5">Ticket ID & Subject</th>
-                <th className="py-3 px-3.5">Project</th>
-                <th className="py-3 px-3.5">Customer</th>
-                <th className="py-3 px-3.5">Category</th>
-                <th className="py-3 px-3.5">Priority</th>
-                <th className="py-3 px-3.5">Assigned To</th>
-                <th className="py-3 px-3.5">SLA / Due</th>
-                <th className="py-3 px-3.5 text-right">Actions</th>
+                {isColVisible('status') && (
+                  <th
+                    className="py-3 px-3.5 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                    onClick={() => handleTicketSort('status')}
+                  >
+                    Status
+                    <TicketSortIcon field="status" />
+                  </th>
+                )}
+                {isColVisible('ticket') && (
+                  <th
+                    className="py-3 px-3.5 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                    onClick={() => handleTicketSort('subject')}
+                  >
+                    Ticket ID & Subject
+                    <TicketSortIcon field="subject" />
+                  </th>
+                )}
+                {isColVisible('project') && <th className="py-3 px-3.5">Project</th>}
+                {isColVisible('customer') && <th className="py-3 px-3.5">Customer</th>}
+                {isColVisible('category') && <th className="py-3 px-3.5">Category</th>}
+                {isColVisible('priority') && (
+                  <th
+                    className="py-3 px-3.5 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                    onClick={() => handleTicketSort('priority')}
+                  >
+                    Priority
+                    <TicketSortIcon field="priority" />
+                  </th>
+                )}
+                {isColVisible('assignedTo') && <th className="py-3 px-3.5">Assigned To</th>}
+                {isColVisible('sla') && (
+                  <th
+                    className="py-3 px-3.5 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                    onClick={() => handleTicketSort('sla')}
+                  >
+                    SLA / Due
+                    <TicketSortIcon field="sla" />
+                  </th>
+                )}
+                {isColVisible('actions') && <th className="py-3 px-3.5 text-right">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
@@ -602,18 +672,21 @@ export default function TicketsDashboard() {
                   </td>
                 </tr>
               ) : (
-                tickets.map((ticket) => (
+                sortedTickets.map((ticket) => (
                   <tr key={ticket.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30 transition-colors">
-                    <td className="py-3 px-3.5 whitespace-nowrap">
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${getStatusBadge(
-                          ticket.status
-                        )}`}
-                      >
-                        {ticket.status}
-                      </span>
-                    </td>
+                    {isColVisible('status') && (
+                      <td className="py-3 px-3.5 whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${getStatusBadge(
+                            ticket.status
+                          )}`}
+                        >
+                          {ticket.status}
+                        </span>
+                      </td>
+                    )}
 
+                    {isColVisible('ticket') && (
                     <td className="py-3 px-3.5 min-w-[220px]">
                       <div className="font-semibold text-slate-900 dark:text-white line-clamp-1">{ticket.subject}</div>
                       <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1.5 font-mono">
@@ -623,41 +696,55 @@ export default function TicketsDashboard() {
                         ) : null}
                       </div>
                     </td>
+                    )}
 
-                    <td className="py-3 px-3.5 whitespace-nowrap text-slate-600 dark:text-slate-300 font-medium">
-                      {ticket.project || 'General'}
-                    </td>
+                    {isColVisible('project') && (
+                      <td className="py-3 px-3.5 whitespace-nowrap text-slate-600 dark:text-slate-300 font-medium">
+                        {ticket.project || 'General'}
+                      </td>
+                    )}
 
-                    <td className="py-3 px-3.5 whitespace-nowrap">
-                      <div className="font-medium text-slate-900 dark:text-white">{ticket.customer_name || 'Client'}</div>
-                      <div className="text-[10px] text-slate-400">{ticket.customer_email || ''}</div>
-                    </td>
+                    {isColVisible('customer') && (
+                      <td className="py-3 px-3.5 whitespace-nowrap">
+                        <div className="font-medium text-slate-900 dark:text-white">{ticket.customer_name || 'Client'}</div>
+                        <div className="text-[10px] text-slate-400">{ticket.customer_email || ''}</div>
+                      </td>
+                    )}
 
-                    <td className="py-3 px-3.5 whitespace-nowrap">
-                      <span className="px-2 py-0.5 text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-md">
-                        {ticket.category || 'General'}
-                      </span>
-                    </td>
+                    {isColVisible('category') && (
+                      <td className="py-3 px-3.5 whitespace-nowrap">
+                        <span className="px-2 py-0.5 text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-md">
+                          {ticket.category || 'General'}
+                        </span>
+                      </td>
+                    )}
 
-                    <td className="py-3 px-3.5 whitespace-nowrap">
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${getPriorityBadge(
-                          ticket.priority
-                        )}`}
-                      >
-                        {ticket.priority}
-                      </span>
-                    </td>
+                    {isColVisible('priority') && (
+                      <td className="py-3 px-3.5 whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${getPriorityBadge(
+                            ticket.priority
+                          )}`}
+                        >
+                          {ticket.priority}
+                        </span>
+                      </td>
+                    )}
 
-                    <td className="py-3 px-3.5 whitespace-nowrap text-slate-700 dark:text-slate-300 font-medium">
-                      {ticket.assigned_to_name || 'Unassigned'}
-                    </td>
+                    {isColVisible('assignedTo') && (
+                      <td className="py-3 px-3.5 whitespace-nowrap text-slate-700 dark:text-slate-300 font-medium">
+                        {ticket.assigned_to_name || 'Unassigned'}
+                      </td>
+                    )}
 
-                    <td className="py-3 px-3.5 whitespace-nowrap text-[11px] text-slate-500">
-                      <div>{ticket.due_date ? new Date(ticket.due_date).toLocaleDateString() : '24h'}</div>
-                      <div className="text-[10px] text-slate-400">{ticket.sla_hours || 24}h SLA</div>
-                    </td>
+                    {isColVisible('sla') && (
+                      <td className="py-3 px-3.5 whitespace-nowrap text-[11px] text-slate-500">
+                        <div>{ticket.due_date ? new Date(ticket.due_date).toLocaleDateString() : '24h'}</div>
+                        <div className="text-[10px] text-slate-400">{ticket.sla_hours || 24}h SLA</div>
+                      </td>
+                    )}
 
+                    {isColVisible('actions') && (
                     <td className="py-3 px-3.5 whitespace-nowrap text-right">
                       <div className="flex items-center justify-end gap-1.5">
                         <button
@@ -695,6 +782,7 @@ export default function TicketsDashboard() {
                         )}
                       </div>
                     </td>
+                    )}
                   </tr>
                 ))
               )}
@@ -1057,6 +1145,25 @@ export default function TicketsDashboard() {
           </div>
         </div>
       )}
+      <ColumnSettingsPopup
+        isOpen={showTicketColumnSettings}
+        onClose={() => setShowTicketColumnSettings(false)}
+        columns={ticketColumns}
+        onSave={(newCols) => {
+          setTicketColumns(newCols);
+          try {
+            localStorage.setItem(TICKET_COL_PREF_KEY, JSON.stringify(newCols));
+          } catch {}
+        }}
+        onReset={() => {
+          setTicketColumns(TICKET_DEFAULT_COLUMNS);
+          try {
+            localStorage.setItem(TICKET_COL_PREF_KEY, JSON.stringify(TICKET_DEFAULT_COLUMNS));
+          } catch {}
+        }}
+        title="Column Settings"
+      />
+
       {isCommModalOpen && selectedTicket && (
         <ActionCenterComposeModal
           isOpen={isCommModalOpen}

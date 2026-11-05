@@ -7048,9 +7048,9 @@ continue
 
 **Timestamp**: 2026-11-05T16:36:19+05:30
 
-`	ext
+```text
 reuse the existing functioanlity and methods don't create the dupliacted code for this and do it fast
-`
+```
 
 ---
 
@@ -7058,6 +7058,6 @@ reuse the existing functioanlity and methods don't create the dupliacted code fo
 
 **Timestamp**: 2026-11-05T17:22:52+05:30
 
-`	ext
+```text
 raise the pr and pass all the coverages and AI review and Gemini pr check and merge in test-v3
-`
+```

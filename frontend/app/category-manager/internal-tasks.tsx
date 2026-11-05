@@ -194,6 +194,23 @@ export default function InternalTasksDashboard() {
     });
   }, []);
 
+  const isColVisible = useCallback(
+    (key: string) => {
+      const col = taskColumns.find((c) => c.key === key);
+      return col ? col.visible : true;
+    },
+    [taskColumns]
+  );
+
+  const TaskSortIcon = ({ field }: { field: string }) => {
+    if (taskSortField !== field) return <ArrowUpDown size={11} className="inline ml-1 text-slate-400" />;
+    return taskSortOrder === 'asc' ? (
+      <ArrowUp size={11} className="inline ml-1 text-indigo-600" />
+    ) : (
+      <ArrowDown size={11} className="inline ml-1 text-indigo-600" />
+    );
+  };
+
   const visibleTaskColumns = useMemo(() => taskColumns.filter((c) => c.visible), [taskColumns]);
 
   const sortedTasks = useMemo(() => {
@@ -1607,15 +1624,67 @@ export default function InternalTasksDashboard() {
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50/80 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800 font-semibold tracking-wide">
                     <tr>
-                      <th className="py-3 px-3.5 w-12 text-center">Done</th>
-                      <th className="py-3 px-3.5 w-28">Status</th>
-                      <th className="py-3 px-3.5 min-w-[200px]">Task Subject & ID</th>
-                      <th className="py-3 px-3.5 w-36">Category & Type</th>
-                      <th className="py-3 px-3.5 min-w-[150px]">Related Entity</th>
-                      <th className="py-3 px-3.5 w-24">Priority</th>
-                      <th className="py-3 px-3.5 min-w-[130px]">Assigned To</th>
-                      <th className="py-3 px-3.5 w-32">Due Date & Time</th>
-                      <th className="py-3 px-3.5 text-right w-24">Actions</th>
+                      {isColVisible('done') && <th className="py-3 px-3.5 w-12 text-center">Done</th>}
+                      {isColVisible('status') && (
+                        <th
+                          className="py-3 px-3.5 w-28 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('status')}
+                        >
+                          Status
+                          <TaskSortIcon field="status" />
+                        </th>
+                      )}
+                      {isColVisible('task') && (
+                        <th
+                          className="py-3 px-3.5 min-w-[200px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('task')}
+                        >
+                          Task Subject & ID
+                          <TaskSortIcon field="task" />
+                        </th>
+                      )}
+                      {isColVisible('category') && (
+                        <th
+                          className="py-3 px-3.5 w-36 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('category')}
+                        >
+                          Category & Type
+                          <TaskSortIcon field="category" />
+                        </th>
+                      )}
+                      {isColVisible('entity') && (
+                        <th className="py-3 px-3.5 min-w-[150px]">Related Entity</th>
+                      )}
+                      {isColVisible('priority') && (
+                        <th
+                          className="py-3 px-3.5 w-24 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('priority')}
+                        >
+                          Priority
+                          <TaskSortIcon field="priority" />
+                        </th>
+                      )}
+                      {isColVisible('assignedTo') && (
+                        <th
+                          className="py-3 px-3.5 min-w-[130px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('assignedTo')}
+                        >
+                          Assigned To
+                          <TaskSortIcon field="assignedTo" />
+                        </th>
+                      )}
+                      {isColVisible('dueDate') && (
+                        <th
+                          className="py-3 px-3.5 w-32 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('dueDate')}
+                        >
+                          Due Date & Time
+                          <TaskSortIcon field="dueDate" />
+                        </th>
+                      )}
+                      {isColVisible('actions') && (
+                        <th className="py-3 px-3.5 text-right w-24">Actions</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
@@ -1630,136 +1699,153 @@ export default function InternalTasksDashboard() {
                           data-testid={`task-row-${task.id}`}
                         >
                           {/* Checkbox toggle */}
-                          <td className="py-3 px-3.5 text-center" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              checked={task.status === 'Completed'}
-                              onChange={() => handleToggleStatus(task)}
-                              className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
-                            />
-                          </td>
+                          {isColVisible('done') && (
+                            <td className="py-3 px-3.5 text-center" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={task.status === 'Completed'}
+                                onChange={() => handleToggleStatus(task)}
+                                className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
+                              />
+                            </td>
+                          )}
 
                           {/* Status Badge */}
-                          <td className="py-3 px-3.5">
-                            <span
-                              className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
-                                task.status === 'Completed'
-                                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                                  : task.status === 'Pending Approval'
-                                  ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-extrabold animate-pulse'
-                                  : task.status === 'In Progress'
-                                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
-                                  : task.status === 'Rejected' || task.status === 'Cancelled'
-                                  ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
-                                  : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
-                              }`}
-                            >
-                              {task.status}
-                            </span>
-                          </td>
-
-                          {/* Task title, ID & description */}
-                          <td className="py-3 px-3.5">
-                            <div className="font-bold text-slate-900 dark:text-slate-100 hover:text-blue-600 transition-colors">
-                              {task.title}
-                            </div>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <span className="font-mono text-[10px] text-slate-400 font-medium">
-                                {task.task_number || task.id}
-                              </span>
-                              {task.description && (
-                                <span className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
-                                  • {task.description}
-                                </span>
-                              )}
-                            </div>
-                          </td>
-
-                          {/* Category & Task Type */}
-                          <td className="py-3 px-3.5">
-                            <div className="font-semibold text-slate-800 dark:text-slate-200">
-                              {task.task_type || task.task_type_name || 'General Task'}
-                            </div>
-                            <span className="text-[10px] text-slate-400 font-medium block">
-                              {INTERNAL_TASK_CATEGORY_LABELS[task.task_category as InternalTaskCategory] ||
-                                task.task_category ||
-                                'Operations'}
-                            </span>
-                          </td>
-
-                          {/* Related Entity Badge */}
-                          <td className="py-3 px-3.5">
-                            <div className="flex items-center gap-1.5">
+                          {isColVisible('status') && (
+                            <td className="py-3 px-3.5">
                               <span
-                                className={`px-1.5 py-0.5 text-[9px] font-bold rounded uppercase ${
-                                  task.related_entity_type === 'RFQ'
-                                    ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
-                                    : task.related_entity_type === 'BUYER'
-                                    ? 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300'
-                                    : task.related_entity_type === 'VENDOR'
+                                className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                                  task.status === 'Completed'
                                     ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                                    : task.related_entity_type === 'CREDIT' || task.related_entity_type === 'PAYMENT'
-                                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
-                                    : task.related_entity_type === 'CATEGORY'
-                                    ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
+                                    : task.status === 'Pending Approval'
+                                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-extrabold animate-pulse'
+                                    : task.status === 'In Progress'
+                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                                    : task.status === 'Rejected' || task.status === 'Cancelled'
+                                    ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
                                     : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
                                 }`}
                               >
-                                {task.related_entity_type}
+                                {task.status}
                               </span>
-                              <span className="font-medium text-slate-800 dark:text-slate-200 line-clamp-1">
-                                {task.credit_account_name || task.related_entity_label || 'Direct Task'}
+                            </td>
+                          )}
+
+                          {/* Task title, ID & description */}
+                          {isColVisible('task') && (
+                            <td className="py-3 px-3.5">
+                              <div className="font-bold text-slate-900 dark:text-slate-100 hover:text-blue-600 transition-colors">
+                                {task.title}
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="font-mono text-[10px] text-slate-400 font-medium">
+                                  {task.task_number || task.id}
+                                </span>
+                                {task.description && (
+                                  <span className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
+                                    • {task.description}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                          )}
+
+                          {/* Category & Task Type */}
+                          {isColVisible('category') && (
+                            <td className="py-3 px-3.5">
+                              <div className="font-semibold text-slate-800 dark:text-slate-200">
+                                {task.task_type || task.task_type_name || 'General Task'}
+                              </div>
+                              <span className="text-[10px] text-slate-400 font-medium block">
+                                {INTERNAL_TASK_CATEGORY_LABELS[task.task_category as InternalTaskCategory] ||
+                                  task.task_category ||
+                                  'Operations'}
                               </span>
-                            </div>
-                          </td>
+                            </td>
+                          )}
+
+                          {/* Related Entity Badge */}
+                          {isColVisible('entity') && (
+                            <td className="py-3 px-3.5">
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={`px-1.5 py-0.5 text-[9px] font-bold rounded uppercase ${
+                                    task.related_entity_type === 'RFQ'
+                                      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
+                                      : task.related_entity_type === 'BUYER'
+                                      ? 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300'
+                                      : task.related_entity_type === 'VENDOR'
+                                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                                      : task.related_entity_type === 'CREDIT' || task.related_entity_type === 'PAYMENT'
+                                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                                      : task.related_entity_type === 'CATEGORY'
+                                      ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
+                                      : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                                  }`}
+                                >
+                                  {task.related_entity_type}
+                                </span>
+                                <span className="font-medium text-slate-800 dark:text-slate-200 line-clamp-1">
+                                  {task.credit_account_name || task.related_entity_label || 'Direct Task'}
+                                </span>
+                              </div>
+                            </td>
+                          )}
 
                           {/* Priority */}
-                          <td className="py-3 px-3.5">
-                            <span
-                              className={`px-2 py-0.5 text-[10px] font-bold rounded ${
-                                task.priority === 'Critical'
-                                  ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
-                                  : task.priority === 'High'
-                                  ? 'bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300'
-                                  : task.priority === 'Medium'
-                                  ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
-                                  : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                              }`}
-                            >
-                              {task.priority}
-                            </span>
-                          </td>
+                          {isColVisible('priority') && (
+                            <td className="py-3 px-3.5">
+                              <span
+                                className={`px-2 py-0.5 text-[10px] font-bold rounded ${
+                                  task.priority === 'Critical'
+                                    ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
+                                    : task.priority === 'High'
+                                    ? 'bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300'
+                                    : task.priority === 'Medium'
+                                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                                    : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                                }`}
+                              >
+                                {task.priority}
+                              </span>
+                            </td>
+                          )}
 
                           {/* Assigned To */}
-                          <td className="py-3 px-3.5">
-                            <div className="flex items-center gap-1.5">
-                              <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] flex items-center justify-center font-bold text-slate-600 dark:text-slate-300">
-                                {(task.assigned_to_name || 'U').slice(0, 1)}
+                          {isColVisible('assignedTo') && (
+                            <td className="py-3 px-3.5">
+                              <div className="flex items-center gap-1.5">
+                                <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] flex items-center justify-center font-bold text-slate-600 dark:text-slate-300">
+                                  {(task.assigned_to_name || 'U').slice(0, 1)}
+                                </div>
+                                <span className="font-medium">{task.assigned_to_name || 'Unassigned'}</span>
                               </div>
-                              <span className="font-medium">{task.assigned_to_name || 'Unassigned'}</span>
-                            </div>
-                          </td>
+                            </td>
+                          )}
 
                           {/* Due Date & Overdue Badge */}
-                          <td className="py-3 px-3.5">
-                            <div className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
-                              {task.due_date || '—'} {task.due_time ? `• ${task.due_time}` : ''}
-                            </div>
-                            <span
-                              className={`text-[10px] font-semibold ${
-                                overdueInfo.isCompleted
-                                  ? 'text-emerald-600'
-                                  : overdueInfo.isOverdue
-                                  ? 'text-rose-600 font-bold'
-                                  : 'text-slate-400'
-                              }`}
-                            >
-                              {overdueInfo.text}
-                            </span>
-                          </td>
+                          {isColVisible('dueDate') && (
+                            <td className="py-3 px-3.5">
+                              <div className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                                {task.due_date || '—'} {task.due_time ? `• ${task.due_time}` : ''}
+                              </div>
+                              <span
+                                className={`text-[10px] font-semibold ${
+                                  overdueInfo.isCompleted
+                                    ? 'text-emerald-600'
+                                    : overdueInfo.isOverdue
+                                    ? 'text-rose-600 font-bold'
+                                    : 'text-slate-400'
+                                }`}
+                              >
+                                {overdueInfo.text}
+                              </span>
+                            </td>
+                          )}
 
                           {/* Actions */}
-                          <td className="py-3 px-3.5 text-right" onClick={(e) => e.stopPropagation()}>
+                          {isColVisible('actions') && (
+                            <td className="py-3 px-3.5 text-right" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center justify-end gap-1.5">
                               <button
                                 type="button"
@@ -1789,6 +1875,7 @@ export default function InternalTasksDashboard() {
                               </button>
                             </div>
                           </td>
+                          )}
                         </tr>
                       );
                     })}

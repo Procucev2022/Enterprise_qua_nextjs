@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import InternalTasksDashboard from '@/app/category-manager/internal-tasks';
 import CategoryManagerInternalTasksPage from '@/app/category-manager/internal-tasks/page';
 import * as internalTaskClient from '@/lib/internalTaskClient';
@@ -3053,6 +3053,90 @@ describe('Action Center & Internal Tasks Redesign', () => {
 
     const submitCreateBtn = screen.getByRole('button', { name: 'Create Task' });
     fireEvent.click(submitCreateBtn);
+  });
+
+
+  test('supports sorting columns on status, task, category, priority, assignedTo, and dueDate in both directions', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Task Subject & ID')).toBeInTheDocument();
+    });
+
+    // Sort by status
+    fireEvent.click(screen.getByText('Status'));
+    fireEvent.click(screen.getByText('Status'));
+
+    // Sort by task
+    fireEvent.click(screen.getByText('Task Subject & ID'));
+    fireEvent.click(screen.getByText('Task Subject & ID'));
+
+    // Sort by category
+    fireEvent.click(screen.getByText('Category & Type'));
+    fireEvent.click(screen.getByText('Category & Type'));
+
+    // Sort by priority
+    fireEvent.click(screen.getByText('Priority'));
+    fireEvent.click(screen.getByText('Priority'));
+
+    // Sort by assignedTo
+    fireEvent.click(screen.getByText('Assigned To'));
+    fireEvent.click(screen.getByText('Assigned To'));
+
+    // Sort by dueDate
+    fireEvent.click(screen.getByText('Due Date & Time'));
+    fireEvent.click(screen.getByText('Due Date & Time'));
+  });
+
+  test('opens column settings modal, toggles visibility, saves, resets to default, and loads from localStorage', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Task Subject & ID')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByTitle('Column Settings');
+    fireEvent.click(gearBtn);
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // Toggle optional column
+    const statusCheckbox = within(screen.getByRole('dialog')).getByLabelText(/Toggle column: Status/i);
+    fireEvent.click(statusCheckbox);
+
+    // Click Done
+    const doneBtn = screen.getByRole('button', { name: 'Done' });
+    fireEvent.click(doneBtn);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and reset to default
+    fireEvent.click(gearBtn);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    const resetBtn = screen.getByRole('button', { name: 'Reset to Default' });
+    fireEvent.click(resetBtn);
+
+    // Reopen and close via close button
+    fireEvent.click(gearBtn);
+    const closeBtn = screen.getByLabelText('Close column settings');
+    fireEvent.click(closeBtn);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  test('loads saved column settings from localStorage on initial render', async () => {
+    const customCols = [
+      { key: 'status', label: 'Status', visible: false },
+      { key: 'task', label: 'Task Subject & ID', visible: true, required: true },
+    ];
+    localStorage.setItem('qua_internal_task_col_prefs', JSON.stringify(customCols));
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Task Subject & ID')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole('columnheader', { name: /^Status/i })).not.toBeInTheDocument();
   });
 
 });
