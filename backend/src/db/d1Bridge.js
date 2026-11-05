@@ -196,12 +196,45 @@ function expandD1Params(text, params = []) {
  * (authSessionQueries.deleteOtp/purgeExpiredAuthState) read it directly to
  * know whether a delete actually removed a row, not just that the query ran.
  */
+/**
+ * Patterns matching transient Cloudflare D1 rate-limiting or resource overload errors.
+ * D1 enforces a maximum resource consumption within a sliding 10-second window.
+ */
+const RETRYABLE_D1_ERROR_PATTERNS = [
+  /overloaded/i,
+  /too many resources/i,
+  /rate limit/i,
+  /temporarily unavailable/i,
+  /resource limit/i,
+];
+
+function isRetryableD1Error(err) {
+  if (!err) return false;
+  const msg = err.message || String(err);
+  return RETRYABLE_D1_ERROR_PATTERNS.some((pattern) => pattern.test(msg));
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function queryD1(db, text, params = []) {
   const stmt = db.prepare(toD1Sql(text));
   const boundParams = expandD1Params(text, params);
   const bound = boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
-  const result = await bound.all();
-  return { rows: result.results || [], rowCount: result.meta ? result.meta.changes : undefined };
+  let attempts = 0;
+  const maxAttempts = 3;
+  while (attempts < maxAttempts) {
+    try {
+      const result = await bound.all();
+      return { rows: result.results || [], rowCount: result.meta ? result.meta.changes : undefined };
+    } catch (err) {
+      attempts++;
+      if (attempts < maxAttempts && isRetryableD1Error(err)) {
+        await sleep(100 * attempts + Math.floor(Math.random() * 50));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 /**
@@ -234,7 +267,22 @@ async function batchD1(db, statements) {
     const boundParams = expandD1Params(text, params);
     return boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
   });
-  const results = await db.batch(prepared);
+  let attempts = 0;
+  const maxAttempts = 3;
+  let results;
+  while (attempts < maxAttempts) {
+    try {
+      results = await db.batch(prepared);
+      break;
+    } catch (err) {
+      attempts++;
+      if (attempts < maxAttempts && isRetryableD1Error(err)) {
+        await sleep(100 * attempts + Math.floor(Math.random() * 50));
+        continue;
+      }
+      throw err;
+    }
+  }
   return results.map((result) => {
     // Workers binding returns { results, meta }; HTTP client returns { rows, rowCount }
     if (result && result.rows !== undefined) return result;

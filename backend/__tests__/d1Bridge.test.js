@@ -159,6 +159,39 @@ describe('d1Bridge', () => {
       expect(bind).toHaveBeenCalledWith('abc');
       expect(result).toEqual({ rows: [{ id: 1 }] });
     });
+
+    it('retries on D1 DB overloaded error and returns successful result on subsequent attempt', async () => {
+      const all = jest.fn()
+        .mockRejectedValueOnce(new Error('D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window'))
+        .mockResolvedValueOnce({ results: [{ id: 42 }] });
+      const prepare = jest.fn().mockReturnValue({ all });
+      const db = { prepare };
+
+      const { queryD1 } = require('../src/db/d1Bridge');
+      const result = await queryD1(db, 'select * from t');
+      expect(all).toHaveBeenCalledTimes(2);
+      expect(result).toEqual({ rows: [{ id: 42 }] });
+    });
+
+    it('throws immediately on non-retryable error without retrying', async () => {
+      const all = jest.fn().mockRejectedValueOnce(new Error('syntax error near unexpected token'));
+      const prepare = jest.fn().mockReturnValue({ all });
+      const db = { prepare };
+
+      const { queryD1 } = require('../src/db/d1Bridge');
+      await expect(queryD1(db, 'select * from t')).rejects.toThrow('syntax error');
+      expect(all).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws error when retry limit is exhausted on repeated overload errors', async () => {
+      const all = jest.fn().mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
+      const prepare = jest.fn().mockReturnValue({ all });
+      const db = { prepare };
+
+      const { queryD1 } = require('../src/db/d1Bridge');
+      await expect(queryD1(db, 'select * from t')).rejects.toThrow('overloaded');
+      expect(all).toHaveBeenCalledTimes(3);
+    });
   });
 
   describe('getD1HttpClient', () => {
@@ -318,6 +351,31 @@ describe('d1Bridge', () => {
         { rows: [{ id: 1 }], rowCount: 1 },
         { rows: [], rowCount: 0 },
       ]);
+    });
+
+    it('retries batch on D1 DB overloaded error and succeeds on subsequent attempt', async () => {
+      const batchMock = jest.fn()
+        .mockRejectedValueOnce(new Error('D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window'))
+        .mockResolvedValueOnce([
+          { results: [{ id: 1 }], meta: { changes: 1 } },
+        ]);
+      const prepareMock = jest.fn().mockReturnValue({});
+      const db = { prepare: prepareMock, batch: batchMock };
+
+      const { batchD1 } = require('../src/db/d1Bridge');
+      const results = await batchD1(db, [{ text: 'insert into t (id) values (1)' }]);
+      expect(batchMock).toHaveBeenCalledTimes(2);
+      expect(results).toEqual([{ rows: [{ id: 1 }], rowCount: 1 }]);
+    });
+
+    it('throws error when batchD1 exhausts retries on overload', async () => {
+      const batchMock = jest.fn().mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
+      const prepareMock = jest.fn().mockReturnValue({});
+      const db = { prepare: prepareMock, batch: batchMock };
+
+      const { batchD1 } = require('../src/db/d1Bridge');
+      await expect(batchD1(db, [{ text: 'insert into t (id) values (1)' }])).rejects.toThrow('overloaded');
+      expect(batchMock).toHaveBeenCalledTimes(3);
     });
 
     it('handles batch results that already have rows/rowCount (HTTP client)', async () => {
