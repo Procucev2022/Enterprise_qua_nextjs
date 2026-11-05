@@ -144,6 +144,10 @@ DEFAULT_LOGS.forEach((item) => inMemoryLogs.set(item.id, { ...item }));
 async function listLoginLogs(options = {}) {
   const { userType, status, search, startDate, endDate, dateRangePreset, page = 1, limit = 50 } = options;
 
+  const sanitizedPage = Math.max(1, parseInt(page, 10) || 1);
+  const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit, 10) || 50));
+  const offset = (sanitizedPage - 1) * sanitizedLimit;
+
   if (pool && pool.hasStorage && pool.hasStorage()) {
     try {
       const conditions = [];
@@ -160,7 +164,7 @@ async function listLoginLogs(options = {}) {
         values.push(status);
       }
 
-      if (search && search.trim()) {
+      if (search && typeof search === 'string' && search.trim()) {
         const escaped = escapeLikeWildcards(search.trim());
         conditions.push(`(user_name ILIKE $${idx} OR email ILIKE $${idx} OR company_name ILIKE $${idx} OR phone_number ILIKE $${idx})`);
         values.push(`%${escaped}%`);
@@ -181,16 +185,17 @@ async function listLoginLogs(options = {}) {
       const countRes = await pool.query(`SELECT COUNT(*) as total FROM user_login_logs ${whereClause}`, values);
       const total = parseInt(countRes.rows[0]?.total || 0, 10);
 
-      const offset = (Math.max(1, page) - 1) * limit;
-      const queryText = `SELECT * FROM user_login_logs ${whereClause} ORDER BY login_at DESC LIMIT $${idx++} OFFSET $${idx++}`;
-      values.push(limit, offset);
+      const limitParamIdx = idx++;
+      const offsetParamIdx = idx++;
+      const queryText = `SELECT * FROM user_login_logs ${whereClause} ORDER BY login_at DESC LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}`;
+      const queryValues = [...values, sanitizedLimit, offset];
 
-      const result = await pool.query(queryText, values);
+      const result = await pool.query(queryText, queryValues);
       return {
         logs: result.rows.map(mapRow),
         total,
-        page: Number(page),
-        totalPages: Math.ceil(total / limit) || 1,
+        page: sanitizedPage,
+        totalPages: Math.ceil(total / sanitizedLimit) || 1,
       };
     } catch (err) {
       logger.warn('listLoginLogs: query failed, falling back to memory', { error: err.message }, 'LOGIN_LOGS_QUERIES');
