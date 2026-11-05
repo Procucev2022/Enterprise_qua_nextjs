@@ -210,15 +210,20 @@ describe('NotificationBell — recipient inbox', () => {
 });
 
 describe('relativeTime', () => {
-  const NOW = Date.now();
-  it.each([
-    ['NaN for an unparseable date', 'not-a-date', ''],
-    ['just now under a minute', new Date(NOW - 15_000).toISOString(), 'just now'],
-    ['minutes', new Date(NOW - 5 * 60_000).toISOString(), '5m ago'],
-    ['hours', new Date(NOW - 3 * 3_600_000).toISOString(), '3h ago'],
-    ['days', new Date(NOW - 2 * 86_400_000).toISOString(), '2d ago'],
-  ])('renders %s', (_label, iso, expected) => {
-    expect(relativeTime(iso)).toBe(expected);
+  it('renders NaN for an unparseable date', () => {
+    expect(relativeTime('not-a-date')).toBe('');
+  });
+  it('renders just now under a minute', () => {
+    expect(relativeTime(new Date(Date.now() - 5_000).toISOString())).toBe('just now');
+  });
+  it('renders minutes', () => {
+    expect(relativeTime(new Date(Date.now() - 5 * 60_000).toISOString())).toBe('5m ago');
+  });
+  it('renders hours', () => {
+    expect(relativeTime(new Date(Date.now() - 3 * 3_600_000).toISOString())).toBe('3h ago');
+  });
+  it('renders days', () => {
+    expect(relativeTime(new Date(Date.now() - 2 * 86_400_000).toISOString())).toBe('2d ago');
   });
 });
 

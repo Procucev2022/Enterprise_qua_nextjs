@@ -21,6 +21,8 @@ export async function fetchDocuments(params: {
   category?: string;
   search?: string;
   activeOnly?: boolean;
+  source?: string;
+  accountType?: string;
 } = {}): Promise<DocumentVaultItem[]> {
   const query = new URLSearchParams();
   if (params.category && params.category !== 'all') {
@@ -31,6 +33,11 @@ export async function fetchDocuments(params: {
   }
   if (params.activeOnly) {
     query.set('activeOnly', 'true');
+  }
+  if (params.source && params.source !== 'all') {
+    query.set('source', params.source);
+  } else if (params.accountType && params.accountType !== 'all') {
+    query.set('source', params.accountType);
   }
 
   const url = `/api/document-vault${query.toString() ? `?${query.toString()}` : ''}`;

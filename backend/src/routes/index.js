@@ -33,10 +33,12 @@ const scorecardRoutes = require('./scorecard');
 const paymentDuesRoutes = require('./paymentDues');
 const actionCenterCommRoutes = require('./actionCenterCommunications');
 const documentVaultRoutes = require('./documentVault');
+const loginLogsRoutes = require('./loginLogs');
 
 // Mount sub-routers
 router.use('/action-center/communications', actionCenterCommRoutes);
 router.use('/document-vault', documentVaultRoutes);
+router.use('/login-logs', loginLogsRoutes);
 router.use('/payment-dues', paymentDuesRoutes);
 router.use('/internal-tasks', internalTaskRoutes);
 router.use('/tickets', ticketRoutes);

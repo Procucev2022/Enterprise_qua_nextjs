@@ -13,13 +13,14 @@ const { logger } = require('../services/loggerService');
  */
 async function listDocuments(req, res) {
   try {
-    const { category, search, activeOnly } = req.query || {};
+    const { category, search, activeOnly, source, accountType } = req.query || {};
     const isActiveOnly = activeOnly === 'true' || activeOnly === true;
 
     const documents = await documentVaultQueries.listDocuments({
       category,
       search,
       activeOnly: isActiveOnly,
+      source: source || accountType,
     });
 
     return res.json({

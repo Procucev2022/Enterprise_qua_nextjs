@@ -2332,7 +2332,50 @@ export type ActionCenterTabKey =
   | 'sellers'
   | 'registrations'
   | 'payment_dues'
-  | 'document_vault';
+  | 'document_vault'
+  | 'login_logs';
+
+export type LoginLogUserType = 'buyer' | 'vendor';
+export type LoginLogStatus = 'ACTIVE' | 'LOGGED_OUT' | 'TIMED_OUT';
+
+export interface LoginLogEntry {
+  id: string;
+  userId?: string;
+  userName: string;
+  email: string;
+  phoneNumber: string;
+  companyName: string;
+  userType: LoginLogUserType;
+  loginAt: string;
+  logoutAt?: string | null;
+  durationSeconds?: number;
+  status: LoginLogStatus;
+  ipAddress?: string;
+  deviceInfo?: string;
+  location?: string;
+  userAgent?: string;
+  createdAt: string;
+}
+
+export interface LoginLogsSummary {
+  totalToday: number;
+  activeNow: number;
+  buyerLogins: number;
+  sellerLogins: number;
+  avgDurationMinutes: number;
+  todayPeakHour?: string;
+}
+
+export interface LoginLogsFilterParams {
+  userType?: 'all' | 'buyer' | 'vendor';
+  status?: 'all' | 'ACTIVE' | 'LOGGED_OUT' | 'TIMED_OUT';
+  search?: string;
+  startDate?: string;
+  endDate?: string;
+  dateRangePreset?: 'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'custom';
+  page?: number;
+  limit?: number;
+}
 
 export type ActionCenterCommChannel = 'EMAIL' | 'SMS' | 'BOTH';
 
@@ -2359,6 +2402,8 @@ export interface DocumentVaultItem {
   isActive: boolean;
   createdAt: string;
   updatedAt?: string;
+  accountType?: 'buyer' | 'seller' | 'vault';
+  accountId?: string;
 }
 
 export interface DocumentVaultSummary {
@@ -3038,6 +3083,24 @@ export interface SupplierPaymentTransaction {
 
 
 
+export type RegistrationColumnKey =
+  | 'userName'
+  | 'clientType'
+  | 'companyName'
+  | 'phoneNumber'
+  | 'userEmail'
+  | 'regDate'
+  | 'status'
+  | 'sourceType'
+  | 'actions';
+
+export interface RegistrationColumnConfig {
+  key: RegistrationColumnKey;
+  label: string;
+  visible: boolean;
+  required?: boolean;
+}
+
 export interface RegisteredClient {
   id: string;
   userName: string;
@@ -3049,6 +3112,7 @@ export interface RegisteredClient {
   sourceType: 'Web App' | 'WhatsApp' | 'Email';
   isApproved?: boolean;
   remarks?: string;
+  clientType?: 'Buyer' | 'Seller';
 }
 
 

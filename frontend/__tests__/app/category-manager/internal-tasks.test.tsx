@@ -35,6 +35,9 @@ jest.mock('@/app/category-manager/components/RegistrationsDashboard', () => () =
 jest.mock('@/app/category-manager/components/PaymentDuesDashboard', () => ({
   PaymentDuesDashboard: () => <div data-testid="payment-dues-dashboard">Payment Dues Dashboard Mock</div>,
 }));
+jest.mock('@/app/category-manager/components/LoginLogsDashboard', () => () => (
+  <div data-testid="login-logs-dashboard">Login Logs Dashboard Mock</div>
+));
 jest.mock('@/lib/ticketClient', () => ({
   fetchTicketSummary: jest.fn().mockResolvedValue({ total: 5, pending: 2, inProgress: 1, escalated: 1, completed: 1, criticalCount: 1 }),
 }));
