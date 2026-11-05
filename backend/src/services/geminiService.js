@@ -2072,4 +2072,5 @@ module.exports = {
   repairTruncatedJson,
   inferCategoryFromLineItems,
   getBackoffMs,
+  parseSpreadsheetDate,
 };

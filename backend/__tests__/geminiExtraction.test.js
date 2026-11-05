@@ -2617,4 +2617,44 @@ describe('geminiService.generateJson', () => {
       });
     });
   });
+
+  describe('parseSpreadsheetDate comprehensive branch coverage', () => {
+    it('handles null, undefined, and empty string inputs', () => {
+      expect(gemini.parseSpreadsheetDate(null)).toBe('');
+      expect(gemini.parseSpreadsheetDate(undefined)).toBe('');
+      expect(gemini.parseSpreadsheetDate('')).toBe('');
+      expect(gemini.parseSpreadsheetDate('   ')).toBe('');
+    });
+
+    it('handles Excel Julian serial numbers in and out of range', () => {
+      expect(gemini.parseSpreadsheetDate('45600')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(gemini.parseSpreadsheetDate('45600.5')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(gemini.parseSpreadsheetDate('20000')).toBe('20000-01-01');
+      expect(gemini.parseSpreadsheetDate('75000')).toBe('75000-01-01');
+    });
+
+    it('handles ISO YYYY-MM-DD directly', () => {
+      expect(gemini.parseSpreadsheetDate('2026-11-20')).toBe('2026-11-20');
+    });
+
+    it('handles DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY formats and invalid date boundaries', () => {
+      expect(gemini.parseSpreadsheetDate('21/11/2026')).toBe('2026-11-21');
+      expect(gemini.parseSpreadsheetDate('21-11-2026')).toBe('2026-11-21');
+      expect(gemini.parseSpreadsheetDate('21.11.2026')).toBe('2026-11-21');
+      expect(gemini.parseSpreadsheetDate('5/6/2026')).toBe('2026-06-05');
+
+      expect(gemini.parseSpreadsheetDate('15/13/2026')).toBe('15/13/2026');
+      expect(gemini.parseSpreadsheetDate('15/00/2026')).toBe('15/00/2026');
+      expect(gemini.parseSpreadsheetDate('32/05/2026')).toBe('32/05/2026');
+      expect(gemini.parseSpreadsheetDate('00/05/2026')).toBe('00/05/2026');
+    });
+
+    it('handles ISO timestamp strings with timezone offsets and regular dates', () => {
+      expect(gemini.parseSpreadsheetDate('2026-11-20T18:30:00.000Z')).toBe('2026-11-21');
+      expect(gemini.parseSpreadsheetDate('2026-11-20 18:30:00Z')).toBe('2026-11-21');
+      expect(gemini.parseSpreadsheetDate('2026-11-20T18:30:00')).toBe('2026-11-21');
+      expect(gemini.parseSpreadsheetDate('November 21, 2026')).toBe('2026-11-21');
+      expect(gemini.parseSpreadsheetDate('completely-invalid-date')).toBe('completely-invalid-date');
+    });
+  });
 });

@@ -279,11 +279,9 @@ export function rankProcucevVendorsForV3(
     const categoryScore = signals.length === 0 ? 60 : match.matchScore;
     if (signals.length > 0 && categoryScore <= 0) continue;
 
-    const vendorMinors = (Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [])
-      .concat(Array.isArray((vendor as any).vendorSelectedCategories) ? (vendor as any).vendorSelectedCategories : [])
-      .concat(Array.isArray((vendor as any).clientMappedCategories) ? (vendor as any).clientMappedCategories : [])
-      .map(normalizeCategory)
-      .filter(Boolean);
+    const vendorMinors = Array.isArray(vendor.minorCategories)
+      ? vendor.minorCategories.map(normalizeCategory).filter(Boolean)
+      : [];
 
     const hasMinorMatch = normMinors.length > 0 && normMinors.some((nm) =>
       vendorMinors.some((vm) => vm === nm || matchesCategoryToken(vm, nm))
@@ -293,9 +291,10 @@ export function rankProcucevVendorsForV3(
     const minorBonus = hasMinorMatch ? 15 : 0;
     const overallScore = Math.min(100, Math.round(categoryScore * 0.7 + loc.score * 0.3) + minorBonus);
 
-    const matchedMinorCategory = hasMinorMatch
-      ? (vendor.minorCategories?.find((m) => normMinors.includes(normalizeCategory(m))) || preferredMinors[0])
-      : (vendor.minorCategories?.[0] || preferredMinors[0] || null);
+    const matchedMinorCategory = vendor.minorCategories?.find((m) => normMinors.includes(normalizeCategory(m)))
+      || vendor.minorCategories?.[0]
+      || preferredMinors[0]
+      || null;
 
     ranked.push({
       vendor,
@@ -310,10 +309,9 @@ export function rankProcucevVendorsForV3(
   }
 
   ranked.sort((a, b) => {
-    if (normMinors.length > 0) {
-      if (a.hasMinorMatch && !b.hasMinorMatch) return -1;
-      if (!a.hasMinorMatch && b.hasMinorMatch) return 1;
-    }
+    const aMinor = a.hasMinorMatch ? 1 : 0;
+    const bMinor = b.hasMinorMatch ? 1 : 0;
+    if (aMinor !== bMinor) return bMinor - aMinor;
     if (b.overallScore !== a.overallScore) return b.overallScore - a.overallScore;
     if (b.categoryScore !== a.categoryScore) return b.categoryScore - a.categoryScore;
     return (b.vendor.rating || 0) - (a.vendor.rating || 0);

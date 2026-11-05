@@ -56,6 +56,7 @@ import {
   fromExtractedEntity,
   updateManualRFQLineItem,
   validateManualRFQForm,
+  isPastDateString,
 } from '@/lib/manualRfqModel';
 import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, resolveLocationFromPostalResult } from '@/lib/validationSchemas';
 import { UI_STRINGS, formatString, extractionReasonMessage } from '@/lib/uiStrings';
@@ -536,7 +537,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       }
       const itemEntities = result.data.extractedEntities.map(fromExtractedEntity);
       if (!derivedDate) {
-        derivedDate = result.data.targetDeliveryDate || itemEntities.find((e) => e.targetDate)?.targetDate || '';
+        const rawDate = result.data.targetDeliveryDate || itemEntities.find((e) => e.targetDate)?.targetDate || '';
+        derivedDate = isPastDateString(rawDate) ? '' : rawDate;
       }
       extracted.push(...itemEntities);
     }

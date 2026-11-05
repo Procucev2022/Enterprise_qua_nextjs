@@ -1180,7 +1180,7 @@ export default function IngestionWizard({
         phone: null,
         vendorCategory: 'Procucev Network',
         majorCategory: r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial',
-        minorCategories: r.matchedMinorCategory ? [r.matchedMinorCategory] : (r.vendor.minorCategories || []),
+        ...(r.matchedMinorCategory ? { minorCategories: [r.matchedMinorCategory] } : (Array.isArray(r.vendor.minorCategories) && r.vendor.minorCategories.length > 0 ? { minorCategories: r.vendor.minorCategories } : {})),
         location: r.vendor.location || r.vendor.city || r.vendor.state || r.locationReason || null,
         matchScore: r.overallScore,
       });
@@ -2971,7 +2971,7 @@ export default function IngestionWizard({
                                     <span
                                       data-testid="procucev-v3-vendor-category"
                                       className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100/70 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800 truncate max-w-full"
-                                      title={`Minor: ${displayCat} | Major: ${r.vendor.majorCategory || 'General Industrial'}`}
+                                      title={displayCat}
                                     >
                                       {displayCat}
                                     </span>

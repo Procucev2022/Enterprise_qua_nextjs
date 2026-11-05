@@ -417,6 +417,38 @@ describe('vendorMatching module', () => {
       expect(res.isMatch).toBe(true);
       expect(res.matchedMajor).toBe('Centrifugal Pumps');
     });
+
+    it('ranks preferredMinors first in rankProcucevVendorsForV3', () => {
+      const v1 = {
+        id: 'v1',
+        name: 'Vendor General',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['General Parts'],
+        source: 'procucev_network',
+        rating: 4.5,
+      };
+
+      const v2 = {
+        id: 'v2',
+        name: 'Vendor Specific Minor',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Centrifugal Pumps'],
+        source: 'procucev_network',
+        rating: 4.0,
+      };
+
+      const ranked = rankProcucevVendorsForV3(
+        [v1 as any, v2 as any],
+        ['Engineering Spares - Mechanical'],
+        { location: 'Mumbai' },
+        10,
+        ['Centrifugal Pumps']
+      );
+
+      expect(ranked[0].vendor.id).toBe('v2');
+      expect(ranked[0].hasMinorMatch).toBe(true);
+      expect(ranked[0].matchedMinorCategory).toBe('Centrifugal Pumps');
+      expect(ranked[1].hasMinorMatch).toBe(false);
+    });
   });
 });
-

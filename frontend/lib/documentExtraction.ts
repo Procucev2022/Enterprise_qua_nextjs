@@ -69,7 +69,6 @@ export function flattenWorkbook(data: ArrayBuffer): string {
       header: 1,
       blankrows: false,
       defval: '',
-      raw: false,
     });
     const formatCell = (cell: unknown): string => {
       if (cell instanceof Date && !isNaN(cell.getTime())) {
