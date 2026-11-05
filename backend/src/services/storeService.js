@@ -201,27 +201,28 @@ class StoreService {
     }
 
     try {
-      const [vendorPage, rfqs, evaluations, vendorCatalogue, buyerAccountsResult, aiFeed, auditLogs, notifications, paymentLinks] =
-        await Promise.all([
-          // Bounded, not domainQueries.getVendorsFromDB() (a full unbounded
-          // table read) — this runs on every Worker cold start, and D1's
-          // free-tier daily row-read cap was exhausted twice by exactly this:
-          // Cloudflare's edge fan-out spins up many isolates under load /
-          // during a deploy, each one re-reading the entire vendors table
-          // once at boot. this.vendors is already documented elsewhere
-          // (getVendorByIdWithDBFallback) as "a capped, bootstrap-time
-          // subset" that individual DB fallbacks paper over — hydration
-          // should actually honor that instead of loading everything.
-          domainQueries.getVendorsPageFromDB({ limit: MAX_HYDRATION_VENDORS, offset: 0, skipCount: true, publicOnly: true }),
-          domainQueries.getRFQsFromDB(null, 100),
-          domainQueries.getEvaluationsFromDB(100),
-          domainQueries.getVendorCatalogueFromDB(100),
-          domainQueries.getBuyerAccountsFromDB(500),
-          domainQueries.getAIFeedFromDB(100),
-          domainQueries.getAuditLogsFromDB(100),
-          domainQueries.getNotificationsFromDB(null, 100),
-          domainQueries.getPaymentLinksFromDB(100),
-        ]);
+      // Bounded, not domainQueries.getVendorsFromDB() (a full unbounded
+      // table read) — this runs on every Worker cold start, and D1's
+      // free-tier daily row-read cap was exhausted twice by exactly this:
+      // Cloudflare's edge fan-out spins up many isolates under load /
+      // during a deploy, each one re-reading the entire vendors table
+      // once at boot. this.vendors is already documented elsewhere
+      // (getVendorByIdWithDBFallback) as "a capped, bootstrap-time
+      // subset" that individual DB fallbacks paper over — hydration
+      // should actually honor that instead of loading everything.
+      //
+      // Queries are sequenced rather than run via Promise.all so Cloudflare D1
+      // is not flooded with 9 parallel table scans within the same millisecond,
+      // which previously triggered D1_ERROR: D1 DB is overloaded within a 10s window.
+      const vendorPage = await domainQueries.getVendorsPageFromDB({ limit: MAX_HYDRATION_VENDORS, offset: 0, skipCount: true, publicOnly: true });
+      const rfqs = await domainQueries.getRFQsFromDB(null, 100);
+      const evaluations = await domainQueries.getEvaluationsFromDB(100);
+      const vendorCatalogue = await domainQueries.getVendorCatalogueFromDB(100);
+      const buyerAccountsResult = await domainQueries.getBuyerAccountsFromDB(500);
+      const aiFeed = await domainQueries.getAIFeedFromDB(100);
+      const auditLogs = await domainQueries.getAuditLogsFromDB(100);
+      const notifications = await domainQueries.getNotificationsFromDB(null, 100);
+      const paymentLinks = await domainQueries.getPaymentLinksFromDB(100);
 
       this.vendors = vendorPage.rows;
       this.vendorsTotal = vendorPage.total || vendorPage.rows.length;
