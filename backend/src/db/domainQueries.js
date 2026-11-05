@@ -13,6 +13,7 @@
 
 const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
+const vendorRfqUnlockQueries = require('./vendorRfqUnlockQueries');
 const vendorQuoteCreditQueries = require('./vendorQuoteCreditQueries');
 const vendorQuoteSubmissionQueries = require('./vendorQuoteSubmissionQueries');
 const { queryCache } = require('./queryCache');
@@ -1659,6 +1660,11 @@ async function getRFQUnlockFromDB(vendorId, rfqId) {
   return result && result.rows ? result.rows[0] : null;
 }
 
+async function unlockVendorRfqDurablyInDB(options) {
+  return vendorRfqUnlockQueries.unlockVendorRfqInDB(options);
+}
+
+
 async function getVendorUnlocksFromDB(vendorId, limit = 50) {
   if (!pool.hasStorage() || !vendorId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
@@ -2064,6 +2070,7 @@ module.exports = {
   unlockRFQInDB,
   getRFQUnlockFromDB,
   getVendorUnlocksFromDB,
+  unlockVendorRfqDurablyInDB,
   recordCreditTransactionInDB,
   recordVendorQuoteCreditInDB: vendorQuoteCreditQueries.recordVendorQuoteCreditInDB,
   makeD1VendorQuoteCreditStatements: vendorQuoteCreditQueries.makeD1VendorQuoteCreditStatements,

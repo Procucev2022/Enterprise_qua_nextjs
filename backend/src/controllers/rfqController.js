@@ -21,6 +21,7 @@ const {
   RFQ_MODES,
   RFQ_MODE_LABELS,
   RFQ_MODE_MAP,
+  RFQ_DOWNLOAD_ERRORS,
   hasUnlimitedRfqAccess,
   hasUnlimitedQuoteAccess,
   hasUnlimitedDownloadAccess,
@@ -1809,6 +1810,29 @@ async function addQuote(req, res, next) {
   }
 }
 
+function respondToVendorUnlockFailure(res, unlockResult) {
+  if (unlockResult && unlockResult.success) return false;
+
+  const creditsExhausted = Boolean(unlockResult && unlockResult.creditsExhausted);
+  const notFound = Boolean(unlockResult && unlockResult.notFound);
+  const status = creditsExhausted || (unlockResult && unlockResult.unauthorized) ? 403 : (notFound ? 404 : 503);
+  const error = unlockResult && unlockResult.error
+    ? unlockResult.error
+    : (creditsExhausted
+      ? RFQ_DOWNLOAD_ERRORS.CREDITS_EXHAUSTED
+      : ((unlockResult && unlockResult.unauthorized)
+        ? RFQ_DOWNLOAD_ERRORS.UNAUTHORIZED
+        : RFQ_DOWNLOAD_ERRORS.UNKNOWN_FAILURE));
+  const payload = { success: false, error };
+  if (creditsExhausted) {
+    payload.freeCreditsRemaining = unlockResult.freeCreditsRemaining ?? 0;
+    payload.exhausted = true;
+  }
+  res.status(status).json(payload);
+  return true;
+}
+
+
 async function downloadRFQ(req, res, next) {
   try {
     const { id } = req.params;
@@ -1824,18 +1848,10 @@ async function downloadRFQ(req, res, next) {
         return res.status(400).json({ success: false, error: 'Vendor profile not found.' });
       }
 
-      const isUnlimitedVendor = hasUnlimitedDownloadAccess(requestingVendor) || hasUnlimitedDownloadAccess(req.user);
       // Counted inside unlockRFQForVendor, and only when the download is new.
 
       const unlockResult = await storeService.unlockRFQForVendor(requestingVendor.id, rfq.id);
-      if (!unlockResult.success && unlockResult.creditsExhausted && !isUnlimitedVendor) {
-        return res.status(403).json({
-          success: false,
-          error: unlockResult.error || 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.',
-          freeCreditsRemaining: unlockResult.freeCreditsRemaining ?? 0,
-          exhausted: true,
-        });
-      }
+      if (respondToVendorUnlockFailure(res, unlockResult)) return;
 
       const vendor = (await resolveVendorForUser(req.user)) || requestingVendor;
       const emailPayload = generateStandardRFQEmail(rfq, vendor);
@@ -1871,17 +1887,9 @@ async function generateEmailPreview(req, res, next) {
     if (req.user && req.user.role === 'vendor') {
       const requestingVendor = await resolveVendorForUser(req.user);
       if (requestingVendor) {
-        const isUnlimitedVendor = hasUnlimitedDownloadAccess(requestingVendor) || hasUnlimitedDownloadAccess(req.user);
         // Counted inside unlockRFQForVendor, and only when the download is new.
         const unlockResult = await storeService.unlockRFQForVendor(requestingVendor.id, rfq.id);
-        if (!unlockResult.success && unlockResult.creditsExhausted && !isUnlimitedVendor) {
-          return res.status(403).json({
-            success: false,
-            error: unlockResult.error || 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.',
-            freeCreditsRemaining: unlockResult.freeCreditsRemaining ?? 0,
-            exhausted: true,
-          });
-        }
+        if (respondToVendorUnlockFailure(res, unlockResult)) return;
       }
     }
 

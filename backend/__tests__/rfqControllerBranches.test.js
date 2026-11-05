@@ -969,6 +969,40 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       );
       expect(resPrevEx.statusCode).toBe(403);
 
+      // Permission failures and missing durable unlock state must not return an RFQ payload.
+      storeService.unlockRFQForVendor.mockResolvedValue({
+        success: false,
+        unauthorized: true,
+        error: 'You do not have permission to access this RFQ.',
+      });
+      const resDenied = mockRes();
+      await rfqController.downloadRFQ(
+        { user: { role: 'vendor', id: 'v-dl-1', email: 'v@dl.com' }, params: { id: 'rfq-dl-1' } },
+        resDenied,
+        next
+      );
+      expect(resDenied.statusCode).toBe(403);
+      expect(resDenied.data).toMatchObject({ success: false, error: 'You do not have permission to access this RFQ.' });
+
+      storeService.unlockRFQForVendor.mockResolvedValue({ success: false, notFound: true, error: 'RFQ is unavailable.' });
+      const resMissingUnlock = mockRes();
+      await rfqController.generateEmailPreview(
+        { user: { role: 'vendor', id: 'v-dl-1', email: 'v@dl.com' }, params: { id: 'rfq-dl-1' }, query: {} },
+        resMissingUnlock,
+        next
+      );
+      expect(resMissingUnlock.statusCode).toBe(404);
+
+      storeService.unlockRFQForVendor.mockResolvedValue(null);
+      const resUnknownFailure = mockRes();
+      await rfqController.downloadRFQ(
+        { user: { role: 'vendor', id: 'v-dl-1', email: 'v@dl.com' }, params: { id: 'rfq-dl-1' } },
+        resUnknownFailure,
+        next
+      );
+      expect(resUnknownFailure.statusCode).toBe(503);
+
+
       storeService.getRFQByIdAsync.mockRestore();
       storeService.getRFQById.mockRestore();
       storeService.getVendorById.mockRestore();

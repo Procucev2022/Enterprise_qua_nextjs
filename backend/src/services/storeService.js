@@ -1717,20 +1717,49 @@ class StoreService {
    * Re-downloading an already-unlocked RFQ does NOT deduct another credit.
    */
   async unlockRFQForVendor(vendorIdOrEmail, rfqIdOrNumber, options = {}) {
-    const vendor = this.getVendorById(vendorIdOrEmail, 'all');
+    let vendor = await this.getVendorByIdWithDBFallback(vendorIdOrEmail, 'all');
     if (!vendor) {
       return {
         success: false,
-        error: 'Vendor record not found.',
+        error: RFQ_DOWNLOAD_ERRORS.VENDOR_NOT_FOUND,
         notFound: true,
       };
+    }
+
+    if (pool.hasStorage()) {
+      try {
+        const persistedVendor = await domainQueries.getVendorByIdFromDB(vendor.id, { fresh: true });
+        if (!persistedVendor) {
+          return {
+            success: false,
+            error: RFQ_DOWNLOAD_ERRORS.VENDOR_STORAGE_MISSING,
+            notFound: true,
+          };
+        }
+        vendor = persistedVendor;
+        const cachedIndex = this.vendors.findIndex((candidate) => candidate.id === vendor.id);
+        if (cachedIndex >= 0) this.vendors[cachedIndex] = vendor;
+        else this.vendors.unshift(vendor);
+      } catch (error) {
+        logger.error('Vendor profile refresh failed before RFQ unlock; refusing to use stale credit state', {
+          error,
+          vendorId: vendor.id,
+          rfqId: rfqIdOrNumber,
+          operation: 'unlock-rfq-vendor-refresh',
+        }, 'STORE_SERVICE');
+        const unavailable = new Error(RFQ_DOWNLOAD_ERRORS.VENDOR_STORAGE_UNAVAILABLE);
+        unavailable.statusCode = 503;
+        unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+        unavailable.cause = error;
+        throw unavailable;
+      }
     }
 
     const rfq = (await this.getRFQByIdAsync(rfqIdOrNumber)) || this.getRFQById(rfqIdOrNumber);
     if (!rfq) {
       return {
         success: false,
-        error: `RFQ ${rfqIdOrNumber} not found.`,
+        error: RFQ_DOWNLOAD_ERRORS.RFQ_NOT_FOUND.replace('{rfqId}', String(rfqIdOrNumber)),
         notFound: true,
       };
     }
@@ -1753,7 +1782,7 @@ class StoreService {
     if (!hasUnlimitedDownloads && !this.vendorCoversRFQ(vendor, rfq) && !(isNetworkMode && categoryMatches)) {
       return {
         success: false,
-        error: 'You do not have permission to access this RFQ.',
+        error: RFQ_DOWNLOAD_ERRORS.UNAUTHORIZED,
         unauthorized: true,
       };
     }
@@ -1774,6 +1803,77 @@ class StoreService {
         unlocked: true,
         freeCreditsRemaining: creditInfo.freeCreditsRemaining,
         creditCharged: 0,
+        rfq,
+        vendor,
+      };
+    }
+
+    if (pool.hasStorage()) {
+      let durableResult;
+      try {
+        durableResult = await domainQueries.unlockVendorRfqDurablyInDB({
+          vendorId: vendor.id,
+          rfqId: rfq.id,
+          rfqNumber: rfq.rfqNumber || null,
+          unlockId: `unl-${crypto.randomUUID()}`,
+          transactionId: `tx-${crypto.randomUUID()}`,
+          idempotencyKey: `tx-${vendor.id}-${rfq.id}`,
+        });
+        if (!durableResult) throw new Error('Vendor RFQ unlock did not return a persisted result.');
+      } catch (error) {
+        logger.error('Vendor RFQ unlock failed before response; durable balance and ledger state were preserved', {
+          error,
+          vendorId: vendor.id,
+          rfqId: rfq.id,
+          rfqNumber: rfq.rfqNumber,
+          operation: 'unlock-rfq-vendor',
+        }, 'STORE_SERVICE');
+        if (error.statusCode === 400 || error.statusCode === 409) throw error;
+        const unavailable = new Error(RFQ_DOWNLOAD_ERRORS.UNLOCK_STORAGE_UNAVAILABLE);
+        unavailable.statusCode = 503;
+        unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+        unavailable.cause = error;
+        throw unavailable;
+      }
+
+      if (durableResult.creditsExhausted) {
+        this.addAuditLog({
+          userEmail: vendor.email || SYSTEM_ACTOR_EMAIL,
+          action: `Download rejected for Vendor ${vendor.name || vendor.id} on RFQ ${rfq.rfqNumber}: Free RFQ download credits exhausted (0 balance).`,
+          rfqNumber: rfq.rfqNumber,
+        });
+        return {
+          success: false,
+          error: RFQ_DOWNLOAD_ERRORS.CREDITS_EXHAUSTED,
+          creditsExhausted: true,
+          freeCreditsRemaining: durableResult.freeCreditsRemaining ?? 0,
+        };
+      }
+
+      if (durableResult.vendor) {
+        const cachedIndex = this.vendors.findIndex((candidate) => candidate.id === vendor.id);
+        if (cachedIndex >= 0) this.vendors[cachedIndex] = durableResult.vendor;
+        else this.vendors.unshift(durableResult.vendor);
+        vendor = durableResult.vendor;
+      }
+
+      if (!durableResult.alreadyUnlocked) {
+        const action = durableResult.creditCharged
+          ? `Vendor ${vendor.name || vendor.id} unlocked RFQ ${rfq.rfqNumber}. 1 credit consumed. Balance remaining: ${durableResult.freeCreditsRemaining}.`
+          : `Vendor ${vendor.name || vendor.id} unlocked RFQ ${rfq.rfqNumber} (${durableResult.source || 'subscription'} entitlement).`;
+        this.addAuditLog({
+          userEmail: vendor.email || SYSTEM_ACTOR_EMAIL,
+          action,
+          rfqNumber: rfq.rfqNumber,
+        });
+      }
+
+      return {
+        success: true,
+        alreadyUnlocked: Boolean(durableResult.alreadyUnlocked),
+        unlocked: true,
+        freeCreditsRemaining: durableResult.freeCreditsRemaining,
+        creditCharged: durableResult.creditCharged || 0,
         rfq,
         vendor,
       };
@@ -1825,7 +1925,7 @@ class StoreService {
       });
       return {
         success: false,
-        error: 'You have no free RFQ download credits available. Please upgrade your subscription to download this RFQ.',
+        error: RFQ_DOWNLOAD_ERRORS.CREDITS_EXHAUSTED,
         creditsExhausted: true,
         freeCreditsRemaining: 0,
       };
