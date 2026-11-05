@@ -21,7 +21,13 @@ import {
   ChevronRight,
   Send,
   Ticket as TicketIcon,
+  Settings,
+  GripVertical,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
+import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
 import {
   fetchTicketSummary,
   fetchTickets,
@@ -54,6 +60,20 @@ const TICKET_CATEGORIES = [
 
 const TICKET_PRIORITIES: TicketPriority[] = ['Critical', 'High', 'Medium', 'Low'];
 const TICKET_STATUSES: TicketStatus[] = ['Pending', 'In Progress', 'Escalated', 'Completed'];
+
+const TICKET_DEFAULT_COLUMNS: ColumnDef[] = [
+  { key: 'ticketId', label: 'Ticket ID', visible: true },
+  { key: 'subject', label: 'Subject', visible: true, required: true },
+  { key: 'customer', label: 'Customer', visible: true },
+  { key: 'category', label: 'Category', visible: true },
+  { key: 'priority', label: 'Priority', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'assignedTo', label: 'Assigned To', visible: true },
+  { key: 'createdAt', label: 'Created At', visible: true },
+  { key: 'slaDeadline', label: 'SLA Deadline', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+const TICKET_COL_PREF_KEY = 'qua_tickets_col_prefs';
 
 export default function TicketsDashboard() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -111,9 +131,37 @@ export default function TicketsDashboard() {
   // Comment State
   const [newComment, setNewComment] = useState('');
 
+  // Column Settings State
+  const [ticketColumns, setTicketColumns] = useState<ColumnDef[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(TICKET_COL_PREF_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch { /* ignore */ }
+    }
+    return TICKET_DEFAULT_COLUMNS;
+  });
+  const [showTicketColumnSettings, setShowTicketColumnSettings] = useState<boolean>(false);
+  const [ticketSortField, setTicketSortField] = useState<string>('createdAt');
+  const [ticketSortOrder, setTicketSortOrder] = useState<'asc' | 'desc'>('desc');
+
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
+  }, []);
+
+  const handleTicketSort = useCallback((field: string) => {
+    setTicketSortField((prev) => {
+      if (prev === field) {
+        setTicketSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+        return prev;
+      }
+      setTicketSortOrder('asc');
+      return field;
+    });
   }, []);
 
   const loadSummary = useCallback(async () => {
@@ -339,7 +387,7 @@ export default function TicketsDashboard() {
       )}
 
       {/* Control Bar: Filters, Search, Export, Create */}
-      <div className="flex flex-wrap items-center justify-between gap-2.5 p-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs">
+      <div className="flex flex-nowrap items-center justify-between gap-2.5 p-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs">
         <div className="flex items-center gap-2 flex-1 min-w-[260px] max-w-xl">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
@@ -386,6 +434,16 @@ export default function TicketsDashboard() {
             className="p-1.5 text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50"
           >
             <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+          </button>
+
+          {/* Gear - Column Settings */}
+          <button
+            type="button"
+            onClick={() => setShowTicketColumnSettings(true)}
+            className="shrink-0 h-8 w-8 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+            title="Column Settings"
+          >
+            <Settings size={14} />
           </button>
 
           <button

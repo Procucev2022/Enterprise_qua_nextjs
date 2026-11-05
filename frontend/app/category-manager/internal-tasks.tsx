@@ -38,6 +38,11 @@ import {
   Award,
   CreditCard,
   Users,
+  Settings,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  GripVertical,
 } from 'lucide-react';
 import {
   InternalTask,
@@ -107,6 +112,21 @@ import ActionCenterComposeModal from './components/ActionCenterComposeModal';
 import DocumentVaultDashboard from './components/DocumentVaultDashboard';
 import LoginLogsDashboard from './components/LoginLogsDashboard';
 import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
+import ColumnSettingsPopup, { type ColumnDef } from './components/ColumnSettingsPopup';
+
+
+const DEFAULT_TASK_TABLE_COLUMNS: ColumnDef[] = [
+  { key: 'done', label: 'Done', visible: true, required: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'task', label: 'Task Subject & ID', visible: true, required: true },
+  { key: 'category', label: 'Category & Type', visible: true },
+  { key: 'entity', label: 'Related Entity', visible: true },
+  { key: 'priority', label: 'Priority', visible: true },
+  { key: 'assignedTo', label: 'Assigned To', visible: true },
+  { key: 'dueDate', label: 'Due Date & Time', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+const TASK_COL_PREF_KEY = 'qua_internal_task_col_prefs';
 
 export default function InternalTasksDashboard() {
   // Data state
@@ -145,6 +165,63 @@ export default function InternalTasksDashboard() {
   const [approvalSummary, setApprovalSummary] = useState<ApprovalSummary | null>(null);
   const [paymentDuesSummary, setPaymentDuesSummary] = useState<PaymentDuesSummary | null>(null);
   const [isComposeModalOpen, setIsComposeModalOpen] = useState<boolean>(false);
+
+  // Column customization & sorting states
+  const [taskColumns, setTaskColumns] = useState<ColumnDef[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(TASK_COL_PREF_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch {}
+    }
+    return DEFAULT_TASK_TABLE_COLUMNS;
+  });
+  const [showTaskColumnSettings, setShowTaskColumnSettings] = useState<boolean>(false);
+  const [taskSortField, setTaskSortField] = useState<string>('');
+  const [taskSortOrder, setTaskSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  const handleTaskSort = useCallback((field: string) => {
+    setTaskSortField((prev) => {
+      if (prev === field) {
+        setTaskSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+        return prev;
+      }
+      setTaskSortOrder('asc');
+      return field;
+    });
+  }, []);
+
+  const visibleTaskColumns = useMemo(() => taskColumns.filter((c) => c.visible), [taskColumns]);
+
+  const sortedTasks = useMemo(() => {
+    if (!taskSortField) return tasks;
+    const list = [...tasks];
+    list.sort((a, b) => {
+      let cmp = 0;
+      if (taskSortField === 'dueDate') {
+        const aT = a.due_date ? new Date(a.due_date).getTime() : 0;
+        const bT = b.due_date ? new Date(b.due_date).getTime() : 0;
+        cmp = aT - bT;
+      } else if (taskSortField === 'task') {
+        cmp = (a.title || '').localeCompare(b.title || '');
+      } else if (taskSortField === 'status') {
+        cmp = (a.status || '').localeCompare(b.status || '');
+      } else if (taskSortField === 'priority') {
+        const rank: Record<string, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 };
+        cmp = (rank[a.priority] || 0) - (rank[b.priority] || 0);
+      } else if (taskSortField === 'category') {
+        cmp = (a.task_category || '').localeCompare(b.task_category || '');
+      } else if (taskSortField === 'assignedTo') {
+        cmp = (a.assigned_to_name || '').localeCompare(b.assigned_to_name || '');
+      }
+      return taskSortOrder === 'asc' ? cmp : -cmp;
+    });
+    return list;
+  }, [tasks, taskSortField, taskSortOrder]);
+
   // Summary Card Popup Modal State
   const [summaryModalState, setSummaryModalState] = useState<{
     isOpen: boolean;
@@ -1300,14 +1377,14 @@ export default function InternalTasksDashboard() {
           </div>
 
           {/* ============================================================== */}
-          {/* TOOLBAR: Search, Category, Assignee, Reminders, Create, Export */}
+          {/* TOOLBAR: 1.Search, 2.Category, 3.My Tasks, 4.All Users, 5.Filter, 6.Export CSV, 7.Reminders, 8.Send SMS/Email, 9.Create Task, 10.Refresh, 11.Gear */}
           {/* ============================================================== */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-wrap items-center justify-between gap-2 sm:gap-2.5">
-            {/* Left: Search input and primary dropdowns */}
-            <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[260px]">
-              {/* Search Bar */}
-              <div className="relative flex-1 min-w-[200px] max-w-sm">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 shadow-xs flex flex-row items-center justify-between gap-1.5 overflow-x-auto no-scrollbar w-full">
+            {/* Left Controls: 1.Search, 2.Category, 3.My Tasks, 4.All Users */}
+            <div className="flex items-center gap-1.5 flex-1 min-w-0">
+              {/* 1. Search Bar */}
+              <div className="relative flex-1 min-w-[150px] max-w-xs">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
                 <input
                   type="text"
                   value={searchQuery}
@@ -1316,7 +1393,7 @@ export default function InternalTasksDashboard() {
                     setCurrentPage(1);
                   }}
                   placeholder="Search by title, ID, entity, instructions..."
-                  className="w-full pl-8 pr-8 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full pl-8 pr-7 py-1 h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 {searchQuery && (
                   <button
@@ -1325,7 +1402,7 @@ export default function InternalTasksDashboard() {
                       setSearchQuery('');
                       setCurrentPage(1);
                     }}
-                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
                     aria-label="Clear search"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -1333,11 +1410,11 @@ export default function InternalTasksDashboard() {
                 )}
               </div>
 
-              {/* Category Filter Dropdown */}
+              {/* 2. All Categories Dropdown */}
               <select
                 value={activeFilters.taskCategory || 'all'}
                 onChange={(e) => handleCategoryChange(e.target.value)}
-                className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 whitespace-nowrap cursor-pointer"
+                className="shrink-0 h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
                 data-testid="toolbar-category-select"
               >
                 <option value="all">All Categories</option>
@@ -1348,13 +1425,13 @@ export default function InternalTasksDashboard() {
                 ))}
               </select>
 
-              {/* Quick "My Tasks" Button */}
+              {/* 3. My Tasks Button */}
               <button
                 type="button"
                 onClick={handleToggleMyTasks}
-                className={`shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
+                className={`shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
                   isMyTasksActive
-                    ? 'bg-blue-600 border-blue-600 text-white shadow-sm shadow-blue-600/20'
+                    ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
                     : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
                 }`}
                 title={UI_STRINGS.actionCenter.tasks.myTasks}
@@ -1364,11 +1441,11 @@ export default function InternalTasksDashboard() {
                 <span>{UI_STRINGS.actionCenter.tasks.myTasks}</span>
               </button>
 
-              {/* Internal User / Assignee Dropdown */}
+              {/* 4. All Users Dropdown */}
               <select
                 value={activeFilters.assignedTo || 'all'}
                 onChange={(e) => handleAssigneeChange(e.target.value)}
-                className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 whitespace-nowrap cursor-pointer"
+                className="shrink-0 h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
                 aria-label={UI_STRINGS.actionCenter.tasks.selectAssignee}
                 data-testid="toolbar-assignee-select"
               >
@@ -1389,43 +1466,43 @@ export default function InternalTasksDashboard() {
               </select>
             </div>
 
-            {/* Right: Actions */}
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              {/* Filter Button */}
+            {/* Right Controls: 5.Filter, 6.Export CSV, 7.Reminders, 8.Send SMS/Email, 9.Create Task, 10.Refresh, 11.Gear */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* 5. Filter Button */}
               <button
                 type="button"
                 onClick={handleOpenFilterDrawer}
-                className={`shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
+                className={`shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
                   activeFilterCount > 0
-                    ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-400 text-blue-700 dark:text-blue-300 shadow-sm'
+                    ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-400 text-blue-700 dark:text-blue-300 shadow-xs'
                     : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
                 }`}
               >
                 <Filter className="w-3.5 h-3.5" />
                 <span>Filter</span>
                 {activeFilterCount > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-blue-600 text-white text-[10px] flex items-center justify-center font-bold">
+                  <span className="w-3.5 h-3.5 rounded-full bg-blue-600 text-white text-[9px] flex items-center justify-center font-bold">
                     {activeFilterCount}
                   </span>
                 )}
               </button>
 
-              {/* Export CSV Button */}
+              {/* 6. Export CSV Button */}
               <a
                 href={clientCsvExportUri || exportUrl}
                 download="internal_tasks.csv"
-                className="shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3 text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+                className="shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
                 data-testid="toolbar-export-csv-btn"
               >
                 <Download className="w-3.5 h-3.5 text-slate-500" />
-                <span>{UI_STRINGS.actionCenter.tasks.exportCsvBtn || 'Export CSV'}</span>
+                <span>Export CSV</span>
               </a>
 
-              {/* Check Reminders Button */}
+              {/* 7. Reminders Button */}
               <button
                 type="button"
                 onClick={handleCheckReminders}
-                className="shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3 text-xs font-semibold rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100 transition-all shadow-sm cursor-pointer"
+                className="shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100 transition-all shadow-xs cursor-pointer"
                 title="Evaluate deadline triggers and dispatch overdue reminders"
                 data-testid="toolbar-check-reminders-btn"
               >
@@ -1433,31 +1510,31 @@ export default function InternalTasksDashboard() {
                 <span>Reminders</span>
               </button>
 
-              {/* Quick Compose SMS / Email Button */}
+              {/* 8. Send SMS / Email Button */}
               <button
                 type="button"
                 onClick={() => {
                   setSelectedTaskDetails(null);
                   setIsComposeModalOpen(true);
                 }}
-                className="shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3 text-xs font-semibold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition-all shadow-sm cursor-pointer"
+                className="shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition-all shadow-xs cursor-pointer"
                 title="Dispatch SMS or Email Notification"
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>Send SMS / Email</span>
               </button>
 
-              {/* Create Internal Task Button */}
+              {/* 9. Create Internal Task Button */}
               <button
                 type="button"
                 onClick={handleOpenCreateModal}
-                className="shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm shadow-blue-600/20 transition-all cursor-pointer"
+                className="shrink-0 h-8 inline-flex items-center gap-1 px-3 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-xs shadow-blue-600/20 transition-all cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Create Internal Task</span>
               </button>
 
-              {/* Refresh Button */}
+              {/* 10. Refresh Button */}
               <button
                 type="button"
                 onClick={() => {
@@ -1466,10 +1543,21 @@ export default function InternalTasksDashboard() {
                   showToast('Refreshed data.');
                 }}
                 aria-label="Refresh tasks"
-                className="shrink-0 h-8.5 w-8.5 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-500 transition-colors cursor-pointer"
+                className="shrink-0 h-8 w-8 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-500 transition-colors cursor-pointer"
                 title="Refresh"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+
+              {/* 11. Gear icon (Column Settings) */}
+              <button
+                type="button"
+                onClick={() => setShowTaskColumnSettings(true)}
+                className="shrink-0 h-8 w-8 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+                title="Column Settings"
+                data-testid="toolbar-gear-btn"
+              >
+                <Settings className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
@@ -1531,7 +1619,7 @@ export default function InternalTasksDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
-                    {tasks.map((task) => {
+                    {sortedTasks.map((task) => {
                       const overdueInfo = getDaysOverdueOrRemaining(task.due_date, task.status);
 
                       return (
@@ -3209,6 +3297,27 @@ export default function InternalTasksDashboard() {
         );
       })()}
       {/* Action Center Tasks Summary Modal */}
+
+      {/* Task Column Settings Popup */}
+      <ColumnSettingsPopup
+        isOpen={showTaskColumnSettings}
+        onClose={() => setShowTaskColumnSettings(false)}
+        columns={taskColumns}
+        onSave={(newCols) => {
+          setTaskColumns(newCols);
+          try {
+            localStorage.setItem(TASK_COL_PREF_KEY, JSON.stringify(newCols));
+          } catch {}
+        }}
+        onReset={() => {
+          setTaskColumns(DEFAULT_TASK_TABLE_COLUMNS);
+          try {
+            localStorage.setItem(TASK_COL_PREF_KEY, JSON.stringify(DEFAULT_TASK_TABLE_COLUMNS));
+          } catch {}
+        }}
+        title="Internal Tasks Columns"
+      />
+
       <ActionCenterSummaryPopupModal
         isOpen={summaryModalState.isOpen}
         onClose={() => setSummaryModalState((prev) => ({ ...prev, isOpen: false }))}
