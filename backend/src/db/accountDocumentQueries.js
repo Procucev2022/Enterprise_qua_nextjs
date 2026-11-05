@@ -408,10 +408,89 @@ async function deleteAccountDocument(id, accountType, accountId, actor = {}) {
   return false;
 }
 
+/**
+ * Retrieve all account documents across buyers and sellers (for Document Vault integration).
+ */
+async function getAllAccountDocuments(filters = {}) {
+  const { accountType, category, search, activeOnly } = filters;
+  let persistedDocs = [];
+
+  if (pool.hasStorage()) {
+    try {
+      const conditions = [];
+      const values = [];
+
+      if (activeOnly) {
+        conditions.push('is_active = 1');
+      }
+
+      if (accountType && accountType !== 'all') {
+        values.push(String(accountType).toLowerCase());
+        conditions.push(`account_type = $${values.length}`);
+      }
+
+      if (category && category !== 'all') {
+        values.push(category);
+        conditions.push(`category = $${values.length}`);
+      }
+
+      if (search && search.trim()) {
+        values.push(`%${escapeLikeWildcards(search.trim())}%`);
+        const pIndex = values.length;
+        conditions.push(`(document_name ILIKE $${pIndex} OR file_name ILIKE $${pIndex} OR description ILIKE $${pIndex})`);
+      }
+
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      const queryText = `
+        SELECT id, account_type, account_id, document_name, file_name, file_size, mime_type,
+               category, file_url, description, uploaded_by, is_active, created_at, updated_at
+          FROM account_documents
+         ${whereClause}
+         ORDER BY created_at DESC
+      `;
+      const result = await pool.query(queryText, values, { d1: true });
+      persistedDocs = result.rows.map(mapRow);
+    } catch (err) {
+      logger.error('accountDocumentQueries: PostgreSQL getAllAccountDocuments failed, falling back to memory', { error: err.message });
+      persistedDocs = inMemoryAccountDocuments.slice();
+    }
+  } else {
+    persistedDocs = inMemoryAccountDocuments.slice();
+  }
+
+  let list = persistedDocs;
+  if (activeOnly) {
+    list = list.filter((d) => d.isActive !== false);
+  }
+  if (accountType && accountType !== 'all') {
+    list = list.filter((d) => d.accountType === String(accountType).toLowerCase());
+  }
+  if (category && category !== 'all') {
+    list = list.filter((d) => d.category === category);
+  }
+  if (search && search.trim()) {
+    const term = search.trim().toLowerCase();
+    list = list.filter((d) => {
+      const name = (d.documentName || '').toLowerCase();
+      const file = (d.fileName || '').toLowerCase();
+      const desc = (d.description || '').toLowerCase();
+      return name.includes(term) || file.includes(term) || desc.includes(term);
+    });
+  }
+
+  return list;
+}
+
+function getInMemoryDocuments() {
+  return inMemoryAccountDocuments.map(mapRow);
+}
+
 module.exports = {
   listAccountDocuments,
   createAccountDocument,
   deleteAccountDocument,
+  getAllAccountDocuments,
+  getInMemoryDocuments,
   resetInMemoryStore,
   mapRow,
   matchesDocumentType,

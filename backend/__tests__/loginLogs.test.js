@@ -1,0 +1,434 @@
+const request = require('supertest');
+const express = require('express');
+const loginLogsRoutes = require('../src/routes/loginLogs');
+const loginLogsQueries = require('../src/db/loginLogsQueries');
+const loginLogsController = require('../src/controllers/loginLogsController');
+const pool = require('../src/db/pool');
+const authService = require('../src/services/authService');
+
+const adminToken = authService.generateSessionToken({
+  id: 'cm-admin',
+  uuid: 'cm-admin',
+  email: 'admin@procucev.com',
+  role: 'category_manager',
+});
+
+const app = express();
+app.use(express.json());
+app.use((req, res, next) => {
+  if (!req.headers.authorization && !req.headers['x-skip-auth']) {
+    req.headers.authorization = `Bearer ${adminToken}`;
+  }
+  next();
+});
+app.use('/api/login-logs', loginLogsRoutes);
+
+describe('Login Logs API & Controller', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('Authentication & Authorization Gate', () => {
+    test('rejects unauthenticated requests with 401', async () => {
+      const res = await request(app).get('/api/login-logs').set('x-skip-auth', 'true');
+      expect(res.status).toBe(401);
+    });
+
+    test('rejects unauthorized roles with 403 on summary and logs', async () => {
+      const buyerToken = authService.generateSessionToken({
+        id: 'buyer-user',
+        email: 'buyer@example.com',
+        role: 'buyer',
+      });
+      const resLogs = await request(app).get('/api/login-logs').set('Authorization', `Bearer ${buyerToken}`);
+      expect(resLogs.status).toBe(403);
+
+      const resSummary = await request(app).get('/api/login-logs/summary').set('Authorization', `Bearer ${buyerToken}`);
+      expect(resSummary.status).toBe(403);
+    });
+  });
+
+  describe('GET /api/login-logs (HTTP Endpoint)', () => {
+    test('returns list of logs with total count and pagination', async () => {
+      const res = await request(app).get('/api/login-logs');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.logs)).toBe(true);
+      expect(res.body.logs.length).toBeGreaterThan(0);
+      expect(res.body.page).toBe(1);
+      expect(res.body.totalPages).toBeGreaterThanOrEqual(1);
+    });
+
+    test('filters logs by userType = buyer', async () => {
+      const res = await request(app).get('/api/login-logs?userType=buyer');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.logs.every((l) => l.userType === 'buyer')).toBe(true);
+    });
+
+    test('filters logs by userType = vendor', async () => {
+      const res = await request(app).get('/api/login-logs?userType=vendor');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.logs.every((l) => l.userType === 'vendor')).toBe(true);
+    });
+
+    test('filters logs by status = ACTIVE', async () => {
+      const res = await request(app).get('/api/login-logs?status=ACTIVE');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.logs.every((l) => l.status === 'ACTIVE')).toBe(true);
+    });
+
+    test('filters logs by search query matching company or name', async () => {
+      const res = await request(app).get('/api/login-logs?search=Tata');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.logs.length).toBeGreaterThan(0);
+      expect(res.body.logs[0].companyName).toContain('Tata');
+    });
+
+    test('filters logs by dateRangePreset presets (today, yesterday, last7, last30, startDate)', async () => {
+      const resToday = await request(app).get('/api/login-logs?dateRangePreset=today');
+      expect(resToday.status).toBe(200);
+      expect(resToday.body.success).toBe(true);
+
+      const resYesterday = await request(app).get('/api/login-logs?dateRangePreset=yesterday');
+      expect(resYesterday.status).toBe(200);
+
+      const resLast7 = await request(app).get('/api/login-logs?dateRangePreset=last7');
+      expect(resLast7.status).toBe(200);
+
+      const resLast30 = await request(app).get('/api/login-logs?dateRangePreset=last30');
+      expect(resLast30.status).toBe(200);
+
+      const resCustom = await request(app).get('/api/login-logs?startDate=2026-01-01');
+      expect(resCustom.status).toBe(200);
+
+      const resInvalidDate = await request(app).get('/api/login-logs?startDate=invalid-date&endDate=also-invalid');
+      expect(resInvalidDate.status).toBe(200);
+      expect(resInvalidDate.body.success).toBe(true);
+    });
+
+    test('handles controller failure gracefully with 500 status', async () => {
+      jest.spyOn(loginLogsQueries, 'listLoginLogs').mockRejectedValueOnce(new Error('DB failure'));
+
+      const res = await request(app).get('/api/login-logs');
+      expect(res.status).toBe(500);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe('Failed to retrieve login session logs');
+    });
+  });
+
+  describe('GET /api/login-logs/summary', () => {
+    test('returns real-time KPI metrics summary', async () => {
+      const res = await request(app).get('/api/login-logs/summary');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.summary).toHaveProperty('totalToday');
+      expect(res.body.summary).toHaveProperty('activeNow');
+      expect(res.body.summary).toHaveProperty('buyerLogins');
+      expect(res.body.summary).toHaveProperty('sellerLogins');
+      expect(res.body.summary).toHaveProperty('avgDurationMinutes');
+    });
+
+    test('handles summary retrieval failure with 500 status', async () => {
+      jest.spyOn(loginLogsQueries, 'getLoginLogsSummary').mockRejectedValueOnce(new Error('Summary error'));
+
+      const res = await request(app).get('/api/login-logs/summary');
+      expect(res.status).toBe(500);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe('Failed to retrieve login logs summary');
+    });
+  });
+
+  describe('POST /api/login-logs/event', () => {
+    test('records a new login event', async () => {
+      const payload = {
+        userName: 'Vikram Malhotra',
+        email: 'vikram.m@jsw.in',
+        companyName: 'JSW Steel Ltd',
+        phoneNumber: '+91 98200 11223',
+        userType: 'buyer',
+        ipAddress: '103.20.10.5',
+      };
+
+      const res = await request(app).post('/api/login-logs/event').send(payload);
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.entry.email).toBe('vikram.m@jsw.in');
+      expect(res.body.entry.status).toBe('ACTIVE');
+    });
+
+    test('records a logout event and sets status to LOGGED_OUT', async () => {
+      // First ensure an active session exists
+      await request(app).post('/api/login-logs/event').send({
+        userName: 'Logout Test User',
+        email: 'logout.test@enterprise.com',
+        companyName: 'Logout Corp',
+        phoneNumber: '+91 99999 12345',
+        userType: 'vendor',
+      });
+
+      // Now logout
+      const res = await request(app).post('/api/login-logs/event').send({
+        type: 'logout',
+        email: 'logout.test@enterprise.com',
+        logoutReason: 'MANUAL',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.entry.status).toBe('LOGGED_OUT');
+      expect(res.body.entry.logoutAt).toBeDefined();
+    });
+
+    test('handles logout event with TIMEOUT reason', async () => {
+      await request(app).post('/api/login-logs/event').send({
+        userName: 'Timeout User',
+        email: 'timeout.user@enterprise.com',
+        companyName: 'Timeout Corp',
+        phoneNumber: '+91 99999 54321',
+        userType: 'buyer',
+      });
+
+      const res = await request(app).post('/api/login-logs/event').send({
+        type: 'logout',
+        email: 'timeout.user@enterprise.com',
+        logoutReason: 'TIMEOUT',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.entry.status).toBe('TIMED_OUT');
+    });
+
+    test('handles recordEvent failure with 500 status', async () => {
+      jest.spyOn(loginLogsQueries, 'recordLoginLog').mockRejectedValueOnce(new Error('Event write error'));
+
+      const res = await request(app).post('/api/login-logs/event').send({
+        userName: 'Fail User',
+        email: 'fail@test.com',
+      });
+
+      expect(res.status).toBe(500);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe('Failed to record session log event');
+    });
+  });
+
+  describe('PostgreSQL Database Pool Branch Coverage', () => {
+    const rawSqlRow = {
+      id: 'log_sql_1',
+      user_id: 'USER-SQL-1',
+      user_name: 'SQL User',
+      email: 'sql.user@example.com',
+      phone_number: '+91 99887 76655',
+      company_name: 'SQL Technologies',
+      user_type: 'buyer',
+      login_at: new Date().toISOString(),
+      logout_at: null,
+      duration_seconds: 0,
+      status: 'ACTIVE',
+      ip_address: '10.0.0.1',
+      device_info: 'Chrome / Windows',
+      location: 'Bangalore, IN',
+      user_agent: 'Mozilla/5.0',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    beforeEach(() => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    test('listLoginLogs executes SQL query and returns mapped rows', async () => {
+      jest.spyOn(pool, 'query').mockImplementation((queryText) => {
+        if (queryText.includes('COUNT(*)')) {
+          return Promise.resolve({ rows: [{ total: '1' }] });
+        }
+        return Promise.resolve({ rows: [rawSqlRow] });
+      });
+
+      const result = await loginLogsQueries.listLoginLogs({
+        userType: 'buyer',
+        status: 'ACTIVE',
+        search: 'SQL',
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+        page: 1,
+        limit: 10,
+      });
+
+      expect(pool.query).toHaveBeenCalled();
+      expect(result.logs.length).toBe(1);
+      expect(result.logs[0].userName).toBe('SQL User');
+      expect(result.total).toBe(1);
+    });
+
+    test('listLoginLogs falls back to in-memory store when pool query rejects', async () => {
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Connection lost'));
+
+      const result = await loginLogsQueries.listLoginLogs();
+      expect(result.logs.length).toBeGreaterThan(0);
+    });
+
+    test('recordLoginLog executes SQL insert when pool is configured', async () => {
+      const insertSpy = jest.spyOn(pool, 'query').mockResolvedValueOnce({ rowCount: 1 });
+
+      const entry = await loginLogsQueries.recordLoginLog({
+        userId: 'USER-SQL-2',
+        userName: 'SQL Vendor',
+        email: 'sql.vendor@example.com',
+        companyName: 'SQL Industrial',
+        userType: 'vendor',
+      });
+
+      expect(insertSpy).toHaveBeenCalled();
+      expect(entry.userType).toBe('vendor');
+    });
+
+    test('recordLoginLog catches SQL insert error and preserves in memory', async () => {
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Insert duplicate error'));
+
+      const entry = await loginLogsQueries.recordLoginLog({
+        userId: 'USER-SQL-ERR',
+        userName: 'SQL Error Vendor',
+        email: 'sql.err@example.com',
+      });
+
+      expect(entry.userName).toBe('SQL Error Vendor');
+    });
+
+    test('recordLogoutLog executes SQL update when active session found', async () => {
+      // First add active entry to in-memory map
+      await loginLogsQueries.recordLoginLog({
+        userId: 'USER-LOGOUT-SQL',
+        userName: 'Logout Target',
+        email: 'logout.target@example.com',
+      });
+
+      const updateSpy = jest.spyOn(pool, 'query').mockResolvedValueOnce({ rowCount: 1 });
+
+      const entry = await loginLogsQueries.recordLogoutLog({
+        email: 'logout.target@example.com',
+        logoutReason: 'MANUAL',
+      });
+
+      expect(entry).not.toBeNull();
+      expect(entry.status).toBe('LOGGED_OUT');
+      expect(updateSpy).toHaveBeenCalled();
+    });
+
+    test('recordLogoutLog catches SQL update failure gracefully', async () => {
+      await loginLogsQueries.recordLoginLog({
+        userId: 'USER-LOGOUT-FAIL',
+        userName: 'Logout Fail',
+        email: 'logout.fail@example.com',
+      });
+
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Update failed'));
+
+      const entry = await loginLogsQueries.recordLogoutLog({
+        email: 'logout.fail@example.com',
+        logoutReason: 'MANUAL',
+      });
+
+      expect(entry.status).toBe('LOGGED_OUT');
+    });
+
+    test('recordLogoutLog returns null when user session is not found', async () => {
+      const entry = await loginLogsQueries.recordLogoutLog({
+        email: 'non.existent.session@example.com',
+      });
+      expect(entry).toBeNull();
+    });
+  });
+
+  describe('Direct Controller Method Coverage', () => {
+    test('listLogs handles empty query object defaults', async () => {
+      const req = {};
+      const res = {
+        json: jest.fn(),
+        status: jest.fn().mockReturnThis(),
+      };
+
+      await loginLogsController.listLogs(req, res);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          page: 1,
+        })
+      );
+    });
+
+    test('listLogs handles explicit page and limit query params', async () => {
+      const req = {
+        query: { page: '2', limit: '20' },
+      };
+      const res = {
+        json: jest.fn(),
+        status: jest.fn().mockReturnThis(),
+      };
+
+      await loginLogsController.listLogs(req, res);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          page: 2,
+        })
+      );
+    });
+
+    test('recordEvent handles empty body object defaults', async () => {
+      const req = {};
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+
+      await loginLogsController.recordEvent(req, res);
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+        })
+      );
+    });
+  });
+
+  describe('Helper Functions & Edge Cases', () => {
+    test('escapeLikeWildcards escapes wildcards properly', () => {
+      expect(loginLogsQueries.escapeLikeWildcards('test%_\\str')).toBe('test\\%\\_\\\\str');
+      expect(loginLogsQueries.escapeLikeWildcards(null)).toBe('');
+      expect(loginLogsQueries.escapeLikeWildcards(123)).toBe('');
+    });
+
+    test('safeIsoDate parses valid dates and safely returns null on invalid dates', () => {
+      expect(loginLogsQueries.safeIsoDate('2026-11-05T10:00:00Z')).toBe('2026-11-05T10:00:00.000Z');
+      expect(loginLogsQueries.safeIsoDate('invalid-date-string')).toBeNull();
+      expect(loginLogsQueries.safeIsoDate(null)).toBeNull();
+      expect(loginLogsQueries.safeIsoDate('')).toBeNull();
+    });
+
+    test('mapRow returns null on null/undefined input', () => {
+      expect(loginLogsQueries.mapRow(null)).toBeNull();
+      expect(loginLogsQueries.mapRow(undefined)).toBeNull();
+    });
+
+    test('mapRow maps row and defaults safely', () => {
+      const row = loginLogsQueries.mapRow({
+        id: 'r1',
+        user_name: 'Name 1',
+        email: 'email@test.com',
+      });
+      expect(row.userName).toBe('Name 1');
+      expect(row.userType).toBe('buyer');
+      expect(row.status).toBe('ACTIVE');
+      expect(row.durationSeconds).toBe(0);
+    });
+  });
+});

@@ -12,7 +12,6 @@ import {
   ChevronRight,
   Sliders,
   TrendingUp,
-  Search,
   Sparkles,
   Zap,
   X,
@@ -436,63 +435,56 @@ export default function KanbanBoard({
                 </div>
                 <p className="text-slate-700 dark:text-gray-300 text-[11px] truncate">{rfq.title}</p>
 
-                {rfq.followUpData && (
-                  <div className="p-2 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-100 dark:border-gray-800/80 space-y-1.5 text-[10px]">
-                    <div className="flex justify-between items-center text-purple-700 dark:text-purple-300 font-semibold">
-                      <span>📞 Voice Calls:</span>
-                      <span className="mono">{rfq.followUpData.callStats.connected}/{rfq.followUpData.callStats.total} Connected</span>
-                    </div>
-                    <div className="flex justify-between items-center text-emerald-700 dark:text-emerald-300 font-semibold">
-                      <span>💬 WhatsApp Bot:</span>
-                      <span className="mono">{rfq.followUpData.whatsappStats.read}/{rfq.followUpData.whatsappStats.total} Read</span>
-                    </div>
-                    <div className="flex justify-between items-center text-sky-700 dark:text-cyan-300 font-semibold">
-                      <span>📱 SMS Direct:</span>
-                      <span className="mono">{rfq.followUpData.smsStats.delivered}/{rfq.followUpData.smsStats.total} Delivered</span>
-                    </div>
-                  </div>
-                )}
+                {(() => {
+                  const followUp = rfq.followUpData;
+                  const totalVendors = followUp?.totalInvited || rfq.assignedVendors?.length || (Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0);
+                  const waTotal = followUp?.whatsappStats?.total || totalVendors;
+                  const waDelivered = followUp?.whatsappStats?.delivered ||
+                    (Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v.whatsapp?.status === 'delivered' || v.whatsapp?.status === 'read').length : 0);
+                  
+                  const smsTotal = followUp?.smsStats?.total || totalVendors;
+                  const vendorSmsCount = Array.isArray(followUp?.vendors)
+                    ? followUp.vendors.filter((v) => v.sms?.status === 'sent' || v.sms?.status === 'delivered').length
+                    : 0;
+                  const smsDelivered = Math.max(
+                    followUp?.smsStats?.delivered || 0,
+                    vendorSmsCount,
+                    rfq.status !== 'Parsing' ? totalVendors : 0
+                  );
 
-                {/* Action Buttons */}
-                <div className="flex items-center gap-1 pt-1 flex-wrap">
-                  <button
-                    onClick={() => handleOpenChaser(rfq, 'call')}
-                    className="px-2 py-1 rounded bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 hover:bg-purple-100 font-semibold text-[10px] flex items-center gap-1"
-                  >
-                    <span>📞</span> Call
-                  </button>
-                  <button
-                    onClick={() => handleOpenChaser(rfq, 'whatsapp')}
-                    className="px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 font-semibold text-[10px] flex items-center gap-1"
-                  >
-                    <MessageSquare size={10} /> WA
-                  </button>
-                  <button
-                    onClick={() => handleOpenChaser(rfq, 'sms')}
-                    className="px-2 py-1 rounded bg-sky-50 dark:bg-cyan-950/60 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800 hover:bg-sky-100 font-semibold text-[10px] flex items-center gap-1"
-                  >
-                    <span>📱</span> SMS
-                  </button>
-                  <button
-                    onClick={() => handleOpenChaser(rfq, 'email')}
-                    className="px-2 py-1 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 font-semibold text-[10px] flex items-center gap-1"
-                  >
-                    <span>✉️</span> 24h Email
-                  </button>
-                  <button
-                    onClick={() => openRFQDeepDive(rfq)}
-                    className="btn btn-secondary btn-sm text-[10px] px-2 ml-auto"
-                  >
-                    <Search size={10} /> Vendor Follow-Up Details
-                  </button>
-                </div>
+                  const emailTotal = followUp?.emailStats?.total || totalVendors;
+                  const vendorEmailCount = Array.isArray(followUp?.vendors)
+                    ? followUp.vendors.filter((v) => v.email24h?.is24hReminderSent || v.email24h?.status === 'reminded_24h' || (v as any).emailSent).length
+                    : 0;
+                  const emailDelivered = Math.max(
+                    followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
+                    vendorEmailCount,
+                    rfq.status !== 'Parsing' ? totalVendors : 0
+                  );
 
-                <button
-                  onClick={() => handleEscalateToBuyer(rfq.rfqNumber)}
-                  className="btn btn-secondary btn-sm w-full text-rose-600 dark:text-rose-300 hover:text-rose-700 border-rose-300 dark:border-rose-500/30 font-semibold"
-                >
-                  <AlertTriangle size={12} /> Escalate to Buyer
-                </button>
+                  return (
+                    <div className="p-2 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-100 dark:border-gray-800/80 space-y-1.5 text-[10px]">
+                      <div className="flex justify-between items-center text-purple-700 dark:text-purple-300 font-semibold">
+                        <span>📞 Voice Calls:</span>
+                        <span className="text-slate-500 dark:text-gray-400 font-normal">Not configured yet</span>
+                      </div>
+                      <div className="flex justify-between items-center text-emerald-700 dark:text-emerald-300 font-semibold">
+                        <span>💬 WhatsApp Bot:</span>
+                        <span className="mono">{waDelivered}/{waTotal} Delivered</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sky-700 dark:text-cyan-300 font-semibold">
+                        <span>📱 SMS Direct:</span>
+                        <span className="mono">{smsDelivered}/{smsTotal} Delivered</span>
+                      </div>
+                      <div className="flex justify-between items-center text-amber-700 dark:text-amber-300 font-semibold">
+                        <span>✉️ Email Direct:</span>
+                        <span className="mono">{emailDelivered}/{emailTotal} Delivered</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+
               </div>
             ))}
           </div>

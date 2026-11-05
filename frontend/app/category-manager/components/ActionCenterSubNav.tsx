@@ -12,6 +12,7 @@ import {
   Users,
   TrendingUp,
   FolderOpen,
+  ShieldCheck,
 } from 'lucide-react';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { ActionCenterTabKey } from '@/lib/types';
@@ -99,6 +100,11 @@ export default function ActionCenterSubNav({
       id: 'document_vault',
       label: tabs.documentVault,
       icon: FolderOpen,
+    },
+    {
+      id: 'login_logs',
+      label: tabs.loginLogs,
+      icon: ShieldCheck,
     },
   ];
 

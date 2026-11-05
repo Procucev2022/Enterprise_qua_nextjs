@@ -498,7 +498,7 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
  * @param {number} maxPerCategory Max vendors per category.
  * @returns {Promise<object[]>}
  */
-async function getPublicVendorsPerCategoryFromDB(categories, maxPerCategory = 5) {
+async function getPublicVendorsPerCategoryFromDB(categories, maxPerCategory = 25) {
   if (!pool.hasStorage()) return [];
   const cleaned = Array.from(
     new Set((Array.isArray(categories) ? categories : []).map((s) => String(s || '').trim()).filter(Boolean))

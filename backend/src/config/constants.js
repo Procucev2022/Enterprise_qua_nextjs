@@ -622,6 +622,9 @@ const RFQ_CATEGORY_CLASSIFICATION = {
   MAJOR_CATEGORY_ALIASES: {
     mechanical: 'Engineering Spares - Mechanical',
     electrical: 'Engineering Spares - Electrical',
+    electricals: 'Engineering Spares - Electrical',
+    solar: 'CAPEX - Equipment & Machinery',
+    'solar equipment': 'CAPEX - Equipment & Machinery',
     civil: 'Civil Works',
     safety: 'Occuptional Health and Safety',
     'occupational health and safety': 'Occuptional Health and Safety',
@@ -638,6 +641,8 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     piping: 'Engineering Spares - Mechanical',
     pipes: 'Engineering Spares - Mechanical',
     valves: 'Engineering Spares - Mechanical',
+    tools: 'Engineering Spares - Mechanical',
+    tool: 'Engineering Spares - Mechanical',
     pumps: 'Engineering Spares - Mechanical',
     motors: 'Engineering Spares - Electrical',
     'general procurement': 'Others – New Product',
@@ -888,6 +893,9 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     brick: { major: 'Civil Works', minor: 'Bricks' },
     paint: { major: 'Civil Works', minor: 'Paints' },
     paints: { major: 'Civil Works', minor: 'Paints' },
+    painting: { major: 'Civil Works', minor: 'Painting' },
+    'painting service': { major: 'Professional Services', minor: 'Painting Service' },
+    'painting services': { major: 'Professional Services', minor: 'Painting Service' },
     waterproofing: { major: 'Civil Works', minor: 'Waterproofing' },
     scaffolding: { major: 'Civil Works', minor: 'Ladders & Scaffolding' },
     flooring: { major: 'Civil Works', minor: 'Flooring Material' },
@@ -1080,10 +1088,13 @@ const MAX_INVITE_VENDORS_PER_REQUEST = 20;
 
 const VENDOR_ASSIGNMENT_LIMITS = {
   get MAX_CLIENT_PER_CATEGORY() {
-    return getEnvNumber('MAX_CLIENT_VENDORS_PER_CATEGORY', 5);
+    return getEnvNumber('MAX_CLIENT_VENDORS_PER_CATEGORY', 25);
   },
   get MAX_PROCUCEV_PER_CATEGORY() {
-    return getEnvNumber('MAX_PROCUCEV_VENDORS_PER_CATEGORY', 5);
+    return getEnvNumber('MAX_PROCUCEV_VENDORS_PER_CATEGORY', 25);
+  },
+  get TARGET_PER_MINOR_CATEGORY() {
+    return getEnvNumber('TARGET_VENDORS_PER_MINOR_CATEGORY', 25);
   },
 };
 
