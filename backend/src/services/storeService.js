@@ -16,6 +16,7 @@ const {
   DEFAULT_CATEGORY_TAXONOMY,
   INQUIRIES_PERSISTENCE_FILE,
   RFQ_QUOTE_WRITE_RETRIES,
+  EVENT_OUTBOX_TYPES,
 } = require('../config/constants');
 const crypto = require('crypto');
 const pool = require('../db/pool');
@@ -4042,14 +4043,14 @@ class StoreService {
     return updated;
   }
 
-  _dispatchQuoteSubmissionSideEffects(rfq, updated, quote, autoClosed) {
+  _dispatchQuoteSubmissionSideEffects(rfq, updated, quote, autoClosed, { skipQuoteEmail = false } = {}) {
     if (autoClosed) {
       this.cancelDelayedQuoteTimers(rfq.id);
       this.notifyBuyerOfAutoClosureAndScheduleComparison(updated, updated.quotes || []);
       return;
     }
     this.notifyBuyerOfQuote(rfq, quote);
-    this.emailQuoteToBuyer(rfq, quote);
+    if (!skipQuoteEmail) this.emailQuoteToBuyer(rfq, quote);
   }
 
   async addQuoteToRFQDurably(rfqId, quote) {
@@ -4115,6 +4116,7 @@ class StoreService {
       return updated;
     }
 
+    const durableQuoteId = quote.id || crypto.randomUUID();
     for (let attempt = 0; attempt < RFQ_QUOTE_WRITE_RETRIES; attempt += 1) {
       let rfq;
       let vendor;
@@ -4160,15 +4162,24 @@ class StoreService {
         throw error;
       }
 
+      const durableQuote = { ...quote, id: durableQuoteId };
       const cachedIndex = this.rfqs.findIndex((item) => item.id === rfq.id);
       const previousCached = cachedIndex === -1 ? null : this.rfqs[cachedIndex];
       if (cachedIndex === -1) this.rfqs.unshift(rfq);
       else this.rfqs[cachedIndex] = rfq;
-      const updatedRFQ = this.addQuoteToRFQ(rfq.id, quote, { persist: false, notify: false });
+      const updatedRFQ = this.addQuoteToRFQ(rfq.id, durableQuote, { persist: false, notify: false });
       if (cachedIndex === -1) this.rfqs = this.rfqs.filter((item) => item.id !== rfq.id);
       else this.rfqs[cachedIndex] = previousCached;
       if (!updatedRFQ) return null;
 
+      const autoClosedByQuote = updatedRFQ.status === 'Closed' && rfq.status !== 'Closed';
+      const buyerEmailPlan = autoClosedByQuote ? null : this._buildBuyerQuoteEmailPlan(rfq);
+      const quoteNotificationEventId = buyerEmailPlan && !buyerEmailPlan.requiresProfileCompletion
+        ? eventOutboxService.buildEventOutboxId(
+          EVENT_OUTBOX_TYPES.RFQ_QUOTE_RECEIVED_EMAIL,
+          `${rfq.id}:${durableQuoteId}`
+        )
+        : null;
       const idempotencyKey = `rfq-quote:${vendor.id}:${rfq.id}`;
       let saved;
       try {
@@ -4180,6 +4191,12 @@ class StoreService {
           idempotencyKey,
           isBuyerMapped: eligibility.isBuyerMapped,
           isResubmission,
+          quoteId: durableQuoteId,
+          quoteNotificationEventId,
+          ...(quoteNotificationEventId ? {
+            quoteNotificationRecipient: buyerEmailPlan.buyerEmail,
+            quoteNotificationRecipientName: buyerEmailPlan.buyer.organizationName,
+          } : {}),
           expectedVendor: vendor,
           expectedRFQ: rfq,
           updatedRFQ,
@@ -4223,7 +4240,11 @@ class StoreService {
       this._lastRfqSyncTime = 0;
       this._notifyRFQUpdate(savedRFQ, rfq.status, { status: savedRFQ.status });
       const autoClosed = savedRFQ.status === 'Closed' && rfq.status !== 'Closed';
-      this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, quote, autoClosed);
+      if (quoteNotificationEventId) {
+        this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed, { skipQuoteEmail: true });
+      } else {
+        this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed);
+      }
       logger.info('Vendor quote submission committed with credit accounting', {
         rfqId: rfq.id,
         vendorId: vendor.id,
@@ -6346,6 +6367,25 @@ class StoreService {
       'Failed to email quote to buyer'
     );
     return true;
+  }
+
+  _buildBuyerQuoteEmailPlan(rfq) {
+    if (!rfq) return null;
+    const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
+    if (!buyerEmail) return null;
+
+    const buyer = (rfq.buyerAccountId && this.buyerAccounts.find((account) => account.id === rfq.buyerAccountId)) ||
+      (this.buyerAccounts && this.buyerAccounts.find((account) => String(account.corporateEmail || '').trim().toLowerCase() === String(buyerEmail).trim().toLowerCase())) || {
+        id: rfq.buyerAccountId || null,
+        corporateEmail: buyerEmail,
+        organizationName: rfq.buyerAccountName || rfq.buyerName || 'Buyer',
+      };
+
+    return {
+      buyer,
+      buyerEmail,
+      requiresProfileCompletion: this.isBuyerProfileUpdateRequired(buyer, rfq),
+    };
   }
 
   queuePendingQuoteNotification(buyerEmail, { rfq, quote }) {

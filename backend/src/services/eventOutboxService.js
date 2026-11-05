@@ -492,6 +492,52 @@ async function dispatchEvent(job) {
       }, 'EVENT_OUTBOX');
       return;
     }
+    case EVENT_OUTBOX_TYPES.RFQ_QUOTE_RECEIVED_EMAIL: {
+      const rfqId = job.raw?.rfqId;
+      const quoteId = job.raw?.quoteId;
+      const recipientEmail = typeof job.raw?.recipientEmail === 'string' ? job.raw.recipientEmail.trim() : '';
+      const recipientName = typeof job.raw?.recipientName === 'string' && job.raw.recipientName.trim()
+        ? job.raw.recipientName.trim()
+        : null;
+      if (
+        typeof rfqId !== 'string' || !rfqId
+        || typeof quoteId !== 'string' || !quoteId
+        || !EMAIL_REGEX.test(recipientEmail)
+      ) {
+        const error = new Error('RFQ quote notification retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+      const quote = Array.isArray(rfq?.quotes)
+        ? rfq.quotes.find((candidate) => String(candidate.id || '') === quoteId)
+        : null;
+      if (!rfq || !quote) {
+        const error = new Error('RFQ quote notification references a missing persisted RFQ or quote.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const delivery = await mailerService.sendQuoteReceivedEmail(recipientEmail, {
+        rfq,
+        quote,
+        recipientName: recipientName || rfq.buyerAccountName || rfq.buyerName || 'Buyer',
+      });
+      if (!delivery?.sent) {
+        const error = new Error('RFQ quote notification email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('RFQ quote notification accepted by a provider', {
+        rfqId,
+        rfqNumber: rfq.rfqNumber,
+        vendorId: quote.vendorId,
+        quoteId,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
     default: {
       const error = new Error(`Unsupported persisted event-outbox type: ${job.event_type}`);
       error.code = 'INVALID_EVENT_OUTBOX_TYPE';

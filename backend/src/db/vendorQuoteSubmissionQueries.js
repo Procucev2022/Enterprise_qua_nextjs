@@ -3,7 +3,7 @@ const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
 const { logger } = require('../services/loggerService');
-const { VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
+const { VENDOR_FREE_CREDITS_LIMIT, EVENT_OUTBOX_TYPES } = require('../config/constants');
 const {
   quoteCreditState,
   parseVendorRaw,
@@ -118,6 +118,15 @@ function makeD1VendorQuoteSubmissionStatements(options) {
     ELSE json_array($3, $4)
   END)`;
 
+  if (options.quoteNotificationEventId && (
+    typeof options.quoteId !== 'string' || !options.quoteId
+    || typeof options.quoteNotificationRecipient !== 'string' || !options.quoteNotificationRecipient
+  )) {
+    const error = new Error('A quote notification outbox event requires a quote ID and persisted recipient.');
+    error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
+    throw error;
+  }
+
   return {
     expectedVendor,
     updatedVendor,
@@ -200,7 +209,28 @@ function makeD1VendorQuoteSubmissionStatements(options) {
           creditCharged,
         ],
       },
-    ],
+    ].concat(options.quoteNotificationEventId ? [{
+      text: `INSERT OR IGNORE INTO event_outbox
+        (id, event_type, raw, status, available_at, created_at, updated_at)
+        SELECT $1, $2, json_object('rfqId', $3, 'quoteId', $4, 'recipientEmail', $5, 'recipientName', $6), 'pending',
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        FROM rfqs r
+        WHERE r.id = $3 AND EXISTS (
+          SELECT 1 FROM json_each(CASE
+            WHEN json_type(r.raw, '$.quotes') = 'array' THEN json_extract(r.raw, '$.quotes')
+            ELSE '[]'
+          END) AS submitted_quote
+          WHERE CAST(json_extract(submitted_quote.value, '$.id') AS TEXT) = CAST($4 AS TEXT)
+        )`,
+      params: [
+        options.quoteNotificationEventId,
+        EVENT_OUTBOX_TYPES.RFQ_QUOTE_RECEIVED_EMAIL,
+        options.rfqId,
+        options.quoteId,
+        options.quoteNotificationRecipient,
+        options.quoteNotificationRecipientName || null,
+      ],
+    }] : []),
   };
 }
 
@@ -265,6 +295,29 @@ async function submitVendorQuoteOnPostgres(options) {
       [options.idempotencyKey]
     )).rows?.[0];
     if (!savedLedger) throw new Error('Vendor quote transaction did not persist its idempotency ledger.');
+    if (options.quoteNotificationEventId) {
+      if (typeof options.quoteId !== 'string' || !options.quoteId
+        || typeof options.quoteNotificationRecipient !== 'string' || !options.quoteNotificationRecipient) {
+        const error = new Error('A quote notification outbox event requires a quote ID and persisted recipient.');
+        error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
+        throw error;
+      }
+      await client.query(
+        `INSERT INTO event_outbox (id, event_type, raw, status, available_at, created_at, updated_at)
+         VALUES ($1, $2, $3::jsonb, 'pending', now(), now(), now())
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          options.quoteNotificationEventId,
+          EVENT_OUTBOX_TYPES.RFQ_QUOTE_RECEIVED_EMAIL,
+          JSON.stringify({
+            rfqId: options.rfqId,
+            quoteId: options.quoteId,
+            recipientEmail: options.quoteNotificationRecipient,
+            recipientName: options.quoteNotificationRecipientName || null,
+          }),
+        ]
+      );
+    }
     return {
       vendor: savedVendor,
       rfq: parseRaw(savedRFQResult.rows[0].raw),

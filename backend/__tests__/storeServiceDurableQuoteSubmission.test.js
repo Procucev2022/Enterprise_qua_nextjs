@@ -150,6 +150,77 @@ describe('durable quote submission and credit synchronization', () => {
     expect(sideEffects).toHaveBeenCalledWith(currentRFQ, savedRFQ, expect.objectContaining({ vendorId: VENDOR_ID }), false);
   });
 
+  test('persists a verified buyer quote email intent atomically and skips direct delivery', async () => {
+    const currentRFQ = rfq({ buyerAccountId: 'buyer-quote-notification', buyerEmail: 'buyer@example.test' });
+    const currentVendor = vendor({ subscriptionPlan: 'connect' });
+    const savedRFQ = { ...currentRFQ, status: 'In Evaluation', quotes: [{ vendorId: VENDOR_ID, unitPrice: 300 }] };
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(currentRFQ);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(currentVendor);
+    jest.spyOn(storeService, '_buildBuyerQuoteEmailPlan').mockReturnValue({
+      buyer: { organizationName: 'Buyer Organization' },
+      buyerEmail: 'buyer@example.test',
+      requiresProfileCompletion: false,
+    });
+    const submit = jest.spyOn(domainQueries, 'submitVendorQuoteInDB').mockResolvedValue({
+      rfq: savedRFQ,
+      vendor: currentVendor,
+      creditCharged: 0,
+    });
+    jest.spyOn(storeService, '_notifyRFQUpdate').mockImplementation(() => {});
+    const sideEffects = jest.spyOn(storeService, '_dispatchQuoteSubmissionSideEffects').mockImplementation(() => {});
+
+    await storeService.submitVendorQuoteDurably(RFQ_ID, { vendorId: VENDOR_ID, unitPrice: 300 });
+
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      rfqId: RFQ_ID,
+      quoteId: expect.any(String),
+      quoteNotificationEventId: expect.stringContaining('rfq_quote_received_email'),
+      quoteNotificationRecipient: 'buyer@example.test',
+      quoteNotificationRecipientName: 'Buyer Organization',
+      updatedRFQ: expect.objectContaining({
+        quotes: [expect.objectContaining({ id: expect.any(String), vendorId: VENDOR_ID })],
+      }),
+    }));
+    expect(sideEffects).toHaveBeenCalledWith(
+      currentRFQ,
+      savedRFQ,
+      expect.objectContaining({ vendorId: VENDOR_ID, id: expect.any(String) }),
+      false,
+      { skipQuoteEmail: true }
+    );
+  });
+
+  test('keeps the profile completion path local when the buyer is pending verification', async () => {
+    const currentRFQ = rfq({ buyerAccountId: 'buyer-pending-quote', buyerEmail: 'pending@example.test' });
+    const currentVendor = vendor({ subscriptionPlan: 'connect' });
+    const savedRFQ = { ...currentRFQ, status: 'In Evaluation', quotes: [{ vendorId: VENDOR_ID, unitPrice: 300 }] };
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(currentRFQ);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(currentVendor);
+    jest.spyOn(storeService, '_buildBuyerQuoteEmailPlan').mockReturnValue({
+      buyerEmail: 'pending@example.test',
+      requiresProfileCompletion: true,
+    });
+    const submit = jest.spyOn(domainQueries, 'submitVendorQuoteInDB').mockResolvedValue({
+      rfq: savedRFQ,
+      vendor: currentVendor,
+      creditCharged: 0,
+    });
+    jest.spyOn(storeService, '_notifyRFQUpdate').mockImplementation(() => {});
+    const sideEffects = jest.spyOn(storeService, '_dispatchQuoteSubmissionSideEffects').mockImplementation(() => {});
+
+    await storeService.submitVendorQuoteDurably(RFQ_ID, { vendorId: VENDOR_ID, unitPrice: 300 });
+
+    expect(submit).toHaveBeenCalledWith(expect.not.objectContaining({ quoteNotificationEventId: expect.anything() }));
+    expect(sideEffects).toHaveBeenCalledWith(
+      currentRFQ,
+      savedRFQ,
+      expect.objectContaining({ vendorId: VENDOR_ID }),
+      false
+    );
+  });
+
   test('rebuilds the quote from fresh RFQ state after a concurrent writer wins', async () => {
     const currentRFQ = rfq();
     const newerRFQ = rfq({ quotes: [{ vendorId: 'other-vendor', unitPrice: 200 }], quotesCount: 1 });
@@ -192,7 +263,10 @@ describe('durable quote submission and credit synchronization', () => {
     const candidate = jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue(null);
     const submit = jest.spyOn(domainQueries, 'submitVendorQuoteInDB');
     await expect(storeService.submitVendorQuoteDurably(RFQ_ID, { vendorId: VENDOR_ID })).resolves.toBeNull();
-    expect(candidate).toHaveBeenCalledWith(RFQ_ID, { vendorId: VENDOR_ID }, { persist: false, notify: false });
+    expect(candidate).toHaveBeenCalledWith(RFQ_ID, expect.objectContaining({
+      id: expect.any(String),
+      vendorId: VENDOR_ID,
+    }), { persist: false, notify: false });
     expect(submit).not.toHaveBeenCalled();
 
     candidate.mockRestore();

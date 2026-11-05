@@ -71,6 +71,36 @@ describe('atomic vendor quote submission queries', () => {
     expect(built.updatedVendor.freeQuotationCredits).toBe(1);
   });
 
+  test('adds a quote email intent to the same D1 batch as the quote and credit writes', () => {
+    const built = queries.makeD1VendorQuoteSubmissionStatements(baseOptions({
+      quoteId: 'quote-atomic-1',
+      quoteNotificationEventId: 'outbox-quote-atomic-1',
+      quoteNotificationRecipient: 'buyer@example.test',
+      quoteNotificationRecipientName: 'Buyer Org',
+    }));
+    const event = built.statements[6];
+
+    expect(built.statements).toHaveLength(7);
+    expect(event.text).toContain('INSERT OR IGNORE INTO event_outbox');
+    expect(event.text).toContain("json_each(CASE");
+    expect(event.text).toContain("'$.quotes'");
+    expect(event.params).toEqual([
+      'outbox-quote-atomic-1',
+      'rfq_quote_received_email',
+      RFQ_ID,
+      'quote-atomic-1',
+      'buyer@example.test',
+      'Buyer Org',
+    ]);
+  });
+
+  test('rejects an incomplete durable quote notification intent', () => {
+    expect(() => queries.makeD1VendorQuoteSubmissionStatements(baseOptions({
+      quoteNotificationEventId: 'outbox-quote-invalid',
+      quoteNotificationRecipient: 'buyer@example.test',
+    }))).toThrow(expect.objectContaining({ code: 'INVALID_VENDOR_QUOTE_SUBMISSION' }));
+  });
+
   test('builds a zero-charge resubmission when the vendor already has an RFQ marker', () => {
     const options = baseOptions({ expectedVendor: vendor({ freeQuotationCredits: 0, quotedRfqIds: [RFQ_ID] }) });
     const built = queries.makeD1VendorQuoteSubmissionStatements(options);
@@ -140,6 +170,43 @@ describe('atomic vendor quote submission queries', () => {
     expect(client.query.mock.calls[0][0]).toContain('FOR UPDATE');
     expect(client.query.mock.calls[1][0]).toContain('FOR UPDATE');
     expect(client.query.mock.calls[5][0]).toContain('ON CONFLICT (idempotency_key) DO NOTHING');
+  });
+
+  test('queues the buyer quote email in the same PostgreSQL transaction', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+    const savedVendor = vendor({ freeQuotationCredits: 1, freeRfqDownloadCredits: 1 });
+    const savedRFQ = rfq({ status: 'In Evaluation', quotes: [{ id: 'quote-pg-1', vendorId: VENDOR_ID }] });
+    const client = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [{ raw: vendor() }] })
+      .mockResolvedValueOnce({ rows: [{ raw: rfq() }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ raw: savedVendor }] })
+      .mockResolvedValueOnce({ rows: [{ raw: savedRFQ }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'tx-atomic-quote', amount: -1 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'outbox-quote-pg-1' }] }) };
+    jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback(client));
+
+    await queries.submitVendorQuoteInDB(baseOptions({
+      quoteId: 'quote-pg-1',
+      quoteNotificationEventId: 'outbox-quote-pg-1',
+      quoteNotificationRecipient: 'buyer@example.test',
+      quoteNotificationRecipientName: 'Buyer Org',
+    }));
+
+    expect(client.query).toHaveBeenCalledTimes(7);
+    expect(client.query.mock.calls[6][0]).toContain('INSERT INTO event_outbox');
+    expect(client.query.mock.calls[6][1]).toEqual([
+      'outbox-quote-pg-1',
+      'rfq_quote_received_email',
+      JSON.stringify({
+        rfqId: RFQ_ID,
+        quoteId: 'quote-pg-1',
+        recipientEmail: 'buyer@example.test',
+        recipientName: 'Buyer Org',
+      }),
+    ]);
   });
 
   test('writes null optional RFQ columns for a sparse PostgreSQL quote update', async () => {
