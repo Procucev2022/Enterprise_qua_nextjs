@@ -1448,7 +1448,7 @@ async function getPaymentLinksByBuyerFromDB(buyerAccountId, limit = 50) {
   return result.rows.map((row) => parseRaw(row.raw));
 }
 
-async function getPaymentLinkByIdFromDB(id) {
+async function getPaymentLinkByIdFromDB(id, { fresh = false } = {}) {
   if (!pool.hasStorage() || !id) return null;
   const result = await pool.query(
     'SELECT raw FROM payment_links WHERE id = $1 LIMIT 1',
@@ -1456,7 +1456,7 @@ async function getPaymentLinkByIdFromDB(id) {
     {
       d1: true,
       d1Text: 'SELECT raw FROM payment_links WHERE id = $1 LIMIT 1',
-      useCache: true,
+      useCache: !fresh,
       tag: 'payment_links',
       ttlMs: 60000,
     }

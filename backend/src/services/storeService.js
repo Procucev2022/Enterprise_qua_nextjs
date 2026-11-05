@@ -20,6 +20,7 @@ const crypto = require('crypto');
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
 const auditLogQueries = require('../db/auditLogQueries');
+const paymentActivationQueries = require('../db/paymentActivationQueries');
 const identityQueries = require('../db/identityQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
@@ -2183,6 +2184,83 @@ class StoreService {
     return updated;
   }
 
+  async updatePaymentLinkRecordDurably(id, updates) {
+    const storageConfigured = pool.hasStorage();
+    let idx = this.paymentLinks.findIndex((link) => link.id === id);
+    let previous = idx >= 0 ? this.paymentLinks[idx] : null;
+    if (!storageConfigured && !previous) return null;
+
+    if (!storageConfigured && previous?.activated && updates.status && String(updates.status).toLowerCase() !== 'paid') {
+      logger.warn('Ignored a non-paid status update for an already activated payment link', {
+        paymentLinkId: id,
+        attemptedStatus: updates.status,
+      }, 'STORE_SERVICE');
+      return previous;
+    }
+
+    let persisted;
+    if (storageConfigured) {
+      try {
+        persisted = await paymentActivationQueries.updatePaymentLinkStatusInDB(id, updates);
+      } catch (error) {
+        logger.error('Failed to atomically update payment-link status', {
+          error,
+          paymentLinkId: id,
+          operation: 'update-payment-link-status',
+        }, 'STORE_SERVICE');
+        const persistError = new Error(PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE);
+        persistError.statusCode = 503;
+        persistError.code = 'PERSISTENCE_UNAVAILABLE';
+        persistError.cause = error;
+        throw persistError;
+      }
+
+      if (!persisted) {
+        try {
+          previous = await domainQueries.getPaymentLinkByIdFromDB(id, { fresh: true });
+        } catch (error) {
+          logger.error('Failed to verify payment-link status after an atomic update conflict', {
+            error,
+            paymentLinkId: id,
+            operation: 'read-payment-link-after-update-conflict',
+          }, 'STORE_SERVICE');
+          const persistError = new Error(PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE);
+          persistError.statusCode = 503;
+          persistError.code = 'PERSISTENCE_UNAVAILABLE';
+          persistError.cause = error;
+          throw persistError;
+        }
+        if (!previous) {
+          this.paymentLinks = this.paymentLinks.filter((link) => link.id !== id);
+          return null;
+        }
+        idx = this.paymentLinks.findIndex((link) => link.id === previous.id);
+        if (previous.activated && updates.status && String(updates.status).toLowerCase() !== 'paid') {
+          logger.warn('Ignored a non-paid status update for an already activated payment link', {
+            paymentLinkId: id,
+            attemptedStatus: updates.status,
+          }, 'STORE_SERVICE');
+          if (idx >= 0) this.paymentLinks[idx] = previous;
+          else this.paymentLinks.unshift(previous);
+          return previous;
+        }
+        const persistError = new Error(PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE);
+        persistError.statusCode = 503;
+        persistError.code = 'PERSISTENCE_UNAVAILABLE';
+        logger.error('Atomic payment-link status update affected no durable row', {
+          paymentLinkId: id,
+          operation: 'update-payment-link-status',
+        }, 'STORE_SERVICE');
+        throw persistError;
+      }
+    }
+
+    const savedLink = persisted || { ...previous, ...updates, updatedAt: new Date().toISOString() };
+    if (idx >= 0) this.paymentLinks[idx] = savedLink;
+    else this.paymentLinks.unshift(savedLink);
+    return savedLink;
+  }
+
   /**
    * Grant a vendor the plan they just paid for.
    *
@@ -2240,6 +2318,58 @@ class StoreService {
     });
 
     return updatedLink;
+  }
+
+  async activatePaymentLinkDurably(paymentLinkId, rawResponse) {
+    if (!pool.hasStorage()) {
+      const currentLink = this.paymentLinks.find((link) => link.id === paymentLinkId);
+      if (!currentLink || currentLink.activated) return currentLink || null;
+      const link = this.updatePaymentLinkRecord(paymentLinkId, { status: 'PAID', rawResponse });
+      return link.payerType === 'buyer'
+        ? this.activateBuyerSubscriptionFromPayment(paymentLinkId)
+        : this.activateVendorSubscriptionFromPayment(paymentLinkId);
+    }
+
+    try {
+      const activation = await paymentActivationQueries.activatePaymentLinkSubscriptionInDB({ paymentLinkId, rawResponse });
+      if (!activation?.link) return null;
+      if (!activation.link.activated) {
+        throw Object.assign(
+          new Error('The payment link was not activated because its subscription owner could not be updated.'),
+          { statusCode: 409, code: 'PAYMENT_ACTIVATION_CONFLICT' }
+        );
+      }
+
+      const linkIndex = this.paymentLinks.findIndex((link) => link.id === paymentLinkId);
+      if (linkIndex >= 0) this.paymentLinks[linkIndex] = activation.link;
+      else this.paymentLinks.unshift(activation.link);
+
+      if (activation.payer) {
+        const collection = activation.payerType === 'buyer' ? this.buyerAccounts : this.vendors;
+        const payerIndex = collection.findIndex((payer) => payer.id === activation.payer.id);
+        if (payerIndex >= 0) collection[payerIndex] = activation.payer;
+        else collection.unshift(activation.payer);
+        if (activation.payerType === 'buyer' && this.activeBuyerAccount?.id === activation.payer.id) {
+          this.activeBuyerAccount = activation.payer;
+        }
+      }
+
+      if (activation.activated) {
+        const payerName = activation.payer?.organizationName || activation.payer?.name || activation.payer?.email || activation.payer?.corporateEmail || activation.payer?.id;
+        this.addAuditLog({
+          userEmail: SYSTEM_ACTOR_EMAIL,
+          action: `Activated ${activation.link.planId} subscription for ${activation.payerType} ${payerName} via Zoho payment ${activation.link.zohoPaymentLinkId}`,
+        });
+      }
+      return activation.link;
+    } catch (error) {
+      logger.error('Atomic payment subscription activation failed', {
+        error,
+        paymentLinkId,
+        payerType: this.paymentLinks.find((link) => link.id === paymentLinkId)?.payerType,
+      }, 'STORE_SERVICE');
+      throw error;
+    }
   }
 
   reviseVendorRating(vendorId, ratingData, scopedBuyerId = null) {
