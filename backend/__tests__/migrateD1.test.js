@@ -196,6 +196,22 @@ describe('D1 migration SQL handling', () => {
     expect(statements[0]).toContain('INSERT OR IGNORE INTO event_outbox');
   });
 
+  test('atomically queues pending email and SMS communication rows in D1', () => {
+    const migrationPath = path.resolve(
+      __dirname,
+      '../src/db/migrations/0019_communication_delivery_outbox.d1.sql'
+    );
+    const statements = splitStatements(fs.readFileSync(migrationPath, 'utf8'));
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toMatch(/CREATE TRIGGER IF NOT EXISTS payment_dues_communications_queue_delivery_outbox/i);
+    expect(statements[0]).toContain("lower(NEW.channel) IN ('email', 'sms')");
+    expect(statements[0]).toContain("lower(NEW.delivery_status) = 'pending'");
+    expect(statements[0]).toContain("'communication_delivery'");
+    expect(statements[0]).toContain("'communication-delivery:' || NEW.id");
+    expect(statements[0]).toContain("json_object('communicationId', NEW.id)");
+  });
+
   test('repairs missing D1 anchor columns and records the local migration', () => {
     const calls = [];
     const run = jest.fn((args) => {

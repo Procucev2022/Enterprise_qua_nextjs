@@ -143,6 +143,22 @@ describe('PostgreSQL migration runner', () => {
     expect(sql).toContain('ON CONFLICT (id) DO NOTHING');
   });
 
+  test('atomically queues pending email and SMS communication rows in PostgreSQL', () => {
+    const migrationPath = path.resolve(
+      __dirname,
+      '../src/db/migrations/0017_communication_delivery_outbox.pg.sql'
+    );
+    const sql = fs.readFileSync(migrationPath, 'utf8');
+
+    expect(sql).toContain('CREATE OR REPLACE FUNCTION queue_communication_delivery_outbox()');
+    expect(sql).toContain('AFTER INSERT ON payment_dues_communications');
+    expect(sql).toContain("lower(NEW.channel) NOT IN ('email', 'sms')");
+    expect(sql).toContain("lower(NEW.delivery_status) <> 'pending'");
+    expect(sql).toContain("'communication_delivery'");
+    expect(sql).toContain("'communication-delivery:' || NEW.id");
+    expect(sql).toContain('ON CONFLICT (id) DO NOTHING');
+  });
+
   test('keeps PostgreSQL columns present in D1 and records intentional D1-only extensions', () => {
     const dbDir = path.resolve(__dirname, '../src/db');
     const readColumns = (fileName) => {
@@ -320,6 +336,7 @@ describe('PostgreSQL migration runner', () => {
         '0014_enterprise_inquiry_email_outbox',
         '0015_audit_chain_integrity_anchors',
         '0016_vendor_rating_revision_email_outbox',
+        '0017_communication_delivery_outbox',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

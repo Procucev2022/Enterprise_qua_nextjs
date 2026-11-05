@@ -333,6 +333,122 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       );
     });
 
+    test('recordBuyerCommunication persists provider-confirmed delivery state', async () => {
+      const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({
+        id: 'buyer-email-delivery-1',
+        deliveryStatus: 'Pending',
+      });
+      jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus').mockImplementation(async (status) => ({
+        id: 'buyer-email-delivery-1',
+        ...status,
+      }));
+      jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'buyer-email-task' });
+      const mailerService = require('../src/services/mailerService');
+      jest.spyOn(mailerService, 'deliver').mockResolvedValue({ sent: true, messageId: 'buyer-email-provider-1' });
+
+      const req = {
+        user: adminUser,
+        params: { id: 'buyer-test-1' },
+        body: {
+          channel: 'EMAIL',
+          recipient: 'buyer@test.com',
+          subject: 'Profile update',
+          message: 'Your profile has been updated.',
+        },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await buyerAccountController.recordBuyerCommunication(req, res, jest.fn());
+
+      expect(paymentDuesQueries.updateCommunicationDeliveryStatus).toHaveBeenCalledWith({
+        communicationId: 'buyer-email-delivery-1',
+        notificationStatus: 'Notification Sent',
+        deliveryStatus: 'Delivered',
+        acknowledgementStatus: 'Acknowledgement Pending',
+      });
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ notificationStatus: 'Notification Sent', deliveryStatus: 'Delivered' }),
+      }));
+    });
+
+    test('recordBuyerCommunication dispatches configured email only through durable recovery', async () => {
+      const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+      const eventOutboxService = require('../src/services/eventOutboxService');
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({
+        id: 'buyer-durable-email-1', deliveryStatus: 'Pending',
+      });
+      jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+        id: 'buyer-durable-email-1', deliveryStatus: 'Delivered',
+      });
+      const dispatchSpy = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ completed: 1 });
+      jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'buyer-email-task' });
+      const mailerService = require('../src/services/mailerService');
+      const directSendSpy = jest.spyOn(mailerService, 'deliver');
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication');
+      const req = {
+        user: adminUser,
+        params: { id: 'buyer-test-1' },
+        body: { channel: 'EMAIL', recipient: 'buyer@target.test', subject: 'Update', message: 'Details' },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await buyerAccountController.recordBuyerCommunication(req, res, jest.fn());
+
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+        recipient: 'buyer@target.test',
+        metadata: expect.objectContaining({
+          deliveryEmailSubject: '[Procucev] Update',
+          deliveryReplyTo: adminUser.email,
+        }),
+      }));
+      expect(dispatchSpy).toHaveBeenCalledWith(1);
+      expect(directSendSpy).not.toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ deliveryStatus: 'Delivered' }),
+      }));
+    });
+
+    test('recordBuyerCommunication retains pending state when delivery reconciliation fails', async () => {
+      const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      const { logger } = require('../src/services/loggerService');
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({
+        id: 'buyer-email-pending-1',
+        notificationStatus: 'Delivery Pending',
+        deliveryStatus: 'Pending',
+        acknowledgementStatus: 'Delivery Pending',
+      });
+      jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus').mockRejectedValue(
+        Object.assign(new Error('D1 unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' })
+      );
+      jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'buyer-email-task' });
+      jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const mailerService = require('../src/services/mailerService');
+      jest.spyOn(mailerService, 'deliver').mockResolvedValue({ sent: true, messageId: 'buyer-email-provider-2' });
+
+      const req = {
+        user: adminUser,
+        params: { id: 'buyer-test-1' },
+        body: { channel: 'EMAIL', recipient: 'buyer@test.com', subject: 'Profile update', message: 'Updated.' },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await buyerAccountController.recordBuyerCommunication(req, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ deliveryStatus: 'Pending', acknowledgementStatus: 'Delivery Pending' }),
+      }));
+      expect(logger.error).toHaveBeenCalledWith(
+        'Buyer dossier delivery result could not be saved; communication remains pending',
+        expect.objectContaining({ communicationId: 'buyer-email-pending-1', providerAccepted: true }),
+        'BUYER_ACCOUNT_CONTROLLER'
+      );
+    });
+
     test('recordBuyerCommunication returns 404 for missing buyer', async () => {
       const req = { user: adminUser, params: { id: 'unknown-b' }, body: {} };
       const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };

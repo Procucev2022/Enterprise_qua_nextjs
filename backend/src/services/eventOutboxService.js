@@ -279,6 +279,84 @@ async function dispatchEvent(job) {
       }, 'EVENT_OUTBOX');
       return;
     }
+    case EVENT_OUTBOX_TYPES.COMMUNICATION_DELIVERY: {
+      const paymentDuesQueries = require('../db/paymentDuesQueries');
+      const communicationId = job.raw?.communicationId;
+      if (typeof communicationId !== 'string' || !communicationId) {
+        const error = new Error('Communication delivery retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const communication = await paymentDuesQueries.getCommunicationById(communicationId);
+      if (!communication) {
+        const error = new Error('Communication delivery retry references a missing record.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      if (communication.deliveryStatus === 'Delivered') return;
+      if (communication.deliveryStatus !== 'Pending') {
+        const error = new Error('Communication delivery retry references a non-pending record.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const channel = String(communication.channel || '').toLowerCase();
+      const metadata = communication.metadata && typeof communication.metadata === 'object'
+        ? communication.metadata
+        : {};
+      if (channel === 'email') {
+        const delivery = await mailerService.deliver({
+          to: communication.recipient,
+          subject: metadata.deliveryEmailSubject || communication.subject,
+          text: communication.message || communication.notes || '',
+          ...(typeof metadata.deliveryReplyTo === 'string' ? { replyTo: metadata.deliveryReplyTo } : {}),
+        }, 'COMMUNICATION_DELIVERY');
+        if (!delivery?.sent) {
+          const error = new Error('Communication email provider did not accept the message.');
+          error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+          throw error;
+        }
+      } else if (channel === 'sms') {
+        const smsService = require('./smsService');
+        const accountType = String(communication.accountType || '').toLowerCase();
+        const delivery = await smsService.sendActionCenterSms({
+          mobile: communication.recipient,
+          recipientName: metadata.deliveryRecipientName || (accountType === 'vendor' ? 'Supplier' : 'Buyer'),
+          message: communication.message || communication.subject || 'Important account update',
+          entityType: metadata.deliveryEntityType || `${accountType || 'account'}_dossier`,
+        });
+        if (!delivery?.success) {
+          const error = new Error('Communication SMS provider did not accept the message.');
+          error.code = 'SMS_DELIVERY_NOT_ACCEPTED';
+          throw error;
+        }
+      } else {
+        const error = new Error('Communication delivery retry references an unsupported channel.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const updated = await paymentDuesQueries.updateCommunicationDeliveryStatus({
+        communicationId,
+        notificationStatus: 'Notification Sent',
+        deliveryStatus: 'Delivered',
+        acknowledgementStatus: 'Acknowledgement Pending',
+      });
+      if (!updated) {
+        const error = new Error('Communication was accepted but its delivery status was not persisted.');
+        error.code = 'COMMUNICATION_STATUS_NOT_SAVED';
+        throw error;
+      }
+      logger.info('Persisted communication delivered and status updated', {
+        communicationId,
+        accountId: communication.accountId,
+        accountType: communication.accountType,
+        channel,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
     default: {
       const error = new Error(`Unsupported persisted event-outbox type: ${job.event_type}`);
       error.code = 'INVALID_EVENT_OUTBOX_TYPE';
@@ -320,6 +398,34 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE) {
       const permanentFailure = error?.code === 'INVALID_EVENT_OUTBOX_TYPE' || error?.code === 'INVALID_PERSISTED_RECORD';
       const isDead = permanentFailure || job.attempts >= EVENT_OUTBOX_MAX_ATTEMPTS;
       const availableAt = new Date(Date.now() + getRetryDelayMs(job.attempts)).toISOString();
+      if (
+        isDead
+        && job.event_type === EVENT_OUTBOX_TYPES.COMMUNICATION_DELIVERY
+        && typeof job.raw?.communicationId === 'string'
+        && job.raw.communicationId
+      ) {
+        try {
+          const paymentDuesQueries = require('../db/paymentDuesQueries');
+          const failedRecord = await paymentDuesQueries.updateCommunicationDeliveryStatus({
+            communicationId: job.raw.communicationId,
+            notificationStatus: 'Failed',
+            deliveryStatus: 'Failed',
+            acknowledgementStatus: 'Failed',
+          });
+          if (!failedRecord) {
+            logger.warn('Dead-lettered communication has no matching delivery-history row', {
+              communicationId: job.raw.communicationId,
+              outboxId: job.id,
+            }, 'EVENT_OUTBOX');
+          }
+        } catch (communicationError) {
+          logger.error('Could not mark dead-lettered communication as failed', {
+            error: communicationError,
+            communicationId: job.raw.communicationId,
+            outboxId: job.id,
+          }, 'EVENT_OUTBOX');
+        }
+      }
       try {
         await eventOutboxQueries.rescheduleEventOutboxInDB({
           id: job.id,

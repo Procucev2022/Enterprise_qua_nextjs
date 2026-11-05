@@ -22,7 +22,7 @@ const { logger } = require('../src/services/loggerService');
 const mailerService = require('../src/services/mailerService');
 const whatsAppService = require('../src/services/whatsAppService');
 const eventOutboxService = require('../src/services/eventOutboxService');
-const { EVENT_OUTBOX_TYPES, PERSISTENCE_MESSAGES } = require('../src/config/constants');
+const { PERSISTENCE_MESSAGES } = require('../src/config/constants');
 const app = require('../src/app');
 
 function createMockResponse() {
@@ -1633,9 +1633,6 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         id: 'pdc-outbox-delivered', accountId: 'b-test-1', channel: 'email', deliveryStatus: 'Pending',
       };
       jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue(pendingCommunication);
-      const enqueueSpy = jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue({
-        id: 'retry-payment-email', status: 'pending',
-      });
       jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ completed: 1 });
       jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
         ...pendingCommunication, deliveryStatus: 'Delivered', notificationStatus: 'Notification Sent',
@@ -1651,11 +1648,6 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.communication.deliveryStatus).toBe('Delivered');
-      expect(enqueueSpy).toHaveBeenCalledWith(
-        EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL,
-        pendingCommunication.id,
-        { communicationId: pendingCommunication.id }
-      );
       expect(eventOutboxService.dispatchDueEventOutboxJobs).toHaveBeenCalledWith(1);
       expect(directSendSpy).not.toHaveBeenCalled();
     });
@@ -1666,7 +1658,6 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         id: 'pdc-outbox-pending', accountId: 'b-test-1', channel: 'email', deliveryStatus: 'Pending',
       };
       jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue(pendingCommunication);
-      jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue({ id: 'retry-pending', status: 'pending' });
       jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ retried: 1 });
       jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue(pendingCommunication);
 
@@ -1683,16 +1674,12 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
       expect(res.body.message).toContain('queued');
     });
 
-    test('POST /api/payment-dues/email fails closed when the delivery intent cannot be persisted', async () => {
+    test('POST /api/payment-dues/email fails closed when the communication and its atomic delivery intent cannot be persisted', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-      const pendingCommunication = {
-        id: 'pdc-outbox-failure', accountId: 'b-test-1', channel: 'email', deliveryStatus: 'Pending',
-      };
-      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue(pendingCommunication);
-      jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockRejectedValue(new Error('outbox unavailable'));
-      const statusSpy = jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus').mockResolvedValue({
-        ...pendingCommunication, deliveryStatus: 'Failed',
-      });
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockRejectedValue(
+        Object.assign(new Error('outbox trigger unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' })
+      );
+      const dispatchSpy = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs');
       const directSendSpy = jest.spyOn(mailerService, 'deliver');
 
       const res = await request(app)
@@ -1703,10 +1690,8 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         });
 
       expect(res.status).toBe(503);
-      expect(statusSpy).toHaveBeenCalledWith(expect.objectContaining({
-        communicationId: pendingCommunication.id, deliveryStatus: 'Failed',
-      }));
       expect(directSendSpy).not.toHaveBeenCalled();
+      expect(dispatchSpy).not.toHaveBeenCalled();
     });
 
     test('POST /api/payment-dues/email uses a safe sender label when session claims omit identity fields', async () => {

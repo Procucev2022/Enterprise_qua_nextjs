@@ -1,5 +1,6 @@
 const storeService = require('../services/storeService');
 const domainQueries = require('../db/domainQueries');
+const pool = require('../db/pool');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
 
@@ -269,16 +270,26 @@ async function recordVendorCommunication(req, res, next) {
       notes || null,
     ].filter(Boolean).join(' | ');
 
+    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
+    const smsService = require('../services/smsService');
+    const normalizedVendorPhone = smsService.formatMobileNumber(recipient);
+    const emailTo = (recipient && recipient.includes('@')) ? recipient : vendor.email;
+    const smsTo = (normalizedVendorPhone && normalizedVendorPhone.length === 10)
+      ? normalizedVendorPhone
+      : vendor.phone;
+    const shouldDispatchEmail = isStaff && normalizedChannel === 'EMAIL' && Boolean(emailTo);
+    const shouldDispatchSms = isStaff && normalizedChannel === 'SMS' && Boolean(smsTo);
+    const deliveryPending = shouldDispatchEmail || shouldDispatchSms;
+
     const record = await paymentDuesQueries.recordCommunication({
       accountId: vendor.id,
       accountType: 'vendor',
       channel: normalizedChannel,
-      recipient: recipient || vendor.email || vendor.phone || '',
       subject: subject || null,
       message: message || '',
-      notificationStatus: 'Delivered',
-      deliveryStatus: 'Delivered',
-      acknowledgementStatus: 'Acknowledgement Pending',
+      notificationStatus: deliveryPending ? 'Delivery Pending' : 'Delivered',
+      deliveryStatus: deliveryPending ? 'Pending' : 'Delivered',
+      acknowledgementStatus: deliveryPending ? 'Delivery Pending' : 'Acknowledgement Pending',
       communicatedBy: req.user?.fullName || req.user?.name || req.user?.email || 'Category Manager',
       notes: commNotes || null,
       metadata: {
@@ -286,40 +297,109 @@ async function recordVendorCommunication(req, res, next) {
         callOutcome: callOutcome || null,
         duration: duration || null,
         nextFollowupDate: nextFollowupDate || null,
+        ...(shouldDispatchEmail ? {
+          deliveryEmailSubject: `[Procucev] ${subject || 'Supplier Communication'}`,
+          ...(req.user?.email ? { deliveryReplyTo: req.user.email } : {}),
+        } : {}),
+        ...(shouldDispatchSms ? {
+          deliveryRecipientName: vendor.companyName || vendor.name || 'Supplier',
+          deliveryEntityType: 'supplier_dossier',
+        } : {}),
       },
+      recipient: shouldDispatchEmail
+        ? emailTo
+        : shouldDispatchSms
+          ? smsTo
+          : recipient || vendor.email || vendor.phone || '',
     });
 
-    // External Live Dispatch for Email and SMS (Restricted to staff and channel-verified destinations)
-    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
-    const smsService = require('../services/smsService');
-    const normalizedVendorPhone = smsService.formatMobileNumber(recipient);
-    const emailTo = (recipient && recipient.includes('@')) ? recipient : vendor.email;
-    const smsTo = (normalizedVendorPhone && normalizedVendorPhone.length === 10) ? recipient : vendor.phone;
-    if (isStaff && normalizedChannel === 'EMAIL' && emailTo) {
+    let deliveryRecord = record;
+    if (deliveryPending && pool.hasStorage()) {
       try {
-        const mailerService = require('../services/mailerService');
-        if (typeof mailerService.deliver === 'function') {
-          mailerService.deliver({
+        const eventOutboxService = require('../services/eventOutboxService');
+        await eventOutboxService.dispatchDueEventOutboxJobs(1);
+      } catch (dispatchError) {
+        logger.error('Immediate supplier dossier delivery failed; durable recovery will retry', {
+          error: dispatchError,
+          vendorId: vendor.id,
+          communicationId: record.id,
+        }, 'VENDOR_CONTROLLER');
+      }
+      try {
+        const current = await paymentDuesQueries.getCommunicationById(record.id);
+        if (current) deliveryRecord = current;
+        else logger.error('Supplier dossier communication disappeared after durable delivery was queued', {
+          vendorId: vendor.id,
+          communicationId: record.id,
+        }, 'VENDOR_CONTROLLER');
+      } catch (lookupError) {
+        logger.error('Supplier dossier delivery state could not be reloaded after queueing', {
+          error: lookupError,
+          vendorId: vendor.id,
+          communicationId: record.id,
+        }, 'VENDOR_CONTROLLER');
+      }
+    } else {
+      let deliveryError = null;
+      if (shouldDispatchEmail) {
+        try {
+          const mailerService = require('../services/mailerService');
+          if (typeof mailerService.deliver !== 'function') {
+            throw new Error('Shared email delivery service is unavailable.');
+          }
+          const result = await mailerService.deliver({
             to: emailTo,
             subject: '[Procucev] ' + (subject || 'Supplier Communication'),
             text: message || commNotes || '',
             replyTo: req.user?.email || undefined,
-          }, 'SUPPLIER_DOSSIER_COMM').catch((err) => logger.warn('Async vendor email dispatch error', { error: err.message }));
+          }, 'SUPPLIER_DOSSIER_COMM');
+          if (!result?.sent) deliveryError = new Error(result?.reason || 'Email provider did not accept the message.');
+        } catch (error) {
+          deliveryError = error;
+          logger.error('Supplier dossier email dispatch failed', { error, vendorId: vendor.id, communicationId: record.id }, 'VENDOR_CONTROLLER');
         }
-      } catch (mailErr) {
-        logger.warn('Failed to dispatch external email for vendor communication', { error: mailErr.message });
+      } else if (shouldDispatchSms) {
+        try {
+          const result = await smsService.sendActionCenterSms({
+            mobile: smsTo,
+            recipientName: vendor.companyName || vendor.name || 'Supplier',
+            message: message || subject || 'Supplier notification',
+            entityType: 'supplier_dossier',
+          });
+          if (!result?.success) deliveryError = new Error(result?.error || 'SMS provider did not accept the message.');
+        } catch (error) {
+          deliveryError = error;
+          logger.error('Supplier dossier SMS dispatch failed', { error, vendorId: vendor.id, communicationId: record.id }, 'VENDOR_CONTROLLER');
+        }
       }
-    } else if (isStaff && normalizedChannel === 'SMS' && smsTo) {
-      try {
-        const smsService = require('../services/smsService');
-        smsService.sendActionCenterSms({
-          mobile: smsTo,
-          recipientName: vendor.companyName || vendor.name || 'Supplier',
-          message: message || subject || 'Supplier notification',
-          entityType: 'supplier_dossier',
-        }).catch((err) => logger.warn('Async vendor SMS dispatch error', { error: err.message }));
-      } catch (smsErr) {
-        logger.warn('Failed to dispatch external SMS for vendor communication', { error: smsErr.message });
+
+      if (deliveryPending) {
+        const delivered = !deliveryError;
+        const status = delivered ? 'Delivered' : 'Failed';
+        try {
+          const updated = await paymentDuesQueries.updateCommunicationDeliveryStatus({
+            communicationId: record.id,
+            notificationStatus: delivered ? 'Notification Sent' : 'Failed',
+            deliveryStatus: status,
+            acknowledgementStatus: delivered ? 'Acknowledgement Pending' : 'Failed',
+          });
+          if (updated) {
+            deliveryRecord = updated;
+          } else {
+            logger.error('Supplier dossier delivery result could not be matched to its persisted communication', {
+              vendorId: vendor.id,
+              communicationId: record.id,
+              deliveryStatus: status,
+            }, 'VENDOR_CONTROLLER');
+          }
+        } catch (statusError) {
+          logger.error('Supplier dossier delivery result could not be saved; communication remains pending', {
+            error: statusError,
+            vendorId: vendor.id,
+            communicationId: record.id,
+            providerAccepted: delivered,
+          }, 'VENDOR_CONTROLLER');
+        }
       }
     }
 
@@ -370,7 +450,7 @@ async function recordVendorCommunication(req, res, next) {
       }
     }
 
-    return res.status(201).json({ success: true, data: record, completedTask, followupTask });
+    return res.status(201).json({ success: true, data: deliveryRecord, completedTask, followupTask });
   } catch (err) {
     logger.error('Error recording vendor communication', err, 'VENDOR_CONTROLLER');
     next(err);

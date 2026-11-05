@@ -8,6 +8,7 @@ const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSch
 const { ZOHO_CONFIG, computeZohoBuyerPlanAmount, BUYER_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig } = require('../config/constants');
 const identityQueries = require('../db/identityQueries');
 
+const pool = require('../db/pool');
 /**
  * Buyer accounts are buyer-side org records: only a buyer (or an admin acting
  * on their behalf) has any business creating, editing, deleting or switching
@@ -928,16 +929,26 @@ async function recordBuyerCommunication(req, res, next) {
       notes || null,
     ].filter(Boolean).join(' | ');
 
+    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
+    const smsService = require('../services/smsService');
+    const normalizedBuyerPhone = smsService.formatMobileNumber(recipient);
+    const buyerEmail = (recipient && recipient.includes('@')) ? recipient : (buyer.corporateEmail || buyer.email);
+    const buyerPhone = (normalizedBuyerPhone && normalizedBuyerPhone.length === 10)
+      ? normalizedBuyerPhone
+      : (buyer.phone || buyer.mobileNumber);
+    const shouldDispatchEmail = isStaff && normalizedChannel === 'EMAIL' && Boolean(buyerEmail);
+    const shouldDispatchSms = isStaff && normalizedChannel === 'SMS' && Boolean(buyerPhone);
+    const deliveryPending = shouldDispatchEmail || shouldDispatchSms;
+
     const record = await paymentDuesQueries.recordCommunication({
       accountId: id,
       accountType: 'buyer',
       channel: normalizedChannel,
-      recipient: recipient || buyer.corporateEmail || buyer.phone || buyer.mobileNumber || '',
       subject: subject || null,
       message: message || '',
-      notificationStatus: 'Delivered',
-      deliveryStatus: 'Delivered',
-      acknowledgementStatus: 'Acknowledgement Pending',
+      notificationStatus: deliveryPending ? 'Delivery Pending' : 'Delivered',
+      deliveryStatus: deliveryPending ? 'Pending' : 'Delivered',
+      acknowledgementStatus: deliveryPending ? 'Delivery Pending' : 'Acknowledgement Pending',
       communicatedBy: req.user?.fullName || req.user?.name || req.user?.email || 'Category Manager',
       notes: commNotes || null,
       metadata: {
@@ -945,40 +956,109 @@ async function recordBuyerCommunication(req, res, next) {
         callOutcome: callOutcome || null,
         duration: duration || null,
         nextFollowupDate: nextFollowupDate || null,
+        ...(shouldDispatchEmail ? {
+          deliveryEmailSubject: `[Procucev] ${subject || 'Buyer Account Update'}`,
+          ...(req.user?.email ? { deliveryReplyTo: req.user.email } : {}),
+        } : {}),
+        ...(shouldDispatchSms ? {
+          deliveryRecipientName: buyer.organizationName || 'Buyer',
+          deliveryEntityType: 'buyer_dossier',
+        } : {}),
       },
+      recipient: shouldDispatchEmail
+        ? buyerEmail
+        : shouldDispatchSms
+          ? buyerPhone
+          : recipient || buyer.corporateEmail || buyer.phone || buyer.mobileNumber || '',
     });
 
-    // External Live Dispatch for Email and SMS (Restricted to staff and channel-verified destinations)
-    const isStaff = !req.user || ['admin', 'category_manager', 'support'].includes(req.user?.role);
-    const smsService = require('../services/smsService');
-    const normalizedBuyerPhone = smsService.formatMobileNumber(recipient);
-    const buyerEmail = (recipient && recipient.includes('@')) ? recipient : (buyer.corporateEmail || buyer.email);
-    const buyerPhone = (normalizedBuyerPhone && normalizedBuyerPhone.length === 10) ? normalizedBuyerPhone : (buyer.phone || buyer.mobileNumber);
-    if (isStaff && normalizedChannel === 'EMAIL' && buyerEmail) {
+    let deliveryRecord = record;
+    if (deliveryPending && pool.hasStorage()) {
       try {
-        const mailerService = require('../services/mailerService');
-        if (typeof mailerService.deliver === 'function') {
-          Promise.resolve().then(() => mailerService.deliver({
+        const eventOutboxService = require('../services/eventOutboxService');
+        await eventOutboxService.dispatchDueEventOutboxJobs(1);
+      } catch (dispatchError) {
+        logger.error('Immediate buyer dossier delivery failed; durable recovery will retry', {
+          error: dispatchError,
+          accountId: id,
+          communicationId: record.id,
+        }, 'BUYER_ACCOUNT_CONTROLLER');
+      }
+      try {
+        const current = await paymentDuesQueries.getCommunicationById(record.id);
+        if (current) deliveryRecord = current;
+        else logger.error('Buyer dossier communication disappeared after durable delivery was queued', {
+          accountId: id,
+          communicationId: record.id,
+        }, 'BUYER_ACCOUNT_CONTROLLER');
+      } catch (lookupError) {
+        logger.error('Buyer dossier delivery state could not be reloaded after queueing', {
+          error: lookupError,
+          accountId: id,
+          communicationId: record.id,
+        }, 'BUYER_ACCOUNT_CONTROLLER');
+      }
+    } else {
+      let deliveryError = null;
+      if (shouldDispatchEmail) {
+        try {
+          const mailerService = require('../services/mailerService');
+          if (typeof mailerService.deliver !== 'function') {
+            throw new Error('Shared email delivery service is unavailable.');
+          }
+          const result = await mailerService.deliver({
             to: buyerEmail,
             subject: '[Procucev] ' + (subject || 'Buyer Account Update'),
             text: message || commNotes || '',
             replyTo: req.user?.email || undefined,
-          }, 'BUYER_DOSSIER_COMM')).catch((err) => logger.warn('Async buyer email dispatch error', { error: err.message }));
+          }, 'BUYER_DOSSIER_COMM');
+          if (!result?.sent) deliveryError = new Error(result?.reason || 'Email provider did not accept the message.');
+        } catch (error) {
+          deliveryError = error;
+          logger.error('Buyer dossier email dispatch failed', { error, accountId: id, communicationId: record.id }, 'BUYER_ACCOUNT_CONTROLLER');
         }
-      } catch (mailErr) {
-        logger.warn('Failed to dispatch external email for buyer communication', { error: mailErr.message });
+      } else if (shouldDispatchSms) {
+        try {
+          const result = await smsService.sendActionCenterSms({
+            mobile: buyerPhone,
+            recipientName: buyer.organizationName || 'Buyer',
+            message: message || subject || 'Buyer account notification',
+            entityType: 'buyer_dossier',
+          });
+          if (!result?.success) deliveryError = new Error(result?.error || 'SMS provider did not accept the message.');
+        } catch (error) {
+          deliveryError = error;
+          logger.error('Buyer dossier SMS dispatch failed', { error, accountId: id, communicationId: record.id }, 'BUYER_ACCOUNT_CONTROLLER');
+        }
       }
-    } else if (isStaff && normalizedChannel === 'SMS' && buyerPhone) {
-      try {
-        const smsService = require('../services/smsService');
-        smsService.sendActionCenterSms({
-          mobile: buyerPhone,
-          recipientName: buyer.organizationName || 'Buyer',
-          message: message || subject || 'Buyer account notification',
-          entityType: 'buyer_dossier',
-        }).catch((err) => logger.warn('Async buyer SMS dispatch error', { error: err.message }));
-      } catch (smsErr) {
-        logger.warn('Failed to dispatch external SMS for buyer communication', { error: smsErr.message });
+
+      if (deliveryPending) {
+        const delivered = !deliveryError;
+        const status = delivered ? 'Delivered' : 'Failed';
+        try {
+          const updated = await paymentDuesQueries.updateCommunicationDeliveryStatus({
+            communicationId: record.id,
+            notificationStatus: delivered ? 'Notification Sent' : 'Failed',
+            deliveryStatus: status,
+            acknowledgementStatus: delivered ? 'Acknowledgement Pending' : 'Failed',
+          });
+          if (updated) {
+            deliveryRecord = updated;
+          } else {
+            logger.error('Buyer dossier delivery result could not be matched to its persisted communication', {
+              accountId: id,
+              communicationId: record.id,
+              deliveryStatus: status,
+            }, 'BUYER_ACCOUNT_CONTROLLER');
+          }
+        } catch (statusError) {
+          logger.error('Buyer dossier delivery result could not be saved; communication remains pending', {
+            error: statusError,
+            accountId: id,
+            communicationId: record.id,
+            providerAccepted: delivered,
+          }, 'BUYER_ACCOUNT_CONTROLLER');
+        }
       }
     }
 
@@ -1027,7 +1107,7 @@ async function recordBuyerCommunication(req, res, next) {
       }
     }
 
-    return res.status(201).json({ success: true, data: record, completedTask, followupTask });
+    return res.status(201).json({ success: true, data: deliveryRecord, completedTask, followupTask });
   } catch (err) {
     logger.error('Error recording buyer communication', err, 'BUYER_ACCOUNT_CONTROLLER');
     next(err);

@@ -13,7 +13,7 @@ const eventOutboxService = require('../services/eventOutboxService');
 const storeService = require('../services/storeService');
 const whatsAppService = require('../services/whatsAppService');
 const { logger } = require('../services/loggerService');
-const { EVENT_OUTBOX_TYPES, PERSISTENCE_MESSAGES } = require('../config/constants');
+const { PERSISTENCE_MESSAGES } = require('../config/constants');
 
 function sendControllerError(res, error, fallbackMessage) {
   if (error?.code === 'PERSISTENCE_UNAVAILABLE') {
@@ -148,42 +148,6 @@ async function sendEmailNotification(req, res) {
     });
 
     if (pool.hasStorage()) {
-      try {
-        await eventOutboxService.enqueueEventOutbox(
-          EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL,
-          communication.id,
-          { communicationId: communication.id }
-        );
-      } catch (enqueueError) {
-        logger.error('Could not persist low-credit email delivery intent', {
-          error: enqueueError,
-          accountId,
-          communicationId: communication.id,
-        }, 'PAYMENT_DUES');
-        try {
-          await paymentDuesQueries.updateCommunicationDeliveryStatus({
-            communicationId: communication.id,
-            notificationStatus: 'Failed',
-            deliveryStatus: 'Failed',
-            acknowledgementStatus: 'Failed',
-          });
-        } catch (statusError) {
-          logger.error('Low-credit email intent failure could not be reflected in communication history', {
-            error: statusError,
-            accountId,
-            communicationId: communication.id,
-          }, 'PAYMENT_DUES');
-        }
-        const persistenceError = new Error('The email could not be queued for delivery.');
-        persistenceError.code = 'PERSISTENCE_UNAVAILABLE';
-        persistenceError.cause = enqueueError;
-        return sendControllerError(
-          res,
-          persistenceError,
-          'The email could not be queued for delivery. Please retry.'
-        );
-      }
-
       try {
         await eventOutboxService.dispatchDueEventOutboxJobs(1);
       } catch (dispatchError) {

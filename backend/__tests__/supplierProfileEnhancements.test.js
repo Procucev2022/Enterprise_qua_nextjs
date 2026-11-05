@@ -2,6 +2,7 @@ const vendorDossierExtensions = require('../src/controllers/vendorDossierExtensi
 const storeService = require('../src/services/storeService');
 const domainQueries = require('../src/db/domainQueries');
 const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+const pool = require('../src/db/pool');
 const zohoReconciliationService = require('../src/services/zohoReconciliationService');
 
 describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
@@ -702,6 +703,74 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
 
       deliverSpy.mockRestore();
       smsSpy.mockRestore();
+    });
+
+    test('recordVendorCommunication dispatches configured SMS only through durable recovery', async () => {
+      const eventOutboxService = require('../src/services/eventOutboxService');
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({
+        id: 'vendor-durable-sms-1', deliveryStatus: 'Pending',
+      });
+      jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+        id: 'vendor-durable-sms-1', deliveryStatus: 'Delivered',
+      });
+      const dispatchSpy = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ completed: 1 });
+      jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'vendor-sms-task' });
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication');
+      const smsService = require('../src/services/smsService');
+      const directSendSpy = jest.spyOn(smsService, 'sendActionCenterSms');
+      const req = {
+        user: adminUser,
+        params: { id: 'v-test-1' },
+        body: { channel: 'SMS', recipient: 'invalid', subject: 'Profile update', message: 'Details' },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.recordVendorCommunication(req, res, jest.fn());
+
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+        recipient: mockVendor.phone,
+        metadata: expect.objectContaining({
+          deliveryRecipientName: mockVendor.companyName || mockVendor.name,
+          deliveryEntityType: 'supplier_dossier',
+        }),
+      }));
+      expect(dispatchSpy).toHaveBeenCalledWith(1);
+      expect(directSendSpy).not.toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ deliveryStatus: 'Delivered' }),
+      }));
+    });
+
+    test('recordVendorCommunication retains default subject when durable email has no subject or actor email', async () => {
+      const eventOutboxService = require('../src/services/eventOutboxService');
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const recordSpy = jest.spyOn(paymentDuesQueries, 'recordCommunication').mockResolvedValue({
+        id: 'vendor-durable-email-defaults', deliveryStatus: 'Pending',
+      });
+      jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+        id: 'vendor-durable-email-defaults', deliveryStatus: 'Delivered',
+      });
+      jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ completed: 1 });
+      jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValue({ id: 'vendor-email-task' });
+      const req = {
+        user: { role: 'admin', id: 'admin-without-email' },
+        params: { id: 'v-test-1' },
+        body: { channel: 'EMAIL', message: 'Details' },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.recordVendorCommunication(req, res, jest.fn());
+
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+        recipient: mockVendor.email,
+        metadata: expect.objectContaining({
+          deliveryEmailSubject: '[Procucev] Supplier Communication',
+        }),
+      }));
+      expect(recordSpy.mock.calls[0][0].metadata).not.toHaveProperty('deliveryReplyTo');
     });
   });
 });

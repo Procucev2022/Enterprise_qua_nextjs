@@ -593,6 +593,230 @@ describe('background event retry outbox', () => {
     expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending' }));
   });
 
+  test('dispatches durable dossier email from the communication row and saves delivery state', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'communication-delivery:comm-buyer-email',
+      event_type: EVENT_OUTBOX_TYPES.COMMUNICATION_DELIVERY,
+      raw: { communicationId: 'comm-buyer-email' },
+      attempts: 1,
+      lease_token: 'lease-buyer-email',
+    }]);
+    const communication = {
+      id: 'comm-buyer-email',
+      accountId: 'buyer-1',
+      accountType: 'buyer',
+      channel: 'email',
+      recipient: 'buyer@example.test',
+      subject: 'Profile update',
+      message: '',
+      notes: 'The profile was updated.',
+      metadata: {
+        deliveryEmailSubject: '[Procucev] Profile update',
+        deliveryReplyTo: 'staff@example.test',
+      },
+      deliveryStatus: 'Pending',
+    };
+    jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue(communication);
+    const deliverySpy = jest.spyOn(mailerService, 'deliver').mockResolvedValue({ sent: true });
+    const updateSpy = jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus').mockResolvedValue({
+      ...communication,
+      deliveryStatus: 'Delivered',
+    });
+    jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(deliverySpy).toHaveBeenCalledWith({
+      to: communication.recipient,
+      subject: '[Procucev] Profile update',
+      text: 'The profile was updated.',
+      replyTo: 'staff@example.test',
+    }, 'COMMUNICATION_DELIVERY');
+    expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      communicationId: communication.id,
+      deliveryStatus: 'Delivered',
+    }));
+  });
+
+  test('dispatches durable dossier SMS and saves delivery state', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'communication-delivery:comm-vendor-sms',
+      event_type: EVENT_OUTBOX_TYPES.COMMUNICATION_DELIVERY,
+      raw: { communicationId: 'comm-vendor-sms' },
+      attempts: 1,
+      lease_token: 'lease-vendor-sms',
+    }]);
+    const communication = {
+      id: 'comm-vendor-sms',
+      accountId: 'vendor-1',
+      accountType: 'vendor',
+      channel: 'SMS',
+      recipient: '9157154504',
+      subject: 'Supplier update',
+      message: 'Please review the updated profile.',
+      metadata: { deliveryRecipientName: 'Supplier One', deliveryEntityType: 'supplier_dossier' },
+      deliveryStatus: 'Pending',
+    };
+    jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue(communication);
+    const smsService = require('../src/services/smsService');
+    const deliverySpy = jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValue({ success: true });
+    jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus').mockResolvedValue({
+      ...communication,
+      deliveryStatus: 'Delivered',
+    });
+    jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(deliverySpy).toHaveBeenCalledWith({
+      mobile: communication.recipient,
+      recipientName: 'Supplier One',
+      message: communication.message,
+      entityType: 'supplier_dossier',
+    });
+  });
+
+  test('skips already-delivered generic communications and dead-letters ineligible records', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const claimSpy = jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'communication-delivery:already-delivered',
+      event_type: EVENT_OUTBOX_TYPES.COMMUNICATION_DELIVERY,
+      raw: { communicationId: 'already-delivered' },
+      attempts: 1,
+      lease_token: 'lease-delivered-generic',
+    }]);
+    const getCommunicationSpy = jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+      id: 'already-delivered', channel: 'email', deliveryStatus: 'Delivered',
+    });
+    const mailSpy = jest.spyOn(mailerService, 'deliver');
+    const completeSpy = jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(mailSpy).not.toHaveBeenCalled();
+
+    claimSpy.mockResolvedValueOnce([{
+      id: 'communication-delivery:unsupported-channel',
+      event_type: EVENT_OUTBOX_TYPES.COMMUNICATION_DELIVERY,
+      raw: { communicationId: 'unsupported-channel' },
+      attempts: 1,
+      lease_token: 'lease-invalid-generic',
+    }]);
+    getCommunicationSpy.mockResolvedValueOnce({
+      id: 'unsupported-channel', channel: 'whatsapp', deliveryStatus: 'Pending',
+    });
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ dead: 1 });
+    expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'dead' }));
+    expect(completeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    [{ communicationId: '' }, null],
+    [{ communicationId: 'missing' }, null],
+    [{ communicationId: 'failed' }, { id: 'failed', channel: 'email', deliveryStatus: 'Failed' }],
+  ])('dead-letters malformed or missing generic communication intent: %p', async (raw, communication) => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'communication-delivery:invalid-record',
+      event_type: EVENT_OUTBOX_TYPES.COMMUNICATION_DELIVERY,
+      raw,
+      attempts: 1,
+      lease_token: 'lease-invalid-record',
+    }]);
+    jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue(communication);
+    const mailSpy = jest.spyOn(mailerService, 'deliver');
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ dead: 1 });
+    expect(mailSpy).not.toHaveBeenCalled();
+    expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'dead' }));
+  });
+
+  test.each([
+    ['email', { sent: false }],
+    ['sms', { success: false, error: 'gateway failed' }],
+  ])('reschedules communication delivery when the %s provider does not accept the message', async (channel, result) => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: `communication-delivery:provider-${channel}-failure`,
+      event_type: EVENT_OUTBOX_TYPES.COMMUNICATION_DELIVERY,
+      raw: { communicationId: `provider-${channel}-failure` },
+      attempts: 1,
+      lease_token: `lease-provider-${channel}`,
+    }]);
+    jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+      id: `provider-${channel}-failure`,
+      accountId: 'account-1',
+      accountType: 'buyer',
+      channel,
+      recipient: channel === 'email' ? 'buyer@example.test' : '9157154504',
+      subject: 'Account update',
+      message: 'Please review the update.',
+      deliveryStatus: 'Pending',
+    });
+    if (channel === 'email') {
+      jest.spyOn(mailerService, 'deliver').mockResolvedValue(result);
+    } else {
+      const smsService = require('../src/services/smsService');
+      jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValue(result);
+    }
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ retried: 1 });
+    expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending' }));
+  });
+
+  test('reschedules generic communication when provider accepted but status persistence failed', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'communication-delivery:status-failure',
+      event_type: EVENT_OUTBOX_TYPES.COMMUNICATION_DELIVERY,
+      raw: { communicationId: 'status-failure' },
+      attempts: 1,
+      lease_token: 'lease-status-failure',
+    }]);
+    jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+      id: 'status-failure', channel: 'email', recipient: 'buyer@example.test',
+      subject: 'Update', message: 'Details', deliveryStatus: 'Pending',
+    });
+    jest.spyOn(mailerService, 'deliver').mockResolvedValue({ sent: true });
+    jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus').mockResolvedValue(null);
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ retried: 1 });
+    expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending' }));
+  });
+
+  test('marks exhausted generic communication delivery as failed when dead-lettered', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'communication-delivery:exhausted',
+      event_type: EVENT_OUTBOX_TYPES.COMMUNICATION_DELIVERY,
+      raw: { communicationId: 'exhausted' },
+      attempts: 8,
+      lease_token: 'lease-exhausted',
+    }]);
+    jest.spyOn(paymentDuesQueries, 'getCommunicationById').mockResolvedValue({
+      id: 'exhausted', accountId: 'buyer-1', accountType: 'buyer',
+      channel: 'sms', recipient: '9157154504', message: 'Update', deliveryStatus: 'Pending',
+    });
+    const smsService = require('../src/services/smsService');
+    jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValue({ success: false });
+    const updateSpy = jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus').mockResolvedValue({
+      id: 'exhausted', deliveryStatus: 'Failed',
+    });
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ dead: 1 });
+    expect(updateSpy).toHaveBeenCalledWith({
+      communicationId: 'exhausted',
+      notificationStatus: 'Failed',
+      deliveryStatus: 'Failed',
+      acknowledgementStatus: 'Failed',
+    });
+    expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'dead' }));
+  });
+
   test('purges retained rows only when storage is configured', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
     await expect(eventOutboxService.purgeExpiredEventOutboxRows()).resolves.toBe(0);
