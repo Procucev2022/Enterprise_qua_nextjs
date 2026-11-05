@@ -453,6 +453,16 @@ export const KNOWN_KEYWORD_RULES: Array<{
     minor: 'Paints',
   },
   {
+    keywords: ['painting service', 'painting services', 'painting contractor'],
+    major: 'Professional Services',
+    minor: 'Painting Service',
+  },
+  {
+    keywords: ['painting', 'wall painting', 'industrial painting', 'commercial painting'],
+    major: 'Civil Works',
+    minor: 'Painting',
+  },
+  {
     keywords: ['brick', 'bricks', 'fly ash brick', 'red brick', 'clay brick'],
     major: 'Civil Works',
     minor: 'Bricks',

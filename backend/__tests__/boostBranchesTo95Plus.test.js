@@ -1338,6 +1338,379 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       querySpy.mockRestore();
     }
   });
+  test('storeService taxonomy matching and minor category fallback branches', () => {
+    // 1. vendorCoversMinorCategory branches
+    expect(storeService.vendorCoversMinorCategory(null, null)).toBe(false);
+    expect(storeService.vendorCoversMinorCategory({}, '')).toBe(false);
+    expect(storeService.vendorCoversMinorCategory({ majorCategory: 'Corrugated Box' }, 'Corrugated Boxes')).toBe(true);
+    expect(storeService.vendorCoversMinorCategory({ vendorSelectedCategories: ['Valves'] }, 'Valves')).toBe(true);
+    expect(storeService.vendorCoversMinorCategory({ clientMappedCategories: ['Plumbing Fixtures'] }, 'Plumbing')).toBe(true);
+    expect(storeService.vendorCoversMinorCategory({ minorCategories: [null, ''] }, 'Pipes')).toBe(false);
+
+    // 2. _rfqTaxonomyGroups edge cases
+    expect(storeService._rfqTaxonomyGroups(null)).toEqual([]);
+    expect(storeService._rfqTaxonomyGroups({})).toEqual([]);
+    
+    // Header minorCategory
+    const rfqHeadMinor = {
+      minorCategory: 'Corrugated Boxes',
+      category: 'Packing Material',
+    };
+    const groupsHead = storeService._rfqTaxonomyGroups(rfqHeadMinor);
+    expect(groupsHead[0].minorCategory).toBe('Corrugated Boxes');
+    expect(groupsHead[0].majorCategory).toBe('Packing Material');
+
+    // Header minorCategories array
+    const rfqHeadMinors = {
+      minorCategories: ['PVC Pipes', '', null],
+      majorCategory: 'Plumbing',
+    };
+    const groupsArray = storeService._rfqTaxonomyGroups(rfqHeadMinors);
+    expect(groupsArray[0].minorCategory).toBe('PVC Pipes');
+
+    // Line item with subCategory
+    const rfqSubCat = {
+      extractedEntities: [
+        { subCategory: 'Valves' },
+        null,
+      ],
+    };
+    const groupsSub = storeService._rfqTaxonomyGroups(rfqSubCat);
+    expect(groupsSub[0].minorCategory).toBe('Valves');
+
+    // 3. selectVendorsPerCategory & selectVendorsForRFQ edge cases
+    expect(storeService.selectVendorsPerCategory([], ['Civil Works'])).toEqual([]);
+    expect(storeService.selectVendorsPerCategory([{ id: 'v1' }], [])).toHaveLength(1);
+    expect(storeService.selectVendorsPerCategory([{ id: 'v1' }], [null, ''])).toHaveLength(1);
+    expect(storeService.selectVendorsForRFQ([], null)).toEqual([]);
+
+    // Custom limit & destination
+    const pool = [
+      { id: 'v1', name: 'Vendor 1', minorCategories: ['Valves'], rating: 4 },
+      { id: 'v2', name: 'Vendor 2', majorCategory: 'Plumbing', rating: 5 },
+    ];
+    const selected = storeService.selectVendorsForRFQ(pool, { minorCategory: 'Valves', majorCategory: 'Plumbing' }, 1);
+    expect(selected).toHaveLength(1);
+
+    // selectVendorsPerCategory with object category without minorCategory
+    const majOnlySelected = storeService.selectVendorsPerCategory(pool, [{ majorCategory: 'Plumbing' }]);
+    expect(majOnlySelected.length).toBeGreaterThan(0);
+
+    // String category mapping to major
+    const strSelected = storeService.selectVendorsPerCategory(pool, ['Valves']);
+    expect(strSelected.length).toBeGreaterThan(0);
+  });
+
+  test('rfqChaserScheduler dispatch branches and follow-up stats', async () => {
+    const scheduler = require('../src/services/rfqChaserScheduler');
+    const smsService = require('../src/services/smsService');
+    const whatsAppService = require('../src/services/whatsAppService');
+    const mailerService = require('../src/services/mailerService');
+    const domainQueries = require('../src/db/domainQueries');
+
+    // 1. _updateLiveFollowUpStats branches
+    const mockRfq = {
+      rfqNumber: 'RFQ-FUP-BOOST',
+      followUpData: {
+        whatsappStats: { delivered: 1 },
+        smsStats: { delivered: 2, total: 5 },
+        emailStats: { delivered: 1, sent24h: 1 },
+        vendors: [
+          { vendorId: 'v-101', vendorName: 'Vendor 101' },
+          { vendorId: 'v-102', vendorName: 'Vendor 102' },
+        ],
+      },
+    };
+    jest.spyOn(storeService, 'getRFQById').mockReturnValue(mockRfq);
+
+    // whatsapp stats already present
+    scheduler._updateLiveFollowUpStats('RFQ-FUP-BOOST', 'whatsapp', { id: 'v-101' });
+    expect(mockRfq.followUpData.whatsappStats.delivered).toBe(2);
+
+    // sms stats where delivered > total
+    mockRfq.followUpData.smsStats = { delivered: 5, total: 5 };
+    scheduler._updateLiveFollowUpStats('RFQ-FUP-BOOST', 'sms', { name: 'Vendor 102' });
+    expect(mockRfq.followUpData.smsStats.total).toBe(6);
+
+    // email stats already present
+    scheduler._updateLiveFollowUpStats('RFQ-FUP-BOOST', 'email', { id: 'v-101' });
+    expect(mockRfq.followUpData.emailStats.delivered).toBe(2);
+
+    // 2. Dispatch helpers in non-test NODE_ENV
+    const oldNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    // _dispatchWhatsApp with phone and jobId
+    jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: true });
+    jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue(true);
+    jest.spyOn(domainQueries, 'markChaserJobFailedInDB').mockResolvedValue(true);
+
+    const waRes = await scheduler._dispatchWhatsApp(
+      { rfqNumber: 'RFQ-FUP-BOOST' },
+      { id: 'v-101', name: 'Vendor 101', phone: '9876543210' },
+      'job-wa-1'
+    );
+    expect(waRes.success).toBe(true);
+
+    // _dispatchWhatsApp failure
+    whatsAppService.sendRFQInvitationWhatsApp.mockResolvedValueOnce({ success: false, error: 'Meta fail' });
+    const waFail = await scheduler._dispatchWhatsApp(
+      { rfqNumber: 'RFQ-FUP-BOOST' },
+      { id: 'v-101', name: 'Vendor 101', phone: '9876543210' },
+      'job-wa-2'
+    );
+    expect(waFail.success).toBe(false);
+
+    // _dispatchSms with mobile, mobileNumber, and store fallback
+    jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-ok' });
+    const smsRes = await scheduler._dispatchSms(
+      { rfqNumber: 'RFQ-FUP-BOOST', title: 'Test' },
+      { id: 'v-101', name: 'Vendor 101', mobile: '9876543210' },
+      'job-sms-1'
+    );
+    expect(smsRes.success).toBe(true);
+
+    // _dispatchSms failure
+    smsService.sendRFQChaserSms.mockResolvedValueOnce({ success: false, error: 'SMS failed' });
+    const smsFail = await scheduler._dispatchSms(
+      { rfqNumber: 'RFQ-FUP-BOOST', title: 'Test' },
+      { id: 'v-101', name: 'Vendor 101', mobileNumber: '9876543210' },
+      'job-sms-2'
+    );
+    expect(smsFail.success).toBe(false);
+
+    // _dispatchReminderEmail failure
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: false, reason: 'SMTP rejected' });
+    const emailFail = await scheduler._dispatchReminderEmail(
+      { rfqNumber: 'RFQ-FUP-BOOST' },
+      { id: 'v-101', name: 'Vendor 101', email: 'v101@test.com' },
+      {},
+      'job-mail-1'
+    );
+    expect(emailFail.sent).toBe(false);
+
+    // _dispatchReminderEmail success
+    mailerService.sendRfqInviteEmail.mockResolvedValueOnce({ sent: true });
+    const emailOk = await scheduler._dispatchReminderEmail(
+      { rfqNumber: 'RFQ-FUP-BOOST' },
+      { id: 'v-101', name: 'Vendor 101', email: 'v101@test.com' },
+      {},
+      'job-mail-2'
+    );
+    expect(emailOk.sent).toBe(true);
+
+    process.env.NODE_ENV = oldNodeEnv;
+  });
+  test('rfqChaserScheduler deep branch boost (dedup keys, waitUntil timers, delays in prod, call with jobId)', async () => {
+    const scheduler = require('../src/services/rfqChaserScheduler');
+    const domainQueries = require('../src/db/domainQueries');
+
+    // 1. scheduleRFQChasers with various vendor identifier shapes (phone-only, email-only, name-only, empty)
+    const vendorsList = [
+      null,
+      { phone: '9876543210' },
+      { email: 'onlyemail@test.com' },
+      { name: 'Only Name' },
+      {},
+    ];
+    scheduler.scheduleRFQChasers({ rfqNumber: 'RFQ-KEY-SHAPES' }, vendorsList);
+
+    // 2. scheduleVendorChaser with waitUntil in Node mode (CF_WAIT_UNTIL present, CF_ENV empty)
+    const waitUntilMock = jest.fn();
+    globalThis.__CF_WAIT_UNTIL__ = waitUntilMock;
+    const oldNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    try {
+      scheduler.scheduleVendorChaser(
+        { rfqNumber: 'RFQ-NODE-WAITUNTIL', title: 'Test WaitUntil' },
+        { id: 'v-node-wu', name: 'WU Vendor', phone: '9123456789', email: 'wu@test.com' }
+      );
+      expect(waitUntilMock).toHaveBeenCalled();
+
+      // 3. _dispatchCall in production with jobId
+      const firedSpy = jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue(true);
+      const callRes = await scheduler._dispatchCall(
+        { rfqNumber: 'RFQ-CALL-JOB' },
+        { id: 'v-call', name: 'Call Vendor', phone: '9123456789' },
+        'job-call-1'
+      );
+      expect(callRes.skipped).toBe(true);
+      expect(firedSpy).toHaveBeenCalledWith('job-call-1');
+    } finally {
+      process.env.NODE_ENV = oldNodeEnv;
+      delete globalThis.__CF_WAIT_UNTIL__;
+    }
+  });
+
+  test('rfqChaserScheduler recoverChasersOnBoot skip existing jobKey branch', async () => {
+    const scheduler = require('../src/services/rfqChaserScheduler');
+    const domainQueries = require('../src/db/domainQueries');
+
+    scheduler.activeScheduledTimers.set('RFQ-REC:v-rec:sms', 9999);
+    jest.spyOn(domainQueries, 'getPendingChaserJobsFromDB').mockResolvedValue([
+      {
+        id: 'job-rec-1',
+        rfq_number: 'RFQ-REC',
+        vendor_id: 'v-rec',
+        channel: 'sms',
+        fire_at: new Date(Date.now() - 1000).toISOString(),
+      },
+      {
+        id: 'job-rec-2',
+        rfq_number: 'RFQ-REC',
+        vendor_id: null,
+        channel: 'call',
+        fire_at: new Date(Date.now() + 5000).toISOString(),
+      },
+    ]);
+
+    await scheduler.recoverChasersOnBoot();
+    scheduler.activeScheduledTimers.delete('RFQ-REC:v-rec:sms');
+  });
+
+  test('storeService deep branch boosts for null/edge lookups', async () => {
+    expect(await storeService.getBuyerAccountByEmail(null)).toBeNull();
+    expect(storeService.getVendorById(null)).toBeUndefined();
+    expect(storeService.getRFQById(null)).toBeUndefined();
+    expect(storeService.isBuyerUploaded(null)).toBe(false);
+    expect(storeService.isProcucevVendor(null)).toBe(false);
+    expect(storeService.getProcucevVendorCount(null)).toBe(0);
+
+    // Delivery location location score branches
+    expect(storeService.scoreVendorLocation({ city: 'Mumbai' }, { location: 'Mumbai' })).toBe(85);
+    expect(storeService.scoreVendorLocation({ state: 'Gujarat' }, { location: 'Ahmedabad, Gujarat' })).toBe(65);
+    expect(storeService.scoreVendorLocation({ location: 'GIDC Vatva' }, { location: 'Vatva Plant' })).toBe(60);
+
+    // Taxonomy group with line items containing null/empty major/minor
+    const weirdRfq = {
+      extractedEntities: [
+        { itemName: 'Item 1' }, // no major, no minor
+        { minorCategory: '   ' },
+        { majorCategory: '   ' },
+      ],
+    };
+    expect(storeService._rfqTaxonomyGroups(weirdRfq)).toEqual([]);
+  });
+
+
+  test('storeService comprehensive branch coverage booster', async () => {
+    // 1. isCategoryAvailable branches
+    expect(storeService.isCategoryAvailable(null)).toBe(false);
+    expect(storeService.isCategoryAvailable(undefined)).toBe(false);
+    expect(storeService.isCategoryAvailable('')).toBe(false);
+    expect(storeService.isCategoryAvailable('   ')).toBe(false);
+    expect(storeService.isCategoryAvailable(999)).toBe(false);
+    expect(storeService.isCategoryAvailable('Paints')).toBe(true);
+    expect(storeService.isCategoryAvailable('Civil Works')).toBe(true);
+    expect(storeService.isCategoryAvailable('Civil')).toBe(true);
+    expect(storeService.isCategoryAvailable('Electricals')).toBe(true);
+    expect(storeService.isCategoryAvailable('solar')).toBe(true);
+
+    // Vendor directory fallback in isCategoryAvailable
+    const tempVendor = storeService.addVendor({
+      name: 'Custom Unlisted Category Supplier',
+      majorCategory: 'Bespoke Custom Fabric',
+      minorCategories: ['Handloom Silk Weave'],
+    });
+    expect(storeService.isCategoryAvailable('Bespoke Custom Fabric')).toBe(true);
+    expect(storeService.isCategoryAvailable('Handloom Silk Weave')).toBe(true);
+    expect(storeService.isCategoryAvailable('Totally Unknown Category XYZ')).toBe(false);
+
+    // 2. notifyVendorsOfNewRFQ branches
+    expect(storeService.notifyVendorsOfNewRFQ(null)).toEqual([]);
+    expect(storeService.notifyVendorsOfNewRFQ({ needsCategoryManagerAssignment: true })).toEqual([]);
+    expect(storeService.notifyVendorsOfNewRFQ({ categoryNotAvailable: true })).toEqual([]);
+
+    // 3. vendorCoversRFQ branches
+    expect(storeService.vendorCoversRFQ(null, {})).toBe(false);
+    expect(storeService.vendorCoversRFQ({}, null)).toBe(false);
+    expect(storeService.vendorCoversRFQ({ id: 'v1' }, { needsCategoryManagerAssignment: true, assignedVendors: [] })).toBe(false);
+    expect(storeService.vendorCoversRFQ({ id: 'v1' }, { needsCategoryManagerAssignment: true, assignedVendors: [{ id: 'v1' }] })).toBe(true);
+    expect(storeService.vendorCoversRFQ({ id: 'v1' }, { categoryNotAvailable: true, assignedVendors: [] })).toBe(false);
+
+    // 4. createRFQ with unlisted category
+    const unlistedRfq = storeService.createRFQ({
+      title: 'Deep Unlisted RFQ',
+      category: 'NonExistentCategory999',
+      sourcingMode: 'mode_0',
+    });
+    expect(unlistedRfq.needsCategoryManagerAssignment).toBe(true);
+    expect(unlistedRfq.categoryNotAvailable).toBe(true);
+    expect(unlistedRfq.assignedVendors).toEqual([]);
+
+    // 5. selectVendorsPerCategory null / empty / malformed branches
+    expect(storeService.selectVendorsPerCategory(null, [])).toEqual([]);
+    expect(storeService.selectVendorsPerCategory([], null)).toEqual([]);
+    expect(storeService.selectVendorsPerCategory([{ id: 'v1' }], null)).toHaveLength(1);
+    expect(storeService.selectVendorsPerCategory([{ id: 'v1' }], [null, '   ', {}])).toEqual([]);
+
+    // 6. extendRFQ branch coverage
+    expect(storeService.extendRFQ('non-existent-id')).toEqual(expect.objectContaining({ success: false, reason: 'NOT_FOUND' }));
+
+    const rfqForExt = storeService.createRFQ({ title: 'Extendable RFQ', category: 'Pumps', sourcingMode: 'mode_0' });
+    // Invalid hours
+    expect(storeService.extendRFQ(rfqForExt.id, { hours: 12 })).toEqual(expect.objectContaining({ success: false, reason: 'VALIDATION' }));
+
+    // Closed RFQ
+    storeService.updateRFQ(rfqForExt.id, { status: 'Closed' });
+    expect(storeService.extendRFQ(rfqForExt.id, { hours: 24 })).toEqual(expect.objectContaining({ success: false, reason: 'INVALID_STATUS' }));
+
+    // Valid 24h extension
+    storeService.updateRFQ(rfqForExt.id, { status: 'Quotes Pending' });
+    const extOk = storeService.extendRFQ(rfqForExt.id, { hours: 24 });
+    expect(extOk.success).toBe(true);
+
+    // Already extended
+    expect(storeService.extendRFQ(rfqForExt.id, { hours: 24 })).toEqual(expect.objectContaining({ success: false, reason: 'ALREADY_EXTENDED' }));
+
+    // 7. addQuoteToRFQ with non-existent RFQ
+    expect(storeService.addQuoteToRFQ('ghost-rfq-id', {})).toBeNull();
+
+    // 8. isCategoryAvailable branches
+    expect(storeService.isCategoryAvailable('')).toBe(false);
+    expect(storeService.isCategoryAvailable('   ')).toBe(false);
+    expect(storeService.isCategoryAvailable('Civil Works')).toBe(true);
+    expect(storeService.isCategoryAvailable('Painting')).toBe(true);
+    // check alias
+    expect(storeService.isCategoryAvailable('Electricals')).toBe(true);
+    expect(storeService.isCategoryAvailable('Solar')).toBe(true);
+    expect(storeService.isCategoryAvailable('UnrealCustomCategory123')).toBe(false);
+    const prevVendors = storeService.vendors;
+    storeService.vendors = [null, { majorCategory: 'UnrealCustomMajor' }, { minorCategories: ['UnrealCustomMinor'] }];
+    expect(storeService.isCategoryAvailable('UnrealCustomMajor')).toBe(true);
+    expect(storeService.isCategoryAvailable('UnrealCustomMinor')).toBe(true);
+    storeService.vendors = prevVendors;
+
+    // 9. ensureBuyerAccountForUser branches
+    expect(await storeService.ensureBuyerAccountForUser(null)).toBeNull();
+    expect(await storeService.ensureBuyerAccountForUser({ role: 'vendor', email: 'v@t.co' })).toBeNull();
+    expect(await storeService.ensureBuyerAccountForUser({ role: 'buyer' })).toBeNull();
+
+    // 10. getBuyerAccounts edge cases
+    const prevAccounts = storeService.buyerAccounts;
+    expect(storeService.getBuyerAccounts('invalid')).toEqual(expect.any(Array));
+    expect(storeService.getBuyerAccounts(-5)).toEqual(expect.any(Array));
+    storeService.buyerAccounts = null;
+    expect(storeService.getBuyerAccounts()).toEqual([]);
+    storeService.buyerAccounts = prevAccounts;
+
+    // 11. deleteVendor edge cases
+    const stubVendor = { id: 'v-no-email', name: 'NoEmailCo' };
+    storeService.vendors.push(stubVendor);
+    expect(storeService.deleteVendor('v-no-email')).toBe(true);
+    expect(storeService.deleteVendor('v-no-email')).toBe(false);
+
+    // 12. unlockRFQForVendor branches
+    const testRfqWithNoNum = { id: 'rfq-no-num', title: 'No Num RFQ', sourcingMode: 'mode_0' };
+    storeService.rfqs.push(testRfqWithNoNum);
+    const subscriberVendor = { id: 'v-sub-test', email: 'sub@vendor.com', subscriptionPlan: 'connect', unlockedRfqIds: [] };
+    storeService.vendors.push(subscriberVendor);
+    const unlSub = await storeService.unlockRFQForVendor('v-sub-test', 'rfq-no-num');
+    expect(unlSub.success).toBe(true);
+    const unlimitedVendor = { id: 'v-unlim-test', email: 'unlim@vendor.com', subscriptionPlan: 'free', unlimitedRfqDownloads: true, unlockedRfqIds: [] };
+    storeService.vendors.push(unlimitedVendor);
+    const unlUnlim = await storeService.unlockRFQForVendor('v-unlim-test', 'rfq-no-num');
+    expect(unlUnlim.success).toBe(true);
+  });
 });
-
-

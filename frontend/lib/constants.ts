@@ -1104,12 +1104,17 @@ export const VENDOR_ASSIGNMENT_LIMITS = {
   get MAX_CLIENT_PER_CATEGORY(): number {
     const envVal = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_MAX_CLIENT_VENDORS_PER_CATEGORY : undefined;
     const num = Number(envVal);
-    return !Number.isNaN(num) && num > 0 ? num : 5;
+    return !Number.isNaN(num) && num > 0 ? num : 25;
   },
   get MAX_PROCUCEV_PER_CATEGORY(): number {
     const envVal = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_MAX_PROCUCEV_VENDORS_PER_CATEGORY : undefined;
     const num = Number(envVal);
-    return !Number.isNaN(num) && num > 0 ? num : 5;
+    return !Number.isNaN(num) && num > 0 ? num : 25;
+  },
+  get TARGET_PER_MINOR_CATEGORY(): number {
+    const envVal = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_TARGET_VENDORS_PER_MINOR_CATEGORY : undefined;
+    const num = Number(envVal);
+    return Number.isFinite(num) && num > 0 ? num : 25;
   },
 };
 
