@@ -67,8 +67,8 @@ export function ApprovalsDashboard() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Navigation Tabs State (5 tabs)
-  const [activeTab, setActiveTab] = useState<ApprovalTabKey>('all');
+  // Filter State
+  const [isMyApprovalsActive, setIsMyApprovalsActive] = useState<boolean>(false);
 
   // Toolbar Filters State
   const [projectFilter, setProjectFilter] = useState<string>('all');
@@ -148,18 +148,21 @@ export function ApprovalsDashboard() {
 
   // Determine effective status filter and approver filter
   const effectiveStatus = useMemo(() => {
-    if (activeTab === 'pending') return 'Pending';
-    if (activeTab === 'approved') return 'Approved';
-    if (activeTab === 'rejected') return 'Rejected';
     return statusFilter;
-  }, [activeTab, statusFilter]);
+  }, [statusFilter]);
 
   const effectiveApprover = useMemo(() => {
-    if (activeTab === 'my_approvals') {
+    if (isMyApprovalsActive) {
       return sessionUser?.name || sessionUser?.email || 'Srinu Sir';
     }
     return '';
-  }, [activeTab, sessionUser]);
+  }, [isMyApprovalsActive, sessionUser]);
+
+  // Handle Quick "My Approvals" toggle
+  const handleToggleMyApprovals = useCallback(() => {
+    setIsMyApprovalsActive((prev) => !prev);
+    setCurrentPage(1);
+  }, []);
 
   // Load approvals list
   const loadApprovals = useCallback(async () => {
@@ -205,16 +208,6 @@ export function ApprovalsDashboard() {
     void loadApprovals();
   }, [loadApprovals]);
 
-  // Handle Tab Change
-  const handleTabSelect = useCallback((tab: ApprovalTabKey) => {
-    setActiveTab(tab);
-    setCurrentPage(1);
-    if (tab === 'all') setStatusFilter('all');
-    else if (tab === 'pending') setStatusFilter('Pending');
-    else if (tab === 'approved') setStatusFilter('Approved');
-    else if (tab === 'rejected') setStatusFilter('Rejected');
-  }, []);
-
   // Handle Summary Card Click
   const handleCardClick = useCallback(async (cardType: 'total' | 'pending' | 'approved' | 'rejected') => {
     let title = strings.total;
@@ -223,18 +216,23 @@ export function ApprovalsDashboard() {
     if (cardType === 'pending') {
       targetStatus = 'Pending';
       title = strings.pending;
-      handleTabSelect('pending');
+      setStatusFilter('Pending');
+      setIsMyApprovalsActive(false);
     } else if (cardType === 'approved') {
       targetStatus = 'Approved';
       title = strings.approved;
-      handleTabSelect('approved');
+      setStatusFilter('Approved');
+      setIsMyApprovalsActive(false);
     } else if (cardType === 'rejected') {
       targetStatus = 'Rejected';
       title = strings.rejected;
-      handleTabSelect('rejected');
+      setStatusFilter('Rejected');
+      setIsMyApprovalsActive(false);
     } else {
-      handleTabSelect('all');
+      setStatusFilter('all');
+      setIsMyApprovalsActive(false);
     }
+    setCurrentPage(1);
 
     // Open matching modal with filtered records
     try {
@@ -255,7 +253,15 @@ export function ApprovalsDashboard() {
     } catch {
       // safe fallback
     }
-  }, [handleTabSelect, strings]);
+  }, [strings]);
+
+  // Handle Keyboard Navigation on Summary Cards
+  const handleKeyDownCard = (e: React.KeyboardEvent, cardType: 'total' | 'pending' | 'approved' | 'rejected') => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      void handleCardClick(cardType);
+    }
+  };
 
   // Handle Action Confirmation (Approve / Reject)
   const handleActionConfirm = async () => {
@@ -473,144 +479,123 @@ export function ApprovalsDashboard() {
       )}
 
       {/* 1. Summary Cards (4 compact cards in one horizontal row) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5 w-full">
         {/* Total Requests */}
-        <button
-          type="button"
+        <div
+          role="group"
+          tabIndex={0}
           onClick={() => handleCardClick('total')}
-          className="text-left bg-sky-50/70 hover:bg-sky-50 dark:bg-sky-950/30 dark:hover:bg-sky-950/50 border border-sky-200 dark:border-sky-800/60 rounded-xl p-3 shadow-2xs transition-all hover:scale-[1.01] cursor-pointer"
+          onKeyDown={(e) => handleKeyDownCard(e, 'total')}
+          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+            statusFilter === 'all' && !isMyApprovalsActive
+              ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-slate-900 shadow-xs'
+              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+          }`}
+          data-testid="card-total-requests"
         >
-          <div className="flex items-center justify-between text-sky-700 dark:text-sky-300 text-xs font-semibold">
-            <span>{strings.total}</span>
-            <ShieldAlert size={14} />
-          </div>
-          <div className="mt-1 text-xl font-black text-sky-900 dark:text-sky-100">{summary.total}</div>
-          <div className="text-[10px] text-sky-600/80 dark:text-sky-400/80 mt-0.5">{strings.totalSubtitle}</div>
-        </button>
+          <p className={`text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight whitespace-nowrap leading-tight ${
+            statusFilter === 'all' && !isMyApprovalsActive ? 'opacity-80' : 'text-slate-600 dark:text-slate-300'
+          }`}>
+            {strings.total}
+          </p>
+          <p className="text-base sm:text-lg font-bold leading-none mt-1">{summary.total}</p>
+          <span className={`text-[10px] whitespace-nowrap mt-1 leading-tight ${
+            statusFilter === 'all' && !isMyApprovalsActive ? 'opacity-70' : 'text-slate-400 dark:text-slate-500'
+          }`}>
+            {strings.totalSubtitle}
+          </span>
+        </div>
 
         {/* Pending Approvals */}
-        <button
-          type="button"
+        <div
+          role="group"
+          tabIndex={0}
           onClick={() => handleCardClick('pending')}
-          className="text-left bg-amber-50/70 hover:bg-amber-50 dark:bg-amber-950/30 dark:hover:bg-amber-950/50 border border-amber-200 dark:border-amber-800/60 rounded-xl p-3 shadow-2xs transition-all hover:scale-[1.01] cursor-pointer"
+          onKeyDown={(e) => handleKeyDownCard(e, 'pending')}
+          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+            statusFilter === 'Pending' && !isMyApprovalsActive
+              ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-amber-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+          }`}
+          data-testid="card-pending-approvals"
         >
-          <div className="flex items-center justify-between text-amber-700 dark:text-amber-300 text-xs font-semibold">
-            <span>{strings.pending}</span>
-            <Clock size={14} />
-          </div>
-          <div className="mt-1 text-xl font-black text-amber-900 dark:text-amber-100">{summary.pending}</div>
-          <div className="text-[10px] text-amber-600/80 dark:text-amber-400/80 mt-0.5">{strings.pendingSubtitle}</div>
-        </button>
+          <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-amber-700 dark:text-amber-300 whitespace-nowrap leading-tight">
+            {strings.pending}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400 leading-none mt-1">
+            {summary.pending}
+          </p>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+            {strings.pendingSubtitle}
+          </span>
+        </div>
 
         {/* Approved */}
-        <button
-          type="button"
+        <div
+          role="group"
+          tabIndex={0}
           onClick={() => handleCardClick('approved')}
-          className="text-left bg-emerald-50/70 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:hover:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/60 rounded-xl p-3 shadow-2xs transition-all hover:scale-[1.01] cursor-pointer"
+          onKeyDown={(e) => handleKeyDownCard(e, 'approved')}
+          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+            statusFilter === 'Approved' && !isMyApprovalsActive
+              ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-emerald-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+          }`}
+          data-testid="card-approved"
         >
-          <div className="flex items-center justify-between text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
-            <span>{strings.approved}</span>
-            <CheckCircle2 size={14} />
-          </div>
-          <div className="mt-1 text-xl font-black text-emerald-900 dark:text-emerald-100">{summary.approved}</div>
-          <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 mt-0.5">{strings.approvedSubtitle}</div>
-        </button>
+          <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-emerald-700 dark:text-emerald-300 whitespace-nowrap leading-tight">
+            {strings.approved}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-emerald-600 dark:text-emerald-400 leading-none mt-1">
+            {summary.approved}
+          </p>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+            {strings.approvedSubtitle}
+          </span>
+        </div>
 
         {/* Rejected */}
-        <button
-          type="button"
+        <div
+          role="group"
+          tabIndex={0}
           onClick={() => handleCardClick('rejected')}
-          className="text-left bg-rose-50/70 hover:bg-rose-50 dark:bg-rose-950/30 dark:hover:bg-rose-950/50 border border-rose-200 dark:border-rose-800/60 rounded-xl p-3 shadow-2xs transition-all hover:scale-[1.01] cursor-pointer"
+          onKeyDown={(e) => handleKeyDownCard(e, 'rejected')}
+          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+            statusFilter === 'Rejected' && !isMyApprovalsActive
+              ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-rose-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+          }`}
+          data-testid="card-rejected"
         >
-          <div className="flex items-center justify-between text-rose-700 dark:text-rose-300 text-xs font-semibold">
-            <span>{strings.rejected}</span>
-            <XCircle size={14} />
-          </div>
-          <div className="mt-1 text-xl font-black text-rose-900 dark:text-rose-100">{summary.rejected}</div>
-          <div className="text-[10px] text-rose-600/80 dark:text-rose-400/80 mt-0.5">{strings.rejectedSubtitle}</div>
-        </button>
+          <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-rose-700 dark:text-rose-300 whitespace-nowrap leading-tight">
+            {strings.rejected}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-rose-600 dark:text-rose-400 leading-none mt-1">
+            {summary.rejected}
+          </p>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+            {strings.rejectedSubtitle}
+          </span>
+        </div>
       </div>
 
-      {/* 2. Simplified Approval Navigation (5 tabs only) */}
-      <div role="tablist" aria-label={strings.tabAllRequests} className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-800 text-xs">
-        <button
-          role="tab"
-          aria-selected={activeTab === 'all'}
-          type="button"
-          onClick={() => handleTabSelect('all')}
-          className={`px-3 py-1.5 font-semibold rounded-t-lg border-b-2 transition-all ${
-            activeTab === 'all'
-              ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/40'
-              : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
-          }`}
-        >
-          {strings.tabAllRequests}
-        </button>
+      {/* 2. Single-Row Filter Toolbar (Clean Horizontal Row like Buyer Directory) */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-sm flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto no-scrollbar text-xs">
+        {/* Search input (takes flexible width) */}
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setCurrentPage(1);
+            }}
+            placeholder={strings.searchPlaceholder}
+            className="w-full pl-8 pr-3 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
 
-        <button
-          role="tab"
-          aria-selected={activeTab === 'pending'}
-          type="button"
-          onClick={() => handleTabSelect('pending')}
-          className={`px-3 py-1.5 font-semibold rounded-t-lg border-b-2 transition-all flex items-center gap-1.5 ${
-            activeTab === 'pending'
-              ? 'border-amber-600 text-amber-700 dark:text-amber-400 bg-amber-50/50 dark:bg-amber-950/40'
-              : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
-          }`}
-        >
-          <span>{strings.tabPendingApprovals}</span>
-          {summary.pending > 0 && (
-            <span className="px-1.5 py-0.2 bg-amber-200 text-amber-900 dark:bg-amber-800 dark:text-amber-100 rounded-full text-[10px] font-bold">
-              {summary.pending}
-            </span>
-          )}
-        </button>
-
-        <button
-          role="tab"
-          aria-selected={activeTab === 'approved'}
-          type="button"
-          onClick={() => handleTabSelect('approved')}
-          className={`px-3 py-1.5 font-semibold rounded-t-lg border-b-2 transition-all ${
-            activeTab === 'approved'
-              ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/40'
-              : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
-          }`}
-        >
-          {strings.tabApproved}
-        </button>
-
-        <button
-          role="tab"
-          aria-selected={activeTab === 'rejected'}
-          type="button"
-          onClick={() => handleTabSelect('rejected')}
-          className={`px-3 py-1.5 font-semibold rounded-t-lg border-b-2 transition-all ${
-            activeTab === 'rejected'
-              ? 'border-rose-600 text-rose-600 dark:text-rose-400 bg-rose-50/50 dark:bg-rose-950/40'
-              : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
-          }`}
-        >
-          {strings.tabRejected}
-        </button>
-
-        <button
-          role="tab"
-          aria-selected={activeTab === 'my_approvals'}
-          type="button"
-          onClick={() => handleTabSelect('my_approvals')}
-          className={`px-3 py-1.5 font-semibold rounded-t-lg border-b-2 transition-all ${
-            activeTab === 'my_approvals'
-              ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/40'
-              : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
-          }`}
-        >
-          {strings.tabMyApprovals}
-        </button>
-      </div>
-
-      {/* 3. Single-Row Filter Toolbar */}
-      <div className="flex flex-wrap lg:flex-nowrap items-center gap-2 p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xs text-xs">
         {/* 1. All Projects dropdown */}
         <select
           value={projectFilter}
@@ -618,7 +603,8 @@ export function ApprovalsDashboard() {
             setProjectFilter(e.target.value);
             setCurrentPage(1);
           }}
-          className="h-8 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 shrink-0 font-medium focus:outline-none"
+          aria-label={strings.allProjects}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 whitespace-nowrap cursor-pointer"
         >
           <option value="all">{strings.allProjects}</option>
           <option value="Tata">Tata Steel</option>
@@ -634,7 +620,8 @@ export function ApprovalsDashboard() {
             setRequestTypeFilter(e.target.value);
             setCurrentPage(1);
           }}
-          className="h-8 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 shrink-0 font-medium focus:outline-none"
+          aria-label={strings.allRequestTypes}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 whitespace-nowrap cursor-pointer"
         >
           <option value="all">{strings.allRequestTypes}</option>
           {APPROVAL_REQUEST_TYPES.map((type) => (
@@ -649,13 +636,11 @@ export function ApprovalsDashboard() {
           value={statusFilter}
           onChange={(e) => {
             setStatusFilter(e.target.value);
+            setIsMyApprovalsActive(false);
             setCurrentPage(1);
-            if (e.target.value === 'Pending') setActiveTab('pending');
-            else if (e.target.value === 'Approved') setActiveTab('approved');
-            else if (e.target.value === 'Rejected') setActiveTab('rejected');
-            else setActiveTab('all');
           }}
-          className="h-8 px-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 shrink-0 font-medium focus:outline-none"
+          aria-label={strings.allStatuses}
+          className="!w-auto shrink-0 h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 whitespace-nowrap cursor-pointer"
         >
           <option value="all">{strings.allStatuses}</option>
           <option value="Pending">Pending</option>
@@ -663,45 +648,55 @@ export function ApprovalsDashboard() {
           <option value="Rejected">Rejected</option>
         </select>
 
-        {/* 4. Search input (takes remaining available width) */}
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={13} />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setCurrentPage(1);
+        {/* 4. Quick "My Approvals" Button */}
+        <button
+          type="button"
+          onClick={handleToggleMyApprovals}
+          className={`!w-auto shrink-0 h-8.5 inline-flex items-center gap-1.5 px-3 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
+            isMyApprovalsActive
+              ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+              : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'
+          }`}
+          data-testid="toggle-my-approvals"
+        >
+          <User size={13} />
+          <span>{strings.tabMyApprovals}</span>
+        </button>
+
+        {/* Right aligned actions: Export CSV, Refresh, Gear */}
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            className="flex items-center gap-1.5 px-3 py-1.5 h-8.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all shrink-0 cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>{strings.exportCsvBtn}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              void loadSummary();
+              void loadApprovals();
             }}
-            placeholder={strings.searchPlaceholder}
-            className="w-full h-8 pl-8 pr-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          />
+            title={strings.refreshTooltip}
+            aria-label={strings.refreshTooltip}
+            className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+          >
+            <RefreshCw size={14} className={isLoading ? 'animate-spin text-indigo-600' : ''} />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsColumnSettingsOpen(true)}
+            title={strings.columnSettingsTooltip}
+            aria-label={strings.columnSettingsTooltip}
+            className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+          >
+            <Settings size={14} />
+          </button>
         </div>
-
-        {/* 5. Refresh button */}
-        <button
-          type="button"
-          onClick={() => {
-            void loadSummary();
-            void loadApprovals();
-          }}
-          className="h-8 w-8 inline-flex items-center justify-center text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 shrink-0 transition"
-          title={strings.refreshTooltip}
-          aria-label={strings.refreshTooltip}
-        >
-          <RefreshCw size={13} className={isLoading ? 'animate-spin text-indigo-600' : ''} />
-        </button>
-
-        {/* 6. Gear icon (Column Settings) */}
-        <button
-          type="button"
-          onClick={() => setIsColumnSettingsOpen(true)}
-          className="h-8 w-8 inline-flex items-center justify-center text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 shrink-0 transition"
-          title={strings.columnSettingsTooltip}
-          aria-label={strings.columnSettingsTooltip}
-        >
-          <Settings size={13} />
-        </button>
       </div>
 
       {/* 4. Main Approval Table */}
@@ -988,18 +983,9 @@ export function ApprovalsDashboard() {
           </table>
         </div>
 
-        {/* Pagination & Export Toolbar Footer */}
+        {/* Pagination Toolbar Footer */}
         <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900 text-xs text-slate-500">
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleExportCsv}
-              className="px-2.5 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 flex items-center gap-1.5 transition"
-            >
-              <Download size={12} />
-              <span>{strings.exportCsvBtn}</span>
-            </button>
-
             <span>
               {formatString(strings.paginationShowing, {
                 from: total === 0 ? 0 : (currentPage - 1) * pageSize + 1,
