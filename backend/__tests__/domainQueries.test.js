@@ -485,6 +485,17 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         // for that exact 2-vs-3-arg mismatch).
       });
 
+      test('can bypass the query cache when the caller needs current credit and entitlement state', async () => {
+        pool.pool = {};
+        const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ raw: { id: 'v-fresh' } }] });
+        await expect(domainQueries.getVendorByIdFromDB('v-fresh', { fresh: true })).resolves.toEqual({ id: 'v-fresh' });
+        expect(querySpy).toHaveBeenCalledWith(
+          'SELECT raw FROM vendors WHERE id = $1 LIMIT 1',
+          ['v-fresh'],
+          { d1: true, useCache: false, tag: 'vendors', ttlMs: 60000 }
+        );
+      });
+
       test('returns null when nothing matches', async () => {
         pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
         await expect(domainQueries.getVendorByIdFromDB('missing')).resolves.toBeNull();

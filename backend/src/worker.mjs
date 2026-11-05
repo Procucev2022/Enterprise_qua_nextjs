@@ -49,10 +49,12 @@ const appModule = await import('./app.js');
 const emailGatewayModule = await import('./services/emailGatewayService.js');
 const zohoReconciliationModule = await import('./services/zohoReconciliationService.js');
 const rfqChaserSchedulerModule = await import('./services/rfqChaserScheduler.js');
+const eventOutboxModule = await import('./services/eventOutboxService.js');
 const app = appModule.default || appModule;
 const emailGatewayService = emailGatewayModule.default || emailGatewayModule;
 const zohoReconciliationService = zohoReconciliationModule.default || zohoReconciliationModule;
 const rfqChaserScheduler = rfqChaserSchedulerModule.default || rfqChaserSchedulerModule;
+const eventOutboxService = eventOutboxModule.default || eventOutboxModule;
 
 const PORT = 4000;
 app.listen(PORT);
@@ -69,7 +71,7 @@ const httpHandler = httpServerHandler({ port: PORT });
 // `scheduled` export) are the platform's actual mechanism for periodic
 // background work: each trigger fire is its own short-lived invocation that
 // calls the same single-shot polling functions (pollBothInboxesOnce /
-// reconcileOnce) and dispatches due D1-backed chaser jobs.
+// reconcileOnce) and dispatches due D1-backed chaser and outbox jobs.
 async function scheduled(controller, workerEnv, ctx) {
   if (workerEnv && typeof workerEnv === 'object') {
     globalThis.__CF_ENV__ = workerEnv;
@@ -93,13 +95,19 @@ async function scheduled(controller, workerEnv, ctx) {
     const results = await Promise.allSettled([
       emailGatewayService.pollBothInboxesOnce(),
       rfqChaserScheduler.dispatchDueChaserJobs(),
+      eventOutboxService.dispatchDueEventOutboxJobs(),
     ]);
     const rejected = results.find((r) => r.status === 'rejected');
     if (rejected) throw rejected.reason;
     return;
   }
   if (cron === ZOHO_RECONCILIATION_CRON) {
-    await zohoReconciliationService.reconcileOnce();
+    const results = await Promise.allSettled([
+      zohoReconciliationService.reconcileOnce(),
+      eventOutboxService.purgeExpiredEventOutboxRows(),
+    ]);
+    const rejected = results.find((result) => result.status === 'rejected');
+    if (rejected) throw rejected.reason;
     return;
   }
   // Unrecognised cron pattern: run all rather than silently doing nothing,
@@ -108,6 +116,8 @@ async function scheduled(controller, workerEnv, ctx) {
     emailGatewayService.pollBothInboxesOnce(),
     zohoReconciliationService.reconcileOnce(),
     rfqChaserScheduler.dispatchDueChaserJobs(),
+    eventOutboxService.dispatchDueEventOutboxJobs(),
+    eventOutboxService.purgeExpiredEventOutboxRows(),
   ]);
   const rejected = results.find((r) => r.status === 'rejected');
   if (rejected) throw rejected.reason;

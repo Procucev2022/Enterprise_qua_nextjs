@@ -1,0 +1,320 @@
+'use strict';
+
+const crypto = require('crypto');
+const pool = require('../db/pool');
+const domainQueries = require('../db/domainQueries');
+const enterpriseInquiryQueries = require('../db/enterpriseInquiryQueries');
+const eventOutboxQueries = require('../db/eventOutboxQueries');
+const mailerService = require('./mailerService');
+const {
+  EVENT_OUTBOX_TYPES,
+  EVENT_OUTBOX_MAX_ATTEMPTS,
+  EVENT_OUTBOX_MAX_BATCH_SIZE,
+  EVENT_OUTBOX_LEASE_MS,
+  EVENT_OUTBOX_RETRY_BASE_MS,
+  EVENT_OUTBOX_RETRY_MAX_MS,
+  EVENT_OUTBOX_ENQUEUE_ATTEMPTS,
+  EVENT_OUTBOX_ENQUEUE_RETRY_MS,
+  EVENT_OUTBOX_RETENTION_DAYS,
+  EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE,
+} = require('../config/constants');
+const { logger } = require('./loggerService');
+
+const VALID_EVENT_TYPES = new Set(Object.values(EVENT_OUTBOX_TYPES));
+
+function buildEventOutboxId(eventType, idempotencyKey) {
+  if (!VALID_EVENT_TYPES.has(eventType)) {
+    const error = new Error(`Unsupported event-outbox type: ${eventType}`);
+    error.code = 'INVALID_EVENT_OUTBOX_TYPE';
+    throw error;
+  }
+  const digest = crypto.createHash('sha256').update(String(idempotencyKey)).digest('hex');
+  return `retry:${eventType}:${digest}`;
+}
+
+function getSafeErrorLabel(error) {
+  const code = typeof error?.code === 'string' ? error.code : 'UNCLASSIFIED';
+  const name = typeof error?.name === 'string' ? error.name : 'Error';
+  return `${code}:${name}`.slice(0, 128);
+}
+
+function getRetryDelayMs(attempts) {
+  return Math.min(EVENT_OUTBOX_RETRY_BASE_MS * (2 ** Math.max(attempts - 1, 0)), EVENT_OUTBOX_RETRY_MAX_MS);
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function enqueueWithRetry(event, operation) {
+  let lastError;
+  for (let attempt = 1; attempt <= EVENT_OUTBOX_ENQUEUE_ATTEMPTS; attempt += 1) {
+    try {
+      const saved = await eventOutboxQueries.enqueueEventOutboxInDB(event);
+      if (saved) return saved;
+      throw new Error('Event-outbox enqueue returned no persisted state.');
+    } catch (error) {
+      lastError = error;
+      logger.error('Failed to record a background event for retry', {
+        error,
+        eventType: event.eventType,
+        outboxId: event.id,
+        operation,
+        enqueueAttempt: attempt,
+        enqueueAttempts: EVENT_OUTBOX_ENQUEUE_ATTEMPTS,
+      }, 'EVENT_OUTBOX');
+      if (attempt < EVENT_OUTBOX_ENQUEUE_ATTEMPTS) {
+        await delay(EVENT_OUTBOX_ENQUEUE_RETRY_MS * attempt);
+      }
+    }
+  }
+  throw lastError;
+}
+
+async function persistWithOutboxFallback({ eventType, idempotencyKey, payload, write, operation }) {
+  const storageConfigured = pool.hasStorage();
+  const id = buildEventOutboxId(eventType, idempotencyKey);
+  try {
+    const persisted = await write();
+    if (storageConfigured && (persisted === null || persisted === undefined)) {
+      throw new Error(`${operation} completed without a persisted row.`);
+    }
+    return { persisted: storageConfigured ? true : null };
+  } catch (error) {
+    if (!storageConfigured) {
+      logger.error('Background event persistence failed; durable retry is unavailable', {
+        error,
+        eventType,
+        outboxId: id,
+        operation,
+      }, 'EVENT_OUTBOX');
+      return { persisted: null };
+    }
+    logger.error('Background event persistence failed; queuing a retry', {
+      error,
+      eventType,
+      outboxId: id,
+      operation,
+    }, 'EVENT_OUTBOX');
+    await enqueueWithRetry({ id, eventType, payload }, operation);
+
+    try {
+      await dispatchDueEventOutboxJobs(1);
+    } catch (dispatchError) {
+      logger.error('Immediate event-outbox retry failed; scheduled recovery will retry it', {
+        error: dispatchError,
+        eventType,
+        outboxId: id,
+        operation,
+      }, 'EVENT_OUTBOX');
+    }
+    return { queued: true, id };
+  }
+}
+
+async function dispatchEvent(job) {
+  switch (job.event_type) {
+    case EVENT_OUTBOX_TYPES.AI_FEED: {
+      const saved = await domainQueries.upsertAIFeedItemInDB(job.raw);
+      if (!saved) throw new Error('AI feed retry completed without a persisted row.');
+      return;
+    }
+    case EVENT_OUTBOX_TYPES.NOTIFICATION: {
+      const saved = await domainQueries.insertNotificationInDB(job.raw);
+      if (!saved) throw new Error('Notification retry completed without a persisted row.');
+      return;
+    }
+    case EVENT_OUTBOX_TYPES.NOTIFICATION_BATCH: {
+      const notifications = Array.isArray(job.raw) ? job.raw : [];
+      if (notifications.length === 0) return;
+      for (let index = 0; index < notifications.length; index += EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE) {
+        await domainQueries.bulkInsertNotificationsInDB(
+          notifications.slice(index, index + EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE)
+        );
+      }
+      return;
+    }
+    case EVENT_OUTBOX_TYPES.ENTERPRISE_INQUIRY_EMAIL: {
+      const inquiryId = job.raw?.inquiryId;
+      const notificationType = job.raw?.notificationType;
+      if (typeof inquiryId !== 'string' || !inquiryId || !['team', 'buyer_confirmation'].includes(notificationType)) {
+        const error = new Error('Enterprise inquiry email retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const inquiry = await enterpriseInquiryQueries.getEnterpriseInquiryById(inquiryId);
+      if (!inquiry) {
+        const error = new Error('Enterprise inquiry email retry references a missing inquiry.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const send = notificationType === 'team'
+        ? mailerService.sendEnterpriseInquiryNotificationEmail
+        : mailerService.sendEnterpriseInquiryBuyerConfirmationEmail;
+      const result = await send(inquiry);
+      if (!result?.sent) {
+        const error = new Error('Enterprise inquiry email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      return;
+    }
+    case EVENT_OUTBOX_TYPES.VENDOR_RATING_REVISION_EMAIL: {
+      const { vendorId, revisionId, recipientEmail } = job.raw || {};
+      if (
+        typeof vendorId !== 'string' || !vendorId
+        || typeof revisionId !== 'string' || !revisionId
+        || typeof recipientEmail !== 'string' || !recipientEmail.trim()
+      ) {
+        const error = new Error('Vendor rating revision email retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const vendor = await domainQueries.getVendorByIdFromDB(vendorId, { fresh: true });
+      const revision = vendor?.ratingRevisionHistory?.find((entry) => entry.id === revisionId);
+      if (!vendor || !revision) {
+        const error = new Error('Vendor rating revision email retry references a missing revision.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const numericFields = [
+        'previousRating',
+        'newRating',
+        'previousScore',
+        'newCompositeScore',
+        'qualityScore',
+        'costScore',
+        'deliveryScore',
+      ];
+      if (numericFields.some((field) => typeof revision[field] !== 'number' || !Number.isFinite(revision[field]))) {
+        const error = new Error('Vendor rating revision email references an invalid persisted rating.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const emailPayload = mailerService.buildRatingRevisionEmail({
+        to: recipientEmail,
+        recipientName: vendor.contactPerson || vendor.name,
+        vendorName: revision.vendorName || vendor.name,
+        buyerCompany: revision.buyerCompany || 'A buyer on Procucev',
+        buyerName: revision.buyerName || '',
+        previousRating: revision.previousRating,
+        newRating: revision.newRating,
+        previousScore: revision.previousScore,
+        newScore: revision.newCompositeScore,
+        remarks: revision.remarks,
+        qualityScore: revision.qualityScore,
+        costScore: revision.costScore,
+        deliveryScore: revision.deliveryScore,
+      });
+      const delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'rating-revision');
+      if (!delivery?.sent) {
+        const error = new Error('Vendor rating revision email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('Vendor rating revision email accepted by a provider', {
+        vendorId,
+        revisionId,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
+    default: {
+      const error = new Error(`Unsupported persisted event-outbox type: ${job.event_type}`);
+      error.code = 'INVALID_EVENT_OUTBOX_TYPE';
+      throw error;
+    }
+  }
+}
+
+async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE) {
+  if (!pool.hasStorage()) return { claimed: 0, completed: 0, retried: 0, dead: 0 };
+
+  const now = new Date();
+  const leaseToken = crypto.randomUUID();
+  const jobs = await eventOutboxQueries.claimDueEventOutboxInDB({
+    now: now.toISOString(),
+    staleBefore: new Date(now.getTime() - EVENT_OUTBOX_LEASE_MS).toISOString(),
+    leaseUntil: new Date(now.getTime() + EVENT_OUTBOX_LEASE_MS).toISOString(),
+    leaseToken,
+    limit: Math.min(Math.max(Number(limit) || 1, 1), EVENT_OUTBOX_MAX_BATCH_SIZE),
+  });
+
+  let completed = 0;
+  let retried = 0;
+  let dead = 0;
+  for (const job of jobs) {
+    try {
+      if (job.parseError) throw job.parseError;
+      await dispatchEvent(job);
+      const saved = await eventOutboxQueries.markEventOutboxCompleteInDB(job.id, job.lease_token || leaseToken);
+      if (!saved) {
+        logger.warn('Event-outbox lease expired before completion was recorded', {
+          outboxId: job.id,
+          eventType: job.event_type,
+        }, 'EVENT_OUTBOX');
+        continue;
+      }
+      completed += 1;
+    } catch (error) {
+      const permanentFailure = error?.code === 'INVALID_EVENT_OUTBOX_TYPE' || error?.code === 'INVALID_PERSISTED_RECORD';
+      const isDead = permanentFailure || job.attempts >= EVENT_OUTBOX_MAX_ATTEMPTS;
+      const availableAt = new Date(Date.now() + getRetryDelayMs(job.attempts)).toISOString();
+      try {
+        await eventOutboxQueries.rescheduleEventOutboxInDB({
+          id: job.id,
+          leaseToken: job.lease_token || leaseToken,
+          status: isDead ? 'dead' : 'pending',
+          availableAt,
+          lastError: getSafeErrorLabel(error),
+        });
+      } catch (stateError) {
+        logger.error('Failed to persist event-outbox retry state', {
+          error: stateError,
+          outboxId: job.id,
+          eventType: job.event_type,
+          attempt: job.attempts,
+        }, 'EVENT_OUTBOX');
+      }
+      logger.error(isDead ? 'Background event moved to the event-outbox dead-letter state' : 'Background event delivery failed and was rescheduled', {
+        error,
+        outboxId: job.id,
+        eventType: job.event_type,
+        attempt: job.attempts,
+        nextAttemptAt: isDead ? null : availableAt,
+      }, 'EVENT_OUTBOX');
+      if (isDead) dead += 1;
+      else retried += 1;
+    }
+  }
+
+  if (jobs.length > 0) {
+    logger.info('Background event-outbox dispatch completed', {
+      claimed: jobs.length,
+      completed,
+      retried,
+      dead,
+    }, 'EVENT_OUTBOX');
+  }
+  return { claimed: jobs.length, completed, retried, dead };
+}
+
+async function purgeExpiredEventOutboxRows() {
+  if (!pool.hasStorage()) return 0;
+  const retentionMs = EVENT_OUTBOX_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const cutoff = new Date(Date.now() - retentionMs).toISOString();
+  const removed = await eventOutboxQueries.purgeEventOutboxInDB(cutoff, cutoff);
+  if (removed > 0) {
+    logger.info('Expired event-outbox rows purged', { removed, retentionDays: EVENT_OUTBOX_RETENTION_DAYS }, 'EVENT_OUTBOX');
+  }
+  return removed;
+}
+
+module.exports = {
+  buildEventOutboxId,
+  persistWithOutboxFallback,
+  dispatchDueEventOutboxJobs,
+  purgeExpiredEventOutboxRows,
+  getSafeErrorLabel,
+  getRetryDelayMs,
+};

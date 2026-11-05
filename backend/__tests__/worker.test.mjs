@@ -5,6 +5,7 @@ let app;
 let emailGateway;
 let reconciliation;
 let chasers;
+let eventOutbox;
 let store;
 let originalFetch;
 let waitUntil;
@@ -18,6 +19,10 @@ beforeEach(() => {
   emailGateway = { pollBothInboxesOnce: jest.fn().mockResolvedValue({}) };
   reconciliation = { reconcileOnce: jest.fn().mockResolvedValue({}) };
   chasers = { dispatchDueChaserJobs: jest.fn().mockResolvedValue([]) };
+  eventOutbox = {
+    dispatchDueEventOutboxJobs: jest.fn().mockResolvedValue({ completed: 0 }),
+    purgeExpiredEventOutboxRows: jest.fn().mockResolvedValue(0),
+  };
   store = { isHydratedFromDB: false, hydrateFromDB: jest.fn().mockResolvedValue(undefined) };
   originalFetch = jest.fn().mockResolvedValue('response');
   waitUntil = jest.fn();
@@ -28,6 +33,7 @@ beforeEach(() => {
   jest.unstable_mockModule('../src/services/emailGatewayService.js', () => ({ default: emailGateway }));
   jest.unstable_mockModule('../src/services/zohoReconciliationService.js', () => ({ default: reconciliation }));
   jest.unstable_mockModule('../src/services/rfqChaserScheduler.js', () => ({ default: chasers }));
+  jest.unstable_mockModule('../src/services/eventOutboxService.js', () => ({ default: eventOutbox }));
   jest.unstable_mockModule('../src/services/storeService.js', () => ({ default: store }));
 });
 
@@ -97,6 +103,7 @@ describe('Worker cron jobs', () => {
     expect(store.hydrateFromDB.mock.invocationCallOrder[0]).toBeLessThan(emailGateway.pollBothInboxesOnce.mock.invocationCallOrder[0]);
     expect(emailGateway.pollBothInboxesOnce).toHaveBeenCalledTimes(1);
     expect(chasers.dispatchDueChaserJobs).toHaveBeenCalledTimes(1);
+    expect(eventOutbox.dispatchDueEventOutboxJobs).toHaveBeenCalledTimes(1);
     expect(reconciliation.reconcileOnce).not.toHaveBeenCalled();
     expect(process.env.WORKER_TEST_SETTING).toBe('cron');
     expect(globalThis.__CF_ENV__).toBe(runtimeBindings);
@@ -108,6 +115,7 @@ describe('Worker cron jobs', () => {
     await worker.scheduled({ cron: '*/10 * * * *' }, null, {});
     expect(store.hydrateFromDB).not.toHaveBeenCalled();
     expect(reconciliation.reconcileOnce).toHaveBeenCalledTimes(1);
+    expect(eventOutbox.purgeExpiredEventOutboxRows).toHaveBeenCalledTimes(1);
     expect(emailGateway.pollBothInboxesOnce).not.toHaveBeenCalled();
   });
 
@@ -117,15 +125,18 @@ describe('Worker cron jobs', () => {
     expect(reconciliation.reconcileOnce).toHaveBeenCalledTimes(1);
     expect(emailGateway.pollBothInboxesOnce).toHaveBeenCalledTimes(1);
     expect(chasers.dispatchDueChaserJobs).toHaveBeenCalledTimes(1);
+    expect(eventOutbox.dispatchDueEventOutboxJobs).toHaveBeenCalledTimes(1);
+    expect(eventOutbox.purgeExpiredEventOutboxRows).toHaveBeenCalledTimes(1);
     reconciliation.reconcileOnce.mockRejectedValue(new Error('payment failure'));
     await expect(worker.scheduled({ cron: 'custom' }, {}, {})).rejects.toThrow('payment failure');
   });
 
-  test('waits for both mail jobs before propagating an error', async () => {
+  test('waits for the scheduled jobs before propagating an error', async () => {
     const worker = await loadWorker();
     emailGateway.pollBothInboxesOnce.mockRejectedValue(new Error('mail failure'));
     await expect(worker.scheduled({ cron: '* * * * *' }, {}, {})).rejects.toThrow('mail failure');
     expect(chasers.dispatchDueChaserJobs).toHaveBeenCalled();
+    expect(eventOutbox.dispatchDueEventOutboxJobs).toHaveBeenCalled();
   });
 
   test('logs hydration errors and tolerates nonenumerable cron bindings', async () => {

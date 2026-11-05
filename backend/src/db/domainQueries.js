@@ -618,14 +618,14 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
  * live, D1-backed paginated search (e.g. the CM's "All Vendors" invite
  * picker) can be entirely absent from that cache, making an id it just
  * returned fail to resolve moments later. This is the D1 fallback for that. */
-async function getVendorByIdFromDB(id) {
+async function getVendorByIdFromDB(id, { fresh = false } = {}) {
   if (!pool.hasStorage() || !id) return null;
   const result = await pool.query(
     'SELECT raw FROM vendors WHERE id = $1 LIMIT 1',
     [id],
     {
       d1: true,
-      useCache: true,
+      useCache: !fresh,
       tag: 'vendors',
       ttlMs: 60000,
     }
