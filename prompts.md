@@ -7336,204 +7336,6 @@ update the env and check the Ui issue and fix that
 Please solve only D1 resource overload issue.
 ```
 
-
----
-
-### Prompt 72
-
-**Timestamp**: 2026-11-06T12:23:56+05:30
-
-```text
-Buyer Profile Details are visible in the Vendor Portal.
-
-The Buyer Contact Details popup displays the buyer's company name, contact person, official email, and mobile number to the vendor.
-```
-
-
----
-
-### Prompt 73
-
-**Timestamp**: 2026-11-06T15:18:38+05:30
-
-```text
-suggest branch name
-```
-
-
----
-
-### Prompt 74
-
-**Timestamp**: 2026-11-06T16:08:29+05:30
-
-```text
-Summary of all failing tests
- FAIL  __tests__/app/category-manager/PaymentDuesDashboard.test.tsx (61.227 s)
-  ● PaymentDuesDashboard › handles API submission errors in communication modals
-
-    Unable to find an element with the text: DB Error. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
-
-    Ignored nodes: comments, script, style
-    <body>
-      <div>
-        <div
-          class="w-full space-y-4 animate-in fade-in duration-200"
-        >
-          <div
-            class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-2.5 w-full"
-          >
-            <button
-              class="bg-white dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
-              type="button"
-            >
-              <div
-                class="flex items-center justify-between gap-1 w-full"
-              >
-                <span
-                  class="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap"
-                >
-                  Low-Credit Accounts
-                </span>
-                <div
-                  class="p-1 rounded bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 shrink-0"
-                >
-                  <svg
-                    class="lucide lucide-credit-card w-3 h-3"
-                    fill="none"
-                    height="24"
-                    stroke="currentColor"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    viewBox="0 0 24 24"
-                    width="24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <rect
-                      height="14"
-                      rx="2"
-                      width="20"
-                      x="2"
-                      y="5"
-                    />
-                    <line
-                      x1="2"
-                      x2="22"
-                      y1="10"
-                      y2="10"
-                    />
-                  </svg>
-                </div>
-              </div>
-              <div
-                class="mt-1 flex items-baseline justify-between gap-1 w-full"
-              >
-                <span
-                  class="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none"
-                >
-                  3
-                </span>
-                <span
-                  class="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap"
-                >
-                  ≤ 2 credits
-                </span>
-              </div>
-            </button>
-            <button
-              class="bg-white dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-sky-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
-              type="button"
-            >
-              <div
-                class="flex items-center justify-between gap-1 w-full"
-              >
-                <span
-                  class="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap"
-                >
-                  Buyers
-                </span>
-                <div
-                  class="p-1 rounded bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400 shrink-0"
-                >
-                  <svg
-                    class="lucide lucide-building2 w-3 h-3"
-                    fill="none"
-                    height="24"
-                    stroke="currentColor"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    viewBox="0 0 24 24"
-                    width="24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"
-                    />
-                    <path
-                      d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"
-                    />
-                    <path
-                      d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"
-                    />
-                    <path
-                      d="M10 6h4"
-                    />
-                    <path
-                      d="M10 10h4"
-                    />
-                    <path
-                      d="M10 14h4"
-                    />
-                    <path
-                      d="M10 18h4"
-                    />
-                  </svg>
-                </div>
-              </div>
-              <div
-                class="mt-1 flex items-baseline justify-between gap-1 w-full"
-              >
-                <span
-                  class="text-base sm:text-lg font-bold text-sky-700 dark:text-sky-300 leading-none"
-                >
-                  1
-                </span>
-                <span
-                  class="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap"
-                >
-                  Top-up needed
-                </span>
-              </div>
-            </button>
-            <button
-              class="bg-white dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-purple-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
-              type="button"
-            >
-              <div
-                class="flex items-center justify-between gap-1 w-full"
-              >
-                <span
-                  class="text-[10px] sm:text-[11px] font-semibold tex...
-
-      at waitForWrapper (node_modules/@testing-library/dom/dist/wait-for.js:163:27)
-      at Object.<anonymous> (__tests__/app/category-manager/PaymentDuesDashboard.test.tsx:796:18)
-
-
-Test Suites: 1 failed, 146 passed, 147 total
-Tests:       1 failed, 3723 passed, 3724 total
-Snapshots:   0 total
-Time:        421.652 s
-Ran all test suites.
-Test results written to: coverage\test-results.json
-Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
-
-✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
-
-❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
-PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
-```
 ---
 
 ### Prompt 78
@@ -7559,6 +7361,18 @@ and please remove the mock and dammi data from registration page
 
 ### Prompt 80
 
+**Timestamp**: 2026-11-06T11:29:50+05:30
+
+```text
+Please fix the PR comments & PR checks: 
+
+https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/425
+```
+
+---
+
+### Prompt 81
+
 **Timestamp**: 2026-11-06T11:35:00+05:30
 
 ```text
@@ -7569,7 +7383,7 @@ seller auto approve only buyer registration ask the permission then approve the 
 
 ---
 
-### Prompt 81
+### Prompt 82
 
 **Timestamp**: 2026-11-06T11:41:09+05:30
 
@@ -7577,3 +7391,125 @@ seller auto approve only buyer registration ask the permission then approve the 
 raise the pr and coverage all the test cases and gemini pr check and AI review
 ```
 
+---
+
+### Prompt 83
+
+**Timestamp**: 2026-11-06T12:23:56+05:30
+
+```text
+Buyer Profile Details are visible in the Vendor Portal.
+
+The Buyer Contact Details popup displays the buyer's company name, contact person, official email, and mobile number to the vendor.
+```
+
+---
+
+### Prompt 84
+
+**Timestamp**: 2026-11-06T12:38:58+05:30
+
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-06T07_04_17.963Z.csv] 
+
+Still too many errors D1 related errors, can you please check
+```
+
+---
+
+### Prompt 85
+
+**Timestamp**: 2026-11-06T13:35:49+05:30
+
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-06T07_04_17.963Z.csv] 
+
+Still some errors, please check & fix
+```
+
+---
+
+### Prompt 86
+
+**Timestamp**: 2026-11-06T14:23:38+05:30
+
+```text
+Please check the image as well & identify the DB high utilization issue. we can see which commands are consuming too much DB usage.
+```
+
+---
+
+### Prompt 87
+
+**Timestamp**: 2026-11-06T15:18:38+05:30
+
+```text
+suggest branch name
+```
+
+---
+
+### Prompt 88
+
+**Timestamp**: 2026-11-06T16:08:29+05:30
+
+```text
+Summary of all failing tests
+ FAIL  __tests__/app/category-manager/PaymentDuesDashboard.test.tsx (61.227 s)
+  ● PaymentDuesDashboard › handles API submission errors in communication modals
+
+    Unable to find an element with the text: DB Error. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Test Suites: 1 failed, 146 passed, 147 total
+Tests:       1 failed, 3723 passed, 3724 total
+Snapshots:   0 total
+Time:        421.652 s
+```
+
+---
+
+### Prompt 89
+
+**Timestamp**: 2026-11-06T16:15:51+05:30
+
+```text
+[navinprocucev-09](https://github.com/navinprocucev-09) and others added 5 commits [5 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430#commits-pushed-f65a902)
+[fix(ui): dynamically resolve vendor minor category from matching RFQ …](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/f65a9025ed73108e67b428f19e606737d98270a9)
+[f65a902](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/f65a9025ed73108e67b428f19e606737d98270a9)
+[D1 Overloading fix (](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)[#425](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/425)[)](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)
+[dbb0c59](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)
+[fix(store): persist batch outreach channel delivery and vendor status…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/969f21786cb229cf7da4c880583cbb6516dd8782)
+[969f217](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/969f21786cb229cf7da4c880583cbb6516dd8782)
+[feat: fix Action Center toolbars, live login logs, and buyer/seller r…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/33c57bd36db0a471ad9403a44906264c8bb2bdbc)
+[33c57bd](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/33c57bd36db0a471ad9403a44906264c8bb2bdbc)
+[fix(buyer): display multi-channel delivery counts and follow-up metri…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/84bbfc59208735c88fde2e60a63c8ae7344ea05f)
+[84bbfc5](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/84bbfc59208735c88fde2e60a63c8ae7344ea05f)
+This branch was successfully deployed
+1 active deployment
+Merge info
+Checks awaiting conflict resolution
+1 successful check
+successful checks
+[Deploy to Cloudflare (Test) / Deploy to Cloudflare Test Environment (push)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/42200942451/job/127835776614?pr=430)
+Successful in 1m
+This branch has conflicts that must be resolved
+Use the command line to resolve conflicts before continuing.
+backend/__tests__/queryCache.test.js
+backend/src/db/domainQueries.js
+backend/src/db/schema.d1.sql
+backend/src/db/schema.sql
+backend/src/services/storeService.js
+prompts.md
+
+this pr is merge in dev but failing inproduction
+```
+
+---
+
+### Prompt 90
+
+**Timestamp**: 2026-11-06T17:03:35+05:30
+
+```text
+continue fast fix that i deploy in production
+```
