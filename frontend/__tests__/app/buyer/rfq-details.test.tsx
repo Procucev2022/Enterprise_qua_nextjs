@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
-import RFQDetails, { daysUntil, lineItemsToCsv } from '@/app/buyer/rfq-details';
+import RFQDetails, { daysUntil, lineItemsToCsv, resolveVendorCategories } from '@/app/buyer/rfq-details';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -3601,6 +3601,283 @@ function makeInquiry(overrides: any = {}): any {
         expect(onUpdateFallback).toHaveBeenCalled();
       });
       unmount2();
+    });
+
+    it('exercises resolveVendorCategories across all category and line item matching branches', () => {
+      const rfqEntities = [
+        { id: 'e1', itemName: 'Steel Pipe', majorCategory: 'Raw Material', minorCategory: 'Steels' } as any,
+        { id: 'e2', itemName: 'Copper Wire', majorCategory: 'Raw Material', minorCategory: 'Copper' } as any,
+        { id: 'e3', itemName: 'Pump Spare', majorCategory: 'Engineering Spares - Mechanical', minorCategory: 'Pumps & Accessories' } as any,
+      ];
+
+      // 1. Inverted taxonomy: majorCategory is "mechanical clamps", minorCategories is ["Raw Material", "Steels"]
+      const invertedRes = resolveVendorCategories(
+        { majorCategory: 'mechanical clamps', minorCategories: ['Raw Material', 'Steels'] },
+        null,
+        false,
+        null,
+        0,
+        rfqEntities
+      );
+      expect(invertedRes.majorCategory).toBe('Raw Material');
+      expect(invertedRes.minorCategory).toBe('Steels');
+
+      // 2. Direct minorCategory string matching RFQ
+      const directMatch = resolveVendorCategories(
+        { majorCategory: 'Raw Material', minorCategory: 'Copper' },
+        null,
+        false,
+        null,
+        0,
+        rfqEntities
+      );
+      expect(directMatch.majorCategory).toBe('Raw Material');
+      expect(directMatch.minorCategory).toBe('Copper');
+
+      // 3. Vendor has own minors not matching RFQ -> picks first own minor
+      const ownNoMatch = resolveVendorCategories(
+        { majorCategory: 'Raw Material', minorCategories: ['Aluminium', 'Zinc'] },
+        null,
+        false,
+        null,
+        0,
+        rfqEntities
+      );
+      expect(ownNoMatch.minorCategory).toBe('Aluminium');
+
+      // 4. Vendor has no own minors -> picks from matching line items by index
+      const lineItemMatch0 = resolveVendorCategories(
+        { majorCategory: 'Raw Material' },
+        null,
+        false,
+        null,
+        0,
+        rfqEntities
+      );
+      expect(lineItemMatch0.minorCategory).toBe('Steels');
+
+      const lineItemMatch1 = resolveVendorCategories(
+        { majorCategory: 'Raw Material' },
+        null,
+        false,
+        null,
+        1,
+        rfqEntities
+      );
+      expect(lineItemMatch1.minorCategory).toBe('Copper');
+
+      // 5. Vendor resolved from `found` with minorCategory and minorCategories
+      const fromFound = resolveVendorCategories(
+        'v-id-1',
+        { name: 'Found Vendor', majorCategory: 'Raw Material', minorCategory: 'Minerals' },
+        false,
+        null,
+        0,
+        []
+      );
+      expect(fromFound.majorCategory).toBe('Raw Material');
+      expect(fromFound.minorCategory).toBe('Minerals');
+
+      const fromFoundArray = resolveVendorCategories(
+        'v-id-2',
+        { name: 'Found Vendor 2', majorCategory: 'Raw Material', minorCategories: ['Cotton'] },
+        false,
+        null,
+        0,
+        []
+      );
+      expect(fromFoundArray.minorCategory).toBe('Cotton');
+
+      // 6. Vendor with no matching line items -> falls back to taxonomy minors
+      const taxonomyRes = resolveVendorCategories(
+        { majorCategory: 'Packaging Material' },
+        null,
+        false,
+        null,
+        0,
+        []
+      );
+      expect(taxonomyRes.majorCategory).toBe('Packaging Material');
+      expect(typeof taxonomyRes.minorCategory).toBe('string');
+      expect(taxonomyRes.minorCategory.length).toBeGreaterThan(0);
+
+      // 7. Unknown major with no taxonomy -> falls back to 'General'
+      const unknownRes = resolveVendorCategories(
+        { majorCategory: 'Completely Unknown Major Category 12345' },
+        null,
+        false,
+        null,
+        0,
+        []
+      );
+      expect(unknownRes.minorCategory).toBe('General');
+
+      // 8. String vendor with isProc resolving from activeRfq
+      const procRes = resolveVendorCategories(
+        'v-proc',
+        null,
+        true,
+        { category: 'Raw Material' } as any,
+        0,
+        rfqEntities
+      );
+      expect(procRes.majorCategory).toBe('Raw Material');
+      expect(procRes.minorCategory).toBe('Steels');
+
+      // 9. Vendor with category property instead of majorCategory
+      const catPropRes = resolveVendorCategories(
+        { category: 'Raw Material', minorCategories: ['Steels'] },
+        null,
+        false,
+        null,
+        0,
+        rfqEntities
+      );
+      expect(catPropRes.majorCategory).toBe('Raw Material');
+      expect(catPropRes.minorCategory).toBe('Steels');
+
+      // 10. Null / undefined vendor and fallback to General
+      const nullVendorRes = resolveVendorCategories(null, null, false, null, 0, []);
+      expect(nullVendorRes.majorCategory).toBe('General');
+      expect(nullVendorRes.minorCategory).toBe('General');
+
+      // 11. Found object with category fallback
+      const foundCatRes = resolveVendorCategories(null, { category: 'Raw Material' }, false, null, 0, []);
+      expect(foundCatRes.majorCategory).toBe('Raw Material');
+
+      // 12. Minor categories containing non-strings, whitespace, or empty strings
+      const dirtyMinorsRes = resolveVendorCategories(
+        { majorCategory: 'Raw Material', minorCategories: [null, 123, '   ', '', 'Steels'] },
+        { minorCategories: [undefined, {}, '   ', 'Steels'] },
+        false,
+        null,
+        0,
+        []
+      );
+      expect(dirtyMinorsRes.majorCategory).toBe('Raw Material');
+      expect(dirtyMinorsRes.minorCategory).toBe('Steels');
+
+      // 13. Line items with duplicate minor categories, missing majorCategory using .major fallback, and e.category fallback
+      const partialLineItems = [
+        { id: 'p1', major: 'Raw Material', category: 'Steels' } as any,
+        { id: 'p2', majorCategory: 'Raw Material', category: 'Steels' } as any,
+        { id: 'p3', majorCategory: '', major: '', category: '' } as any,
+        { id: 'p4', majorCategory: 'Engineering Spares - Mechanical', minorCategory: 'Valves' } as any,
+      ];
+      const partialMatchRes = resolveVendorCategories(
+        { majorCategory: 'Mechanical' },
+        null,
+        false,
+        null,
+        0,
+        partialLineItems
+      );
+      expect(partialMatchRes.minorCategory).toBe('Valves');
+
+      // 14. Vendor with major containing itemMajor
+      const vendorIncludesItemMajorRes = resolveVendorCategories(
+        { majorCategory: 'Engineering Spares - Mechanical Heavy Industrial' },
+        null,
+        false,
+        null,
+        0,
+        partialLineItems
+      );
+      expect(vendorIncludesItemMajorRes.minorCategory).toBe('Valves');
+    });
+
+    it('exercises renderFullCard, renderConfidentialCard, and normalizedAssigned edge cases in RFQDetails', async () => {
+      const mockVendorRfq: any = buildRFQ({
+        id: 'rfq-edge-vendor-cards',
+        rfqNumber: 'RFQ-EDGE-CARDS',
+        sourcingMode: 'mode_3',
+        status: 'Quotes Pending',
+        quotes: [
+          {
+            id: 'q-ai-score',
+            rfqId: 'rfq-edge-vendor-cards',
+            vendorId: 'v-ai-score',
+            vendorName: 'AI Score Vendor',
+            totalQuoteAmount: 10000,
+            aiMatchScore: 84.5,
+          } as any,
+        ],
+        followUpData: {
+          vendors: [
+            null,
+            {
+              id: 'v-followup-dup',
+              name: 'Duplicate Vendor',
+              majorCategory: 'Raw Material',
+            },
+          ],
+        } as any,
+        assignedVendors: [
+          {
+            id: 'v-followup-dup',
+            name: 'Duplicate Vendor',
+            majorCategory: 'Raw Material',
+          },
+          {
+            id: 'v-procucev-fallbacks',
+            name: '',
+            majorCategory: '',
+            minorCategory: '',
+            location: '',
+            matchScore: 92,
+            source: 'category_manager_upload',
+          },
+          {
+            id: 'v-procucev-citystate',
+            name: 'Procucev Clean Name (Category Tag)',
+            city: 'Ahmedabad',
+            state: 'Gujarat',
+            source: 'category_manager_upload',
+          },
+          {
+            id: 'v-invited-full',
+            name: '',
+            contactPerson: 'Alice',
+            email: 'alice@invited.com',
+            phone: '+919876543210',
+            matchScore: 78,
+            source: 'buyer_upload',
+          },
+          {
+            id: 'v-ai-score',
+            name: 'AI Score Vendor',
+            source: 'category_manager_upload',
+          },
+          'v-string-rated',
+        ] as any,
+      });
+
+      (useApp as unknown as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        currentUserSession: { name: 'Buyer User', email: 'buyer@procucev.com' },
+        buyerVendors: [
+          {
+            id: 'v-string-rated',
+            name: 'String Rated Vendor',
+            rating: 4.5,
+            source: 'category_manager_upload',
+          },
+        ],
+        showToast: mockShowToast,
+      });
+
+      const { unmount } = render(
+        <RFQDetails
+          rfq={mockVendorRfq}
+          onBack={jest.fn()}
+        />
+      );
+
+      expect(screen.getByText('Assigned & Invited Suppliers')).toBeInTheDocument();
+      expect(screen.getAllByText('Enterprise Supplier').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('🔒 Double-Blind').length).toBeGreaterThan(0);
+
+      unmount();
     });
   });
 });
