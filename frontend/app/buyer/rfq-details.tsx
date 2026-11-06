@@ -2537,10 +2537,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                     </span>
                   </div>
                   <div className="text-[10px] text-slate-400 flex items-center gap-2 truncate">
-                    {(activeRfq.raisedByEmail || activeRfq.sourceEmail) && (
-                      <span className="mono truncate">{activeRfq.raisedByEmail || activeRfq.sourceEmail}</span>
-                    )}
-                    <span>•</span>
                     <span className="mono font-semibold text-slate-500 dark:text-gray-400">RFQ #{activeRfq.rfqNumber}</span>
                   </div>
                 </div>
