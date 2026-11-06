@@ -233,6 +233,7 @@ CREATE INDEX IF NOT EXISTS idx_vendors_corporate_email ON vendors (json_extract(
 CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category);
 CREATE INDEX IF NOT EXISTS idx_vendors_created_at ON vendors (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vendors_source ON vendors (source);
+CREATE INDEX IF NOT EXISTS idx_vendors_source_created ON vendors (source, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vendors_status ON vendors (status);
 
 CREATE TABLE IF NOT EXISTS rfqs (

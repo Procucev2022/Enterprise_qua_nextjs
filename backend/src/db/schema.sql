@@ -270,6 +270,7 @@ CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category
 -- requires a full sort of the whole table.
 CREATE INDEX IF NOT EXISTS idx_vendors_created_at ON vendors (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vendors_source ON vendors (source);
+CREATE INDEX IF NOT EXISTS idx_vendors_source_created ON vendors (source, created_at DESC);
 
 -- getVendorsPageFromDB's vendor search matches `ILIKE '%term%'` — a leading
 -- wildcard, which a plain btree index (idx_vendors_email/major_category
