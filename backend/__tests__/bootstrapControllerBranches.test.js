@@ -146,4 +146,65 @@ describe('bootstrapController 100% Branch Coverage', () => {
 
     expect(next).toHaveBeenCalledWith(expect.any(Error));
   });
+
+  test('gracefully handles D1 overload error during getBootstrapData by serving degraded payload', async () => {
+    jest.spyOn(storeService, 'getBootstrapData').mockRejectedValue(new Error('D1 DB is overloaded. Too many resources consumed within a 10 second window'));
+    const next = jest.fn();
+    const res = mockRes();
+
+    await bootstrapController.getBootstrap({}, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.data.success).toBe(true);
+    expect(res.data.data.vendors).toBeDefined();
+    expect(res.data.data.buyerAccounts).toBeDefined();
+  });
+
+  test('gracefully handles failure in ensureBuyerAccountForUser without crashing', async () => {
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockRejectedValue(new Error('DB failure in buyer account'));
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [] });
+    const next = jest.fn();
+    const res = mockRes();
+
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', email: 'test@buyer.com' } }, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+  });
+
+  test('gracefully handles D1 overload error when storeService has null collection fields', async () => {
+    jest.spyOn(storeService, 'getBootstrapData').mockRejectedValue(new Error('D1 DB is overloaded'));
+    const origAccounts = storeService.buyerAccounts;
+    const origVendors = storeService.vendors;
+    const origEvals = storeService.evaluations;
+    const origLogs = storeService.auditLogs;
+    storeService.buyerAccounts = null;
+    storeService.vendors = null;
+    storeService.evaluations = null;
+    storeService.auditLogs = null;
+
+    try {
+      const res = mockRes();
+      await bootstrapController.getBootstrap({}, res, jest.fn());
+      expect(res.statusCode).toBe(200);
+      expect(res.data.data.buyerAccounts).toEqual([]);
+      expect(res.data.data.vendors).toEqual([]);
+      expect(res.data.data.evaluations).toEqual([]);
+      expect(res.data.data.auditLogs).toEqual([]);
+    } finally {
+      storeService.buyerAccounts = origAccounts;
+      storeService.vendors = origVendors;
+      storeService.evaluations = origEvals;
+      storeService.auditLogs = origLogs;
+    }
+  });
+
+  test('covers user.orgId branch for buyer', async () => {
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue(null);
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({});
+    const res = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-123' } }, res, jest.fn());
+    expect(res.statusCode).toBe(200);
+  });
 });

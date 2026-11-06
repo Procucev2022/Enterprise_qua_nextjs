@@ -239,6 +239,20 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         expect(countParams).toEqual([]);
       });
 
+      test('falls back to stale query cache when pool.query throws an error during getVendorsPageFromDB', async () => {
+        const { queryCache } = require('../src/db/queryCache');
+        const staleVendors = { rows: [{ id: 'stale-1', name: 'Stale Co' }], total: 1 };
+        queryCache.set('vendors_page_10_0_false__true', [], staleVendors, { ttlMs: 1 });
+        await new Promise((r) => setTimeout(r, 5));
+
+        pool.pool = {
+          query: jest.fn().mockRejectedValue(new Error('D1 DB is overloaded')),
+        };
+
+        const res = await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, skipCount: true });
+        expect(res).toEqual(staleVendors);
+      });
+
       test('adds an exact-match category filter', async () => {
         const query = jest
           .fn()

@@ -35,6 +35,14 @@ describe('Database QueryCache Unit Tests', () => {
     expect(cache.get(query, [])).toBeNull();
   });
 
+  test('getStale returns cached entry even after TTL expires, or null if never cached', async () => {
+    cache.set('SELECT * FROM stale_table', [], [{ val: 'stale_val' }], { ttlMs: 10 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(cache.get('SELECT * FROM stale_table', [])).toBeNull();
+    expect(cache.getStale('SELECT * FROM stale_table', [])).toEqual([{ val: 'stale_val' }]);
+    expect(cache.getStale('SELECT * FROM unknown_table', [])).toBeNull();
+  });
+
   test('enforces LRU capacity limit by evicting oldest entry', () => {
     cache.set('Q1', [], 'data1');
     cache.set('Q2', [], 'data2');
@@ -88,6 +96,16 @@ describe('Database QueryCache Unit Tests', () => {
     // delete
     expect(testC.delete('NO_TAG')).toBe(true);
     expect(testC.delete('NON_EXISTENT')).toBe(false);
+  });
+
+  test('covers generateKey defaults and getStale with pre-formatted key and options defaults', () => {
+    const testC = new QueryCache();
+    expect(testC.generateKey(null, null)).toBe('::[]');
+    testC.set('CUSTOM::[]', [], 'preformatted_val');
+    expect(testC.getStale('CUSTOM::[]')).toBe('preformatted_val');
+
+    testC.set('DEF_OPT', [], 'def_data', {});
+    expect(testC.get('DEF_OPT', [])).toBe('def_data');
   });
 
   test('singleton instance methods work', () => {

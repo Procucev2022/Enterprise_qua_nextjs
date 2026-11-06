@@ -11,7 +11,8 @@
 // ==============================================================================
 
 const { Pool } = require('pg');
-const { getD1Binding, getD1HttpClient, queryD1 } = require('./d1Bridge');
+const d1Bridge = require('./d1Bridge');
+const { getD1Binding, getD1HttpClient, queryD1 } = d1Bridge;
 const { queryCache } = require('./queryCache');
 const { queryAuditor } = require('./queryAuditor');
 
@@ -185,7 +186,25 @@ async function query(text, params = [], options = {}) {
   const startTime = Date.now();
   let result;
   if (d1) {
-    result = await queryD1(d1, sql, boundParams);
+    if (options.useCache && cacheKey && !isWrite && typeof d1Bridge.isD1Overloaded === 'function' && d1Bridge.isD1Overloaded()) {
+      const staleData = queryCache.getStale(cacheKey, boundParams);
+      if (staleData !== null) {
+        queryAuditor.auditQuery(sql, boundParams, 0, true);
+        return { rows: staleData, rowCount: staleData.length, isCacheHit: true, isStaleFallback: true };
+      }
+    }
+    try {
+      result = await queryD1(d1, sql, boundParams);
+    } catch (err) {
+      if (options.useCache && cacheKey && !isWrite && typeof d1Bridge.isRetryableD1Error === 'function' && d1Bridge.isRetryableD1Error(err)) {
+        const staleData = queryCache.getStale(cacheKey, boundParams);
+        if (staleData !== null) {
+          queryAuditor.auditQuery(sql, boundParams, 0, true);
+          return { rows: staleData, rowCount: staleData.length, isCacheHit: true, isStaleFallback: true };
+        }
+      }
+      throw err;
+    }
   } else {
     if (!poolModule.pool) {
       throw new Error(NOT_CONFIGURED_MESSAGE);
