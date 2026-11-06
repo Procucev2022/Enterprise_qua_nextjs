@@ -541,14 +541,12 @@ describe('Header Session Timer and Auto Logout', () => {
     jest.clearAllTimers();
   });
 
-  it('renders session timer badge for buyer dashboard', () => {
+  it('hides session timer badge for buyer dashboard', () => {
     render(<Header />);
-    const timer = screen.getByTestId('header-session-timer');
-    expect(timer).toBeInTheDocument();
-    expect(timer).toHaveTextContent(/Session:/i);
+    expect(screen.queryByTestId('header-session-timer')).not.toBeInTheDocument();
   });
 
-  it('renders session timer badge for vendor dashboard', () => {
+  it('hides session timer badge for vendor dashboard', () => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       isLoggedIn: true,
       currentRole: 'vendor',
@@ -560,7 +558,7 @@ describe('Header Session Timer and Auto Logout', () => {
       vendorFreeCreditsRemaining: 3,
     });
     render(<Header />);
-    expect(screen.getByTestId('header-session-timer')).toBeInTheDocument();
+    expect(screen.queryByTestId('header-session-timer')).not.toBeInTheDocument();
   });
 
   it('renders session timer badge and extends session by 3 hours for category manager dashboard', () => {
@@ -584,7 +582,16 @@ describe('Header Session Timer and Auto Logout', () => {
     );
   });
 
-  it('allows user to click session timer to extend session by 30 minutes', () => {
+  it('allows user to click session timer to extend session by 30 minutes for admin role', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      isLoggedIn: true,
+      currentRole: 'admin',
+      setIsLoggedIn: mockSetIsLoggedIn,
+      setCurrentRole: mockSetCurrentRole,
+      setCurrentUserSession: mockSetCurrentUserSession,
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+    });
     render(<Header />);
     const timer = screen.getByTestId('header-session-timer');
     fireEvent.click(timer);
@@ -702,6 +709,15 @@ describe('Header Session Timer and Auto Logout', () => {
   });
 
   it('covers session timer keydown events and warning color intervals', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      isLoggedIn: true,
+      currentRole: 'category_manager',
+      setIsLoggedIn: mockSetIsLoggedIn,
+      setCurrentRole: mockSetCurrentRole,
+      setCurrentUserSession: mockSetCurrentUserSession,
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+    });
     jest.useFakeTimers();
     // 2 minutes left (amber)
     localStorage.setItem('procucev_session_expires_at', String(Date.now() + 120_000));
@@ -722,7 +738,7 @@ describe('Header Session Timer and Auto Logout', () => {
     fireEvent.keyDown(timer, { key: 'Enter' });
     expect(mockShowToast).toHaveBeenCalledWith(
       'Session Extended',
-      expect.stringMatching(/(5|30) minutes/),
+      expect.stringMatching(/(5|30) minutes|3 hours/),
       'info'
     );
 

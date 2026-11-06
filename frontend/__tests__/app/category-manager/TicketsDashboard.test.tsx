@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import TicketsDashboard from '@/app/category-manager/components/TicketsDashboard';
 import * as ticketClient from '@/lib/ticketClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -810,4 +810,70 @@ describe('TicketsDashboard', () => {
       expect(screen.getByText('TCK-1001')).toBeInTheDocument();
     });
   });
+
+  it('supports column sorting and opens column settings modal, toggles visibility, saves, resets to default, and loads from localStorage', async () => {
+    render(<TicketsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('TCK-1001')).toBeInTheDocument();
+    });
+
+    // Sort by status
+    fireEvent.click(screen.getByRole('columnheader', { name: /Status/i }));
+    fireEvent.click(screen.getByRole('columnheader', { name: /Status/i }));
+
+    // Sort by subject
+    fireEvent.click(screen.getByRole('columnheader', { name: /Ticket ID & Subject/i }));
+    fireEvent.click(screen.getByRole('columnheader', { name: /Ticket ID & Subject/i }));
+
+    // Sort by priority
+    fireEvent.click(screen.getByRole('columnheader', { name: /Priority/i }));
+    fireEvent.click(screen.getByRole('columnheader', { name: /Priority/i }));
+
+    // Sort by sla
+    fireEvent.click(screen.getByRole('columnheader', { name: /SLA \/ Due/i }));
+    fireEvent.click(screen.getByRole('columnheader', { name: /SLA \/ Due/i }));
+
+    // Column settings
+    const gearBtn = screen.getByRole('button', { name: /Column Settings/i });
+    fireEvent.click(gearBtn);
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    const categoryCheckbox = within(dialog).getByLabelText(/Toggle column: Category/i);
+    fireEvent.click(categoryCheckbox);
+
+    const doneBtn = within(dialog).getByRole('button', { name: 'Done' });
+    fireEvent.click(doneBtn);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reset to default
+    fireEvent.click(gearBtn);
+    const resetBtn = screen.getByRole('button', { name: 'Reset to Default' });
+    fireEvent.click(resetBtn);
+
+    // Close via X
+    fireEvent.click(gearBtn);
+    const closeBtn = screen.getByLabelText('Close column settings');
+    fireEvent.click(closeBtn);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('loads saved column settings from localStorage on initial render', async () => {
+    const customCols = [
+      { key: 'status', label: 'Status', visible: true, required: true },
+      { key: 'category', label: 'Category', visible: false },
+    ];
+    localStorage.setItem('qua_tickets_col_prefs', JSON.stringify(customCols));
+
+    render(<TicketsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('TCK-1001')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole('columnheader', { name: /Category/i })).not.toBeInTheDocument();
+  });
+
 });

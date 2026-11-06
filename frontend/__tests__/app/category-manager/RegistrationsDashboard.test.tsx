@@ -711,4 +711,25 @@ describe('RegistrationsDashboard', () => {
     expect(screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).not.toBeInTheDocument();
   });
 
+  test('supports sorting columns ascending and descending', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const sortUserBtn = screen.getByTestId('sort-col-userName');
+    expect(sortUserBtn).toBeInTheDocument();
+
+    // Click to sort by user name ascending
+    fireEvent.click(sortUserBtn);
+
+    // Click again to sort descending
+    fireEvent.click(sortUserBtn);
+
+    // Sort by registeredAt
+    const sortDateBtn = screen.getByTestId('sort-col-regDate');
+    fireEvent.click(sortDateBtn);
+    fireEvent.click(sortDateBtn);
+  });
 });

@@ -20,6 +20,9 @@ import {
   Settings,
   GripVertical,
   RotateCcw,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -62,6 +65,35 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
 
   const [showColumnSettings, setShowColumnSettings] = useState<boolean>(false);
   const [draggedColIndex, setDraggedColIndex] = useState<number | null>(null);
+  const [sortField, setSortField] = useState<RegistrationColumnKey>('regDate');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  const handleSort = (field: RegistrationColumnKey) => {
+    if (sortField === field) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortOrder('asc');
+    }
+  };
+
+  const sortedClients = useMemo(() => {
+    if (!clients.length) return [];
+    return [...clients].sort((a, b) => {
+      const valA = a[sortField as keyof RegisteredClient];
+      const valB = b[sortField as keyof RegisteredClient];
+      if (sortField === 'regDate') {
+        const timeA = new Date(a.regDate || 0).getTime();
+        const timeB = new Date(b.regDate || 0).getTime();
+        return sortOrder === 'asc' ? timeA - timeB : timeB - timeA;
+      }
+      if (typeof valA === 'string' && typeof valB === 'string') {
+        const cmp = valA.localeCompare(valB);
+        return sortOrder === 'asc' ? cmp : -cmp;
+      }
+      return 0;
+    });
+  }, [clients, sortField, sortOrder]);
 
   const saveColumns = useCallback((newCols: RegistrationColumnConfig[]) => {
     setColumns(newCols);
@@ -538,28 +570,27 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
           </select>
         </div>
 
-        {/* Column Settings Gear Button */}
-        <button
-          type="button"
-          onClick={() => setShowColumnSettings(true)}
-          title={strings.columnSettingsTooltip}
-          aria-label={strings.columnSettingsTooltip}
-          className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer ml-auto"
-        >
-          <Settings className="w-3.5 h-3.5" />
-        </button>
-
         {/* Refresh Button */}
         <button
           type="button"
           onClick={() => fetchRegistrations()}
           title={strings.refreshTooltip}
           aria-label={strings.refreshTooltip}
-          className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+          className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer ml-auto"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
         </button>
-      </div>
+
+        {/* Column Settings Gear Button */}
+        <button
+          type="button"
+          onClick={() => setShowColumnSettings(true)}
+          title={strings.columnSettingsTooltip}
+          aria-label={strings.columnSettingsTooltip}
+          className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+        >
+          <Settings className="w-3.5 h-3.5" />
+        </button></div>
 
       {/* Column Customization Modal */}
       {showColumnSettings && (
@@ -647,14 +678,38 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
         <table className="w-full text-left text-xs border-collapse">
           <thead>
             <tr className="bg-slate-100/80 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-700">
-              {visibleColumns.map((col) => (
-                <th
-                  key={col.key}
-                  className={`py-3 px-3.5 whitespace-nowrap ${col.key === 'actions' ? 'text-center' : ''}`}
-                >
-                  {col.label}
-                </th>
-              ))}
+              {visibleColumns.map((col) => {
+                const isSortable = col.key !== 'actions';
+                const isSorted = sortField === col.key;
+                return (
+                  <th
+                    key={col.key}
+                    className={`py-3 px-3.5 whitespace-nowrap ${col.key === 'actions' ? 'text-center' : ''}`}
+                  >
+                    {isSortable ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSort(col.key)}
+                        className="inline-flex items-center gap-1 font-bold hover:text-orange-600 dark:hover:text-orange-400 transition-colors cursor-pointer"
+                        data-testid={`sort-col-${col.key}`}
+                      >
+                        <span>{col.label}</span>
+                        {isSorted ? (
+                          sortOrder === 'asc' ? (
+                            <ArrowUp className="w-3.5 h-3.5 text-orange-600 dark:text-orange-400" />
+                          ) : (
+                            <ArrowDown className="w-3.5 h-3.5 text-orange-600 dark:text-orange-400" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
+                        )}
+                      </button>
+                    ) : (
+                      <span>{col.label}</span>
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
@@ -683,7 +738,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                 </td>
               </tr>
             ) : (
-              clients.map((client, index) => {
+              sortedClients.map((client, index) => {
                 // Alternating peach and soft blue stripes matching reference image
                 const isEven = index % 2 === 0;
                 const rowBg = isEven

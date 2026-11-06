@@ -44,7 +44,7 @@ export function isWordDocument(name: string): boolean {
  * they belong to.
  */
 export function flattenWorkbook(data: ArrayBuffer): string {
-  const workbook = XLSX.read(new Uint8Array(data), { type: 'array' });
+  const workbook = XLSX.read(new Uint8Array(data), { type: 'array', cellDates: true });
   return workbook.SheetNames.map((sheetName) => {
     const sheet = workbook.Sheets[sheetName];
     if (sheet && sheet['!merges']) {
@@ -70,8 +70,17 @@ export function flattenWorkbook(data: ArrayBuffer): string {
       blankrows: false,
       defval: '',
     });
+    const formatCell = (cell: unknown): string => {
+      if (cell instanceof Date && !isNaN(cell.getTime())) {
+        // Adjust by +12 hours so local timezone boundary jitter (e.g. 18:29:59Z in UTC+5:30)
+        // never shifts the date to the previous day.
+        const midday = new Date(cell.getTime() + 12 * 3600 * 1000);
+        return midday.toISOString().slice(0, 10);
+      }
+      return String(cell ?? '').trim();
+    };
     const body = rows
-      .map((row) => row.map((cell) => String(cell ?? '').trim()).join(' | '))
+      .map((row) => row.map(formatCell).join(' | '))
       .filter((line) => line.replace(/\|/g, '').trim() !== '')
       .join('\n');
     return `SHEET: ${sheetName}\n${body}`;

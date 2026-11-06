@@ -625,6 +625,14 @@ export default function IngestionWizard({
       return;
     }
     const { signals } = extractRfqCategorySignals(form);
+    const lineItemMinors = Array.from(
+      new Set(
+        (form.lineItems || [])
+          .map((it) => it.minorCategory?.trim())
+          
+          .filter(Boolean) as string[]
+      )
+    );
     const seq = ++procucevV3FetchSeqRef.current;
     setProcucevV3Loading(true);
     // Pull a generous page so the client-side 360° ranking has a real pool to
@@ -641,7 +649,8 @@ export default function IngestionWizard({
           result.candidates,
           signals,
           { location: form.deliveryLocation, pincode: form.deliveryPincode },
-          10
+          10,
+          lineItemMinors
         );
         setProcucevV3Ranked(ranked);
         // Drop any prior selection that is no longer in the new top-10.
@@ -652,7 +661,7 @@ export default function IngestionWizard({
       setProcucevV3Loading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-rank only on the inputs that change the ranking
-  }, [form.sourcingMode, selectedMajorCategory, isAllCategories, form.deliveryLocation, form.deliveryPincode]);
+  }, [form.sourcingMode, selectedMajorCategory, isAllCategories, form.deliveryLocation, form.deliveryPincode, JSON.stringify(form.lineItems.map((it) => [it.majorCategory, it.minorCategory]))]);
 
   const toggleProcucevV3 = (id: string) => {
     setSelectedProcucevV3Ids((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -910,7 +919,7 @@ export default function IngestionWizard({
         const derivedMajor = dominantMajorCategory(extracted, [ALL_CATEGORIES_OPTION]);
         const derivedLocation = result.data.deliveryLocation || '';
         const derivedPincode = result.data.deliveryPincode || '';
-        const derivedDate = result.data.targetDeliveryDate || '';
+        const derivedDate = result.data.targetDeliveryDate || extracted.find((e) => e.targetDate)?.targetDate || '';
         const extractedCategory = result.data.category || '';
 
         setForm((prev) => ({
@@ -1143,6 +1152,7 @@ export default function IngestionWizard({
         vendorCategory?: 'Client List' | 'Procucev Network';
         /** Non-identifying fields the details view may show for a Procucev vendor. */
         majorCategory?: string | null;
+        minorCategories?: string[] | null;
         location?: string | null;
         matchScore?: number | null;
       };
@@ -1170,6 +1180,7 @@ export default function IngestionWizard({
         phone: null,
         vendorCategory: 'Procucev Network',
         majorCategory: r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial',
+        ...(r.matchedMinorCategory ? { minorCategories: [r.matchedMinorCategory] } : (Array.isArray(r.vendor.minorCategories) && r.vendor.minorCategories.length > 0 ? { minorCategories: r.vendor.minorCategories } : {})),
         location: r.vendor.location || r.vendor.city || r.vendor.state || r.locationReason || null,
         matchScore: r.overallScore,
       });
@@ -2710,9 +2721,28 @@ export default function IngestionWizard({
             {(() => {
               const allMyVendors = buyerVendors.filter(isBuyerUploaded);
               const { signals: rfqSignals } = extractRfqCategorySignals(form);
-              const myVendors = rfqSignals.length > 0
-                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch)
-                : allMyVendors;
+              const lineItemMinors = Array.from(
+                new Set(
+                  (form.lineItems || [])
+                    .map((it) => it.minorCategory?.trim())
+                    
+                    .filter(Boolean) as string[]
+                )
+              );
+
+              let myVendors = allMyVendors;
+              if (lineItemMinors.length > 0) {
+                const minorMatched = allMyVendors.filter((v) =>
+                  lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m]).isMatch)
+                );
+                if (minorMatched.length > 0) {
+                  myVendors = minorMatched;
+                } else if (rfqSignals.length > 0) {
+                  myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch);
+                }
+              } else if (rfqSignals.length > 0) {
+                myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch);
+              }
 
               return (
                 <>
@@ -2842,7 +2872,20 @@ export default function IngestionWizard({
                               )}
                             </div>
                             <div className="pt-1 border-t border-indigo-100 dark:border-indigo-900/40 text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                              <span className="font-semibold text-slate-700 dark:text-gray-300 truncate">{v.majorCategory || 'General Industrial'}</span>
+                              {(() => {
+                                const vendorMinors = Array.isArray(v.minorCategories) && v.minorCategories.length > 0
+                                  ? v.minorCategories.join(', ')
+                                  : null;
+                                const displayMinor = vendorMinors || lineItemMinors[0] || v.majorCategory || 'General Industrial';
+                                return (
+                                  <span
+                                    className="font-semibold text-indigo-700 dark:text-indigo-300 truncate"
+                                    title={`Minor: ${displayMinor} | Major: ${v.majorCategory || 'General Industrial'}`}
+                                  >
+                                    {displayMinor}
+                                  </span>
+                                );
+                              })()}
                               <span className="truncate">{v.city || v.state || v.location || 'India'}</span>
                             </div>
                           </div>
@@ -2919,13 +2962,21 @@ export default function IngestionWizard({
                                 <span className="badge badge-indigo text-[8px] font-bold shrink-0">#{i + 1}</span>
                               </div>
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <span
-                                  data-testid="procucev-v3-vendor-category"
-                                  className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100/70 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800 truncate max-w-full"
-                                  title={r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial'}
-                                >
-                                  {r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial'}
-                                </span>
+                                {(() => {
+                                  const vendorMinors = Array.isArray(r.vendor.minorCategories) && r.vendor.minorCategories.length > 0
+                                    ? r.vendor.minorCategories.join(', ')
+                                    : null;
+                                  const displayCat = r.matchedMinorCategory || vendorMinors || lineItemMinors[0] || r.vendor.majorCategory || r.matchedCategories[0] || 'General Industrial';
+                                  return (
+                                    <span
+                                      data-testid="procucev-v3-vendor-category"
+                                      className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100/70 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800 truncate max-w-full"
+                                      title={displayCat}
+                                    >
+                                      {displayCat}
+                                    </span>
+                                  );
+                                })()}
                               </div>
                               <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-gray-400">
                                 <span className="font-semibold text-emerald-600 dark:text-emerald-400">

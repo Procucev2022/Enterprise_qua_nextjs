@@ -201,27 +201,28 @@ class StoreService {
     }
 
     try {
-      const [vendorPage, rfqs, evaluations, vendorCatalogue, buyerAccountsResult, aiFeed, auditLogs, notifications, paymentLinks] =
-        await Promise.all([
-          // Bounded, not domainQueries.getVendorsFromDB() (a full unbounded
-          // table read) — this runs on every Worker cold start, and D1's
-          // free-tier daily row-read cap was exhausted twice by exactly this:
-          // Cloudflare's edge fan-out spins up many isolates under load /
-          // during a deploy, each one re-reading the entire vendors table
-          // once at boot. this.vendors is already documented elsewhere
-          // (getVendorByIdWithDBFallback) as "a capped, bootstrap-time
-          // subset" that individual DB fallbacks paper over — hydration
-          // should actually honor that instead of loading everything.
-          domainQueries.getVendorsPageFromDB({ limit: MAX_HYDRATION_VENDORS, offset: 0, skipCount: true, publicOnly: true }),
-          domainQueries.getRFQsFromDB(null, 100),
-          domainQueries.getEvaluationsFromDB(100),
-          domainQueries.getVendorCatalogueFromDB(100),
-          domainQueries.getBuyerAccountsFromDB(500),
-          domainQueries.getAIFeedFromDB(100),
-          domainQueries.getAuditLogsFromDB(100),
-          domainQueries.getNotificationsFromDB(null, 100),
-          domainQueries.getPaymentLinksFromDB(100),
-        ]);
+      // Bounded, not domainQueries.getVendorsFromDB() (a full unbounded
+      // table read) — this runs on every Worker cold start, and D1's
+      // free-tier daily row-read cap was exhausted twice by exactly this:
+      // Cloudflare's edge fan-out spins up many isolates under load /
+      // during a deploy, each one re-reading the entire vendors table
+      // once at boot. this.vendors is already documented elsewhere
+      // (getVendorByIdWithDBFallback) as "a capped, bootstrap-time
+      // subset" that individual DB fallbacks paper over — hydration
+      // should actually honor that instead of loading everything.
+      //
+      // Queries are sequenced rather than run via Promise.all so Cloudflare D1
+      // is not flooded with 9 parallel table scans within the same millisecond,
+      // which previously triggered D1_ERROR: D1 DB is overloaded within a 10s window.
+      const vendorPage = await domainQueries.getVendorsPageFromDB({ limit: MAX_HYDRATION_VENDORS, offset: 0, skipCount: true, publicOnly: true });
+      const rfqs = await domainQueries.getRFQsFromDB(null, 100);
+      const evaluations = await domainQueries.getEvaluationsFromDB(100);
+      const vendorCatalogue = await domainQueries.getVendorCatalogueFromDB(100);
+      const buyerAccountsResult = await domainQueries.getBuyerAccountsFromDB(500);
+      const aiFeed = await domainQueries.getAIFeedFromDB(100);
+      const auditLogs = await domainQueries.getAuditLogsFromDB(100);
+      const notifications = await domainQueries.getNotificationsFromDB(null, 100);
+      const paymentLinks = await domainQueries.getPaymentLinksFromDB(100);
 
       this.vendors = vendorPage.rows;
       this.vendorsTotal = vendorPage.total || vendorPage.rows.length;
@@ -943,7 +944,9 @@ class StoreService {
     const inMemory = this.getVendorById(id, scopedBuyerId);
     if (inMemory) return inMemory;
     let vendor = await domainQueries.getVendorByIdFromDB(id);
-    if (!vendor) vendor = await domainQueries.getVendorByEmailFromDB(id);
+    if (!vendor && typeof id === 'string' && id.includes('@')) {
+      vendor = await domainQueries.getVendorByEmailFromDB(id);
+    }
     if (!vendor) return undefined;
     if (!this.vendors.some((v) => v.id === vendor.id)) this.vendors.push(vendor);
     return this.getVendorById(vendor.id, scopedBuyerId);
@@ -2513,7 +2516,7 @@ class StoreService {
         respondedCount: 0,
         callStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, connected: 0, avgDuration: '0s' },
         whatsappStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, read: 0, replied: 0 },
-        smsStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, clicked: 0 },
+        smsStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: 0, clicked: 0 },
         emailStats: { total: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, delivered: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length, sent24h: 0, opened: 0 },
         autoChasingEnabled: true,
       },
@@ -4331,6 +4334,7 @@ class StoreService {
             limit,
             offset: 0,
             publicOnly: true,
+            skipCount: true,
           });
           dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
         } catch (err) {
@@ -4524,6 +4528,7 @@ class StoreService {
             limit,
             offset: 0,
             publicOnly: true,
+            skipCount: true,
           });
           dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
         } catch (err) {
@@ -6700,32 +6705,54 @@ class StoreService {
         vendors = this.vendors.slice(0, MAX_BOOTSTRAP_VENDORS);
         vendorsTotal = this.vendorsTotal || vendors.length;
       } else {
-        const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true });
-        vendors = page.rows;
-        vendorsTotal = page.total;
+        try {
+          const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true, skipCount: true });
+          vendors = page.rows;
+          vendorsTotal = page.total || (Array.isArray(this.vendors) ? this.vendors.length : 0);
+        } catch (err) {
+          vendors = Array.isArray(this.vendors) ? this.vendors.slice(0, MAX_BOOTSTRAP_VENDORS) : [];
+          vendorsTotal = vendors.length;
+        }
       }
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();
         if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
-          const own = await domainQueries.getVendorByEmailFromDB(email);
-          if (own) vendors = [own, ...vendors];
+          try {
+            const own = await domainQueries.getVendorByEmailFromDB(email);
+            if (own) vendors = [own, ...vendors];
+          } catch {}
         }
       }
     } else if (scopedBuyerId && pool.hasStorage()) {
-      const ownVendors = sessionEmail
-        ? await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS, sessionEmail)
-        : await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
+      let ownVendors = [];
+      try {
+        ownVendors = sessionEmail
+          ? await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS, sessionEmail)
+          : await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
+      } catch {
+        ownVendors = [];
+      }
       const remaining = Math.max(0, MAX_BOOTSTRAP_VENDORS - ownVendors.length);
-      const publicPage = remaining > 0
-        ? await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true })
-        : { rows: [], total: 0 };
-      vendors = [...ownVendors, ...publicPage.rows];
-      vendorsTotal = ownVendors.length + publicPage.total;
+      let publicRows = [];
+      let publicTotal = 0;
+      if (remaining > 0) {
+        try {
+          const publicPage = await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true, skipCount: true });
+          publicRows = publicPage.rows || [];
+          publicTotal = publicPage.total || 0;
+        } catch {
+          publicRows = [];
+        }
+      }
+      vendors = [...ownVendors, ...publicRows];
+      vendorsTotal = ownVendors.length + publicTotal;
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();
         if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
-          const own = await domainQueries.getVendorByEmailFromDB(email);
-          if (own) vendors = [own, ...vendors];
+          try {
+            const own = await domainQueries.getVendorByEmailFromDB(email);
+            if (own) vendors = [own, ...vendors];
+          } catch {}
         }
       }
     } else {

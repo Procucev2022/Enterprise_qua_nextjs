@@ -947,6 +947,12 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       renderDetails(buildRFQ({ quotes: undefined as unknown as QuoteComparison[] }));
       expect(screen.getByText(DETAILS.noQuotes)).toBeInTheDocument();
     });
+
+    it('does not render the Vendor Quotations section when isVendorView is true', () => {
+      renderDetails(buildRFQ({ quotes: [quote()] }), { isVendorView: true });
+      expect(screen.queryByText(DETAILS.quotesHeading)).not.toBeInTheDocument();
+      expect(screen.queryByText(DETAILS.noQuotes)).not.toBeInTheDocument();
+    });
   });
 
 function makeInquiry(overrides: any = {}): any {

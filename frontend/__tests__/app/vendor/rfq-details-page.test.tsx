@@ -85,7 +85,7 @@ describe('Vendor RFQ Details page', () => {
     expect(screen.getAllByText('Steel Bottle').length).toBeGreaterThan(0);
   });
 
-  test('shows only this vendor\'s own quote, never a competitor\'s', async () => {
+  test('does not show the Vendor Quotation section on the vendor portal', async () => {
     mockedFetchRFQById.mockResolvedValue({ success: true, rfq: BASE_RFQ });
 
     render(<VendorRFQDetailsPage />);
@@ -93,7 +93,8 @@ describe('Vendor RFQ Details page', () => {
     await waitFor(() =>
       expect(screen.getByText('Steel Bottle RFQ Requirement')).toBeInTheDocument(),
     );
-    expect(screen.getAllByText('My Vendor Co').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Vendor Quotations/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('My Vendor Co')).not.toBeInTheDocument();
     expect(screen.queryByText('Competitor Supplies')).not.toBeInTheDocument();
     expect(screen.queryByText('19000')).not.toBeInTheDocument();
   });

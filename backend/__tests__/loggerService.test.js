@@ -199,4 +199,100 @@ describe('Backend LoggerService Unit Tests', () => {
     const entry = logger.info('Default logger test');
     expect(entry.level).toBe('INFO');
   });
+
+  test('streams logs to console and invokes persistToDatabase in non-test environment', async () => {
+    const prevNodeEnv = process.env.NODE_ENV;
+    const pool = require('../src/db/pool');
+    const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+    const storageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      process.env.NODE_ENV = 'development';
+      testLogger.info('Dev info', { detail: 'yes' });
+      expect(consoleLogSpy).toHaveBeenCalled();
+
+      testLogger.warn('Dev warn', { code: 1 });
+      expect(consoleWarnSpy).toHaveBeenCalled();
+
+      testLogger.error('Dev error', new Error('Fail'));
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      expect(querySpy).toHaveBeenCalled();
+
+      // Test with storage false
+      storageSpy.mockReturnValue(false);
+      testLogger.error('Dev error without storage');
+
+      // Test with all error fields and waitUntil active
+      storageSpy.mockReturnValue(true);
+      const d1Bridge = require('../src/db/d1Bridge');
+      const waitSpy = jest.fn();
+      jest.spyOn(d1Bridge, 'getWaitUntil').mockReturnValue(waitSpy);
+
+      testLogger.error('Dev error with full fields', {
+        errorName: 'CustomErr',
+        url: '/api/test',
+        correlationId: 'c-1',
+        userEmail: 'u@test.com',
+      });
+      expect(waitSpy).toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+      querySpy.mockRestore();
+      storageSpy.mockRestore();
+      consoleLogSpy.mockRestore();
+      consoleWarnSpy.mockRestore();
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  test('handles readdirSync failure in getLogStats and directory resolution fallback', () => {
+    const readdirSpy = jest.spyOn(fs, 'readdirSync').mockImplementation(() => {
+      throw new Error('Disk unreadable');
+    });
+    try {
+      const stats = testLogger.getLogStats();
+      expect(stats.diskLogFiles).toEqual([]);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
+  test('covers all remaining branches in createLogEntry, queryLogs, and directory fallback', () => {
+    testLogger.info('With request ID', { requestId: 'req-456', ipAddress: '192.168.1.1' });
+
+    // Test search branches in queryLogs
+    testLogger.audit('Action for search', 'user@search.com', { detail: 'querymatch' }, 'SEARCH_CAT');
+    const byUser = testLogger.queryLogs({ search: 'user@search' });
+    expect(byUser.count).toBeGreaterThanOrEqual(1);
+
+    const byCat = testLogger.queryLogs({ search: 'SEARCH_CAT' });
+    expect(byCat.count).toBeGreaterThanOrEqual(1);
+
+    const byMeta = testLogger.queryLogs({ search: 'querymatch' });
+    expect(byMeta.count).toBeGreaterThanOrEqual(1);
+
+    // Test resolveDefaultLogsDir catch block
+    const origResolve = path.resolve;
+    path.resolve = () => { throw new Error('resolve failed'); };
+    try {
+      expect(LoggerService.resolveDefaultLogsDir()).toBe('./logs');
+    } finally {
+      path.resolve = origResolve;
+    }
+
+    // Default arguments & branches
+    testLogger.log('CUSTOM_LEVEL', 'Custom log');
+    testLogger.createLogEntry('INFO', 'No meta');
+    testLogger.audit('No extra', 'u@test.com');
+
+    // Subdirectory in logs dir for purgeExpiredLogs
+    fs.mkdirSync(path.join(testLogsDir, 'subfolder'), { recursive: true });
+    testLogger.purgeExpiredLogs();
+
+    // Bare persistToDatabase
+    testLogger.persistToDatabase({ id: 'bare-1', level: 'ERROR', category: 'SYS', message: 'Bare error' });
+  });
 });

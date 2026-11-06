@@ -106,6 +106,25 @@ describe('bootstrapController 100% Branch Coverage', () => {
     storeService.isHydratedFromDB = false;
   });
 
+  test('non-buyer user with query refresh = true handles hydration failure gracefully without crashing', async () => {
+    jest.spyOn(storeService, 'hydrateFromDB').mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
+    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [] });
+    storeService.isHydratedFromDB = true;
+
+    const req = {
+      user: { role: 'vendor', email: 'v@corp.com' },
+      query: { refresh: 'true' },
+    };
+    const res = mockRes();
+    await bootstrapController.getBootstrap(req, res, jest.fn());
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data.source).toBe('persisted');
+    expect(getBootSpy).toHaveBeenCalled();
+
+    storeService.isHydratedFromDB = false;
+  });
+
   test('anonymous user without query params with in_memory source', async () => {
     const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [] });
     storeService.isHydratedFromDB = false;

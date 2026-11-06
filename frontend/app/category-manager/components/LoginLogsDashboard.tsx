@@ -11,7 +11,6 @@ import {
   Filter,
   RefreshCw,
   Download,
-  Calendar,
   X,
   ExternalLink,
   ShieldCheck,
@@ -19,6 +18,10 @@ import {
   ChevronRight,
   Globe,
   Laptop,
+  Settings,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type {
@@ -33,18 +36,73 @@ import {
   fetchLoginLogsSummary,
   FALLBACK_SUMMARY,
 } from '@/lib/loginLogsClient';
+import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
+
+// ---------------------------------------------------------------------------
+// Module-level constants
+// ---------------------------------------------------------------------------
+
+const LOGIN_LOGS_DEFAULT_COLUMNS: ColumnDef[] = [
+  { key: 'user', label: 'User & Role', visible: true, required: true },
+  { key: 'company', label: 'Company', visible: true },
+  { key: 'contact', label: 'Contact Info', visible: true },
+  { key: 'loginAt', label: 'Login Time', visible: true },
+  { key: 'logoutAt', label: 'Logout Time / Duration', visible: true },
+  { key: 'telemetry', label: 'IP & Device Info', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+const LOGIN_LOGS_COL_PREF_KEY = 'qua_login_logs_col_prefs';
+
+function loadColumnPrefs(): ColumnDef[] {
+  try {
+    const raw = localStorage.getItem(LOGIN_LOGS_COL_PREF_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as ColumnDef[];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {
+    // ignore
+  }
+  return LOGIN_LOGS_DEFAULT_COLUMNS;
+}
+
+// ---------------------------------------------------------------------------
+// SortIcon helper
+// ---------------------------------------------------------------------------
+
+interface SortIconProps {
+  colKey: string;
+  sortField: string;
+  sortOrder: 'asc' | 'desc';
+}
+
+function SortIcon({ colKey, sortField, sortOrder }: SortIconProps) {
+  if (sortField !== colKey) return <ArrowUpDown size={12} className="ml-1 text-slate-400 opacity-50" />;
+  if (sortOrder === 'asc') return <ArrowUp size={12} className="ml-1 text-indigo-500" />;
+  return <ArrowDown size={12} className="ml-1 text-indigo-500" />;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export default function LoginLogsDashboard() {
   const strings = UI_STRINGS.actionCenter.loginLogs;
 
+  // -------------------------------------------------------------------------
   // Data states
+  // -------------------------------------------------------------------------
   const [logs, setLogs] = useState<LoginLogEntry[]>([]);
   const [summary, setSummary] = useState<LoginLogsSummary>(FALLBACK_SUMMARY);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [realtimeActive, setRealtimeActive] = useState<boolean>(true);
 
+  // -------------------------------------------------------------------------
   // Filter states
+  // -------------------------------------------------------------------------
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedUserType, setSelectedUserType] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
@@ -52,12 +110,28 @@ export default function LoginLogsDashboard() {
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
 
+  // -------------------------------------------------------------------------
+  // Sorting states
+  // -------------------------------------------------------------------------
+  const [sortField, setSortField] = useState<string>('loginAt');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  // -------------------------------------------------------------------------
+  // Column settings states
+  // -------------------------------------------------------------------------
+  const [showColumnSettings, setShowColumnSettings] = useState<boolean>(false);
+  const [columns, setColumns] = useState<ColumnDef[]>(() => loadColumnPrefs());
+
+  // -------------------------------------------------------------------------
   // Pagination & modal states
+  // -------------------------------------------------------------------------
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [selectedLogForDetails, setSelectedLogForDetails] = useState<LoginLogEntry | null>(null);
   const itemsPerPage = 10;
 
-  // Load logs and metrics from client
+  // -------------------------------------------------------------------------
+  // Data loading
+  // -------------------------------------------------------------------------
   const loadData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setIsRefreshing(true);
     try {
@@ -100,7 +174,9 @@ export default function LoginLogsDashboard() {
     return () => clearInterval(interval);
   }, [realtimeActive, loadData]);
 
-  // Client-side date filter computation
+  // -------------------------------------------------------------------------
+  // Filtered + sorted logs
+  // -------------------------------------------------------------------------
   const filteredLogs = useMemo(() => {
     let result = [...logs];
 
@@ -155,10 +231,48 @@ export default function LoginLogsDashboard() {
       }
     }
 
-    return result;
-  }, [logs, selectedUserType, selectedStatus, searchQuery, dateRangePreset, customStartDate, customEndDate]);
+    // Sorting with tie-breaker
+    result.sort((a, b) => {
+      let cmp = 0;
+      if (sortField === 'loginAt') {
+        cmp = new Date(a.loginAt).getTime() - new Date(b.loginAt).getTime();
+      } else if (sortField === 'logoutAt') {
+        const aTime = a.logoutAt ? new Date(a.logoutAt).getTime() : 0;
+        const bTime = b.logoutAt ? new Date(b.logoutAt).getTime() : 0;
+        cmp = aTime - bTime;
+      } else if (sortField === 'userName') {
+        cmp = a.userName.localeCompare(b.userName);
+      } else if (sortField === 'companyName') {
+        cmp = a.companyName.localeCompare(b.companyName);
+      } else if (sortField === 'durationSeconds') {
+        cmp = (a.durationSeconds ?? 0) - (b.durationSeconds ?? 0);
+      }
+      if (cmp !== 0) {
+        return sortOrder === 'asc' ? cmp : -cmp;
+      }
+      return 0;
+    });
 
-  // Pagination calculation
+    return result;
+  }, [logs, selectedUserType, selectedStatus, searchQuery, dateRangePreset, customStartDate, customEndDate, sortField, sortOrder]);
+
+  // -------------------------------------------------------------------------
+  // Sort handler
+  // -------------------------------------------------------------------------
+  const handleSort = useCallback((field: string) => {
+    setSortField((prev) => {
+      if (prev === field) {
+        setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+        return prev;
+      }
+      setSortOrder('asc');
+      return field;
+    });
+  }, []);
+
+  // -------------------------------------------------------------------------
+  // Pagination
+  // -------------------------------------------------------------------------
   const totalPages = Math.max(1, Math.ceil(filteredLogs.length / itemsPerPage));
   const paginatedLogs = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
@@ -171,7 +285,14 @@ export default function LoginLogsDashboard() {
     }
   };
 
-  // CSV Export utility
+  // -------------------------------------------------------------------------
+  // Visible columns
+  // -------------------------------------------------------------------------
+  const visibleColumns = useMemo(() => columns.filter((c) => c.visible), [columns]);
+
+  // -------------------------------------------------------------------------
+  // CSV Export
+  // -------------------------------------------------------------------------
   const handleExportCsv = () => {
     if (filteredLogs.length === 0) return;
     const headers = [
@@ -216,10 +337,15 @@ export default function LoginLogsDashboard() {
     document.body.removeChild(link);
   };
 
+  // -------------------------------------------------------------------------
+  // Formatters
+  // -------------------------------------------------------------------------
   const formatDateTime = (isoString?: string | null) => {
     if (!isoString) return '—';
     try {
       const date = new Date(isoString);
+      const time = date.getTime();
+      if (isNaN(time) || time <= 86400000) return '—';
       return date.toLocaleString('en-IN', {
         day: '2-digit',
         month: 'short',
@@ -229,7 +355,7 @@ export default function LoginLogsDashboard() {
         hour12: true,
       });
     } catch {
-      return isoString;
+      return '—';
     }
   };
 
@@ -243,28 +369,80 @@ export default function LoginLogsDashboard() {
     return `${secs}s`;
   };
 
+  // -------------------------------------------------------------------------
+  // Column save helper
+  // -------------------------------------------------------------------------
+  const saveColumnPrefs = (newCols: ColumnDef[]) => {
+    setColumns(newCols);
+    try {
+      localStorage.setItem(LOGIN_LOGS_COL_PREF_KEY, JSON.stringify(newCols));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const resetColumnPrefs = () => {
+    setColumns(LOGIN_LOGS_DEFAULT_COLUMNS);
+    try {
+      localStorage.setItem(LOGIN_LOGS_COL_PREF_KEY, JSON.stringify(LOGIN_LOGS_DEFAULT_COLUMNS));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // Render helpers – per-column header label
+  // -------------------------------------------------------------------------
+  const colHeaderLabel = (key: string): string => {
+    switch (key) {
+      case 'user': return strings.table.colUser;
+      case 'company': return strings.table.colCompany;
+      case 'contact': return strings.table.colContact;
+      case 'loginAt': return strings.table.colLoginTime;
+      case 'logoutAt': return strings.table.colLogoutTime;
+      case 'telemetry': return strings.table.colTelemetry;
+      case 'status': return strings.table.colStatus;
+      case 'actions': return 'Actions';
+      default: return key;
+    }
+  };
+
+  // Which columns are sortable and their sort key
+  const sortableColKey = (key: string): string | null => {
+    const map: Record<string, string> = {
+      user: 'userName',
+      company: 'companyName',
+      loginAt: 'loginAt',
+      logoutAt: 'logoutAt',
+    };
+    return map[key] ?? null;
+  };
+
+  // -------------------------------------------------------------------------
+  // JSX
+  // -------------------------------------------------------------------------
   return (
-    <div className="space-y-6">
-      {/* Top Banner & Title Area */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-xs">
+    <div className="space-y-5">
+      {/* Top Banner & Title Area – compact */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
         <div>
-          <div className="flex items-center gap-2.5">
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <ShieldCheck className="text-indigo-600 dark:text-indigo-400" size={24} />
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <ShieldCheck className="text-indigo-600 dark:text-indigo-400" size={20} />
               {strings.title}
             </h2>
             <span
-              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold ${
                 realtimeActive
                   ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60'
                   : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700'
               }`}
             >
-              <span className={`w-2 h-2 rounded-full ${realtimeActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${realtimeActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
               {strings.badgeLive}
             </span>
           </div>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{strings.subtitle}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{strings.subtitle}</p>
         </div>
 
         {/* Global Actions */}
@@ -273,50 +451,28 @@ export default function LoginLogsDashboard() {
           <button
             type="button"
             onClick={() => setRealtimeActive(!realtimeActive)}
-            className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
               realtimeActive
                 ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
                 : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700 hover:bg-slate-50'
             }`}
           >
-            <Activity size={14} className={realtimeActive ? 'text-emerald-600 animate-pulse' : 'text-slate-400'} />
+            <Activity size={13} className={realtimeActive ? 'text-emerald-600 animate-pulse' : 'text-slate-400'} />
             <span>{realtimeActive ? strings.actions.realtimeActive : strings.actions.realtimePaused}</span>
-          </button>
-
-          {/* Refresh button */}
-          <button
-            type="button"
-            onClick={() => loadData(true)}
-            disabled={isRefreshing}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={isRefreshing ? 'animate-spin text-indigo-600' : 'text-slate-500'} />
-            <span>{strings.actions.refresh}</span>
-          </button>
-
-          {/* Export CSV button */}
-          <button
-            type="button"
-            onClick={handleExportCsv}
-            disabled={filteredLogs.length === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer disabled:opacity-50"
-          >
-            <Download size={14} className="text-slate-500" />
-            <span>{strings.actions.exportCsv}</span>
           </button>
         </div>
       </div>
 
-      {/* KPI Stats Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
+      {/* KPI Stats Grid – compact */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {/* Total Logins Today */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
-            <span className="text-xs font-semibold uppercase tracking-wider">{strings.stats.totalLoginsToday}</span>
-            <LogIn size={16} className="text-indigo-600 dark:text-indigo-400" />
+            <span className="text-[10px] font-semibold uppercase tracking-wider">{strings.stats.totalLoginsToday}</span>
+            <LogIn size={15} className="text-indigo-600 dark:text-indigo-400" />
           </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-bold text-slate-900 dark:text-white">{summary.totalToday}</span>
+          <div className="mt-1.5 flex items-baseline justify-between">
+            <span className="text-xl font-bold text-slate-900 dark:text-white">{summary.totalToday}</span>
             {summary.todayPeakHour && (
               <span className="text-[10px] text-slate-500 dark:text-slate-400">Peak: {summary.todayPeakHour}</span>
             )}
@@ -324,59 +480,59 @@ export default function LoginLogsDashboard() {
         </div>
 
         {/* Active Online Now */}
-        <div className="bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-900/60 rounded-xl p-4 shadow-xs">
+        <div className="bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-900/60 rounded-xl p-3 shadow-xs">
           <div className="flex items-center justify-between text-emerald-700 dark:text-emerald-400">
-            <span className="text-xs font-semibold uppercase tracking-wider">{strings.stats.activeOnlineNow}</span>
-            <span className="flex h-2.5 w-2.5 relative">
+            <span className="text-[10px] font-semibold uppercase tracking-wider">{strings.stats.activeOnlineNow}</span>
+            <span className="flex h-2 w-2 relative">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
             </span>
           </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{summary.activeNow}</span>
+          <div className="mt-1.5">
+            <span className="text-xl font-bold text-emerald-600 dark:text-emerald-400">{summary.activeNow}</span>
           </div>
         </div>
 
         {/* Buyer Logins */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
-            <span className="text-xs font-semibold uppercase tracking-wider">{strings.stats.buyerLogins}</span>
-            <Building2 size={16} className="text-sky-600 dark:text-sky-400" />
+            <span className="text-[10px] font-semibold uppercase tracking-wider">{strings.stats.buyerLogins}</span>
+            <Building2 size={15} className="text-sky-600 dark:text-sky-400" />
           </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-slate-900 dark:text-white">{summary.buyerLogins}</span>
+          <div className="mt-1.5">
+            <span className="text-xl font-bold text-slate-900 dark:text-white">{summary.buyerLogins}</span>
           </div>
         </div>
 
         {/* Seller Logins */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
-            <span className="text-xs font-semibold uppercase tracking-wider">{strings.stats.sellerLogins}</span>
-            <Truck size={16} className="text-emerald-600 dark:text-emerald-400" />
+            <span className="text-[10px] font-semibold uppercase tracking-wider">{strings.stats.sellerLogins}</span>
+            <Truck size={15} className="text-emerald-600 dark:text-emerald-400" />
           </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-slate-900 dark:text-white">{summary.sellerLogins}</span>
+          <div className="mt-1.5">
+            <span className="text-xl font-bold text-slate-900 dark:text-white">{summary.sellerLogins}</span>
           </div>
         </div>
 
         {/* Avg Duration */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
-            <span className="text-xs font-semibold uppercase tracking-wider">{strings.stats.avgSessionDuration}</span>
-            <Clock size={16} className="text-amber-600 dark:text-amber-400" />
+            <span className="text-[10px] font-semibold uppercase tracking-wider">{strings.stats.avgSessionDuration}</span>
+            <Clock size={15} className="text-amber-600 dark:text-amber-400" />
           </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-slate-900 dark:text-white">{summary.avgDurationMinutes}m</span>
+          <div className="mt-1.5">
+            <span className="text-xl font-bold text-slate-900 dark:text-white">{summary.avgDurationMinutes}m</span>
           </div>
         </div>
       </div>
 
-      {/* Filter and Control Bar */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs space-y-3.5">
-        <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+      {/* Filter Bar – compact multi-layer controls */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-xs space-y-2.5">
+        <div className="flex flex-row items-center gap-2 overflow-x-auto no-scrollbar">
           {/* Search Box */}
-          <div className="relative flex-1">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={searchQuery}
@@ -385,7 +541,7 @@ export default function LoginLogsDashboard() {
                 setCurrentPage(1);
               }}
               placeholder={strings.filters.searchPlaceholder}
-              className="w-full pl-9 pr-8 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+              className="w-full pl-8 pr-7 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
             />
             {searchQuery && (
               <button
@@ -395,85 +551,89 @@ export default function LoginLogsDashboard() {
                   setCurrentPage(1);
                 }}
                 aria-label="Clear search"
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
               >
-                <X size={14} />
+                <X size={13} />
               </button>
             )}
           </div>
 
           {/* User Type Role Pills */}
-          <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg">
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedUserType('all');
-                setCurrentPage(1);
-              }}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all cursor-pointer ${
-                selectedUserType === 'all'
-                  ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-              }`}
-            >
-              {strings.filters.allRoles}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedUserType('buyer');
-                setCurrentPage(1);
-              }}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all cursor-pointer ${
-                selectedUserType === 'buyer'
-                  ? 'bg-white dark:bg-slate-700 text-sky-600 dark:text-sky-400 font-semibold shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-              }`}
-            >
-              {strings.filters.buyersOnly}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedUserType('vendor');
-                setCurrentPage(1);
-              }}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all cursor-pointer ${
-                selectedUserType === 'vendor'
-                  ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 font-semibold shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-              }`}
-            >
-              {strings.filters.sellersOnly}
-            </button>
+          <div className="flex items-center gap-0.5 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg shrink-0">
+            {[
+              { id: 'all', label: strings.filters.allRoles, activeClass: 'text-slate-900 dark:text-white' },
+              { id: 'buyer', label: strings.filters.buyersOnly, activeClass: 'text-sky-600 dark:text-sky-400' },
+              { id: 'vendor', label: strings.filters.sellersOnly, activeClass: 'text-emerald-600 dark:text-emerald-400' },
+            ].map((pill) => (
+              <button
+                key={pill.id}
+                type="button"
+                onClick={() => {
+                  setSelectedUserType(pill.id);
+                  setCurrentPage(1);
+                }}
+                className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer ${
+                  selectedUserType === pill.id
+                    ? `bg-white dark:bg-slate-700 ${pill.activeClass} shadow-xs font-semibold`
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                {pill.label}
+              </button>
+            ))}
           </div>
 
           {/* Status Dropdown Filter */}
-          <div className="flex items-center gap-2">
-            <Filter size={14} className="text-slate-400 hidden sm:block" />
-            <select
-              value={selectedStatus}
-              onChange={(e) => {
-                setSelectedStatus(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="py-1.5 px-3 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
-            >
-              <option value="all">{strings.filters.allStatuses}</option>
-              <option value="ACTIVE">{strings.filters.activeOnly}</option>
-              <option value="LOGGED_OUT">{strings.filters.loggedOut}</option>
-              <option value="TIMED_OUT">{strings.filters.timedOut}</option>
-            </select>
-          </div>
+          <select
+            value={selectedStatus}
+            onChange={(e) => {
+              setSelectedStatus(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="shrink-0 py-1.5 px-2.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+          >
+            <option value="all">{strings.filters.allStatuses}</option>
+            <option value="ACTIVE">{strings.filters.activeOnly}</option>
+            <option value="LOGGED_OUT">{strings.filters.loggedOut}</option>
+            <option value="TIMED_OUT">{strings.filters.timedOut}</option>
+          </select>
+
+          {/* Refresh button */}
+          <button
+            type="button"
+            onClick={() => loadData(true)}
+            disabled={isRefreshing}
+            title={strings.actions.refresh}
+            className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={isRefreshing ? 'animate-spin text-indigo-600' : ''} />
+          </button>
+
+          {/* Export CSV button */}
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={filteredLogs.length === 0}
+            title={strings.actions.exportCsv}
+            className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <Download size={14} />
+          </button>
+
+          {/* Gear / Column Settings button */}
+          <button
+            type="button"
+            onClick={() => setShowColumnSettings(true)}
+            className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+            title="Column Settings"
+          >
+            <Settings size={14} />
+          </button>
         </div>
 
-        {/* Date Wise Filter Row */}
-        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400 mr-2">
-            <Calendar size={14} className="text-indigo-600 dark:text-indigo-400" />
-            <span>Date Range:</span>
-          </div>
-
+        {/* Date Wise Filter Row (Buttons) */}
+        <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+          <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mr-1.5">Date Range:</span>
           {[
             { id: 'all', label: strings.filters.dateRangeAll },
             { id: 'today', label: strings.filters.dateRangeToday },
@@ -501,7 +661,7 @@ export default function LoginLogsDashboard() {
 
           {/* Custom Date Inputs */}
           {dateRangePreset === 'custom' && (
-            <div className="flex items-center gap-2 ml-auto">
+            <div className="flex items-center gap-1.5 ml-auto">
               <input
                 type="date"
                 value={customStartDate}
@@ -509,7 +669,7 @@ export default function LoginLogsDashboard() {
                   setCustomStartDate(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="px-2.5 py-1 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200"
+                className="px-2 py-1 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200"
                 aria-label={strings.filters.startDate}
               />
               <span className="text-slate-400 text-xs">to</span>
@@ -520,7 +680,7 @@ export default function LoginLogsDashboard() {
                   setCustomEndDate(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="px-2.5 py-1 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200"
+                className="px-2 py-1 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200"
                 aria-label={strings.filters.endDate}
               />
             </div>
@@ -534,27 +694,34 @@ export default function LoginLogsDashboard() {
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-700 dark:text-slate-300">
-                <th className="py-3 px-4">{strings.table.colUser}</th>
-                <th className="py-3 px-4">{strings.table.colCompany}</th>
-                <th className="py-3 px-4">{strings.table.colContact}</th>
-                <th className="py-3 px-4">{strings.table.colLoginTime}</th>
-                <th className="py-3 px-4">{strings.table.colLogoutTime}</th>
-                <th className="py-3 px-4">{strings.table.colTelemetry}</th>
-                <th className="py-3 px-4">{strings.table.colStatus}</th>
-                <th className="py-3 px-4 text-right">Actions</th>
+                {visibleColumns.map((col) => {
+                  const sk = sortableColKey(col.key);
+                  return (
+                    <th
+                      key={col.key}
+                      className={`py-3 px-4 ${col.key === 'actions' ? 'text-right' : ''} ${sk ? 'cursor-pointer select-none hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors' : ''}`}
+                      onClick={sk ? () => handleSort(sk) : undefined}
+                    >
+                      <span className="inline-flex items-center">
+                        {colHeaderLabel(col.key)}
+                        {sk && <SortIcon colKey={sk} sortField={sortField} sortOrder={sortOrder} />}
+                      </span>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
               {isLoading ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={visibleColumns.length} className="py-12 text-center text-slate-400">
                     <RefreshCw className="animate-spin inline-block mr-2" size={18} />
                     Loading session logs...
                   </td>
                 </tr>
               ) : paginatedLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400 dark:text-slate-500">
+                  <td colSpan={visibleColumns.length} className="py-12 text-center text-slate-400 dark:text-slate-500">
                     <ShieldCheck className="mx-auto mb-2 text-slate-300 dark:text-slate-600" size={32} />
                     {strings.table.emptyState}
                   </td>
@@ -570,98 +737,113 @@ export default function LoginLogsDashboard() {
                       onClick={() => setSelectedLogForDetails(log)}
                       className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer group"
                     >
-                      {/* User & Role */}
-                      <td className="py-3 px-4">
-                        <div className="font-semibold text-slate-900 dark:text-slate-100">{log.userName}</div>
-                        <span
-                          className={`inline-block mt-0.5 px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                            isBuyer
-                              ? 'bg-sky-50 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300 border border-sky-200 dark:border-sky-800/50'
-                              : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50'
-                          }`}
-                        >
-                          {isBuyer ? 'Buyer' : 'Seller / Vendor'}
-                        </span>
-                      </td>
-
-                      {/* Company Name */}
-                      <td className="py-3 px-4 text-slate-800 dark:text-slate-200 font-medium">
-                        {log.companyName}
-                      </td>
-
-                      {/* Contact Info (Email & Phone) */}
-                      <td className="py-3 px-4 space-y-0.5">
-                        <div className="text-slate-900 dark:text-slate-100 font-mono text-[11px]">{log.email}</div>
-                        <div className="text-slate-500 dark:text-slate-400 text-[11px] font-mono">{log.phoneNumber}</div>
-                      </td>
-
-                      {/* Login Time */}
-                      <td className="py-3 px-4">
-                        <div className="text-slate-900 dark:text-slate-100 font-medium">{formatDateTime(log.loginAt)}</div>
-                      </td>
-
-                      {/* Logout Time / Duration */}
-                      <td className="py-3 px-4">
-                        {isActive ? (
-                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                            {strings.table.inProgress}
-                          </span>
-                        ) : (
-                          <div>
-                            <div className="text-slate-800 dark:text-slate-200">{formatDateTime(log.logoutAt)}</div>
-                            <div className="text-slate-400 dark:text-slate-500 text-[10px]">
-                              Duration: {formatDuration(log.durationSeconds)}
-                            </div>
-                          </div>
-                        )}
-                      </td>
-
-                      {/* IP & Device Telemetry */}
-                      <td className="py-3 px-4 space-y-0.5">
-                        <div className="flex items-center gap-1 text-slate-700 dark:text-slate-300 font-mono text-[11px]">
-                          <Globe size={11} className="text-slate-400" />
-                          <span>{log.ipAddress || '—'}</span>
-                        </div>
-                        <div className="flex items-center gap-1 text-slate-500 dark:text-slate-400 text-[10px]">
-                          <Laptop size={11} className="text-slate-400" />
-                          <span className="truncate max-w-[140px]">{log.deviceInfo || 'Desktop'}</span>
-                        </div>
-                      </td>
-
-                      {/* Status Badge */}
-                      <td className="py-3 px-4">
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                            isActive
-                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300'
-                              : log.status === 'TIMED_OUT'
-                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300'
-                              : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
-                          }`}
-                        >
-                          {isActive
-                            ? strings.filters.activeOnly
-                            : log.status === 'TIMED_OUT'
-                            ? strings.filters.timedOut
-                            : strings.filters.loggedOut}
-                        </span>
-                      </td>
-
-                      {/* Actions */}
-                      <td className="py-3 px-4 text-right">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedLogForDetails(log);
-                          }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-950/40 dark:hover:text-indigo-400 transition-colors"
-                        >
-                          <ExternalLink size={12} />
-                          <span>{strings.actions.viewDetails}</span>
-                        </button>
-                      </td>
+                      {visibleColumns.map((col) => {
+                        switch (col.key) {
+                          case 'user':
+                            return (
+                              <td key="user" className="py-3 px-4">
+                                <div className="font-semibold text-slate-900 dark:text-slate-100">{log.userName}</div>
+                                <span
+                                  className={`inline-block mt-0.5 px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                                    isBuyer
+                                      ? 'bg-sky-50 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300 border border-sky-200 dark:border-sky-800/50'
+                                      : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50'
+                                  }`}
+                                >
+                                  {isBuyer ? 'Buyer' : 'Seller / Vendor'}
+                                </span>
+                              </td>
+                            );
+                          case 'company':
+                            return (
+                              <td key="company" className="py-3 px-4 text-slate-800 dark:text-slate-200 font-medium">
+                                {log.companyName}
+                              </td>
+                            );
+                          case 'contact':
+                            return (
+                              <td key="contact" className="py-3 px-4 space-y-0.5">
+                                <div className="text-slate-900 dark:text-slate-100 font-mono text-[11px]">{log.email}</div>
+                                <div className="text-slate-500 dark:text-slate-400 text-[11px] font-mono">{log.phoneNumber}</div>
+                              </td>
+                            );
+                          case 'loginAt':
+                            return (
+                              <td key="loginAt" className="py-3 px-4">
+                                <div className="text-slate-900 dark:text-slate-100 font-medium">{formatDateTime(log.loginAt)}</div>
+                              </td>
+                            );
+                          case 'logoutAt':
+                            return (
+                              <td key="logoutAt" className="py-3 px-4">
+                                {isActive ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                    {strings.table.inProgress}
+                                  </span>
+                                ) : (
+                                  <div>
+                                    <div className="text-slate-800 dark:text-slate-200">{formatDateTime(log.logoutAt)}</div>
+                                    <div className="text-slate-400 dark:text-slate-500 text-[10px]">
+                                      Duration: {formatDuration(log.durationSeconds)}
+                                    </div>
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          case 'telemetry':
+                            return (
+                              <td key="telemetry" className="py-3 px-4 space-y-0.5">
+                                <div className="flex items-center gap-1 text-slate-700 dark:text-slate-300 font-mono text-[11px]">
+                                  <Globe size={11} className="text-slate-400" />
+                                  <span>{log.ipAddress || '—'}</span>
+                                </div>
+                                <div className="flex items-center gap-1 text-slate-500 dark:text-slate-400 text-[10px]">
+                                  <Laptop size={11} className="text-slate-400" />
+                                  <span className="truncate max-w-[140px]">{log.deviceInfo || 'Desktop'}</span>
+                                </div>
+                              </td>
+                            );
+                          case 'status':
+                            return (
+                              <td key="status" className="py-3 px-4">
+                                <span
+                                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                    isActive
+                                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300'
+                                      : log.status === 'TIMED_OUT'
+                                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300'
+                                      : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                                  }`}
+                                >
+                                  {isActive
+                                    ? strings.filters.activeOnly
+                                    : log.status === 'TIMED_OUT'
+                                    ? strings.filters.timedOut
+                                    : strings.filters.loggedOut}
+                                </span>
+                              </td>
+                            );
+                          case 'actions':
+                            return (
+                              <td key="actions" className="py-3 px-4 text-right">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedLogForDetails(log);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-950/40 dark:hover:text-indigo-400 transition-colors"
+                                >
+                                  <ExternalLink size={12} />
+                                  <span>{strings.actions.viewDetails}</span>
+                                </button>
+                              </td>
+                            );
+                          default:
+                            return null;
+                        }
+                      })}
                     </tr>
                   );
                 })
@@ -798,6 +980,16 @@ export default function LoginLogsDashboard() {
           </div>
         </div>
       )}
+
+      {/* Column Settings Popup */}
+      <ColumnSettingsPopup
+        isOpen={showColumnSettings}
+        onClose={() => setShowColumnSettings(false)}
+        columns={columns}
+        onSave={saveColumnPrefs}
+        onReset={resetColumnPrefs}
+        title="Login Logs Columns"
+      />
     </div>
   );
 }
