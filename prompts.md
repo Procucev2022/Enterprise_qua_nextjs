@@ -7254,10 +7254,59 @@ reuse the existing functioanlity and methods don't create the dupliacted code fo
 raise the pr and pass all the coverages and AI review and Gemini pr check and merge in test-v3
 ```
 
-
 ---
 
 ### Prompt 70
+
+**Timestamp**: 2026-11-05T18:00:00+05:30
+
+```text
+# CRITICAL: Action Center UI Root-Cause Fix – Internal Tasks Toolbar & Layout
+```
+
+---
+
+### Prompt 71
+
+**Timestamp**: 2026-11-05T20:30:00+05:30
+
+```text
+run in locally
+```
+
+---
+
+### Prompt 72
+
+**Timestamp**: 2026-11-05T21:00:00+05:30
+
+```text
+not solve the issue
+```
+
+---
+
+### Prompt 73
+
+**Timestamp**: 2026-11-06T08:50:00+05:30
+
+```text
+remove the text in that page user login & session time and all and the search is moving horizantally please check and fix the toolbar issue
+```
+
+---
+
+### Prompt 74
+
+**Timestamp**: 2026-11-06T09:30:00+05:30
+
+```text
+Remove all the mock data from the analatics in CM i want really live data only
+```
+
+---
+
+### Prompt 75
 
 **Timestamp**: 2026-11-06T09:57:52+05:30
 
@@ -7267,13 +7316,66 @@ raise the pr and pass all the coverages and AI review and Gemini pr check and me
 Analyse all issues mentioned in these logs, also how can we fix these
 ```
 
+---
+
+### Prompt 76
+
+**Timestamp**: 2026-11-06T10:15:00+05:30
+
+```text
+update the env and check the Ui issue and fix that
+```
 
 ---
 
-### Prompt 71
+### Prompt 77
 
 **Timestamp**: 2026-11-06T10:27:16+05:30
 
 ```text
 Please solve only D1 resource overload issue.
 ```
+
+---
+
+### Prompt 78
+
+**Timestamp**: 2026-11-06T10:45:00+05:30
+
+```text
+run locally
+```
+
+---
+
+### Prompt 79
+
+**Timestamp**: 2026-11-06T11:00:00+05:30
+
+```text
+please fix the toolbar of document valut
+and please remove the mock and dammi data from registration page
+```
+
+---
+
+### Prompt 80
+
+**Timestamp**: 2026-11-06T11:35:00+05:30
+
+```text
+remove the dummy data from login page and
+please fix the registrataion search toolbar it si merged the section data 
+seller auto approve only buyer registration ask the permission then approve the credentials is go to buyer
+```
+
+---
+
+### Prompt 81
+
+**Timestamp**: 2026-11-06T11:41:09+05:30
+
+```text
+raise the pr and coverage all the test cases and gemini pr check and AI review
+```
+

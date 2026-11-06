@@ -346,6 +346,45 @@ describe('Login Logs API & Controller', () => {
       });
       expect(entry).toBeNull();
     });
+
+    test('getLoginLogsSummary executes SQL query when pool is configured', async () => {
+      jest.spyOn(pool, 'query').mockImplementation((queryText) => {
+        if (queryText.includes('WHERE login_at >=')) {
+          return Promise.resolve({ rows: [{ count: '12' }] });
+        }
+        if (queryText.includes("status = 'ACTIVE'")) {
+          return Promise.resolve({ rows: [{ count: '5' }] });
+        }
+        if (queryText.includes("LOWER(user_type) = 'buyer'")) {
+          return Promise.resolve({ rows: [{ count: '7' }] });
+        }
+        if (queryText.includes("LOWER(user_type) IN")) {
+          return Promise.resolve({ rows: [{ count: '5' }] });
+        }
+        if (queryText.includes("AVG(duration_seconds)")) {
+          return Promise.resolve({ rows: [{ avg_sec: '1200' }] });
+        }
+        return Promise.resolve({ rows: [{ count: '0' }] });
+      });
+
+      const summary = await loginLogsQueries.getLoginLogsSummary();
+      expect(pool.query).toHaveBeenCalled();
+      expect(summary.totalToday).toBe(12);
+      expect(summary.activeNow).toBe(5);
+      expect(summary.buyerLogins).toBe(7);
+      expect(summary.sellerLogins).toBe(5);
+      expect(summary.avgDurationMinutes).toBe(20);
+      expect(summary.todayPeakHour).toBe('Live Telemetry Active');
+    });
+
+    test('getLoginLogsSummary falls back to in-memory store when pool query rejects', async () => {
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Summary DB query failed'));
+
+      const summary = await loginLogsQueries.getLoginLogsSummary();
+      expect(summary).toBeDefined();
+      expect(summary).toHaveProperty('totalToday');
+      expect(summary).toHaveProperty('activeNow');
+    });
   });
 
   describe('Direct Controller Method Coverage', () => {
@@ -419,16 +458,74 @@ describe('Login Logs API & Controller', () => {
       expect(loginLogsQueries.mapRow(undefined)).toBeNull();
     });
 
-    test('mapRow maps row and defaults safely', () => {
-      const row = loginLogsQueries.mapRow({
+    test('mapRow maps row and defaults safely with snake_case and camelCase fields', () => {
+      const row1 = loginLogsQueries.mapRow({
         id: 'r1',
         user_name: 'Name 1',
         email: 'email@test.com',
+        logout_at: '2026-11-05T12:00:00Z',
+        duration_seconds: 180,
       });
-      expect(row.userName).toBe('Name 1');
-      expect(row.userType).toBe('buyer');
-      expect(row.status).toBe('ACTIVE');
-      expect(row.durationSeconds).toBe(0);
+      expect(row1.userName).toBe('Name 1');
+      expect(row1.userType).toBe('buyer');
+      expect(row1.status).toBe('ACTIVE');
+      expect(row1.durationSeconds).toBe(180);
+      expect(row1.logoutAt).toBe('2026-11-05T12:00:00.000Z');
+
+      const row2 = loginLogsQueries.mapRow({
+        id: 'r2',
+        userId: 'U-2',
+        userName: 'Name 2',
+        companyName: 'Company 2',
+        phoneNumber: '+91 99999 88888',
+        userType: 'vendor',
+        ipAddress: '1.2.3.4',
+        deviceInfo: 'Safari / macOS',
+        location: 'Delhi',
+        userAgent: 'Safari',
+        createdAt: '2026-11-05T10:00:00Z',
+        updatedAt: '2026-11-05T11:00:00Z',
+        logoutAt: '2026-11-05T11:00:00Z',
+      });
+      expect(row2.userId).toBe('U-2');
+      expect(row2.userType).toBe('vendor');
+      expect(row2.ipAddress).toBe('1.2.3.4');
+
+      const row3 = loginLogsQueries.mapRow({});
+      expect(row3.id).toBe('');
+      expect(row3.userId).toBe('');
+      expect(row3.userName).toBe('');
+      expect(row3.email).toBe('');
+      expect(row3.logoutAt).toBeNull();
+    });
+
+    test('recordLogoutLog finds and updates session matching userUuid', async () => {
+      await loginLogsQueries.recordLoginLog({
+        userId: 'USER-UUID-MATCH',
+        userName: 'UUID User',
+        email: 'uuid.user@example.com',
+      });
+
+      const entry = await loginLogsQueries.recordLogoutLog({
+        userUuid: 'USER-UUID-MATCH',
+        logoutReason: 'TIMEOUT',
+      });
+
+      expect(entry).not.toBeNull();
+      expect(entry.status).toBe('TIMED_OUT');
+    });
+
+    test('getLoginLogsSummary handles empty rows from pool query', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+
+      const summary = await loginLogsQueries.getLoginLogsSummary();
+      expect(summary.totalToday).toBe(0);
+      expect(summary.activeNow).toBe(0);
+      expect(summary.buyerLogins).toBe(0);
+      expect(summary.sellerLogins).toBe(0);
+      expect(summary.avgDurationMinutes).toBe(0);
+      expect(summary.todayPeakHour).toBe('None');
     });
   });
 });
