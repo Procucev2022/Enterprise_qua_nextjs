@@ -108,6 +108,16 @@ describe('Database QueryCache Unit Tests', () => {
     expect(testC.get('DEF_OPT', [])).toBe('def_data');
   });
 
+  test('invalidate performs soft invalidation so get() misses but getStale() still returns entry', () => {
+    cache.set('SELECT * FROM test_soft', [], [{ id: 1 }], { tag: 'soft_tag', ttlMs: 10000 });
+    expect(cache.get('SELECT * FROM test_soft', [])).toEqual([{ id: 1 }]);
+
+    const count = cache.invalidate('soft_tag');
+    expect(count).toBe(1);
+    expect(cache.get('SELECT * FROM test_soft', [])).toBeNull();
+    expect(cache.getStale('SELECT * FROM test_soft', [])).toEqual([{ id: 1 }]);
+  });
+
   test('singleton instance methods work', () => {
     queryCache.clear();
     queryCache.set('SELECT 1', [], 'test');

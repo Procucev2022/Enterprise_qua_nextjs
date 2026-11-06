@@ -850,6 +850,32 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       storeService.isHydratedFromDB = false;
     });
 
+    test('getVendors falls back to in_memory_fallback when getVendorsPageFromDB throws with buyerId and search', async () => {
+      const next = jest.fn();
+      const res = mockRes();
+      const pool = require('../src/db/pool');
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      storeService.vendors = [
+        { id: 'v-b1', name: 'Alpha Fasteners', email: 'alpha@fast.com', majorCategory: 'Industrial', buyerId: 'b-99' },
+        { id: 'v-b2', name: 'Beta Tools', email: 'beta@tools.com', majorCategory: 'Tools', buyerId: 'b-other' },
+      ];
+      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValue(new Error('D1 DB is overloaded'));
+
+      await vendorController.getVendors(
+        { query: { page: '1', pageSize: '10', buyerId: 'b-99', search: 'alpha' } },
+        res,
+        next
+      );
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          source: 'in_memory_fallback',
+          data: [expect.objectContaining({ id: 'v-b1' })],
+        })
+      );
+    });
+
     test('recordVendorHeartbeat with user.sub and fallback role', async () => {
       const next = jest.fn();
       const res = mockRes();

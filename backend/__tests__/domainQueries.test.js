@@ -1361,6 +1361,24 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       const res = await domainQueries.getVendorsByBuyerFromDB(['b-1'], 100, 'buyer@company.com');
       expect(res).toEqual([v]);
 
+      // Cache hit branch
+      const cachedRes = await domainQueries.getVendorsByBuyerFromDB(['b-1'], 100, 'buyer@company.com');
+      expect(cachedRes).toEqual([v]);
+
+      // Stale cache fallback test
+      const { queryCache } = require('../src/db/queryCache');
+      const staleVendors = [{ id: 'stale-buyer-v' }];
+      queryCache.set('buyer_vendors:b-stale:500', [], staleVendors, { ttlMs: 1 });
+      await new Promise((r) => setTimeout(r, 5));
+      pool.pool = {
+        query: jest.fn().mockRejectedValue(new Error('D1 DB is overloaded')),
+      };
+      const staleRes = await domainQueries.getVendorsByBuyerFromDB('b-stale', 500);
+      expect(staleRes).toEqual(staleVendors);
+
+      // Throws if no stale cache
+      await expect(domainQueries.getVendorsByBuyerFromDB('b-nostale', 500)).rejects.toThrow('D1 DB is overloaded');
+
       pool.pool = null;
       await expect(domainQueries.getVendorsByBuyerFromDB('b-1')).resolves.toEqual([]);
       pool.pool = { query: jest.fn() };
@@ -1673,6 +1691,46 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       pool.pool = null;
       await expect(domainQueries.getVendorCreditTransactionsFromDB('v-1')).resolves.toEqual([]);
       await expect(domainQueries.getVendorCreditTransactionsFromDB('')).resolves.toEqual([]);
+    });
+
+    test('getVendorsFromDB copies created_at and updated_at when missing on raw', async () => {
+      pool.pool = {
+        query: jest.fn().mockResolvedValueOnce({
+          rows: [{ raw: { id: 'v-no-dates', name: 'No Dates' }, created_at: '2026-01-01', updated_at: '2026-01-02' }],
+        }),
+      };
+      const res = await domainQueries.getVendorsFromDB(10);
+      expect(res[0].created_at).toBe('2026-01-01');
+      expect(res[0].createdAt).toBe('2026-01-01');
+      expect(res[0].updated_at).toBe('2026-01-02');
+    });
+
+    test('category signals <= 3 characters in countPublicVendorsMatchingCategories and getPublicVendorsMatchingCategories', async () => {
+      pool.pool = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ total: 2 }] })
+          .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-it' } }] }),
+      };
+      const count = await domainQueries.countPublicVendorsMatchingCategories(['IT', 'HR']);
+      expect(count).toBe(2);
+      const vendors = await domainQueries.getPublicVendorsMatchingCategories(['IT']);
+      expect(vendors).toEqual([{ id: 'v-it' }]);
+    });
+
+    test('upsertVendorInDB triggers syncVendorCategoriesIndexed with categories arrays', async () => {
+      const v = {
+        id: 'v-cat-test',
+        email: 'test@cat.com',
+        majorCategory: 'Industrial',
+        minorCategories: ['Valves'],
+        vendorSelectedCategories: ['Pumps', ''],
+        clientMappedCategories: ['Tubes', null],
+      };
+      pool.pool = {
+        query: jest.fn().mockResolvedValue({ rows: [{ raw: v }] }),
+      };
+      const res = await domainQueries.upsertVendorInDB(v);
+      expect(res).toEqual(v);
     });
   });
 });

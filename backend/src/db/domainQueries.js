@@ -45,12 +45,12 @@ async function getVendorsFromDB(limit = null) {
   );
   return (result && result.rows)
     ? result.rows.map((row) => {
-        const v = parseRaw(row.raw);
-        if (row.created_at && !v.created_at) v.created_at = row.created_at;
-        if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
-        if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
-        return v;
-      })
+      const v = parseRaw(row.raw);
+      if (row.created_at && !v.created_at) v.created_at = row.created_at;
+      if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+      if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+      return v;
+    })
     : [];
 }
 
@@ -69,7 +69,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   if (!pool.hasStorage()) return { rows: [], total: 0 };
   const cacheKey = (!search && !email && !category && !state && !city)
     ? `vendors_page_${limit}_${offset}_${publicOnly}_${scopedBuyerId}_${skipCount}`
-    : null;
+    : `vendors_page_${limit}_${offset}_${publicOnly}_${scopedBuyerId}_${skipCount}_${search}_${email}_${category}_${state}_${city}`;
   if (cacheKey) {
     const cached = queryCache.get(cacheKey, []);
     if (cached) return cached;
@@ -581,7 +581,7 @@ async function getVendorByEmailFromDB(email) {
     [cleanEmail],
     {
       d1: true,
-      d1Text: `SELECT raw FROM vendors WHERE lower(json_extract(raw,'$.corporateEmail')) = $1 LIMIT 1`,
+      d1Text: `SELECT raw FROM vendors WHERE json_extract(raw,'$.corporateEmail') = $1 COLLATE NOCASE LIMIT 1`,
       useCache: true,
       tag: 'vendors',
       ttlMs: 60000,
@@ -625,7 +625,7 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
         if (acc && acc.id) {
           addCandidate(acc.id);
         }
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -641,27 +641,36 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
   const limitPlaceholder = `$${ids.length + 1}`;
 
   const pgQuery = `SELECT raw FROM vendors
-     WHERE (lower(raw->>'buyerId') IN (${placeholders})
+     WHERE source IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'buyer_direct', 'historical_purchase_dump')
+       AND (lower(raw->>'buyerId') IN (${placeholders})
         OR lower(raw->>'buyerAccountId') IN (${placeholders})
         OR lower(raw->>'buyerEmail') IN (${placeholders}))
      ORDER BY created_at DESC
      LIMIT ${limitPlaceholder}`;
 
   const d1Query = `SELECT raw FROM vendors
-     WHERE (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
+     WHERE source IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'buyer_direct', 'historical_purchase_dump')
+       AND (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
         OR lower(json_extract(raw,'$.buyerAccountId')) IN (${placeholders})
         OR lower(json_extract(raw,'$.buyerEmail')) IN (${placeholders}))
      ORDER BY created_at DESC
      LIMIT ${limitPlaceholder}`;
 
-  const result = await pool.query(
-    pgQuery,
-    [...ids, maxLimit],
-    {
-      d1: true,
-      d1Text: d1Query,
-    }
-  );
+  let result;
+  try {
+    result = await pool.query(
+      pgQuery,
+      [...ids, maxLimit],
+      {
+        d1: true,
+        d1Text: d1Query,
+      }
+    );
+  } catch (err) {
+    const stale = queryCache.getStale(cacheKey);
+    if (stale) return stale;
+    throw err;
+  }
   const rows = result.rows.map((row) => parseRaw(row.raw));
   queryCache.set(cacheKey, [], rows, { tag: 'vendors', ttlMs: 120000 });
   return rows;
@@ -1624,8 +1633,8 @@ async function insertChaserJobInDB(job) {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
      ON CONFLICT (id) DO NOTHING`,
     [id, rfqNumber, rfqId, vendorId, vendorName,
-     vendorPhone || null, vendorEmail || null, vendorContactPerson || null,
-     rfqTitle || null, channel, fireAt],
+      vendorPhone || null, vendorEmail || null, vendorContactPerson || null,
+      rfqTitle || null, channel, fireAt],
     { d1: true }
   );
   return job;
@@ -2063,13 +2072,13 @@ async function getPublicVendorFiltersFromDB() {
 
     const categories = (catResult && catResult.rows)
       ? catResult.rows
-          .map((r) => (r && r.category ? String(r.category).trim() : ''))
-          .filter((c) => (
-            c &&
-            c.length >= 2 &&
-            !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
-            !c.includes('(No Past POs)')
-          ))
+        .map((r) => (r && r.category ? String(r.category).trim() : ''))
+        .filter((c) => (
+          c &&
+          c.length >= 2 &&
+          !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
+          !c.includes('(No Past POs)')
+        ))
       : [];
 
     return { categories, states: defaultStates };

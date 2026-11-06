@@ -6753,15 +6753,6 @@ class StoreService {
       }
       vendors = [...ownVendors, ...publicRows];
       vendorsTotal = ownVendors.length + publicTotal;
-      if (sessionEmail) {
-        const email = String(sessionEmail).toLowerCase();
-        if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
-          try {
-            const own = await domainQueries.getVendorByEmailFromDB(email);
-            if (own) vendors = [own, ...vendors];
-          } catch { }
-        }
-      }
     } else {
       // No DB configured: the in-memory-only fallback, a small enough set
       // that the full in-memory path is fine. Same own-first-then-cap

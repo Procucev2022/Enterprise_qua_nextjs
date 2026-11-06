@@ -7277,3 +7277,28 @@ Analyse all issues mentioned in these logs, also how can we fix these
 ```text
 Please solve only D1 resource overload issue.
 ```
+
+
+---
+
+### Prompt 72
+
+**Timestamp**: 2026-11-06T11:29:50+05:30
+
+```text
+Please fix the PR comments & PR checks: 
+
+https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/425
+```
+
+---
+
+### Prompt 73
+
+**Timestamp**: 2026-11-06T12:38:58+05:30
+
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-06T07_04_17.963Z.csv] 
+
+Still too many errors D1 related errors, can you please check
+```
