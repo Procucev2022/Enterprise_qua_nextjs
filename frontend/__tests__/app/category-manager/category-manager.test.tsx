@@ -574,7 +574,7 @@ describe('Category Manager Screens Suite', () => {
       expect(screen.getByText('Vendor Response Rate')).toBeInTheDocument();
       // The default jest.setup.ts fixtures carry no recent createdAt/audit
       // logs/assignedVendors/followUpData, so every real metric is 0.
-      expect(screen.getByText('0.0%')).toBeInTheDocument();
+      expect(screen.getAllByText('0.0%').length).toBeGreaterThan(0);
 
       const raisedCard = screen.getByText('RFQs Received (Raised)').closest('button')!;
       const downloadedCard = screen.getAllByText('RFQs Downloaded')[0].closest('button')!;
@@ -712,7 +712,7 @@ describe('Category Manager Screens Suite', () => {
       // and a 2/4 = 50% response rate.
       await waitFor(() => expect(screen.getAllByText('2').length).toBeGreaterThan(0));
       expect(screen.getByText('1.0')).toBeInTheDocument();
-      expect(screen.getByText('50.0%')).toBeInTheDocument();
+      expect(screen.getAllByText('50.0%').length).toBeGreaterThan(0);
 
       fireEvent.click(screen.getByText('RFQs Received (Raised)').closest('button')!);
       expect(onNavigateToAllRfqs).toHaveBeenCalledTimes(1);
@@ -740,6 +740,74 @@ describe('Category Manager Screens Suite', () => {
 
       await waitFor(() => expect(screen.getByText('Avg Vendors / RFQ')).toBeInTheDocument());
       expect(screen.getByText('0.0')).toBeInTheDocument();
+    });
+
+    test('SpendDashboard computes mode breakdown for Mode 1, Mode 2, and Mode 3 with audit downloads', async () => {
+      const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+      global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: [
+                {
+                  id: 'rfq-m1',
+                  rfqNumber: 'RFQ-M1',
+                  title: 'M1 RFQ',
+                  sourcingMode: 'MODE 1',
+                  status: 'Quotes Pending',
+                  followUpData: { totalInvited: 5, respondedCount: 4 },
+                },
+                {
+                  id: 'rfq-m2',
+                  rfqNumber: 'RFQ-M2',
+                  title: 'M2 RFQ',
+                  sourcingMode: 'MODE 2',
+                  status: 'Quotes Pending',
+                  followUpData: { totalInvited: 4, respondedCount: 2 },
+                },
+                {
+                  id: 'rfq-m3',
+                  rfqNumber: 'RFQ-M3',
+                  title: 'M3 RFQ',
+                  sourcingMode: 'MODE 3',
+                  status: 'Quotes Pending',
+                  followUpData: { totalInvited: 3, respondedCount: 1 },
+                },
+              ],
+            }),
+          });
+        }
+        if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                buyerAccounts: [],
+                vendors: [],
+                evaluations: [],
+                auditLogs: [
+                  { id: 'a1', rfqNumber: 'RFQ-M1', action: 'Vendor downloaded RFQ specification for RFQ-M1' },
+                  { id: 'a2', rfqNumber: 'RFQ-M2', action: 'Vendor downloaded RFQ specification for RFQ-M2' },
+                  { id: 'a3', rfqNumber: 'RFQ-M3', action: 'Vendor downloaded RFQ specification for RFQ-M3' },
+                ],
+                aiFeed: [],
+                systemConfig: {},
+              },
+            }),
+          });
+        }
+        return baseImpl(url, init);
+      });
+
+      renderWithProvider(<SpendDashboard onBackToKanban={jest.fn()} />);
+      await waitFor(() => expect(screen.getByText('Private Client Roster')).toBeInTheDocument());
+      expect(screen.getByText('Hybrid Base Network')).toBeInTheDocument();
+      expect(screen.getByText('360° AI Evaluated Roster')).toBeInTheDocument();
     });
   });
 

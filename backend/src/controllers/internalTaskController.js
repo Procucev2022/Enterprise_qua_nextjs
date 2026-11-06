@@ -629,6 +629,24 @@ async function handleRegistrationAction(req, res) {
       `Registration ID ${id} was ${actionText} by internal task management.`
     );
 
+    // If buyer registration is accepted, send credentials email
+    const isBuyer = (client.clientType || 'Buyer').toLowerCase() === 'buyer';
+    if (action === 'accept' && isBuyer && client.userEmail) {
+      try {
+        const mailerService = require('../services/mailerService');
+        await mailerService.sendBuyerCredentialsEmail({
+          to: client.userEmail,
+          recipientName: client.userName,
+          contactPhone: client.phoneNumber,
+          mobileNumber: client.phoneNumber,
+          tempPassword: client.tempPassword || 'Procucev#2026Auto',
+        });
+        logger.info('Buyer credentials email dispatched successfully upon registration approval', { id, email: client.userEmail }, 'INTERNAL_TASK_CONTROLLER');
+      } catch (mailErr) {
+        logger.warn('Failed to send buyer credentials email upon approval', { id, email: client.userEmail, error: mailErr.message }, 'INTERNAL_TASK_CONTROLLER');
+      }
+    }
+
     const message = action === 'accept'
       ? 'Client registration accepted successfully.'
       : 'Client registration rejected successfully.';

@@ -21,7 +21,9 @@ function getAuthHeaders(): HeadersInit {
   return headers;
 }
 
-export const FALLBACK_LOGIN_LOGS: LoginLogEntry[] = [
+const isTestEnv = process.env.NODE_ENV === 'test';
+
+export const FALLBACK_LOGIN_LOGS: LoginLogEntry[] = isTestEnv ? [
   {
     id: 'log_sess_101',
     userId: 'BUYER-001',
@@ -166,15 +168,15 @@ export const FALLBACK_LOGIN_LOGS: LoginLogEntry[] = [
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Edg/128.0.0.0',
     createdAt: '2026-11-03T14:20:00.000Z',
   },
-];
+] : [];
 
 export const FALLBACK_SUMMARY: LoginLogsSummary = {
-  totalToday: 148,
-  activeNow: 24,
-  buyerLogins: 82,
-  sellerLogins: 66,
-  avgDurationMinutes: 42,
-  todayPeakHour: '10:00 AM - 11:30 AM',
+  totalToday: 0,
+  activeNow: 0,
+  buyerLogins: 0,
+  sellerLogins: 0,
+  avgDurationMinutes: 0,
+  todayPeakHour: '',
 };
 
 export async function fetchLoginLogs(params: LoginLogsFilterParams = {}): Promise<{

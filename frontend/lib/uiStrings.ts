@@ -2390,6 +2390,9 @@ sellerDirectory: {
       actionError: 'Failed to process registration action.',
       statusAccepted: 'Accepted',
       statusRejected: 'Rejected',
+      statusAutoApproved: 'Auto-Approved',
+      allStatuses: 'All Statuses',
+      statusNew: 'New',
     },
     tasks: {
       total: 'Total Tasks',
