@@ -150,9 +150,31 @@ class LoggerService {
     return entry;
   }
 
+  static isDbLoggingRateLimited() {
+    const now = Date.now();
+    LoggerService._dbLogTimestamps = (LoggerService._dbLogTimestamps || []).filter((t) => now - t < 1000);
+    if (LoggerService._dbLogTimestamps.length >= 5) {
+      return true;
+    }
+    LoggerService._dbLogTimestamps.push(now);
+    return false;
+  }
+
+  static resetDbLoggingRateLimit() {
+    LoggerService._dbLogTimestamps = [];
+  }
+
   persistToDatabase(entry) {
     if (process.env.NODE_ENV === 'test') return;
     try {
+      const { isD1Overloaded } = require('../db/d1Bridge');
+      if (typeof isD1Overloaded === 'function' && isD1Overloaded()) return;
+
+      const entryText = `${entry.message || ''} ${entry.metadata?.errorMessage || ''} ${entry.stackTrace || ''} ${entry.category || ''}`;
+      if (/overloaded|too many resources|system_error_logs|SQLITE_ERROR/i.test(entryText)) return;
+
+      if (LoggerService.isDbLoggingRateLimited()) return;
+
       const pool = require('../db/pool');
       if (!pool.hasStorage()) return;
       const sql = `

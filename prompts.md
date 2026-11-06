@@ -7308,6 +7308,18 @@ Remove all the mock data from the analatics in CM i want really live data only
 
 ### Prompt 75
 
+**Timestamp**: 2026-11-06T09:57:52+05:30
+
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-06T01_01_37.004Z.csv] 
+
+Analyse all issues mentioned in these logs, also how can we fix these
+```
+
+---
+
+### Prompt 76
+
 **Timestamp**: 2026-11-06T10:15:00+05:30
 
 ```text
@@ -7316,7 +7328,17 @@ update the env and check the Ui issue and fix that
 
 ---
 
-### Prompt 76
+### Prompt 77
+
+**Timestamp**: 2026-11-06T10:27:16+05:30
+
+```text
+Please solve only D1 resource overload issue.
+```
+
+---
+
+### Prompt 78
 
 **Timestamp**: 2026-11-06T10:45:00+05:30
 
@@ -7326,7 +7348,7 @@ run locally
 
 ---
 
-### Prompt 77
+### Prompt 79
 
 **Timestamp**: 2026-11-06T11:00:00+05:30
 
@@ -7337,7 +7359,7 @@ and please remove the mock and dammi data from registration page
 
 ---
 
-### Prompt 78
+### Prompt 80
 
 **Timestamp**: 2026-11-06T11:35:00+05:30
 
@@ -7349,12 +7371,11 @@ seller auto approve only buyer registration ask the permission then approve the 
 
 ---
 
-### Prompt 79
+### Prompt 81
 
 **Timestamp**: 2026-11-06T11:41:09+05:30
 
 ```text
 raise the pr and coverage all the test cases and gemini pr check and AI review
 ```
-
 

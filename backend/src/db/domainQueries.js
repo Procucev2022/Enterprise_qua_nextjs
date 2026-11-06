@@ -309,17 +309,26 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   const effectiveLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 1000) : (limit !== undefined ? limit : 50);
   const effectiveOffset = Number.isInteger(Number(offset)) && Number(offset) >= 0 ? Number(offset) : (offset !== undefined ? offset : 0);
   const dataParams = [...params, effectiveLimit, effectiveOffset];
-  const dataResult = await pool.query(
-    `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
-    dataParams,
-    {
-      d1: true,
-      d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
-      useCache: true,
-      tag: 'vendors',
-      ttlMs: 120000,
+  let dataResult;
+  try {
+    dataResult = await pool.query(
+      `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      dataParams,
+      {
+        d1: true,
+        d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+        useCache: true,
+        tag: 'vendors',
+        ttlMs: 120000,
+      }
+    );
+  } catch (err) {
+    if (cacheKey) {
+      const stale = queryCache.getStale(cacheKey, []);
+      if (stale) return stale;
     }
-  );
+    throw err;
+  }
   const response = {
     rows: dataResult.rows.map((row) => {
       const v = parseRaw(row.raw);
@@ -368,7 +377,7 @@ async function countPublicVendorsMatchingCategories(signals) {
   if (!pool.hasStorage()) return 0;
   const cleaned = Array.from(
     new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, 45);
+  ).slice(0, 20);
   if (cleaned.length === 0) return 0;
 
   const params = [];
@@ -449,7 +458,7 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
   if (!pool.hasStorage()) return [];
   const cleaned = Array.from(
     new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, 45);
+  ).slice(0, 20);
   if (cleaned.length === 0) return [];
 
   const params = [];

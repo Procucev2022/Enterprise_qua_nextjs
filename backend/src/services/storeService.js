@@ -102,7 +102,7 @@ function loadPersistedInquiries() {
       const parsed = JSON.parse(data);
       if (Array.isArray(parsed) && parsed.length > 0) return parsed;
     }
-  } catch (_) {}
+  } catch (_) { }
   return [...SEEDED_INQUIRIES];
 }
 
@@ -112,7 +112,7 @@ function savePersistedInquiries(list) {
     const dir = path.dirname(INQUIRIES_PERSISTENCE_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(INQUIRIES_PERSISTENCE_FILE, JSON.stringify(list, null, 2), 'utf8');
-  } catch (_) {}
+  } catch (_) { }
 }
 
 class StoreService {
@@ -476,7 +476,7 @@ class StoreService {
           }
           return fresh;
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     return this.buyerAccounts.find((a) => (a.corporateEmail || '').toLowerCase() === target) || null;
@@ -511,7 +511,7 @@ class StoreService {
         organizationId: user.orgId,
       });
       if (lookup && lookup.found) profile = lookup.profile;
-    } catch (_) {}
+    } catch (_) { }
 
     if (existing) {
       if (profile && (!existing.gstin || !existing.mobileNumber || !existing.city)) {
@@ -2406,10 +2406,10 @@ class StoreService {
       requestingBuyerAccount ||
       (rfqData.buyerEmail
         ? this.buyerAccounts.find(
-            (a) =>
-              a.corporateEmail &&
-              a.corporateEmail.toLowerCase() === String(rfqData.buyerEmail).trim().toLowerCase()
-          )
+          (a) =>
+            a.corporateEmail &&
+            a.corporateEmail.toLowerCase() === String(rfqData.buyerEmail).trim().toLowerCase()
+        )
         : null);
 
     const buyerEmail =
@@ -2428,13 +2428,13 @@ class StoreService {
       deadline: rfqData.deadline
         ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
         : (rfqData.targetDeliveryDate
-            ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
-            : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
+          ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
+          : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
       targetDeliveryDate: rfqData.targetDeliveryDate
         ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
         : (rfqData.deadline
-            ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
-            : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
+          ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
+          : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
       // Budget was previously dropped here, so an RFQ saved through the API came
       // back from hydration with no budget at all: the portfolio value totalled
       // zero and the quote matrix crashed reading it. It is validated as a
@@ -2857,8 +2857,8 @@ class StoreService {
       !newRFQ.needsCategoryManagerAssignment &&
       !newRFQ.categoryNotAvailable &&
       (newRFQ.sourcingMode === 'mode_3' ||
-      newRFQ.sourcingMode === 'v3' ||
-      newRFQ.sourcingMode === 'version_3')
+        newRFQ.sourcingMode === 'v3' ||
+        newRFQ.sourcingMode === 'version_3')
     ) {
       const maxProcucevPerCat = VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY;
       const categories = this._rfqDistinctCategories(newRFQ);
@@ -2914,8 +2914,8 @@ class StoreService {
       procucevVendorCount = procucevAssigned.length > 0
         ? procucevAssigned.length
         : mode3ProcucevCount > 0
-        ? mode3ProcucevCount
-        : this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v)).length;
+          ? mode3ProcucevCount
+          : this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v)).length;
     }
 
     newRFQ.procucevVendorCount = procucevVendorCount;
@@ -3309,26 +3309,26 @@ class StoreService {
       const prevMsgs = Array.isArray(target.messages) && target.messages.length > 0
         ? target.messages
         : [
-            {
-              id: `msg-${target.id}-orig`,
-              senderRole: 'vendor',
-              senderName: target.vendorName,
-              senderEmail: target.vendorEmail,
-              message: target.message,
-              timestamp: target.createdAt,
-            },
-            ...(target.reply
-              ? [
-                  {
-                    id: `msg-${target.id}-reply`,
-                    senderRole: 'buyer',
-                    senderName: target.repliedBy || 'Procurement Team',
-                    message: target.reply,
-                    timestamp: target.repliedAt || target.createdAt,
-                  },
-                ]
-              : []),
-          ];
+          {
+            id: `msg-${target.id}-orig`,
+            senderRole: 'vendor',
+            senderName: target.vendorName,
+            senderEmail: target.vendorEmail,
+            message: target.message,
+            timestamp: target.createdAt,
+          },
+          ...(target.reply
+            ? [
+              {
+                id: `msg-${target.id}-reply`,
+                senderRole: 'buyer',
+                senderName: target.repliedBy || 'Procurement Team',
+                message: target.reply,
+                timestamp: target.repliedAt || target.createdAt,
+              },
+            ]
+            : []),
+        ];
 
       updatedInquiry = {
         ...target,
@@ -3396,26 +3396,26 @@ class StoreService {
     const prevMsgs = Array.isArray(target.messages) && target.messages.length > 0
       ? target.messages
       : [
-          {
-            id: `msg-${target.id}-orig`,
-            senderRole: 'vendor',
-            senderName: target.vendorName,
-            senderEmail: target.vendorEmail,
-            message: target.message,
-            timestamp: target.createdAt,
-          },
-          ...(target.reply
-            ? [
-                {
-                  id: `msg-${target.id}-reply`,
-                  senderRole: 'buyer',
-                  senderName: target.repliedBy || 'Procurement Team',
-                  message: target.reply,
-                  timestamp: target.repliedAt || target.createdAt,
-                },
-              ]
-            : []),
-        ];
+        {
+          id: `msg-${target.id}-orig`,
+          senderRole: 'vendor',
+          senderName: target.vendorName,
+          senderEmail: target.vendorEmail,
+          message: target.message,
+          timestamp: target.createdAt,
+        },
+        ...(target.reply
+          ? [
+            {
+              id: `msg-${target.id}-reply`,
+              senderRole: 'buyer',
+              senderName: target.repliedBy || 'Procurement Team',
+              message: target.reply,
+              timestamp: target.repliedAt || target.createdAt,
+            },
+          ]
+          : []),
+      ];
 
     const replyMsg = {
       id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -3801,8 +3801,8 @@ class StoreService {
     const items = Array.isArray(rfq.extractedEntities)
       ? rfq.extractedEntities
       : Array.isArray(rfq.lineItems)
-      ? rfq.lineItems
-      : [];
+        ? rfq.lineItems
+        : [];
     for (const ent of items) {
       const c = ent.majorCategory || ent.category;
       if (c && typeof c === 'string' && c.trim()) {
@@ -3884,8 +3884,8 @@ class StoreService {
     const items = Array.isArray(rfq.extractedEntities)
       ? rfq.extractedEntities
       : Array.isArray(rfq.lineItems)
-      ? rfq.lineItems
-      : [];
+        ? rfq.lineItems
+        : [];
 
     for (const ent of items) {
       if (!ent) continue;
@@ -4622,7 +4622,7 @@ class StoreService {
           kind: 'rfq_category_match',
           rfq: updated,
           title: 'New RFQ in ' + categoryLabel,
-        message: buyerDisplayName + ' invited you to ' + updated.rfqNumber + ' — ' + updated.title + '.',
+          message: buyerDisplayName + ' invited you to ' + updated.rfqNumber + ' — ' + updated.title + '.',
           meta: { category: categoryLabel, buyerAccountName: isBuyerUploaded ? (updated.buyerAccountName || null) : null },
         });
         this.notifications.unshift(notification);
@@ -6545,12 +6545,19 @@ class StoreService {
         if (!rfq.followUpData.smsStats) rfq.followUpData.smsStats = { total: vCount, delivered: 0, clicked: 0 };
         rfq.followUpData.smsStats.total = Math.max(rfq.followUpData.smsStats.total || 0, vCount);
         rfq.followUpData.smsStats.delivered = vCount;
+        (rfq.followUpData.vendors || []).forEach((v) => {
+          if (v) v.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        });
       }
       if (channels.includes('whatsapp')) {
         if (!rfq.followUpData.whatsappStats) rfq.followUpData.whatsappStats = { total: vCount, delivered: 0, read: 0, replied: 0 };
         rfq.followUpData.whatsappStats.total = Math.max(rfq.followUpData.whatsappStats.total || 0, vCount);
         rfq.followUpData.whatsappStats.delivered = vCount;
+        (rfq.followUpData.vendors || []).forEach((v) => {
+          if (v) v.whatsapp = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        });
       }
+      this._persistRFQ(rfq);
     }
 
     this.aiFeed.unshift(...outreachLogs);
@@ -6720,7 +6727,7 @@ class StoreService {
           try {
             const own = await domainQueries.getVendorByEmailFromDB(email);
             if (own) vendors = [own, ...vendors];
-          } catch {}
+          } catch { }
         }
       }
     } else if (scopedBuyerId && pool.hasStorage()) {
@@ -6752,7 +6759,7 @@ class StoreService {
           try {
             const own = await domainQueries.getVendorByEmailFromDB(email);
             if (own) vendors = [own, ...vendors];
-          } catch {}
+          } catch { }
         }
       }
     } else {
@@ -6769,17 +6776,17 @@ class StoreService {
 
       const ownVendors = candidateIds.size > 0
         ? allVendors.filter((v) =>
-            candidateIds.has(String(v.buyerId || '').toLowerCase()) ||
-            candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) ||
-            candidateIds.has(String(v.buyerEmail || '').toLowerCase())
-          )
+          candidateIds.has(String(v.buyerId || '').toLowerCase()) ||
+          candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) ||
+          candidateIds.has(String(v.buyerEmail || '').toLowerCase())
+        )
         : [];
       const publicVendors = candidateIds.size > 0
         ? allVendors.filter((v) =>
-            !candidateIds.has(String(v.buyerId || '').toLowerCase()) &&
-            !candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) &&
-            !candidateIds.has(String(v.buyerEmail || '').toLowerCase())
-          )
+          !candidateIds.has(String(v.buyerId || '').toLowerCase()) &&
+          !candidateIds.has(String(v.buyerAccountId || '').toLowerCase()) &&
+          !candidateIds.has(String(v.buyerEmail || '').toLowerCase())
+        )
         : allVendors;
       vendors = [...ownVendors, ...publicVendors].slice(0, MAX_BOOTSTRAP_VENDORS);
       if (sessionEmail) {
@@ -6839,7 +6846,7 @@ class StoreService {
       this.addAuditLog(
         `Enterprise contract enquiry submitted for ${newRecord.companyName} (${newRecord.email}, ${newRecord.mobile})`
       );
-    } catch (_) {}
+    } catch (_) { }
 
     return newRecord;
   }

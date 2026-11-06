@@ -192,6 +192,37 @@ describe('d1Bridge', () => {
       await expect(queryD1(db, 'select * from t')).rejects.toThrow('overloaded');
       expect(all).toHaveBeenCalledTimes(3);
     });
+
+    it('drops system_error_logs queries when D1 is overloaded', async () => {
+      const { queryD1, markD1Overloaded, resetD1OverloadState, isD1Overloaded } = require('../src/db/d1Bridge');
+      markD1Overloaded();
+      expect(isD1Overloaded()).toBe(true);
+
+      const prepareMock = jest.fn();
+      const db = { prepare: prepareMock };
+      const res = await queryD1(db, 'INSERT INTO system_error_logs (id) VALUES ($1)', ['e1']);
+      expect(res).toEqual({ rows: [], rowCount: 0 });
+      expect(prepareMock).not.toHaveBeenCalled();
+
+      resetD1OverloadState();
+      expect(isD1Overloaded()).toBe(false);
+    });
+
+    it('marks D1 overloaded and does not retry when system_error_logs fails with retryable error', async () => {
+      const { queryD1, resetD1OverloadState, isD1Overloaded } = require('../src/db/d1Bridge');
+      resetD1OverloadState();
+
+      const all = jest.fn().mockRejectedValue(new Error('D1_ERROR: too many resources consumed within a 10 second window'));
+      const bind = jest.fn().mockReturnValue({ all });
+      const prepare = jest.fn().mockReturnValue({ bind });
+      const db = { prepare };
+
+      const res = await queryD1(db, 'INSERT INTO system_error_logs (id) VALUES ($1)', ['e2']);
+      expect(res).toEqual({ rows: [], rowCount: 0 });
+      expect(all).toHaveBeenCalledTimes(1);
+      expect(isD1Overloaded()).toBe(true);
+      resetD1OverloadState();
+    });
   });
 
   describe('getD1HttpClient', () => {
