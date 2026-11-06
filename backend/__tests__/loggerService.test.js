@@ -248,6 +248,47 @@ describe('Backend LoggerService Unit Tests', () => {
     }
   });
 
+  test('persistToDatabase respects D1 overload, self-referential error filter, and rate limiter', () => {
+    const prevNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const pool = require('../src/db/pool');
+    const d1Bridge = require('../src/db/d1Bridge');
+    const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+    const storageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+    try {
+      // 1. Skips when isD1Overloaded is true
+      jest.spyOn(d1Bridge, 'isD1Overloaded').mockReturnValue(true);
+      testLogger.persistToDatabase({ id: 'err-ov-1', level: 'ERROR', message: 'Any error' });
+      expect(querySpy).not.toHaveBeenCalled();
+
+      // 2. Skips when entry contains overload or system_error_logs keywords
+      d1Bridge.isD1Overloaded.mockReturnValue(false);
+      testLogger.persistToDatabase({ id: 'err-ov-2', level: 'ERROR', message: 'D1 DB is overloaded' });
+      expect(querySpy).not.toHaveBeenCalled();
+
+      testLogger.persistToDatabase({ id: 'err-ov-3', level: 'ERROR', message: 'Failed table', metadata: { errorMessage: 'no such table: system_error_logs' } });
+      expect(querySpy).not.toHaveBeenCalled();
+
+      // 3. Skips when rate limited
+      LoggerService.resetDbLoggingRateLimit();
+      for (let i = 0; i < 5; i++) {
+        expect(LoggerService.isDbLoggingRateLimited()).toBe(false);
+      }
+      expect(LoggerService.isDbLoggingRateLimited()).toBe(true);
+
+      testLogger.persistToDatabase({ id: 'err-ov-4', level: 'ERROR', message: 'Normal error' });
+      expect(querySpy).not.toHaveBeenCalled();
+
+      LoggerService.resetDbLoggingRateLimit();
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+      querySpy.mockRestore();
+      storageSpy.mockRestore();
+      if (d1Bridge.isD1Overloaded.mockRestore) d1Bridge.isD1Overloaded.mockRestore();
+    }
+  });
+
   test('handles readdirSync failure in getLogStats and directory resolution fallback', () => {
     const readdirSpy = jest.spyOn(fs, 'readdirSync').mockImplementation(() => {
       throw new Error('Disk unreadable');
