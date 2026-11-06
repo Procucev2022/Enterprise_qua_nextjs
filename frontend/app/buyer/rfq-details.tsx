@@ -1796,16 +1796,57 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           }
         }
 
+        // Collect all RFQ line items and their categories
+        const rfqEntities = [
+          ...((activeRfq?.extractedEntities as ExtractedEntity[]) || []),
+          ...(((activeRfq as any)?.lineItems as ExtractedEntity[]) || []),
+        ];
+
+        const allRfqMinors: string[] = [];
+        rfqEntities.forEach((e) => {
+          const m = (e.minorCategory || e.category || '').trim();
+          if (m && !allRfqMinors.some((x) => x.toLowerCase() === m.toLowerCase())) {
+            allRfqMinors.push(m);
+          }
+        });
+
         const normalizedAssigned = rawAssigned.map((v: any, idx: number) => {
           if (typeof v === 'string') {
             const found = (buyerVendors || []).find((bv) => bv.id === v || bv.name === v || bv.email === v);
             const isProc = checkIsProcucevVendor(v, found?.name || v, found?.email || null, found);
             const foundMajor = found?.majorCategory || (isProc ? activeRfq?.category || null : null) || 'General';
+
+            const vMajorClean = (foundMajor || '').trim().toLowerCase();
+            const matchingLineItems = rfqEntities.filter((e) => {
+              const itemMajor = (e.majorCategory || (e as any).major || '').trim().toLowerCase();
+              return itemMajor && vMajorClean && (itemMajor === vMajorClean || vMajorClean.includes(itemMajor) || itemMajor.includes(vMajorClean));
+            });
+            const lineItemMinors: string[] = [];
+            matchingLineItems.forEach((e) => {
+              const m = (e.minorCategory || e.category || '').trim();
+              if (m && !lineItemMinors.some((x) => x.toLowerCase() === m.toLowerCase())) {
+                lineItemMinors.push(m);
+              }
+            });
+
+            const taxonomyMinors = foundMajor ? getMinorCategories(foundMajor) : [];
             const rawFoundMinor =
               (found as any)?.minorCategory ||
               (Array.isArray(found?.minorCategories) && found.minorCategories.length > 0 ? found.minorCategories[0] : null);
-            const taxonomyMinors = foundMajor ? getMinorCategories(foundMajor) : [];
-            const resolvedMinor = rawFoundMinor || (taxonomyMinors.length > 0 ? taxonomyMinors[idx % taxonomyMinors.length] : 'General');
+
+            let resolvedMinor = rawFoundMinor;
+            if (!resolvedMinor) {
+              if (lineItemMinors.length > 0) {
+                resolvedMinor = lineItemMinors[idx % lineItemMinors.length];
+              } else if (taxonomyMinors.length > 0) {
+                resolvedMinor = taxonomyMinors[idx % taxonomyMinors.length];
+              } else if (allRfqMinors.length > 0) {
+                resolvedMinor = allRfqMinors[idx % allRfqMinors.length];
+              } else {
+                resolvedMinor = 'General';
+              }
+            }
+
             return {
               id: v || `vendor-${idx}`,
               name: found?.name || v,
@@ -1846,17 +1887,57 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             resolvedScore = Math.round(Math.min(5, found.rating) * 20);
           }
 
-          const rawMinor =
-            v.minorCategory ||
-            (Array.isArray(v.minorCategories) && v.minorCategories.length > 0 ? v.minorCategories[0] : (typeof v.minorCategories === 'string' ? v.minorCategories : null)) ||
-            (found as any)?.minorCategory ||
-            (Array.isArray(found?.minorCategories) && found.minorCategories.length > 0 ? found.minorCategories[0] : (typeof (found as any)?.minorCategories === 'string' ? (found as any).minorCategories : null)) ||
-            (activeRfq as any)?.minorCategory ||
-            activeRfq?.extractedEntities?.[0]?.minorCategory ||
-            null;
+          // 1. Line items belonging to this vendor's major category
+          const vMajorClean = (resolvedCategory || '').trim().toLowerCase();
+          const matchingLineItems = rfqEntities.filter((e) => {
+            const itemMajor = (e.majorCategory || (e as any).major || '').trim().toLowerCase();
+            return itemMajor && vMajorClean && (itemMajor === vMajorClean || vMajorClean.includes(itemMajor) || itemMajor.includes(vMajorClean));
+          });
+          const lineItemMinors: string[] = [];
+          matchingLineItems.forEach((e) => {
+            const m = (e.minorCategory || e.category || '').trim();
+            if (m && !lineItemMinors.some((x) => x.toLowerCase() === m.toLowerCase())) {
+              lineItemMinors.push(m);
+            }
+          });
 
+          // 2. Taxonomy fallback
           const taxonomyMinors = resolvedCategory ? getMinorCategories(resolvedCategory) : [];
-          const resolvedMinor = rawMinor || (taxonomyMinors.length > 0 ? taxonomyMinors[idx % taxonomyMinors.length] : 'General');
+
+          // 3. Vendor own minor categories
+          const vendorOwnMinors: string[] = [];
+          if (typeof v.minorCategory === 'string' && v.minorCategory.trim()) {
+            vendorOwnMinors.push(v.minorCategory.trim());
+          }
+          if (Array.isArray(v.minorCategories)) {
+            v.minorCategories.forEach((m: any) => {
+              if (typeof m === 'string' && m.trim()) vendorOwnMinors.push(m.trim());
+            });
+          }
+          if (typeof (found as any)?.minorCategory === 'string' && (found as any).minorCategory.trim()) {
+            vendorOwnMinors.push((found as any).minorCategory.trim());
+          }
+          if (Array.isArray(found?.minorCategories)) {
+            found.minorCategories.forEach((m: any) => {
+              if (typeof m === 'string' && m.trim()) vendorOwnMinors.push(m.trim());
+            });
+          }
+
+          let resolvedMinor: string;
+          if (vendorOwnMinors.length > 0) {
+            const matchedWithRfq = vendorOwnMinors.find((vm) =>
+              rfqEntities.some((e) => (e.minorCategory || e.category || '').trim().toLowerCase() === vm.toLowerCase())
+            );
+            resolvedMinor = matchedWithRfq || vendorOwnMinors[0];
+          } else if (lineItemMinors.length > 0) {
+            resolvedMinor = lineItemMinors[idx % lineItemMinors.length];
+          } else if (taxonomyMinors.length > 0) {
+            resolvedMinor = taxonomyMinors[idx % taxonomyMinors.length];
+          } else if (allRfqMinors.length > 0) {
+            resolvedMinor = allRfqMinors[idx % allRfqMinors.length];
+          } else {
+            resolvedMinor = 'General';
+          }
 
           return {
             id: v.id || `vendor-${idx}`,
@@ -1957,27 +2038,53 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
         // Confidential double-blind card (name + category + location + score, no
         // contact). Used for Procucev vendors in the BUYER view only.
-        const renderConfidentialCard = (v: any) => (
-          <div
-            key={v.id}
-            data-testid="assigned-supplier-card"
-            className="p-3 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/40 space-y-1"
-          >
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
-              <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                🔒 Double-Blind
-              </span>
+        const renderConfidentialCard = (v: any) => {
+          const cleanName = v.name ? v.name.replace(/\s*\([^)]*\)$/, '').trim() : 'Enterprise Supplier';
+          return (
+            <div
+              key={v.id}
+              data-testid="assigned-supplier-card"
+              className="p-3.5 rounded-2xl border border-slate-200/90 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-xs space-y-2.5"
+            >
+              <div className="flex items-center justify-between gap-1.5">
+                <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={v.name}>
+                  {cleanName}
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                  🔒 Double-Blind
+                </span>
+              </div>
+
+              {/* Major & Minor Category Badges */}
+              <div className="p-2.5 rounded-xl bg-slate-50/80 dark:bg-gray-950/50 border border-slate-100 dark:border-gray-800/80 flex items-center justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
+                    MAJOR CATEGORY
+                  </div>
+                  <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 truncate max-w-full">
+                    {v.majorCategory || 'General Industrial'}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
+                    MINOR CATEGORY
+                  </div>
+                  <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60 truncate max-w-full">
+                    {v.minorCategory || 'General'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
+                <span className="sr-only">Category:</span>
+                <p className="truncate">Location: {v.location || 'Procucev Network'}</p>
+                <p className="font-semibold text-emerald-600 dark:text-emerald-400">
+                  {typeof v.matchScore === 'number' ? `${v.matchScore}% match` : 'Match: Verified'}
+                </p>
+              </div>
             </div>
-            <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
-              <p className="truncate">Category: {v.majorCategory || 'General Industrial'}</p>
-              <p className="truncate">Location: {v.location || 'Procucev Network'}</p>
-              <p className="font-semibold text-emerald-600 dark:text-emerald-400">
-                {typeof v.matchScore === 'number' ? `${v.matchScore}% match` : 'Match: Verified'}
-              </p>
-            </div>
-          </div>
-        );
+          );
+        };
 
         const emptyState = (
           <div className="p-4 text-center rounded-xl bg-slate-50 dark:bg-gray-950/40 border border-slate-200 dark:border-gray-800 space-y-1">
