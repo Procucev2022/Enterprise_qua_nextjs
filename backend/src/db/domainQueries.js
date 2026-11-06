@@ -179,7 +179,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           OR raw->>'city' ILIKE $${p}
           OR raw->>'deliveryLocation' ILIKE $${p})`);
 
-        d1TokenConditions.push(`(${d1CatCondition}
+        d1TokenConditions.push(`((raw LIKE $${p} OR email LIKE lower($${p})) AND (${d1CatCondition}
           OR lower(email) LIKE lower($${p})
           OR ${d1NameCondition}
           OR ${d1MinorCatCondition}
@@ -187,7 +187,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           OR lower(json_extract(raw,'$.contact')) LIKE lower($${p})
           OR lower(json_extract(raw,'$.location')) LIKE lower($${p})
           OR lower(json_extract(raw,'$.city')) LIKE lower($${p})
-          OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p}))`);
+          OR lower(json_extract(raw,'$.deliveryLocation')) LIKE lower($${p})))`);
       }
 
       if (tokenConditions.length > 0) {
@@ -206,13 +206,13 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     params.push(category.trim());
     const p = params.length;
     conditions.push(`(major_category = $${p} OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}) OR (raw->'minorCategories')::text ILIKE ('%"' || $${p} || '"%'))`);
-    d1Conditions.push(`(lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || lower($${p}) || '"%'))`);
+    d1Conditions.push(`(major_category = $${p} COLLATE NOCASE OR (raw LIKE ('%' || lower($${p}) || '%') AND (lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || lower($${p}) || '"%'))))`);
   }
   if (state) {
     params.push(`%${state.trim()}%`);
     const p = params.length;
     conditions.push(`(raw->>'state' ILIKE $${p} OR raw->>'location' ILIKE $${p})`);
-    d1Conditions.push(`(lower(json_extract(raw,'$.state')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p}))`);
+    d1Conditions.push(`(raw LIKE $${p} AND (lower(json_extract(raw,'$.state')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p})))`);
   }
   if (city) {
     const trimmedCity = city.trim();
@@ -224,12 +224,12 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       const idx1 = params.length - 1;
       const idx2 = params.length;
       conditions.push(`(raw->>'city' ILIKE $${idx1} OR raw->>'location' ILIKE $${idx1} OR raw->>'city' ILIKE $${idx2} OR raw->>'location' ILIKE $${idx2})`);
-      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.city')) LIKE lower($${idx2}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx2}))`);
+      d1Conditions.push(`((raw LIKE $${idx1} OR raw LIKE $${idx2}) AND (lower(json_extract(raw,'$.city')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx1}) OR lower(json_extract(raw,'$.city')) LIKE lower($${idx2}) OR lower(json_extract(raw,'$.location')) LIKE lower($${idx2})))`);
     } else {
       params.push(`%${trimmedCity}%`);
       const p = params.length;
       conditions.push(`(raw->>'city' ILIKE $${p} OR raw->>'location' ILIKE $${p})`);
-      d1Conditions.push(`(lower(json_extract(raw,'$.city')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p}))`);
+      d1Conditions.push(`(raw LIKE $${p} AND (lower(json_extract(raw,'$.city')) LIKE lower($${p}) OR lower(json_extract(raw,'$.location')) LIKE lower($${p})))`);
     }
   }
   if (publicOnly) {
@@ -1205,7 +1205,13 @@ async function getBuyerAccountByEmailFromDB(email) {
   const result = await pool.query(
     'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
     [email],
-    { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
+    {
+      d1: true,
+      d1Text: 'SELECT raw FROM buyer_accounts WHERE corporate_email = $1 COLLATE NOCASE LIMIT 1',
+      useCache: true,
+      tag: 'buyer_accounts',
+      ttlMs: 60000,
+    }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }

@@ -288,6 +288,18 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
       rowsSpy.mockRejectedValue(new Error('ECONNREFUSED'));
       await expect(real.isTokenRevoked('sig-1')).rejects.toThrow('ECONNREFUSED');
     });
+
+    test('falls back to memory store when d1Bridge.isD1Overloaded is true', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      const spy = jest.spyOn(d1Bridge, 'isD1Overloaded').mockReturnValue(true);
+      await expect(real.isTokenRevoked('sig-overload-test')).resolves.toBe(false);
+      spy.mockRestore();
+    });
+
+    test('falls back to memory store when pool.rows throws D1 overload error', async () => {
+      rowsSpy.mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
+      await expect(real.isTokenRevoked('sig-retryable-test')).resolves.toBe(false);
+    });
   });
 
   // ── Sweep ─────────────────────────────────────────────────────────────────

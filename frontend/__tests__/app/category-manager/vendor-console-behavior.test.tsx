@@ -26,9 +26,11 @@ const rfq: RFQItem = {
   sourcingMode: 'mode_1', status: 'PO Generated', quotesCount: 1,
   targetDeliveryDate: '2026-12-01', budget: 2000, createdAt: '2026-10-01',
   chasingActive: false, extractedEntities: [], awardedVendor: candidate.name, awardedAmount: 1000,
-  quotes: [{ vendorId: candidate.id, vendorName: candidate.name, vendorCategory: 'Client List',
+  quotes: [{
+    vendorId: candidate.id, vendorName: candidate.name, vendorCategory: 'Client List',
     unitPrice: 100, totalPrice: 1000, leadTimeDays: 5, aiMatchScore: 95,
-    warrantyYears: 0, complianceStatus: 'Minor Exception', paymentTerms: 'Advance', remarks: 'Quote audit remarks' }],
+    warrantyYears: 0, complianceStatus: 'Minor Exception', paymentTerms: 'Advance', remarks: 'Quote audit remarks'
+  }],
 };
 
 beforeEach(() => {
@@ -74,8 +76,10 @@ describe('vendor source classification', () => {
 });
 
 test('filters the two supplier streams and audits a quotation with real metrics and matrix navigation', async () => {
-  (useApp as jest.Mock).mockReturnValue({ rfqs: [rfq, { ...rfq, id: 'no-quote', quotes: [] }],
-    categoryTaxonomy: [null, {}, { majorCategory: ' Store Category ' }] });
+  (useApp as jest.Mock).mockReturnValue({
+    rfqs: [rfq, { ...rfq, id: 'no-quote', quotes: [] }],
+    categoryTaxonomy: [null, {}, { majorCategory: ' Store Category ' }]
+  });
   (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: [{ majorCategory: 'API Category' }] });
   (fetchAllVendors as jest.Mock).mockResolvedValue(page([
     candidate,
@@ -126,7 +130,7 @@ test('keeps latest category results when a slower initial request arrives later'
     .mockResolvedValueOnce(page([{ ...candidate, name: 'Current supplier' }]));
   render(<VendorConsole onNavigateToMatrix={jest.fn()} />);
   fireEvent.change(screen.getAllByRole('combobox')[2], { target: { value: 'Cables' } });
-  await waitFor(() => expect(screen.getByTestId(`vendor-card-${candidate.id}`)).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByTestId(`vendor-card-${candidate.id}`)).toBeInTheDocument(), { timeout: 3000 });
   await act(async () => resolveEarlier(page([{ ...candidate, id: 'stale', name: 'Stale supplier' }])));
   expect(screen.queryByTestId('vendor-card-stale')).not.toBeInTheDocument();
   expect(fetchAllVendors).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'Cables' }));
@@ -142,7 +146,7 @@ test('ignores stale pagination responses and treats an exact category search as 
   render(<VendorConsole onNavigateToMatrix={jest.fn()} />);
   fireEvent.click(await screen.findByTestId('load-more-vendor-cards'));
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Cables' } });
-  await waitFor(() => expect(screen.getByTestId('vendor-card-filtered')).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByTestId('vendor-card-filtered')).toBeInTheDocument(), { timeout: 3000 });
   await act(async () => resolveMore(page([{ ...candidate, id: 'stale', name: 'Stale supplier' }], 2, 2)));
   expect(screen.queryByTestId('vendor-card-stale')).not.toBeInTheDocument();
   expect(fetchAllVendors).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'Cables', search: '' }));

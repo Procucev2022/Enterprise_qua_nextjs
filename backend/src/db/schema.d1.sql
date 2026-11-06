@@ -133,6 +133,8 @@ CREATE TABLE IF NOT EXISTS "user" (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_username ON "user" (username);
+CREATE INDEX IF NOT EXISTS idx_user_username_nocase ON "user" (username COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_user_email_nocase ON "user" (email COLLATE NOCASE);
 
 CREATE INDEX IF NOT EXISTS idx_user_org_uuid ON "user" (org_uuid);
 
