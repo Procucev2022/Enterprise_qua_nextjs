@@ -117,7 +117,6 @@ describe('Database QueryCache Unit Tests', () => {
     expect(cache.get('SELECT * FROM test_soft', [])).toBeNull();
     expect(cache.getStale('SELECT * FROM test_soft', [])).toEqual([{ id: 1 }]);
   });
-
   test('singleton instance methods work', () => {
     queryCache.clear();
     queryCache.set('SELECT 1', [], 'test');

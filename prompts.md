@@ -7254,10 +7254,59 @@ reuse the existing functioanlity and methods don't create the dupliacted code fo
 raise the pr and pass all the coverages and AI review and Gemini pr check and merge in test-v3
 ```
 
-
 ---
 
 ### Prompt 70
+
+**Timestamp**: 2026-11-05T18:00:00+05:30
+
+```text
+# CRITICAL: Action Center UI Root-Cause Fix – Internal Tasks Toolbar & Layout
+```
+
+---
+
+### Prompt 71
+
+**Timestamp**: 2026-11-05T20:30:00+05:30
+
+```text
+run in locally
+```
+
+---
+
+### Prompt 72
+
+**Timestamp**: 2026-11-05T21:00:00+05:30
+
+```text
+not solve the issue
+```
+
+---
+
+### Prompt 73
+
+**Timestamp**: 2026-11-06T08:50:00+05:30
+
+```text
+remove the text in that page user login & session time and all and the search is moving horizantally please check and fix the toolbar issue
+```
+
+---
+
+### Prompt 74
+
+**Timestamp**: 2026-11-06T09:30:00+05:30
+
+```text
+Remove all the mock data from the analatics in CM i want really live data only
+```
+
+---
+
+### Prompt 75
 
 **Timestamp**: 2026-11-06T09:57:52+05:30
 
@@ -7267,10 +7316,19 @@ raise the pr and pass all the coverages and AI review and Gemini pr check and me
 Analyse all issues mentioned in these logs, also how can we fix these
 ```
 
+---
+
+### Prompt 76
+
+**Timestamp**: 2026-11-06T10:15:00+05:30
+
+```text
+update the env and check the Ui issue and fix that
+```
 
 ---
 
-### Prompt 71
+### Prompt 77
 
 **Timestamp**: 2026-11-06T10:27:16+05:30
 
@@ -7278,10 +7336,30 @@ Analyse all issues mentioned in these logs, also how can we fix these
 Please solve only D1 resource overload issue.
 ```
 
+---
+
+### Prompt 78
+
+**Timestamp**: 2026-11-06T10:45:00+05:30
+
+```text
+run locally
+```
 
 ---
 
-### Prompt 72
+### Prompt 79
+
+**Timestamp**: 2026-11-06T11:00:00+05:30
+
+```text
+please fix the toolbar of document valut
+and please remove the mock and dammi data from registration page
+```
+
+---
+
+### Prompt 80
 
 **Timestamp**: 2026-11-06T11:29:50+05:30
 
@@ -7293,7 +7371,41 @@ https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/425
 
 ---
 
-### Prompt 73
+### Prompt 81
+
+**Timestamp**: 2026-11-06T11:35:00+05:30
+
+```text
+remove the dummy data from login page and
+please fix the registrataion search toolbar it si merged the section data 
+seller auto approve only buyer registration ask the permission then approve the credentials is go to buyer
+```
+
+---
+
+### Prompt 82
+
+**Timestamp**: 2026-11-06T11:41:09+05:30
+
+```text
+raise the pr and coverage all the test cases and gemini pr check and AI review
+```
+
+---
+
+### Prompt 83
+
+**Timestamp**: 2026-11-06T12:23:56+05:30
+
+```text
+Buyer Profile Details are visible in the Vendor Portal.
+
+The Buyer Contact Details popup displays the buyer's company name, contact person, official email, and mobile number to the vendor.
+```
+
+---
+
+### Prompt 84
 
 **Timestamp**: 2026-11-06T12:38:58+05:30
 
@@ -7303,10 +7415,9 @@ https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/425
 Still too many errors D1 related errors, can you please check
 ```
 
-
 ---
 
-### Prompt 74
+### Prompt 85
 
 **Timestamp**: 2026-11-06T13:35:49+05:30
 
@@ -7318,7 +7429,7 @@ Still some errors, please check & fix
 
 ---
 
-### Prompt 75
+### Prompt 86
 
 **Timestamp**: 2026-11-06T14:23:38+05:30
 
@@ -7328,20 +7439,77 @@ Please check the image as well & identify the DB high utilization issue. we can 
 
 ---
 
-### Prompt 76
+### Prompt 87
 
-**Timestamp**: 2026-11-06T15:24:35+05:30
+**Timestamp**: 2026-11-06T15:18:38+05:30
 
 ```text
-Still too high D1 usage at certain places, can you please check once again
+suggest branch name
 ```
 
 ---
 
-### Prompt 77
+### Prompt 88
 
-**Timestamp**: 2026-11-06T16:39:26+05:30
+**Timestamp**: 2026-11-06T16:08:29+05:30
 
 ```text
-Still too much DB utilization, please check once again. 
+Summary of all failing tests
+ FAIL  __tests__/app/category-manager/PaymentDuesDashboard.test.tsx (61.227 s)
+  ● PaymentDuesDashboard › handles API submission errors in communication modals
+
+    Unable to find an element with the text: DB Error. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Test Suites: 1 failed, 146 passed, 147 total
+Tests:       1 failed, 3723 passed, 3724 total
+Snapshots:   0 total
+Time:        421.652 s
+```
+
+---
+
+### Prompt 89
+
+**Timestamp**: 2026-11-06T16:15:51+05:30
+
+```text
+[navinprocucev-09](https://github.com/navinprocucev-09) and others added 5 commits [5 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430#commits-pushed-f65a902)
+[fix(ui): dynamically resolve vendor minor category from matching RFQ …](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/f65a9025ed73108e67b428f19e606737d98270a9)
+[f65a902](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/f65a9025ed73108e67b428f19e606737d98270a9)
+[D1 Overloading fix (](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)[#425](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/425)[)](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)
+[dbb0c59](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)
+[fix(store): persist batch outreach channel delivery and vendor status…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/969f21786cb229cf7da4c880583cbb6516dd8782)
+[969f217](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/969f21786cb229cf7da4c880583cbb6516dd8782)
+[feat: fix Action Center toolbars, live login logs, and buyer/seller r…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/33c57bd36db0a471ad9403a44906264c8bb2bdbc)
+[33c57bd](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/33c57bd36db0a471ad9403a44906264c8bb2bdbc)
+[fix(buyer): display multi-channel delivery counts and follow-up metri…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/84bbfc59208735c88fde2e60a63c8ae7344ea05f)
+[84bbfc5](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/84bbfc59208735c88fde2e60a63c8ae7344ea05f)
+This branch was successfully deployed
+1 active deployment
+Merge info
+Checks awaiting conflict resolution
+1 successful check
+successful checks
+[Deploy to Cloudflare (Test) / Deploy to Cloudflare Test Environment (push)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/42200942451/job/127835776614?pr=430)
+Successful in 1m
+This branch has conflicts that must be resolved
+Use the command line to resolve conflicts before continuing.
+backend/__tests__/queryCache.test.js
+backend/src/db/domainQueries.js
+backend/src/db/schema.d1.sql
+backend/src/db/schema.sql
+backend/src/services/storeService.js
+prompts.md
+
+this pr is merge in dev but failing inproduction
+```
+
+---
+
+### Prompt 90
+
+**Timestamp**: 2026-11-06T17:03:35+05:30
+
+```text
+continue fast fix that i deploy in production
 ```

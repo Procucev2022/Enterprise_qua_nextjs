@@ -21,6 +21,7 @@ import {
   ArrowUp,
   ArrowDown,
   GripVertical,
+  X,
 } from 'lucide-react';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { DOCUMENT_VAULT_CATEGORIES, DOCUMENT_VAULT_SOURCES, DOCUMENT_VAULT_CONFIG } from '@/lib/constants';
@@ -326,7 +327,7 @@ export default function DocumentVaultDashboard() {
   void GripVertical;
 
   return (
-    <div className="space-y-6" data-testid="document-vault-dashboard">
+    <div className="space-y-3.5 w-full min-w-0 max-w-full overflow-x-hidden" data-testid="document-vault-dashboard">
       {/* Toast Notification */}
       {toastMessage && (
         <div
@@ -387,18 +388,28 @@ export default function DocumentVaultDashboard() {
       </div>
 
       {/* Filters & Search Toolbar — single row */}
-      <div className="flex flex-row items-center gap-2 overflow-x-auto no-scrollbar bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-1.5 shadow-xs flex flex-row items-center gap-1.5 xl:gap-2 w-full min-w-0 max-w-full box-border">
         {/* Search */}
         <div className="flex-1 min-w-[140px] relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={strings.actions.searchPlaceholder}
             data-testid="vault-search-input"
-            className="w-full pl-9 pr-4 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full has-leading-icon has-trailing-icon pr-8 py-1.5 h-8 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              aria-label="Clear search"
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
 
         {/* Source Dropdown */}
@@ -407,7 +418,7 @@ export default function DocumentVaultDashboard() {
           onChange={(e) => setSelectedSource(e.target.value)}
           data-testid="vault-source-filter"
           aria-label={strings.actions.filterSource}
-          className="shrink-0 px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="shrink-0 h-8 w-[115px] xl:w-[125px] px-2 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer truncate"
         >
           {DOCUMENT_VAULT_SOURCES.map((src) => (
             <option key={src.id} value={src.id}>
@@ -422,7 +433,7 @@ export default function DocumentVaultDashboard() {
           onChange={(e) => setSelectedCategory(e.target.value)}
           data-testid="vault-category-filter"
           aria-label={strings.actions.filterCategory}
-          className="shrink-0 px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="shrink-0 h-8 w-[140px] xl:w-[155px] px-2 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer truncate"
         >
           {DOCUMENT_VAULT_CATEGORIES.map((cat) => (
             <option key={cat.id} value={cat.id}>
@@ -436,7 +447,8 @@ export default function DocumentVaultDashboard() {
           value={activeFilter}
           onChange={(e) => setActiveFilter(e.target.value as 'all' | 'active' | 'inactive')}
           data-testid="vault-status-filter"
-          className="shrink-0 px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          aria-label="Filter by status"
+          className="shrink-0 h-8 w-[100px] xl:w-[110px] px-2 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer truncate"
         >
           <option value="all">All Status</option>
           <option value="active">Active Only</option>
@@ -448,7 +460,7 @@ export default function DocumentVaultDashboard() {
           type="button"
           onClick={handleOpenUploadModal}
           data-testid="upload-document-btn"
-          className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer"
+          className="shrink-0 h-8 inline-flex items-center gap-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer whitespace-nowrap"
         >
           <Upload size={13} />
           <span>{strings.actions.uploadDocument}</span>
@@ -458,7 +470,7 @@ export default function DocumentVaultDashboard() {
         <button
           type="button"
           onClick={loadData}
-          className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors cursor-pointer"
+          className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors cursor-pointer"
           title="Refresh"
         >
           <RefreshCw size={14} />
@@ -468,7 +480,7 @@ export default function DocumentVaultDashboard() {
         <button
           type="button"
           onClick={() => setShowDocColumnSettings(true)}
-          className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+          className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
           title="Column Settings"
         >
           <Settings size={14} />
