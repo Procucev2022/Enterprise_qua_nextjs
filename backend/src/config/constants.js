@@ -739,6 +739,9 @@ const RFQ_CATEGORY_CLASSIFICATION = {
   MAJOR_CATEGORY_ALIASES: {
     mechanical: 'Engineering Spares - Mechanical',
     electrical: 'Engineering Spares - Electrical',
+    electricals: 'Engineering Spares - Electrical',
+    solar: 'CAPEX - Equipment & Machinery',
+    'solar equipment': 'CAPEX - Equipment & Machinery',
     civil: 'Civil Works',
     safety: 'Occuptional Health and Safety',
     'occupational health and safety': 'Occuptional Health and Safety',
@@ -755,6 +758,8 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     piping: 'Engineering Spares - Mechanical',
     pipes: 'Engineering Spares - Mechanical',
     valves: 'Engineering Spares - Mechanical',
+    tools: 'Engineering Spares - Mechanical',
+    tool: 'Engineering Spares - Mechanical',
     pumps: 'Engineering Spares - Mechanical',
     motors: 'Engineering Spares - Electrical',
     'general procurement': 'Others – New Product',
@@ -1005,6 +1010,9 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     brick: { major: 'Civil Works', minor: 'Bricks' },
     paint: { major: 'Civil Works', minor: 'Paints' },
     paints: { major: 'Civil Works', minor: 'Paints' },
+    painting: { major: 'Civil Works', minor: 'Painting' },
+    'painting service': { major: 'Professional Services', minor: 'Painting Service' },
+    'painting services': { major: 'Professional Services', minor: 'Painting Service' },
     waterproofing: { major: 'Civil Works', minor: 'Waterproofing' },
     scaffolding: { major: 'Civil Works', minor: 'Ladders & Scaffolding' },
     flooring: { major: 'Civil Works', minor: 'Flooring Material' },
@@ -1197,10 +1205,13 @@ const MAX_INVITE_VENDORS_PER_REQUEST = 20;
 
 const VENDOR_ASSIGNMENT_LIMITS = {
   get MAX_CLIENT_PER_CATEGORY() {
-    return getEnvNumber('MAX_CLIENT_VENDORS_PER_CATEGORY', 5);
+    return getEnvNumber('MAX_CLIENT_VENDORS_PER_CATEGORY', 25);
   },
   get MAX_PROCUCEV_PER_CATEGORY() {
-    return getEnvNumber('MAX_PROCUCEV_VENDORS_PER_CATEGORY', 5);
+    return getEnvNumber('MAX_PROCUCEV_VENDORS_PER_CATEGORY', 25);
+  },
+  get TARGET_PER_MINOR_CATEGORY() {
+    return getEnvNumber('TARGET_VENDORS_PER_MINOR_CATEGORY', 25);
   },
 };
 
@@ -1289,7 +1300,7 @@ function zohoLiveCredentials() {
     PAYMENTS_BASE_URL: getZohoEnv('ZOHO_LIVE_PAYMENTS_BASE_URL', 'https://payments.zoho.in/api/v1'),
     ACCOUNT_ID: getZohoEnv('ZOHO_LIVE_PAYMENTS_ACCOUNT_ID') || getZohoEnv('ZOHO_PAYMENTS_ACCOUNT_ID'),
     WEBHOOK_SIGNING_KEY: getZohoEnv('ZOHO_LIVE_WEBHOOK_SIGNING_KEY') || getZohoEnv('ZOHO_WEBHOOK_SIGNING_KEY'),
-    RETURN_URL_BASE: getZohoEnv('ZOHO_LIVE_RETURN_URL_BASE') || getZohoEnv('ZOHO_PAYMENTS_RETURN_URL_BASE') || getZohoEnv('PUBLIC_FRONTEND_URL', 'http://localhost:3000'),
+    RETURN_URL_BASE: String(getZohoEnv('ZOHO_LIVE_RETURN_URL_BASE') || getZohoEnv('ZOHO_PAYMENTS_RETURN_URL_BASE') || getZohoEnv('PUBLIC_FRONTEND_URL', 'http://localhost:3000')).replace(/\/+$/, ''),
   };
 }
 
@@ -1302,7 +1313,7 @@ function zohoSandboxCredentials() {
     PAYMENTS_BASE_URL: getZohoEnv('ZOHO_SANDBOX_PAYMENTS_BASE_URL', 'https://paymentssandbox.zoho.in/api/v1'),
     ACCOUNT_ID: getZohoEnv('ZOHO_SANDBOX_PAYMENTS_ACCOUNT_ID') || getZohoEnv('ZOHO_PAYMENTS_ACCOUNT_ID'),
     WEBHOOK_SIGNING_KEY: getZohoEnv('ZOHO_SANDBOX_WEBHOOK_SIGNING_KEY'),
-    RETURN_URL_BASE: getZohoEnv('ZOHO_SANDBOX_RETURN_URL_BASE') || getZohoEnv('ZOHO_PAYMENTS_RETURN_URL_BASE') || getZohoEnv('PUBLIC_FRONTEND_URL', 'http://localhost:3000'),
+    RETURN_URL_BASE: String(getZohoEnv('ZOHO_SANDBOX_RETURN_URL_BASE') || getZohoEnv('ZOHO_PAYMENTS_RETURN_URL_BASE') || getZohoEnv('PUBLIC_FRONTEND_URL', 'http://localhost:3000')).replace(/\/+$/, ''),
   };
 }
 
@@ -1619,6 +1630,13 @@ const EMAIL_GATEWAY_CONFIG = {
   LABEL_PROCESSED: 'Processed',
   LABEL_ERROR: 'Error',
 };
+
+const EMAIL_RFQ_SCENARIOS = Object.freeze({
+  REGISTERED_TO_ONLY: 'REGISTERED_TO_ONLY',
+  REGISTERED_TO_REGISTERED_CC: 'REGISTERED_TO_REGISTERED_CC',
+  UNREGISTERED_TO_REGISTERED_CC: 'UNREGISTERED_TO_REGISTERED_CC',
+  UNREGISTERED_TO_UNREGISTERED_CC: 'UNREGISTERED_TO_UNREGISTERED_CC',
+});
 
 const GMAIL_GATEWAY_LABELS = Object.freeze({
   PROCESSED: 'Processed',
@@ -2055,10 +2073,11 @@ const RFQ_NOT_CREATED_NOTIFICATION = {
 };
 
 /**
- * Default free RFQ quotation credits granted to each vendor. Vendors receive
- * none: quoting needs a subscription, a buyer mapping or unlimited access.
+ * Default free RFQ credits granted to every vendor, subscribed or not. One
+ * credit is consumed per new RFQ downloaded/quoted (re-downloads and quote
+ * revisions on the same RFQ are free); once exhausted, a paid plan is needed.
  */
-const VENDOR_FREE_CREDITS_LIMIT = 0;
+const VENDOR_FREE_CREDITS_LIMIT = 5;
 
 const RFQ_DOWNLOAD_ERRORS = Object.freeze({
   VENDOR_NOT_FOUND: 'Vendor record not found.',
@@ -2077,10 +2096,10 @@ const RFQ_CREATION_ERRORS = Object.freeze({
 
 /** Notification email content for vendor credit exhaustion */
 const VENDOR_CREDITS_EXHAUSTED_NOTIFICATION = {
-  SUBJECT: 'Action Required – Subscription Required to Quote on RFQ #{rfqNumber}',
+  SUBJECT: `Action Required – ${VENDOR_FREE_CREDITS_LIMIT} Free Quotation Credits Exhausted for RFQ #{rfqNumber}`,
   HEADLINE: 'PROCUCEV ENTERPRISE',
   SUBLINE: 'Free Quotation Credits Exhausted',
-  EXHAUSTION_MESSAGE: 'You have no free RFQ quotation credits available.',
+  EXHAUSTION_MESSAGE: `Your ${VENDOR_FREE_CREDITS_LIMIT} free RFQ quotation credits have been fully utilized.`,
   UPGRADE_BUTTON_LABEL: 'Click Here to Go to Portal and Upgrade Plan',
   REASSURANCE: 'Your quotation has not been submitted yet. To continue submitting quotations and have your bids evaluated by buyers, please upgrade your subscription plan on the vendor portal.',
 };
@@ -3035,7 +3054,97 @@ const ONBOARDING_STAGES = Object.freeze({
 });
 
 
+const ACCOUNT_DOCUMENT_CATEGORIES = Object.freeze([
+  'Registration',
+  'Company Profile',
+  'GST',
+  'PAN',
+  'RFQ',
+  'Quotation',
+  'Other',
+]);
+
+const ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES = Object.freeze([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+const ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS = Object.freeze([
+  '.pdf',
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.doc',
+  '.docx',
+  '.xls',
+  '.xlsx',
+]);
+
+const ACCOUNT_DOCUMENT_MAX_BYTES = 25 * 1024 * 1024;
+
+const CREDIT_APPROVAL_APPROVERS = Object.freeze([
+  'Srinu Sir',
+  'Sudheer Sir',
+]);
+
+const CREDIT_APPROVAL_INITIATORS = Object.freeze([
+  'Govardhan',
+  'Krishna',
+  'Chandhan',
+]);
+
+const SELLER_QUOTE_CREDITS_ALLOWED = Object.freeze([1, 2, 3, 4, 5]);
+
+const APPROVAL_REQUEST_TYPES = Object.freeze([
+  'Buyer Credit Addition',
+  'Seller Credit Addition',
+  'Credit Notes',
+  'Purchase Requests',
+  'Payment Approvals',
+  'Discounts',
+  'Account Approvals',
+  'Trial Periods',
+  'Offline Payments',
+  'Unit Bookings',
+  'Cancellations & Refunds',
+  'Packages',
+  'Milestones',
+]);
+
+const APPROVAL_STATUSES = Object.freeze(['Pending', 'Approved', 'Rejected']);
+
+
+const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
+  DEFAULT_RECIPIENTS: Object.freeze(['veerababu.v@procucev.com']),
+  DEFAULT_SCHEDULE_HOUR: 6, // 6:00 AM
+  DEFAULT_SCHEDULE_MINUTE: 0,
+  DEFAULT_TIMEZONE: 'Asia/Kolkata',
+  DEFAULT_ENABLED: true,
+  INGESTION_CHANNEL_LABELS: Object.freeze({
+    web_portal: 'Web Portal',
+    email_gateway: 'Email Gateway',
+    email_upload: 'Email Upload',
+    manual_entry: 'Manual Entry',
+    ai_extraction: 'AI Extraction',
+  }),
+});
+
 module.exports = {
+  DAILY_RFQ_REPORT_CONFIG,
+  ACCOUNT_DOCUMENT_CATEGORIES,
+  ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES,
+  ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS,
+  ACCOUNT_DOCUMENT_MAX_BYTES,
+  CREDIT_APPROVAL_APPROVERS,
+  CREDIT_APPROVAL_INITIATORS,
+  SELLER_QUOTE_CREDITS_ALLOWED,
+  APPROVAL_REQUEST_TYPES,
+  APPROVAL_STATUSES,
   INTERNAL_TASK_CATEGORIES,
   INTERNAL_TASK_CATEGORY_LABELS,
   INTERNAL_TASK_CATEGORY_TYPES,
@@ -3116,6 +3225,7 @@ module.exports = {
   EMAIL_INGESTION_STATUS,
   EMAIL_INGESTION_MESSAGES,
   EMAIL_GATEWAY_CONFIG,
+  EMAIL_RFQ_SCENARIOS,
   GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,

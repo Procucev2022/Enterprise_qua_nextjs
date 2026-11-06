@@ -50,11 +50,13 @@ const emailGatewayModule = await import('./services/emailGatewayService.js');
 const zohoReconciliationModule = await import('./services/zohoReconciliationService.js');
 const rfqChaserSchedulerModule = await import('./services/rfqChaserScheduler.js');
 const eventOutboxModule = await import('./services/eventOutboxService.js');
+const dailyRfqReportModule = await import('./services/dailyRfqReportService.js');
 const app = appModule.default || appModule;
 const emailGatewayService = emailGatewayModule.default || emailGatewayModule;
 const zohoReconciliationService = zohoReconciliationModule.default || zohoReconciliationModule;
 const rfqChaserScheduler = rfqChaserSchedulerModule.default || rfqChaserSchedulerModule;
 const eventOutboxService = eventOutboxModule.default || eventOutboxModule;
+const dailyRfqReportService = dailyRfqReportModule.default || dailyRfqReportModule;
 
 const PORT = 4000;
 app.listen(PORT);
@@ -111,6 +113,10 @@ async function scheduled(controller, workerEnv, ctx) {
     if (rejected) throw rejected.reason;
     return;
   }
+  if (cron === DAILY_RFQ_REPORT_CRON) {
+    await dailyRfqReportService.sendDailyRfqReport();
+    return;
+  }
   if (cron === ZOHO_RECONCILIATION_CRON) {
     const results = await Promise.allSettled([
       zohoReconciliationService.reconcileOnce(),
@@ -139,6 +145,7 @@ async function scheduled(controller, workerEnv, ctx) {
 // passes the matched cron expression string back on `controller.cron`.
 const EMAIL_GATEWAY_CRON = '* * * * *';
 const ZOHO_RECONCILIATION_CRON = '*/10 * * * *';
+const DAILY_RFQ_REPORT_CRON = '30 0 * * *';
 
 const originalFetch = httpHandler.fetch;
 httpHandler.fetch = function (request, workerEnv, ctx) {

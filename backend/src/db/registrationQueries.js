@@ -12,8 +12,8 @@ const crypto = require('crypto');
 const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
 const { IDENTITY_ROLE_MAP } = require('../config/constants');
 
-const BUYER_ROLE_NAMES = Object.freeze(
-  Object.keys(IDENTITY_ROLE_MAP).filter((roleName) => IDENTITY_ROLE_MAP[roleName] === 'buyer')
+const REGISTRATION_ROLE_NAMES = Object.freeze(
+  Object.keys(IDENTITY_ROLE_MAP).filter((roleName) => ['buyer', 'vendor'].includes(IDENTITY_ROLE_MAP[roleName]))
 );
 
 const INITIAL_CLIENTS = [
@@ -27,6 +27,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-102',
@@ -38,6 +39,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-103',
@@ -49,6 +51,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-104',
@@ -60,6 +63,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-105',
@@ -71,6 +75,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-106',
@@ -82,6 +87,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-107',
@@ -93,6 +99,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-108',
@@ -104,6 +111,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-109',
@@ -115,6 +123,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-110',
@@ -126,6 +135,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-111',
@@ -137,6 +147,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-112',
@@ -148,6 +159,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-113',
@@ -159,6 +171,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Email',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-114',
@@ -170,6 +183,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Email',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-115',
@@ -181,6 +195,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-116',
@@ -192,6 +207,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-117',
@@ -203,6 +219,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'WhatsApp',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-118',
@@ -214,6 +231,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-119',
@@ -225,6 +243,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Email',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-120',
@@ -236,6 +255,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-121',
@@ -247,6 +267,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-122',
@@ -258,6 +279,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-123',
@@ -269,6 +291,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Email',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-124',
@@ -280,6 +303,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-125',
@@ -291,6 +315,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-126',
@@ -302,6 +327,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-127',
@@ -313,6 +339,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Email',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-128',
@@ -324,6 +351,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-129',
@@ -335,6 +363,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-130',
@@ -346,6 +375,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-131',
@@ -357,6 +387,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-132',
@@ -368,6 +399,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-133',
@@ -379,6 +411,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Email',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-134',
@@ -390,6 +423,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-135',
@@ -401,6 +435,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'WhatsApp',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-136',
@@ -412,6 +447,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-137',
@@ -423,6 +459,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-138',
@@ -434,6 +471,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Email',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-139',
@@ -445,6 +483,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-140',
@@ -456,6 +495,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-141',
@@ -467,6 +507,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Web App',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-142',
@@ -478,6 +519,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'Email',
     isApproved: true,
+    clientType: 'Seller',
   },
   {
     id: 'reg-client-143',
@@ -489,6 +531,7 @@ const INITIAL_CLIENTS = [
     status: 'New',
     sourceType: 'Web App',
     isApproved: false,
+    clientType: 'Buyer',
   },
   {
     id: 'reg-client-144',
@@ -500,6 +543,7 @@ const INITIAL_CLIENTS = [
     status: 'Accepted',
     sourceType: 'WhatsApp',
     isApproved: true,
+    clientType: 'Buyer',
   },
 ];
 
@@ -514,6 +558,37 @@ function normalizeSourceType(source) {
   if (s.includes('whatsapp') || s.includes('whats_app')) return 'WhatsApp';
   if (s.includes('email')) return 'Email';
   return 'Web App';
+}
+
+function normalizeClientType(val, companyName = '', userEmail = '') {
+  if (val) {
+    const s = String(val).toLowerCase().trim();
+    if (s.includes('seller') || s.includes('vendor') || s.includes('supplier')) return 'Seller';
+    if (s.includes('buyer')) return 'Buyer';
+  }
+  const check = `${companyName} ${userEmail}`.toLowerCase();
+  if (
+    check.includes('supplier') ||
+    check.includes('seller') ||
+    check.includes('vendor') ||
+    check.includes('fasteners') ||
+    check.includes('steel') ||
+    check.includes('foundry') ||
+    check.includes('polymer') ||
+    check.includes('pumps') ||
+    check.includes('metals') ||
+    check.includes('hydraulics') ||
+    check.includes('wire') ||
+    check.includes('components') ||
+    check.includes('bearing') ||
+    check.includes('transformer') ||
+    check.includes('cables') ||
+    check.includes('plywood') ||
+    check.includes('furnitures')
+  ) {
+    return 'Seller';
+  }
+  return 'Buyer';
 }
 
 function normalizeStatus(isApproved, verificationStatus) {
@@ -560,11 +635,12 @@ function normalizeClientRow(row) {
     status: computedStatus,
     sourceType: source,
     isApproved: Boolean(row.isApproved),
+    clientType: normalizeClientType(row.roleName, row.companyName, row.userEmail),
   };
 }
 
-function buildBuyerRolePredicate(startIndex) {
-  const placeholders = BUYER_ROLE_NAMES.map((_, index) => `$${startIndex + index}`).join(', ');
+function buildRegistrationRolePredicate(startIndex) {
+  const placeholders = REGISTRATION_ROLE_NAMES.map((_, index) => `$${startIndex + index}`).join(', ');
   return `LOWER(REPLACE(COALESCE(r.role_name, ''), ' ', '')) IN (${placeholders})`;
 }
 
@@ -580,6 +656,7 @@ function buildRegistrationSelect(whereClause) {
       u.source_type AS "sourceTypeRaw",
       u.is_whats_app AS "isWhatsApp",
       u.is_web_app AS "isWebApp",
+      r.role_name AS "roleName",
       COUNT(*) OVER() AS total
     FROM "user" u
     INNER JOIN role r ON r.uuid = u.role_uuid
@@ -592,9 +669,9 @@ async function queryRegistrationRows(sql, params) {
 }
 
 async function findRegistrationInDatabase(id) {
-  const rolePredicate = buildBuyerRolePredicate(2);
+  const rolePredicate = buildRegistrationRolePredicate(2);
   const sql = buildRegistrationSelect(`WHERE u.uuid = $1 AND ${rolePredicate}`);
-  const result = await queryRegistrationRows(sql, [id, ...BUYER_ROLE_NAMES]);
+  const result = await queryRegistrationRows(sql, [id, ...REGISTRATION_ROLE_NAMES]);
   return result.rows[0] ? normalizeClientRow(result.rows[0]) : null;
 }
 
@@ -605,17 +682,19 @@ async function getRegisteredClients({
   search = '',
   sourceType = 'all',
   status = 'all',
+  clientType = 'all',
   limit = 100,
   offset = 0,
 } = {}) {
   if (pool.hasStorage()) {
     try {
-      const filters = [buildBuyerRolePredicate(1)];
-      const params = [...BUYER_ROLE_NAMES];
+      const filters = [buildRegistrationRolePredicate(1)];
+      const params = [...REGISTRATION_ROLE_NAMES];
       const addFilter = (value, predicate) => {
         params.push(value);
         filters.push(predicate(params.length));
       };
+
 
       if (sourceType && sourceType.toLowerCase() !== 'all') {
         addFilter(sourceType.toLowerCase(), (index) => `(CASE
@@ -628,6 +707,11 @@ async function getRegisteredClients({
           WHEN LOWER(COALESCE(u.verification_status, '')) = 'rejected' THEN 'rejected'
           WHEN u.is_approved = true OR LOWER(COALESCE(u.verification_status, '')) IN ('verified', 'accepted', 'active') THEN 'accepted'
           ELSE 'new' END) = $${index}`);
+      }
+      if (clientType && clientType.toLowerCase() !== 'all') {
+        addFilter(clientType.toLowerCase(), (index) => `(CASE
+          WHEN LOWER(COALESCE(r.role_name, '')) LIKE '%vendor%' OR LOWER(COALESCE(r.role_name, '')) LIKE '%supplier%' THEN 'seller'
+          ELSE 'buyer' END) = $${index}`);
       }
       if (search && search.trim()) {
         const searchValue = `%${search.trim().toLowerCase()}%`;
@@ -681,6 +765,12 @@ async function getRegisteredClients({
     const targetStatus = status.toLowerCase();
     filtered = filtered.filter((c) => c.status.toLowerCase() === targetStatus);
   }
+
+  if (clientType && clientType.toLowerCase() !== 'all') {
+    const targetType = clientType.toLowerCase();
+    filtered = filtered.filter((c) => (c.clientType || 'Buyer').toLowerCase() === targetType);
+  }
+
 
   if (search && search.trim()) {
     const q = search.toLowerCase().trim();
@@ -744,7 +834,7 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
                 COALESCE(phone, '') AS "phoneNumber", COALESCE(email, username) AS "userEmail",
                 created_ts AS "regDate", is_approved AS "isApproved", verification_status AS "verificationStatus",
                 source_type AS "sourceTypeRaw", is_whats_app AS "isWhatsApp"`,
-            params: [isApproved, verificationStatus, id, ...BUYER_ROLE_NAMES],
+            params: [isApproved, verificationStatus, id, ...REGISTRATION_ROLE_NAMES],
           },
           {
             text: `INSERT INTO client_registration_events
@@ -770,9 +860,9 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
         }
       } else {
         updatedRow = await pool.withTransaction(async (client) => {
-          const rolePredicate = buildBuyerRolePredicate(2);
+          const rolePredicate = buildRegistrationRolePredicate(2);
           const currentSql = `${buildRegistrationSelect(`WHERE u.uuid = $1 AND ${rolePredicate}`)} FOR UPDATE OF u`;
-          const currentResult = await client.query(currentSql, [id, ...BUYER_ROLE_NAMES]);
+          const currentResult = await client.query(currentSql, [id, ...REGISTRATION_ROLE_NAMES]);
           const current = currentResult.rows[0];
           if (!current) return null;
           if (normalizeStatus(current.isApproved, current.verificationStatus) !== 'New') {
@@ -788,7 +878,7 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
               COALESCE(phone, '') AS "phoneNumber", COALESCE(email, username) AS "userEmail",
               created_ts AS "regDate", is_approved AS "isApproved", verification_status AS "verificationStatus",
               source_type AS "sourceTypeRaw", is_whats_app AS "isWhatsApp"`;
-          const updateResult = await client.query(updateSql, [isApproved, verificationStatus, id, ...BUYER_ROLE_NAMES]);
+          const updateResult = await client.query(updateSql, [isApproved, verificationStatus, id, ...REGISTRATION_ROLE_NAMES]);
           const saved = updateResult.rows[0];
           if (!saved) throw registrationConflict();
 
@@ -866,6 +956,7 @@ function syncBuyerAccountCache(id, email, status, isApproved, verificationStatus
 module.exports = {
   INITIAL_CLIENTS,
   resetMemoryClients,
+  normalizeClientType,
   getRegisteredClients,
   updateClientRegistrationStatus,
 };

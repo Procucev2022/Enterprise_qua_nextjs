@@ -28,8 +28,9 @@ const { GRAPHQL_CONFIG, STORE_HYDRATION_CONFIG } = require('./config/constants')
 
 const app = express();
 
-// Security & Parsing Middlewares
+// Security, request logging, and CORS preflight run before any hydration work.
 app.use(cors());
+app.options('*', cors());
 app.use(requestLogger);
 // GraphQL accepts only bounded JSON bodies even though selected file-ingestion
 // APIs need the larger workspace upload limit below.

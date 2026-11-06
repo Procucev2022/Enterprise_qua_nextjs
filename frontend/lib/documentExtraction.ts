@@ -44,15 +44,43 @@ export function isWordDocument(name: string): boolean {
  * they belong to.
  */
 export function flattenWorkbook(data: ArrayBuffer): string {
-  const workbook = XLSX.read(new Uint8Array(data), { type: 'array' });
+  const workbook = XLSX.read(new Uint8Array(data), { type: 'array', cellDates: true });
   return workbook.SheetNames.map((sheetName) => {
-    const rows: unknown[][] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+    const sheet = workbook.Sheets[sheetName];
+    if (sheet && sheet['!merges']) {
+      for (const merge of sheet['!merges']) {
+        const startAddr = XLSX.utils.encode_cell({ r: merge.s.r, c: merge.s.c });
+        const val = sheet[startAddr];
+        if (val) {
+          for (let r = merge.s.r; r <= merge.e.r; r++) {
+            for (let c = merge.s.c; c <= merge.e.c; c++) {
+              if (r !== merge.s.r || c !== merge.s.c) {
+                const cellAddr = XLSX.utils.encode_cell({ r, c });
+                if (!sheet[cellAddr]) {
+                  sheet[cellAddr] = { ...val };
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       blankrows: false,
       defval: '',
     });
+    const formatCell = (cell: unknown): string => {
+      if (cell instanceof Date && !isNaN(cell.getTime())) {
+        // Adjust by +12 hours so local timezone boundary jitter (e.g. 18:29:59Z in UTC+5:30)
+        // never shifts the date to the previous day.
+        const midday = new Date(cell.getTime() + 12 * 3600 * 1000);
+        return midday.toISOString().slice(0, 10);
+      }
+      return String(cell ?? '').trim();
+    };
     const body = rows
-      .map((row) => row.map((cell) => String(cell ?? '').trim()).join(' | '))
+      .map((row) => row.map(formatCell).join(' | '))
       .filter((line) => line.replace(/\|/g, '').trim() !== '')
       .join('\n');
     return `SHEET: ${sheetName}\n${body}`;

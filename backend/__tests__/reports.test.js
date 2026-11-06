@@ -17,7 +17,9 @@ const {
   getBuyerReports,
   getRfqReports,
   getDailyActivityReport,
+  triggerDailyRfqReportEmail,
 } = require('../src/controllers/reportsController');
+const dailyRfqReportService = require('../src/services/dailyRfqReportService');
 const { RFQ_MODES, RFQ_MODE_LABELS } = require('../src/config/constants');
 const { authHeader } = require('./testHelpers');
 
@@ -367,7 +369,7 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(res.body.data[0].QuotedRFQsCount).toBe(2);
       expect(res.body.data[0].CompanyLocation).toBeTruthy();
       expect(res.body.data[0].LastLogin).toBeDefined();
-      expect(res.body.data[1].FreeQuotationCredits).toBe(0);
+      expect(res.body.data[1].FreeQuotationCredits).toBe(5);
       expect(res.body.data[1].QuotedRFQsCount).toBe(0);
     });
 
@@ -718,6 +720,18 @@ describe('Reports Controller & Endpoints Suite', () => {
       expect(res.body.data[1].LastLogin).toBe('');
     });
 
+    test('GET /api/reports/rfq-report?requestType=dailyRfqInflow returns daily inflow breakdown', async () => {
+      const res = await request(app)
+        .get('/api/reports/rfq-report?requestType=dailyRfqInflow&date=2026-11-03')
+        .set(authHeader('category_manager'))
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.reportType).toBe('dailyRfqInflow');
+      expect(res.body.reportDate).toBe('2026-11-03');
+      expect(res.body.summary).toBeDefined();
+    });
+
     test('GET /api/reports/rfq-report with invalid requestType returns 400', async () => {
       const res = await request(app).get('/api/reports/rfq-report?requestType=invalid').set(authHeader('category_manager')).expect(400);
       expect(res.body.success).toBe(false);
@@ -873,6 +887,47 @@ describe('Reports Controller & Endpoints Suite', () => {
       };
       const next = jest.fn();
       await getDailyActivityReport(badReq, {}, next);
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+    });
+  });
+
+
+  describe('Daily RFQ Report Email Endpoint', () => {
+    test('POST /api/reports/send-daily-rfq-email dispatches daily report', async () => {
+      const res = await request(app)
+        .post('/api/reports/send-daily-rfq-email')
+        .set(authHeader('category_manager'))
+        .send({
+          targetDate: '2026-11-03',
+          recipients: ['veerababu.v@procucev.com'],
+          dryRun: true,
+        })
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toContain('dispatched successfully');
+      expect(res.body.result.reportDate).toBe('2026-11-03');
+    });
+
+    test('POST /api/reports/send-daily-rfq-email validates targetDate format', async () => {
+      const res = await request(app)
+        .post('/api/reports/send-daily-rfq-email')
+        .set(authHeader('category_manager'))
+        .send({ targetDate: 'invalid-date' })
+        .expect(400);
+
+      expect(res.body.success).toBe(false);
+      expect(res.body.errors.targetDate).toBeTruthy();
+    });
+
+    test('triggerDailyRfqReportEmail calls next(err) on service failure', async () => {
+      const req = { body: { targetDate: '2026-11-03' } };
+      const res = {};
+      const next = jest.fn();
+
+      jest.spyOn(dailyRfqReportService, 'sendDailyRfqReport').mockRejectedValueOnce(new Error('Simulated failure'));
+
+      await triggerDailyRfqReportEmail(req, res, next);
       expect(next).toHaveBeenCalledWith(expect.any(Error));
     });
   });

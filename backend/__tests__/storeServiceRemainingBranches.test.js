@@ -254,7 +254,7 @@ describe('Store Service — remaining branch coverage', () => {
 
       await freshStore.hydrateFromDB();
 
-      expect(pageSpy).toHaveBeenCalledWith({ limit: expect.any(Number), offset: 0 });
+      expect(pageSpy).toHaveBeenCalledWith(expect.objectContaining({ limit: expect.any(Number), offset: 0 }));
       expect(fullTableSpy).not.toHaveBeenCalled();
     });
 

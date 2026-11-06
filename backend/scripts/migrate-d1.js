@@ -53,7 +53,7 @@ const HEADERS = {
 const REPORTED_TABLES = [
   'schema_migrations',
   'role', 'org_types', 'master_status', 'organization', 'user',
-  'category_division', 'org_division_category',
+  'category_division', 'org_division_category', 'vendor_dispatch_templates',
   'auth_otp_codes', 'auth_revoked_tokens',
   'vendors', 'rfqs', 'evaluations', 'vendor_catalogue',
   'buyer_accounts', 'ai_feed', 'audit_logs', 'audit_chain_state', 'event_outbox', 'notifications',
@@ -61,7 +61,7 @@ const REPORTED_TABLES = [
   'vendor_ingestion_sessions', 'ingestion_jobs', 'vendor_master_records',
   'po_line_items', 'vendor_category_mappings', 'vendor_category_dispatches',
   'vendor_email_dispatch_log', 'vendor_ingestion_audit', 'ai_classification_logs',
-  'bulk_vendor_import_sessions', 'vendor_directory_sessions',
+  'bulk_vendor_import_sessions', 'vendor_directory_sessions', 'user_login_logs',
   'payment_dues_communications',
   'schema_migration_locks',
   'management_approvals',
@@ -69,6 +69,11 @@ const REPORTED_TABLES = [
   'client_registration_events',
   'enterprise_inquiries',
   'zoho_webhook_events',
+  'chaser_queue', 'rfq_unlocks',
+  'vendor_credit_transactions', 'buyer_credit_transactions',
+  'tickets', 'ticket_activities', 'internal_task_types',
+  'internal_tasks', 'internal_task_activities', 'approvals',
+  'system_error_logs', 'vendor_categories_indexed', 'document_vault', 'account_documents',
 ];
 
 async function d1Query(sql, params = []) {
@@ -289,7 +294,22 @@ async function applyD1Migrations({ query = d1Query, migrationsPath = MIGRATIONS_
     }
 
     const statements = splitStatements(sql);
-    for (const statement of statements) await query(statement);
+    for (const statement of statements) {
+      try {
+        await query(statement);
+      } catch (error) {
+        const addedColumn = statement.match(/^\s*ALTER\s+TABLE\s+["`]?([\w]+)["`]?\s+ADD\s+COLUMN\s+["`]?([\w]+)/i);
+        const duplicateColumn = String(error?.message || '').match(/duplicate column name:\s*["`]?([\w]+)/i);
+        if (!addedColumn || !duplicateColumn || addedColumn[2].toLowerCase() !== duplicateColumn[1].toLowerCase()) {
+          throw error;
+        }
+        logger.info('D1 migration column already exists; skipping idempotent add', {
+          migrationVersion: version,
+          table: addedColumn[1],
+          column: addedColumn[2],
+        }, 'DATABASE_MIGRATION');
+      }
+    }
 
     const description = version.replace(/^\d+_/, '').replaceAll('_', ' ');
     await query(
@@ -337,6 +357,7 @@ async function recordSchemaBaseline(query, checksum) {
 }
 
 async function reportRowCounts(query = d1Query) {
+
   console.log('\n[migrate-d1] Row counts:');
   for (const table of REPORTED_TABLES) {
     try {

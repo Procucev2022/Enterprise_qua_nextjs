@@ -2008,9 +2008,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
   });
 
-  it('handles template customization modal (A and B), editing subject/body, saving success/errors, and closing', async () => {
+  it('renders Step 5 setup summary without Template A and Template B sections after data upload', async () => {
     jest.useFakeTimers();
-    const { saveDispatchTemplate } = jest.requireMock('@/lib/buyerProfileClient');
     const { container } = render(<InitialSetupModal />);
 
     // Step 2: Valid Vendor Master
@@ -2037,94 +2036,41 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       jest.advanceTimersByTime(1200);
     });
 
-    // Step 5: Review Email Dispatch & Finalize with custom saved templates (lines 250-251, 268, 271)
-    const { fetchDispatchTemplates } = jest.requireMock('@/lib/buyerProfileClient');
-    fetchDispatchTemplates.mockResolvedValueOnce({
-      success: true,
-      data: {
-        category_mapped: { subject: 'Saved Custom A Subject', message: 'Saved Custom A Message' },
-        self_map_required: { subject: 'Saved Custom B Subject', message: 'Saved Custom B Message' },
-      },
-    });
+    // Step 5: Review Email Dispatch & Finalize
     fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
     await act(async () => {
-      await Promise.resolve();
       await Promise.resolve();
     });
     jest.useRealTimers();
 
-    // Open Template A modal (line 2715)
-    const customizeBtnA = screen.getByRole('button', { name: /View & Edit Template A/i });
-    fireEvent.click(customizeBtnA);
-    expect(screen.getByText('Template A: Suppliers With Pre-PO History')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Saved Custom A Subject')).toBeInTheDocument();
+    // Verify Step 5 header & description
+    expect(screen.getByText(/Step 5: Confirm Ingestion & Dispatch Tailored Onboarding Emails/i)).toBeInTheDocument();
+    expect(screen.getByText(/The platform will dispatch tailored credentials and category notices based on PO correlation/i)).toBeInTheDocument();
 
-    // Edit Template A Subject and Message (lines 2855, 2865)
-    const subjectInput = screen.getByPlaceholderText('Subject line...');
-    const messageInput = screen.getByPlaceholderText('Custom email message...');
-    fireEvent.change(subjectInput, { target: { value: 'Updated Template A Subject' } });
-    fireEvent.change(messageInput, { target: { value: 'Updated Template A Body Message' } });
+    // Verify Template A and Template B sections are NOT rendered
+    expect(screen.queryByText(/Template A: Suppliers With Pre-Purchase Order History/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Template B: Suppliers With NO Pre-Purchase Orders/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /View & Edit Template A/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /View & Edit Template B/i })).not.toBeInTheDocument();
 
-    // Save Template A successfully (lines 277-293)
-    saveDispatchTemplate.mockResolvedValueOnce({ success: true });
-    const saveBtn = screen.getByRole('button', { name: /Save Template/i });
-    await act(async () => {
-      fireEvent.click(saveBtn);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    });
-    expect(saveDispatchTemplate).toHaveBeenCalledWith('category_mapped', {
-      subject: 'Updated Template A Subject',
-      message: 'Updated Template A Body Message',
-    });
-    expect(mockShowToast).toHaveBeenCalledWith('Template Updated', expect.stringContaining('Template A has been saved'), 'success');
+    // Verify remaining setup summary is intact
+    expect(screen.getByText(/Total Stored/i)).toBeInTheDocument();
+    expect(screen.getByText(/PO Mapped/i)).toBeInTheDocument();
+    expect(screen.getByText(/Self-Map Required/i)).toBeInTheDocument();
+    expect(screen.getByText(/3-Day Reminders/i)).toBeInTheDocument();
 
-    // Open Template B modal (line 2742)
-    const customizeBtnB = screen.getByRole('button', { name: /View & Edit Template B/i });
-    fireEvent.click(customizeBtnB);
-    expect(screen.getByText('Template B: Suppliers With NO Pre-PO History')).toBeInTheDocument();
+    // Verify Back to Category Join navigation
+    const backBtn = screen.getByRole('button', { name: /Back to Category Join/i });
+    expect(backBtn).toBeInTheDocument();
+    fireEvent.click(backBtn);
+    expect(screen.getByText(/Review Email Dispatch & Finalize/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
 
-    // Test Save failure (line 295)
-    saveDispatchTemplate.mockResolvedValueOnce({ success: false, error: 'Custom Save Error' });
-    const saveBtnB = screen.getByRole('button', { name: /Save Template/i });
-    await act(async () => {
-      fireEvent.click(saveBtnB);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    });
-    expect(mockShowToast).toHaveBeenCalledWith('Save Failed', 'Custom Save Error', 'warning');
-
-    // Test Save exception (line 298)
-    saveDispatchTemplate.mockRejectedValueOnce(new Error('Network Save Crash'));
-    await act(async () => {
-      fireEvent.click(saveBtnB);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    });
-    expect(mockShowToast).toHaveBeenCalledWith('Save Error', 'Network Save Crash', 'warning');
-
-    // Test Save Template B successfully (lines 287-293 else branch)
-    saveDispatchTemplate.mockResolvedValueOnce({ success: true });
-    await act(async () => {
-      fireEvent.click(saveBtnB);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    });
-    expect(mockShowToast).toHaveBeenCalledWith('Template Updated', expect.stringContaining('Template B has been saved'), 'success');
-
-    // Reopen Template B and test Cancel button (line 2890)
-    fireEvent.click(customizeBtnB);
-    const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
-    fireEvent.click(cancelBtn);
-    expect(screen.queryByText('Template B: Suppliers With NO Pre-PO History')).not.toBeInTheDocument();
-
-    // Reopen and test backdrop / X button close (lines 2823, 2842)
-    fireEvent.click(customizeBtnA);
-    const closeXBtn = screen.getByText('Template A: Suppliers With Pre-PO History')
-      .closest('div[class*="animate-scale-in"]')
-      ?.querySelector('button[class*="text-slate-400"]');
-    if (closeXBtn) {
-      fireEvent.click(closeXBtn);
-    }
+    // Verify Completion button is present
+    expect(screen.getByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
   });
 
-  it('covers empty template preview fallbacks, sessionStorage auth headers, and period ingestion options', async () => {
+  it('covers sessionStorage auth headers and period ingestion options', async () => {
     // Test auth headers reading token from sessionStorage (lines 407-412)
     sessionStorage.setItem('procucev_auth_token', 'test-session-jwt-token');
     jest.useFakeTimers();
@@ -2165,24 +2111,6 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     // Step 5: Review Email Dispatch & Finalize
     fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
     jest.useRealTimers();
-
-    // Open Template A and clear subject and message (covers lines 2876-2877: Default Subject/Message)
-    const customizeBtnA = screen.getByRole('button', { name: /View & Edit Template A/i });
-    fireEvent.click(customizeBtnA);
-    const subjectInput = screen.getByPlaceholderText('Subject line...');
-    const messageInput = screen.getByPlaceholderText('Custom email message...');
-    fireEvent.change(subjectInput, { target: { value: '' } });
-    fireEvent.change(messageInput, { target: { value: '' } });
-
-    expect(screen.getByText(/\(Default Subject\)/i)).toBeInTheDocument();
-    expect(screen.getByText(/\(Default Message\)/i)).toBeInTheDocument();
-
-    // Click outside modal backdrop (lines 2823, 2826)
-    const backdrop = screen.getByText('Template A: Suppliers With Pre-PO History')
-      .closest('div[class*="fixed inset-0"]');
-    if (backdrop) {
-      fireEvent.click(backdrop);
-    }
 
     // Complete setup with 1_year selected (line 1523: '1 Year')
     const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
@@ -2521,23 +2449,6 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
       // Step 5: Proceed to Step 5
       fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
-
-      // Open Template B modal and verify preview shows Template B action link
-      const customizeBtnB = screen.getByRole('button', { name: /View & Edit Template B/i });
-      fireEvent.click(customizeBtnB);
-      expect(screen.getByText(/Complete category self-mapping/i)).toBeInTheDocument();
-
-      // Test stopPropagation on inner modal dialog (line 2826)
-      const innerModal = screen.getByText('Template B: Suppliers With NO Pre-PO History')
-        .closest('div[class*="animate-scale-in"]');
-      if (innerModal) {
-        fireEvent.click(innerModal);
-        expect(screen.getByText('Template B: Suppliers With NO Pre-PO History')).toBeInTheDocument();
-      }
-
-      // Close Template B modal
-      const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
-      fireEvent.click(cancelBtn);
 
       // Trigger submission error and dismiss error banner (line 2772, 2790)
       mockProcessHistoricalPurchaseData.mockRejectedValueOnce(new Error('Ingestion pipeline failed'));

@@ -30,6 +30,7 @@ const {
   resolveBuyerSourcingMode,
   MAX_INVITE_VENDORS_PER_REQUEST,
   EVENT_OUTBOX_TYPES,
+  VENDOR_FREE_CREDITS_LIMIT,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
@@ -187,7 +188,15 @@ async function canAccessRfq(req, rfq) {
   const scope = await resolveRfqReadScope(req);
   if (!scope.restricted) return true;
   if (scope.role === 'vendor') return canVendorViewRfq(scope.vendor, rfq);
-  return !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId;
+  if (scope.role === 'buyer') {
+    if (!scope.buyerAccountId) return false;
+    if (rfq.buyerAccountId === scope.buyerAccountId) return true;
+    if (Array.isArray(rfq.sharedBuyerAccountIds) && rfq.sharedBuyerAccountIds.includes(scope.buyerAccountId)) {
+      return true;
+    }
+    return false;
+  }
+  return false;
 }
 
 /**
@@ -309,7 +318,14 @@ function scopedRfqList(scope) {
       .filter((rfq) => canVendorViewRfq(scope.vendor, rfq))
       .map((rfq) => applyVendorBuyerPrivacy(rfq, scope.vendor));
   }
-  const buyerRfqs = all.filter((rfq) => !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId);
+  const buyerRfqs = all.filter((rfq) => {
+    if (!scope.buyerAccountId) return false;
+    if (rfq.buyerAccountId === scope.buyerAccountId) return true;
+    if (Array.isArray(rfq.sharedBuyerAccountIds) && rfq.sharedBuyerAccountIds.includes(scope.buyerAccountId)) {
+      return true;
+    }
+    return false;
+  });
   return buyerRfqs.map((rfq) => applyQuotesVisibility(rfq, scope.role));
 }
 
@@ -994,6 +1010,12 @@ async function createRFQ(req, res, next) {
       }
     }
 
+    try {
+      await storeService.confirmRfqPersisted(finalRFQ);
+    } catch (persistErr) {
+      logger.warn('Initial RFQ DB confirmation caught non-fatal warning', { error: persistErr.message }, 'RFQ_CONTROLLER');
+    }
+
     res.status(201).json({ success: true, data: finalRFQ });
   } catch (err) {
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
@@ -1232,6 +1254,10 @@ async function extractRFQFromDocument(req, res, next) {
     const isGenericDocumentTitle = !extraction.documentTitle || /^(request for quotation|rfq|inquiry|requisition)$/i.test(String(extraction.documentTitle).trim());
     const draftTitle = body.title ? String(body.title).trim() : (!isEmail && !isGenericDocumentTitle ? extraction.documentTitle : null);
 
+    const derivedDeliveryDate = extraction.deliveryDate ||
+      (Array.isArray(extraction.lineItems) && extraction.lineItems.find((it) => it && it.targetDate)?.targetDate) ||
+      null;
+
     // Reuse the shared normalisation + taxonomy classification so an AI-extracted
     // RFQ is shaped identically to one keyed by hand.
     const { draft, classification } = await rfqIngestionService.buildRFQDraft({
@@ -1239,7 +1265,7 @@ async function extractRFQFromDocument(req, res, next) {
       title: draftTitle,
       category: extraction.category,
       estimatedBudget: extraction.estimatedBudget,
-      targetDeliveryDate: extraction.deliveryDate,
+      targetDeliveryDate: derivedDeliveryDate,
       source: 'ai_extraction',
       sourceFileName: body.fileName,
       ...(sourceEmail ? { sourceEmail } : {}),
@@ -1781,13 +1807,13 @@ async function addQuote(req, res, next) {
       (Array.isArray(vendorRecord.quotedRfqIds) && vendorRecord.quotedRfqIds.some((quotedRfqId) => String(quotedRfqId) === String(targetRfq.id)));
     if (!eligibility.eligible && !isUnlimitedVendor && !isResubmission) {
       logger.warn(
-        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but 5 free quotation credits are exhausted`,
+        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits are exhausted`,
         { id, vendorId: vendorRecord.id, freeCreditsRemaining: eligibility.freeCreditsRemaining, subscriptionPlan: eligibility.subscriptionPlan },
         'RFQ_CONTROLLER'
       );
       return res.status(403).json({
         success: false,
-        error: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
+        error: `Your ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.`,
         upgradeRequired: true,
         freeCreditsRemaining: 0,
         subscriptionPlan: eligibility.subscriptionPlan,

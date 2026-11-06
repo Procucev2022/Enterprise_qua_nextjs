@@ -6,6 +6,9 @@ const storeService = require('../src/services/storeService');
 const eventOutboxService = require('../src/services/eventOutboxService');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
 const { logger } = require('../src/services/loggerService');
+const emailGatewayService = require('../src/services/emailGatewayService');
+const zohoReconciliationService = require('../src/services/zohoReconciliationService');
+const dailyRfqReportService = require('../src/services/dailyRfqReportService');
 
 function restoreEnvVar(name, originalValue) {
   if (originalValue === undefined) delete process.env[name];
@@ -13,6 +16,20 @@ function restoreEnvVar(name, originalValue) {
 }
 
 describe('Server & Health Endpoints', () => {
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    jest.spyOn(emailGatewayService, 'startPolling').mockReturnValue({ started: false, reason: 'disabled in server tests' });
+    jest.spyOn(emailGatewayService, 'stopPolling').mockReturnValue(false);
+    jest.spyOn(zohoReconciliationService, 'startPolling').mockReturnValue({ started: false, reason: 'disabled in server tests' });
+    jest.spyOn(zohoReconciliationService, 'stopPolling').mockReturnValue(false);
+    jest.spyOn(dailyRfqReportService, 'startDailyReportScheduler').mockReturnValue({ started: false, reason: 'disabled in server tests' });
+    jest.spyOn(dailyRfqReportService, 'stopDailyReportScheduler').mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   test('GET /health should return 200 and system health metadata', async () => {
     const res = await request(app).get('/health');
     expect(res.statusCode).toBe(200);
@@ -46,6 +63,9 @@ describe('Server & Health Endpoints', () => {
     const server = await bootstrapServer(0);
     expect(server).toBeDefined();
     await new Promise((resolve) => server.close(resolve));
+    expect(emailGatewayService.stopPolling).toHaveBeenCalled();
+    expect(zohoReconciliationService.stopPolling).toHaveBeenCalled();
+    expect(dailyRfqReportService.stopDailyReportScheduler).toHaveBeenCalled();
   });
 
   test('scheduled RFQ closure logs sweep failures and clears its timer when the server closes', async () => {
@@ -132,6 +152,9 @@ describe('Server & Health Endpoints', () => {
       expect(clearIntervalSpy).toHaveBeenCalledWith({ id: 'outbox' });
       expect(clearIntervalSpy).toHaveBeenCalledWith({ id: 'comparison' });
       expect(setIntervalSpy).toHaveBeenCalledTimes(3);
+      expect(emailGatewayService.stopPolling).toHaveBeenCalled();
+      expect(zohoReconciliationService.stopPolling).toHaveBeenCalled();
+      expect(dailyRfqReportService.stopDailyReportScheduler).toHaveBeenCalled();
     } finally {
       if (server?.listening) await new Promise((resolve) => server.close(resolve));
       jest.restoreAllMocks();

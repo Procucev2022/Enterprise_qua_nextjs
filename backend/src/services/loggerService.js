@@ -244,7 +244,45 @@ class LoggerService {
     // Persist to local disk
     this.writeToDisk(entry);
 
+    // Persist critical errors and audits to durable database sink
+    if (level === 'ERROR' || level === 'AUDIT') {
+      this.persistToDatabase(entry);
+    }
+
     return entry;
+  }
+
+  persistToDatabase(entry) {
+    if (process.env.NODE_ENV === 'test') return;
+    try {
+      const pool = require('../db/pool');
+      if (!pool.hasStorage()) return;
+      const sql = `
+        INSERT INTO system_error_logs (
+          id, level, category, message, error_name, stack_trace, user_email, request_path, correlation_id, metadata, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `;
+      const metaStr = entry.metadata ? JSON.stringify(entry.metadata) : null;
+      const params = [
+        entry.id,
+        entry.level,
+        entry.category,
+        entry.message,
+        entry.metadata?.errorName || null,
+        entry.stackTrace || null,
+        entry.userEmail || null,
+        entry.metadata?.url || null,
+        entry.correlationId || null,
+        metaStr,
+        entry.timestamp || new Date().toISOString(),
+      ];
+      const p = pool.query(sql, params, { d1: true, d1Text: sql }).catch(() => {});
+      const { getWaitUntil } = require('../db/d1Bridge');
+      const waitUntil = getWaitUntil();
+      if (waitUntil) waitUntil(p);
+    } catch {
+      // Safe non-fatal error log persistence
+    }
   }
 
   info(message, meta = {}, category = 'SYSTEM') {

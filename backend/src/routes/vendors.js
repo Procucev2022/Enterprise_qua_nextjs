@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const vendorController = require('../controllers/vendorController');
+const accountDocumentController = require('../controllers/accountDocumentController');
 const { authenticate, requireRole, requireVendorDirectorySession } = require('../middleware/auth');
 
 router.get('/', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorController.getVendors);
@@ -30,8 +31,15 @@ router.get('/:id/payment-links/:linkId/invoice', authenticate, vendorController.
 router.get('/:id/onboarding-email', authenticate, vendorController.generateOnboardingEmailPreview);
 
 router.get('/:id/credit-history', authenticate, vendorController.getCreditHistory);
+router.post('/:id/add-quote-credits', authenticate, vendorController.addQuoteCredits);
+router.post('/:id/request-credit-approval', authenticate, vendorController.requestCreditApproval);
 router.get('/:id/communications', authenticate, vendorController.getVendorCommunications);
 router.post('/:id/communications', authenticate, vendorController.recordVendorCommunication);
 router.get('/:id/payment-history', authenticate, vendorController.getVendorPaymentHistory);
+
+// Seller Dossier Documents
+router.get('/:id/documents', authenticate, accountDocumentController.getSellerDocuments);
+router.post('/:id/documents', authenticate, accountDocumentController.uploadSellerDocument);
+router.delete('/:id/documents/:docId', authenticate, accountDocumentController.deleteSellerDocument);
 
 module.exports = router;

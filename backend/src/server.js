@@ -5,6 +5,7 @@ const emailGatewayService = require('./services/emailGatewayService');
 const zohoReconciliationService = require('./services/zohoReconciliationService');
 const rfqChaserScheduler = require('./services/rfqChaserScheduler');
 const eventOutboxService = require('./services/eventOutboxService');
+const dailyRfqReportService = require('./services/dailyRfqReportService');
 const { logger } = require('./services/loggerService');
 const { EVENT_OUTBOX_POLL_INTERVAL_MS, RFQ_AUTO_CLOSE_POLL_INTERVAL_MS } = require('./config/constants');
 const PORT = process.env.PORT || 4000;
@@ -111,6 +112,10 @@ async function bootstrapServer(port = PORT) {
   if (!zohoReconciliation.started) {
     logger.info(`Zoho payment-link reconciliation not started: ${zohoReconciliation.reason}`, {}, 'SERVER');
   }
+  const dailyRfqReport = dailyRfqReportService.startDailyReportScheduler();
+  if (!dailyRfqReport.started) {
+    logger.info(`Daily RFQ report scheduler not started: ${dailyRfqReport.reason}`, {}, 'SERVER');
+  }
 
   const rfqClosureTimer = setInterval(() => {
     storeService.closeExpiredRFQsDurably().catch((error) => {
@@ -131,10 +136,16 @@ async function bootstrapServer(port = PORT) {
     server.once('close', () => {
       clearInterval(rfqClosureTimer);
       clearInterval(eventOutboxTimer);
+      emailGatewayService.stopPolling();
+      zohoReconciliationService.stopPolling();
+      dailyRfqReportService.stopDailyReportScheduler();
     });
   } else {
     clearInterval(rfqClosureTimer);
     clearInterval(eventOutboxTimer);
+    emailGatewayService.stopPolling();
+    zohoReconciliationService.stopPolling();
+    dailyRfqReportService.stopDailyReportScheduler();
   }
 
   const dispatchRFQComparisonJobs = () => {

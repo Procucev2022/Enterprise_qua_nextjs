@@ -15,10 +15,17 @@ import {
   HardDrive,
   Layers,
   FileCheck,
+  Settings,
+  RefreshCw,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  GripVertical,
 } from 'lucide-react';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import { DOCUMENT_VAULT_CATEGORIES, DOCUMENT_VAULT_CONFIG } from '@/lib/constants';
+import { DOCUMENT_VAULT_CATEGORIES, DOCUMENT_VAULT_SOURCES, DOCUMENT_VAULT_CONFIG } from '@/lib/constants';
 import type { DocumentVaultItem, DocumentVaultSummary } from '@/lib/types';
+import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
 import {
   fetchDocuments,
   fetchDocumentVaultSummary,
@@ -26,6 +33,18 @@ import {
   updateDocument,
   deleteDocument,
 } from '@/lib/documentVaultClient';
+
+const DOC_VAULT_DEFAULT_COLUMNS: ColumnDef[] = [
+  { key: 'name', label: 'Document Name', visible: true, required: true },
+  { key: 'category', label: 'Category', visible: true },
+  { key: 'source', label: 'Source', visible: true },
+  { key: 'fileSize', label: 'File Size', visible: true },
+  { key: 'uploadedBy', label: 'Uploaded By', visible: true },
+  { key: 'uploadedAt', label: 'Upload Date', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+const DOC_VAULT_COL_PREF_KEY = 'qua_doc_vault_col_prefs';
 
 export default function DocumentVaultDashboard() {
   const strings = UI_STRINGS.actionCenter.documentVault;
@@ -40,6 +59,7 @@ export default function DocumentVaultDashboard() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [selectedSource, setSelectedSource] = useState<string>('all');
   const [activeFilter, setActiveFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
   // Modal states
@@ -57,6 +77,23 @@ export default function DocumentVaultDashboard() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
+  // Column settings & sort states
+  const [docColumns, setDocColumns] = useState<ColumnDef[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(DOC_VAULT_COL_PREF_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved) as unknown;
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed as ColumnDef[];
+        }
+      } catch { /* ignore */ }
+    }
+    return DOC_VAULT_DEFAULT_COLUMNS;
+  });
+  const [showDocColumnSettings, setShowDocColumnSettings] = useState<boolean>(false);
+  const [docSortField, setDocSortField] = useState<string>('uploadedAt');
+  const [docSortOrder, setDocSortOrder] = useState<'asc' | 'desc'>('desc');
+
   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
     const timer = setTimeout(() => {
@@ -71,6 +108,7 @@ export default function DocumentVaultDashboard() {
       const [docsData, summaryData] = await Promise.all([
         fetchDocuments({
           category: selectedCategory === 'all' ? undefined : selectedCategory,
+          source: selectedSource === 'all' ? undefined : selectedSource,
           search: searchQuery.trim() || undefined,
         }),
         fetchDocumentVaultSummary(),
@@ -83,7 +121,7 @@ export default function DocumentVaultDashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedCategory, searchQuery, showToast]);
+  }, [selectedCategory, selectedSource, searchQuery, showToast]);
 
   useEffect(() => {
     loadData();
@@ -221,19 +259,71 @@ export default function DocumentVaultDashboard() {
     }
   };
 
+  const handleDocSort = (field: string) => {
+    if (docSortField === field) {
+      setDocSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setDocSortField(field);
+      setDocSortOrder('asc');
+    }
+  };
+
+  const DocSortIcon = ({ field }: { field: string }) => {
+    if (docSortField !== field) return <ArrowUpDown size={12} className="text-slate-300 ml-1 inline" />;
+    return docSortOrder === 'asc'
+      ? <ArrowUp size={12} className="text-indigo-500 ml-1 inline" />
+      : <ArrowDown size={12} className="text-indigo-500 ml-1 inline" />;
+  };
+
   const filteredDocuments = useMemo(() => {
-    return documents.filter((doc) => {
+    const filtered = documents.filter((doc) => {
       if (activeFilter === 'active' && !doc.isActive) return false;
       if (activeFilter === 'inactive' && doc.isActive) return false;
       return true;
     });
-  }, [documents, activeFilter]);
+
+    return [...filtered].sort((a, b) => {
+      let aVal: string | number = '';
+      let bVal: string | number = '';
+      if (docSortField === 'name') {
+        aVal = a.documentName?.toLowerCase() ?? '';
+        bVal = b.documentName?.toLowerCase() ?? '';
+      } else if (docSortField === 'category') {
+        aVal = a.category?.toLowerCase() ?? '';
+        bVal = b.category?.toLowerCase() ?? '';
+      } else if (docSortField === 'source') {
+        aVal = (a.accountType || a.category)?.toLowerCase() ?? '';
+        bVal = (b.accountType || b.category)?.toLowerCase() ?? '';
+      } else if (docSortField === 'fileSize') {
+        aVal = a.fileSize ?? 0;
+        bVal = b.fileSize ?? 0;
+      } else if (docSortField === 'uploadedBy') {
+        aVal = a.uploadedBy?.toLowerCase() ?? '';
+        bVal = b.uploadedBy?.toLowerCase() ?? '';
+      } else if (docSortField === 'uploadedAt') {
+        aVal = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        bVal = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      } else if (docSortField === 'status') {
+        aVal = a.isActive ? 1 : 0;
+        bVal = b.isActive ? 1 : 0;
+      }
+      if (aVal < bVal) return docSortOrder === 'asc' ? -1 : 1;
+      if (aVal > bVal) return docSortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [documents, activeFilter, docSortField, docSortOrder]);
+
+  const isColVisible = (key: string) =>
+    docColumns.find((c) => c.key === key)?.visible !== false;
 
   const formatFileSize = (bytes?: number) => {
     if (!bytes || bytes <= 0) return '0 KB';
     if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     return `${Math.round(bytes / 1024)} KB`;
   };
+
+  // Suppress unused import lint warning for GripVertical (used by ColumnSettingsPopup internally)
+  void GripVertical;
 
   return (
     <div className="space-y-6" data-testid="document-vault-dashboard">
@@ -253,79 +343,53 @@ export default function DocumentVaultDashboard() {
         </div>
       )}
 
-      {/* Header Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-sm">
-        <div className="flex items-start gap-3">
-          <div className="p-3 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-xl">
-            <FolderOpen size={24} />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white">
-              {strings.title}
-            </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-2xl">
-              {strings.subtitle}
-            </p>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={handleOpenUploadModal}
-          data-testid="upload-document-btn"
-          className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer self-start md:self-auto"
-        >
-          <Upload size={14} />
-          <span>{strings.actions.uploadDocument}</span>
-        </button>
-      </div>
-
       {/* KPI Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium mb-1">
             <span>{strings.stats.totalDocuments}</span>
-            <FileText size={16} className="text-indigo-500" />
+            <FileText size={14} className="text-indigo-500" />
           </div>
-          <div className="text-2xl font-bold text-slate-900 dark:text-white" data-testid="stat-total-documents">
+          <div className="text-xl font-bold text-slate-900 dark:text-white" data-testid="stat-total-documents">
             {summary.totalDocuments}
           </div>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium mb-1">
             <span>{strings.stats.activeCollateral}</span>
-            <FileCheck size={16} className="text-emerald-500" />
+            <FileCheck size={14} className="text-emerald-500" />
           </div>
-          <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400" data-testid="stat-active-documents">
+          <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400" data-testid="stat-active-documents">
             {summary.activeDocuments}
           </div>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium mb-1">
             <span>{strings.stats.totalStorage}</span>
-            <HardDrive size={16} className="text-amber-500" />
+            <HardDrive size={14} className="text-amber-500" />
           </div>
-          <div className="text-2xl font-bold text-slate-900 dark:text-white" data-testid="stat-total-storage">
+          <div className="text-xl font-bold text-slate-900 dark:text-white" data-testid="stat-total-storage">
             {formatFileSize(summary.totalSizeBytes)}
           </div>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-medium mb-1">
             <span>{strings.stats.categories}</span>
-            <Layers size={16} className="text-sky-500" />
+            <Layers size={14} className="text-sky-500" />
           </div>
-          <div className="text-2xl font-bold text-slate-900 dark:text-white" data-testid="stat-categories-count">
+          <div className="text-xl font-bold text-slate-900 dark:text-white" data-testid="stat-categories-count">
             {summary.categoriesCount}
           </div>
         </div>
       </div>
 
-      {/* Filters & Search Toolbar */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3">
-        <div className="flex-1 relative">
+      {/* Filters & Search Toolbar — single row */}
+      <div className="flex flex-row items-center gap-2 overflow-x-auto no-scrollbar bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3">
+        {/* Search */}
+        <div className="flex-1 min-w-[140px] relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
@@ -337,33 +401,78 @@ export default function DocumentVaultDashboard() {
           />
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Category Dropdown */}
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            data-testid="vault-category-filter"
-            className="px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            {DOCUMENT_VAULT_CATEGORIES.map((cat) => (
-              <option key={cat.id} value={cat.id}>
-                {cat.label}
-              </option>
-            ))}
-          </select>
+        {/* Source Dropdown */}
+        <select
+          value={selectedSource}
+          onChange={(e) => setSelectedSource(e.target.value)}
+          data-testid="vault-source-filter"
+          aria-label={strings.actions.filterSource}
+          className="shrink-0 px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        >
+          {DOCUMENT_VAULT_SOURCES.map((src) => (
+            <option key={src.id} value={src.id}>
+              {src.label}
+            </option>
+          ))}
+        </select>
 
-          {/* Active status filter */}
-          <select
-            value={activeFilter}
-            onChange={(e) => setActiveFilter(e.target.value as 'all' | 'active' | 'inactive')}
-            data-testid="vault-status-filter"
-            className="px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            <option value="all">All Status</option>
-            <option value="active">Active Only</option>
-            <option value="inactive">Inactive Only</option>
-          </select>
-        </div>
+        {/* Category Dropdown */}
+        <select
+          value={selectedCategory}
+          onChange={(e) => setSelectedCategory(e.target.value)}
+          data-testid="vault-category-filter"
+          aria-label={strings.actions.filterCategory}
+          className="shrink-0 px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        >
+          {DOCUMENT_VAULT_CATEGORIES.map((cat) => (
+            <option key={cat.id} value={cat.id}>
+              {cat.label}
+            </option>
+          ))}
+        </select>
+
+        {/* Status Dropdown */}
+        <select
+          value={activeFilter}
+          onChange={(e) => setActiveFilter(e.target.value as 'all' | 'active' | 'inactive')}
+          data-testid="vault-status-filter"
+          className="shrink-0 px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        >
+          <option value="all">All Status</option>
+          <option value="active">Active Only</option>
+          <option value="inactive">Inactive Only</option>
+        </select>
+
+        {/* Upload Button */}
+        <button
+          type="button"
+          onClick={handleOpenUploadModal}
+          data-testid="upload-document-btn"
+          className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer"
+        >
+          <Upload size={13} />
+          <span>{strings.actions.uploadDocument}</span>
+        </button>
+
+        {/* Refresh */}
+        <button
+          type="button"
+          onClick={loadData}
+          className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors cursor-pointer"
+          title="Refresh"
+        >
+          <RefreshCw size={14} />
+        </button>
+
+        {/* Gear - Column Settings */}
+        <button
+          type="button"
+          onClick={() => setShowDocColumnSettings(true)}
+          className="shrink-0 inline-flex items-center justify-center w-8 h-8 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+          title="Column Settings"
+        >
+          <Settings size={14} />
+        </button>
       </div>
 
       {/* Documents Table */}
@@ -393,12 +502,72 @@ export default function DocumentVaultDashboard() {
             <table className="w-full text-left border-collapse" data-testid="vault-table">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                  <th className="py-3 px-4">{strings.table.documentName}</th>
-                  <th className="py-3 px-3">{strings.table.category}</th>
-                  <th className="py-3 px-3">{strings.table.fileDetails}</th>
-                  <th className="py-3 px-3">{strings.table.uploadedBy}</th>
-                  <th className="py-3 px-3 text-center">{strings.table.status}</th>
-                  <th className="py-3 px-4 text-right">{strings.table.actions}</th>
+                  {isColVisible('name') && (
+                    <th
+                      className="py-3 px-4 cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200"
+                      onClick={() => handleDocSort('name')}
+                    >
+                      {strings.table.documentName}
+                      <DocSortIcon field="name" />
+                    </th>
+                  )}
+                  {isColVisible('category') && (
+                    <th
+                      className="py-3 px-3 cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200"
+                      onClick={() => handleDocSort('category')}
+                    >
+                      {strings.table.category ?? 'Category'}
+                      <DocSortIcon field="category" />
+                    </th>
+                  )}
+                  {isColVisible('source') && (
+                    <th
+                      className="py-3 px-3 cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200"
+                      onClick={() => handleDocSort('source')}
+                    >
+                      {strings.table.source}
+                      <DocSortIcon field="source" />
+                    </th>
+                  )}
+                  {isColVisible('fileSize') && (
+                    <th
+                      className="py-3 px-3 cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200"
+                      onClick={() => handleDocSort('fileSize')}
+                    >
+                      {strings.table.fileDetails}
+                      <DocSortIcon field="fileSize" />
+                    </th>
+                  )}
+                  {isColVisible('uploadedBy') && (
+                    <th
+                      className="py-3 px-3 cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200"
+                      onClick={() => handleDocSort('uploadedBy')}
+                    >
+                      {strings.table.uploadedBy}
+                      <DocSortIcon field="uploadedBy" />
+                    </th>
+                  )}
+                  {isColVisible('uploadedAt') && (
+                    <th
+                      className="py-3 px-3 cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200"
+                      onClick={() => handleDocSort('uploadedAt')}
+                    >
+                      Upload Date
+                      <DocSortIcon field="uploadedAt" />
+                    </th>
+                  )}
+                  {isColVisible('status') && (
+                    <th
+                      className="py-3 px-3 text-center cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200"
+                      onClick={() => handleDocSort('status')}
+                    >
+                      {strings.table.status}
+                      <DocSortIcon field="status" />
+                    </th>
+                  )}
+                  {isColVisible('actions') && (
+                    <th className="py-3 px-4 text-right">{strings.table.actions}</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-xs">
@@ -413,100 +582,121 @@ export default function DocumentVaultDashboard() {
                       data-testid={`doc-row-${doc.id}`}
                       className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors"
                     >
-                      <td className="py-3 px-4">
-                        <div className="flex items-start gap-2.5">
-                          <div className="p-1.5 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 rounded-md shrink-0 mt-0.5">
-                            <FileText size={16} />
-                          </div>
-                          <div>
-                            <div className="font-semibold text-slate-900 dark:text-white">
-                              {doc.documentName}
+                      {isColVisible('name') && (
+                        <td className="py-3 px-4">
+                          <div className="flex items-start gap-2.5">
+                            <div className="p-1.5 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 rounded-md shrink-0 mt-0.5">
+                              <FileText size={16} />
                             </div>
-                            {doc.description && (
-                              <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5">
-                                {doc.description}
-                              </p>
-                            )}
+                            <div>
+                              <div className="font-semibold text-slate-900 dark:text-white">
+                                {doc.documentName}
+                              </div>
+                              {doc.description && (
+                                <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5">
+                                  {doc.description}
+                                </p>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      </td>
+                        </td>
+                      )}
 
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <span className="inline-block px-2 py-0.5 text-[10px] font-medium rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                          {catLabel}
-                        </span>
-                      </td>
+                      {isColVisible('category') && (
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          <span className="inline-block px-2 py-0.5 text-[10px] font-medium rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                            {catLabel}
+                          </span>
+                        </td>
+                      )}
 
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <div className="font-mono text-[11px] text-slate-700 dark:text-slate-300">
-                          {doc.fileName}
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {formatFileSize(doc.fileSize)}
-                        </div>
-                      </td>
+                      {isColVisible('source') && (
+                        <td className="py-3 px-3 whitespace-nowrap text-slate-600 dark:text-slate-400 text-[11px]">
+                          {doc.accountType ?? 'System'}
+                        </td>
+                      )}
 
-                      <td className="py-3 px-3 whitespace-nowrap text-slate-600 dark:text-slate-400 text-[11px]">
-                        <div>{doc.uploadedBy || 'Category Desk'}</div>
-                        <div className="text-[10px] text-slate-400">
-                          {doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : 'Active'}
-                        </div>
-                      </td>
+                      {isColVisible('fileSize') && (
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          <div className="font-mono text-[11px] text-slate-700 dark:text-slate-300">
+                            {doc.fileName}
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            {formatFileSize(doc.fileSize)}
+                          </div>
+                        </td>
+                      )}
 
-                      <td className="py-3 px-3 text-center whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleActive(doc)}
-                          data-testid={`toggle-active-${doc.id}`}
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold cursor-pointer transition-colors ${
-                            doc.isActive
-                              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'
-                              : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700'
-                          }`}
-                        >
-                          {doc.isActive ? <CheckCircle2 size={10} /> : <XCircle size={10} />}
-                          <span>{doc.isActive ? 'Active' : 'Inactive'}</span>
-                        </button>
-                      </td>
+                      {isColVisible('uploadedBy') && (
+                        <td className="py-3 px-3 whitespace-nowrap text-slate-600 dark:text-slate-400 text-[11px]">
+                          {doc.uploadedBy ?? 'Category Desk'}
+                        </td>
+                      )}
 
-                      <td className="py-3 px-4 text-right whitespace-nowrap">
-                        <div className="inline-flex items-center gap-1.5">
-                          {doc.fileUrl && (
-                            <a
-                              href={doc.fileUrl}
-                              download={doc.fileName}
-                              target="_blank"
-                              rel="noreferrer"
-                              title={strings.actions.download}
-                              data-testid={`download-doc-${doc.id}`}
-                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+                      {isColVisible('uploadedAt') && (
+                        <td className="py-3 px-3 whitespace-nowrap text-slate-600 dark:text-slate-400 text-[11px]">
+                          {doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '—'}
+                        </td>
+                      )}
+
+                      {isColVisible('status') && (
+                        <td className="py-3 px-3 text-center whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleActive(doc)}
+                            data-testid={`toggle-active-${doc.id}`}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold cursor-pointer transition-colors ${
+                              doc.isActive
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'
+                                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700'
+                            }`}
+                          >
+                            {doc.isActive ? <CheckCircle2 size={10} /> : <XCircle size={10} />}
+                            <span>{doc.isActive ? 'Active' : 'Inactive'}</span>
+                          </button>
+                        </td>
+                      )}
+
+                      {isColVisible('actions') && (
+                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                          <div className="inline-flex items-center gap-1.5">
+                            {doc.fileUrl && (
+                              <a
+                                href={doc.fileUrl}
+                                download={doc.fileName}
+                                target="_blank"
+                                rel="noreferrer"
+                                title={strings.actions.download}
+                                data-testid={`download-doc-${doc.id}`}
+                                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+                              >
+                                <Download size={13} />
+                              </a>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditModal(doc)}
+                              title={strings.actions.edit}
+                              data-testid={`edit-doc-${doc.id}`}
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors cursor-pointer"
                             >
-                              <Download size={13} />
-                            </a>
-                          )}
+                              <Edit2 size={13} />
+                            </button>
 
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditModal(doc)}
-                            title={strings.actions.edit}
-                            data-testid={`edit-doc-${doc.id}`}
-                            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors cursor-pointer"
-                          >
-                            <Edit2 size={13} />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(doc.id)}
-                            disabled={deletingId === doc.id}
-                            title={strings.actions.delete}
-                            data-testid={`delete-doc-${doc.id}`}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors cursor-pointer disabled:opacity-50"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      </td>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(doc.id)}
+                              disabled={deletingId === doc.id}
+                              title={strings.actions.delete}
+                              data-testid={`delete-doc-${doc.id}`}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors cursor-pointer disabled:opacity-50"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -627,7 +817,7 @@ export default function DocumentVaultDashboard() {
                   htmlFor="formIsActive"
                   className="text-xs text-slate-700 dark:text-slate-300 font-medium cursor-pointer"
                 >
-                  Active & Available for Email Collateral Selection
+                  Active &amp; Available for Email Collateral Selection
                 </label>
               </div>
 
@@ -654,6 +844,22 @@ export default function DocumentVaultDashboard() {
           </div>
         </div>
       )}
+
+      {/* Column Settings Popup */}
+      <ColumnSettingsPopup
+        isOpen={showDocColumnSettings}
+        onClose={() => setShowDocColumnSettings(false)}
+        columns={docColumns}
+        onSave={(newCols) => {
+          setDocColumns(newCols);
+          try { localStorage.setItem(DOC_VAULT_COL_PREF_KEY, JSON.stringify(newCols)); } catch { /* ignore */ }
+        }}
+        onReset={() => {
+          setDocColumns(DOC_VAULT_DEFAULT_COLUMNS);
+          try { localStorage.setItem(DOC_VAULT_COL_PREF_KEY, JSON.stringify(DOC_VAULT_DEFAULT_COLUMNS)); } catch { /* ignore */ }
+        }}
+        title="Document Vault Columns"
+      />
     </div>
   );
 }

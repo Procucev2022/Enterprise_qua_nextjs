@@ -490,6 +490,9 @@ Vendor Network Operations | Procucev`,
   },
 ];
 
+/**
+ * Replace placeholders like {contactName}, {companyName}, {followupDate} with provided values.
+ */
 export function interpolateScenarioTemplate(
   template: string,
   variables: Record<string, string | number | undefined | null>
@@ -504,6 +507,9 @@ export function interpolateScenarioTemplate(
   });
 }
 
+/**
+ * Filter scenarios by entity type.
+ */
 export function getScenariosForEntityType(
   entityType?: 'BUYER' | 'SELLER' | 'ALL' | string
 ): EmailScenarioTemplate[] {
@@ -524,6 +530,9 @@ export function getScenariosForEntityType(
   return EMAIL_SCENARIO_TEMPLATES;
 }
 
+/**
+ * Retrieves the specific scenario template matching a call outcome.
+ */
 export function getScenarioForCallOutcome(
   entityType: 'BUYER' | 'SELLER' | string,
   callOutcome: string

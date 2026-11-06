@@ -473,8 +473,8 @@ describe('VENDOR_ASSIGNMENT_LIMITS and getEnvNumber', () => {
   const { VENDOR_ASSIGNMENT_LIMITS } = require('../src/config/constants');
 
   test('reads limits from globalThis.__CF_ENV__ and process.env', () => {
-    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(5);
-    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(5);
+    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(25);
+    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(25);
 
     process.env.MAX_CLIENT_VENDORS_PER_CATEGORY = '12';
     expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(12);
@@ -487,7 +487,7 @@ describe('VENDOR_ASSIGNMENT_LIMITS and getEnvNumber', () => {
     expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(15);
 
     globalThis.__CF_ENV__.MAX_CLIENT_VENDORS_PER_CATEGORY = 'invalid';
-    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(5);
+    expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(25);
 
     delete globalThis.__CF_ENV__;
     delete process.env.MAX_CLIENT_VENDORS_PER_CATEGORY;

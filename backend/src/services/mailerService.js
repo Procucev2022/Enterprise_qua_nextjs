@@ -8,6 +8,7 @@ const {
   RFQ_ACKNOWLEDGEMENT_NOTIFICATION,
   RFQ_NOT_CREATED_NOTIFICATION,
   VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
+  VENDOR_FREE_CREDITS_LIMIT,
 } = require('../config/constants');
 const {
   buildEmail1_RfqCreatedAccountAutoCreated,
@@ -387,8 +388,16 @@ function tokenFingerprint(token) {
  * the one OAuth app (GMAIL_CLIENT_ID/SECRET); each token is its own mailbox
  * with its own sending quota.
  */
+function getGmailClientId() {
+  return getEnv('GMAIL_CLIENT_ID') || getEnv('VENDOR_GMAIL_CLIENT_ID');
+}
+
+function getGmailClientSecret() {
+  return getEnv('GMAIL_CLIENT_SECRET') || getEnv('VENDOR_GMAIL_CLIENT_SECRET');
+}
+
 function gmailIdentities() {
-  if (!getEnv('GMAIL_CLIENT_ID') || !getEnv('GMAIL_CLIENT_SECRET')) return [];
+  if (!getGmailClientId() || !getGmailClientSecret()) return [];
   const identities = [
     { id: 'otp', refreshToken: getEnv('OTP_GMAIL_REFRESH_TOKEN'), sender: getEnv('OTP_GMAIL_SENDER_EMAIL') },
     { id: 'buyer', refreshToken: getEnv('GMAIL_REFRESH_TOKEN'), sender: getEnv('GMAIL_SENDER_EMAIL') },
@@ -421,7 +430,7 @@ function oauthClientFor(identity) {
   if (!identity) return undefined;
   const cached = gmailOAuthClients.get(identity.id);
   if (cached && cached.refreshToken === identity.refreshToken) return cached.client;
-  const client = new (googleApi().auth.OAuth2)(getEnv('GMAIL_CLIENT_ID'), getEnv('GMAIL_CLIENT_SECRET'));
+  const client = new (googleApi().auth.OAuth2)(getGmailClientId(), getGmailClientSecret());
   client.setCredentials({ refresh_token: identity.refreshToken });
   gmailOAuthClients.set(identity.id, { refreshToken: identity.refreshToken, client });
   return client;
@@ -433,8 +442,8 @@ function gmailProviderKey(identity) {
 
 /** True when the buyer/system Gmail identity (GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN) is set. */
 function isGmailApiConfigured() {
-  const hasClientId = Boolean(getEnv('GMAIL_CLIENT_ID'));
-  const hasClientSecret = Boolean(getEnv('GMAIL_CLIENT_SECRET'));
+  const hasClientId = Boolean(getGmailClientId());
+  const hasClientSecret = Boolean(getGmailClientSecret());
   const hasRefreshToken = Boolean(getEnv('GMAIL_REFRESH_TOKEN'));
   return hasClientId && hasClientSecret && hasRefreshToken;
 }
@@ -444,7 +453,7 @@ function getGmailOAuthClient() {
 }
 
 function isVendorGmailApiConfigured() {
-  return Boolean(getEnv('GMAIL_CLIENT_ID')) && Boolean(getEnv('GMAIL_CLIENT_SECRET')) && Boolean(getEnv('VENDOR_GMAIL_REFRESH_TOKEN'));
+  return Boolean(getGmailClientId()) && Boolean(getGmailClientSecret()) && Boolean(getEnv('VENDOR_GMAIL_REFRESH_TOKEN'));
 }
 
 function getVendorGmailOAuthClient() {
@@ -457,7 +466,7 @@ function getVendorGmailOAuthClient() {
  * buyer inbound-polling mailbox or the vendor-outbound mailbox.
  */
 function isQuoteAlertGmailApiConfigured() {
-  return Boolean(getEnv('GMAIL_CLIENT_ID')) && Boolean(getEnv('GMAIL_CLIENT_SECRET')) && Boolean(getEnv('QUOTE_ALERT_GMAIL_REFRESH_TOKEN'));
+  return Boolean(getGmailClientId()) && Boolean(getGmailClientSecret()) && Boolean(getEnv('QUOTE_ALERT_GMAIL_REFRESH_TOKEN'));
 }
 
 /** Where replies to buyer mail should go when it is sent from a borrowed mailbox. */
@@ -967,7 +976,7 @@ function buildRfqInviteEmail(to, context = {}) {
         isSubscribed
           ? '<div style="background: #f0fdf4; border: 1px solid #86efac; color: #166534; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">✨ <strong>Subscribed Supplier:</strong> You have active subscription access with unlimited quotation submissions.</div>'
           : freeCreditsRemaining !== undefined && freeCreditsRemaining !== null
-          ? `<div style="background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">📊 <strong>Available Free Quotation Credits:</strong> ${freeCreditsRemaining} remaining.${freeCreditsRemaining === 0 ? ' <span style="color: #b91c1c; font-weight: bold;">(Plan upgrade required to submit quote)</span>' : ''}</div>`
+          ? `<div style="background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">📊 <strong>Available Free Quotation Credits:</strong> ${freeCreditsRemaining} / ${VENDOR_FREE_CREDITS_LIMIT} remaining.${freeCreditsRemaining === 0 ? ' <span style="color: #b91c1c; font-weight: bold;">(Plan upgrade required to submit quote)</span>' : ''}</div>`
           : ''
       }
       <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">How to Submit Your Quotation</h4>

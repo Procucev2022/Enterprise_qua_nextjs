@@ -418,4 +418,31 @@ describe('Document Vault Queries', () => {
       expect(docNoActor.uploadedBy).toBe('System Admin');
     });
   });
+
+  describe('listDocuments (source filtering & account document auto-sync)', () => {
+    it('filters documents by source: vault, buyer, seller, and all', async () => {
+      const allDocs = await documentVaultQueries.listDocuments({ source: 'all' });
+      expect(allDocs.length).toBeGreaterThan(0);
+
+      const buyerDocs = await documentVaultQueries.listDocuments({ source: 'buyer' });
+      expect(buyerDocs.length).toBeGreaterThan(0);
+      expect(buyerDocs.every((d) => d.accountType === 'buyer')).toBe(true);
+
+      const sellerDocs = await documentVaultQueries.listDocuments({ source: 'seller' });
+      expect(sellerDocs.length).toBeGreaterThan(0);
+      expect(sellerDocs.every((d) => d.accountType === 'seller')).toBe(true);
+
+      const vaultDocs = await documentVaultQueries.listDocuments({ source: 'vault' });
+      expect(vaultDocs.length).toBeGreaterThan(0);
+      expect(vaultDocs.every((d) => !d.accountType || d.accountType === 'vault')).toBe(true);
+    });
+
+    it('getDocumentVaultSummary returns buyerDocuments, sellerDocuments, and vaultDocuments counts', async () => {
+      const summary = await documentVaultQueries.getDocumentVaultSummary();
+      expect(summary).toHaveProperty('buyerDocuments');
+      expect(summary).toHaveProperty('sellerDocuments');
+      expect(summary).toHaveProperty('vaultDocuments');
+      expect(summary.totalDocuments).toBe(summary.buyerDocuments + summary.sellerDocuments + summary.vaultDocuments);
+    });
+  });
 });

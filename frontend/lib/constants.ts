@@ -1,4 +1,5 @@
 import type {
+  RegistrationColumnConfig,
   BuyerDirectoryColumnConfig,
   SellerDirectoryColumnConfig,
   SellerDirectoryColumnKey,
@@ -329,11 +330,14 @@ export const VENDOR_SUBSCRIPTION_PLANS = [
 /** RFQ downloads included per paid vendor plan per 3-month period (mirrors backend VENDOR_PLAN_RFQ_QUOTA). */
 export const VENDOR_PLAN_RFQ_QUOTA: Record<string, number> = { connect: 50, select: 100 };
 
+/** Free RFQ credits every vendor starts with (mirrors backend VENDOR_FREE_CREDITS_LIMIT). */
+export const VENDOR_FREE_CREDITS_LIMIT = 5;
+
 /**
  * A vendor's displayable credit balance: plan quota less downloads used for a
- * Connect/Select subscriber, otherwise their free-tier balance (0 unless the
- * vendor still holds free credits). Reading the free-tier field alone
- * rendered every subscriber as "0 Credits".
+ * Connect/Select subscriber, otherwise their free-tier balance (the default
+ * VENDOR_FREE_CREDITS_LIMIT until the vendor's record stores a balance).
+ * Reading the free-tier field alone rendered every subscriber as "0 Credits".
  */
 export function getVendorCreditBalance(vendor: {
   subscriptionPlan?: string;
@@ -342,6 +346,7 @@ export function getVendorCreditBalance(vendor: {
 }): number {
   const quota = vendor.subscriptionPlan ? VENDOR_PLAN_RFQ_QUOTA[vendor.subscriptionPlan] : undefined;
   if (quota !== undefined) return Math.max(0, quota - (Number(vendor.rfqDownloadsUsed) || 0));
+  if (vendor.freeQuotationCredits == null) return VENDOR_FREE_CREDITS_LIMIT;
   return Math.max(0, Number(vendor.freeQuotationCredits) || 0);
 }
 
@@ -1103,12 +1108,17 @@ export const VENDOR_ASSIGNMENT_LIMITS = {
   get MAX_CLIENT_PER_CATEGORY(): number {
     const envVal = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_MAX_CLIENT_VENDORS_PER_CATEGORY : undefined;
     const num = Number(envVal);
-    return !Number.isNaN(num) && num > 0 ? num : 5;
+    return !Number.isNaN(num) && num > 0 ? num : 25;
   },
   get MAX_PROCUCEV_PER_CATEGORY(): number {
     const envVal = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_MAX_PROCUCEV_VENDORS_PER_CATEGORY : undefined;
     const num = Number(envVal);
-    return !Number.isNaN(num) && num > 0 ? num : 5;
+    return !Number.isNaN(num) && num > 0 ? num : 25;
+  },
+  get TARGET_PER_MINOR_CATEGORY(): number {
+    const envVal = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_TARGET_VENDORS_PER_MINOR_CATEGORY : undefined;
+    const num = Number(envVal);
+    return Number.isFinite(num) && num > 0 ? num : 25;
   },
 };
 
@@ -1343,6 +1353,26 @@ export function parseSearchTokens(search?: string | null): string[] {
 }
 
 
+export const REGISTRATION_CLIENT_TYPES = [
+  { id: 'all', label: 'All (Buyers & Sellers)' },
+  { id: 'buyer', label: 'Buyers' },
+  { id: 'seller', label: 'Sellers' },
+] as const;
+
+export const REGISTRATION_COLUMN_PREF_KEY = 'registration_columns_pref';
+
+export const DEFAULT_REGISTRATION_COLUMNS: RegistrationColumnConfig[] = [
+  { key: 'userName', label: 'User Name', visible: true, required: true },
+  { key: 'clientType', label: 'Client View', visible: true },
+  { key: 'companyName', label: 'Company Name', visible: true },
+  { key: 'phoneNumber', label: 'Phone Number', visible: true },
+  { key: 'userEmail', label: 'User Email', visible: true },
+  { key: 'regDate', label: 'Reg. Date', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'sourceType', label: 'Source Type', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
 export const BUYER_DIRECTORY_COLUMN_PREF_KEY = 'buyer_directory_columns_pref';
 
 export const DEFAULT_BUYER_DIRECTORY_COLUMNS: BuyerDirectoryColumnConfig[] = [
@@ -1531,6 +1561,13 @@ export const ONBOARDING_STAGES = {
 } as const;
 
 
+export const DOCUMENT_VAULT_SOURCES = [
+  { id: 'all', label: 'All Sources' },
+  { id: 'vault', label: 'Platform Collateral' },
+  { id: 'buyer', label: 'Buyer Documents' },
+  { id: 'seller', label: 'Seller Documents' },
+] as const;
+
 export const DOCUMENT_VAULT_CATEGORIES = [
   { id: 'all', label: 'All Documents' },
   { id: 'marketing_overview', label: 'Company Overview & ROI Decks' },
@@ -1545,3 +1582,87 @@ export const DOCUMENT_VAULT_CONFIG = {
   MAX_UPLOAD_SIZE_BYTES: 25 * 1024 * 1024,
   ALLOWED_EXTENSIONS: ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.zip'],
 } as const;
+// --- Account Documents & Dossier Credit Workflows Constants -------------------
+
+export const ACCOUNT_DOCUMENT_CATEGORIES = [
+  'Registration',
+  'Company Profile',
+  'GST',
+  'PAN',
+  'RFQ',
+  'Quotation',
+  'Other',
+] as const;
+
+export type AccountDocumentCategory = (typeof ACCOUNT_DOCUMENT_CATEGORIES)[number];
+
+export const ACCOUNT_DOCUMENT_TYPES = [
+  'All Types',
+  'PDF',
+  'Image',
+  'Excel',
+  'Word',
+] as const;
+
+export type AccountDocumentFilterType = (typeof ACCOUNT_DOCUMENT_TYPES)[number];
+
+export const CREDIT_APPROVAL_APPROVERS = [
+  'Srinu Sir',
+  'Sudheer Sir',
+] as const;
+
+export type CreditApprovalApprover = (typeof CREDIT_APPROVAL_APPROVERS)[number];
+
+export const CREDIT_APPROVAL_INITIATORS = [
+  'Govardhan',
+  'Krishna',
+  'Chandhan',
+] as const;
+
+export type CreditApprovalInitiator = (typeof CREDIT_APPROVAL_INITIATORS)[number];
+
+export const SELLER_QUOTE_CREDITS_ALLOWED = [1, 2, 3, 4, 5] as const;
+
+export const APPROVAL_REQUEST_TYPES = [
+  'Buyer Credit Addition',
+  'Seller Credit Addition',
+  'Credit Notes',
+  'Purchase Requests',
+  'Payment Approvals',
+  'Discounts',
+  'Account Approvals',
+  'Trial Periods',
+  'Offline Payments',
+  'Unit Bookings',
+  'Cancellations & Refunds',
+  'Packages',
+  'Milestones',
+] as const;
+
+export const DEFAULT_APPROVAL_COLUMNS: Array<{
+  key:
+    | 'request_id'
+    | 'request_type'
+    | 'requested_by'
+    | 'project_account'
+    | 'amount_quantity'
+    | 'request_date'
+    | 'assigned_approver'
+    | 'status'
+    | 'actions';
+  label: string;
+  visible: boolean;
+  locked?: boolean;
+  order: number;
+}> = [
+  { key: 'request_id', label: 'Request ID', visible: true, locked: true, order: 1 },
+  { key: 'request_type', label: 'Request Type', visible: true, order: 2 },
+  { key: 'requested_by', label: 'Requested By', visible: true, order: 3 },
+  { key: 'project_account', label: 'Project / Buyer / Supplier', visible: true, order: 4 },
+  { key: 'amount_quantity', label: 'Amount / Quantity', visible: true, order: 5 },
+  { key: 'request_date', label: 'Request Date', visible: true, order: 6 },
+  { key: 'assigned_approver', label: 'Assigned Approver', visible: true, order: 7 },
+  { key: 'status', label: 'Status', visible: true, order: 8 },
+  { key: 'actions', label: 'Actions', visible: true, locked: true, order: 9 },
+];
+

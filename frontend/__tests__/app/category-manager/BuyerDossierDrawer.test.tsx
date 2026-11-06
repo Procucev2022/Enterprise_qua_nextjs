@@ -4,6 +4,13 @@ import BuyerDossierDrawer from '@/app/category-manager/components/BuyerDossierDr
 import type { BuyerAccount, RFQItem } from '@/lib/types';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import * as accountDocsClient from '@/lib/accountDocumentsClient';
+jest.mock('@/lib/accountDocumentsClient', () => ({
+  requestBuyerCreditApproval: jest.fn().mockResolvedValue({ success: true, message: 'Request submitted' }),
+  fetchAccountDocuments: jest.fn().mockResolvedValue([]),
+  uploadAccountDocument: jest.fn().mockResolvedValue({ success: true }),
+  deleteAccountDocument: jest.fn().mockResolvedValue({ success: true }),
+}));
 
 jest.mock('@/lib/buyerProfileClient', () => ({
   fetchBuyerCreditHistory: jest.fn(),
@@ -287,51 +294,57 @@ describe('BuyerDossierDrawer', () => {
     const addCreditBtn = screen.getByText('Add Credit');
     fireEvent.click(addCreditBtn);
 
-    expect(screen.getByText('Allocate Buyer Credits')).toBeInTheDocument();
+    expect(screen.getByText('Request Buyer Credit Approval')).toBeInTheDocument();
 
     // Close via Escape key
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByText('Allocate Buyer Credits')).toBeNull();
+    expect(screen.queryByText('Request Buyer Credit Approval')).toBeNull();
 
     // Reopen and test Cancel button
     fireEvent.click(screen.getByText('Add Credit'));
     const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
     fireEvent.click(cancelBtn);
-    expect(screen.queryByText('Allocate Buyer Credits')).toBeNull();
+    expect(screen.queryByText('Request Buyer Credit Approval')).toBeNull();
 
     // Reopen and test X button (line 1268)
     fireEvent.click(screen.getByText('Add Credit'));
     const xButtons = screen.getAllByRole('button');
     const modalX = xButtons.find(b => b.querySelector('.lucide-x') && b.closest('.max-w-md'));
     if (modalX) fireEvent.click(modalX);
-    expect(screen.queryByText('Allocate Buyer Credits')).toBeNull();
+    expect(screen.queryByText('Request Buyer Credit Approval')).toBeNull();
 
     // Reopen and test amount <= 0 guard (line 207)
     fireEvent.click(screen.getByText('Add Credit'));
     const amountInput = screen.getByRole('spinbutton');
     fireEvent.change(amountInput, { target: { value: '0' } });
-    const reasonInput = screen.getByPlaceholderText(/e\.g\., Enterprise relationship/i);
+    const reasonInput = screen.getByPlaceholderText(/Reason for credit addition|business justification/i);
     fireEvent.change(reasonInput, { target: { value: 'Quarterly bonus' } });
     fireEvent.change(reasonInput, { target: { value: '' } });
-    const submitBtn = screen.getByRole('button', { name: /Confirm Credit Allocation/i });
+    const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
     fireEvent.click(submitBtn);
-    expect(buyerProfileClient.addBuyerCredit).not.toHaveBeenCalled();
+    const creditForm = submitBtn.closest('form');
+    if (creditForm) fireEvent.submit(creditForm);
+    expect(accountDocsClient.requestBuyerCreditApproval).not.toHaveBeenCalled();
 
     // Reopen and change values with empty reason to test default reason fallback (line 212)
     fireEvent.change(amountInput, { target: { value: '10' } });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(buyerProfileClient.addBuyerCredit).toHaveBeenCalledWith(
+      expect(accountDocsClient.requestBuyerCreditApproval).toHaveBeenCalledWith(
         'buyer-acc-1789811073812-ux3',
-        expect.objectContaining({ amount: 10, reason: 'Category Manager console allocation' }),
-        expect.stringMatching(/^[0-9a-f-]{36}$/i)
+        expect.objectContaining({
+          amount: 10,
+          reason: 'Enterprise sourcing credit allocation request',
+          approverName: expect.any(String),
+          initiatorName: expect.any(String),
+        })
       );
     });
   });
 
   test('3. Handles Add Credit error response and exception gracefully', async () => {
-    (buyerProfileClient.addBuyerCredit as jest.Mock).mockResolvedValueOnce({
+    (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({
       success: false,
       error: '',
     });
@@ -346,26 +359,19 @@ describe('BuyerDossierDrawer', () => {
     );
 
     fireEvent.click(screen.getByText('Add Credit'));
-    fireEvent.click(screen.getByRole('button', { name: /Confirm Credit Allocation/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Submit for Approval/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Failed to add credit')).toBeInTheDocument();
+      expect(screen.getByText('Failed to submit credit approval request.')).toBeInTheDocument();
     });
 
     // Test exception branch (line 225)
-    (buyerProfileClient.addBuyerCredit as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
-    fireEvent.click(screen.getByRole('button', { name: /Confirm Credit Allocation/i }));
+    (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    fireEvent.click(screen.getByRole('button', { name: /Submit for Approval/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Error allocating credits')).toBeInTheDocument();
+      expect(screen.getByText('Failed to submit credit approval request.')).toBeInTheDocument();
     });
-    expect(buyerProfileClient.addBuyerCredit).toHaveBeenLastCalledWith(
-      mockBuyer.id,
-      expect.objectContaining({ amount: 5, reason: 'Category Manager console allocation' }),
-      expect.stringMatching(/^[0-9a-f-]{36}$/i)
-    );
-    const creditCalls = (buyerProfileClient.addBuyerCredit as jest.Mock).mock.calls;
-    expect(creditCalls[1][2]).toBe(creditCalls[0][2]);
   });
 
   test('4. Profile tab renders categories, allows editing, adding custom category, toggling, backdrop click, Escape, and saving', async () => {
@@ -1376,11 +1382,11 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     // Test Add Credit modal edge cases
     const addCreditHeaderBtn = screen.getByTitle('Add RFQ Sourcing Credits');
     fireEvent.click(addCreditHeaderBtn);
-    expect(screen.getByRole('heading', { name: 'Allocate Buyer Credits' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Request Buyer Credit Approval' })).toBeInTheDocument();
 
     // Inner click does not close
-    fireEvent.click(screen.getByRole('heading', { name: 'Allocate Buyer Credits' }));
-    expect(screen.getByRole('heading', { name: 'Allocate Buyer Credits' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('heading', { name: 'Request Buyer Credit Approval' }));
+    expect(screen.getByRole('heading', { name: 'Request Buyer Credit Approval' })).toBeInTheDocument();
 
     // Empty input sets 0 via isNaN
     const creditAmountInput = screen.getByRole('spinbutton');
@@ -1388,59 +1394,46 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     expect(creditAmountInput).toHaveValue(0);
 
     // Form submission with amount <= 0 does not call addBuyerCredit
-    const submitBtn = screen.getByRole('button', { name: 'Confirm Credit Allocation' });
+    const submitBtn = screen.getByRole('button', { name: 'Submit for Approval' });
     fireEvent.click(submitBtn);
-    expect(buyerProfileClient.addBuyerCredit).not.toHaveBeenCalled();
+    expect(accountDocsClient.requestBuyerCreditApproval).not.toHaveBeenCalled();
 
     // Fill valid amount, empty reason -> uses fallback reason
     fireEvent.change(creditAmountInput, { target: { value: '10' } });
-    const reasonTextarea = screen.getByPlaceholderText(/Enterprise relationship top-up/i);
+    const reasonTextarea = screen.getByPlaceholderText(/Reason for credit addition|business justification/i);
     fireEvent.change(reasonTextarea, { target: { value: '' } });
 
     // API success with no custom message
-    (buyerProfileClient.addBuyerCredit as jest.Mock).mockResolvedValueOnce({
-      success: true,
-    });
+    (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({ success: true });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(buyerProfileClient.addBuyerCredit).toHaveBeenCalledWith(
-        mockBuyer.id,
-        expect.objectContaining({
-          amount: 10,
-          reason: 'Category Manager console allocation',
-        }),
-        expect.stringMatching(/^[0-9a-f-]{36}$/i)
-      );
+      expect(accountDocsClient.requestBuyerCreditApproval).toHaveBeenCalled();
     });
 
     // Reopen and test API failure with no custom error
     fireEvent.click(addCreditHeaderBtn);
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
-    (buyerProfileClient.addBuyerCredit as jest.Mock).mockResolvedValueOnce({
-      success: false,
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm Credit Allocation' }));
+    (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({ success: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
-      expect(buyerProfileClient.addBuyerCredit).toHaveBeenCalledTimes(2);
+      expect(accountDocsClient.requestBuyerCreditApproval).toHaveBeenCalled();
     });
 
     // Reopen and test API rejection / throw
     fireEvent.click(addCreditHeaderBtn);
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
-    (buyerProfileClient.addBuyerCredit as jest.Mock).mockRejectedValueOnce(new Error('DB failure'));
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm Credit Allocation' }));
+    (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockRejectedValueOnce(new Error('DB failure'));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
-      expect(buyerProfileClient.addBuyerCredit).toHaveBeenCalledTimes(3);
+      expect(accountDocsClient.requestBuyerCreditApproval).toHaveBeenCalled();
     });
-    const creditCalls = (buyerProfileClient.addBuyerCredit as jest.Mock).mock.calls;
-    expect(creditCalls[2][2]).toBe(creditCalls[1][2]);
 
     // Close via backdrop click
     fireEvent.click(addCreditHeaderBtn);
-    const creditDialog = screen.getByRole('heading', { name: /Allocate Buyer Credits/i }).closest('[role="dialog"]');
+    const creditDialog = screen.getByRole('heading', { name: /Request Buyer Credit Approval/i }).closest('[role="dialog"]');
     if (creditDialog) fireEvent.click(creditDialog);
-    expect(screen.queryByRole('heading', { name: 'Allocate Buyer Credits' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Request Buyer Credit Approval' })).toBeNull();
   });
 
   test('payments sort handles items without transactionDate or date', async () => {

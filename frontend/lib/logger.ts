@@ -88,7 +88,8 @@ export class ClientLogger {
           remoteMetadata.errorName = metadata.error.name;
           remoteMetadata.errorMessage = metadata.error.message;
         }
-        fetch('/api/logs', {
+        const endpoint = token ? '/api/logs' : '/api/logs/client-error';
+        fetch(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

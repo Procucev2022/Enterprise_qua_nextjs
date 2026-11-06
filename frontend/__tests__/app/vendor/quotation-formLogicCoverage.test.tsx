@@ -436,10 +436,10 @@ describe('upgrade plan selection', () => {
 // ─── Credit balance ───────────────────────────────────────────────────────────
 
 describe('quotation credit balance', () => {
-  test('defaults to 0 free credits when neither the vendor record, the vendor list nor the store reports a balance', async () => {
+  test('defaults to 5 free credits when neither the vendor record, the vendor list nor the store reports a balance', async () => {
     await renderForm({ vendorFreeCreditsRemaining: undefined });
 
-    expect(screen.getByText('0 Free Left')).toBeInTheDocument();
+    expect(screen.getByText('5 Free Left')).toBeInTheDocument();
   });
 
   test('shows a subscriber their remaining plan credits instead of a plain Active Plan label', async () => {
@@ -865,7 +865,7 @@ describe('bid form access', () => {
 
     expect(mockShowToast).toHaveBeenCalledWith(
       'Subscription Required',
-      'You have no free quotation credits. Please upgrade your subscription to continue quoting on external buyer RFQs.',
+      'Your 5 free quotation credits are exhausted. Please upgrade your subscription to continue quoting on external buyer RFQs.',
       'warning'
     );
     expect(await screen.findByText('🔒 Upgrade Plan to Submit Quotations')).toBeInTheDocument();
@@ -1345,7 +1345,7 @@ describe('quote submission', () => {
       fireEvent.click(submitQuotationButton());
 
       const fallbackMessage =
-        'You have no free quotation credits available. Please upgrade your subscription plan to continue submitting quotations.';
+        'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.';
       expect(await screen.findByText(fallbackMessage)).toBeInTheDocument();
       expect(mockShowToast).toHaveBeenCalledWith('Quotation Credits Exhausted', fallbackMessage, 'warning');
     });
@@ -1481,7 +1481,7 @@ describe('RFQ specification download', () => {
     await waitFor(() =>
       expect(mockShowToast).toHaveBeenCalledWith(
         'Free Credits Exhausted',
-        'You have no free RFQ download credits available. Please upgrade your subscription to download this RFQ.',
+        'You have used all 5 free RFQ download credits. Please upgrade your subscription to download this RFQ.',
         'warning'
       )
     );

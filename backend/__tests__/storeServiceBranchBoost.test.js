@@ -6,6 +6,7 @@ const pool = require('../src/db/pool');
 const mailerService = require('../src/services/mailerService');
 const smsService = require('../src/services/smsService');
 const whatsAppService = require('../src/services/whatsAppService');
+const { RFQ_DOWNLOAD_ERRORS } = require('../src/config/constants');
 
 describe('storeService comprehensive branch boost tests', () => {
   beforeEach(() => {
@@ -769,6 +770,17 @@ describe('storeService comprehensive branch boost tests', () => {
       const data = await storeService.getBootstrapData('buyer-boot-1', 'session@vendor.com');
       expect(data.vendors.length).toBeGreaterThanOrEqual(2);
       expect(data.vendorsTotal).toBeGreaterThanOrEqual(2);
+    });
+
+    test('getBootstrapData with pool.hasStorage and isHydratedFromDB uses cached vendors', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      storeService.isHydratedFromDB = true;
+      storeService.vendors = [{ id: 'v-cached-1', name: 'Cached Vendor' }];
+      storeService.vendorsTotal = 1;
+      const data = await storeService.getBootstrapData();
+      expect(data.vendors).toEqual([{ id: 'v-cached-1', name: 'Cached Vendor' }]);
+      expect(data.vendorsTotal).toBe(1);
+      storeService.isHydratedFromDB = false;
     });
 
     test('getBootstrapData in-memory with array scopedBuyerId and session catalogue filter', async () => {
@@ -2107,7 +2119,7 @@ describe('storeService comprehensive branch boost tests', () => {
       storeService.vendors = [vExhausted];
       const resEx = await storeService.unlockRFQForVendor('v-ex-1', 'rfq-ex-1');
       expect(resEx.success).toBe(false);
-      expect(resEx.error).toContain('You have no free RFQ download credits available');
+      expect(resEx.error).toBe(RFQ_DOWNLOAD_ERRORS.CREDITS_EXHAUSTED);
     });
 
     test('createRFQ executes line 2563 candidate filter callback when isV3 and mode3ProcucevCount is 0', () => {

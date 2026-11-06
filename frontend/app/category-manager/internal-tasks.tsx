@@ -21,6 +21,7 @@ import {
   Trash2,
   ExternalLink,
   RefreshCw,
+  RotateCcw,
   FolderOpen,
   ClipboardList,
   Flame,
@@ -37,6 +38,11 @@ import {
   Award,
   CreditCard,
   Users,
+  Settings,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  GripVertical,
 } from 'lucide-react';
 import {
   InternalTask,
@@ -87,6 +93,7 @@ import type {
   InternalTaskCategory,
   CreditAccountType,
   DemoStatus,
+  ActionCenterSummaryPopupColumn,
 } from '@/lib/types';
 
 import ActionCenterSubNav, { type ActionCenterTabKey } from './components/ActionCenterSubNav';
@@ -102,6 +109,23 @@ import { fetchTicketSummary } from '@/lib/ticketClient';
 import { fetchApprovalSummary } from '@/lib/approvalClient';
 import ActionCenterComposeModal from './components/ActionCenterComposeModal';
 import DocumentVaultDashboard from './components/DocumentVaultDashboard';
+import LoginLogsDashboard from './components/LoginLogsDashboard';
+import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
+import ColumnSettingsPopup, { type ColumnDef } from './components/ColumnSettingsPopup';
+
+
+const DEFAULT_TASK_TABLE_COLUMNS: ColumnDef[] = [
+  { key: 'done', label: 'Done', visible: true, required: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'task', label: 'Task Subject & ID', visible: true, required: true },
+  { key: 'category', label: 'Category & Type', visible: true },
+  { key: 'entity', label: 'Related Entity', visible: true },
+  { key: 'priority', label: 'Priority', visible: true },
+  { key: 'assignedTo', label: 'Assigned To', visible: true },
+  { key: 'dueDate', label: 'Due Date & Time', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+const TASK_COL_PREF_KEY = 'qua_internal_task_col_prefs';
 
 export default function InternalTasksDashboard() {
   // Data state
@@ -140,6 +164,95 @@ export default function InternalTasksDashboard() {
   const [approvalSummary, setApprovalSummary] = useState<ApprovalSummary | null>(null);
   const [paymentDuesSummary, setPaymentDuesSummary] = useState<PaymentDuesSummary | null>(null);
   const [isComposeModalOpen, setIsComposeModalOpen] = useState<boolean>(false);
+
+  // Column customization & sorting states
+  const [taskColumns, setTaskColumns] = useState<ColumnDef[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem(TASK_COL_PREF_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch {}
+    }
+    return DEFAULT_TASK_TABLE_COLUMNS;
+  });
+  const [showTaskColumnSettings, setShowTaskColumnSettings] = useState<boolean>(false);
+  const [taskSortField, setTaskSortField] = useState<string>('');
+  const [taskSortOrder, setTaskSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  const handleTaskSort = useCallback((field: string) => {
+    setTaskSortField((prev) => {
+      if (prev === field) {
+        setTaskSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+        return prev;
+      }
+      setTaskSortOrder('asc');
+      return field;
+    });
+  }, []);
+
+  const isColVisible = useCallback(
+    (key: string) => {
+      const col = taskColumns.find((c) => c.key === key);
+      return col ? col.visible : true;
+    },
+    [taskColumns]
+  );
+
+  const TaskSortIcon = ({ field }: { field: string }) => {
+    if (taskSortField !== field) return <ArrowUpDown size={11} className="inline ml-1 text-slate-400" />;
+    return taskSortOrder === 'asc' ? (
+      <ArrowUp size={11} className="inline ml-1 text-indigo-600" />
+    ) : (
+      <ArrowDown size={11} className="inline ml-1 text-indigo-600" />
+    );
+  };
+
+  const visibleTaskColumns = useMemo(() => taskColumns.filter((c) => c.visible), [taskColumns]);
+
+  const sortedTasks = useMemo(() => {
+    if (!taskSortField) return tasks;
+    const list = [...tasks];
+    list.sort((a, b) => {
+      let cmp = 0;
+      if (taskSortField === 'dueDate') {
+        const aT = a.due_date ? new Date(a.due_date).getTime() : 0;
+        const bT = b.due_date ? new Date(b.due_date).getTime() : 0;
+        cmp = aT - bT;
+      } else if (taskSortField === 'task') {
+        cmp = (a.title || '').localeCompare(b.title || '');
+      } else if (taskSortField === 'status') {
+        cmp = (a.status || '').localeCompare(b.status || '');
+      } else if (taskSortField === 'priority') {
+        const rank: Record<string, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 };
+        cmp = (rank[a.priority] || 0) - (rank[b.priority] || 0);
+      } else if (taskSortField === 'category') {
+        cmp = (a.task_category || '').localeCompare(b.task_category || '');
+      } else if (taskSortField === 'assignedTo') {
+        cmp = (a.assigned_to_name || '').localeCompare(b.assigned_to_name || '');
+      }
+      return taskSortOrder === 'asc' ? cmp : -cmp;
+    });
+    return list;
+  }, [tasks, taskSortField, taskSortOrder]);
+
+  // Summary Card Popup Modal State
+  const [summaryModalState, setSummaryModalState] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle: string;
+    totalCount: number;
+    records: InternalTask[];
+  }>({
+    isOpen: false,
+    title: '',
+    subtitle: '',
+    totalCount: 0,
+    records: [],
+  });
+
 
   // Credit approval action state in Drawer
   const [creditApprovalRemarks, setCreditApprovalRemarks] = useState<string>('');
@@ -184,6 +297,8 @@ export default function InternalTasksDashboard() {
       'sellers',
       'registrations',
       'payment_dues',
+      'document_vault',
+      'login_logs',
     ];
     if (tabParam && validTabs.includes(tabParam)) {
       setActiveTab(tabParam);
@@ -435,12 +550,123 @@ export default function InternalTasksDashboard() {
     }
   };
 
-  // Summary Card Click Filter
+  // Summary Modal Columns Configuration
+  const taskPopupColumns = useMemo<ActionCenterSummaryPopupColumn<InternalTask>[]>(() => [
+    {
+      key: 'task_number',
+      label: 'Task ID',
+      render: (t) => (
+        <span className="font-mono font-bold text-blue-600 dark:text-blue-400">
+          {t.task_number || t.id.slice(0, 8)}
+        </span>
+      ),
+    },
+    {
+      key: 'title',
+      label: 'Title',
+      render: (t) => (
+        <span className="font-semibold text-slate-900 dark:text-white max-w-xs truncate block" title={t.title}>
+          {t.title}
+        </span>
+      ),
+    },
+    {
+      key: 'task_category',
+      label: 'Category',
+      render: (t) => (
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          {t.task_category || 'GENERAL'}
+        </span>
+      ),
+    },
+    {
+      key: 'priority',
+      label: 'Priority',
+      render: (t) => (
+        <span
+          className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold ${
+            t.priority === 'Critical'
+              ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
+              : t.priority === 'High'
+              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+              : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+          }`}
+        >
+          {t.priority}
+        </span>
+      ),
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (t) => (
+        <span
+          className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold ${
+            t.status === 'Completed'
+              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+              : t.status === 'In Progress'
+              ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
+              : t.status === 'Pending Approval'
+              ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
+              : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+          }`}
+        >
+          {t.status}
+        </span>
+      ),
+    },
+    {
+      key: 'assigned_to_name',
+      label: 'Assigned To',
+      render: (t) => <span>{t.assigned_to_name || t.assigned_team || 'Unassigned'}</span>,
+    },
+    {
+      key: 'due_date',
+      label: 'Due Date',
+      render: (t) => {
+        if (!t.due_date) return <span>–</span>;
+        const d = new Date(t.due_date);
+        return <span>{isNaN(d.getTime()) ? t.due_date : d.toLocaleDateString('en-GB')}</span>;
+      },
+    },
+  ], []);
+
+  // Summary Card Click Filter & Popup Modal Launcher
   const handleCardClick = (statusKey: string) => {
-    const nextStatus = statusKey === 'all' ? 'all' : statusKey;
-    setActiveFilters((prev) => ({ ...prev, status: nextStatus }));
-    setDraftFilters((prev) => ({ ...prev, status: nextStatus }));
+    let filtered: InternalTask[] = [];
+    let modalTitle = 'Total Tasks';
+    let modalSubtitle = 'All internal tasks across modules';
+
+    if (statusKey === 'overdue') {
+      const todayIso = new Date().toISOString().split('T')[0];
+      setActiveFilters((prev) => ({ ...prev, status: 'all', dueTo: todayIso }));
+      setDraftFilters((prev) => ({ ...prev, status: 'all', dueTo: todayIso }));
+      filtered = tasks.filter((t) => getDaysOverdueOrRemaining(t.due_date, t.status).isOverdue);
+      modalTitle = 'Overdue Tasks';
+      modalSubtitle = 'Tasks that have exceeded their deadline';
+    } else {
+      const nextStatus = statusKey === 'all' ? 'all' : statusKey;
+      setActiveFilters((prev) => ({ ...prev, status: nextStatus, dueTo: '' }));
+      setDraftFilters((prev) => ({ ...prev, status: nextStatus, dueTo: '' }));
+      if (statusKey === 'all') {
+        filtered = tasks;
+        modalTitle = 'Total Tasks';
+        modalSubtitle = 'All internal tasks across modules';
+      } else {
+        filtered = tasks.filter((t) => t.status === statusKey);
+        modalTitle = `${statusKey} Tasks`;
+        modalSubtitle = `Tasks currently marked as ${statusKey}`;
+      }
+    }
     setCurrentPage(1);
+
+    setSummaryModalState({
+      isOpen: true,
+      title: modalTitle,
+      subtitle: modalSubtitle,
+      totalCount: filtered.length,
+      records: filtered,
+    });
   };
 
   // Handle Detailed Complete Task from Drawer
@@ -951,9 +1177,7 @@ export default function InternalTasksDashboard() {
 
   return (
     <div
-      className={`min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 ${
-        activeTab === 'payment_dues' ? 'p-2 sm:p-3 md:p-4 space-y-4' : 'p-4 md:p-6 space-y-6'
-      }`}
+      className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-2.5 sm:p-3 md:p-4 space-y-3.5"
     >
       {/* Toast Notification */}
       {toastMessage && (
@@ -981,164 +1205,246 @@ export default function InternalTasksDashboard() {
       {activeTab === 'registrations' && <RegistrationsDashboard />}
       {activeTab === 'payment_dues' && <PaymentDuesDashboard onSummaryChange={setPaymentDuesSummary} />}
       {activeTab === 'document_vault' && <DocumentVaultDashboard />}
+      {activeTab === 'login_logs' && <LoginLogsDashboard />}
 
       {activeTab === 'tasks' && (
         <>
-          {/* Header & Metric Summary */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Action Center</h1>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Internal Task Management, Employee Responsibilities, Approval Governance & Credit Tracking.
+          {/* Section: Ultra-Compact Summary Cards (Single Horizontal Row, Responsive Grid) */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-2.5 w-full">
+            {/* Total Tasks */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('all')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('all');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'all'
+                  ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-slate-900 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-total-tasks"
+            >
+              <p className={`text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight whitespace-nowrap leading-tight ${
+                activeFilters.status === 'all' ? 'opacity-80' : 'text-slate-600 dark:text-slate-300'
+              }`}>
+                Total Tasks
               </p>
+              <p className="text-base sm:text-lg font-bold leading-none mt-1">{summary.total}</p>
+              <span className={`text-[10px] whitespace-nowrap mt-1 leading-tight ${
+                activeFilters.status === 'all' ? 'opacity-70' : 'text-slate-400 dark:text-slate-500'
+              }`}>
+                All records
+              </span>
             </div>
 
-            {/* Section 5: Summary Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 w-full md:w-auto text-xs">
-              {/* Total Tasks */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('all')}
-                className={`p-2.5 rounded-xl border text-left transition-all ${
-                  activeFilters.status === 'all'
-                    ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-slate-900 shadow-sm'
-                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60'
-                }`}
-                data-testid="card-total-tasks"
-              >
-                <div className="text-[10px] uppercase font-semibold opacity-70">Total Tasks</div>
-                <div className="text-lg font-extrabold mt-0.5">{summary.total}</div>
-              </button>
+            {/* New Tasks */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('New')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('New');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'New'
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-blue-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-new-tasks"
+            >
+              <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-blue-700 dark:text-blue-300 whitespace-nowrap leading-tight">
+                New Tasks
+              </p>
+              <p className="text-base sm:text-lg font-bold text-blue-600 dark:text-blue-400 leading-none mt-1">
+                {summary.newTasks ?? summary.pending ?? 0}
+              </p>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+                Awaiting action
+              </span>
+            </div>
 
-              {/* New Tasks */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('New')}
-                className={`p-2.5 rounded-xl border text-left transition-all ${
-                  activeFilters.status === 'New'
-                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
-                    : 'bg-blue-50/70 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800/60 hover:bg-blue-100/70'
-                }`}
-                data-testid="card-new-tasks"
-              >
-                <div className="text-[10px] uppercase font-semibold text-blue-700 dark:text-blue-300">New Tasks</div>
-                <div className="text-lg font-extrabold text-blue-900 dark:text-blue-100 mt-0.5">
-                  {summary.newTasks ?? summary.pending ?? 0}
-                </div>
-              </button>
+            {/* In Progress */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('In Progress')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('In Progress');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'In Progress'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-in-progress"
+            >
+              <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-indigo-700 dark:text-indigo-300 whitespace-nowrap leading-tight">
+                In Progress
+              </p>
+              <p className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 leading-none mt-1">
+                {summary.inProgress}
+              </p>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+                Active work
+              </span>
+            </div>
 
-              {/* In Progress */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('In Progress')}
-                className={`p-2.5 rounded-xl border text-left transition-all ${
-                  activeFilters.status === 'In Progress'
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                    : 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-200 dark:border-indigo-800/60 hover:bg-indigo-100/70'
-                }`}
-                data-testid="card-in-progress"
-              >
-                <div className="text-[10px] uppercase font-semibold text-indigo-700 dark:text-indigo-300">In Progress</div>
-                <div className="text-lg font-extrabold text-indigo-900 dark:text-indigo-100 mt-0.5">
-                  {summary.inProgress}
-                </div>
-              </button>
+            {/* Pending Approval */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('Pending Approval')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('Pending Approval');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'Pending Approval'
+                  ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-amber-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-pending-approval"
+            >
+              <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-amber-700 dark:text-amber-300 whitespace-nowrap leading-tight">
+                Pending Approval
+              </p>
+              <p className="text-base sm:text-lg font-bold text-amber-600 dark:text-amber-400 leading-none mt-1">
+                {summary.pendingApproval ?? 0}
+              </p>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+                Requires review
+              </span>
+            </div>
 
-              {/* Pending Approval */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('Pending Approval')}
-                className={`p-2.5 rounded-xl border text-left transition-all ${
-                  activeFilters.status === 'Pending Approval'
-                    ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
-                    : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/60 hover:bg-amber-100/70'
-                }`}
-                data-testid="card-pending-approval"
-              >
-                <div className="text-[10px] uppercase font-semibold text-amber-700 dark:text-amber-300">Pending Approval</div>
-                <div className="text-lg font-extrabold text-amber-900 dark:text-amber-100 mt-0.5">
-                  {summary.pendingApproval ?? 0}
-                </div>
-              </button>
+            {/* Completed */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('Completed')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('Completed');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'Completed'
+                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-emerald-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-completed"
+            >
+              <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-emerald-700 dark:text-emerald-300 whitespace-nowrap leading-tight">
+                Completed
+              </p>
+              <p className="text-base sm:text-lg font-bold text-emerald-600 dark:text-emerald-400 leading-none mt-1">
+                {summary.completed}
+              </p>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+                Resolved
+              </span>
+            </div>
 
-              {/* Completed */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('Completed')}
-                className={`p-2.5 rounded-xl border text-left transition-all ${
-                  activeFilters.status === 'Completed'
-                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                    : 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60 hover:bg-emerald-100/70'
-                }`}
-                data-testid="card-completed"
-              >
-                <div className="text-[10px] uppercase font-semibold text-emerald-700 dark:text-emerald-300">Completed</div>
-                <div className="text-lg font-extrabold text-emerald-900 dark:text-emerald-100 mt-0.5">
-                  {summary.completed}
-                </div>
-              </button>
-
-              {/* Overdue Tasks */}
-              <button
-                type="button"
-                onClick={() => handleCardClick('all')}
-                className="p-2.5 rounded-xl border text-left bg-rose-50/70 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60 hover:bg-rose-100/70 transition-all"
-                data-testid="card-overdue"
-              >
-                <div className="text-[10px] uppercase font-semibold text-rose-700 dark:text-rose-300">Overdue</div>
-                <div className="text-lg font-extrabold text-rose-900 dark:text-rose-100 mt-0.5">
-                  {summary.overdueCount ?? 0}
-                </div>
-              </button>
+            {/* Overdue Tasks */}
+            <div
+              role="group"
+              tabIndex={0}
+              onClick={() => handleCardClick('overdue')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleCardClick('overdue');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
+                activeFilters.status === 'overdue'
+                  ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-rose-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
+              }`}
+              data-testid="card-overdue"
+            >
+              <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-rose-700 dark:text-rose-300 whitespace-nowrap leading-tight">
+                Overdue
+              </p>
+              <p className="text-base sm:text-lg font-bold text-rose-600 dark:text-rose-400 leading-none mt-1">
+                {summary.overdueCount ?? 0}
+              </p>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1 leading-tight">
+                Past deadline
+              </span>
             </div>
           </div>
 
           {/* ============================================================== */}
-          {/* TOOLBAR: Search, Category, Assignee, Reminders, Create, Export */}
+          {/* TOOLBAR: 1.Search, 2.Category, 3.My Tasks, 4.All Users, 5.Filter, 6.Export CSV, 7.Reminders, 8.Send SMS/Email, 9.Create Task, 10.Refresh, 11.Gear */}
           {/* ============================================================== */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-sm flex flex-col lg:flex-row items-center justify-between gap-3">
-            {/* Search Bar */}
-            <div className="relative flex-1 w-full">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-2.5" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder="Search by title, task ID, related entity, or instructions..."
-                className="w-full bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            {/* Action Controls */}
-            <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-end">
-              {/* Category Filter Dropdown */}
-              <div className="relative">
-                <select
-                  value={activeFilters.taskCategory || 'all'}
-                  onChange={(e) => handleCategoryChange(e.target.value)}
-                  className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                  data-testid="toolbar-category-select"
-                >
-                  <option value="all">All Categories</option>
-                  {Object.values(INTERNAL_TASK_CATEGORIES).map((cat) => (
-                    <option key={cat} value={cat}>
-                      {INTERNAL_TASK_CATEGORY_LABELS[cat] || cat}
-                    </option>
-                  ))}
-                </select>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 shadow-xs flex flex-row items-center justify-between gap-1.5 overflow-x-auto no-scrollbar w-full">
+            {/* Left Controls: 1.Search, 2.Category, 3.My Tasks, 4.All Users */}
+            <div className="flex items-center gap-1.5 flex-1 min-w-0">
+              {/* 1. Search Bar */}
+              <div className="relative flex-1 min-w-[150px] max-w-xs">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="Search by title, ID, entity, instructions..."
+                  className="w-full pl-8 pr-7 py-1 h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setCurrentPage(1);
+                    }}
+                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    aria-label="Clear search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
 
-              {/* Quick "My Tasks" Button */}
+              {/* 2. All Categories Dropdown */}
+              <select
+                value={activeFilters.taskCategory || 'all'}
+                onChange={(e) => handleCategoryChange(e.target.value)}
+                className="shrink-0 h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                data-testid="toolbar-category-select"
+              >
+                <option value="all">All Categories</option>
+                {Object.values(INTERNAL_TASK_CATEGORIES).map((cat) => (
+                  <option key={cat} value={cat}>
+                    {INTERNAL_TASK_CATEGORY_LABELS[cat] || cat}
+                  </option>
+                ))}
+              </select>
+
+              {/* 3. My Tasks Button */}
               <button
                 type="button"
                 onClick={handleToggleMyTasks}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${
+                className={`shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
                   isMyTasksActive
-                    ? 'bg-blue-600 border-blue-600 text-white shadow-sm shadow-blue-600/20'
-                    : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
+                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
                 }`}
                 title={UI_STRINGS.actionCenter.tasks.myTasks}
                 data-testid="toolbar-my-tasks-btn"
@@ -1147,66 +1453,68 @@ export default function InternalTasksDashboard() {
                 <span>{UI_STRINGS.actionCenter.tasks.myTasks}</span>
               </button>
 
-              {/* Internal User / Assignee Dropdown */}
-              <div className="relative">
-                <select
-                  value={activeFilters.assignedTo || 'all'}
-                  onChange={(e) => handleAssigneeChange(e.target.value)}
-                  className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                  aria-label={UI_STRINGS.actionCenter.tasks.selectAssignee}
-                  data-testid="toolbar-assignee-select"
-                >
-                  <option value="all">{UI_STRINGS.actionCenter.tasks.allUsers}</option>
-                  {sessionUser?.name && (
-                    <option value={sessionUser.name}>
-                      {UI_STRINGS.actionCenter.tasks.myTasks} ({sessionUser.name})
+              {/* 4. All Users Dropdown */}
+              <select
+                value={activeFilters.assignedTo || 'all'}
+                onChange={(e) => handleAssigneeChange(e.target.value)}
+                className="shrink-0 h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                aria-label={UI_STRINGS.actionCenter.tasks.selectAssignee}
+                data-testid="toolbar-assignee-select"
+              >
+                <option value="all">{UI_STRINGS.actionCenter.tasks.allUsers}</option>
+                {sessionUser?.name && (
+                  <option value={sessionUser.name}>
+                    {UI_STRINGS.actionCenter.tasks.myTasks} ({sessionUser.name})
+                  </option>
+                )}
+                <option value="Unassigned">{UI_STRINGS.actionCenter.tasks.unassigned}</option>
+                <optgroup label="Internal Team Members">
+                  {assignees.map((m) => (
+                    <option key={m.id || m.name} value={m.name}>
+                      {m.name} {m.role ? `• ${m.role}` : ''}
                     </option>
-                  )}
-                  <option value="Unassigned">{UI_STRINGS.actionCenter.tasks.unassigned}</option>
-                  <optgroup label="Internal Team Members">
-                    {assignees.map((m) => (
-                      <option key={m.id || m.name} value={m.name}>
-                        {m.name} {m.role ? `• ${m.role}` : ''}
-                      </option>
-                    ))}
-                  </optgroup>
-                </select>
-              </div>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
 
-              {/* Filter Button */}
+            {/* Right Controls: 5.Filter, 6.Export CSV, 7.Reminders, 8.Send SMS/Email, 9.Create Task, 10.Refresh, 11.Gear */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* 5. Filter Button */}
               <button
+                type="button"
                 onClick={handleOpenFilterDrawer}
-                className={`flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${
+                className={`shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
                   activeFilterCount > 0
-                    ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-400 text-blue-700 dark:text-blue-300 shadow-sm'
-                    : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-400 text-blue-700 dark:text-blue-300 shadow-xs'
+                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
                 }`}
               >
                 <Filter className="w-3.5 h-3.5" />
                 <span>Filter</span>
                 {activeFilterCount > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-blue-600 text-white text-[10px] flex items-center justify-center font-bold">
+                  <span className="w-3.5 h-3.5 rounded-full bg-blue-600 text-white text-[9px] flex items-center justify-center font-bold">
                     {activeFilterCount}
                   </span>
                 )}
               </button>
 
-              {/* Export Button */}
+              {/* 6. Export CSV Button */}
               <a
                 href={clientCsvExportUri}
                 download="internal_tasks.csv"
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors"
+                className="shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
                 data-testid="toolbar-export-csv-btn"
               >
                 <Download className="w-3.5 h-3.5 text-slate-500" />
-                <span>{UI_STRINGS.actionCenter.tasks.exportCsvBtn || 'Export CSV'}</span>
+                <span>Export CSV</span>
               </a>
 
-              {/* Check Reminders Button */}
+              {/* 7. Reminders Button */}
               <button
                 type="button"
                 onClick={handleCheckReminders}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100 transition-all shadow-sm"
+                className="shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100 transition-all shadow-xs cursor-pointer"
                 title="Evaluate deadline triggers and dispatch overdue reminders"
                 data-testid="toolbar-check-reminders-btn"
               >
@@ -1214,40 +1522,54 @@ export default function InternalTasksDashboard() {
                 <span>Reminders</span>
               </button>
 
-              {/* Quick Compose SMS / Email Button */}
+              {/* 8. Send SMS / Email Button */}
               <button
                 type="button"
                 onClick={() => {
                   setSelectedTaskDetails(null);
                   setIsComposeModalOpen(true);
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition-all shadow-sm"
+                className="shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition-all shadow-xs cursor-pointer"
                 title="Dispatch SMS or Email Notification"
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>Send SMS / Email</span>
               </button>
 
-              {/* Create Internal Task Button */}
+              {/* 9. Create Internal Task Button */}
               <button
+                type="button"
                 onClick={handleOpenCreateModal}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm shadow-blue-600/20 transition-all"
+                className="shrink-0 h-8 inline-flex items-center gap-1 px-3 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-xs shadow-blue-600/20 transition-all cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Create Internal Task</span>
               </button>
 
-              {/* Refresh Button */}
+              {/* 10. Refresh Button */}
               <button
+                type="button"
                 onClick={() => {
                   loadTasks();
                   loadSummary();
                   showToast('Refreshed data.');
                 }}
-                className="p-1.5 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-500 transition-colors"
+                aria-label="Refresh tasks"
+                className="shrink-0 h-8 w-8 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-500 transition-colors cursor-pointer"
                 title="Refresh"
               >
-                <RefreshCw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+
+              {/* 11. Gear icon (Column Settings) */}
+              <button
+                type="button"
+                onClick={() => setShowTaskColumnSettings(true)}
+                className="shrink-0 h-8 w-8 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+                title="Column Settings"
+                data-testid="toolbar-gear-btn"
+              >
+                <Settings className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
@@ -1297,19 +1619,71 @@ export default function InternalTasksDashboard() {
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50/80 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800 font-semibold tracking-wide">
                     <tr>
-                      <th className="py-3 px-3.5 w-12 text-center">Done</th>
-                      <th className="py-3 px-3.5 w-28">Status</th>
-                      <th className="py-3 px-3.5 min-w-[200px]">Task Subject & ID</th>
-                      <th className="py-3 px-3.5 w-36">Category & Type</th>
-                      <th className="py-3 px-3.5 min-w-[150px]">Related Entity</th>
-                      <th className="py-3 px-3.5 w-24">Priority</th>
-                      <th className="py-3 px-3.5 min-w-[130px]">Assigned To</th>
-                      <th className="py-3 px-3.5 w-32">Due Date & Time</th>
-                      <th className="py-3 px-3.5 text-right w-24">Actions</th>
+                      {isColVisible('done') && <th className="py-3 px-3.5 w-12 text-center">Done</th>}
+                      {isColVisible('status') && (
+                        <th
+                          className="py-3 px-3.5 w-28 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('status')}
+                        >
+                          Status
+                          <TaskSortIcon field="status" />
+                        </th>
+                      )}
+                      {isColVisible('task') && (
+                        <th
+                          className="py-3 px-3.5 min-w-[200px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('task')}
+                        >
+                          Task Subject & ID
+                          <TaskSortIcon field="task" />
+                        </th>
+                      )}
+                      {isColVisible('category') && (
+                        <th
+                          className="py-3 px-3.5 w-36 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('category')}
+                        >
+                          Category & Type
+                          <TaskSortIcon field="category" />
+                        </th>
+                      )}
+                      {isColVisible('entity') && (
+                        <th className="py-3 px-3.5 min-w-[150px]">Related Entity</th>
+                      )}
+                      {isColVisible('priority') && (
+                        <th
+                          className="py-3 px-3.5 w-24 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('priority')}
+                        >
+                          Priority
+                          <TaskSortIcon field="priority" />
+                        </th>
+                      )}
+                      {isColVisible('assignedTo') && (
+                        <th
+                          className="py-3 px-3.5 min-w-[130px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('assignedTo')}
+                        >
+                          Assigned To
+                          <TaskSortIcon field="assignedTo" />
+                        </th>
+                      )}
+                      {isColVisible('dueDate') && (
+                        <th
+                          className="py-3 px-3.5 w-32 cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          onClick={() => handleTaskSort('dueDate')}
+                        >
+                          Due Date & Time
+                          <TaskSortIcon field="dueDate" />
+                        </th>
+                      )}
+                      {isColVisible('actions') && (
+                        <th className="py-3 px-3.5 text-right w-24">Actions</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
-                    {tasks.map((task) => {
+                    {sortedTasks.map((task) => {
                       const overdueInfo = getDaysOverdueOrRemaining(task.due_date, task.status);
 
                       return (
@@ -1320,136 +1694,153 @@ export default function InternalTasksDashboard() {
                           data-testid={`task-row-${task.id}`}
                         >
                           {/* Checkbox toggle */}
-                          <td className="py-3 px-3.5 text-center" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              checked={task.status === 'Completed'}
-                              onChange={() => handleToggleStatus(task)}
-                              className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
-                            />
-                          </td>
+                          {isColVisible('done') && (
+                            <td className="py-3 px-3.5 text-center" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={task.status === 'Completed'}
+                                onChange={() => handleToggleStatus(task)}
+                                className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
+                              />
+                            </td>
+                          )}
 
                           {/* Status Badge */}
-                          <td className="py-3 px-3.5">
-                            <span
-                              className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
-                                task.status === 'Completed'
-                                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                                  : task.status === 'Pending Approval'
-                                  ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-extrabold animate-pulse'
-                                  : task.status === 'In Progress'
-                                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
-                                  : task.status === 'Rejected' || task.status === 'Cancelled'
-                                  ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
-                                  : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
-                              }`}
-                            >
-                              {task.status}
-                            </span>
-                          </td>
-
-                          {/* Task title, ID & description */}
-                          <td className="py-3 px-3.5">
-                            <div className="font-bold text-slate-900 dark:text-slate-100 hover:text-blue-600 transition-colors">
-                              {task.title}
-                            </div>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <span className="font-mono text-[10px] text-slate-400 font-medium">
-                                {task.task_number || task.id}
-                              </span>
-                              {task.description && (
-                                <span className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
-                                  • {task.description}
-                                </span>
-                              )}
-                            </div>
-                          </td>
-
-                          {/* Category & Task Type */}
-                          <td className="py-3 px-3.5">
-                            <div className="font-semibold text-slate-800 dark:text-slate-200">
-                              {task.task_type || task.task_type_name || 'General Task'}
-                            </div>
-                            <span className="text-[10px] text-slate-400 font-medium block">
-                              {INTERNAL_TASK_CATEGORY_LABELS[task.task_category as InternalTaskCategory] ||
-                                task.task_category ||
-                                'Operations'}
-                            </span>
-                          </td>
-
-                          {/* Related Entity Badge */}
-                          <td className="py-3 px-3.5">
-                            <div className="flex items-center gap-1.5">
+                          {isColVisible('status') && (
+                            <td className="py-3 px-3.5">
                               <span
-                                className={`px-1.5 py-0.5 text-[9px] font-bold rounded uppercase ${
-                                  task.related_entity_type === 'RFQ'
-                                    ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
-                                    : task.related_entity_type === 'BUYER'
-                                    ? 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300'
-                                    : task.related_entity_type === 'VENDOR'
+                                className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                                  task.status === 'Completed'
                                     ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                                    : task.related_entity_type === 'CREDIT' || task.related_entity_type === 'PAYMENT'
-                                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
-                                    : task.related_entity_type === 'CATEGORY'
-                                    ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
+                                    : task.status === 'Pending Approval'
+                                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-extrabold animate-pulse'
+                                    : task.status === 'In Progress'
+                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                                    : task.status === 'Rejected' || task.status === 'Cancelled'
+                                    ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
                                     : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
                                 }`}
                               >
-                                {task.related_entity_type}
+                                {task.status}
                               </span>
-                              <span className="font-medium text-slate-800 dark:text-slate-200 line-clamp-1">
-                                {task.credit_account_name || task.related_entity_label || 'Direct Task'}
+                            </td>
+                          )}
+
+                          {/* Task title, ID & description */}
+                          {isColVisible('task') && (
+                            <td className="py-3 px-3.5">
+                              <div className="font-bold text-slate-900 dark:text-slate-100 hover:text-blue-600 transition-colors">
+                                {task.title}
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="font-mono text-[10px] text-slate-400 font-medium">
+                                  {task.task_number || task.id}
+                                </span>
+                                {task.description && (
+                                  <span className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
+                                    • {task.description}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                          )}
+
+                          {/* Category & Task Type */}
+                          {isColVisible('category') && (
+                            <td className="py-3 px-3.5">
+                              <div className="font-semibold text-slate-800 dark:text-slate-200">
+                                {task.task_type || task.task_type_name || 'General Task'}
+                              </div>
+                              <span className="text-[10px] text-slate-400 font-medium block">
+                                {INTERNAL_TASK_CATEGORY_LABELS[task.task_category as InternalTaskCategory] ||
+                                  task.task_category ||
+                                  'Operations'}
                               </span>
-                            </div>
-                          </td>
+                            </td>
+                          )}
+
+                          {/* Related Entity Badge */}
+                          {isColVisible('entity') && (
+                            <td className="py-3 px-3.5">
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={`px-1.5 py-0.5 text-[9px] font-bold rounded uppercase ${
+                                    task.related_entity_type === 'RFQ'
+                                      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
+                                      : task.related_entity_type === 'BUYER'
+                                      ? 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300'
+                                      : task.related_entity_type === 'VENDOR'
+                                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                                      : task.related_entity_type === 'CREDIT' || task.related_entity_type === 'PAYMENT'
+                                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                                      : task.related_entity_type === 'CATEGORY'
+                                      ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
+                                      : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                                  }`}
+                                >
+                                  {task.related_entity_type}
+                                </span>
+                                <span className="font-medium text-slate-800 dark:text-slate-200 line-clamp-1">
+                                  {task.credit_account_name || task.related_entity_label || 'Direct Task'}
+                                </span>
+                              </div>
+                            </td>
+                          )}
 
                           {/* Priority */}
-                          <td className="py-3 px-3.5">
-                            <span
-                              className={`px-2 py-0.5 text-[10px] font-bold rounded ${
-                                task.priority === 'Critical'
-                                  ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
-                                  : task.priority === 'High'
-                                  ? 'bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300'
-                                  : task.priority === 'Medium'
-                                  ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
-                                  : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                              }`}
-                            >
-                              {task.priority}
-                            </span>
-                          </td>
+                          {isColVisible('priority') && (
+                            <td className="py-3 px-3.5">
+                              <span
+                                className={`px-2 py-0.5 text-[10px] font-bold rounded ${
+                                  task.priority === 'Critical'
+                                    ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
+                                    : task.priority === 'High'
+                                    ? 'bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300'
+                                    : task.priority === 'Medium'
+                                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                                    : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                                }`}
+                              >
+                                {task.priority}
+                              </span>
+                            </td>
+                          )}
 
                           {/* Assigned To */}
-                          <td className="py-3 px-3.5">
-                            <div className="flex items-center gap-1.5">
-                              <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] flex items-center justify-center font-bold text-slate-600 dark:text-slate-300">
-                                {(task.assigned_to_name || 'U').slice(0, 1)}
+                          {isColVisible('assignedTo') && (
+                            <td className="py-3 px-3.5">
+                              <div className="flex items-center gap-1.5">
+                                <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] flex items-center justify-center font-bold text-slate-600 dark:text-slate-300">
+                                  {(task.assigned_to_name || 'U').slice(0, 1)}
+                                </div>
+                                <span className="font-medium">{task.assigned_to_name || 'Unassigned'}</span>
                               </div>
-                              <span className="font-medium">{task.assigned_to_name || 'Unassigned'}</span>
-                            </div>
-                          </td>
+                            </td>
+                          )}
 
                           {/* Due Date & Overdue Badge */}
-                          <td className="py-3 px-3.5">
-                            <div className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
-                              {task.due_date || '—'} {task.due_time ? `• ${task.due_time}` : ''}
-                            </div>
-                            <span
-                              className={`text-[10px] font-semibold ${
-                                overdueInfo.isCompleted
-                                  ? 'text-emerald-600'
-                                  : overdueInfo.isOverdue
-                                  ? 'text-rose-600 font-bold'
-                                  : 'text-slate-400'
-                              }`}
-                            >
-                              {overdueInfo.text}
-                            </span>
-                          </td>
+                          {isColVisible('dueDate') && (
+                            <td className="py-3 px-3.5">
+                              <div className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                                {task.due_date || '—'} {task.due_time ? `• ${task.due_time}` : ''}
+                              </div>
+                              <span
+                                className={`text-[10px] font-semibold ${
+                                  overdueInfo.isCompleted
+                                    ? 'text-emerald-600'
+                                    : overdueInfo.isOverdue
+                                    ? 'text-rose-600 font-bold'
+                                    : 'text-slate-400'
+                                }`}
+                              >
+                                {overdueInfo.text}
+                              </span>
+                            </td>
+                          )}
 
                           {/* Actions */}
-                          <td className="py-3 px-3.5 text-right" onClick={(e) => e.stopPropagation()}>
+                          {isColVisible('actions') && (
+                            <td className="py-3 px-3.5 text-right" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center justify-end gap-1.5">
                               <button
                                 type="button"
@@ -1479,6 +1870,7 @@ export default function InternalTasksDashboard() {
                               </button>
                             </div>
                           </td>
+                          )}
                         </tr>
                       );
                     })}
@@ -2080,7 +2472,10 @@ export default function InternalTasksDashboard() {
               />
 
               <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
-                <div className="w-screen max-w-md bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200 text-xs">
+                <div
+                  className="w-screen max-w-md bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200 text-xs"
+                  data-testid="task-details-drawer"
+                >
                   {/* Header */}
                   <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
                     <div>
@@ -2983,6 +3378,37 @@ export default function InternalTasksDashboard() {
           />
         );
       })()}
+      {/* Action Center Tasks Summary Modal */}
+
+      {/* Task Column Settings Popup */}
+      <ColumnSettingsPopup
+        isOpen={showTaskColumnSettings}
+        onClose={() => setShowTaskColumnSettings(false)}
+        columns={taskColumns}
+        onSave={(newCols) => {
+          setTaskColumns(newCols);
+          try {
+            localStorage.setItem(TASK_COL_PREF_KEY, JSON.stringify(newCols));
+          } catch {}
+        }}
+        onReset={() => {
+          setTaskColumns(DEFAULT_TASK_TABLE_COLUMNS);
+          try {
+            localStorage.setItem(TASK_COL_PREF_KEY, JSON.stringify(DEFAULT_TASK_TABLE_COLUMNS));
+          } catch {}
+        }}
+        title="Internal Tasks Columns"
+      />
+
+      <ActionCenterSummaryPopupModal
+        isOpen={summaryModalState.isOpen}
+        onClose={() => setSummaryModalState((prev) => ({ ...prev, isOpen: false }))}
+        title={summaryModalState.title}
+        subtitle={summaryModalState.subtitle}
+        totalCount={summaryModalState.totalCount}
+        columns={taskPopupColumns}
+        records={summaryModalState.records}
+      />
     </div>
   );
 }

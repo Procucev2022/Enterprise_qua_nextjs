@@ -291,7 +291,6 @@ async function purgeExpiredAuthState() {
         d1Params: [isoNow],
       }
     );
-    queryCache.invalidate('auth_revoked_tokens');
     return {
       otpsPurged: otps.rowCount || 0,
       revokedTokensPurged: tokens.rowCount || 0,

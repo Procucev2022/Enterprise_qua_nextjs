@@ -8,7 +8,7 @@ const pool = require('./pool');
 const crypto = require('crypto');
 const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
-const { VENDOR_PLAN_RFQ_QUOTA } = require('../config/constants');
+const { VENDOR_PLAN_RFQ_QUOTA, VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
 
 function parseRaw(val, fallback = {}) {
   if (!val) return fallback;
@@ -50,7 +50,7 @@ function getSellerAvailableCredits(v) {
   if (v.freeRfqDownloadCredits != null) return parseCredits(v.freeRfqDownloadCredits, 0);
   if (v.freeCreditsRemaining != null) return parseCredits(v.freeCreditsRemaining, 0);
   if (v.credits != null) return parseCredits(v.credits, 0);
-  return 0;
+  return VENDOR_FREE_CREDITS_LIMIT;
 }
 
 function getSellerCreditsUsed(v, totalCredits, available) {
@@ -321,7 +321,7 @@ async function getLowCreditAccounts({
     // Strict eligibility: available credits <= 2 and >= 0
     if (available > 2 || available < 0) continue;
 
-    const totalCredits = getSellerPlanQuota(v) ?? Number(v.totalCredits || v.freeCreditsAllocated || 10);
+    const totalCredits = getSellerPlanQuota(v) ?? Number(v.totalCredits || v.freeCreditsAllocated || VENDOR_FREE_CREDITS_LIMIT);
     const creditsUsed = getSellerCreditsUsed(v, totalCredits, available);
     const history = commMap.get(v.id) || [];
     const latestComm = history[0] || null;

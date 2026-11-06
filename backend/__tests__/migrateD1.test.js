@@ -11,6 +11,7 @@ const {
   splitStatements,
 } = require('../scripts/migrate-d1');
 const { ensureLocalAuditChainVerificationMigration } = require('../scripts/migrate-d1-local-audit-chain-verification');
+const { ensureLocalDossierAlignmentMigration } = require('../scripts/migrate-d1-local-dossier-alignment');
 
 describe('D1 migration SQL handling', () => {
   test('splits SQL while preserving quoted semicolons and complete trigger bodies', () => {
@@ -275,10 +276,35 @@ describe('D1 migration SQL handling', () => {
     const localSetupWithAllHelpers = localSetupWithHelpers.includes('migrate-d1-local-audit-chain-verification.js')
       ? `${localSetupWithHelpers}\n${fs.readFileSync(path.resolve(__dirname, '../scripts/migrate-d1-local-audit-chain-verification.js'), 'utf8')}`
       : localSetupWithHelpers;
+    const localSetupWithDossierHelper = localSetupWithAllHelpers.includes('migrate-d1-local-dossier-alignment.js')
+      ? `${localSetupWithAllHelpers}\n${fs.readFileSync(path.resolve(__dirname, '../scripts/migrate-d1-local-dossier-alignment.js'), 'utf8')}`
+      : localSetupWithAllHelpers;
     const migrationFiles = fs.readdirSync(migrationsPath).filter((file) => /^\d+_[\w-]+\.d1\.sql$/i.test(file));
 
     expect(migrationFiles.length).toBeGreaterThan(0);
-    migrationFiles.forEach((file) => expect(localSetupWithAllHelpers).toContain(file));
+    migrationFiles.forEach((file) => expect(localSetupWithDossierHelper).toContain(file));
+  });
+
+  test('applies local dossier alignment statements and skips columns already present', () => {
+    const calls = [];
+    const run = jest.fn((args) => {
+      calls.push(args);
+      const command = args[args.indexOf('--command') + 1];
+      if (command.includes("pragma_table_info('payment_dues_communications')")) {
+        return [{ results: [{ name: 'account_name' }, { name: 'sent_by_user_id' }, { name: 'sent_by_name' }, { name: 'status' }] }];
+      }
+      if (command.includes("pragma_table_info('internal_tasks')")) {
+        return [{ results: [{ name: 'resolved_at' }] }];
+      }
+      if (command.includes('FROM schema_migrations')) return [{ results: [] }];
+      return [{ results: [] }];
+    });
+    expect(ensureLocalDossierAlignmentMigration({ run })).toMatchObject({
+      addedColumns: 1,
+      ledgerInserted: true,
+    });
+    expect(calls.some((args) => args.some((argument) => String(argument).includes('ADD COLUMN resolved_by_name')))).toBe(true);
+    expect(calls.some((args) => args.some((argument) => String(argument).includes('ADD COLUMN resolved_at')))).toBe(false);
   });
 
   test('applies numbered D1 migrations once and records a content checksum', async () => {
@@ -308,6 +334,53 @@ describe('D1 migration SQL handling', () => {
       await expect(applyD1Migrations({ query, migrationsPath })).resolves.toEqual({ applied: 0, skipped: 1 });
       expect(calls.slice(firstRunCallCount).some(({ sql }) => sql.includes('search_fts(search_fts)'))).toBe(false);
       expect(ledger.get('0001_search_index')).toMatch(/^[a-f0-9]{64}$/);
+    } finally {
+      fs.rmSync(migrationsPath, { recursive: true, force: true });
+    }
+  });
+
+  test('skips only matching duplicate-column errors in idempotent D1 migrations', async () => {
+    const migrationsPath = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-migrations-'));
+    fs.writeFileSync(
+      path.join(migrationsPath, '0001_schema_alignment.d1.sql'),
+      'ALTER TABLE payment_dues_communications ADD COLUMN account_name TEXT;\n',
+      'utf8'
+    );
+    const ledger = new Map();
+    const query = jest.fn(async (sql, params = []) => {
+      if (sql.startsWith('SELECT checksum')) {
+        const checksum = ledger.get(params[0]);
+        return { result: [{ results: checksum ? [{ checksum }] : [] }] };
+      }
+      if (sql.startsWith('ALTER TABLE')) throw new Error('D1 query failed: duplicate column name: account_name');
+      if (sql.startsWith('INSERT INTO schema_migrations')) ledger.set(params[0], params[2]);
+      return { result: [{ results: [] }] };
+    });
+
+    try {
+      await expect(applyD1Migrations({ query, migrationsPath })).resolves.toEqual({ applied: 1, skipped: 0 });
+      expect(ledger.has('0001_schema_alignment')).toBe(true);
+    } finally {
+      fs.rmSync(migrationsPath, { recursive: true, force: true });
+    }
+  });
+
+  test('does not hide duplicate-column errors for a different column', async () => {
+    const migrationsPath = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-migrations-'));
+    fs.writeFileSync(
+      path.join(migrationsPath, '0001_schema_alignment.d1.sql'),
+      'ALTER TABLE payment_dues_communications ADD COLUMN account_name TEXT;\n',
+      'utf8'
+    );
+    const query = jest.fn(async (sql) => {
+      if (sql.startsWith('SELECT checksum')) return { result: [{ results: [] }] };
+      if (sql.startsWith('ALTER TABLE')) throw new Error('D1 query failed: duplicate column name: status');
+      return { result: [{ results: [] }] };
+    });
+
+    try {
+      await expect(applyD1Migrations({ query, migrationsPath })).rejects.toThrow(/duplicate column name: status/);
+      expect(query.mock.calls.some(([sql]) => sql.startsWith('INSERT INTO schema_migrations'))).toBe(false);
     } finally {
       fs.rmSync(migrationsPath, { recursive: true, force: true });
     }

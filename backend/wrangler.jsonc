@@ -65,7 +65,7 @@
     "ZOHO_RECONCILIATION_ENABLED": "true",
     "ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL": "info@procucev.com",
     "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
-    "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5",
+    "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "25",
     "SUBSCRIPTION_GST_PERCENT": "18",
     "BUYER_V1_6M_PRICE": "5499",
     "BUYER_V1_12M_PRICE": "4999",
@@ -84,7 +84,7 @@
     {
       "binding": "DB",
       "database_name": "enterprise-qua-d1",
-      "database_id": "63af6c6f-3606-4afa-b0c7-9f9db6296d61"
+      "database_id": "6d7e68be-0e96-47be-b8c7-69aae903adf1"
     }
   ],
   // Native R2 binding — used in place of the @aws-sdk/client-s3 path (see
@@ -99,7 +99,7 @@
   "r2_buckets": [
     {
       "binding": "R2_BUCKET",
-      "bucket_name": "procucec-dev"
+      "bucket_name": "enterprise-qua-dev"
     }
   ],
   // Drives the scheduled() export in worker.mjs — Cloudflare's replacement
@@ -110,12 +110,14 @@
   "triggers": {
     "crons": [
       "* * * * *",
-      "*/10 * * * *"
+      "*/10 * * * *",
+      "30 0 * * *"
     ]
   },
   "env": {
     "dev": {
-      "name": "procucev-enterprise-backend",
+      "name": "procucev-enterprise-backend-test",
+      "account_id": "97a5dd65ad21c0f5dcd8547de147c806",
       "vars": {
         "NODE_ENV": "development",
         "EMAIL_GATEWAY_ENABLED": "true",
@@ -146,16 +148,16 @@
         "LOG_LEVEL": "INFO",
         "LOG_RETENTION_DAYS": "30",
         "LOG_MAX_SIZE_BYTES": "10485760",
-        "PUBLIC_FRONTEND_URL": "https://procucev-enterprise-frontend.procucev-enterprise.workers.dev",
+        "PUBLIC_FRONTEND_URL": "https://procucev-enterprise-frontend.anshul-goel.workers.dev",
         "ZOHO_MODE": "sandbox",
         "ZOHO_PAYMENTS_ACCOUNT_ID": "60045604493",
         "ZOHO_PAYMENTS_BASE_URL": "https://payments.zoho.in/api/v1",
         "ZOHO_OAUTH_TOKEN_URL": "https://accounts.zoho.in/oauth/v2/token",
-        "ZOHO_PAYMENTS_RETURN_URL_BASE": "https://procucev-enterprise-frontend.procucev-enterprise.workers.dev",
+        "ZOHO_PAYMENTS_RETURN_URL_BASE": "https://procucev-enterprise-frontend.anshul-goel.workers.dev",
         "ZOHO_RECONCILIATION_ENABLED": "true",
         "ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL": "info@procucev.com",
         "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
-        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5",
+        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "25",
         "SUBSCRIPTION_GST_PERCENT": "18",
         "BUYER_V1_6M_PRICE": "5499",
         "BUYER_V1_12M_PRICE": "4999",
@@ -174,13 +176,13 @@
         {
           "binding": "DB",
           "database_name": "enterprise-qua-d1",
-          "database_id": "63af6c6f-3606-4afa-b0c7-9f9db6296d61"
+      "database_id": "6d7e68be-0e96-47be-b8c7-69aae903adf1"
         }
       ],
       "r2_buckets": [
         {
           "binding": "R2_BUCKET",
-          "bucket_name": "procucec-dev"
+          "bucket_name": "enterprise-qua-dev"
         }
       ]
     },
@@ -223,7 +225,7 @@
         "ZOHO_RECONCILIATION_ENABLED": "true",
         "ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL": "info@procucev.com",
         "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
-        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5",
+        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "25",
         "SUBSCRIPTION_GST_PERCENT": "18",
         "BUYER_V1_6M_PRICE": "5499",
         "BUYER_V1_12M_PRICE": "4999",
@@ -291,7 +293,7 @@
         "ZOHO_RECONCILIATION_ENABLED": "true",
         "ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL": "info@procucev.com",
         "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
-        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5",
+        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "25",
         "SUBSCRIPTION_GST_PERCENT": "18",
         "BUYER_V1_6M_PRICE": "5499",
         "BUYER_V1_12M_PRICE": "4999",
@@ -357,11 +359,11 @@
         "ZOHO_PAYMENTS_ACCOUNT_ID": "60045604493",
         "ZOHO_PAYMENTS_BASE_URL": "https://payments.zoho.in/api/v1",
         "ZOHO_OAUTH_TOKEN_URL": "https://accounts.zoho.in/oauth/v2/token",
-        "ZOHO_PAYMENTS_RETURN_URL_BASE": "https://procucev-enterprise-frontend.anshul-goel.workers.dev/",
+        "ZOHO_PAYMENTS_RETURN_URL_BASE": "https://procucev-enterprise-frontend.anshul-goel.workers.dev",
         "ZOHO_RECONCILIATION_ENABLED": "true",
         "ENTERPRISE_INQUIRY_NOTIFICATION_EMAIL": "info@procucev.com",
         "MAX_CLIENT_VENDORS_PER_CATEGORY": "5",
-        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "5",
+        "MAX_PROCUCEV_VENDORS_PER_CATEGORY": "25",
         "SUBSCRIPTION_GST_PERCENT": "18",
         "BUYER_V1_6M_PRICE": "5499",
         "BUYER_V1_12M_PRICE": "4999",

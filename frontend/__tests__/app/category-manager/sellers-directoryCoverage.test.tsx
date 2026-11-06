@@ -470,7 +470,7 @@ describe('SellersDirectory coverage companion', () => {
       expect(row.getByText('Industrial Supplies')).toBeInTheDocument();
       expect(row.getByText('Never')).toBeInTheDocument();
       expect(row.getByText('4.5')).toBeInTheDocument();
-      expect(row.getByText('0 Credits')).toBeInTheDocument();
+      expect(row.getByText('5 Credits')).toBeInTheDocument();
       expect(row.getByText('ACTIVE')).toBeInTheDocument();
       expect(within(cardOf('Network Suppliers')).getByText('1')).toBeInTheDocument();
 
@@ -603,8 +603,8 @@ describe('SellersDirectory coverage companion', () => {
       expect(emailOnly.getAllByText('India')).toHaveLength(2);
       expect(emailOnly.getByText('Custom Client Category')).toBeInTheDocument();
       expect(emailOnly.getByText('4.2')).toBeInTheDocument();
-      // No plan and no free credits on the record: a real 0, not a made-up 10.
-      expect(emailOnly.getByText('0 Credits')).toBeInTheDocument();
+      // No plan and no stored balance on the record: the default 5 free credits.
+      expect(emailOnly.getByText('5 Credits')).toBeInTheDocument();
       expect(emailOnly.getByText('VERIFIED_CLIENT_LIST')).toBeInTheDocument();
       expect(emailOnly.getByText('Never')).toBeInTheDocument();
 
@@ -917,7 +917,7 @@ describe('SellersDirectory coverage companion', () => {
           MajorCategory: 'Industrial Supplies',
           AIScore: 88,
           StarRating: 4.5,
-          FreeQuotationCredits: 0,
+          FreeQuotationCredits: 5,
           RFQDownloadsUsed: 0,
           Status: 'ACTIVE',
         },
@@ -949,7 +949,7 @@ describe('SellersDirectory coverage companion', () => {
           MajorCategory: 'Custom Client Category',
           AIScore: 85,
           StarRating: 4.2,
-          FreeQuotationCredits: 0,
+          FreeQuotationCredits: 5,
           RFQDownloadsUsed: 0,
           Status: 'VERIFIED_CLIENT_LIST',
         },

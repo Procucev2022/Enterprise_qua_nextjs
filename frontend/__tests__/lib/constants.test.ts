@@ -484,8 +484,8 @@ describe('normalizePoDate', () => {
       // Defaults
       delete process.env.NEXT_PUBLIC_MAX_CLIENT_VENDORS_PER_CATEGORY;
       delete process.env.NEXT_PUBLIC_MAX_PROCUCEV_VENDORS_PER_CATEGORY;
-      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(5);
-      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(5);
+      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY).toBe(25);
+      expect(VENDOR_ASSIGNMENT_LIMITS.MAX_PROCUCEV_PER_CATEGORY).toBe(25);
 
       // With overrides
       process.env.NEXT_PUBLIC_MAX_CLIENT_VENDORS_PER_CATEGORY = '12';
@@ -567,9 +567,10 @@ describe('getVendorCreditBalance', () => {
     expect(getVendorCreditBalance({ subscriptionPlan: 'select', rfqDownloadsUsed: 150 })).toBe(0);
   });
 
-  it('falls back to the free-tier balance, 0 when there is none, for vendors without a subscription', () => {
+  it('falls back to the free-tier balance, the default 5 when none is stored, for vendors without a subscription', () => {
     expect(getVendorCreditBalance({ subscriptionPlan: 'premium', freeQuotationCredits: 3 })).toBe(3);
     expect(getVendorCreditBalance({ freeQuotationCredits: -2 })).toBe(0);
-    expect(getVendorCreditBalance({})).toBe(0);
+    expect(getVendorCreditBalance({})).toBe(5);
+    expect(getVendorCreditBalance({ freeQuotationCredits: 0 })).toBe(0);
   });
 });

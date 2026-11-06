@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 export type UserRole = 'buyer' | 'category_manager' | 'vendor' | 'admin';
 
 export type SourcingMode = 'mode_0' | 'mode_1' | 'mode_2' | 'mode_3';
@@ -174,6 +176,7 @@ export interface RFQFollowUpBreakdown {
   emailStats?: {
     total: number;
     sent24h: number;
+    delivered?: number;
     opened: number;
   };
   vendors: VendorFollowUpRecord[];
@@ -1863,7 +1866,7 @@ export interface DBHealthStatus {
   providerLabel?: string;
   latencyMs?: number;
   poolStatus?: {
-    totalCount: number;
+    totalCount?: number;
     idleCount: number;
     waitingCount: number;
   };
@@ -2363,7 +2366,50 @@ export type ActionCenterTabKey =
   | 'sellers'
   | 'registrations'
   | 'payment_dues'
-  | 'document_vault';
+  | 'document_vault'
+  | 'login_logs';
+
+export type LoginLogUserType = 'buyer' | 'vendor';
+export type LoginLogStatus = 'ACTIVE' | 'LOGGED_OUT' | 'TIMED_OUT';
+
+export interface LoginLogEntry {
+  id: string;
+  userId?: string;
+  userName: string;
+  email: string;
+  phoneNumber: string;
+  companyName: string;
+  userType: LoginLogUserType;
+  loginAt: string;
+  logoutAt?: string | null;
+  durationSeconds?: number;
+  status: LoginLogStatus;
+  ipAddress?: string;
+  deviceInfo?: string;
+  location?: string;
+  userAgent?: string;
+  createdAt: string;
+}
+
+export interface LoginLogsSummary {
+  totalToday: number;
+  activeNow: number;
+  buyerLogins: number;
+  sellerLogins: number;
+  avgDurationMinutes: number;
+  todayPeakHour?: string;
+}
+
+export interface LoginLogsFilterParams {
+  userType?: 'all' | 'buyer' | 'vendor';
+  status?: 'all' | 'ACTIVE' | 'LOGGED_OUT' | 'TIMED_OUT';
+  search?: string;
+  startDate?: string;
+  endDate?: string;
+  dateRangePreset?: 'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'custom';
+  page?: number;
+  limit?: number;
+}
 
 export type ActionCenterCommChannel = 'EMAIL' | 'SMS' | 'BOTH';
 
@@ -2390,6 +2436,8 @@ export interface DocumentVaultItem {
   isActive: boolean;
   createdAt: string;
   updatedAt?: string;
+  accountType?: 'buyer' | 'seller' | 'vault';
+  accountId?: string;
 }
 
 export interface DocumentVaultSummary {
@@ -2542,23 +2590,69 @@ export interface TicketFilterParams {
   offset?: number;
 }
 
+export interface ApprovalHistoryItem {
+  action: string;
+  actor_name: string;
+  actor_role?: string;
+  timestamp: string;
+  remarks?: string;
+}
+
+export interface ApprovalAttachmentItem {
+  name: string;
+  url?: string;
+  size?: number;
+}
+
 export interface ApprovalRequest {
   id: string;
   request_number: string;
   module: string;
+  request_type?: string;
   project: string;
   applicant_name: string;
   applicant_email: string;
   value_impact: string;
+  amount?: number;
+  quantity?: number;
+  available_balance?: number;
   maker_name: string;
   maker_role: string;
+  assigned_approver?: string;
   status: 'Pending' | 'Approved' | 'Rejected';
   details?: string;
   approver_name?: string;
   approver_remarks?: string;
+  history?: ApprovalHistoryItem[];
+  attachments?: ApprovalAttachmentItem[];
+  internal_task_id?: string;
+  buyer_id?: string;
+  seller_id?: string;
+  raw?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
+
+export type ApprovalTableColumnKey =
+  | 'request_id'
+  | 'request_type'
+  | 'requested_by'
+  | 'project_account'
+  | 'amount_quantity'
+  | 'request_date'
+  | 'assigned_approver'
+  | 'status'
+  | 'actions';
+
+export interface ApprovalTableColumnConfig {
+  key: ApprovalTableColumnKey;
+  label: string;
+  visible: boolean;
+  locked?: boolean;
+  order: number;
+}
+
+export type ApprovalTabKey = 'all' | 'pending' | 'approved' | 'rejected' | 'my_approvals';
 
 export interface ApprovalSummary {
   pending: number;
@@ -2899,6 +2993,25 @@ export interface BuyerPaymentTransaction {
   receiptUrl?: string;
 }
 
+export interface AccountDocument {
+  id: string;
+  accountType: 'buyer' | 'seller';
+  accountId: string;
+  documentName: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  category: string;
+  fileUrl: string;
+  description?: string;
+  uploadedBy: string;
+  uploadDate: string;
+  createdAt?: string;
+  updatedAt?: string;
+  isActive?: boolean;
+  sourceWorkflow?: string;
+}
+
 // --- Seller Directory & Supplier 360° Dossier Types -----------------------------
 
 export type SellerDirectoryColumnKey =
@@ -3004,6 +3117,24 @@ export interface SupplierPaymentTransaction {
 
 
 
+export type RegistrationColumnKey =
+  | 'userName'
+  | 'clientType'
+  | 'companyName'
+  | 'phoneNumber'
+  | 'userEmail'
+  | 'regDate'
+  | 'status'
+  | 'sourceType'
+  | 'actions';
+
+export interface RegistrationColumnConfig {
+  key: RegistrationColumnKey;
+  label: string;
+  visible: boolean;
+  required?: boolean;
+}
+
 export interface RegisteredClient {
   id: string;
   userName: string;
@@ -3015,6 +3146,7 @@ export interface RegisteredClient {
   sourceType: 'Web App' | 'WhatsApp' | 'Email';
   isApproved?: boolean;
   remarks?: string;
+  clientType?: 'Buyer' | 'Seller';
 }
 
 
@@ -3146,4 +3278,25 @@ export interface TaskSummary {
   pending?: number;
   blocked?: number;
   escalated?: number;
+}
+
+
+export interface ActionCenterSummaryPopupColumn<T = Record<string, unknown>> {
+  key: string;
+  label: string;
+  render?: (item: T) => ReactNode;
+  sortable?: boolean;
+}
+
+export interface ActionCenterSummaryPopupModalProps<T = Record<string, unknown>> {
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle?: string;
+  totalCount?: number;
+  columns: ActionCenterSummaryPopupColumn<T>[];
+  records: T[];
+  searchPlaceholder?: string;
+  searchKeys?: string[];
+  initialPageSize?: number;
 }

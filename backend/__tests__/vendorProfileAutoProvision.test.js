@@ -55,7 +55,7 @@ describe('storeService.ensureVendorProfileForUser', () => {
       majorCategory: '',
       source: 'migrated_identity',
       subscriptionPlan: 'premium',
-      freeQuotationCredits: 0,
+      freeQuotationCredits: 5,
       isCategoryAligned: false,
       onboardingEmailStatus: 'account_exists',
     });

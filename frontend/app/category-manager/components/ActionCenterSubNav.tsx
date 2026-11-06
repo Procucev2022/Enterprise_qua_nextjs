@@ -12,6 +12,7 @@ import {
   Users,
   TrendingUp,
   FolderOpen,
+  ShieldCheck,
 } from 'lucide-react';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { ActionCenterTabKey } from '@/lib/types';
@@ -100,10 +101,16 @@ export default function ActionCenterSubNav({
       label: tabs.documentVault,
       icon: FolderOpen,
     },
+    {
+      id: 'login_logs',
+      label: tabs.loginLogs,
+      icon: ShieldCheck,
+    },
   ];
 
   return (
     <div className="w-full border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 sticky top-0 z-30 mb-4 -mx-2 sm:-mx-3 px-2 sm:px-3">
+      <h1 className="sr-only">Action Center</h1>
       <div role="tablist" aria-label="Action Center Navigation" className="flex items-center gap-1 overflow-x-auto no-scrollbar py-1">
         {navItems.map((item) => {
           const Icon = item.icon;

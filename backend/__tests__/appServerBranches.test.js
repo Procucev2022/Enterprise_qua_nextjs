@@ -4,6 +4,7 @@ const { app, bootstrapServer, start } = require('../src/server');
 const storeService = require('../src/services/storeService');
 const pool = require('../src/db/pool');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
+const dailyRfqReportService = require('../src/services/dailyRfqReportService');
 const { logger } = require('../src/services/loggerService');
 
 describe('App & Server Dedicated Branch Boost Suite', () => {
@@ -39,6 +40,16 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
         'SERVER'
       );
       await new Promise((resolve) => server.close(resolve));
+    });
+
+    test('bootstrapServer starts and stops the daily RFQ report scheduler with the server lifecycle', async () => {
+      const startScheduler = jest.spyOn(dailyRfqReportService, 'startDailyReportScheduler');
+      const stopScheduler = jest.spyOn(dailyRfqReportService, 'stopDailyReportScheduler');
+      const server = await bootstrapServer(0);
+
+      expect(startScheduler).toHaveBeenCalledTimes(1);
+      await new Promise((resolve) => server.close(resolve));
+      expect(stopScheduler).toHaveBeenCalledTimes(1);
     });
 
     test('start() starts server successfully on designated port', async () => {

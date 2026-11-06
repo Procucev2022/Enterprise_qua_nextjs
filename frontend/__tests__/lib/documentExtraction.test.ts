@@ -173,7 +173,40 @@ describe('flattenWorkbook', () => {
     expect(text).toContain('Electrical Cable 1 | 101 | Meters | XLPE 4C 1mm');
     expect(text).toContain('Electrical Cable 100 | 200 | Meters | XLPE 4C 100mm');
   });
+
+  test('formats Date cells as ISO YYYY-MM-DD strings', () => {
+    const book = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['Item', 'Qty', 'Target Delivery Date'],
+      ['Pipes', 20, new Date('2026-11-25T00:00:00.000Z')],
+    ]);
+    XLSX.utils.book_append_sheet(book, ws, 'DeliverySheet');
+    const written = XLSX.write(book, { type: 'array', bookType: 'xlsx' });
+    const text = flattenWorkbook(written);
+    expect(text).toContain('Pipes | 20 | 2026-11-25');
+  });
 });
+
+
+  test('replicates merged cell values across merged range including empty and non-empty cells', () => {
+    const book = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['Header', null, 'Qty'],
+      ['Submersible', 'Pump', 10],
+    ]);
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 1 } },
+      { s: { r: 5, c: 0 }, e: { r: 5, c: 1 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 1 } },
+    ];
+    XLSX.utils.book_append_sheet(book, ws, 'MergedSheet');
+    const written = XLSX.write(book, { type: 'array', bookType: 'xlsx' });
+
+    const text = flattenWorkbook(written);
+    expect(text).toContain('Header | Header | Qty');
+    expect(text).toContain('Submersible | Pump | 10');
+  });
+
 
 describe('readAsBase64', () => {
   test('returns the body without the data-URL prefix', async () => {

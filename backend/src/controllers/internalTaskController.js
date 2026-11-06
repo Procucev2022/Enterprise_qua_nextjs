@@ -586,6 +586,7 @@ async function getRegistrations(req, res) {
       search = '',
       sourceType = 'all',
       status = 'all',
+      clientType = 'all',
       limit = 100,
       offset = 0,
     } = validation.sanitizedData;
@@ -595,6 +596,9 @@ async function getRegistrations(req, res) {
       searchLength: String(search).length,
       sourceType,
       status,
+      clientType,
+      limit,
+      offset,
     }, 'INTERNAL_TASK_CONTROLLER');
     const result = await registrationQueries.getRegisteredClients({
       search,
@@ -602,6 +606,7 @@ async function getRegistrations(req, res) {
       status,
       limit,
       offset,
+      clientType,
     });
 
     return res.status(200).json({

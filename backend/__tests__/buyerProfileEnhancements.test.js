@@ -899,6 +899,42 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       storeService.isHydratedFromDB = prevHydrated;
     });
 
+    test('getBuyerAccounts rejects invalid callers and selects durable buyer/admin records', async () => {
+      const next = jest.fn();
+      const response = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn() });
+
+      const unauthenticated = response();
+      await buyerAccountController.getBuyerAccounts({ user: null }, unauthenticated, next);
+      expect(unauthenticated.status).toHaveBeenCalledWith(401);
+
+      const forbidden = response();
+      await buyerAccountController.getBuyerAccounts({ user: vendorUser }, forbidden, next);
+      expect(forbidden.status).toHaveBeenCalledWith(403);
+
+      const hasStorage = jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      const missingBuyer = response();
+      storeService.getBuyerAccountByEmail.mockResolvedValueOnce(null);
+      await buyerAccountController.getBuyerAccounts({ user: buyerUser, query: {} }, missingBuyer, next);
+      expect(missingBuyer.json).toHaveBeenCalledWith(expect.objectContaining({ data: [] }));
+
+      hasStorage.mockReturnValue(true);
+      jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB').mockResolvedValueOnce(mockBuyer);
+      const persistedBuyer = response();
+      await buyerAccountController.getBuyerAccounts({ user: buyerUser, query: {} }, persistedBuyer, next);
+      expect(persistedBuyer.json).toHaveBeenCalledWith(expect.objectContaining({ data: [mockBuyer] }));
+
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValueOnce({ accounts: [mockBuyer] });
+      const persistedAdmins = response();
+      await buyerAccountController.getBuyerAccounts({ user: adminUser, query: {} }, persistedAdmins, next);
+      expect(persistedAdmins.json).toHaveBeenCalledWith(expect.objectContaining({ data: [mockBuyer] }));
+
+      const dbError = response();
+      const error = new Error('buyer accounts unavailable');
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockRejectedValueOnce(error);
+      await buyerAccountController.getBuyerAccounts({ user: adminUser, query: {} }, dbError, next);
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 503, retryable: true }));
+    });
+
     test('createSubscriptionPaymentLink exercises duration, missing phone fallback, and auto-creation', async () => {
       const zohoPaymentService = require('../src/services/zohoPaymentService');
       const identityQueries = require('../src/db/identityQueries');
@@ -1222,6 +1258,21 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       const resActive = { status: jest.fn().mockReturnThis(), json: jest.fn() };
       await buyerAccountController.setActiveAccount(reqActive, resActive, jest.fn());
       expect(resActive.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: mockBuyer }));
+    });
+
+    test('deleteBuyerAccount and setActiveAccount return not found when persistence has no matching account', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      jest.spyOn(storeService, 'deleteBuyerAccountDurably').mockResolvedValue(false);
+      jest.spyOn(storeService, 'alignActiveBuyerAccountDurably').mockResolvedValue(null);
+
+      const req = { user: adminUser, params: { id: mockBuyer.id } };
+      const deleteResponse = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.deleteBuyerAccount(req, deleteResponse, jest.fn());
+      expect(deleteResponse.status).toHaveBeenCalledWith(404);
+
+      const activateResponse = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.setActiveAccount(req, activateResponse, jest.fn());
+      expect(activateResponse.status).toHaveBeenCalledWith(404);
     });
 
     test('updateBuyerAccount authorizes against the persisted buyer account when storage is configured', async () => {

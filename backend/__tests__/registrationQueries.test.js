@@ -301,6 +301,7 @@ describe('registrationQueries', () => {
         sourceTypeRaw: 'whats_app',
         isWhatsApp: false,
         total: 2,
+        roleName: 'vendor',
       },
       {
         id: 'db-u-active',
@@ -314,6 +315,7 @@ describe('registrationQueries', () => {
         sourceTypeRaw: null,
         isWhatsApp: false,
         total: 2,
+        roleName: 'buyer',
       },
     ];
 
@@ -507,5 +509,33 @@ describe('registrationQueries', () => {
       else globalThis.__CF_ENV__ = previousEnv;
     }
   });
-});
 
+  test('getRegisteredClients filters by clientType (Buyer and Seller)', async () => {
+    const buyers = await registrationQueries.getRegisteredClients({ clientType: 'Buyer' });
+    expect(buyers.total).toBeGreaterThan(0);
+    buyers.clients.forEach((c) => expect(c.clientType).toBe('Buyer'));
+
+    const sellers = await registrationQueries.getRegisteredClients({ clientType: 'Seller' });
+    expect(sellers.total).toBeGreaterThan(0);
+    sellers.clients.forEach((c) => expect(c.clientType).toBe('Seller'));
+
+    const all = await registrationQueries.getRegisteredClients({ clientType: 'all' });
+    expect(all.total).toBe(buyers.total + sellers.total);
+
+    // Test fallback when clientType property is missing
+    const defaultType = await registrationQueries.getRegisteredClients({ clientType: 'buyer' });
+    expect(defaultType.clients.length).toBeGreaterThan(0);
+  });
+
+  test('normalizeClientType correctly detects Buyer and Seller', () => {
+    expect(registrationQueries.normalizeClientType('seller')).toBe('Seller');
+    expect(registrationQueries.normalizeClientType('vendor')).toBe('Seller');
+    expect(registrationQueries.normalizeClientType('supplier')).toBe('Seller');
+    expect(registrationQueries.normalizeClientType('buyer')).toBe('Buyer');
+    expect(registrationQueries.normalizeClientType(null, 'Apex Fasteners Ltd', 'apex@example.com')).toBe('Seller');
+    expect(registrationQueries.normalizeClientType(null, 'Global Steel Corp', 'steel@example.com')).toBe('Seller');
+    expect(registrationQueries.normalizeClientType(null, 'ProcureHub Tech', 'procure@example.com')).toBe('Buyer');
+    expect(registrationQueries.normalizeClientType(undefined, undefined, undefined)).toBe('Buyer');
+  });
+
+});

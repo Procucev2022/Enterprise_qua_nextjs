@@ -137,6 +137,60 @@ describe('storeService.ensureBuyerAccountForUser', () => {
     expect(got.city).toBe('Pune');
   });
 
+  test('refreshes an existing durable account by id and skips complete profiles', async () => {
+    storeService.buyerAccounts = [];
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+    const existing = {
+      id: 'db-buyer-profile',
+      organizationName: 'Basic Durable Account',
+      corporateEmail: 'db-profile@ex.com',
+    };
+    const enriched = {
+      ...existing,
+      gstin: '27AABCE1234F1Z5',
+      mobileNumber: '+919999988888',
+      city: 'Pune',
+    };
+    jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB')
+      .mockResolvedValueOnce(existing)
+      .mockResolvedValueOnce(enriched);
+    jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockResolvedValue({
+      found: true,
+      profile: { gstNumber: enriched.gstin, contactPhone: enriched.mobileNumber, city: enriched.city },
+    });
+    const update = jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue(enriched);
+
+    const first = await storeService.ensureBuyerAccountForUser({
+      role: 'buyer', email: existing.corporateEmail, sub: existing.id,
+    });
+    expect(first).toMatchObject({ id: existing.id, gstin: enriched.gstin });
+    expect(update).toHaveBeenCalledTimes(1);
+
+    const second = await storeService.ensureBuyerAccountForUser({
+      role: 'buyer', email: existing.corporateEmail, sub: existing.id,
+    });
+    expect(second).toMatchObject({ id: existing.id, city: 'Pune' });
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  test('fails when profile enrichment cannot update the durable buyer account', async () => {
+    storeService.buyerAccounts = [];
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+    const existing = { id: 'db-buyer-no-update', corporateEmail: 'no-update@ex.com' };
+    jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValue(existing);
+    jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockResolvedValue({
+      found: true,
+      profile: { gstNumber: '27AABCE1234F1Z5' },
+    });
+    jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue(null);
+
+    await expect(storeService.ensureBuyerAccountForUser({
+      role: 'buyer', email: existing.corporateEmail, sub: existing.id,
+    })).rejects.toThrow('Buyer profile enrichment did not find a durable account row.');
+  });
+
   test('logs profile lookup errors and returns the existing account unchanged', async () => {
     const buyerProfileQueries = require('../src/db/buyerProfileQueries');
     const existing = storeService.addBuyerAccount({

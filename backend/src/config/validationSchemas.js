@@ -209,7 +209,7 @@ const INTERNAL_TASK_TYPE_ENUM = Object.freeze([
 
 const VALIDATION_SCHEMAS = {
   clientLogEntry: {
-    level: { type: 'string', required: false, enum: ['DEBUG', 'INFO', 'WARN', 'ERROR', 'AUDIT'] },
+      level: { type: 'string', required: false, enum: ['DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL', 'AUDIT'] },
     message: {
       type: 'string', required: true, minLength: 1, maxLength: CLIENT_LOG_LIMITS.MESSAGE_LENGTH,
       message: 'Log message is required.',
@@ -266,6 +266,51 @@ const VALIDATION_SCHEMAS = {
     idempotencyKey: {
       type: 'string', required: true, maxLength: 36, pattern: UUID_REGEX,
       message: 'Idempotency-Key must be a UUID.',
+    },
+  },
+  accountDocumentUpload: {
+    documentName: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'Document name is required.' },
+    category: { type: 'string', required: true, minLength: 1, maxLength: 64, message: 'Valid document category is required.' },
+    fileName: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'File name is required.' },
+    fileSize: { type: 'number', required: false, min: 0, max: 26214400, message: 'File size must not exceed 25MB.' },
+    description: { type: 'string', required: false, maxLength: 2000 },
+    fileUrl: { type: 'string', required: false },
+    mimeType: { type: 'string', required: false },
+  },
+
+  sellerAddQuoteCredits: {
+    amount: {
+      type: 'number',
+      required: true,
+      min: 1,
+      max: 5,
+      custom: (val) => (!Number.isInteger(Number(val)) || Number(val) < 1 || Number(val) > 5 ? 'Quote credits must be an integer between 1 and 5.' : null),
+      message: 'Quote credits must be an integer between 1 and 5.',
+    },
+    reason: { type: 'string', required: false, maxLength: 500 },
+  },
+
+  buyerCreditApprovalRequest: {
+    amount: {
+      type: 'number',
+      required: true,
+      min: 1,
+      max: 100000,
+      custom: (val) => (!Number.isInteger(Number(val)) || Number(val) < 1 ? 'Credit amount must be a positive integer.' : null),
+      message: 'Credit amount must be a positive integer.',
+    },
+    reason: { type: 'string', required: false, maxLength: 1000 },
+    approverName: {
+      type: 'string',
+      required: true,
+      enum: ['Srinu Sir', 'Sudheer Sir'],
+      message: 'Approver must be Srinu Sir or Sudheer Sir.',
+    },
+    initiatorName: {
+      type: 'string',
+      required: true,
+      enum: ['Govardhan', 'Krishna', 'Chandhan'],
+      message: 'Initiator must be Govardhan, Krishna, or Chandhan.',
     },
   },
 
@@ -363,6 +408,8 @@ const VALIDATION_SCHEMAS = {
       pattern: EMAIL_REGEX,
       message: 'Gateway notification address must be a valid email address.',
     },
+    sharedBuyerAccountIds: { type: 'array', required: false },
+    sharedBuyerEmails: { type: 'array', required: false },
   },
 
   // Edit of an existing RFQ (PUT /api/rfqs/:id).
@@ -1010,6 +1057,7 @@ const VALIDATION_SCHEMAS = {
 
   registrationList: {
     search: { type: 'string', required: false, maxLength: 200 },
+    clientType: { type: 'string', required: false, enum: ['all', 'buyer', 'seller'] },
     sourceType: {
       type: 'string',
       required: false,
@@ -1259,6 +1307,23 @@ const VALIDATION_SCHEMAS = {
     },
   },
 
+  sendDailyRfqReport: {
+    targetDate: {
+      type: 'string',
+      required: false,
+      pattern: /^\d{4}-\d{2}-\d{2}$/,
+      message: 'targetDate must be a valid date in YYYY-MM-DD format if provided.',
+    },
+    recipients: {
+      type: 'array',
+      required: false,
+      message: 'recipients must be an array of email strings.',
+    },
+    dryRun: {
+      type: 'boolean',
+      required: false,
+    },
+  },
 };
 
 

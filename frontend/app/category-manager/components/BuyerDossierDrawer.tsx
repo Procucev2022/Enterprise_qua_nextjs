@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   X,
   Building2,
@@ -57,17 +57,20 @@ import {
   DEFAULT_INTERNAL_MEMBERS,
   CALL_OUTCOMES,
   FOLLOWUP_PRIORITIES,
+  CREDIT_APPROVAL_APPROVERS,
+  CREDIT_APPROVAL_INITIATORS,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 import {
   fetchBuyerCreditHistory,
-  addBuyerCredit,
   updateBuyerCategories,
   fetchBuyerCommunications,
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
 } from '@/lib/buyerProfileClient';
+import { requestBuyerCreditApproval } from '@/lib/accountDocumentsClient';
+import AccountDocumentsTab from './AccountDocumentsTab';
 
 interface BuyerDossierDrawerProps {
   buyer: BuyerAccount;
@@ -75,8 +78,8 @@ interface BuyerDossierDrawerProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
   buyerRfqs?: RFQItem[];
   initialCommunications?: BuyerCommunicationItem[];
-  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments';
-  onTabChange?: (tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments') => void;
+  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents';
+  onTabChange?: (tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents') => void;
 }
 
 const DEFAULT_MAJOR_CATEGORIES = [
@@ -104,8 +107,9 @@ export default function BuyerDossierDrawer({
   const strings = UI_STRINGS.buyerDirectory.dossier;
 
   // Active Main Tab with context preservation
-  const [dossierTab, setDossierTabState] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments'>(initialTab);
-  const setDossierTab = useCallback((tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments') => {
+  const [dossierTab, setDossierTabState] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents'>(initialTab);
+  const [docCount, setDocCount] = useState<number>(0);
+  const setDossierTab = useCallback((tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents') => {
     setDossierTabState(tab);
     if (onTabChange) onTabChange(tab);
   }, [onTabChange]);
@@ -322,10 +326,11 @@ export default function BuyerDossierDrawer({
 
   // Add Credit modal states
   const [isAddCreditModalOpen, setIsAddCreditModalOpen] = useState<boolean>(false);
+  const [creditApprover, setCreditApprover] = useState<string>(CREDIT_APPROVAL_APPROVERS[0]);
+  const [creditInitiator, setCreditInitiator] = useState<string>(CREDIT_APPROVAL_INITIATORS[0]);
   const [addCreditAmount, setAddCreditAmount] = useState<number>(5);
   const [addCreditReason, setAddCreditReason] = useState<string>('');
   const [isSubmittingCredit, setIsSubmittingCredit] = useState<boolean>(false);
-  const addCreditRequestRef = useRef<{ signature: string; idempotencyKey: string } | null>(null);
 
   const loadCreditHistory = useCallback(async () => {
     setLoadingCredit(true);
@@ -352,32 +357,30 @@ export default function BuyerDossierDrawer({
   const handleConfirmAddCredit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (addCreditAmount <= 0) return;
-    const payload = {
-      amount: addCreditAmount,
-      reason: addCreditReason || 'Category Manager console allocation',
-      source: 'Category Manager Console',
-    };
-    const signature = JSON.stringify([buyer.id, payload.amount, payload.reason, payload.source]);
-    let request = addCreditRequestRef.current;
-    if (!request || request.signature !== signature) {
-      request = { signature, idempotencyKey: crypto.randomUUID() };
-      addCreditRequestRef.current = request;
-    }
     setIsSubmittingCredit(true);
     try {
-      const res = await addBuyerCredit(buyer.id, payload, request.idempotencyKey);
+      const res = await requestBuyerCreditApproval(buyer.id, {
+        amount: addCreditAmount,
+        reason: addCreditReason || 'Enterprise sourcing credit allocation request',
+        approverName: creditApprover,
+        initiatorName: creditInitiator,
+      });
       if (res.success) {
-        addCreditRequestRef.current = null;
-        showToast(res.message || `Successfully added ${addCreditAmount} credits.`, 'success');
+        showToast(
+          res.message ||
+            formatString(strings.creditApproval?.toastSuccess || strings.creditApproval?.successToast || 'Credit request submitted for approval to {approverName}. Status: Pending Approval.', {
+              approverName: creditApprover,
+            }),
+          'success'
+        );
         setIsAddCreditModalOpen(false);
         setAddCreditAmount(5);
         setAddCreditReason('');
-        loadCreditHistory();
       } else {
-        showToast(res.error || 'Failed to add credit', 'error');
+        showToast(res.error || strings.creditApproval?.toastError || strings.creditApproval?.errorToast || 'Failed to submit credit approval request.', 'error');
       }
     } catch {
-      showToast('Error allocating credits', 'error');
+      showToast(strings.creditApproval?.toastError || strings.creditApproval?.errorToast || 'Failed to submit credit approval request.', 'error');
     } finally {
       setIsSubmittingCredit(false);
     }
@@ -739,6 +742,7 @@ export default function BuyerDossierDrawer({
             { id: 'credits', label: strings.creditTab, icon: CreditCard },
             { id: 'communications', label: `${strings.communicationsTab} (${communications.length})`, icon: MessageSquare },
             { id: 'payments', label: `${strings.paymentsTab} (${payments.length})`, icon: Receipt },
+            { id: 'documents', label: `${strings.documentsTab} (${docCount})`, icon: FileText },
           ].map((tab) => {
             const Icon = tab.icon;
             return (
@@ -1291,6 +1295,16 @@ export default function BuyerDossierDrawer({
             </div>
           )}
 
+
+          {/* TAB 6: DOCUMENTS TAB */}
+          {dossierTab === 'documents' && (
+            <AccountDocumentsTab
+              accountType="buyer"
+              accountId={buyer.id}
+              accountName={buyer.organizationName}
+              onDocumentCountChange={setDocCount}
+            />
+          )}
           {/* TAB 5: PAYMENTS TAB */}
           {dossierTab === 'payments' && (
             <div className="space-y-5">
@@ -1499,7 +1513,7 @@ export default function BuyerDossierDrawer({
       </div>
 
       {/* ------------------------------------------------------------------------ */}
-      {/* MODAL 1: ADD CREDIT MODAL */}
+      {/* MODAL 1: ADD CREDIT MODAL (WITH APPROVAL WORKFLOW) */}
       {/* ------------------------------------------------------------------------ */}
       {isAddCreditModalOpen && (
         <div
@@ -1511,12 +1525,14 @@ export default function BuyerDossierDrawer({
           }}
         >
           <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  {strings.credit.addCreditTitle}
+                  {strings.creditApproval?.modalTitle || 'Request Buyer Sourcing Credits'}
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5">{strings.credit.addCreditSubtitle}</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {strings.creditApproval?.modalSubtitle || 'Submit a credit addition request for executive review & approval'}
+                </p>
               </div>
               <button
                 type="button"
@@ -1527,10 +1543,34 @@ export default function BuyerDossierDrawer({
               </button>
             </div>
 
-            <form onSubmit={handleConfirmAddCredit} className="space-y-4">
+            <form onSubmit={handleConfirmAddCredit} className="space-y-3.5 text-xs">
+              {/* Buyer Name (Read-Only) */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {strings.credit.creditAmount}
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {strings.creditApproval?.buyerNameLabel || 'Buyer Organization'}
+                </label>
+                <input
+                  type="text"
+                  readOnly
+                  value={buyer.organizationName}
+                  className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                />
+              </div>
+
+              {/* Current Available Credits (Read-Only) */}
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {strings.creditApproval?.availableCreditsLabel || 'Available Sourcing Credits'}
+                </label>
+                <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold">
+                  {creditSummary?.remainingFreeCredits ?? (buyer as any).creditsRemaining ?? 0} Credits
+                </div>
+              </div>
+
+              {/* Requested Credits */}
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {strings.creditApproval?.requestedCreditsLabel || 'Requested Credits'} <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="number"
@@ -1538,38 +1578,77 @@ export default function BuyerDossierDrawer({
                   max="1000"
                   value={addCreditAmount}
                   onChange={(e) => setAddCreditAmount(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
-                  className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold"
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                   required
                 />
               </div>
 
+              {/* Initiated By Select */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {strings.credit.reason}
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {strings.creditApproval?.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={creditInitiator}
+                  onChange={(e) => setCreditInitiator(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                >
+                  {CREDIT_APPROVAL_INITIATORS.map((init) => (
+                    <option key={init} value={init}>
+                      {init}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Assigned Approver Select */}
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {strings.creditApproval?.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={creditApprover}
+                  onChange={(e) => setCreditApprover(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                >
+                  {CREDIT_APPROVAL_APPROVERS.map((appr) => (
+                    <option key={appr} value={appr}>
+                      {appr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Reason / Remarks */}
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {strings.creditApproval?.reasonLabel || 'Business Justification / Reason'}
                 </label>
                 <textarea
-                  rows={3}
+                  rows={2}
                   value={addCreditReason}
                   onChange={(e) => setAddCreditReason(e.target.value)}
-                  placeholder="e.g., Enterprise relationship top-up / manual adjustment"
-                  className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                  placeholder={strings.creditApproval?.reasonPlaceholder || 'Enter business justification...'}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setIsAddCreditModalOpen(false)}
-                  className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
+                  className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingCredit}
+                  disabled={isSubmittingCredit || addCreditAmount <= 0}
                   className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50"
                 >
-                  {isSubmittingCredit ? 'Allocating...' : strings.credit.confirmAddCredit}
+                  {isSubmittingCredit
+                    ? strings.creditApproval?.submittingBtn || 'Submitting Request...'
+                    : strings.creditApproval?.submitBtn || 'Submit for Approval'}
                 </button>
               </div>
             </form>

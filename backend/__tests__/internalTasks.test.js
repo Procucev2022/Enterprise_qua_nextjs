@@ -366,48 +366,68 @@ describe('Internal Tasks API & Controller', () => {
     expect(res.body.success).toBe(true);
   });
 
-  test('handles 500 error catch branches gracefully', async () => {
-    jest.spyOn(internalTaskQueries, 'getInternalTasks').mockRejectedValue(new Error('DB failure'));
-    const res = await request(app).get('/api/internal-tasks');
-    expect(res.status).toBe(500);
-    expect(res.body.success).toBe(false);
+  describe('handles 500 error catch branches gracefully', () => {
+    test('GET /api/internal-tasks returns 500 on DB failure', async () => {
+      jest.spyOn(internalTaskQueries, 'getInternalTasks').mockRejectedValue(new Error('DB failure'));
+      const res = await request(app).get('/api/internal-tasks');
+      expect(res.status).toBe(500);
+      expect(res.body.success).toBe(false);
+    });
 
-    jest.spyOn(internalTaskQueries, 'getInternalTaskSummary').mockRejectedValue(new Error('DB failure'));
-    const sumRes = await request(app).get('/api/internal-tasks/summary');
-    expect(sumRes.status).toBe(500);
+    test('GET /api/internal-tasks/summary returns 500 on DB failure', async () => {
+      jest.spyOn(internalTaskQueries, 'getInternalTaskSummary').mockRejectedValue(new Error('DB failure'));
+      const sumRes = await request(app).get('/api/internal-tasks/summary');
+      expect(sumRes.status).toBe(500);
+    });
 
-    jest.spyOn(internalTaskQueries, 'getTaskTypes').mockRejectedValue(new Error('DB failure'));
-    const ttRes = await request(app).get('/api/internal-tasks/task-types');
-    expect(ttRes.status).toBe(200);
-    expect(ttRes.body.taskTypes).toEqual(internalTaskQueries.DEFAULT_TASK_TYPES);
+    test('GET /api/internal-tasks/task-types falls back to default types on DB failure', async () => {
+      jest.spyOn(internalTaskQueries, 'getTaskTypes').mockRejectedValue(new Error('DB failure'));
+      const ttRes = await request(app).get('/api/internal-tasks/task-types');
+      expect(ttRes.status).toBe(200);
+      expect(ttRes.body.taskTypes).toEqual(internalTaskQueries.DEFAULT_TASK_TYPES);
+    });
 
-    jest.spyOn(internalTaskQueries, 'createTaskType').mockRejectedValue(new Error('DB failure'));
-    const ctRes = await request(app).post('/api/internal-tasks/task-types').send({ name: 'Test' });
-    expect(ctRes.status).toBe(500);
+    test('POST /api/internal-tasks/task-types returns 500 on DB failure', async () => {
+      jest.spyOn(internalTaskQueries, 'createTaskType').mockRejectedValue(new Error('DB failure'));
+      const ctRes = await request(app).post('/api/internal-tasks/task-types').send({ name: 'Test' });
+      expect(ctRes.status).toBe(500);
+    });
 
-    jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockRejectedValue(new Error('DB failure'));
-    const tByIdRes = await request(app).get('/api/internal-tasks/123');
-    expect(tByIdRes.status).toBe(500);
+    test('GET /api/internal-tasks/:id returns 500 on DB failure', async () => {
+      jest.spyOn(internalTaskQueries, 'getInternalTaskById').mockRejectedValue(new Error('DB failure'));
+      const tByIdRes = await request(app).get('/api/internal-tasks/123');
+      expect(tByIdRes.status).toBe(500);
+    });
 
-    jest.spyOn(internalTaskQueries, 'createInternalTask').mockRejectedValue(new Error('DB failure'));
-    const createRes = await request(app).post('/api/internal-tasks').send({ title: 'Task Test' });
-    expect(createRes.status).toBe(500);
+    test('POST /api/internal-tasks returns 500 on DB failure', async () => {
+      jest.spyOn(internalTaskQueries, 'createInternalTask').mockRejectedValue(new Error('DB failure'));
+      const createRes = await request(app).post('/api/internal-tasks').send({ title: 'Task Test' });
+      expect(createRes.status).toBe(500);
+    });
 
-    jest.spyOn(internalTaskQueries, 'updateInternalTask').mockRejectedValue(new Error('DB failure'));
-    const updateRes = await request(app).put('/api/internal-tasks/123').send({ status: 'In Progress' });
-    expect(updateRes.status).toBe(500);
+    test('PUT /api/internal-tasks/:id returns 500 on DB failure', async () => {
+      jest.spyOn(internalTaskQueries, 'updateInternalTask').mockRejectedValue(new Error('DB failure'));
+      const updateRes = await request(app).put('/api/internal-tasks/123').send({ status: 'In Progress' });
+      expect(updateRes.status).toBe(500);
+    });
 
-    jest.spyOn(internalTaskQueries, 'deleteInternalTask').mockRejectedValue(new Error('DB failure'));
-    const delRes = await request(app).delete('/api/internal-tasks/123');
-    expect(delRes.status).toBe(500);
+    test('DELETE /api/internal-tasks/:id returns 500 on DB failure', async () => {
+      jest.spyOn(internalTaskQueries, 'deleteInternalTask').mockRejectedValue(new Error('DB failure'));
+      const delRes = await request(app).delete('/api/internal-tasks/123');
+      expect(delRes.status).toBe(500);
+    });
 
-    jest.spyOn(internalTaskQueries, 'searchRelatedEntities').mockRejectedValue(new Error('DB failure'));
-    const searchRes = await request(app).get('/api/internal-tasks/entities');
-    expect(searchRes.status).toBe(500);
+    test('GET /api/internal-tasks/entities returns 500 on DB failure', async () => {
+      jest.spyOn(internalTaskQueries, 'searchRelatedEntities').mockRejectedValue(new Error('DB failure'));
+      const searchRes = await request(app).get('/api/internal-tasks/entities');
+      expect(searchRes.status).toBe(500);
+    });
 
-    jest.spyOn(internalTaskQueries, 'getInternalTasks').mockRejectedValue(new Error('DB failure'));
-    const expRes = await request(app).get('/api/internal-tasks/export');
-    expect(expRes.status).toBe(500);
+    test('GET /api/internal-tasks/export returns 500 on DB failure', async () => {
+      jest.spyOn(internalTaskQueries, 'getInternalTasks').mockRejectedValue(new Error('DB failure'));
+      const expRes = await request(app).get('/api/internal-tasks/export');
+      expect(expRes.status).toBe(500);
+    });
   });
 
   test('POST /api/internal-tasks/:id/approve rejects unauthenticated and unauthorized users', async () => {

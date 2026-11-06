@@ -228,6 +228,13 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       );
       await waitFor(() => expect(screen.getByTestId('ready')).toBeInTheDocument());
 
+      // Load bootstrap once, then verify both shared loaders use its warm cache.
+      await act(async () => {
+        await capturedApp?.ensureVendors(true);
+        await capturedApp?.ensureVendors(false);
+        await capturedApp?.ensureVendorEvaluations(false);
+      });
+
       // ensureRFQs
       await act(async () => {
         await capturedApp?.ensureRFQs(true);
@@ -261,6 +268,12 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       });
 
       expect(capturedApp?.categoryTaxonomy.length).toBeGreaterThan(0);
+
+      // A signed-out caller clears the AI feed without making a request.
+      jest.spyOn(authClient, 'getToken').mockReturnValue(null);
+      await act(async () => {
+        await capturedApp?.ensureAIFeed(true);
+      });
     });
 
     test('signed out state clears RFQs, activeBuyerAccount, and taxonomy', async () => {

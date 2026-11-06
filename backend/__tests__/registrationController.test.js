@@ -70,7 +70,7 @@ describe('internalTaskController - Registrations', () => {
 
       expect(res.status).toHaveBeenCalledWith(200);
       expect(registrationQueries.getRegisteredClients).toHaveBeenCalledWith({
-        search: '', sourceType: 'all', status: 'all', limit: 100, offset: 0,
+        search: '', sourceType: 'all', status: 'all', clientType: 'all', limit: 100, offset: 0,
       });
     });
 

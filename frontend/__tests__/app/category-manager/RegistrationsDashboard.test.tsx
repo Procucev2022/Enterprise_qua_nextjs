@@ -49,6 +49,17 @@ const mockClients = [
     sourceType: 'Email',
     isApproved: true,
   },
+  {
+    id: 'reg-client-114',
+    userName: 'Anita Rao',
+    companyName: 'Rao Enterprises',
+    phoneNumber: '',
+    userEmail: 'anita@rao.in',
+    regDate: '2026-03-10T10:00:00.000Z',
+    status: 'Rejected',
+    sourceType: 'Other',
+    isApproved: false,
+  },
 ];
 
 describe('RegistrationsDashboard', () => {
@@ -89,8 +100,8 @@ describe('RegistrationsDashboard', () => {
 
     expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.title)).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText('4 Total')).toBeInTheDocument();
-      expect(onCountChange).toHaveBeenCalledWith(4);
+      expect(screen.getByText('5 Total')).toBeInTheDocument();
+      expect(onCountChange).toHaveBeenCalledWith(5);
     });
   });
 
@@ -456,5 +467,288 @@ describe('RegistrationsDashboard', () => {
       expect(screen.getByText('-')).toBeInTheDocument();
     });
   });
-});
+  test('clicks summary cards to open modal with filtered clients', async () => {
+    render(<RegistrationsDashboard />);
 
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    // Click Total Registrations card
+    const totalCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiTotalClients);
+    fireEvent.click(totalCards[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    // Close modal
+    const closeBtn = screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn);
+    fireEvent.click(closeBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    // Click Web App card
+    const webAppCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWebApp);
+    fireEvent.click(webAppCards[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    // Close modal again
+    fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+
+    // Click WhatsApp card
+    const whatsAppCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWhatsApp);
+    fireEvent.click(whatsAppCards[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+
+    // Click Email card
+    const emailCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiEmail);
+    fireEvent.click(emailCards[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+  });
+
+  test('handles keyboard enter and space on summary card to open modal', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const webAppCard = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWebApp)[0].closest('[role="group"]');
+    expect(webAppCard).not.toBeNull();
+    if (webAppCard) {
+      fireEvent.keyDown(webAppCard, { key: 'Enter' });
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+
+      fireEvent.keyDown(webAppCard, { key: ' ' });
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+
+      // Non-activating key
+      fireEvent.keyDown(webAppCard, { key: 'ArrowDown' });
+    }
+
+    const whatsAppCard = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWhatsApp)[0].closest('[role="group"]');
+    if (whatsAppCard) {
+      fireEvent.keyDown(whatsAppCard, { key: 'Enter' });
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+    }
+
+    const emailCard = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiEmail)[0].closest('[role="group"]');
+    if (emailCard) {
+      fireEvent.keyDown(emailCard, { key: ' ' });
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+    }
+
+    const totalCard = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiTotalClients)[0].closest('[role="group"]');
+    if (totalCard) {
+      fireEvent.keyDown(totalCard, { key: 'Enter' });
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+    }
+  });
+
+  test('handles clicking summary cards to open modal with filtered clients', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const totalCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiTotalClients);
+    fireEvent.click(totalCards[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+
+    const webAppCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWebApp);
+    fireEvent.click(webAppCards[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+
+    const whatsAppCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWhatsApp);
+    fireEvent.click(whatsAppCards[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText(UI_STRINGS.actionCenter.summaryModal.closeBtn));
+
+    const emailCards = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiEmail);
+    fireEvent.click(emailCards[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+  });
+
+  test('clears search input with clear button and triggers refresh', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const searchInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.searchPlaceholder);
+    fireEvent.change(searchInput, { target: { value: 'test-query' } });
+
+    const clearButton = screen.getByLabelText('Clear search');
+    expect(clearButton).toBeInTheDocument();
+    fireEvent.click(clearButton);
+
+    expect(searchInput).toHaveValue('');
+
+    const refreshButton = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.refreshTooltip);
+    fireEvent.click(refreshButton);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+  });
+  test('filters by client view (Buyers / Sellers)', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const clientTypeSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.clientTypeLabel);
+    fireEvent.change(clientTypeSelect, { target: { value: 'buyer' } });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('clientType=buyer'),
+        expect.objectContaining({
+          headers: { Authorization: 'Bearer registration-session-token' },
+        })
+      );
+    });
+
+    fireEvent.change(clientTypeSelect, { target: { value: 'seller' } });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('clientType=seller'),
+        expect.objectContaining({
+          headers: { Authorization: 'Bearer registration-session-token' },
+        })
+      );
+    });
+  });
+
+  test('opens column settings modal, reorders columns via drag and drop, and toggles visibility', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTooltip);
+    fireEvent.click(gearBtn);
+
+    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).toBeInTheDocument();
+
+    // Toggle column visibility
+    const companyCheckbox = document.getElementById('col-toggle-companyName') as HTMLInputElement;
+    expect(companyCheckbox).toBeInTheDocument();
+    expect(companyCheckbox.checked).toBe(true);
+
+    fireEvent.click(companyCheckbox);
+    expect(companyCheckbox.checked).toBe(false);
+
+    // Test drag and drop reordering
+    const firstBadge = screen.getByText('#1');
+    const secondBadge = screen.getByText('#2');
+    const firstRow = firstBadge.closest('[draggable="true"]') as HTMLElement;
+    const secondRow = secondBadge.closest('[draggable="true"]') as HTMLElement;
+
+    const dataTransfer = { effectAllowed: '', dropEffect: '' };
+    fireEvent.dragStart(firstRow, { dataTransfer });
+    fireEvent.dragOver(secondRow, { dataTransfer });
+    fireEvent.drop(secondRow, { dataTransfer });
+
+    // Test Reset to Default
+    const resetBtn = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.resetToDefault);
+    fireEvent.click(resetBtn);
+
+    // Test Done button closes modal
+    const doneBtn = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.doneBtn);
+    fireEvent.click(doneBtn);
+
+    expect(screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).not.toBeInTheDocument();
+  });
+
+  test('closes column settings modal using the close X button', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTooltip);
+    fireEvent.click(gearBtn);
+
+    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).toBeInTheDocument();
+
+    const closeBtn = screen.getByLabelText('Close column settings');
+    fireEvent.click(closeBtn);
+
+    expect(screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).not.toBeInTheDocument();
+  });
+
+  test('supports sorting columns ascending and descending', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const sortUserBtn = screen.getByTestId('sort-col-userName');
+    expect(sortUserBtn).toBeInTheDocument();
+
+    // Click to sort by user name ascending
+    fireEvent.click(sortUserBtn);
+
+    // Click again to sort descending
+    fireEvent.click(sortUserBtn);
+
+    // Sort by registeredAt
+    const sortDateBtn = screen.getByTestId('sort-col-regDate');
+    fireEvent.click(sortDateBtn);
+    fireEvent.click(sortDateBtn);
+  });
+});

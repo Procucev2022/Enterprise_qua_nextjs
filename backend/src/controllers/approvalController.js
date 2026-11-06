@@ -63,14 +63,17 @@ async function getSummary(req, res) {
  */
 async function getApprovals(req, res) {
   try {
-    const { module, status, project, search, limit = 50, offset = 0 } = req.query;
+    const { module, status, project, search, assigned_approver, limit = 50, offset = 0, sortBy, sortOrder } = req.query;
     const result = await approvalQueries.getApprovals({
       module,
       status,
       project,
       search,
+      assigned_approver,
       limit: Number(limit) || 50,
       offset: Number(offset) || 0,
+      sortBy,
+      sortOrder,
     });
     return res.json({
       success: true,
@@ -118,4 +121,5 @@ module.exports = {
   getSummary,
   getApprovals,
   processAction,
+  extractActor,
 };

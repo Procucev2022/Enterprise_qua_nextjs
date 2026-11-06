@@ -868,15 +868,62 @@ CREATE TABLE IF NOT EXISTS buyer_credit_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_buyer_credit_transactions_buyer ON buyer_credit_transactions (buyer_id, created_at DESC);
 
+-- =============================================================================
+-- ACTION CENTER: TICKETS, APPROVALS, INTERNAL TASKS & DOCUMENT VAULT (PostgreSQL)
+-- =============================================================================
 
+CREATE TABLE IF NOT EXISTS tickets (
+  id VARCHAR(64) PRIMARY KEY,
+  ticket_number VARCHAR(64) UNIQUE,
+  customer_name VARCHAR(255),
+  customer_email VARCHAR(255),
+  customer_phone VARCHAR(64),
+  customer_company VARCHAR(255),
+  subject VARCHAR(500) NOT NULL,
+  description TEXT,
+  category VARCHAR(128),
+  project VARCHAR(255),
+  priority VARCHAR(32) NOT NULL DEFAULT 'Medium',
+  status VARCHAR(32) NOT NULL DEFAULT 'Open',
+  assigned_to_user_id VARCHAR(64),
+  assigned_to_name VARCHAR(255),
+  assigned_team VARCHAR(128),
+  source VARCHAR(64),
+  created_by_user_id VARCHAR(64),
+  created_by_name VARCHAR(255),
+  due_date TIMESTAMPTZ,
+  resolution_notes TEXT,
+  resolved_at TIMESTAMPTZ,
+  resolved_by_name VARCHAR(255),
+  last_edited_by_name VARCHAR(255),
+  tags TEXT,
+  attachments JSONB DEFAULT '[]'::jsonb,
+  raw JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets (status);
+CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets (priority);
+CREATE INDEX IF NOT EXISTS idx_tickets_created_at ON tickets (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tickets_assigned_to ON tickets (assigned_to_user_id);
 
--- ============================================================================
--- ACTION CENTER: INTERNAL TASKS, DYNAMIC TYPES & ACTIVITIES
--- ============================================================================
+CREATE TABLE IF NOT EXISTS ticket_activities (
+  id VARCHAR(64) PRIMARY KEY,
+  ticket_id VARCHAR(64) NOT NULL,
+  action_type VARCHAR(64) NOT NULL,
+  actor_id VARCHAR(64),
+  actor_name VARCHAR(255),
+  comment TEXT,
+  from_value TEXT,
+  to_value TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_activities_ticket_id ON ticket_activities (ticket_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS internal_task_types (
   id VARCHAR(64) PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
-  code VARCHAR(64) UNIQUE NOT NULL,
+  code VARCHAR(128) UNIQUE NOT NULL,
   default_module VARCHAR(64) NOT NULL DEFAULT 'GENERAL',
   description TEXT,
   is_active BOOLEAN NOT NULL DEFAULT true,
@@ -909,7 +956,7 @@ CREATE TABLE IF NOT EXISTS internal_tasks (
   related_entity_id VARCHAR(64),
   related_entity_label VARCHAR(512),
   notes TEXT,
-  attachments JSONB,
+  attachments JSONB DEFAULT '[]'::jsonb,
   approval_status VARCHAR(32),
   approver_id VARCHAR(64),
   approver_name VARCHAR(255),
@@ -923,7 +970,9 @@ CREATE TABLE IF NOT EXISTS internal_tasks (
   credit_account_name VARCHAR(255),
   credit_quantity NUMERIC DEFAULT 0,
   credit_reason TEXT,
-  raw JSONB NOT NULL,
+  raw JSONB,
+  resolved_at TIMESTAMPTZ,
+  resolved_by_name VARCHAR(255),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -951,6 +1000,84 @@ CREATE TABLE IF NOT EXISTS internal_task_activities (
 );
 CREATE INDEX IF NOT EXISTS idx_internal_task_activities_task ON internal_task_activities (task_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS payment_dues_communications (
+  id VARCHAR(64) PRIMARY KEY,
+  account_id VARCHAR(64) NOT NULL,
+  account_type VARCHAR(32) NOT NULL,
+  account_name VARCHAR(255),
+  channel VARCHAR(32) NOT NULL,
+  recipient VARCHAR(320) NOT NULL,
+  subject TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL,
+  sent_by_user_id VARCHAR(64),
+  sent_by_name VARCHAR(255),
+  status VARCHAR(32) NOT NULL DEFAULT 'SENT',
+  metadata JSONB,
+  notification_status VARCHAR(64) NOT NULL DEFAULT 'Notification Sent',
+  delivery_status VARCHAR(64) NOT NULL DEFAULT 'Delivered',
+  acknowledgement_status VARCHAR(64) NOT NULL DEFAULT 'Acknowledgement Pending',
+  communicated_by VARCHAR(255) NOT NULL DEFAULT 'Category Manager',
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  acknowledged_at TIMESTAMPTZ,
+  acknowledged_by VARCHAR(255),
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_pd_comm_account ON payment_dues_communications (account_id, sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payment_dues_communications_sent ON payment_dues_communications (sent_at DESC);
+
+CREATE TABLE IF NOT EXISTS approvals (
+  id VARCHAR(64) PRIMARY KEY,
+  request_number VARCHAR(64) UNIQUE NOT NULL,
+  module VARCHAR(64) NOT NULL,
+  project VARCHAR(255),
+  applicant_name VARCHAR(255),
+  applicant_email VARCHAR(255),
+  value_impact VARCHAR(255),
+  maker_name VARCHAR(255),
+  maker_role VARCHAR(128),
+  status VARCHAR(32) NOT NULL DEFAULT 'Pending',
+  details TEXT,
+  approver_name VARCHAR(255),
+  approver_remarks TEXT,
+  raw JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals (status);
+CREATE INDEX IF NOT EXISTS idx_approvals_module ON approvals (module);
+CREATE INDEX IF NOT EXISTS idx_approvals_created_at ON approvals (created_at DESC);
+
+-- =============================================================================
+-- LOGGING OBSERVABILITY & SEARCH INDEXING (PostgreSQL)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS system_error_logs (
+  id VARCHAR(64) PRIMARY KEY,
+  level VARCHAR(32) NOT NULL,
+  category VARCHAR(64) NOT NULL,
+  message TEXT NOT NULL,
+  error_name VARCHAR(128),
+  stack_trace TEXT,
+  user_email VARCHAR(255),
+  request_path VARCHAR(255),
+  correlation_id VARCHAR(128),
+  metadata JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_sys_error_level ON system_error_logs (level, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sys_error_category ON system_error_logs (category);
+
+CREATE TABLE IF NOT EXISTS vendor_categories_indexed (
+  vendor_id VARCHAR(64) NOT NULL,
+  category_name VARCHAR(255) NOT NULL,
+  category_type VARCHAR(64) NOT NULL DEFAULT 'major',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (vendor_id, category_name, category_type)
+);
+CREATE INDEX IF NOT EXISTS idx_vci_cat_name ON vendor_categories_indexed (lower(category_name));
+CREATE INDEX IF NOT EXISTS idx_vci_vendor_id ON vendor_categories_indexed (vendor_id);
 
 -- ==============================================================================
 -- DOCUMENT VAULT (Corporate Sales Collateral, Pitch Decks, Rate Cards & Attachments)
@@ -971,32 +1098,6 @@ CREATE TABLE IF NOT EXISTS document_vault (
 );
 CREATE INDEX IF NOT EXISTS idx_document_vault_category ON document_vault (category);
 CREATE INDEX IF NOT EXISTS idx_document_vault_active ON document_vault (is_active);
-
--- Persistent delivery and acknowledgement history used by payment dues.
-CREATE TABLE IF NOT EXISTS payment_dues_communications (
-  id VARCHAR(64) PRIMARY KEY,
-  account_id VARCHAR(64) NOT NULL,
-  account_type VARCHAR(32) NOT NULL,
-  channel VARCHAR(32) NOT NULL,
-  recipient VARCHAR(320) NOT NULL,
-  subject TEXT NOT NULL DEFAULT '',
-  message TEXT NOT NULL,
-  notification_status VARCHAR(64) NOT NULL DEFAULT 'Notification Sent',
-  delivery_status VARCHAR(64) NOT NULL DEFAULT 'Delivered',
-  acknowledgement_status VARCHAR(64) NOT NULL DEFAULT 'Acknowledgement Pending',
-  communicated_by VARCHAR(255) NOT NULL DEFAULT 'Category Manager',
-  sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  acknowledged_at TIMESTAMPTZ,
-  acknowledged_by VARCHAR(255),
-  notes TEXT NOT NULL DEFAULT '',
-  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_payment_dues_communications_account_sent
-  ON payment_dues_communications (account_id, sent_at DESC);
-CREATE INDEX IF NOT EXISTS idx_payment_dues_communications_sent
-  ON payment_dues_communications (sent_at DESC);
 
 -- Restart-resilient scheduled notifications. Keep this table in sync with
 -- schema.d1.sql so chaser jobs survive process restarts on either backend.
@@ -1038,3 +1139,75 @@ CREATE TABLE IF NOT EXISTS rfq_comparison_queue (
 );
 CREATE INDEX IF NOT EXISTS idx_rfq_comparison_queue_status_fire_at
   ON rfq_comparison_queue (status, fire_at);
+
+-- ==============================================================================
+-- ACCOUNT DOCUMENTS (Buyer & Seller Dossier Associated Documents)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS account_documents (
+  id VARCHAR(64) PRIMARY KEY,
+  account_type VARCHAR(32) NOT NULL, -- 'buyer' | 'seller'
+  account_id VARCHAR(64) NOT NULL,
+  document_name VARCHAR(255) NOT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  file_size BIGINT DEFAULT 0,
+  mime_type VARCHAR(128) DEFAULT 'application/pdf',
+  category VARCHAR(64) NOT NULL DEFAULT 'Other',
+  file_url TEXT NOT NULL,
+  description TEXT,
+  uploaded_by VARCHAR(255) DEFAULT 'Category Manager',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_account_documents_account ON account_documents (account_type, account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_account_documents_category ON account_documents (category);
+CREATE INDEX IF NOT EXISTS idx_account_documents_active ON account_documents (is_active);
+
+-- ==============================================================================
+-- USER LOGIN LOGS (Real-time Buyer & Seller Session Telemetry)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS user_login_logs (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64),
+  user_name VARCHAR(255) NOT NULL,
+  email VARCHAR(255) NOT NULL,
+  phone_number VARCHAR(64),
+  company_name VARCHAR(255) NOT NULL,
+  user_type VARCHAR(32) NOT NULL,
+  login_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  logout_at TIMESTAMPTZ,
+  duration_seconds INTEGER DEFAULT 0,
+  status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+  ip_address VARCHAR(64),
+  user_agent TEXT,
+  device_info VARCHAR(128),
+  location VARCHAR(128),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_user_login_logs_user_type ON user_login_logs (user_type);
+CREATE INDEX IF NOT EXISTS idx_user_login_logs_login_at ON user_login_logs (login_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_login_logs_status ON user_login_logs (status);
+CREATE INDEX IF NOT EXISTS idx_user_login_logs_email ON user_login_logs (email);
+
+CREATE TABLE IF NOT EXISTS vendor_directory_sessions (
+  id VARCHAR(64) PRIMARY KEY,
+  user_uuid VARCHAR(64) NOT NULL,
+  email VARCHAR(320) NOT NULL,
+  role VARCHAR(64) NOT NULL DEFAULT 'category_manager',
+  auth_method VARCHAR(32) NOT NULL DEFAULT 'EMAIL_OTP',
+  login_at TIMESTAMPTZ NOT NULL,
+  last_activity_at TIMESTAMPTZ NOT NULL,
+  logout_at TIMESTAMPTZ,
+  duration_seconds INTEGER DEFAULT 0,
+  logout_reason TEXT,
+  status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+  ip_address VARCHAR(64),
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_user ON vendor_directory_sessions (user_uuid);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email ON vendor_directory_sessions (email);
+CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status ON vendor_directory_sessions (status);
+
+

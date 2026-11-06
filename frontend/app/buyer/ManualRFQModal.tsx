@@ -56,6 +56,7 @@ import {
   fromExtractedEntity,
   updateManualRFQLineItem,
   validateManualRFQForm,
+  isPastDateString,
 } from '@/lib/manualRfqModel';
 import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, resolveLocationFromPostalResult } from '@/lib/validationSchemas';
 import { UI_STRINGS, formatString, extractionReasonMessage } from '@/lib/uiStrings';
@@ -507,6 +508,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     const failures: string[] = [];
     let derivedTitle = '';
     let derivedBudget: number | null = null;
+    let derivedDate = '';
 
     for (const file of files) {
       if (file.size > RFQ_DOCUMENT_LIMITS.MAX_FILE_SIZE_BYTES) {
@@ -533,7 +535,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       if (derivedBudget === null && result.data.estimatedBudget) {
         derivedBudget = result.data.estimatedBudget;
       }
-      extracted.push(...result.data.extractedEntities.map(fromExtractedEntity));
+      const itemEntities = result.data.extractedEntities.map(fromExtractedEntity);
+      if (!derivedDate) {
+        const rawDate = result.data.targetDeliveryDate || itemEntities.find((e) => e.targetDate)?.targetDate || '';
+        derivedDate = isPastDateString(rawDate) ? '' : rawDate;
+      }
+      extracted.push(...itemEntities);
     }
 
     setIsExtracting(false);
@@ -551,6 +558,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       title: prev.title || derivedTitle,
       estimatedBudget: prev.estimatedBudget ?? derivedBudget,
       majorCategory: prev.majorCategory || headerMajor,
+      targetDeliveryDate: prev.targetDeliveryDate || derivedDate,
       lineItems: extracted,
     }));
   };
@@ -2272,9 +2280,29 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                   Approved
                                 </span>
                               </div>
-                              <div className="text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                              <div className="space-y-0.5 text-[10px] text-slate-500 dark:text-gray-400">
+                                {vendor.contactPerson && (
+                                  <div className="flex items-center gap-1 text-slate-700 dark:text-gray-300">
+                                    <Users size={10} className="text-slate-400 shrink-0" />
+                                    <span className="truncate">{vendor.contactPerson}</span>
+                                  </div>
+                                )}
+                                {vendor.email && (
+                                  <div className="flex items-center gap-1">
+                                    <Mail size={10} className="text-blue-500 shrink-0" />
+                                    <span className="font-mono truncate">{vendor.email}</span>
+                                  </div>
+                                )}
+                                {vendor.phone && (
+                                  <div className="flex items-center gap-1">
+                                    <Phone size={10} className="text-emerald-500 shrink-0" />
+                                    <span className="font-mono">{vendor.phone}</span>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="pt-1 border-t border-indigo-100 dark:border-indigo-900/40 text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
                                 <span className="truncate font-semibold text-indigo-700 dark:text-indigo-300">{vendor.majorCategory || 'General Industrial'}</span>
-                                <span className="text-indigo-600 dark:text-indigo-400 font-semibold">🔒 Double-Blind</span>
+                                <span className="truncate">{vendor.city || vendor.state || vendor.location || 'India'}</span>
                               </div>
                             </div>
                           ))}

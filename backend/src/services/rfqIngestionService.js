@@ -451,10 +451,51 @@ function ensureFutureDeliveryDate(dateInput, offsetDays = DELIVERY_DATE_OFFSET_D
     return str;
   }
 
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  // Handle Excel Julian serial numbers (e.g. 46351 for 2026-11-25)
+  if (/^\d{5}(?:\.\d+)?$/.test(str)) {
+    const num = parseFloat(str);
+    if (num >= 35000 && num <= 65000) {
+      // Use midday (+0.5) to avoid timezone boundary shifts
+      const dateObj = new Date(Math.round((num - 25569 + 0.5) * 86400 * 1000));
+      if (!isNaN(dateObj.getTime())) {
+        const iso = dateObj.toISOString().slice(0, 10);
+        return iso >= todayStr ? iso : fallback;
+      }
+    }
+  }
+
+  // Check DD/MM/YYYY or DD-MM-YYYY (common in UK/India/EU procurements)
+  const dmyMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (dmyMatch) {
+    const day = Number(dmyMatch[1]);
+    const month = Number(dmyMatch[2]);
+    const year = Number(dmyMatch[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      return iso >= todayStr ? iso : fallback;
+    }
+  }
+
   const parsed = new Date(str);
   if (isNaN(parsed.getTime())) return fallback;
-  const targetIso = parsed.toISOString().slice(0, 10);
-  const todayStr = new Date().toISOString().slice(0, 10);
+
+  // Infer missing year when V8 defaults year-less string (e.g. "28 November") to 2001
+  if (parsed.getFullYear() === 2001 && !str.includes('2001')) {
+    const currentYear = new Date().getFullYear();
+    parsed.setFullYear(currentYear);
+    const tempIso = `${currentYear}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+    if (tempIso < todayStr) {
+      parsed.setFullYear(currentYear + 1);
+    }
+  }
+
+  const y = parsed.getFullYear();
+  const m = String(parsed.getMonth() + 1).padStart(2, '0');
+  const d = String(parsed.getDate()).padStart(2, '0');
+  const targetIso = `${y}-${m}-${d}`;
+
   if (targetIso < todayStr) return fallback;
   return targetIso;
 }
@@ -464,9 +505,18 @@ function ensureFutureDeliveryDate(dateInput, offsetDays = DELIVERY_DATE_OFFSET_D
  * Anything absent, non-numeric or <= 0 becomes the documented default of 1.
  */
 function normalizeQuantity(raw) {
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_QUANTITY;
-  return parsed;
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_QUANTITY;
+  }
+  if (typeof raw === 'string') {
+    const cleaned = raw.replace(/,/g, '').trim();
+    const match = cleaned.match(/^\d+(?:\.\d+)?/);
+    if (match) {
+      const parsed = Number(match[0]);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
+  return DEFAULT_QUANTITY;
 }
 
 /**
@@ -564,8 +614,13 @@ function normalizeLineItems(rawItems, options = {}) {
     if (!itemName) return;
 
     if (options.requireValidQuantity) {
-      const qNum = Number(raw.quantity);
-      if (raw.quantity === null || raw.quantity === undefined || raw.quantity === '' || !Number.isFinite(qNum) || qNum <= 0) {
+      if (raw.quantity === null || raw.quantity === undefined || raw.quantity === '') {
+        return;
+      }
+      const rawNum = typeof raw.quantity === 'number'
+        ? raw.quantity
+        : Number(String(raw.quantity).replace(/,/g, '').trim());
+      if (!Number.isFinite(rawNum) || rawNum <= 0) {
         return;
       }
     }
@@ -726,11 +781,11 @@ async function buildRFQDraft(payload = {}, options = {}) {
     targetDeliveryDate: (options.ensureFutureDate || payload.ensureFutureDate)
       ? ensureFutureDeliveryDate(
           payload.targetDeliveryDate ||
-          (entities.length > 0 && entities[0].targetDate ? entities[0].targetDate : null),
+          (entities.find((e) => e && e.targetDate)?.targetDate || null),
           DELIVERY_DATE_OFFSET_DAYS
         )
       : (payload.targetDeliveryDate ||
-         (entities.length > 0 && entities[0].targetDate ? entities[0].targetDate : defaultTargetDate())),
+         (entities.find((e) => e && e.targetDate)?.targetDate || defaultTargetDate())),
     // Null rather than a placeholder figure: the wizard shows an empty budget
     // field so the buyer supplies the number the document did not state.
     estimatedBudget,

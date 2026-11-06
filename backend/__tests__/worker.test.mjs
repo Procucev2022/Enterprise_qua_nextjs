@@ -5,6 +5,8 @@ let app;
 let emailGateway;
 let reconciliation;
 let chasers;
+let eventOutbox;
+let dailyReport;
 let store;
 let loggerService;
 let originalFetch;
@@ -22,6 +24,11 @@ beforeEach(() => {
     dispatchDueChaserJobs: jest.fn().mockResolvedValue([]),
     dispatchDueRFQComparisonJobs: jest.fn().mockResolvedValue([]),
   };
+  eventOutbox = {
+    dispatchDueEventOutboxJobs: jest.fn().mockResolvedValue([]),
+    purgeExpiredEventOutboxRows: jest.fn().mockResolvedValue([]),
+  };
+  dailyReport = { sendDailyRfqReport: jest.fn().mockResolvedValue({ sent: true }) };
   store = {
     isHydratedFromDB: false,
     hydrateFromDB: jest.fn().mockResolvedValue(undefined),
@@ -37,6 +44,8 @@ beforeEach(() => {
   jest.unstable_mockModule('../src/services/emailGatewayService.js', () => ({ default: emailGateway }));
   jest.unstable_mockModule('../src/services/zohoReconciliationService.js', () => ({ default: reconciliation }));
   jest.unstable_mockModule('../src/services/rfqChaserScheduler.js', () => ({ default: chasers }));
+  jest.unstable_mockModule('../src/services/eventOutboxService.js', () => ({ default: eventOutbox }));
+  jest.unstable_mockModule('../src/services/dailyRfqReportService.js', () => ({ default: dailyReport }));
   jest.unstable_mockModule('../src/services/storeService.js', () => ({ default: store }));
   jest.unstable_mockModule('../src/services/loggerService.js', () => ({ logger: loggerService }));
 });
@@ -91,6 +100,8 @@ describe('Worker runtime bindings and fetch bridge', () => {
     jest.unstable_mockModule('../src/services/emailGatewayService.js', () => emailGateway);
     jest.unstable_mockModule('../src/services/zohoReconciliationService.js', () => reconciliation);
     jest.unstable_mockModule('../src/services/rfqChaserScheduler.js', () => chasers);
+    jest.unstable_mockModule('../src/services/eventOutboxService.js', () => eventOutbox);
+    jest.unstable_mockModule('../src/services/dailyRfqReportService.js', () => dailyReport);
     const worker = await loadWorker();
     await worker.scheduled({ cron: '* * * * *' }, {}, {});
     expect(app.listen).toHaveBeenCalled();
@@ -122,6 +133,15 @@ describe('Worker cron jobs', () => {
     expect(reconciliation.reconcileOnce).toHaveBeenCalledTimes(1);
     expect(emailGateway.pollBothInboxesOnce).not.toHaveBeenCalled();
     expect(store.closeExpiredRFQsDurably).not.toHaveBeenCalled();
+  });
+
+  test('runs only the daily report for the daily report trigger', async () => {
+    store.isHydratedFromDB = true;
+    const worker = await loadWorker();
+    await worker.scheduled({ cron: '30 0 * * *' }, {}, {});
+    expect(dailyReport.sendDailyRfqReport).toHaveBeenCalledTimes(1);
+    expect(emailGateway.pollBothInboxesOnce).not.toHaveBeenCalled();
+    expect(reconciliation.reconcileOnce).not.toHaveBeenCalled();
   });
 
   test('runs all jobs for an unrecognized trigger and reports rejected jobs', async () => {

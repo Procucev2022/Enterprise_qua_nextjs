@@ -26,7 +26,9 @@ async function getBootstrap(req, res, next) {
       candidateBuyerIds.push(buyerId);
     }
     if (req.query && req.query.refresh === 'true') {
-      await storeService.hydrateFromDB();
+      await storeService.hydrateFromDB().catch((err) => {
+        logger.warn('Bootstrap forced refresh hydration failed; continuing with current store', { error: err.message }, 'BOOTSTRAP_CONTROLLER');
+      });
     }
     const scopedBuyerArg = candidateBuyerIds.length > 0 ? candidateBuyerIds : buyerId;
     const data = await storeService.getBootstrapData(scopedBuyerArg, user && user.email);

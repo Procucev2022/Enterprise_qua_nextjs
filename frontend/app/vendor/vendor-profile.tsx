@@ -45,9 +45,16 @@ export default function VendorProfilePage() {
     // The category master, read from the database rather than a bundled copy.
     categoryTaxonomy,
     categoryTaxonomyError,
+    ensureCategoryTaxonomy,
   } = useApp();
 
   const MAX_CATEGORIES = 10;
+
+  useEffect(() => {
+    if (typeof ensureCategoryTaxonomy === 'function') {
+      void ensureCategoryTaxonomy();
+    }
+  }, [ensureCategoryTaxonomy]);
 
   // Vendor Organization State — starts blank; populated from the authenticated
   // vendor's own backend record once it loads (see the profile-load effect below).

@@ -537,7 +537,7 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         expect(paymentDuesQueries.getSellerAvailableCredits({ freeRfqDownloadCredits: 0 })).toBe(0);
         expect(paymentDuesQueries.getSellerAvailableCredits({ freeCreditsRemaining: 2 })).toBe(2);
         expect(paymentDuesQueries.getSellerAvailableCredits({ credits: 1 })).toBe(1);
-        expect(paymentDuesQueries.getSellerAvailableCredits({})).toBe(0);
+        expect(paymentDuesQueries.getSellerAvailableCredits({})).toBe(5);
       });
 
       test('getSellerCreditsUsed covers freeCreditsUsed, rfqDownloadsUsed and calculated fallback', () => {
@@ -573,13 +573,13 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
         expect(history).toEqual([]);
       });
 
-      test('seller with undefined totalCredits defaults to 10', async () => {
+      test('seller with undefined totalCredits defaults to the 5 free credits', async () => {
         jest.spyOn(paymentDuesQueries, 'fetchRawBuyers').mockResolvedValue([]);
         jest.spyOn(paymentDuesQueries, 'fetchRawVendors').mockResolvedValue([
           { id: 'v-no-tc', name: 'No TC Vendor', freeQuotationCredits: 0 },
         ]);
         const res = await paymentDuesQueries.getLowCreditAccounts();
-        expect(res.accounts[0].totalCredits).toBe(10);
+        expect(res.accounts[0].totalCredits).toBe(5);
       });
 
       test('updateAcknowledgementStatus when no prior communication and not Acknowledged', async () => {

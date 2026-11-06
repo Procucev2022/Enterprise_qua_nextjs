@@ -386,6 +386,32 @@ describe('emailIngestionService.extractCcAddresses and resolveBodyText edge case
         text: 'Buyer@Example.com, Manager@example.com, ,',
       })
     ).toEqual(['buyer@example.com', 'manager@example.com']);
+
+    expect(
+      emailIngestionService.extractCcAddresses([
+        ' Direct@Example.com ',
+        { address: 'ObjAddr@example.com ' },
+        { value: 'ObjVal@example.com' },
+        null,
+        123,
+      ])
+    ).toEqual(['direct@example.com', 'objaddr@example.com', 'objval@example.com']);
+
+    expect(
+      emailIngestionService.extractCcAddresses('single@example.com, another@example.com, ,')
+    ).toEqual(['single@example.com', 'another@example.com']);
+  });
+
+  test('decodeAndNormalizeEmailSubject covers latin1 charsets and unhandled encoding token', () => {
+    expect(
+      emailIngestionService.decodeAndNormalizeEmailSubject('=?iso-8859-1?Q?CAF=C9?=')
+    ).toBe('CAFÉ');
+    expect(
+      emailIngestionService.decodeAndNormalizeEmailSubject('=?iso-8859-1?B?Q0FGw4k=?=')
+    ).toBeTruthy();
+    expect(
+      emailIngestionService.decodeAndNormalizeEmailSubject('=?utf-8?X?raw?=')
+    ).toBe('=?utf-8?X?raw?=');
   });
 
   test('resolveBodyText returns empty string when text is not a string and html is missing', () => {

@@ -12,6 +12,7 @@
  */
 
 const { execSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 const rootDir = path.resolve(__dirname, '..');
@@ -38,6 +39,10 @@ function runStep(title, command, cwd = rootDir, extraEnv = {}) {
 console.log('\n🚀 Starting Procucev Enterprise Workspace Quality Check Pipeline...\n');
 
 // 1. Build Verification
+const qcDir = path.resolve(rootDir, 'frontend', '.next-qc');
+if (!fs.existsSync(qcDir)) {
+  try { fs.mkdirSync(qcDir, { recursive: true }); } catch (_) {}
+}
 // Built into a dedicated directory so the gate never contends with a running
 // `next dev` server over `.next` (concurrent access causes EPERM on Windows).
 // NODE_ENV is pinned: a shell left on NODE_ENV=development makes `next build`
@@ -46,6 +51,7 @@ console.log('\n🚀 Starting Procucev Enterprise Workspace Quality Check Pipelin
 runStep('Step 1: Production Build Verification', 'npm run build --prefix frontend', rootDir, {
   NEXT_DIST_DIR: '.next-qc',
   NODE_ENV: 'production',
+  NODE_OPTIONS: process.env.NODE_OPTIONS || '--max-old-space-size=6144',
 });
 
 // 2. Unit Test & Per-File Coverage (Backend + Frontend)
@@ -64,7 +70,6 @@ runStep('Step 3: TypeScript Static Typecheck Verification', 'npm run typecheck -
 runStep('Step 4: Linter & Static Code Analysis Verification', 'npm run lint --prefix frontend');
 
 // 5. Database Schema & Migration Health Check
-const fs = require('fs');
 const schemaPath = path.resolve(rootDir, 'backend/src/db/schema.sql');
 runStep('Step 5A: PostgreSQL / D1 Schema Parity', 'npm run check:db-schema-parity');
 runStep('Step 5B: Schema Parity Checker Regression Tests', 'npm run test:db-schema-parity');

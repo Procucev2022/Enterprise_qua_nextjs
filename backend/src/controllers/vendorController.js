@@ -782,7 +782,8 @@ async function createSubscriptionPaymentLink(req, res, next) {
     // for why a hardcoded `?payment=success` here would misreport a real
     // cancellation.
     const linkId = `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const returnUrl = `${ZOHO_CONFIG.RETURN_URL_BASE}/vendor/vendor-subscription?linkId=${linkId}`;
+    const returnBase = String(ZOHO_CONFIG.RETURN_URL_BASE || '').replace(/\/+$/, '');
+    const returnUrl = `${returnBase}/vendor/vendor-subscription?linkId=${linkId}`;
 
     const result = await zohoPaymentService.createPaymentLink({
       planId: plan,

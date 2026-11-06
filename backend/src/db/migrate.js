@@ -63,6 +63,20 @@ const REPORTED_TABLES = [
   'client_registration_events',
   'enterprise_inquiries',
   'zoho_webhook_events',
+  'tickets',
+  'ticket_activities',
+  'internal_task_types',
+  'internal_tasks',
+  'internal_task_activities',
+  'approvals',
+  'system_error_logs',
+  'vendor_categories_indexed',
+  'rfq_unlocks',
+  'vendor_credit_transactions',
+  'buyer_credit_transactions',
+  'document_vault',
+  'account_documents',
+  'user_login_logs',
 ];
 
 function checksum(content) {
