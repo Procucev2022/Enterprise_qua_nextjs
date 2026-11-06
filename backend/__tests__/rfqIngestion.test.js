@@ -674,6 +674,34 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       expect(draft.estimatedBudget).toBeNull();
     });
 
+    test('leaves targetDeliveryDate and line item targetDate empty when source is ai_extraction and no dates provided', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
+        lineItems: [{ itemName: 'Centrifugal Pump' }],
+        source: 'ai_extraction',
+      });
+      expect(draft.targetDeliveryDate).toBe('');
+      expect(draft.extractedEntities[0].targetDate).toBe('');
+    });
+
+    test('leaves targetDeliveryDate empty when allowEmptyDeliveryDate is true', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
+        lineItems: [{ itemName: 'Centrifugal Pump' }],
+        allowEmptyDeliveryDate: true,
+      });
+      expect(draft.targetDeliveryDate).toBe('');
+      expect(draft.extractedEntities[0].targetDate).toBe('');
+    });
+
+    test('preserves targetDeliveryDate and targetDate when supplied during ai_extraction', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
+        lineItems: [{ itemName: 'Centrifugal Pump', targetDate: '2026-12-25' }],
+        targetDeliveryDate: '2026-12-25',
+        source: 'ai_extraction',
+      });
+      expect(draft.targetDeliveryDate).toBe('2026-12-25');
+      expect(draft.extractedEntities[0].targetDate).toBe('2026-12-25');
+    });
+
     test('processes all 100 valid items from a 200-item batch when requireValidQuantity is enabled', async () => {
       const items = [];
       for (let i = 1; i <= 100; i++) {

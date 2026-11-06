@@ -630,9 +630,11 @@ function normalizeLineItems(rawItems, options = {}) {
       itemName,
       quantity: normalizeQuantity(raw.quantity),
       unit: String(raw.unit || raw.uom || '').trim() || DEFAULT_UNIT,
-      targetDate: options.ensureFutureDate
-        ? ensureFutureDeliveryDate(raw.targetDate, DELIVERY_DATE_OFFSET_DAYS)
-        : (String(raw.targetDate || '').trim() || defaultTargetDate()),
+      targetDate: (options.allowEmptyDeliveryDate || options.source === 'ai_extraction')
+        ? (raw.targetDate ? (options.ensureFutureDate ? ensureFutureDeliveryDate(raw.targetDate, DELIVERY_DATE_OFFSET_DAYS) : String(raw.targetDate).trim()) : '')
+        : (options.ensureFutureDate
+            ? ensureFutureDeliveryDate(raw.targetDate, DELIVERY_DATE_OFFSET_DAYS)
+            : (String(raw.targetDate || '').trim() || defaultTargetDate())),
       technicalSpecs: String(raw.technicalSpecs || raw.specifications || raw.specification || '').trim(),
       brand: String(raw.brand || '').trim(),
       deliveryCity: String(raw.deliveryCity || '').trim(),
@@ -696,10 +698,19 @@ async function buildRFQDraft(payload = {}, options = {}) {
   // synchronous and one ingest costs at most one taxonomy read.
   await ensureTaxonomyLoaded();
 
+  const allowEmptyDeliveryDate = Boolean(
+    payload.allowEmptyDeliveryDate ||
+    options.allowEmptyDeliveryDate ||
+    payload.source === 'ai_extraction' ||
+    options.source === 'ai_extraction'
+  );
+
   const { entities, duplicatesRemoved, lineValues } = normalizeLineItems(payload.lineItems, {
     category: payload.category,
     requireValidQuantity: Boolean(payload.requireValidQuantity),
-    ensureFutureDate: Boolean(payload.ensureFutureDate),
+    ensureFutureDate: Boolean(payload.ensureFutureDate || options.ensureFutureDate),
+    allowEmptyDeliveryDate,
+    source: payload.source || options.source,
   });
 
   // A declared major category (e.g. the email's "Category: Civil Works") is the
@@ -778,15 +789,17 @@ async function buildRFQDraft(payload = {}, options = {}) {
   const candidateDates = entities.map((e) => e && e.targetDate).filter(Boolean);
   const earliestEntityDate = candidateDates.length > 0 ? [...candidateDates].sort()[0] : null;
 
+  const resolvedDate = payload.targetDeliveryDate || earliestEntityDate || null;
+  const defaultDateFallback = allowEmptyDeliveryDate ? '' : defaultTargetDate();
+
   const draft = {
     title,
     category: headerCategory,
     targetDeliveryDate: (options.ensureFutureDate || payload.ensureFutureDate)
-      ? ensureFutureDeliveryDate(
-          payload.targetDeliveryDate || earliestEntityDate,
-          DELIVERY_DATE_OFFSET_DAYS
-        )
-      : (payload.targetDeliveryDate || earliestEntityDate || defaultTargetDate()),
+      ? (resolvedDate
+          ? ensureFutureDeliveryDate(resolvedDate, DELIVERY_DATE_OFFSET_DAYS)
+          : defaultDateFallback)
+      : (resolvedDate || defaultDateFallback),
     // Null rather than a placeholder figure: the wizard shows an empty budget
     // field so the buyer supplies the number the document did not state.
     estimatedBudget,
