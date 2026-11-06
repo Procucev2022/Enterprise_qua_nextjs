@@ -98,7 +98,12 @@ class QueryCache {
 
     let count = 0;
     for (const key of Array.from(keys)) {
-      this.cache.delete(key);
+      const entry = this.cache.get(key);
+      if (entry) {
+        // Soft invalidation: set expiresAt to 0 so get() misses and re-queries fresh data,
+        // while preserving entry in cache so getStale() can serve it if D1 is overloaded
+        entry.expiresAt = 0;
+      }
       count += 1;
     }
     this.tagMap.delete(tag);
