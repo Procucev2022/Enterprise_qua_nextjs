@@ -10,13 +10,18 @@ const {
   hasUnlimitedDownloadAccess,
   VENDOR_FREE_CREDITS_LIMIT,
   VENDOR_PLAN_RFQ_QUOTA,
+  RFQ_DOWNLOAD_ERRORS,
+  RFQ_CREATION_ERRORS,
   VENDOR_ASSIGNMENT_LIMITS,
+  PERSISTENCE_MESSAGES,
+  RFQ_AUTO_CLOSE_AFTER_MS,
+  RFQ_AUTO_CLOSE_REASON,
   RFQ_STATE_WRITE_RETRIES,
+  PERSISTED_RECORD_WRITE_RETRIES,
+  EVENT_OUTBOX_TYPES,
   MAJOR_CATEGORY_ALIASES,
   DEFAULT_CATEGORY_TAXONOMY,
-  INQUIRIES_PERSISTENCE_FILE,
   RFQ_QUOTE_WRITE_RETRIES,
-  EVENT_OUTBOX_TYPES,
 } = require('../config/constants');
 const crypto = require('crypto');
 const pool = require('../db/pool');
@@ -49,8 +54,6 @@ const { logger } = require('./loggerService');
 // below), reused here rather than invented separately: this.vendors is one
 // shared in-memory cache used by both paths, so they should stay consistent.
 const MAX_HYDRATION_VENDORS = 500;
-let auditLogWriteQueue = Promise.resolve();
-const path = require('path');
 
 const MINOR_TO_MAJOR_MAP = new Map();
 const MAJOR_TO_MINORS_MAP = new Map();
@@ -101,41 +104,6 @@ function normalizeRFQForRead(rfq) {
   return normalized;
 }
 
-const SEEDED_INQUIRIES = [
-  {
-    id: 'ent-inq-1792066342226-1vkew',
-    companyName: 'Procucev  Navin Buyer',
-    email: 'navin.procucev@gmail.com',
-    mobile: '+919157154504',
-    buyerAccountId: '4fdcc92c-8421-4ab5-8258-0134375a3c86',
-    notes: '',
-    status: 'NEW',
-    createdAt: '2026-10-15T12:12:22.226Z',
-    updatedAt: '2026-10-15T12:12:22.226Z',
-  },
-];
-
-function loadPersistedInquiries() {
-  try {
-    const fs = require('fs');
-    if (fs.existsSync(INQUIRIES_PERSISTENCE_FILE)) {
-      const data = fs.readFileSync(INQUIRIES_PERSISTENCE_FILE, 'utf8');
-      const parsed = JSON.parse(data);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch (_) {}
-  return [...SEEDED_INQUIRIES];
-}
-
-function savePersistedInquiries(list) {
-  try {
-    const fs = require('fs');
-    const dir = path.dirname(INQUIRIES_PERSISTENCE_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(INQUIRIES_PERSISTENCE_FILE, JSON.stringify(list, null, 2), 'utf8');
-  } catch (_) {}
-}
-
 class StoreService {
   constructor() {
     // Every collection starts empty and is filled from Neon by hydrateFromDB().
@@ -163,10 +131,13 @@ class StoreService {
     this.notifications = [];
     this.vendorCatalogue = [];
     this.paymentLinks = [];
-    this.enterpriseInquiries = loadPersistedInquiries();
     this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
     this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
     this.isHydratedFromDB = false;
+    this._rfqSyncPromises = new Map();
+    this._lastRfqSyncMap = new Map();
+    this._lastRfqSyncTime = 0;
+    this._auditWriteQueue = Promise.resolve();
   }
 
   reset() {
@@ -180,10 +151,13 @@ class StoreService {
     this.notifications = [];
     this.vendorCatalogue = [];
     this.paymentLinks = [];
-    this.enterpriseInquiries = loadPersistedInquiries();
     this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
     this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
     this.isHydratedFromDB = false;
+    this._rfqSyncPromises = new Map();
+    this._lastRfqSyncMap = new Map();
+    this._lastRfqSyncTime = 0;
+    this._auditWriteQueue = Promise.resolve();
     this._pendingQuoteNotifications = new Map();
     this._rfqQuoteAckSent = new Set();
     if (this._delayedQuoteTimers) {
@@ -246,18 +220,7 @@ class StoreService {
 
       this.vendors = vendorPage.rows;
       this.vendorsTotal = vendorPage.total;
-      this.rfqs = rfqs.map((rfq) => {
-        if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
-          rfq = { ...rfq, status: 'PO Generated', poFinalised: true };
-          this._persistRFQ(rfq);
-        }
-        if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
-          const corrected = { ...rfq, source: 'manual_entry' };
-          this._persistRFQ(corrected);
-          return corrected;
-        }
-        return rfq;
-      });
+      this.rfqs = rfqs.map(normalizeRFQForRead);
       this.evaluations = evaluations;
       this.vendorCatalogue = vendorCatalogue;
       this.notifications = notifications;
@@ -454,7 +417,16 @@ class StoreService {
   }
 
   _persistAIFeedItem(item) {
-    this._background(domainQueries.upsertAIFeedItemInDB(item), 'Failed to persist AI feed item');
+    this._background(
+      eventOutboxService.persistWithOutboxFallback({
+        eventType: EVENT_OUTBOX_TYPES.AI_FEED,
+        idempotencyKey: item.id,
+        payload: item,
+        operation: 'persist-ai-feed-item',
+        write: () => domainQueries.upsertAIFeedItemInDB(item),
+      }),
+      'Failed to persist AI feed item or schedule its retry'
+    );
   }
 
   _persistAuditLog(entry) {
@@ -466,7 +438,7 @@ class StoreService {
   }
 
   _queueAuditLogPersistence(entry) {
-    const pendingWrite = auditLogWriteQueue.then(async () => {
+    const pendingWrite = this._auditWriteQueue.then(async () => {
       const requestedPreviousHash = entry.previousHash || '';
       const persisted = await auditLogQueries.appendAuditLogInDB(entry);
       if (pool.hasStorage() && !persisted) {
@@ -500,16 +472,36 @@ class StoreService {
       );
       return entry;
     });
-    auditLogWriteQueue = pendingWrite.catch(() => undefined);
+    this._auditWriteQueue = pendingWrite.catch(() => undefined);
     return pendingWrite;
   }
 
   _persistNotification(notification) {
-    this._background(domainQueries.insertNotificationInDB(notification), 'Failed to persist notification');
+    this._background(
+      eventOutboxService.persistWithOutboxFallback({
+        eventType: EVENT_OUTBOX_TYPES.NOTIFICATION,
+        idempotencyKey: notification.id,
+        payload: notification,
+        operation: 'persist-notification',
+        write: () => domainQueries.insertNotificationInDB(notification),
+      }),
+      'Failed to persist notification or schedule its retry'
+    );
   }
 
   _persistNotificationBatch(notifications) {
-    this._background(domainQueries.bulkInsertNotificationsInDB(notifications), 'Failed to persist notification batch');
+    if (!Array.isArray(notifications) || notifications.length === 0) return;
+    const idempotencyKey = JSON.stringify(notifications.map((notification) => notification.id).sort());
+    this._background(
+      eventOutboxService.persistWithOutboxFallback({
+        eventType: EVENT_OUTBOX_TYPES.NOTIFICATION_BATCH,
+        idempotencyKey,
+        payload: notifications,
+        operation: 'persist-notification-batch',
+        write: () => domainQueries.bulkInsertNotificationsInDB(notifications),
+      }),
+      'Failed to persist notification batch or schedule its retry'
+    );
   }
 
   // ==========================================
@@ -561,7 +553,19 @@ class StoreService {
           }
           return fresh;
         }
-      } catch (_) {}
+        return null;
+      } catch (error) {
+        logger.error('Buyer account database lookup failed; refusing to use stale in-memory identity data', {
+          error,
+          operation: 'get-buyer-account-by-email',
+        }, 'STORE_SERVICE');
+        const unavailable = new Error('Buyer account storage is temporarily unavailable.');
+        unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+        unavailable.status = 503;
+        unavailable.statusCode = 503;
+        unavailable.cause = error;
+        throw unavailable;
+      }
     }
 
     return this.buyerAccounts.find((a) => (a.corporateEmail || '').toLowerCase() === target) || null;
@@ -584,7 +588,14 @@ class StoreService {
     let existing = await this.getBuyerAccountByEmail(user.email);
     const id = user.sub || user.id;
 
-    if (!existing && id) {
+    if (!existing && id && pool.hasStorage()) {
+      existing = await domainQueries.getBuyerAccountByIdFromDB(id, { fresh: true });
+      if (existing) {
+        const existingIndex = this.buyerAccounts.findIndex((account) => account.id === existing.id);
+        if (existingIndex >= 0) this.buyerAccounts[existingIndex] = existing;
+        else this.buyerAccounts.unshift(existing);
+      }
+    } else if (!existing && id) {
       existing = this.buyerAccounts.find((a) => a.id === id) || null;
     }
 
@@ -596,7 +607,13 @@ class StoreService {
         organizationId: user.orgId,
       });
       if (lookup && lookup.found) profile = lookup.profile;
-    } catch (_) {}
+    } catch (error) {
+      logger.warn('Buyer profile lookup failed; account enrichment will use the existing account values', {
+        error,
+        operation: 'ensure-buyer-account-profile-enrichment',
+        userId: id || null,
+      }, 'STORE_SERVICE');
+    }
 
     if (existing) {
       if (profile && (!existing.gstin || !existing.mobileNumber || !existing.city)) {
@@ -620,18 +637,23 @@ class StoreService {
           country: profile.country || existing.country,
           categories: profile.categories || existing.categories,
         };
-        this.updateBuyerAccount(existing.id, enriched);
-        return enriched;
+        const saved = await this.updateBuyerAccountDurably(existing.id, enriched);
+        if (!saved && pool.hasStorage()) {
+          throw new Error('Buyer profile enrichment did not find a durable account row.');
+        }
+        return saved || enriched;
       }
       return existing;
     }
 
     if (!id) return null;
-    const cached = this.buyerAccounts.find((a) => a.id === id);
-    if (cached) return cached;
+    if (!pool.hasStorage()) {
+      const cached = this.buyerAccounts.find((a) => a.id === id);
+      if (cached) return cached;
+    }
 
     logger.info('Auto-creating missing buyer account', { id, email: user.email }, 'STORE_SERVICE');
-    return this.addBuyerAccount({
+    return this.addBuyerAccountDurably({
       id,
       organizationName: profile?.companyName || user.orgName || user.email,
       brandName: profile?.brandName || '',
@@ -670,8 +692,9 @@ class StoreService {
   async ensureVendorProfileForUser(user) {
     if (!user || user.role !== 'vendor' || !user.email) return null;
     const email = String(user.email).trim().toLowerCase();
-    const existing =
-      this.getVendorById(user.email, 'all') || (await this.getVendorByIdWithDBFallback(email, 'all'));
+    const existing = pool.hasStorage()
+      ? await this.getVendorByIdWithDBFallback(email, 'all', { fresh: true })
+      : this.getVendorById(user.email, 'all');
     if (existing) return existing;
 
     if (!this._pendingVendorProfiles) this._pendingVendorProfiles = new Map();
@@ -694,34 +717,33 @@ class StoreService {
     }
 
     const contactName = (identity && identity.name) || user.name || '';
-    const created = this.addVendor(
-      {
-        name: (identity && identity.orgName) || user.orgName || contactName || email,
-        contactPerson: contactName,
-        email,
-        phone: (identity && identity.mobile) || '',
-        source: 'migrated_identity',
-        status: 'PREFERRED ENTERPRISE SUPPLIER',
-        subscriptionPlan: 'premium',
-        freeQuotationCredits: VENDOR_FREE_CREDITS_LIMIT,
-        majorCategory: '',
-        minorCategories: [],
-        vendorSelectedCategories: [],
-        clientMappedCategories: [],
-        isCategoryAligned: false,
-        country: 'India',
-      },
-      email
-    );
-    created.onboardingEmailStatus = 'account_exists';
-    logger.info('Auto-created missing vendor profile', { id: created.id, email }, 'STORE_SERVICE');
-
     try {
-      await this.confirmVendorPersisted(created);
+      const created = await this.addVendorDurably(
+        {
+          name: (identity && identity.orgName) || user.orgName || contactName || email,
+          contactPerson: contactName,
+          email,
+          phone: (identity && identity.mobile) || '',
+          source: 'migrated_identity',
+          onboardingEmailStatus: 'account_exists',
+          status: 'PREFERRED ENTERPRISE SUPPLIER',
+          subscriptionPlan: 'premium',
+          freeQuotationCredits: VENDOR_FREE_CREDITS_LIMIT,
+          majorCategory: '',
+          minorCategories: [],
+          vendorSelectedCategories: [],
+          clientMappedCategories: [],
+          isCategoryAligned: false,
+          country: 'India',
+        },
+        email,
+        null
+      );
+      logger.info('Auto-created missing vendor profile', { id: created.id, email }, 'STORE_SERVICE');
       return created;
     } catch (err) {
       if (err.statusCode === 409) {
-        return (await domainQueries.getVendorByEmailFromDB(email)) || null;
+        return (await domainQueries.getVendorByEmailFromDB(email, { fresh: true })) || null;
       }
       logger.error('Failed to auto-create vendor profile', err, 'STORE_SERVICE');
       return null;
@@ -741,7 +763,7 @@ class StoreService {
   async claimMigratedVendorProfile(email, details, buyerId = null, actorEmail = null) {
     if (!email) return null;
     const normalized = String(email).trim().toLowerCase();
-    const existing = await this.getVendorByIdWithDBFallback(normalized, 'all');
+    const existing = await this.getVendorByIdWithDBFallback(normalized, 'all', { fresh: true });
     if (
       !existing ||
       existing.source !== 'migrated_identity' ||
@@ -765,23 +787,25 @@ class StoreService {
       created_at: _createdAtRaw,
       ...claimable
     } = details || {};
-    Object.assign(existing, claimable, {
+    const updates = {
+      ...claimable,
       buyerId: buyerId || null,
       buyerAccountId: buyerId || null,
       source: claimable.source || (buyerId || claimable.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
       isCategoryAligned: claimable.isCategoryAligned !== undefined ? claimable.isCategoryAligned : true,
       onboardingEmailStatus: 'account_exists',
-    });
+    };
 
-    await this.confirmVendorPersisted(existing);
+    const savedVendor = await this.updateVendorDurably(existing.id, updates);
+    if (!savedVendor) return null;
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
-      action: `Linked migrated vendor ${existing.name} (${existing.email}) in category ${existing.majorCategory}`,
+      action: `Linked migrated vendor ${savedVendor.name} (${savedVendor.email}) in category ${savedVendor.majorCategory}`,
     });
-    return existing;
+    return savedVendor;
   }
 
-  addBuyerAccount(accData) {
+  _buildBuyerAccountRecord(accData) {
     const newAcc = {
       ...accData,
       id: accData.id || `buyer-acc-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
@@ -794,7 +818,11 @@ class StoreService {
       subscriptionPlan: accData.subscriptionPlan || 'free_trial',
       remainingFreeRFQs: accData.remainingFreeRFQs !== undefined ? accData.remainingFreeRFQs : 5,
     };
+    return newAcc;
+  }
 
+  addBuyerAccount(accData) {
+    const newAcc = this._buildBuyerAccountRecord(accData);
     this.buyerAccounts.unshift(newAcc);
     this._persistBuyerAccount(newAcc);
     this.addAuditLog({
@@ -805,7 +833,41 @@ class StoreService {
     return newAcc;
   }
 
-  updateBuyerAccount(idOrEmail, updates) {
+  async addBuyerAccountDurably(accData) {
+    const newAcc = this._buildBuyerAccountRecord(accData);
+    const storageConfigured = pool.hasStorage();
+    let persisted;
+
+    try {
+      persisted = await domainQueries.upsertBuyerAccountInDB(newAcc);
+      if (storageConfigured && !persisted) {
+        throw new Error('Buyer account upsert completed without a persisted row');
+      }
+    } catch (error) {
+      logger.error('Failed to persist buyer account creation', error, 'STORE_SERVICE');
+      const isUniqueConflict =
+        (error && error.code === '23505') ||
+        (error && typeof error.message === 'string' && /unique constraint/i.test(error.message));
+      const persistError = new Error(
+        isUniqueConflict
+          ? `A buyer account with the email ${newAcc.corporateEmail} already exists.`
+          : 'The buyer account could not be saved to storage. Try again.'
+      );
+      persistError.statusCode = isUniqueConflict ? 409 : 503;
+      persistError.code = isUniqueConflict ? 'BUYER_EMAIL_CONFLICT' : 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+
+    const savedAccount = persisted || newAcc;
+    this.buyerAccounts.unshift(savedAccount);
+    this.addAuditLog({
+      userEmail: savedAccount.corporateEmail,
+      action: `Created buyer account for ${savedAccount.organizationName} (${savedAccount.corporateEmail})`,
+    });
+    return savedAccount;
+  }
+
+  updateBuyerAccount(idOrEmail, updates, { persist = true } = {}) {
     const key = String(idOrEmail || '').trim().toLowerCase();
     const idx = this.buyerAccounts.findIndex(
       (a) => a.id === idOrEmail || (a.corporateEmail && a.corporateEmail.toLowerCase() === key)
@@ -818,13 +880,76 @@ class StoreService {
       syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
     };
     this.buyerAccounts[idx] = updated;
-    this._persistBuyerAccount(updated);
+    if (persist) this._persistBuyerAccount(updated);
 
     if (this.activeBuyerAccount && this.activeBuyerAccount.id === updated.id) {
       this.activeBuyerAccount = updated;
     }
 
     return updated;
+  }
+
+  async updateBuyerAccountDurably(idOrEmail, updates) {
+    const key = String(idOrEmail || '').trim().toLowerCase();
+    let idx = this.buyerAccounts.findIndex(
+      (account) => account.id === idOrEmail || (account.corporateEmail && account.corporateEmail.toLowerCase() === key)
+    );
+    const storageConfigured = pool.hasStorage();
+    let updated;
+    let savedAccount;
+
+    try {
+      if (storageConfigured) {
+        const snapshotReader = String(idOrEmail || '').includes('@')
+          ? domainQueries.getBuyerAccountSnapshotByEmailFromDB
+          : domainQueries.getBuyerAccountSnapshotByIdFromDB;
+        let snapshot = await snapshotReader(idOrEmail);
+        if (!snapshot) return null;
+
+        for (let attempt = 0; attempt < PERSISTED_RECORD_WRITE_RETRIES; attempt += 1) {
+          updated = {
+            ...snapshot.account,
+            ...updates,
+            syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
+          };
+          savedAccount = await domainQueries.updateBuyerAccountIfUnchangedInDB(snapshot, updated);
+          if (savedAccount) break;
+          snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(snapshot.id);
+          if (!snapshot) return null;
+        }
+        if (!savedAccount) throw new Error('Buyer account changed repeatedly while saving; retry the update.');
+      } else {
+        const previous = idx >= 0 ? this.buyerAccounts[idx] : null;
+        if (!previous) return null;
+        updated = {
+          ...previous,
+          ...updates,
+          syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
+        };
+        savedAccount = updated;
+      }
+      idx = this.buyerAccounts.findIndex((account) => account.id === savedAccount.id);
+      if (idx >= 0) this.buyerAccounts[idx] = savedAccount;
+      else this.buyerAccounts.unshift(savedAccount);
+      if (this.activeBuyerAccount && this.activeBuyerAccount.id === savedAccount.id) {
+        this.activeBuyerAccount = savedAccount;
+      }
+      return savedAccount;
+    } catch (error) {
+      logger.error('Failed to persist buyer account update', error, 'STORE_SERVICE');
+      const isUniqueConflict =
+        (error && error.code === '23505') ||
+        (error && typeof error.message === 'string' && /unique constraint/i.test(error.message)) ||
+        (error && error.cause && typeof error.cause.message === 'string' && /unique constraint/i.test(error.cause.message));
+      const persistError = new Error(
+        isUniqueConflict
+          ? `A buyer account with the email ${updated?.corporateEmail || idOrEmail} already exists.`
+          : 'The buyer account could not be updated in storage. Try again.'
+      );
+      persistError.statusCode = isUniqueConflict ? 409 : 503;
+      persistError.code = isUniqueConflict ? 'BUYER_EMAIL_CONFLICT' : 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
   }
 
   async addBuyerCreditsDurably(id, amount, transaction) {
@@ -886,12 +1011,91 @@ class StoreService {
     return false;
   }
 
+  async deleteBuyerAccountDurably(id) {
+    const storageConfigured = pool.hasStorage();
+    const deletedAccount = this.buyerAccounts.find((account) => account.id === id) || null;
+    try {
+      let deletion;
+      if (storageConfigured) {
+        deletion = await domainQueries.deleteBuyerAccountAndPromoteActiveInDB(id);
+        if (!deletion || !deletion.deleted) return false;
+      } else {
+        if (!deletedAccount) return false;
+        deletion = {
+          deleted: true,
+          activeAccount: this.activeBuyerAccount && this.activeBuyerAccount.id !== id
+            ? this.activeBuyerAccount
+            : null,
+        };
+      }
+
+      this.buyerAccounts = this.buyerAccounts.filter((account) => account.id !== id);
+      if (!storageConfigured && this.activeBuyerAccount?.id === id) {
+        deletion.activeAccount = this.buyerAccounts[0] || null;
+      }
+      if (deletion.activeAccount) {
+        const activeIndex = this.buyerAccounts.findIndex((account) => account.id === deletion.activeAccount.id);
+        if (activeIndex === -1) {
+          this.buyerAccounts.unshift(deletion.activeAccount);
+          this.activeBuyerAccount = this.buyerAccounts[0];
+        } else {
+          this.buyerAccounts[activeIndex] = deletion.activeAccount;
+          this.activeBuyerAccount = this.buyerAccounts[activeIndex];
+        }
+      } else {
+        this.activeBuyerAccount = null;
+      }
+
+      if (deletedAccount) {
+        this.addAuditLog({
+          userEmail: deletedAccount.corporateEmail || SYSTEM_ACTOR_EMAIL,
+          action: `Deleted buyer account for ${deletedAccount.organizationName || id}`,
+        });
+      }
+      return true;
+    } catch (error) {
+      logger.error('Failed to durably delete buyer account and reconcile active account', error, 'STORE_SERVICE');
+      const persistError = new Error('The buyer account could not be deleted from storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      persistError.retryable = true;
+      throw persistError;
+    }
+  }
+
   alignActiveBuyerAccount(id) {
     const target = this.buyerAccounts.find((a) => a.id === id);
     if (!target) return null;
     this.activeBuyerAccount = target;
     this._setActiveBuyerAccount(id);
     return target;
+  }
+
+  async alignActiveBuyerAccountDurably(id) {
+    const storageConfigured = pool.hasStorage();
+    try {
+      const persisted = storageConfigured
+        ? await domainQueries.setActiveBuyerAccountDurablyInDB(id)
+        : this.buyerAccounts.find((account) => account.id === id) || null;
+      if (!persisted) return null;
+
+      const activeIndex = this.buyerAccounts.findIndex((account) => account.id === id);
+      if (activeIndex === -1) {
+        this.buyerAccounts.unshift(persisted);
+        this.activeBuyerAccount = this.buyerAccounts[0];
+      } else {
+        this.buyerAccounts[activeIndex] = persisted;
+        this.activeBuyerAccount = this.buyerAccounts[activeIndex];
+      }
+      return this.activeBuyerAccount;
+    } catch (error) {
+      logger.error('Failed to durably set active buyer account', error, 'STORE_SERVICE');
+      const persistError = new Error('The active buyer account could not be saved. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      persistError.retryable = true;
+      throw persistError;
+    }
   }
 
   /**
@@ -1070,17 +1274,52 @@ class StoreService {
    * (blank form) and then hit the real UNIQUE-email conflict on save. Mirrors
    * the identical fallback already used for RFQ-invite vendor resolution.
    */
-  async getVendorByIdWithDBFallback(id, scopedBuyerId = null) {
+  async getVendorByIdWithDBFallback(id, scopedBuyerId = null, { fresh = false } = {}) {
     const inMemory = this.getVendorById(id, scopedBuyerId);
-    if (inMemory) return inMemory;
-    let vendor = await domainQueries.getVendorByIdFromDB(id);
-    if (!vendor) vendor = await domainQueries.getVendorByEmailFromDB(id);
-    if (!vendor) return undefined;
-    if (!this.vendors.some((v) => v.id === vendor.id)) this.vendors.push(vendor);
+    if (!pool.hasStorage()) return inMemory;
+    if (inMemory && !fresh) return inMemory;
+
+    const normalizedId = String(id || '').trim();
+    const isEmail = normalizedId.includes('@');
+    const lookupById = () => fresh
+      ? domainQueries.getVendorByIdFromDB(normalizedId, { fresh: true })
+      : domainQueries.getVendorByIdFromDB(normalizedId);
+    const lookupByEmail = () => fresh
+      ? domainQueries.getVendorByEmailFromDB(normalizedId, { fresh: true })
+      : domainQueries.getVendorByEmailFromDB(normalizedId);
+    let vendor = isEmail ? await lookupByEmail() : await lookupById();
+    if (!vendor && !isEmail) vendor = await lookupByEmail();
+    if (!vendor) {
+      if (fresh) {
+        const normalizedEmail = isEmail ? normalizedId.toLowerCase() : '';
+        this.vendors = this.vendors.filter((cached) => {
+          const sameId = cached.id === normalizedId;
+          const sameEmail = normalizedEmail && String(cached.email || '').trim().toLowerCase() === normalizedEmail;
+          return !sameId && !sameEmail;
+        });
+      }
+      return undefined;
+    }
+
+    const normalizedEmail = String(vendor.email || '').trim().toLowerCase();
+    const cachedIndex = this.vendors.findIndex((cached) =>
+      cached.id === vendor.id || (normalizedEmail && String(cached.email || '').trim().toLowerCase() === normalizedEmail)
+    );
+    if (cachedIndex < 0) {
+      this.vendors.push(vendor);
+      return this.getVendorById(vendor.id, scopedBuyerId);
+    }
+
+    this.vendors = this.vendors.filter((cached) => {
+      const sameId = cached.id === vendor.id;
+      const cachedEmail = String(cached.email || '').trim().toLowerCase();
+      return !sameId && (!normalizedEmail || cachedEmail !== normalizedEmail);
+    });
+    this.vendors.splice(Math.min(cachedIndex, this.vendors.length), 0, vendor);
     return this.getVendorById(vendor.id, scopedBuyerId);
   }
 
-  addVendor(vendorData, actorEmail = null, buyerId = null) {
+  _buildVendorRecord(vendorData, buyerId = null) {
     // A client-supplied id was previously trusted as-is (never checked for
     // uniqueness) and the auto-generated fallback was only the last 4 digits
     // of Date.now() — collision-prone within the same ~10s window, and a
@@ -1089,10 +1328,14 @@ class StoreService {
     // resolve by the *first* array match). The id is now always generated
     // server-side; nothing in the app currently has a legitimate reason to
     // request a specific vendor id.
-    const { id: _ignoredClientId, ...safeVendorData } = vendorData;
+    const { id: _ignoredClientId, tempPassword: _ignoredTemporaryPassword, ...safeVendorData } = vendorData;
     const resolvedBuyerId = buyerId || vendorData.buyerId || vendorData.buyerAccountId || null;
-    const newVendor = {
+    const normalizedEmail = safeVendorData.email === undefined || safeVendorData.email === null
+      ? safeVendorData.email
+      : String(safeVendorData.email).trim().toLowerCase();
+    return {
       ...safeVendorData,
+      ...(safeVendorData.email !== undefined ? { email: normalizedEmail } : {}),
       id: `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       buyerId: resolvedBuyerId,
       buyerAccountId: resolvedBuyerId,
@@ -1108,7 +1351,7 @@ class StoreService {
       // "sent" status that was simply a lie. Now starts 'pending' and only
       // flips to 'sent' once mailerService confirms real delivery, mirroring
       // bulkAddVendors' already-correct pattern below.
-      onboardingEmailStatus: vendorData.email ? 'pending' : (vendorData.onboardingEmailStatus || 'sent'),
+      onboardingEmailStatus: vendorData.onboardingEmailStatus || (normalizedEmail ? 'pending' : 'sent'),
       isCategoryAligned: vendorData.isCategoryAligned !== undefined ? vendorData.isCategoryAligned : true,
       // Every vendor starts on the free client-uploaded tier with a clean
       // download counter and initial free quotation credits.
@@ -1121,9 +1364,13 @@ class StoreService {
       createdAt: vendorData.createdAt || vendorData.created_at || new Date().toISOString(),
       created_at: vendorData.createdAt || vendorData.created_at || new Date().toISOString(),
     };
+  }
+
+  addVendor(vendorData, actorEmail = null, buyerId = null, { deferPersistence = false } = {}) {
+    const newVendor = this._buildVendorRecord(vendorData, buyerId);
 
     this.vendors.unshift(newVendor);
-    this._persistVendor(newVendor);
+    if (!deferPersistence) this._persistVendor(newVendor);
     this.addAuditLog({
       // The signed-in caller when the controller could resolve one. Falls back to
       // the system marker rather than naming a fabricated procurement mailbox.
@@ -1140,10 +1387,45 @@ class StoreService {
     // this background call and the controller's explicit await fire at once
     // raced past _provisionVendorOnboarding's existing-identity guard before
     // either had committed, creating two separate "user" rows for the same
-    // email with two different temp passwords — confirmed live. addVendor's
-    // only caller (createVendor) now awaits provisionVendorOnboarding
-    // itself, synchronously, before responding — see that controller.
+    // email with two different temp passwords — confirmed live. The REST
+    // controller awaits provisioning after durable creation; other callers do
+    // not trigger onboarding as an implicit side effect.
     return newVendor;
+  }
+
+  async addVendorDurably(vendorData, actorEmail = null, buyerId = null) {
+    const newVendor = this._buildVendorRecord(vendorData, buyerId);
+    const storageConfigured = pool.hasStorage();
+    let persistedVendor;
+
+    try {
+      persistedVendor = await domainQueries.upsertVendorInDB(newVendor);
+      if (storageConfigured && !persistedVendor) {
+        throw new Error('Vendor creation upsert completed without a persisted row');
+      }
+    } catch (error) {
+      logger.error('Failed to persist vendor creation', error, 'STORE_SERVICE');
+      const isUniqueConflict =
+        (error && error.code === '23505') ||
+        (error && typeof error.message === 'string' && /unique constraint/i.test(error.message)) ||
+        (error && error.cause && typeof error.cause.message === 'string' && /unique constraint/i.test(error.cause.message));
+      const persistError = new Error(
+        isUniqueConflict
+          ? `A vendor with the email ${newVendor.email} already exists.`
+          : 'The vendor could not be saved to storage. Try again.'
+      );
+      persistError.statusCode = isUniqueConflict ? 409 : 503;
+      persistError.code = isUniqueConflict ? 'VENDOR_EMAIL_CONFLICT' : 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+
+    const savedVendor = persistedVendor || newVendor;
+    this.vendors.unshift(savedVendor);
+    this.addAuditLog({
+      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Registered vendor ${savedVendor.name} in category ${savedVendor.majorCategory}`,
+    });
+    return savedVendor;
   }
 
   /**
@@ -1152,11 +1434,29 @@ class StoreService {
    * which awaits this directly rather than relying on addVendor's internal
    * fire-and-forget call (below). Safe to call twice for the same vendor:
    * _provisionVendorOnboarding checks for an existing identity account first
-   * and no-ops if one is already there, so this and addVendor's own
-   * background attempt don't race into a double-create.
+   * and no-ops if one is already there, so repeated explicit provisioning
+   * attempts do not create a second identity account.
    */
   async provisionVendorOnboarding(vendor, actorEmail = null, options = {}) {
     return this._provisionVendorOnboarding(vendor, actorEmail, options);
+  }
+
+  async _persistVendorOnboardingStatus(vendor, status) {
+    try {
+      const updated = await this.updateVendorDurably(vendor.id, { onboardingEmailStatus: status });
+      if (!updated) throw new Error('Vendor onboarding status update returned no persisted row.');
+      return { updated, warning: null };
+    } catch (error) {
+      logger.error('Failed to persist vendor onboarding status', {
+        error,
+        vendorId: vendor.id,
+        onboardingEmailStatus: status,
+      }, 'STORE_SERVICE');
+      return {
+        updated: null,
+        warning: 'The vendor was added, but the onboarding status could not be saved. Please retry the onboarding action.',
+      };
+    }
   }
 
   async _provisionVendorOnboarding(vendor, actorEmail = null, { skipEmail = false } = {}) {
@@ -1178,10 +1478,13 @@ class StoreService {
       existingIdentity = await identityQueries.findUserByEmail(vendor.email);
     } catch (err) {
       logger.error(`Could not verify identity for vendor ${vendor.email}`, err, 'STORE_SERVICE');
-      this.updateVendor(vendor.id, { onboardingEmailStatus: 'failed' });
+      const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
       return {
         status: 'failed',
-        error: 'The vendor was added, but their login could not be verified. Please contact support to resend the invitation.',
+        error: [
+          'The vendor was added, but their login could not be verified. Please contact support to resend the invitation.',
+          statusWrite.warning,
+        ].join(' ').trim(),
       };
     }
     if (existingIdentity) {
@@ -1190,8 +1493,8 @@ class StoreService {
         { vendorId: vendor.id },
         'STORE_SERVICE'
       );
-      this.updateVendor(vendor.id, { onboardingEmailStatus: 'account_exists' });
-      return { status: 'account_exists' };
+      const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'account_exists');
+      return { status: 'account_exists', error: statusWrite.warning };
     }
 
     const tempPassword = this._generateTempPassword();
@@ -1212,8 +1515,8 @@ class StoreService {
         });
         identityCreated = result.created === true;
         if (!identityCreated) {
-          this.updateVendor(vendor.id, { onboardingEmailStatus: 'account_exists' });
-          return { status: 'account_exists' };
+          const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'account_exists');
+          return { status: 'account_exists', error: statusWrite.warning };
         }
       } catch (err) {
         logger.error(
@@ -1225,26 +1528,27 @@ class StoreService {
     }
 
     if (!identityCreated) {
-      this.updateVendor(vendor.id, { onboardingEmailStatus: 'failed' });
+      const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
       return {
         status: 'failed',
-        error: 'The vendor was added, but their login account could not be created. Please contact support to resend the invitation.',
+        error: [
+          'The vendor was added, but their login account could not be created. Please contact support to resend the invitation.',
+          statusWrite.warning,
+        ].join(' ').trim(),
       };
     }
-
-    this.updateVendor(vendor.id, { tempPassword });
 
     if (skipEmail) {
       // CM bulk-upload path: the login account is still created so the
       // vendor can be given/reset credentials later, but no automated
       // credentials email goes out for this import channel.
-      this.updateVendor(vendor.id, { onboardingEmailStatus: 'skipped' });
+      const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'skipped');
       logger.info(
         `Identity created for ${vendor.email} via CM bulk upload; onboarding email intentionally skipped`,
         { vendorId: vendor.id },
         'STORE_SERVICE'
       );
-      return { status: 'skipped' };
+      return { status: 'skipped', error: statusWrite.warning };
     }
 
     const emailPayload = mailerService.buildVendorOnboardingEmail({
@@ -1259,23 +1563,29 @@ class StoreService {
     try {
       const delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
       if (delivery.sent) {
-        this.updateVendor(vendor.id, { onboardingEmailStatus: 'sent', tempPassword });
+        const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'sent');
         logger.info(`Onboarding email sent to ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
-        return { status: 'sent' };
+        return { status: 'sent', error: statusWrite.warning };
       } else {
-        this.updateVendor(vendor.id, { onboardingEmailStatus: 'failed' });
+        const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
         logger.warn(`Failed to send onboarding email to ${vendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
         return {
           status: 'failed',
-          error: 'The vendor account was created, but the credentials email could not be delivered. Please contact support to resend the invitation.',
+          error: [
+            'The vendor account was created, but the credentials email could not be delivered. Please contact support to resend the invitation.',
+            statusWrite.warning,
+          ].join(' ').trim(),
         };
       }
     } catch (err) {
-      this.updateVendor(vendor.id, { onboardingEmailStatus: 'failed' });
+      const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
       logger.error(`Error sending onboarding email to ${vendor.email}`, err, 'STORE_SERVICE');
       return {
         status: 'failed',
-        error: 'The vendor account was created, but the credentials email could not be delivered. Please contact support to resend the invitation.',
+        error: [
+          'The vendor account was created, but the credentials email could not be delivered. Please contact support to resend the invitation.',
+          statusWrite.warning,
+        ].join(' ').trim(),
       };
     }
   }
@@ -1452,7 +1762,8 @@ class StoreService {
             { vendorId: vendor.id },
             'STORE_SERVICE'
           );
-          this.updateVendor(vendor.id, { onboardingEmailStatus: 'account_exists' });
+          const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'account_exists');
+          importedResult.onboardingError = statusWrite.warning;
         } else if (vendor.email) {
           try {
             const onboarding = await this.provisionVendorOnboarding(vendor, 'vendor-bulk-import', {
@@ -1462,10 +1773,12 @@ class StoreService {
             if (onboarding?.error) importedResult.onboardingError = onboarding.error;
           } catch (err) {
             logger.error(`Failed to provision login for bulk-imported vendor ${vendor.email}`, err, 'STORE_SERVICE');
-            this.updateVendor(vendor.id, { onboardingEmailStatus: 'failed' });
+            const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
             importedResult.onboardingEmailStatus = 'failed';
-            importedResult.onboardingError =
-              'The vendor was added, but their login could not be set up. Please contact support to resend the invitation.';
+            importedResult.onboardingError = [
+              'The vendor was added, but their login could not be set up. Please contact support to resend the invitation.',
+              statusWrite.warning,
+            ].join(' ').trim();
           }
         }
 
@@ -1514,37 +1827,116 @@ class StoreService {
     return { results, importedCount, duplicateCount, missingEmailCount };
   }
 
-  updateVendor(id, updates) {
+  updateVendor(id, updates, { persist = true } = {}) {
     const idx = this.vendors.findIndex((v) => v.id === id || v.email === id);
     if (idx === -1) return null;
 
     // A client payload must never be able to reassign the record's primary
     // key (would corrupt this.vendors' id-uniqueness and orphan the old id).
-    const { id: _ignoredId, ...safeUpdates } = updates;
+    const { id: _ignoredId, tempPassword: _ignoredTemporaryPassword, ...safeUpdates } = updates;
     const updated = { ...this.vendors[idx], ...safeUpdates };
     this.vendors[idx] = updated;
-    this._persistVendor(updated);
+    if (persist) this._persistVendor(updated);
 
     return updated;
   }
 
-  deleteVendor(id, actorEmail = null) {
+  async updateVendorDurably(id, updates) {
+    let idx = this.vendors.findIndex((vendor) => vendor.id === id || vendor.email === id);
+    const storageConfigured = pool.hasStorage();
+    let updated;
+    let savedVendor;
+
+    const resolveUpdates = (currentVendor) => {
+      const candidate = typeof updates === 'function' ? updates(currentVendor) : updates;
+      const { id: _ignoredId, tempPassword: _ignoredTemporaryPassword, ...safeUpdates } = candidate || {};
+      return safeUpdates;
+    };
+
+    try {
+      if (storageConfigured) {
+        const snapshotReader = String(id || '').includes('@')
+          ? domainQueries.getVendorSnapshotByEmailFromDB
+          : domainQueries.getVendorSnapshotByIdFromDB;
+        let snapshot = await snapshotReader(id);
+        if (!snapshot) return null;
+
+        for (let attempt = 0; attempt < PERSISTED_RECORD_WRITE_RETRIES; attempt += 1) {
+          updated = { ...snapshot.vendor, ...resolveUpdates(snapshot.vendor) };
+          savedVendor = await domainQueries.updateVendorIfUnchangedInDB(snapshot, updated);
+          if (savedVendor) break;
+          snapshot = await domainQueries.getVendorSnapshotByIdFromDB(snapshot.id);
+          if (!snapshot) return null;
+        }
+        if (!savedVendor) throw new Error('Vendor changed repeatedly while saving; retry the update.');
+      } else {
+        const previous = idx >= 0 ? this.vendors[idx] : null;
+        if (!previous) return null;
+        updated = { ...previous, ...resolveUpdates(previous) };
+        savedVendor = updated;
+      }
+      idx = this.vendors.findIndex((vendor) => vendor.id === savedVendor.id);
+      if (idx >= 0) this.vendors[idx] = savedVendor;
+      else this.vendors.unshift(savedVendor);
+      return savedVendor;
+    } catch (error) {
+      logger.error('Failed to persist vendor update', error, 'STORE_SERVICE');
+      const isUniqueConflict =
+        (error && error.code === '23505') ||
+        (error && typeof error.message === 'string' && /unique constraint/i.test(error.message)) ||
+        (error && error.cause && typeof error.cause.message === 'string' && /unique constraint/i.test(error.cause.message));
+      const persistError = new Error(
+        isUniqueConflict ? `A vendor with the email ${updated?.email || id} already exists.` : 'The vendor could not be updated in storage. Try again.'
+      );
+      persistError.statusCode = isUniqueConflict ? 409 : 503;
+      persistError.code = isUniqueConflict ? 'VENDOR_EMAIL_CONFLICT' : 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+  }
+
+  deleteVendor(id, actorEmail = null, { deferPersistence = false, deferAudit = false } = {}) {
     const target = this.vendors.find((v) => v.id === id || v.email === id);
     const beforeLen = this.vendors.length;
     this.vendors = this.vendors.filter((v) => v.id !== id && v.email !== id);
     if (this.vendors.length < beforeLen) {
-      this._removeVendor(target ? target.id : id);
+      if (!deferPersistence) this._removeVendor(target ? target.id : id);
       // Deletion was the only vendor mutation that wrote no audit entry, so a
       // vendor disappearing from the master left no record of who removed it or
       // when — the addVendor and updateVendor paths both log, and the removal of
       // a supplier is the change most worth being able to account for.
-      this.addAuditLog({
-        userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
-        action: `Removed vendor ${target ? target.name : id} (${target && target.email ? target.email : 'no email on record'}) from the vendor master`,
-      });
+      if (!deferAudit) {
+        this.addAuditLog({
+          userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+          action: `Removed vendor ${target ? target.name : id} (${target && target.email ? target.email : 'no email on record'}) from the vendor master`,
+        });
+      }
       return true;
     }
     return false;
+  }
+
+  async deleteVendorDurably(id, actorEmail = null) {
+    const target = this.vendors.find((vendor) => vendor.id === id || vendor.email === id);
+    if (!target) return false;
+
+    if (pool.hasStorage()) {
+      try {
+        await domainQueries.deleteVendorInDB(target.id);
+      } catch (error) {
+        logger.error('Failed to persist vendor deletion', error, 'STORE_SERVICE');
+        const persistError = new Error('The vendor could not be deleted from storage. Try again.');
+        persistError.statusCode = 503;
+        persistError.code = 'PERSISTENCE_UNAVAILABLE';
+        throw persistError;
+      }
+    }
+
+    if (!this.deleteVendor(id, actorEmail, { deferPersistence: true, deferAudit: true })) return false;
+    this.addAuditLog({
+      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Removed vendor ${target.name} (${target.email || 'no email on record'}) from the vendor master`,
+    });
+    return true;
   }
 
 
@@ -2138,7 +2530,6 @@ class StoreService {
     return updated;
   }
 
-
   async consumeVendorQuotationCreditDurably(vendorId, rfqId) {
     if (!pool.hasStorage()) return this.consumeVendorQuotationCredit(vendorId, rfqId);
 
@@ -2225,6 +2616,7 @@ class StoreService {
     }, 'STORE_SERVICE');
     return result.vendor;
   }
+
 
   // ==========================================
   // ZOHO PAYMENT LINKS
@@ -2334,7 +2726,7 @@ class StoreService {
     return link || null;
   }
 
-  createPaymentLinkRecord({
+  _buildPaymentLinkRecord({
     id,
     zohoPaymentLinkId,
     vendorId,
@@ -2347,7 +2739,7 @@ class StoreService {
     status,
     rawResponse,
   }) {
-    const link = {
+    return {
       id,
       zohoPaymentLinkId,
       vendorId: vendorId || null,
@@ -2363,9 +2755,41 @@ class StoreService {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  createPaymentLinkRecord(data) {
+    const link = this._buildPaymentLinkRecord(data);
     this.paymentLinks.unshift(link);
     this._persistPaymentLink(link);
     return link;
+  }
+
+  async createPaymentLinkRecordDurably(data) {
+    const link = this._buildPaymentLinkRecord(data);
+    const storageConfigured = pool.hasStorage();
+    let persisted;
+    try {
+      persisted = await domainQueries.upsertPaymentLinkInDB(link);
+      if (storageConfigured && !persisted) {
+        throw new Error('Payment-link upsert completed without a persisted row');
+      }
+    } catch (error) {
+      logger.error('Failed to persist payment-link record after provider creation', {
+        error,
+        paymentLinkId: link.id,
+        zohoPaymentLinkId: link.zohoPaymentLinkId,
+        operation: 'create-payment-link-record',
+      }, 'STORE_SERVICE');
+      const persistError = new Error(PERSISTENCE_MESSAGES.PAYMENT_LINK_TRACKING_FAILED);
+      persistError.statusCode = 503;
+      persistError.code = 'PAYMENT_LINK_PERSISTENCE_UNAVAILABLE';
+      persistError.cause = error;
+      throw persistError;
+    }
+
+    const savedLink = persisted || link;
+    this.paymentLinks.unshift(savedLink);
+    return savedLink;
   }
 
   updatePaymentLinkRecord(id, updates) {
@@ -2565,52 +2989,62 @@ class StoreService {
     }
   }
 
-  reviseVendorRating(vendorId, ratingData, scopedBuyerId = null) {
-    const vendor = this.getVendorById(vendorId, scopedBuyerId);
-    if (!vendor) return null;
-
-    // Nothing here is defaulted to an invented buyer. A revision is a record of
-    // who rated whom, so an unattributed one is stored as unattributed (null)
-    // rather than credited to a placeholder company and contact name.
+  _prepareVendorRatingRevision(vendor, ratingData) {
     const { qualityScore, costScore, deliveryScore, remarks, buyerCompany, buyerName, buyerEmail } = ratingData;
+    const normalizedQualityScore = Number(qualityScore);
+    const normalizedCostScore = Number(costScore);
+    const normalizedDeliveryScore = Number(deliveryScore);
+    const previousScore = Number(vendor.score || 85);
+    const previousRating = Number(vendor.rating || 4.5);
     const { buyerAverage, newCompositeScore, newRating } = calculateRevisedRating({
-      qualityScore: Number(qualityScore),
-      costScore: Number(costScore),
-      deliveryScore: Number(deliveryScore),
-      previousScore: Number(vendor.score || 85),
+      qualityScore: normalizedQualityScore,
+      costScore: normalizedCostScore,
+      deliveryScore: normalizedDeliveryScore,
+      previousScore,
     });
 
     const revisionRecord = {
-      id: `rev-${Date.now()}`,
+      id: `rev-${crypto.randomUUID()}`,
       vendorId: vendor.id,
       vendorName: vendor.name,
       buyerCompany: buyerCompany || null,
       buyerName: buyerName || null,
       buyerEmail: buyerEmail || null,
       timestamp: new Date().toISOString(),
-      qualityScore,
-      costScore,
-      deliveryScore,
+      qualityScore: normalizedQualityScore,
+      costScore: normalizedCostScore,
+      deliveryScore: normalizedDeliveryScore,
       buyerAverage,
-      previousScore: vendor.score || 85,
+      previousScore,
       newCompositeScore,
-      previousRating: vendor.rating || 4.5,
+      previousRating,
       newRating,
       remarks: remarks || 'Periodic Buyer Rating Assessment',
-      emailDispatched: true,
-      shaSignature: `sha256-${Date.now()}`,
+      emailDispatched: Boolean(vendor.email),
     };
+    revisionRecord.shaSignature = `sha256-${crypto.createHash('sha256').update(JSON.stringify(revisionRecord)).digest('hex')}`;
 
-    const history = vendor.ratingRevisionHistory || [];
+    const history = [
+      ...(Array.isArray(vendor.ratingRevisionHistory) ? vendor.ratingRevisionHistory : []),
+    ];
     history.unshift(revisionRecord);
 
-    const updatedVendor = this.updateVendor(vendor.id, {
-      score: newCompositeScore,
-      rating: newRating,
-      latestRatingRevision: revisionRecord,
-      ratingRevisionHistory: history,
-    });
+    return {
+      revisionRecord,
+      updates: {
+        score: newCompositeScore,
+        rating: newRating,
+        latestRatingRevision: revisionRecord,
+        ratingRevisionHistory: history,
+      },
+      newCompositeScore,
+      newRating,
+    };
+  }
 
+  _sendVendorRatingRevisionEmail(vendor, ratingData, prepared) {
+    const { qualityScore, costScore, deliveryScore, remarks, buyerCompany, buyerName } = ratingData;
+    const { newCompositeScore, newRating } = prepared;
     // Send rating revision email to the vendor
     if (vendor.email) {
       const emailPayload = mailerService.buildRatingRevisionEmail({
@@ -2641,57 +3075,131 @@ class StoreService {
           logger.error(`Error sending rating revision email to ${vendor.email}`, err, 'STORE_SERVICE');
         });
     }
+  }
 
+  _auditVendorRatingRevision(vendor, ratingData, prepared) {
+    const { buyerEmail } = ratingData;
+    const { newCompositeScore, newRating } = prepared;
     this.addAuditLog({
       userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
       action: `Revised vendor rating for ${vendor.name}: ${vendor.rating} -> ${newRating} (Score: ${newCompositeScore})`,
     });
+  }
 
-    return { updatedVendor, revisionRecord };
+  reviseVendorRating(vendorId, ratingData, scopedBuyerId = null) {
+    const vendor = this.getVendorById(vendorId, scopedBuyerId);
+    if (!vendor) return null;
+    const prepared = this._prepareVendorRatingRevision(vendor, ratingData);
+    const updatedVendor = this.updateVendor(vendor.id, prepared.updates);
+    if (!pool.hasStorage()) this._sendVendorRatingRevisionEmail(vendor, ratingData, prepared);
+    this._auditVendorRatingRevision(vendor, ratingData, prepared);
+
+    return { updatedVendor, revisionRecord: prepared.revisionRecord };
+  }
+
+  async reviseVendorRatingDurably(vendorId, ratingData, scopedBuyerId = null) {
+    let vendor = this.getVendorById(vendorId, scopedBuyerId);
+    if (!vendor && pool.hasStorage()) {
+      vendor = await this.getVendorByIdWithDBFallback(vendorId, scopedBuyerId, { fresh: true });
+    }
+    if (!vendor) return null;
+    let revisionSource = vendor;
+    let prepared;
+    const updatedVendor = await this.updateVendorDurably(vendor.id, (currentVendor) => {
+      revisionSource = currentVendor;
+      prepared = this._prepareVendorRatingRevision(currentVendor, ratingData);
+      return prepared.updates;
+    });
+    if (!updatedVendor) return null;
+
+    // Persistent updates atomically enqueue their email through the vendor
+    // rating revision database trigger. Only memory-only mode needs a direct
+    // send, because it has no durable event-outbox table or dispatcher.
+    if (!pool.hasStorage()) this._sendVendorRatingRevisionEmail(revisionSource, ratingData, prepared);
+    this._auditVendorRatingRevision(revisionSource, ratingData, prepared);
+    return { updatedVendor, revisionRecord: prepared.revisionRecord };
   }
 
   // ==========================================
   // 3. RFQS
   // ==========================================
   /**
-   * Checks all open RFQs that have reached 48 hours after release and officially closes them,
-   * triggering final comparison evaluation email and SMS acknowledgment to the buyer.
+   * Close due RFQs through one conditional database update before changing the
+   * cache or sending closure notifications. The in-memory path is retained for
+   * local mock-only operation when no persistent store is configured.
    */
-  checkAndClose48HourRFQs() {
-    const now = Date.now();
-    const fortyEightHoursMs = 48 * 60 * 60 * 1000;
-    const closedList = [];
+  async closeExpiredRFQsDurably(now = Date.now()) {
+    const nowMs = Number(now);
+    if (!Number.isFinite(nowMs)) throw new TypeError('Closure time must be a valid timestamp.');
+    const cutoffIso = new Date(nowMs - RFQ_AUTO_CLOSE_AFTER_MS).toISOString();
+    const closedAtIso = new Date(nowMs).toISOString();
+    let closedList;
 
-    for (let i = 0; i < this.rfqs.length; i++) {
-      const rfq = this.rfqs[i];
-      if (
-        rfq &&
-        rfq.status !== 'Closed' &&
-        rfq.status !== 'PO Generated' &&
-        !rfq.poFinalised &&
-        !rfq.poNumber &&
-        rfq.status !== 'Expired'
-      ) {
-        const createdMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
-        if (createdMs > 0 && now - createdMs >= fortyEightHoursMs) {
+    if (pool.hasStorage()) {
+      try {
+        closedList = await domainQueries.closeExpiredRFQsInDB(
+          cutoffIso,
+          closedAtIso,
+          RFQ_AUTO_CLOSE_REASON
+        );
+      } catch (error) {
+        logger.error('Durable RFQ closure query failed; cached RFQs were left unchanged', {
+          error,
+          cutoffIso,
+          operation: 'close-expired-rfqs',
+        }, 'STORE_SERVICE');
+        throw error;
+      }
+    } else {
+      closedList = this.rfqs.reduce((closed, rfq, index) => {
+        const createdMs = rfq?.createdAt ? new Date(rfq.createdAt).getTime() : 0;
+        if (
+          rfq &&
+          createdMs > 0 &&
+          nowMs - createdMs >= RFQ_AUTO_CLOSE_AFTER_MS &&
+          rfq.status !== 'Closed' &&
+          rfq.status !== 'PO Generated' &&
+          !rfq.poFinalised &&
+          !rfq.poNumber &&
+          rfq.status !== 'Expired'
+        ) {
           const updated = {
             ...rfq,
             status: 'Closed',
-            closedAt: new Date(now).toISOString(),
-            closedReason: 'Official closure 48 hours after release',
+            closedAt: closedAtIso,
+            closedReason: RFQ_AUTO_CLOSE_REASON,
           };
-          this.rfqs[i] = updated;
-          this._persistRFQ(updated);
-          this.notifyOfRFQClosure(updated);
-          closedList.push(updated);
+          this.rfqs[index] = updated;
+          closed.push(updated);
         }
+        return closed;
+      }, []);
+    }
+
+    for (const updated of closedList) {
+      const index = this.rfqs.findIndex((rfq) => rfq.id === updated.id || rfq.rfqNumber === updated.rfqNumber);
+      if (index >= 0) this.rfqs[index] = updated;
+      try {
+        this.notifyOfRFQClosure(updated);
+      } catch (error) {
+        logger.error('RFQ closure was persisted but closure notification processing failed', {
+          error,
+          rfqId: updated.id,
+          rfqNumber: updated.rfqNumber,
+        }, 'STORE_SERVICE');
       }
+    }
+
+    if (closedList.length > 0) {
+      logger.info('Automatically closed expired RFQs after durable status transition', {
+        closedCount: closedList.length,
+        rfqIds: closedList.map((rfq) => rfq.id),
+      }, 'STORE_SERVICE');
     }
     return closedList;
   }
 
   getRFQs(buyerAccountId = null) {
-    this.checkAndClose48HourRFQs();
     let list = this.rfqs;
     if (buyerAccountId) {
       const targetId = String(buyerAccountId).toLowerCase();
@@ -2711,49 +3219,57 @@ class StoreService {
     if (!pool.hasStorage()) return this.getRFQs(buyerAccountId);
     const now = Date.now();
     const cacheKey = buyerAccountId || '__all__';
-    this._lastRfqSyncMap = this._lastRfqSyncMap || new Map();
-    const lastSync = this._lastRfqSyncMap.get(cacheKey) || (!buyerAccountId ? this._lastRfqSyncTime : 0);
+    const lastSync = buyerAccountId ? this._lastRfqSyncMap.get(cacheKey) : this._lastRfqSyncTime;
     if (!force && lastSync && (now - lastSync < 25000)) {
       return this.getRFQs(buyerAccountId);
     }
-    if (this._syncRFQsPromise) {
-      return this._syncRFQsPromise;
+    const pendingSync = this._rfqSyncPromises.get(cacheKey);
+    if (pendingSync) {
+      return pendingSync;
     }
-    this._syncRFQsPromise = (async () => {
+
+    const syncPromise = (async () => {
       try {
         const allFromDB = buyerAccountId
           ? await domainQueries.getRFQsFromDB(buyerAccountId, 100)
           : await domainQueries.getRFQsFromDB(null, 200);
-        if (Array.isArray(allFromDB)) {
-          const byId = new Map(this.rfqs.map((r) => [r.id, r]));
-          for (const rfq of allFromDB) {
-            if (rfq && (rfq.poFinalised || rfq.poNumber) && rfq.status === 'Closed') {
-              rfq.status = 'PO Generated';
-              rfq.poFinalised = true;
-              this._persistRFQ(rfq);
-            }
-            if (rfq && rfq.source === 'ai_extraction' && !rfq.sourceFileName) {
-              rfq.source = 'manual_entry';
-              this._persistRFQ(rfq);
-            }
-            byId.set(rfq.id, rfq);
-          }
-          this.rfqs = Array.from(byId.values()).sort(
-            (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-          );
+        if (!Array.isArray(allFromDB)) {
+          throw new Error('RFQ database query returned an invalid result');
         }
-        if (!buyerAccountId) {
+
+        const byId = new Map(this.rfqs.map((r) => [r.id, r]));
+        for (const rfq of allFromDB) {
+          const normalizedRFQ = normalizeRFQForRead(rfq);
+          byId.set(normalizedRFQ.id, normalizedRFQ);
+        }
+        this.rfqs = Array.from(byId.values()).sort(
+          (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+        );
+        if (buyerAccountId) {
+          this._lastRfqSyncMap.set(cacheKey, Date.now());
+        } else {
           this._lastRfqSyncTime = Date.now();
         }
-        this._lastRfqSyncMap.set(cacheKey, Date.now());
       } catch (err) {
-        logger.error('Failed to sync RFQs from database', err, 'STORE_SERVICE');
+        logger.error('Failed to sync RFQs from authoritative storage', {
+          error: err,
+          buyerAccountId: buyerAccountId || null,
+          operation: 'sync-rfqs-from-database',
+        }, 'STORE_SERVICE');
+        const unavailable = new Error(PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE);
+        unavailable.status = 503;
+        unavailable.statusCode = 503;
+        unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+        unavailable.retryable = true;
+        unavailable.cause = err;
+        throw unavailable;
       } finally {
-        this._syncRFQsPromise = null;
+        this._rfqSyncPromises.delete(cacheKey);
       }
       return this.getRFQs(buyerAccountId);
     })();
-    return this._syncRFQsPromise;
+    this._rfqSyncPromises.set(cacheKey, syncPromise);
+    return syncPromise;
   }
 
   async getRFQByIdAsync(id) {
@@ -2789,7 +3305,6 @@ class StoreService {
   }
 
   getRFQById(id) {
-    this.checkAndClose48HourRFQs();
     const found = this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
     if (!found) return undefined;
     const rfq = normalizeRFQForRead(found);
@@ -3595,7 +4110,8 @@ class StoreService {
     if (idx === -1) return null;
 
     const oldStatus = this.rfqs[idx].status;
-    const quotes = updates.quotes ? evaluateQuotes(updates.quotes) : this.rfqs[idx].quotes;
+    let quotes = updates.quotes ? evaluateQuotes(updates.quotes) : this.rfqs[idx].quotes;
+
     const updated = {
       ...this.rfqs[idx],
       ...updates,
@@ -3775,48 +4291,6 @@ class StoreService {
     ) {
       this.notifyBuyerOfFinalComparison(updated);
     }
-  }
-
-  extendRFQ(id, { hours, userEmail } = {}) {
-    const rfq = this.getRFQById(id);
-    if (!rfq) return { success: false, reason: 'NOT_FOUND', error: `RFQ with ID ${id} not found.` };
-
-    if (rfq.status === 'Closed' || rfq.status === 'Expired') {
-      return { success: false, reason: 'INVALID_STATUS', error: 'Cannot extend a closed or expired RFQ.' };
-    }
-
-    if (rfq.isExtended || rfq.extendedAt || rfq.extensionHours) {
-      return { success: false, reason: 'ALREADY_EXTENDED', error: 'This RFQ has already received its one-time deadline extension.' };
-    }
-
-    const extHours = Number(hours);
-    if (![24, 48].includes(extHours)) {
-      return { success: false, reason: 'VALIDATION', error: 'Extension duration must be either 24 or 48 hours.' };
-    }
-
-    const currentDeadlineStr = rfq.closingDeadline || rfq.deadline || rfq.targetDeliveryDate;
-    let baseMs = Date.now();
-    if (currentDeadlineStr && !isNaN(Date.parse(currentDeadlineStr))) {
-      baseMs = Math.max(Date.parse(currentDeadlineStr), Date.now());
-    } else if (rfq.createdAt && !isNaN(Date.parse(rfq.createdAt))) {
-      baseMs = Math.max(new Date(rfq.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000, Date.now());
-    }
-
-    const newDeadlineMs = baseMs + extHours * 60 * 60 * 1000;
-    const newDeadlineIso = new Date(newDeadlineMs).toISOString();
-
-    const updates = {
-      closingDeadline: newDeadlineIso,
-      deadline: newDeadlineIso,
-      isExtended: true,
-      extensionHours: extHours,
-      extendedAt: new Date().toISOString(),
-      extendedByEmail: userEmail || rfq.raisedByEmail || null,
-      updatedAt: new Date().toISOString(),
-    };
-
-    const updated = this.updateRFQ(rfq.id, updates);
-    return { success: true, rfq: updated };
   }
 
   extendRFQ(id, { hours, userEmail } = {}) {
@@ -4046,11 +4520,13 @@ class StoreService {
   _dispatchQuoteSubmissionSideEffects(rfq, updated, quote, autoClosed, {
     skipQuoteEmail = false,
     skipAutoClosureEmail = false,
+    comparisonJob = null,
   } = {}) {
     if (autoClosed) {
       this.cancelDelayedQuoteTimers(rfq.id);
       this.notifyBuyerOfAutoClosureAndScheduleComparison(updated, updated.quotes || [], {
         skipEmail: skipAutoClosureEmail,
+        comparisonJob,
       });
       return;
     }
@@ -4191,6 +4667,9 @@ class StoreService {
           `${rfq.id}:${durableQuoteId}`
         )
         : null;
+      const autoClosureComparisonIntent = autoClosedByQuote
+        ? rfqChaserScheduler.buildBuyerComparisonJobIntent(updatedRFQ)
+        : null;
       const idempotencyKey = `rfq-quote:${vendor.id}:${rfq.id}`;
       let saved;
       try {
@@ -4212,6 +4691,10 @@ class StoreService {
           ...(autoClosureEmailEventId ? {
             autoClosureRecipientEmail: buyerEmailPlan.buyerEmail,
             autoClosureRecipientName: buyerEmailPlan.buyer.organizationName,
+          } : {}),
+          ...(autoClosureComparisonIntent ? {
+            autoClosureComparisonJobId: autoClosureComparisonIntent.id,
+            autoClosureComparisonFireAt: autoClosureComparisonIntent.fireAt,
           } : {}),
           expectedVendor: vendor,
           expectedRFQ: rfq,
@@ -4260,6 +4743,7 @@ class StoreService {
         this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed, {
           ...(quoteNotificationEventId ? { skipQuoteEmail: true } : {}),
           ...(autoClosureEmailEventId ? { skipAutoClosureEmail: true } : {}),
+          ...(autoClosureComparisonIntent ? { comparisonJob: autoClosureComparisonIntent } : {}),
         });
       } else {
         this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed);
@@ -4293,7 +4777,7 @@ class StoreService {
     }
   }
 
-  notifyBuyerOfAutoClosureAndScheduleComparison(rfq, quotes, { skipEmail = false } = {}) {
+  notifyBuyerOfAutoClosureAndScheduleComparison(rfq, quotes, { skipEmail = false, comparisonJob = null } = {}) {
     if (!rfq) return;
     const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
     const buyer = (rfq.buyerAccountId && this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId)) || {
@@ -4333,88 +4817,137 @@ class StoreService {
       );
     }
 
-    // 3. Schedule 5-Minute Comparison-Ready Notification (Email + SMS)
-    const FIVE_MINUTES_MS = 5 * 60 * 1000;
-    const timer = setTimeout(() => {
-      try {
-        const freshRfq = this.getRFQById(rfq.id) || rfq;
-        logger.info(
-          `[AUTO_CLOSURE] 5-minute comparison delay complete for RFQ ${freshRfq.rfqNumber}. Dispatching final comparison email and SMS.`,
-          { rfqNumber: freshRfq.rfqNumber, quotesCount: quotes.length, buyerEmail: buyer.corporateEmail },
-          'STORE_SERVICE'
-        );
-
-        if (this.isBuyerProfileUpdateRequired(buyer, freshRfq)) {
-          logger.info(
-            `[AUTO_CLOSURE] Buyer ${buyer.corporateEmail} profile verification is pending. Queueing quotes and omitting unsealed comparison email for RFQ ${freshRfq.rfqNumber}.`,
-            { rfqNumber: freshRfq.rfqNumber, quotesCount: quotes.length },
-            'STORE_SERVICE'
-          );
-          if (Array.isArray(quotes)) {
-            quotes.forEach((q) => this.queuePendingQuoteNotification(buyer.corporateEmail, { rfq: freshRfq, quote: q }));
-          }
-          if (!this.hasQuoteAckBeenSent(freshRfq)) {
-            this.markQuoteAckSent(freshRfq);
-            this._background(
-              mailerService.sendBuyerProfileCompletionReminderEmail({
-                to: buyer.corporateEmail,
-                recipientName: buyer.organizationName,
-                rfqNumber: freshRfq.rfqNumber,
-                rfqTitle: freshRfq.title,
-                quotesCount: quotes.length,
-              }),
-              'Failed to dispatch profile completion reminder email on auto-closure'
-            );
-          }
-          return;
-        }
-
-        // Send comparison email
-        if (buyer.corporateEmail) {
-          this._background(
-            mailerService.sendRfqFinalComparisonEmail(buyer.corporateEmail, {
-              rfq: freshRfq,
-              quotes,
-              recipientName: buyer.organizationName,
-            }),
-            'Failed to dispatch 5-minute comparison email to buyer'
-          );
-        }
-
-        // Send comparison SMS to buyer's phone
-        const buyerPhone = buyer.phone || buyer.corporatePhone || freshRfq.buyerPhone;
-        if (buyerPhone) {
-          this._background(
-            smsService.sendBuyerComparisonSms(buyerPhone, {
-              rfqNumber: freshRfq.rfqNumber,
-              quotesCount: quotes.length,
-              buyerName: buyer.organizationName,
-            }),
-            'Failed to dispatch 5-minute comparison SMS to buyer'
-          );
-        }
-      } catch (err) {
-        logger.error(`Error in 5-minute comparison notification dispatch for ${rfq.rfqNumber}`, err, 'STORE_SERVICE');
-      }
-    }, FIVE_MINUTES_MS);
-
-    if (timer && timer.unref) {
-      timer.unref();
-    }
+    // 3. Persist the delayed comparison notice. Node uses a timer backed by
+    // this row; Workers dispatch it from the existing one-minute Cron trigger.
+    if (comparisonJob) rfqChaserScheduler.schedulePersistedBuyerComparison(rfq, comparisonJob);
+    else rfqChaserScheduler.scheduleBuyerComparison(rfq);
   }
 
-  addInquiryToRFQ(rfqId, inquiry) {
-    const rfq = this.getRFQById(rfqId);
+  async dispatchBuyerComparisonNotification(rfq, deliveryState = {}) {
+    if (!rfq) throw new Error('Cannot dispatch buyer comparison notification without an RFQ');
+    const freshRfq = this.getRFQById(rfq.id || rfq.rfqNumber) || rfq;
+    const quotes = Array.isArray(freshRfq.quotes) ? freshRfq.quotes : [];
+    const buyerEmail = this.resolveBuyerEmailForRFQ(freshRfq);
+    const buyer = (freshRfq.buyerAccountId && this.buyerAccounts.find((account) => account.id === freshRfq.buyerAccountId)) || {
+      id: freshRfq.buyerAccountId || null,
+      corporateEmail: buyerEmail,
+      organizationName: freshRfq.buyerAccountName || freshRfq.buyerName || 'Buyer',
+      phone: freshRfq.buyerPhone || null,
+    };
+
+    logger.info(
+      `Auto-closure comparison delay complete for RFQ ${freshRfq.rfqNumber}. Dispatching comparison email and SMS.`,
+      { rfqNumber: freshRfq.rfqNumber, quotesCount: quotes.length, buyerEmail: buyer.corporateEmail },
+      'STORE_SERVICE'
+    );
+
+    let emailCompleted = Boolean(deliveryState.emailCompleted);
+    let smsCompleted = Boolean(deliveryState.smsCompleted);
+
+    if (this.isBuyerProfileUpdateRequired(buyer, freshRfq)) {
+      logger.info(
+        `Buyer profile verification is pending. Queueing submitted quotes and withholding comparison email for RFQ ${freshRfq.rfqNumber}.`,
+        { rfqNumber: freshRfq.rfqNumber, quotesCount: quotes.length, buyerEmail: buyer.corporateEmail },
+        'STORE_SERVICE'
+      );
+      if (buyer.corporateEmail && !this.hasQuoteAckBeenSent(freshRfq)) {
+        quotes.forEach((quote) => this.queuePendingQuoteNotification(buyer.corporateEmail, { rfq: freshRfq, quote }));
+      }
+      if (buyer.corporateEmail && !emailCompleted) {
+        if (!this.hasQuoteAckBeenSent(freshRfq)) this.markQuoteAckSent(freshRfq);
+        const reminderResult = await mailerService.sendBuyerProfileCompletionReminderEmail({
+          to: buyer.corporateEmail,
+          recipientName: buyer.organizationName,
+          rfqNumber: freshRfq.rfqNumber,
+          rfqTitle: freshRfq.title,
+          quotesCount: quotes.length,
+        });
+        emailCompleted = !(reminderResult && reminderResult.sent === false);
+        if (!emailCompleted) {
+          logger.error('Buyer profile completion reminder email was not sent', {
+            rfqId: freshRfq.id,
+            rfqNumber: freshRfq.rfqNumber,
+            buyerEmail: buyer.corporateEmail,
+            error: reminderResult.error || null,
+          }, 'STORE_SERVICE');
+        }
+      }
+      if (!buyer.corporateEmail) emailCompleted = true;
+      // A pending profile intentionally withholds SMS and the comparison matrix.
+      smsCompleted = true;
+      return { emailCompleted, smsCompleted };
+    }
+
+    const deliveries = [];
+    if (buyer.corporateEmail && !emailCompleted) {
+      deliveries.push({
+        channel: 'email',
+        promise: mailerService.sendRfqFinalComparisonEmail(buyer.corporateEmail, {
+          rfq: freshRfq,
+          quotes,
+          recipientName: buyer.organizationName,
+        }),
+      });
+    } else if (!buyer.corporateEmail) emailCompleted = true;
+    const buyerPhone = buyer.phone || buyer.corporatePhone || freshRfq.buyerPhone;
+    if (buyerPhone && !smsCompleted) {
+      deliveries.push({
+        channel: 'sms',
+        promise: smsService.sendBuyerComparisonSms({
+          mobile: buyerPhone,
+          rfqNumber: freshRfq.rfqNumber,
+          quotesCount: quotes.length,
+          buyerName: buyer.organizationName,
+        }),
+      });
+    } else if (!buyerPhone) smsCompleted = true;
+
+    if (!buyer.corporateEmail && !buyerPhone && !deliveryState.emailCompleted && !deliveryState.smsCompleted) {
+      logger.warn('Buyer comparison notification has no configured delivery destination', {
+        rfqId: freshRfq.id,
+        rfqNumber: freshRfq.rfqNumber,
+      }, 'STORE_SERVICE');
+      emailCompleted = true;
+      smsCompleted = true;
+      return { emailCompleted, smsCompleted };
+    }
+
+    const results = await Promise.allSettled(deliveries.map(({ promise }) => promise));
+    const failures = results.flatMap((result, index) => {
+      if (result.status === 'rejected') {
+        return [{ channel: deliveries[index].channel, error: result.reason }];
+      }
+      if (result.value && (result.value.sent === false || result.value.success === false)) {
+        return [{ channel: deliveries[index].channel, error: result.value.error || 'delivery returned unsuccessful status' }];
+      }
+      if (deliveries[index].channel === 'email') emailCompleted = true;
+      if (deliveries[index].channel === 'sms') smsCompleted = true;
+      return [];
+    });
+    if (failures.length) {
+      logger.error('Buyer comparison notification delivery failed', {
+        rfqId: freshRfq.id,
+        rfqNumber: freshRfq.rfqNumber,
+        failures,
+      }, 'STORE_SERVICE');
+    }
+    return { emailCompleted, smsCompleted };
+  }
+
+  async addInquiryToRFQ(rfqId, inquiry) {
+    const rfq = await this.getRFQByIdAsync(rfqId);
     if (!rfq) return null;
 
-    const existingInquiries = Array.isArray(rfq.inquiries) ? rfq.inquiries : [];
+    const existingInquiries = Array.isArray(rfq.inquiries) ? [...rfq.inquiries] : [];
     const timestamp = inquiry.createdAt || new Date().toISOString();
     const vendorEmail = inquiry.vendorEmail || null;
     const vendorName = inquiry.vendorName || 'Vendor Partner';
     const vendorId = inquiry.vendorId || null;
 
     const chatMsg = {
-      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: inquiry.messageId
+        ? `msg-email-${crypto.createHash('sha256').update(String(inquiry.messageId)).digest('hex')}`
+        : `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       senderRole: 'vendor',
       senderName: vendorName,
       senderEmail: vendorEmail,
@@ -4459,6 +4992,10 @@ class StoreService {
               : []),
           ];
 
+      if (prevMsgs.some((message) => message.id === chatMsg.id)) {
+        return { updatedRfq: rfq, inquiry: target, duplicate: true };
+      }
+
       updatedInquiry = {
         ...target,
         message: inquiry.message || target.message,
@@ -4484,8 +5021,8 @@ class StoreService {
       inquiries = [...existingInquiries, updatedInquiry];
     }
 
-    rfq.inquiries = inquiries;
-    const updated = this.updateRFQ(rfq.id, { inquiries });
+    const updated = await this.updateRFQDurably(rfq.id, { inquiries });
+    if (!updated) return null;
 
     this.addFeedItem({
       type: 'system',
@@ -4510,11 +5047,11 @@ class StoreService {
     return { updatedRfq: updated, inquiry: updatedInquiry };
   }
 
-  replyToRFQInquiry(rfqId, inquiryId, replyData) {
-    const rfq = this.getRFQById(rfqId);
+  async replyToRFQInquiry(rfqId, inquiryId, replyData) {
+    const rfq = await this.getRFQByIdAsync(rfqId);
     if (!rfq) return null;
 
-    const existingInquiries = Array.isArray(rfq.inquiries) ? rfq.inquiries : [];
+    const existingInquiries = Array.isArray(rfq.inquiries) ? [...rfq.inquiries] : [];
     const inqIndex = existingInquiries.findIndex((i) => i.id === inquiryId);
     if (inqIndex === -1) return null;
 
@@ -4564,8 +5101,8 @@ class StoreService {
     };
 
     existingInquiries[inqIndex] = updatedInquiry;
-    rfq.inquiries = existingInquiries;
-    const updated = this.updateRFQ(rfq.id, { inquiries: existingInquiries });
+    const updated = await this.updateRFQDurably(rfq.id, { inquiries: existingInquiries });
+    if (!updated) return null;
 
     this.addFeedItem({
       type: 'system',
@@ -4586,18 +5123,49 @@ class StoreService {
   }
 
   deleteRFQ(id) {
-    const beforeLen = this.rfqs.length;
-    this.rfqs = this.rfqs.filter((r) => r.id !== id && r.rfqNumber !== id);
-    const removed = this.rfqs.length < beforeLen;
-    if (removed) {
-      this._removeRFQ(id);
-      if (this._delayedQuoteTimers && this._delayedQuoteTimers.has(id)) {
-        const handles = this._delayedQuoteTimers.get(id) || [];
-        handles.forEach((h) => clearTimeout(h));
-        this._delayedQuoteTimers.delete(id);
+    const rfq = this.rfqs.find((record) => record.id === id || record.rfqNumber === id);
+    if (!rfq) return false;
+
+    // The database delete is keyed by the persisted row ID. Callers may use
+    // either that ID or the public RFQ number, so resolve the row before
+    // writing or the cache could report a deletion that never reached storage.
+    this._removeRFQ(rfq.id);
+    this._removeRFQFromMemory(rfq, id);
+    return true;
+  }
+
+  async deleteRFQDurably(id) {
+    const rfq = this.rfqs.find((record) => record.id === id || record.rfqNumber === id);
+    if (!rfq) return false;
+
+    if (pool.hasStorage()) {
+      try {
+        await domainQueries.deleteRFQInDB(rfq.id);
+      } catch (error) {
+        logger.error('Failed to persist RFQ deletion', error, 'STORE_SERVICE');
+        const persistError = new Error('The RFQ could not be deleted from storage. Try again.');
+        persistError.statusCode = 503;
+        persistError.code = 'PERSISTENCE_UNAVAILABLE';
+        throw persistError;
       }
     }
-    return removed;
+
+    this._lastRfqSyncTime = 0;
+    this._removeRFQFromMemory(rfq, id);
+    return true;
+  }
+
+  _removeRFQFromMemory(rfq, requestedId) {
+    this.rfqs = this.rfqs.filter((record) => record.id !== rfq.id);
+
+    if (this._delayedQuoteTimers) {
+      for (const timerId of new Set([requestedId, rfq.id, rfq.rfqNumber])) {
+        if (!this._delayedQuoteTimers.has(timerId)) continue;
+        const handles = this._delayedQuoteTimers.get(timerId) || [];
+        handles.forEach((h) => clearTimeout(h));
+        this._delayedQuoteTimers.delete(timerId);
+      }
+    }
   }
 
   // getRFQSummary was removed with the RFQ seeds. The portfolio roll-up now
@@ -4649,6 +5217,41 @@ class StoreService {
     };
   }
 
+  async createNotificationDurably({ recipientType, recipientId, kind, title, message, meta }) {
+    const notification = this._buildNotification({
+      recipientType,
+      recipientId,
+      kind,
+      title,
+      message,
+      meta,
+    });
+
+    try {
+      await eventOutboxService.persistWithOutboxFallback({
+        eventType: EVENT_OUTBOX_TYPES.NOTIFICATION,
+        idempotencyKey: notification.id,
+        payload: notification,
+        operation: 'persist-notification',
+        write: () => domainQueries.insertNotificationInDB(notification),
+      });
+    } catch (error) {
+      logger.error('Failed to durably persist low-credit notification', {
+        error,
+        notificationId: notification.id,
+        recipientType,
+      }, 'STORE_SERVICE');
+      const persistError = new Error(PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE);
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      persistError.retryable = true;
+      throw persistError;
+    }
+
+    this.notifications.unshift(notification);
+    return notification;
+  }
+
   /**
    * Mark one notification read, but only if it belongs to the caller — a
    * recipient must not be able to flip another recipient's notification by id.
@@ -4661,9 +5264,38 @@ class StoreService {
     if (!notification) return null;
     if (!notification.read) {
       notification.read = true;
-      this._background(domainQueries.markNotificationReadInDB(id), 'Failed to persist notification read');
+      this._background(
+        domainQueries.markNotificationReadInDB(id, recipientType, recipientId),
+        'Failed to persist notification read'
+      );
     }
     return notification;
+  }
+
+  async markNotificationReadDurably(id, recipientType, recipientId) {
+    if (!pool.hasStorage()) return this.markNotificationRead(id, recipientType, recipientId);
+
+    const notification = this.notifications.find(
+      (item) => item.id === id && item.recipientType === recipientType && item.recipientId === recipientId
+    );
+    if (!notification) return null;
+
+    try {
+      const persisted = await domainQueries.markNotificationReadInDB(id, recipientType, recipientId);
+      if (!persisted) {
+        this.notifications = this.notifications.filter((item) => item.id !== id);
+        return null;
+      }
+      notification.read = true;
+      return notification;
+    } catch (error) {
+      logger.error('Failed to persist notification read state', error, 'STORE_SERVICE');
+      const persistError = new Error(PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE);
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      persistError.retryable = true;
+      throw persistError;
+    }
   }
 
   /** Mark all of one recipient's notifications read. Returns how many changed. */
@@ -4682,6 +5314,27 @@ class StoreService {
       );
     }
     return changed;
+  }
+
+  async markAllNotificationsReadDurably(recipientType, recipientId) {
+    if (!pool.hasStorage()) return this.markAllNotificationsRead(recipientType, recipientId);
+
+    try {
+      const changed = await domainQueries.markAllNotificationsReadInDB(recipientType, recipientId);
+      this.notifications.forEach((notification) => {
+        if (notification.recipientType === recipientType && notification.recipientId === recipientId) {
+          notification.read = true;
+        }
+      });
+      return changed;
+    } catch (error) {
+      logger.error('Failed to persist bulk notification read state', error, 'STORE_SERVICE');
+      const persistError = new Error(PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE);
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      persistError.retryable = true;
+      throw persistError;
+    }
   }
 
   isBuyerUploaded(vendor) {
@@ -5104,7 +5757,7 @@ class StoreService {
    * @param {Object} rfq The RFQ created by createRFQ.
    * @returns {Promise<Object>} The RFQ with DB-backed V0 assignments applied.
    */
-  async augmentV0AssignmentsFromDB(rfq) {
+  async augmentV0AssignmentsFromDB(rfq, { deferChasers = false } = {}) {
     if (!rfq) return rfq;
     const mode = rfq.sourcingMode || '';
     const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
@@ -5117,10 +5770,17 @@ class StoreService {
     // If a V0 RFQ was submitted without selecting a category, do NOT automatically assign
     // vendors or fallback to the general public directory. It routes to Category Manager for manual assignment.
     if (!Array.isArray(signals) || signals.length === 0) {
-      rfq.assignedVendors = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-      rfq.procucevVendorCount = rfq.assignedVendors.length;
-      rfq.needsCategoryManagerAssignment = true;
-      return rfq;
+      const assignedVendors = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+      const updated = await this.updateRFQDurably(rfq.id, (current) => ({
+        procucevVendorCount: Array.isArray(current.assignedVendors) ? current.assignedVendors.length : 0,
+        needsCategoryManagerAssignment: true,
+      }));
+      return updated || {
+        ...rfq,
+        assignedVendors,
+        procucevVendorCount: assignedVendors.length,
+        needsCategoryManagerAssignment: true,
+      };
     }
     const targetCategories = categories.length > 0 ? categories : signals;
     const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
@@ -5166,11 +5826,11 @@ class StoreService {
 
     if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
       const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-      if (existing.length === 0) {
-        this.updateRFQ(rfq.id, { needsCategoryManagerAssignment: true });
-        rfq.needsCategoryManagerAssignment = true;
-      }
-      return rfq;
+      if (existing.length > 0) return rfq;
+      const updated = await this.updateRFQDurably(rfq.id, (current) => ({
+        needsCategoryManagerAssignment: !Array.isArray(current.assignedVendors) || current.assignedVendors.length === 0,
+      }));
+      return updated || rfq;
     }
 
     // Prefer vendors in the RFQ's delivery location and pincode, then by rating — select up to maxProcucevPerCat per category.
@@ -5239,15 +5899,17 @@ class StoreService {
       };
     });
 
-    rfqChaserScheduler.scheduleRFQChasers(
-      updated,
-      resolvedAdditions,
-      (vendor) => this.checkVendorQuotationEligibility(vendor)
-    );
+    if (!deferChasers) {
+      rfqChaserScheduler.scheduleRFQChasers(
+        updated,
+        resolvedAdditions,
+        (vendor) => this.checkVendorQuotationEligibility(vendor)
+      );
+    }
 
     logger.info(
-      `V0 RFQ ${rfq.rfqNumber}: assigned ${merged.length} Procucev vendors from DB match (${additions.length} added)`,
-      { rfqNumber: rfq.rfqNumber, assigned: merged.length },
+      `V0 RFQ ${rfq.rfqNumber}: assigned ${updated.assignedVendors.length} Procucev vendors from DB match (${committedAdditions.length} added)`,
+      { rfqNumber: rfq.rfqNumber, assigned: updated.assignedVendors.length },
       'STORE_SERVICE'
     );
     return updated;
@@ -5689,7 +6351,7 @@ class StoreService {
       this._persistNotification(notification);
 
       // Real invite email
-      if (vendor.email) {
+      if (vendor.email && !pool.hasStorage()) {
         const buyerEmail = this.resolveBuyerEmailForRFQ(updatedRFQ);
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         logger.info(
@@ -6107,6 +6769,11 @@ class StoreService {
     const assigned = (Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []).filter((v) => v && v.email);
     const allEmails = new Set();
 
+    if (pool.hasStorage()) {
+      this._dispatchRFQVendorInviteOutbox(rfq, 'rfq-creation-vendor-invites');
+      return Array.isArray(rfq.vendorInvitationTargets) ? rfq.vendorInvitationTargets.length : 0;
+    }
+
     for (const vendor of recipients) {
       if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
         allEmails.add(vendor.email.toLowerCase());
@@ -6340,18 +7007,10 @@ class StoreService {
    * - Otherwise, mailerService sends the unsealed quote details.
    */
   emailQuoteToBuyer(rfq, quote) {
-    if (!rfq) return false;
-    const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
-    if (!buyerEmail) return false;
-
-    const buyer = (rfq.buyerAccountId && this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId)) ||
-      (this.buyerAccounts && this.buyerAccounts.find((a) => String(a.corporateEmail || '').trim().toLowerCase() === String(buyerEmail).trim().toLowerCase())) || {
-      id: rfq.buyerAccountId || null,
-      corporateEmail: buyerEmail,
-      organizationName: rfq.buyerAccountName || rfq.buyerName || 'Buyer',
-    };
-
-    const isPendingVerification = this.isBuyerProfileUpdateRequired(buyer, rfq);
+    const plan = this._buildBuyerQuoteEmailPlan(rfq);
+    if (!plan) return false;
+    const { buyer } = plan;
+    const isPendingVerification = plan.requiresProfileCompletion;
 
     if (isPendingVerification) {
       logger.info(
@@ -6487,7 +7146,7 @@ class StoreService {
     return this.evaluations.slice(0, 500);
   }
 
-  createEvaluation(evalData) {
+  _buildEvaluationRecord(evalData) {
     const { moduleScores, overallScore, status, systemAction } = calculate360Evaluation(evalData.moduleScores || {});
 
     const mergedModuleScores = { ...moduleScores };
@@ -6525,6 +7184,11 @@ class StoreService {
       questionBreakdown: evalData.questionBreakdown || [],
     };
 
+    return newEval;
+  }
+
+  createEvaluation(evalData) {
+    const newEval = this._buildEvaluationRecord(evalData);
     this.evaluations.unshift(newEval);
     this._persistEvaluation(newEval);
 
@@ -6534,6 +7198,33 @@ class StoreService {
     });
 
     return newEval;
+  }
+
+  async createEvaluationDurably(evalData) {
+    const newEval = this._buildEvaluationRecord(evalData);
+    const storageConfigured = pool.hasStorage();
+    let persistedEvaluation;
+
+    try {
+      persistedEvaluation = await domainQueries.upsertEvaluationInDB(newEval);
+      if (storageConfigured && !persistedEvaluation) {
+        throw new Error('Evaluation upsert completed without a persisted row');
+      }
+    } catch (error) {
+      logger.error('Failed to persist vendor evaluation', error, 'STORE_SERVICE');
+      const persistError = new Error('The evaluation could not be saved to storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+
+    const savedEvaluation = persistedEvaluation || newEval;
+    this.evaluations.unshift(savedEvaluation);
+    this.addAuditLog({
+      userEmail: evalData.actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Executed 360° AI Supplier Audit for ${savedEvaluation.vendorName || savedEvaluation.vendorId}: Score ${savedEvaluation.overallScore}% (${savedEvaluation.status})`,
+    });
+    return savedEvaluation;
   }
 
   // ==========================================
@@ -6554,10 +7245,6 @@ class StoreService {
     return entry;
   }
 
-  verifyAuditIntegrity() {
-    return verifyAuditTrail(this.auditLogs);
-  }
-
   async addAuditLogDurably({ userEmail, action, rfqNumber, ipAddress }) {
     const previousHash = this.auditLogs.length > 0 ? this.auditLogs[0].shaSignature : '';
     const entry = createAuditEntry({ userEmail, action, rfqNumber, ipAddress, previousHash });
@@ -6570,6 +7257,10 @@ class StoreService {
       persistError.code = error.code || 'PERSISTENCE_UNAVAILABLE';
       throw persistError;
     }
+  }
+
+  verifyAuditIntegrity() {
+    return verifyAuditTrail(this.auditLogs);
   }
 
   async verifyAuditIntegrityDurably() {
@@ -6596,11 +7287,27 @@ class StoreService {
     return this.aiFeed.slice(0, 500);
   }
 
+  async getAIFeedDurably(limit = 100) {
+    if (!pool.hasStorage()) return this.getAIFeed(limit);
+
+    try {
+      const feed = await domainQueries.getAIFeedFromDB(limit);
+      this.aiFeed = Array.isArray(feed) ? feed : [];
+      return this.aiFeed;
+    } catch (error) {
+      logger.error('Failed to refresh AI feed from persistence', error, 'STORE_SERVICE');
+      const unavailable = new Error('The AI activity feed could not be refreshed from storage. Try again.');
+      unavailable.statusCode = 503;
+      unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+      throw unavailable;
+    }
+  }
+
   addFeedItem(feedItem) {
     return this.addAIFeedItem(feedItem);
   }
 
-  addAIFeedItem(feedItem) {
+  _buildAIFeedItem(feedItem) {
     let buyerAccountId = feedItem.buyerAccountId || null;
     if (!buyerAccountId && feedItem.rfqNumber) {
       const rfq = this.getRFQById(feedItem.rfqNumber);
@@ -6624,13 +7331,41 @@ class StoreService {
       channelDetails: feedItem.channelDetails || {},
     };
 
+    return item;
+  }
+
+  _cacheAIFeedItem(item) {
     this.aiFeed.unshift(item);
     if (this.aiFeed.length > 100) this.aiFeed.pop();
-    // The DB-side upsert trims to the newest 100 rows itself (see
-    // domainQueries.upsertAIFeedItemInDB), so it stays in sync with the
-    // in-memory cap without needing to know which item .pop() just evicted.
+    return item;
+  }
+
+  addAIFeedItem(feedItem) {
+    const item = this._buildAIFeedItem(feedItem);
+    this._cacheAIFeedItem(item);
     this._persistAIFeedItem(item);
     return item;
+  }
+
+  async addAIFeedItemDurably(feedItem) {
+    const item = this._buildAIFeedItem(feedItem);
+    const storageConfigured = pool.hasStorage();
+    let persistedItem;
+
+    try {
+      persistedItem = await domainQueries.upsertAIFeedItemInDB(item);
+      if (storageConfigured && !persistedItem) {
+        throw new Error('AI feed item upsert completed without a persisted row');
+      }
+    } catch (error) {
+      logger.error('Failed to persist AI feed item', error, 'STORE_SERVICE');
+      const persistError = new Error('The AI feed item could not be saved to storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+
+    return this._cacheAIFeedItem(persistedItem || item);
   }
 
   // ==========================================
@@ -6819,12 +7554,17 @@ class StoreService {
       if (!existing && pool.hasStorage()) {
         try {
           // eslint-disable-next-line no-await-in-loop
-          existing = await domainQueries.getVendorByEmailFromDB(email);
+          existing = await domainQueries.getVendorByEmailFromDB(email, { fresh: true });
           if (existing && !this.vendors.some((v) => v.id === existing.id)) {
             this.vendors.push(existing);
           }
         } catch (e) {
           logger.error('Failed to lookup vendor by email from DB', e, 'STORE_SERVICE');
+          skipped.push({
+            row: idx + 1,
+            reason: 'Could not verify whether this vendor already exists. Retry after database connectivity is restored.',
+          });
+          continue;
         }
       }
 
@@ -6839,30 +7579,37 @@ class StoreService {
           (sBuyerEmail && existing.buyerEmail && String(existing.buyerEmail).toLowerCase() === sBuyerEmail)
         );
 
-        existing.buyerId = buyerId || existing.buyerId || null;
-        existing.buyerAccountId = buyerId || existing.buyerAccountId || null;
-        existing.buyerEmail = buyerEmail || existing.buyerEmail || null;
-        if (name) existing.name = name;
-        if (rec.contactPerson) existing.contactPerson = (rec.contactPerson || '').trim();
-        if (rec.phone) existing.phone = (rec.phone || '').trim();
-        if (rec.location || rec.address) existing.location = (rec.location || rec.address || '').trim();
-        if (majorCategory) existing.majorCategory = majorCategory;
+        const updatedVendor = { ...existing };
+        updatedVendor.buyerId = buyerId || updatedVendor.buyerId || null;
+        updatedVendor.buyerAccountId = buyerId || updatedVendor.buyerAccountId || null;
+        updatedVendor.buyerEmail = buyerEmail || updatedVendor.buyerEmail || null;
+        if (name) updatedVendor.name = name;
+        if (rec.contactPerson) updatedVendor.contactPerson = (rec.contactPerson || '').trim();
+        if (rec.phone) updatedVendor.phone = (rec.phone || '').trim();
+        if (rec.location || rec.address) updatedVendor.location = (rec.location || rec.address || '').trim();
+        if (majorCategory) updatedVendor.majorCategory = majorCategory;
         if (minorCategories.length > 0) {
-          existing.minorCategories = minorCategories;
-          existing.clientMappedCategories = minorCategories;
+          updatedVendor.minorCategories = minorCategories;
+          updatedVendor.clientMappedCategories = minorCategories;
         }
-        if (Number.isFinite(Number(rec.rating))) existing.rating = Number(rec.rating);
-        if (Number.isFinite(Number(rec.score))) existing.score = Number(rec.score);
-        existing.hasRecord = true;
-        existing.isExistingInDatabase = true;
+        if (Number.isFinite(Number(rec.rating))) updatedVendor.rating = Number(rec.rating);
+        if (Number.isFinite(Number(rec.score))) updatedVendor.score = Number(rec.score);
+        updatedVendor.hasRecord = true;
+        updatedVendor.isExistingInDatabase = true;
 
         if (pool.hasStorage()) {
           try {
             // eslint-disable-next-line no-await-in-loop
-            await domainQueries.upsertVendorInDB(existing);
+            const persisted = await domainQueries.upsertVendorInDB(updatedVendor);
+            if (!persisted) throw new Error('Vendor update returned no persisted row');
+            Object.assign(existing, persisted);
           } catch (err) {
             logger.error('Failed to update existing vendor in DB', err, 'STORE_SERVICE');
+            skipped.push({ row: idx + 1, reason: 'Could not save this vendor. Retry after database connectivity is restored.' });
+            continue;
           }
+        } else {
+          Object.assign(existing, updatedVendor);
         }
 
         if (!alreadyScopedToThisBuyer) {
@@ -6931,12 +7678,16 @@ class StoreService {
     for (const { rec, vendor, isNew, isMapped } of vendorsToEmail) {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!vendor.email || !emailRegex.test(vendor.email)) {
+        const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
         failedEmails.push({
           vendorId: vendor.id,
           vendorName: vendor.name,
           email: vendor.email || '',
           template: isMapped ? 'Template A' : 'Template B',
-          reason: !vendor.email ? 'Vendor record has no registered email address.' : 'Invalid email address format.',
+          reason: [
+            !vendor.email ? 'Vendor record has no registered email address.' : 'Invalid email address format.',
+            statusWrite.warning,
+          ].join(' ').trim(),
         });
         continue;
       }
@@ -6949,15 +7700,17 @@ class StoreService {
         continue;
       }
 
-      let tempPassword = this._generateTempPassword();
+      let tempPassword = null;
       try {
-        const existingIdentity = await identityQueries.findUserByEmail(vendor.email).catch(() => null);
+        const existingIdentity = await identityQueries.findUserByEmail(vendor.email);
         if (existingIdentity) {
           logger.info(`Skipped onboarding identity provisioning for ${vendor.email}: an identity account already exists`, { vendorId: vendor.id }, 'STORE_SERVICE');
           if (isNew) {
+            await this._persistVendorOnboardingStatus(vendor, 'account_exists');
             continue;
           }
         } else {
+          tempPassword = this._generateTempPassword();
           const result = await identityQueries.insertVendorAccount({
             email: vendor.email,
             password: tempPassword,
@@ -6965,13 +7718,35 @@ class StoreService {
             fullName: vendor.contactPerson || vendor.name,
             organizationName: vendor.name,
             createdBy: 'vendor-ingestion',
+            resetExisting: false,
           });
           if (result && result.created) {
             logger.info(`Vendor identity account created for ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
+          } else if (result && result.reason === 'ALREADY_EXISTS') {
+            tempPassword = null;
+            logger.info(`Vendor identity appeared during onboarding for ${vendor.email}; retaining existing credentials`, { vendorId: vendor.id }, 'STORE_SERVICE');
+            if (isNew) {
+              await this._persistVendorOnboardingStatus(vendor, 'account_exists');
+              continue;
+            }
+          } else {
+            throw new Error('Vendor identity creation returned without a persisted account.');
           }
         }
       } catch (idErr) {
         logger.error(`Failed to verify or provision identity for ${vendor.email}`, idErr, 'STORE_SERVICE');
+        const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
+        failedEmails.push({
+          vendorId: vendor.id,
+          vendorName: vendor.name,
+          email: vendor.email,
+          template: isMapped ? 'Template A' : 'Template B',
+          reason: [
+            `Vendor login could not be verified or created: ${idErr.message || 'identity storage unavailable'}`,
+            statusWrite.warning,
+          ].join(' ').trim(),
+        });
+        continue;
       }
 
       const { templateType, payload } = buildMappingEmail(rec, {
@@ -6985,27 +7760,35 @@ class StoreService {
       try {
         const delivery = await mailerService.sendVendorIngestionEmail(payload, 'onboarding');
         if (delivery && delivery.sent) {
-          this.updateVendor(vendor.id, { onboardingEmailStatus: 'sent', tempPassword });
+          await this._persistVendorOnboardingStatus(vendor, 'sent');
           if (isMapped) mappedEmailsSent++;
           else unmappedEmailsSent++;
           logger.info(`Onboarding email (${templateType}) sent to ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
         } else {
+          const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
           failedEmails.push({
             vendorId: vendor.id,
             vendorName: vendor.name,
             email: vendor.email,
             template: templateType,
-            reason: (delivery && delivery.reason) || 'Email service rejected delivery',
+            reason: [
+              (delivery && delivery.reason) || 'Email service rejected delivery',
+              statusWrite.warning,
+            ].join(' ').trim(),
           });
           logger.warn(`Failed to send onboarding email to ${vendor.email}`, { reason: delivery?.reason }, 'STORE_SERVICE');
         }
       } catch (sendErr) {
+        const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
         failedEmails.push({
           vendorId: vendor.id,
           vendorName: vendor.name,
           email: vendor.email,
           template: templateType,
-          reason: sendErr.message || 'Error communicating with email service',
+          reason: [
+            sendErr.message || 'Error communicating with email service',
+            statusWrite.warning,
+          ].join(' ').trim(),
         });
         logger.error(`Error sending onboarding email to ${vendor.email}`, sendErr, 'STORE_SERVICE');
       }
@@ -7053,7 +7836,7 @@ class StoreService {
    * stays absent: rating, score and evaluated are null/false until a real
    * evaluation produces them.
    */
-  empanelIngestedVendor(vendorData, actorEmail = null) {
+  async empanelIngestedVendor(vendorData, actorEmail = null) {
     const minorCategories = Array.isArray(vendorData.minorCategories) ? vendorData.minorCategories : [];
     const newVendor = {
       id: `v-ingest-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -7087,15 +7870,37 @@ class StoreService {
       rfqDownloadsUsed: 0,
     };
 
-    this.vendors.unshift(newVendor);
-    this._persistVendor(newVendor);
+    let persistedVendor;
+    try {
+      persistedVendor = await domainQueries.upsertVendorInDB(newVendor);
+      if (pool.hasStorage() && !persistedVendor) {
+        throw new Error('Vendor empanelment completed without a persisted row');
+      }
+    } catch (error) {
+      logger.error('Failed to persist vendor empanelled from vendor master ingestion', error, 'STORE_SERVICE');
+      const isUniqueConflict =
+        (error && error.code === '23505') ||
+        (error && typeof error.message === 'string' && /unique constraint/i.test(error.message)) ||
+        (error && error.cause && typeof error.cause.message === 'string' && /unique constraint/i.test(error.cause.message));
+      const persistError = new Error(
+        isUniqueConflict
+          ? `A vendor with the email ${newVendor.email} already exists.`
+          : 'The vendor could not be empanelled in storage. Try again.'
+      );
+      persistError.statusCode = isUniqueConflict ? 409 : 503;
+      persistError.code = isUniqueConflict ? 'VENDOR_EMAIL_CONFLICT' : 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+
+    const savedVendor = persistedVendor || newVendor;
+    this.vendors.unshift(savedVendor);
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
-      action: `Empanelled ${newVendor.name} from vendor master ingestion in category ${newVendor.majorCategory || 'unassigned'
+      action: `Empanelled ${savedVendor.name} from vendor master ingestion in category ${savedVendor.majorCategory || 'unassigned'
         }`,
     });
 
-    return newVendor;
+    return savedVendor;
   }
 
   // ==========================================
@@ -7129,6 +7934,27 @@ class StoreService {
       action: `Reconciled categories for ${vendor.name}: ${vendorSelectedCategories.length} categories active (Aligned: ${isCategoryAligned})`,
     });
 
+    return updated;
+  }
+
+  async updateVendorCategoriesDurably(vendorId, { clientMappedCategories = [], vendorSelectedCategories = [] }) {
+    const vendor = this.getVendorById(vendorId, 'all');
+    if (!vendor) return null;
+
+    const isCategoryAligned =
+      clientMappedCategories.length === 0 ||
+      clientMappedCategories.every((category) => vendorSelectedCategories.includes(category));
+    const updated = await this.updateVendorDurably(vendor.id, {
+      clientMappedCategories,
+      vendorSelectedCategories: vendorSelectedCategories.slice(0, 10),
+      isCategoryAligned,
+    });
+    if (!updated) return null;
+
+    this.addAuditLog({
+      userEmail: vendor.email,
+      action: `Reconciled categories for ${vendor.name}: ${vendorSelectedCategories.length} categories active (Aligned: ${isCategoryAligned})`,
+    });
     return updated;
   }
 
@@ -7206,12 +8032,62 @@ class StoreService {
     return items;
   }
 
+  async getVendorCatalogueDurably(vendorId, limit = 100) {
+    if (!pool.hasStorage()) return this.getVendorCatalogue(vendorId, limit);
+    try {
+      const products = vendorId
+        ? await domainQueries.getVendorCatalogueByVendorFromDB(vendorId, limit)
+        : await domainQueries.getVendorCatalogueFromDB(limit, { fresh: true });
+      if (vendorId) {
+        this.vendorCatalogue = [
+          ...products,
+          ...this.vendorCatalogue.filter((product) => product.vendorId !== vendorId),
+        ];
+      } else {
+        const refreshedIds = new Set(products.map((product) => product.id));
+        this.vendorCatalogue = [
+          ...products,
+          ...this.vendorCatalogue.filter((product) => !refreshedIds.has(product.id)),
+        ];
+      }
+      return products;
+    } catch (error) {
+      logger.error('Failed to refresh vendor catalogue from storage', error, 'STORE_SERVICE');
+      const persistError = new Error('The catalogue could not be loaded from storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+  }
+
   getCatalogueProductById(id) {
     return this.vendorCatalogue.find((p) => p.id === id);
   }
 
-  addProductToCatalogue(product, vendorId, userEmail) {
-    const newProd = {
+  async getCatalogueProductByIdDurably(id) {
+    if (!pool.hasStorage()) return this.getCatalogueProductById(id) || null;
+    try {
+      const product = await domainQueries.getCatalogueProductByIdFromDB(id);
+      const cachedIndex = this.vendorCatalogue.findIndex((candidate) => candidate.id === id);
+      if (product && cachedIndex >= 0) {
+        this.vendorCatalogue[cachedIndex] = product;
+      } else if (product) {
+        this.vendorCatalogue.unshift(product);
+      } else if (cachedIndex >= 0) {
+        this.vendorCatalogue.splice(cachedIndex, 1);
+      }
+      return product;
+    } catch (error) {
+      logger.error('Failed to refresh catalogue product from storage', error, 'STORE_SERVICE');
+      const persistError = new Error('The catalogue item could not be loaded from storage. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
+  }
+
+  _buildCatalogueProduct(product, vendorId) {
+    return {
       ...product,
       id: product.id || `prod-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
       vendorId,
@@ -7219,13 +8095,47 @@ class StoreService {
       leadTimeDays: Number(product.leadTimeDays) || 7,
       moq: Number(product.moq) || 1,
     };
+  }
+
+  _auditCatalogueMutation(userEmail, action) {
+    this.addAuditLog({ userEmail: userEmail || 'unknown', action });
+  }
+
+  addProductToCatalogue(product, vendorId, userEmail) {
+    const newProd = this._buildCatalogueProduct(product, vendorId);
     this.vendorCatalogue.unshift(newProd);
     this._persistCatalogueProduct(newProd);
-    this.addAuditLog({
-      userEmail: userEmail || 'unknown',
-      action: `Added product ${newProd.sku} (${newProd.name}) to item SKU catalogue`,
-    });
+    this._auditCatalogueMutation(userEmail, `Added product ${newProd.sku} (${newProd.name}) to item SKU catalogue`);
     return newProd;
+  }
+
+  async addProductToCatalogueDurably(product, vendorId, userEmail) {
+    if (!pool.hasStorage()) return this.addProductToCatalogue(product, vendorId, userEmail);
+    const newProduct = this._buildCatalogueProduct(product, vendorId);
+    try {
+      const persisted = await domainQueries.upsertCatalogueProductInDB(newProduct);
+      if (!persisted) throw new Error('Catalogue product upsert completed without a persisted row');
+      this.vendorCatalogue.unshift(persisted);
+      this._auditCatalogueMutation(userEmail, `Added product ${persisted.sku} (${persisted.name}) to item SKU catalogue`);
+      logger.info('Catalogue product creation committed', {
+        productId: persisted.id,
+        vendorId: persisted.vendorId,
+      }, 'STORE_SERVICE');
+      return persisted;
+    } catch (error) {
+      if (error?.code === 'CATALOGUE_SKU_CONFLICT') {
+        logger.warn('Catalogue product creation rejected because the SKU is already in use', {
+          productId: newProduct.id,
+          vendorId: newProduct.vendorId,
+        }, 'STORE_SERVICE');
+        throw error;
+      }
+      logger.error('Failed to persist catalogue product creation', error, 'STORE_SERVICE');
+      const persistError = new Error('The catalogue item could not be saved. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
   }
 
   updateCatalogueProduct(id, updates, userEmail) {
@@ -7234,11 +8144,42 @@ class StoreService {
     const { vendorId: _ignoredVendorId, id: _ignoredId, ...safeUpdates } = updates;
     this.vendorCatalogue[idx] = { ...this.vendorCatalogue[idx], ...safeUpdates };
     this._persistCatalogueProduct(this.vendorCatalogue[idx]);
-    this.addAuditLog({
-      userEmail: userEmail || 'unknown',
-      action: `Updated SKU ${this.vendorCatalogue[idx].sku} in catalogue`,
-    });
+    this._auditCatalogueMutation(userEmail, `Updated SKU ${this.vendorCatalogue[idx].sku} in catalogue`);
     return this.vendorCatalogue[idx];
+  }
+
+  async updateCatalogueProductDurably(id, updates, userEmail) {
+    const idx = this.vendorCatalogue.findIndex((product) => product.id === id);
+    if (idx === -1) return null;
+    if (!pool.hasStorage()) return this.updateCatalogueProduct(id, updates, userEmail);
+
+    const { vendorId: _ignoredVendorId, id: _ignoredId, ...safeUpdates } = updates;
+    const candidate = { ...this.vendorCatalogue[idx], ...safeUpdates };
+    try {
+      const persisted = await domainQueries.upsertCatalogueProductInDB(candidate);
+      if (!persisted) throw new Error('Catalogue product update completed without a persisted row');
+      this.vendorCatalogue[idx] = persisted;
+      this._auditCatalogueMutation(userEmail, `Updated SKU ${persisted.sku} in catalogue`);
+      logger.info('Catalogue product update committed', {
+        productId: persisted.id,
+        vendorId: persisted.vendorId,
+        changedFields: Object.keys(safeUpdates),
+      }, 'STORE_SERVICE');
+      return persisted;
+    } catch (error) {
+      if (error?.code === 'CATALOGUE_SKU_CONFLICT') {
+        logger.warn('Catalogue product update rejected because the SKU is already in use', {
+          productId: candidate.id,
+          vendorId: candidate.vendorId,
+        }, 'STORE_SERVICE');
+        throw error;
+      }
+      logger.error('Failed to persist catalogue product update', error, 'STORE_SERVICE');
+      const persistError = new Error('The catalogue item could not be updated. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
   }
 
   deleteCatalogueProduct(id, userEmail) {
@@ -7246,11 +8187,36 @@ class StoreService {
     if (idx === -1) return false;
     const removed = this.vendorCatalogue.splice(idx, 1)[0];
     this._removeCatalogueProduct(id);
-    this.addAuditLog({
-      userEmail: userEmail || 'unknown',
-      action: `Removed product ${removed.sku} from SKU catalogue`,
-    });
+    this._auditCatalogueMutation(userEmail, `Removed product ${removed.sku} from SKU catalogue`);
     return true;
+  }
+
+  async deleteCatalogueProductDurably(id, userEmail) {
+    const idx = this.vendorCatalogue.findIndex((product) => product.id === id);
+    if (idx === -1) return false;
+    if (!pool.hasStorage()) return this.deleteCatalogueProduct(id, userEmail);
+
+    const product = this.vendorCatalogue[idx];
+    try {
+      const deleted = await domainQueries.deleteCatalogueProductInDB(id);
+      if (!deleted) {
+        this.vendorCatalogue.splice(idx, 1);
+        return false;
+      }
+      this.vendorCatalogue.splice(idx, 1);
+      this._auditCatalogueMutation(userEmail, `Removed product ${product.sku} from SKU catalogue`);
+      logger.info('Catalogue product deletion committed', {
+        productId: id,
+        vendorId: product.vendorId,
+      }, 'STORE_SERVICE');
+      return true;
+    } catch (error) {
+      logger.error('Failed to persist catalogue product deletion', error, 'STORE_SERVICE');
+      const persistError = new Error('The catalogue item could not be deleted. Try again.');
+      persistError.statusCode = 503;
+      persistError.code = 'PERSISTENCE_UNAVAILABLE';
+      throw persistError;
+    }
   }
 
   // ==========================================
@@ -7577,59 +8543,6 @@ class StoreService {
     };
   }
 
-  addEnterpriseInquiry(inquiry) {
-    const id = `ent-inq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const newRecord = {
-      id,
-      companyName: (inquiry.companyName || '').trim(),
-      email: (inquiry.email || '').trim(),
-      mobile: (inquiry.mobile || '').trim(),
-      buyerAccountId: inquiry.buyerAccountId || null,
-      notes: inquiry.notes || '',
-      status: inquiry.status || 'NEW',
-      createdAt: inquiry.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    if (!Array.isArray(this.enterpriseInquiries)) {
-      this.enterpriseInquiries = [];
-    }
-    this.enterpriseInquiries.unshift(newRecord);
-    savePersistedInquiries(this.enterpriseInquiries);
-
-    try {
-      this.addAuditLog(
-        `Enterprise contract enquiry submitted for ${newRecord.companyName} (${newRecord.email}, ${newRecord.mobile})`
-      );
-    } catch (_) {}
-
-    return newRecord;
-  }
-
-  getEnterpriseInquiries(limit = null) {
-    if (!Array.isArray(this.enterpriseInquiries)) {
-      this.enterpriseInquiries = loadPersistedInquiries();
-    }
-    const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
-    const effectiveLimit = hasLimit ? Math.min(Number(limit), 500) : 500;
-    return this.enterpriseInquiries.slice(0, effectiveLimit);
-  }
-
-  updateEnterpriseInquiry(id, updates) {
-    if (!Array.isArray(this.enterpriseInquiries)) {
-      this.enterpriseInquiries = loadPersistedInquiries();
-    }
-    const idx = this.enterpriseInquiries.findIndex((i) => i.id === id);
-    if (idx === -1) return null;
-    const target = this.enterpriseInquiries[idx];
-    const updated = {
-      ...target,
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
-    this.enterpriseInquiries[idx] = updated;
-    savePersistedInquiries(this.enterpriseInquiries);
-    return updated;
-  }
 }
 
 // Global Singleton Instance for Node.js process

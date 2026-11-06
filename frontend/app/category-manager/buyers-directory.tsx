@@ -67,7 +67,7 @@ export function isVerifiedBuyer(buyer?: { status?: string; verificationStatus?: 
   );
 }
 
-import type { BuyerAccount, RFQItem, AuditLogEntry, BuyerDirectoryColumnKey, BuyerDirectoryColumnConfig, BuyerCommunicationItem, BuyerPaymentTransaction } from '@/lib/types';
+import type { BuyerAccount, RFQItem, AuditLogEntry, BuyerDirectoryColumnKey, BuyerDirectoryColumnConfig } from '@/lib/types';
 import {
   RFQ_MODES,
   RFQ_MODE_LABELS,
@@ -517,63 +517,6 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
       );
     });
   }, [activeBuyer, auditLogs]);
-
-  // Synthetic/Standardized communications & payments derived from buyer state
-  const buyerCommunications = useMemo<BuyerCommunicationItem[]>(() => {
-    if (!activeBuyer) return [];
-    const logs: BuyerCommunicationItem[] = [];
-    if (activeBuyer.createdDate) {
-      logs.push({
-        id: `comm-reg-${activeBuyer.id}`,
-        accountId: activeBuyer.id,
-        channel: 'EMAIL',
-        subject: 'Enterprise Onboarding Confirmation & API Key Generation',
-        recipient: activeBuyer.corporateEmail || '',
-        message: `Welcome ${activeBuyer.contactPerson || activeBuyer.organizationName} to the Procucev Enterprise Network. Initial free trial activated.`,
-        preview: `Welcome ${activeBuyer.contactPerson || activeBuyer.organizationName} to the Procucev Enterprise Network. Initial free trial activated.`,
-        deliveryStatus: 'DELIVERED',
-        sentAt: activeBuyer.createdDate,
-      });
-    }
-    buyerRfqs.forEach((rfq, idx) => {
-      if (rfq.createdAt) {
-        logs.push({
-          id: `comm-rfq-${rfq.id}-${idx}`,
-          accountId: activeBuyer.id,
-          channel: 'SYSTEM_NOTIFICATION',
-          subject: `RFQ Dispatch & Supplier Sourcing Match: ${rfq.rfqNumber}`,
-          recipient: activeBuyer.corporateEmail || '',
-          message: `RFQ for "${rfq.title}" dispatched across ${(rfq.assignedVendors || []).length} verified suppliers via ${RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}.`,
-          preview: `RFQ for "${rfq.title}" dispatched across ${(rfq.assignedVendors || []).length} verified suppliers via ${RFQ_MODE_LABELS[rfq.sourcingMode] || 'Mode 1'}.`,
-          deliveryStatus: 'DISPATCHED',
-          sentAt: rfq.createdAt,
-        });
-      }
-    });
-    return logs;
-  }, [activeBuyer, buyerRfqs]);
-
-  const buyerPayments = useMemo<BuyerPaymentTransaction[]>(() => {
-    if (!activeBuyer) return [];
-    const payments: BuyerPaymentTransaction[] = [];
-    if (activeBuyer.createdDate) {
-      payments.push({
-        id: `pay-init-${activeBuyer.id}`,
-        paymentId: `PAY-${activeBuyer.id.slice(0, 5).toUpperCase()}`,
-        invoiceNo: `INV-2026-${activeBuyer.id.slice(0, 5).toUpperCase()}`,
-        description: `Plan: ${activeBuyer.subscriptionPlan || 'Free Enterprise Trial'}`,
-        subscriptionPlan: activeBuyer.subscriptionPlan || 'Free Enterprise Trial',
-        amount: activeBuyer.subscriptionPlan?.includes('growth') ? 14999 : activeBuyer.subscriptionPlan?.includes('custom') ? 49999 : 0,
-        currency: 'INR',
-        status: 'PAID',
-        gateway: 'Zoho Payments (India UPI / NetBanking)',
-        paymentMethod: 'Zoho Payments (India UPI / NetBanking)',
-        transactionDate: activeBuyer.createdDate,
-        date: activeBuyer.createdDate,
-      });
-    }
-    return payments;
-  }, [activeBuyer]);
 
   const handleExportDirectory = useCallback(() => {
     const rows = sortedBuyers.map((b) => {
@@ -1121,8 +1064,6 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
           onClose={() => setActiveBuyer(null)}
           onSelectRFQ={onSelectRFQ}
           buyerRfqs={buyerRfqs}
-          initialCommunications={buyerCommunications}
-          initialPayments={buyerPayments}
         />
       )}
     </div>

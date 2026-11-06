@@ -3,6 +3,24 @@ const dbPool = require('../src/db/pool');
 const d1Bridge = require('../src/db/d1Bridge');
 const { IDENTITY_MASTER_DATA } = require('../src/config/constants');
 
+function mockAtomicD1Batch({ organizationUuid = 'd1-org', userUuid = 'd1-user' } = {}) {
+  const binding = { prepare: jest.fn() };
+  jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
+  return jest.spyOn(d1Bridge, 'batchD1').mockImplementation(async (_database, statements) => {
+    const organizationInsert = statements.find(({ text }) => /insert into organization/i.test(text));
+    const resolvedOrganizationUuid = organizationInsert?.params?.[0] || organizationUuid;
+    return statements.map(({ text }) => {
+      if (/returning uuid, org_uuid/i.test(text)) {
+        return { rows: [{ uuid: userUuid, org_uuid: resolvedOrganizationUuid }], rowCount: 1 };
+      }
+      if (/insert into organization/i.test(text) && /returning uuid/i.test(text)) {
+        return { rows: [{ uuid: resolvedOrganizationUuid }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+  });
+}
+
 describe('Identity queries (Neon PostgreSQL)', () => {
   afterEach(() => {
     jest.restoreAllMocks();
@@ -245,6 +263,16 @@ describe('Identity queries (Neon PostgreSQL)', () => {
       await identityQueries.listUsers(25);
       expect(spy).toHaveBeenCalledWith(expect.any(String), [25], expect.objectContaining({ d1: true }));
     });
+
+    test.each([
+      [0, 200],
+      [-5, 1],
+      [900, 500],
+    ])('bounds the requested limit %p to %p', async (requested, expected) => {
+      const spy = jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
+      await identityQueries.listUsers(requested);
+      expect(spy).toHaveBeenCalledWith(expect.any(String), [expected], expect.objectContaining({ d1: true }));
+    });
   });
 
   describe('resolveMasterUuid', () => {
@@ -272,6 +300,15 @@ describe('Identity queries (Neon PostgreSQL)', () => {
     test('returns null when the master row is absent', async () => {
       jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await expect(identityQueries.resolveMasterUuid('role', 'role_name', 'Nope')).resolves.toBeNull();
+    });
+
+    test('uses the active master fallback when the natural key is absent', async () => {
+      jest.spyOn(dbPool, 'rows')
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ uuid: 'active-fallback' }]);
+      await expect(identityQueries.resolveMasterUuid('role', 'role_name', 'Renamed role', true)).resolves.toBe(
+        'active-fallback'
+      );
     });
   });
 
@@ -725,11 +762,15 @@ describe('Identity queries (Neon PostgreSQL)', () => {
 
     test('handles existing user with resetExisting true and false', async () => {
       const existing = { uuid: 'v-ex-1', username: 'vendor@example.com', role_name: 'Vendor' };
+      dbPool.query.mockClear();
       jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([existing]);
 
       const res1 = await identityQueries.insertVendorAccount({ ...payload, resetExisting: true });
       expect(res1.created).toBe(false);
       expect(res1.reason).toBe('ALREADY_EXISTS');
+      expect(dbPool.query).toHaveBeenCalledTimes(1);
+      expect(dbPool.query.mock.calls[0][0]).toContain('phone = $4');
+      expect(dbPool.query.mock.calls[0][1]).toEqual(['Pass@123', 'vendor-ingestion', 'v-ex-1', '+919157154504']);
 
       jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([existing]);
       const res2 = await identityQueries.insertVendorAccount({ ...payload, resetExisting: false });
@@ -744,12 +785,8 @@ describe('Identity queries (Neon PostgreSQL)', () => {
     });
 
     test('creates vendor account under D1 path', async () => {
-      const d1Bridge = require('../src/db/d1Bridge');
-      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({ prepare: jest.fn() });
-      jest.spyOn(dbPool, 'query')
-        .mockResolvedValueOnce({ rows: [] }) // orgLookup
-        .mockResolvedValueOnce({ rows: [] }) // insert org
-        .mockResolvedValueOnce({ rows: [] }); // insert user
+      mockAtomicD1Batch({ organizationUuid: 'd1-vendor-org', userUuid: 'd1-vendor-user' });
+      jest.spyOn(dbPool, 'query').mockResolvedValueOnce({ rows: [] }); // orgLookup
 
       const res = await identityQueries.insertVendorAccount({
         email: 'd1vendor@example.com',
@@ -757,12 +794,37 @@ describe('Identity queries (Neon PostgreSQL)', () => {
       });
       expect(res.created).toBe(true);
       expect(res.user.role).toBe('vendor');
-      d1Bridge.getD1Binding.mockRestore();
+      const batchCall = d1Bridge.batchD1.mock.calls[0][1];
+      expect(batchCall).toHaveLength(2);
+      expect(batchCall.some(({ text }) => text.includes('not exists (select 1 from organization'))).toBe(true);
+      expect(batchCall.some(({ text }) => text.includes('returning uuid, org_uuid'))).toBe(true);
+      expect(batchCall[0].text).toContain('contact_person, email, organization_phonenumber');
+      expect(batchCall[0].text).not.toMatch(/contact_name|contact_email|contact_phone/);
+      expect(batchCall[1].text).not.toContain('organization_name, org_uuid');
     });
 
-    test('fails clearly when master rows are missing', async () => {
-      masterRows.role = [];
-      await expect(identityQueries.insertVendorAccount(payload)).rejects.toThrow(/Role.*not found/);
+    test.each([
+      ['role', /Role.*not found/],
+      ['org_types', /Org type.*not found/],
+      ['master_status', /Status.*not found/],
+    ])('fails clearly when the %s master row is missing', async (table, expected) => {
+      masterRows[table] = [];
+      await expect(identityQueries.insertVendorAccount(payload)).rejects.toThrow(expected);
+    });
+
+    test('reuses an existing D1 organisation without writing blank profile values', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      mockAtomicD1Batch({ organizationUuid: 'existing-vendor-org', userUuid: 'existing-vendor-user' });
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) =>
+        sql.includes('from "user"') ? [] : [{ uuid: 'master-uuid' }]
+      );
+      const querySpy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [{ uuid: 'existing-vendor-org' }] });
+
+      const result = await identityQueries.insertVendorAccount({ ...payload, city: '', state: '' });
+
+      expect(result).toMatchObject({ created: true, organizationReused: true });
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      expect(d1Bridge.batchD1.mock.calls[0][1]).toHaveLength(1);
     });
   });
 
@@ -774,7 +836,6 @@ describe('Identity queries (Neon PostgreSQL)', () => {
         userUuid: 'u-b-1',
         newPhone: '9876543210',
         newPassword: 'NewPassword@123',
-        verificationStatus: 'EMAIL_VERIFIED',
       });
 
       expect(res).toBe(true);
@@ -783,6 +844,17 @@ describe('Identity queries (Neon PostgreSQL)', () => {
         ['+919876543210', 'NewPassword@123', 'EMAIL_VERIFIED', 'buyer-onboarding', 'u-b-1'],
         expect.any(Object)
       );
+    });
+
+    test('returns false when no buyer row was updated', async () => {
+      jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 0 });
+      await expect(
+        identityQueries.updateBuyerOnboardingStatus({
+          userUuid: 'missing-user',
+          newPhone: '9876543210',
+          newPassword: 'NewPassword@123',
+        })
+      ).resolves.toBe(false);
     });
   });
 
@@ -796,8 +868,26 @@ describe('Identity queries (Neon PostgreSQL)', () => {
       expect(set.has('c@d.com')).toBe(false);
 
       expect(await identityQueries.findExistingUsernames([])).toEqual(new Set());
+      expect(await identityQueries.findExistingUsernames()).toEqual(new Set());
       dbPool.pool = null;
       expect(await identityQueries.findExistingUsernames(['a@b.com'])).toEqual(new Set());
+    });
+
+    test('normalizes email inputs before the batch username lookup', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      const rowsSpy = jest.spyOn(dbPool, 'rows').mockResolvedValue([{ username: 'a@b.com' }]);
+      await expect(identityQueries.findExistingUsernames([' A@B.COM ', 'C@D.com'])).resolves.toEqual(
+        new Set(['a@b.com'])
+      );
+      expect(rowsSpy).toHaveBeenCalledWith(
+        expect.stringContaining('lower(username) = any($1)'),
+        [['a@b.com', 'c@d.com']],
+        expect.objectContaining({
+          d1: true,
+          d1Text: expect.stringContaining('lower(username) in ($1, $2)'),
+          d1Params: ['a@b.com', 'c@d.com'],
+        })
+      );
     });
 
     test('findUserByEmailAndPhone checks placeholder phone when 9999999999 requested', async () => {
@@ -812,8 +902,7 @@ describe('Identity queries (Neon PostgreSQL)', () => {
 
     test('insertBuyerAccount and insertStaffAccount under D1 path with existing org address update', async () => {
       dbPool.pool = { connect: jest.fn() };
-      const d1Bridge = require('../src/db/d1Bridge');
-      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({ prepare: jest.fn() });
+      mockAtomicD1Batch({ organizationUuid: 'existing-org-d1' });
       jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) => {
         if (sql.includes('from "user"')) return [];
         return [{ uuid: 'master-uuid' }];
@@ -840,7 +929,94 @@ describe('Identity queries (Neon PostgreSQL)', () => {
         statusName: IDENTITY_MASTER_DATA.ADMIN_STATUS,
       });
       expect(staffRes.created).toBe(true);
-      d1Bridge.getD1Binding.mockRestore();
+      const batches = d1Bridge.batchD1.mock.calls.map((call) => call[1]);
+      expect(batches).toHaveLength(2);
+      expect(batches[0].some(({ text }) => text.includes('update organization'))).toBe(true);
+      expect(batches.every((batch) => batch.some(({ text }) => text.includes('returning uuid, org_uuid')))).toBe(true);
+    });
+
+    test('buyer D1 registration reuses an existing organisation without a blank address update', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      mockAtomicD1Batch({ organizationUuid: 'existing-org-d1', userUuid: 'buyer-no-address' });
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) =>
+        sql.includes('from "user"') ? [] : [{ uuid: 'master-uuid' }]
+      );
+      const querySpy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [{ uuid: 'existing-org-d1' }] });
+
+      const result = await identityQueries.insertBuyerAccount({
+        email: 'no-address@example.com',
+        password: 'Pass@123',
+        phone: '9157154504',
+      });
+
+      expect(result).toMatchObject({ created: true, organizationReused: true });
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      expect(d1Bridge.batchD1.mock.calls[0][1]).toHaveLength(1);
+    });
+
+    test('returns the account created concurrently when D1 insert guard returns no user row', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      mockAtomicD1Batch();
+      d1Bridge.batchD1.mockResolvedValue([{ rows: [], rowCount: 0 }]);
+      let userLookupCount = 0;
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) => {
+        if (sql.includes('from "user"')) {
+          userLookupCount += 1;
+          return userLookupCount === 3
+            ? [{ uuid: 'concurrent-user', username: 'race@example.com', role_name: 'ClientInitiator' }]
+            : [];
+        }
+        return [{ uuid: 'master-uuid' }];
+      });
+      jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [{ uuid: 'existing-org' }] });
+
+      const result = await identityQueries.insertBuyerAccount({
+        email: 'race@example.com',
+        password: 'Pass@123',
+        phone: '9157154504',
+      });
+
+      expect(result).toMatchObject({ created: false, reason: 'ALREADY_EXISTS', user: { id: 'concurrent-user' } });
+    });
+
+    test('rejects D1 identity creation when only the non-atomic HTTP adapter is configured', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue({ _isHttpClient: true });
+      const batchSpy = jest.spyOn(d1Bridge, 'batchD1');
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) =>
+        sql.includes('from "user"') ? [] : [{ uuid: 'master-uuid' }]
+      );
+      const querySpy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [] });
+
+      await expect(
+        identityQueries.insertBuyerAccount({
+          email: 'http-only@example.com',
+          password: 'Pass@123',
+          phone: '9157154504',
+        })
+      ).rejects.toThrow('Identity account creation requires a Workers D1 binding with atomic batch support.');
+
+      expect(querySpy).toHaveBeenCalledTimes(1); // advisory organization lookup only
+      expect(batchSpy).not.toHaveBeenCalled();
+    });
+
+    test('fails registration when the D1 guard returns no user and no concurrent account exists', async () => {
+      dbPool.pool = { connect: jest.fn() };
+      mockAtomicD1Batch();
+      d1Bridge.batchD1.mockResolvedValue([{ rows: [], rowCount: 0 }]);
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) =>
+        sql.includes('from "user"') ? [] : [{ uuid: 'master-uuid' }]
+      );
+      jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [{ uuid: 'existing-org' }] });
+
+      await expect(
+        identityQueries.insertBuyerAccount({
+          email: 'guard-rejected@example.com',
+          password: 'Pass@123',
+          phone: '9157154504',
+        })
+      ).rejects.toThrow('Buyer account could not be created because its organization no longer exists. Retry the registration.');
     });
 
     test('insertBuyerAccount under Postgres with existing org updates org address', async () => {
@@ -870,14 +1046,7 @@ describe('Identity queries (Neon PostgreSQL)', () => {
 
     test('insertBuyerAccount and insertStaffAccount under D1 path with new org creation', async () => {
       dbPool.pool = { connect: jest.fn() };
-      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({
-        prepare: () => ({
-          bind: () => ({
-            all: async () => ({ results: [] }),
-            run: async () => ({ success: true }),
-          }),
-        }),
-      });
+      mockAtomicD1Batch({ organizationUuid: 'new-org-uuid', userUuid: 'new-user-uuid' });
 
       jest.spyOn(dbPool, 'query').mockImplementation(async (sql) => {
         if (sql.includes('from "user" where lower(email) = lower($1)')) {
@@ -915,7 +1084,12 @@ describe('Identity queries (Neon PostgreSQL)', () => {
       });
       expect(staffRes.created).toBe(true);
       expect(staffRes.organizationReused).toBe(false);
-      d1Bridge.getD1Binding.mockRestore();
+      const batches = d1Bridge.batchD1.mock.calls.map((call) => call[1]);
+      expect(batches).toHaveLength(2);
+      expect(batches.every((batch) => batch.some(({ text }) => text.includes('not exists (select 1 from organization')))).toBe(true);
+      const newBuyerOrganization = batches[0].find(({ text }) => text.includes('insert into organization'));
+      expect(newBuyerOrganization.text).toContain('contact_person, email, organization_phonenumber');
+      expect(newBuyerOrganization.text).not.toMatch(/contact_name|contact_email|contact_phone/);
     });
   });
 });

@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const buyerAccountController = require('../controllers/buyerAccountController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireRole } = require('../middleware/auth');
 
-router.get('/', buyerAccountController.getBuyerAccounts);
+router.get('/', authenticate, requireRole('admin', 'category_manager', 'buyer'), buyerAccountController.getBuyerAccounts);
 router.get('/subscription-pricing', buyerAccountController.getSubscriptionPricing);
 router.post('/', authenticate, buyerAccountController.createBuyerAccount);
 // Authenticated: this resolves the caller's own organisation from the identity

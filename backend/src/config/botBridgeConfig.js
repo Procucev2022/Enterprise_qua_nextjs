@@ -51,8 +51,12 @@ const BOT_BRIDGE_MESSAGES = {
   ACCOUNT_NOT_FOUND: 'No active account found.',
   SELLER_NOT_FOUND: 'Seller not found.',
   INVALID_VERIFICATION_STATE: 'verificationStatus must be PENDING_EMAIL_VERIFICATION or EMAIL_VERIFIED.',
+  PREFERENCE_SAVE_FAILED: 'The seller notification preference could not be saved. Please retry shortly.',
   INVALID_RECIPIENTS: 'Invalid email addresses found.',
   NO_RECIPIENTS: 'At least one recipient is required.',
+  INVALID_REQUEST: 'The WhatsApp bot request is invalid. Correct the highlighted fields and retry.',
+  UNSUPPORTED_FIELD: 'This field is not supported for this operation.',
+  INVALID_FIELD_TYPE: 'This field must be supplied as a single text value.',
 };
 
 module.exports = {

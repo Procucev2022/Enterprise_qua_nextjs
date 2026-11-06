@@ -26,6 +26,21 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
       await new Promise((resolve) => server.close(resolve));
     });
 
+    test('bootstrapServer catches comparison queue recovery rejection and logs warning', async () => {
+      jest.spyOn(rfqChaserScheduler, 'recoverRFQComparisonJobsOnBoot')
+        .mockRejectedValueOnce(new Error('Comparison recovery crash'));
+      const warnSpy = jest.spyOn(logger, 'warn');
+
+      const server = await bootstrapServer(0);
+      expect(server).toBeDefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Failed to recover RFQ comparison notifications on boot',
+        expect.objectContaining({ error: 'Comparison recovery crash' }),
+        'SERVER'
+      );
+      await new Promise((resolve) => server.close(resolve));
+    });
+
     test('start() starts server successfully on designated port', async () => {
       const server = await start(0);
       expect(server).toBeDefined();
@@ -33,14 +48,17 @@ describe('App & Server Dedicated Branch Boost Suite', () => {
       await new Promise((resolve) => server.close(resolve));
     });
 
-    test('start() catches boot errors, logs to console, and exits with code 1', async () => {
+    test('start() catches boot errors, logs a structured error, and exits with code 1', async () => {
       jest.spyOn(storeService, 'hydrateFromDB').mockRejectedValueOnce(new Error('Fatal database boot error'));
       const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => {});
-      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
       await start(0);
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to start server:', expect.any(Error));
+      expect(errorLogSpy.mock.calls.map(([message, , category]) => [message, category])).toContainEqual([
+        'Failed to start server',
+        'SERVER',
+      ]);
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
   });

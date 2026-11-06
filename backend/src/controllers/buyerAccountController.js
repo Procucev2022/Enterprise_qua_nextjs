@@ -4,11 +4,18 @@ const zohoPaymentService = require('../services/zohoPaymentService');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { generateReceiptPdf } = require('../services/invoiceService');
 const { logger } = require('../services/loggerService');
-const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
-const { ZOHO_CONFIG, computeZohoBuyerPlanAmount, BUYER_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig } = require('../config/constants');
+const {
+  ZOHO_CONFIG,
+  computeZohoBuyerPlanAmount,
+  BUYER_SUBSCRIPTION_PLANS,
+  getSubscriptionPricingConfig,
+  PERSISTENCE_MESSAGES,
+} = require('../config/constants');
 const identityQueries = require('../db/identityQueries');
-
+const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
+const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
+
 /**
  * Buyer accounts are buyer-side org records: only a buyer (or an admin acting
  * on their behalf) has any business creating, editing, deleting or switching
@@ -71,14 +78,68 @@ function assertBuyerAccountRole(req, res) {
   return false;
 }
 
-function getBuyerAccounts(req, res, next) {
+async function assertBuyerAccountAccess(req, res, id) {
+  if (!assertBuyerAccountRole(req, res)) return false;
+  const buyer = pool.hasStorage()
+    ? await domainQueries.getBuyerAccountByIdFromDB(id)
+    : storeService.getBuyerAccounts().find((account) => account.id === id) || null;
+  if (!buyer) {
+    res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
+    return false;
+  }
+  if (req.user.role === 'admin') return true;
+
+  const identityValues = [
+    req.user.email,
+    req.user.id,
+    req.user.sub,
+    req.user.orgId,
+    req.user.organizationId,
+    req.user.buyerAccountId,
+  ].filter(Boolean).map((value) => String(value).toLowerCase());
+  const ownerValues = [buyer.corporateEmail, buyer.email, buyer.userId, buyer.organizationId, buyer.id]
+    .filter(Boolean).map((value) => String(value).toLowerCase());
+  if (identityValues.some((value) => ownerValues.includes(value))) return true;
+
+  logger.warn('Rejected buyer account mutation outside the caller account scope', {
+    id,
+    role: req.user.role,
+  }, 'BUYER_ACCOUNT_CONTROLLER');
+  res.status(403).json({ success: false, error: 'You do not have permission to modify this buyer account.' });
+  return false;
+}
+
+async function getBuyerAccounts(req, res, next) {
   try {
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    if (!['admin', 'category_manager', 'buyer'].includes(user.role)) {
+      logger.warn('Rejected buyer account listing from a non-buyer role', { role: user.role }, 'BUYER_ACCOUNT_CONTROLLER');
+      return res.status(403).json({ success: false, error: 'You do not have permission to access buyer accounts.' });
+    }
     logger.info('Fetching buyer accounts', {}, 'BUYER_ACCOUNT_CONTROLLER');
     const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
     const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
-    const accounts = storeService.getBuyerAccounts(limit);
+    let accounts;
+    if (user.role === 'buyer') {
+      const account = pool.hasStorage()
+        ? await domainQueries.getBuyerAccountByEmailFromDB(user.email)
+        : await storeService.getBuyerAccountByEmail(user.email);
+      accounts = account ? [account] : [];
+    } else if (pool.hasStorage()) {
+      const persisted = await domainQueries.getBuyerAccountsFromDB(limit);
+      accounts = persisted.accounts;
+    } else {
+      accounts = storeService.getBuyerAccounts(limit);
+    }
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: accounts });
   } catch (err) {
+    if (pool.hasStorage()) {
+      err.status = 503;
+      err.retryable = true;
+    }
     logger.error('Error fetching buyer accounts', err, 'BUYER_ACCOUNT_CONTROLLER');
     next(err);
   }
@@ -107,7 +168,7 @@ async function getActiveAccount(req, res, next) {
   }
 }
 
-function createBuyerAccount(req, res, next) {
+async function createBuyerAccount(req, res, next) {
   try {
     if (!assertBuyerAccountRole(req, res)) return;
     const body = req.body;
@@ -116,7 +177,7 @@ function createBuyerAccount(req, res, next) {
       return res.status(400).json({ success: false, error: 'organizationName and corporateEmail are required.' });
     }
     logger.info(`Creating new buyer account: ${body.organizationName}`, { organizationName: body.organizationName, email: body.corporateEmail }, 'BUYER_ACCOUNT_CONTROLLER');
-    const created = storeService.addBuyerAccount(body);
+    const created = await storeService.addBuyerAccountDurably(body);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -143,14 +204,14 @@ function sanitizeBuyerAccountUpdates(updates, res) {
   return null;
 }
 
-function updateBuyerAccount(req, res, next) {
+async function updateBuyerAccount(req, res, next) {
   try {
-    if (!assertBuyerAccountRole(req, res)) return;
     const { id } = req.params;
+    if (!await assertBuyerAccountAccess(req, res, id)) return;
     const updates = sanitizeBuyerAccountUpdates(req.body, res);
     if (!updates) return;
-    logger.info(`Updating buyer account ${id}`, { id, updates }, 'BUYER_ACCOUNT_CONTROLLER');
-    const updated = storeService.updateBuyerAccount(id, updates);
+    logger.info(`Updating buyer account ${id}`, { id, updatedFields: Object.keys(updates || {}) }, 'BUYER_ACCOUNT_CONTROLLER');
+    const updated = await storeService.updateBuyerAccountDurably(id, updates);
     if (!updated) {
       logger.warn(`Buyer account not found for update: ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
@@ -162,12 +223,12 @@ function updateBuyerAccount(req, res, next) {
   }
 }
 
-function deleteBuyerAccount(req, res, next) {
+async function deleteBuyerAccount(req, res, next) {
   try {
-    if (!assertBuyerAccountRole(req, res)) return;
     const { id } = req.params;
+    if (!await assertBuyerAccountAccess(req, res, id)) return;
     logger.info(`Deleting buyer account ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
-    const deleted = storeService.deleteBuyerAccount(id);
+    const deleted = await storeService.deleteBuyerAccountDurably(id);
     if (!deleted) {
       logger.warn(`Buyer account not found for deletion: ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
@@ -179,12 +240,12 @@ function deleteBuyerAccount(req, res, next) {
   }
 }
 
-function setActiveAccount(req, res, next) {
+async function setActiveAccount(req, res, next) {
   try {
-    if (!assertBuyerAccountRole(req, res)) return;
     const { id } = req.params;
+    if (!await assertBuyerAccountAccess(req, res, id)) return;
     logger.info(`Setting active buyer account to ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
-    const active = storeService.alignActiveBuyerAccount(id);
+    const active = await storeService.alignActiveBuyerAccountDurably(id);
     if (!active) {
       logger.warn(`Buyer account not found to set active: ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
@@ -206,6 +267,9 @@ async function createSubscriptionPaymentLink(req, res, next) {
     const { id } = req.params;
     const { plan, billingDuration = '12_months', duration } = req.body || {};
     const normalizedDuration = (billingDuration || duration) === '6_months' ? '6_months' : '12_months';
+    if (!ZOHO_PAYABLE_BUYER_PLANS.includes(plan)) {
+      return res.status(400).json({ success: false, error: `plan must be one of: ${ZOHO_PAYABLE_BUYER_PLANS.join(', ')}.` });
+    }
 
     // The frontend's activeBuyerAccount comes from the identity-DB-backed
     // GET /active (organisation uuid space) — a different id space from the
@@ -220,17 +284,26 @@ async function createSubscriptionPaymentLink(req, res, next) {
     // above already rejected the request otherwise.
     let existing = await storeService.getBuyerAccountByEmail(req.user.email);
     if (!existing && req.user.email) {
-      existing = storeService.addBuyerAccount({
+      const buyerData = {
         organizationName: req.user.orgName || req.user.email,
         corporateEmail: req.user.email,
         mobileNumber: '',
-      });
+      };
+      try {
+        existing = await storeService.addBuyerAccountDurably(buyerData);
+      } catch (persistError) {
+        // Two first-time payment requests can race to create the same mirror.
+        // Re-read the winner after a uniqueness conflict so the second request
+        // can continue without creating a duplicate or a false failure.
+        if (persistError.statusCode === 409) {
+          existing = await storeService.getBuyerAccountByEmail(req.user.email);
+        } else {
+          throw persistError;
+        }
+      }
     }
     if (!existing) {
       return res.status(404).json({ success: false, error: `Buyer account with ID ${id} not found.` });
-    }
-    if (!ZOHO_PAYABLE_BUYER_PLANS.includes(plan)) {
-      return res.status(400).json({ success: false, error: `plan must be one of: ${ZOHO_PAYABLE_BUYER_PLANS.join(', ')}.` });
     }
     if (!existing.corporateEmail) {
       return res.status(400).json({ success: false, error: 'Buyer account has no email on file to create a payment link for.' });
@@ -275,7 +348,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
       returnUrl,
     });
 
-    const link = storeService.createPaymentLinkRecord({
+    const link = await storeService.createPaymentLinkRecordDurably({
       id: linkId,
       zohoPaymentLinkId: result.zohoPaymentLinkId,
       buyerAccountId: existing.id,
@@ -292,7 +365,16 @@ async function createSubscriptionPaymentLink(req, res, next) {
     res.json({ success: true, data: { paymentUrl: link.paymentUrl, paymentLinkId: link.id, status: link.status } });
   } catch (err) {
     logger.error(`Error creating Zoho payment link for buyer account ${req.params.id}`, err, 'BUYER_ACCOUNT_CONTROLLER');
-    res.status(502).json({ success: false, error: 'Unable to create a payment link right now. Please try again shortly.' });
+    const paymentLinkPersistenceFailed = err && err.code === 'PAYMENT_LINK_PERSISTENCE_UNAVAILABLE';
+    const persistenceUnavailable = err && err.statusCode === 503;
+    res.status(persistenceUnavailable ? 503 : 502).json({
+      success: false,
+      error: paymentLinkPersistenceFailed
+        ? PERSISTENCE_MESSAGES.PAYMENT_LINK_TRACKING_FAILED
+        : persistenceUnavailable
+          ? 'Your buyer account could not be saved. No payment link was created; please retry shortly.'
+          : 'Unable to create a payment link right now. Please try again shortly.',
+    });
   }
 }
 
@@ -525,64 +607,9 @@ async function getCreditHistory(req, res, next) {
     const sourcingMode = buyer.sourcingMode || 'mode_0';
     const subscriptionPlan = buyer.subscriptionPlan || 'free_trial';
 
-    let transactions = await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100);
+    const transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
 
-    if (!transactions || transactions.length === 0) {
-      const createdDate = buyer.createdDate || new Date().toISOString();
-      const initialTx = {
-        id: `ctx-init-${buyer.id.slice(0, 8)}`,
-        buyerId: buyer.id,
-        rfqId: null,
-        transactionType: 'Free Credits Allocated',
-        creditSource: 'Enterprise Free Trial',
-        creditsAdded: 5,
-        creditsConsumed: 0,
-        previousBalance: 0,
-        updatedBalance: 5,
-        paymentReference: 'TRIAL-INIT',
-        status: 'COMPLETED',
-        description: 'Initial allocation of 5 Free Trial RFQ Credits',
-        idempotencyKey: `init-${buyer.id}`,
-        createdAt: createdDate,
-      };
-
-      await domainQueries.recordBuyerCreditTransactionInDB(initialTx);
-
-      const allRfqs = storeService.getRFQs().filter(
-        (r) =>
-          (r.buyerAccountId && r.buyerAccountId === buyer.id) ||
-          (r.raisedByEmail && buyer.corporateEmail && r.raisedByEmail.toLowerCase() === buyer.corporateEmail.toLowerCase())
-      );
-
-      let currentBal = 5;
-      for (const rfq of allRfqs) {
-        if (!storeService.isV0SourcingMode(rfq.sourcingMode) && currentBal > 0) {
-          const prevBal = currentBal;
-          currentBal = Math.max(0, currentBal - 1);
-          const rfqTx = {
-            id: `ctx-rfq-${rfq.id.slice(0, 8)}`,
-            buyerId: buyer.id,
-            rfqId: rfq.rfqNumber || rfq.id,
-            transactionType: 'Credits Consumed',
-            creditSource: 'RFQ Generation',
-            creditsAdded: 0,
-            creditsConsumed: 1,
-            previousBalance: prevBal,
-            updatedBalance: currentBal,
-            paymentReference: null,
-            status: 'COMPLETED',
-            description: `Deduction for RFQ ${rfq.rfqNumber || rfq.id} (${rfq.title || 'Sourcing'})`,
-            idempotencyKey: `rfq-consume-${rfq.id}`,
-            createdAt: rfq.createdAt || new Date().toISOString(),
-          };
-          await domainQueries.recordBuyerCreditTransactionInDB(rfqTx);
-        }
-      }
-
-      transactions = await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100);
-    }
-
-    let totalAllocated = 5;
+    let totalAllocated = 0;
     let totalConsumed = 0;
     let purchasedCredits = 0;
     let adjustedCredits = 0;
@@ -605,10 +632,6 @@ async function getCreditHistory(req, res, next) {
       if (consumed > 0) {
         totalConsumed += consumed;
       }
-    }
-
-    if (totalConsumed === 0) {
-      totalConsumed = Math.max(0, 5 - remainingFree);
     }
 
     const summary = {
@@ -637,7 +660,12 @@ async function getCreditHistory(req, res, next) {
       description: t.description || 'Credit balance update',
     }));
 
-    return res.json({ success: true, summary, transactions: formattedTransactions });
+    return res.json({
+      success: true,
+      summary,
+      transactions: formattedTransactions,
+      historyAvailable: transactions.length > 0,
+    });
   } catch (err) {
     logger.error('Error fetching buyer credit history', err, 'BUYER_ACCOUNT_CONTROLLER');
     next(err);
@@ -721,72 +749,6 @@ async function addCredit(req, res, next) {
 
 async function updateSupportedCategories(req, res, next) {
   try {
-    if (!assertCategoryManagerOrAdmin(req, res)) return;
-    const { id } = req.params;
-    const { amount, reason, source } = req.body || {};
-    const creditAmount = parseInt(amount, 10);
-    if (isNaN(creditAmount) || creditAmount <= 0) {
-      return res.status(400).json({ success: false, error: 'A valid positive credit amount is required.' });
-    }
-
-    const domainQueries = require('../db/domainQueries');
-    const crypto = require('crypto');
-
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
-    if (!buyer) {
-      return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
-    }
-
-    const previousBalance = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 5;
-    const updatedBalance = previousBalance + creditAmount;
-
-    storeService.updateBuyerAccount(id, {
-      remainingFreeRFQs: updatedBalance,
-    });
-
-    const txId = `ctx-add-${crypto.randomBytes(6).toString('hex')}`;
-    const tx = {
-      id: txId,
-      buyerId: id,
-      rfqId: null,
-      transactionType: 'Admin Credit Addition',
-      creditSource: source || 'Category Manager Console',
-      creditsAdded: creditAmount,
-      creditsConsumed: 0,
-      previousBalance,
-      updatedBalance,
-      paymentReference: `MANUAL-${req.user?.email || 'ADMIN'}`,
-      status: 'COMPLETED',
-      description: reason || `Admin manual credit addition of ${creditAmount} credits by ${req.user?.email || 'Category Manager'}`,
-      idempotencyKey: `add-${txId}`,
-      createdAt: new Date().toISOString(),
-    };
-
-    await domainQueries.recordBuyerCreditTransactionInDB(tx);
-
-    storeService.addAuditLog({
-      userEmail: req.user?.email || 'admin@procucev.com',
-      action: `Added ${creditAmount} credits to ${buyer.organizationName} (${buyer.corporateEmail}). New balance: ${updatedBalance}`,
-    });
-
-    return res.json({
-      success: true,
-      message: `Successfully allocated ${creditAmount} credits to ${buyer.organizationName}.`,
-      data: {
-        buyerId: id,
-        previousBalance,
-        updatedBalance,
-        transaction: tx,
-      },
-    });
-  } catch (err) {
-    logger.error('Error adding credit to buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
-    next(err);
-  }
-}
-
-async function updateSupportedCategories(req, res, next) {
-  try {
     if (!assertCategoryManagerOrBuyer(req, res)) return;
     const { id } = req.params;
     const { categories } = req.body || {};
@@ -801,7 +763,7 @@ async function updateSupportedCategories(req, res, next) {
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
     const cleanCategories = Array.from(new Set(categories.map((c) => String(c).trim()).filter(Boolean)));
-    const updated = storeService.updateBuyerAccount(id, {
+    const updated = await storeService.updateBuyerAccountDurably(id, {
       supportedMajorCategories: cleanCategories,
     });
 
@@ -834,60 +796,7 @@ async function getBuyerCommunications(req, res, next) {
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
     const comms = await paymentDuesQueries.getCommunicationHistory(id);
-
-    // Also include standard onboarding & RFQ notifications as email/system records if not present
-    const combined = [...comms];
-
-    if (!combined.some((c) => c.subject && c.subject.includes('Onboarding'))) {
-      combined.push({
-        id: `comm-reg-${buyer.id}`,
-        accountId: buyer.id,
-        accountType: 'buyer',
-        channel: 'EMAIL',
-        subject: 'Enterprise Onboarding Confirmation & API Key Generation',
-        sender: 'Procucev Onboarding Desk',
-        recipient: buyer.corporateEmail,
-        message: `Welcome ${buyer.contactPerson || buyer.organizationName} to the Procucev Enterprise Network. Initial free trial activated.`,
-        deliveryStatus: 'Delivered',
-        notificationStatus: 'Delivered',
-        acknowledgementStatus: 'Acknowledged',
-        sentAt: buyer.createdDate || new Date().toISOString(),
-        direction: 'OUTGOING',
-      });
-    }
-
-    // Include RFQ notifications
-    const buyerRfqs = storeService.getRFQs().filter(
-      (r) =>
-        (r.buyerAccountId && r.buyerAccountId === buyer.id) ||
-        (r.raisedByEmail && buyer.corporateEmail && r.raisedByEmail.toLowerCase() === buyer.corporateEmail.toLowerCase())
-    );
-
-    buyerRfqs.forEach((rfq, idx) => {
-      const commId = `comm-rfq-${rfq.id}-${idx}`;
-      if (!combined.some((c) => c.id === commId)) {
-        combined.push({
-          id: commId,
-          accountId: buyer.id,
-          accountType: 'buyer',
-          channel: 'EMAIL',
-          subject: `RFQ Dispatch & Supplier Sourcing Match: ${rfq.rfqNumber || rfq.id}`,
-          sender: 'Qua AI Dispatch Engine',
-          recipient: buyer.corporateEmail,
-          message: `RFQ for "${rfq.title || 'Material Sourcing'}" dispatched across ${(rfq.assignedVendors || []).length} verified suppliers via ${rfq.sourcingMode || 'Mode 1'}.`,
-          deliveryStatus: 'Delivered',
-          notificationStatus: 'Dispatched',
-          acknowledgementStatus: 'Acknowledged',
-          sentAt: rfq.createdAt || new Date().toISOString(),
-          direction: 'OUTGOING',
-        });
-      }
-    });
-
-    // Sort newest first
-    combined.sort((a, b) => new Date(b.sentAt || b.createdAt || 0).getTime() - new Date(a.sentAt || a.createdAt || 0).getTime());
-
-    return res.json({ success: true, data: combined });
+    return res.json({ success: true, data: comms });
   } catch (err) {
     logger.error('Error fetching buyer communications', err, 'BUYER_ACCOUNT_CONTROLLER');
     next(err);
@@ -1135,30 +1044,8 @@ async function getBuyerPaymentHistory(req, res, next) {
 
     const payments = [];
 
-    // Include initial trial/subscription plan record
     const planName = buyer.subscriptionPlan || 'Free Enterprise Trial';
-    const isPaidPlan = planName.includes('version_1') || planName.includes('version_2') || planName.includes('version_3') || planName.includes('growth') || planName.includes('custom');
-    const baseAmount = planName.includes('version_1') ? 14999 : planName.includes('version_2') ? 29999 : planName.includes('version_3') ? 49999 : 0;
-
-    payments.push({
-      id: `pay-init-${buyer.id}`,
-      paymentId: `pay-init-${buyer.id}`,
-      invoiceNo: `INV-2026-${buyer.id.slice(0, 5).toUpperCase()}`,
-      invoiceNumber: `INV-2026-${buyer.id.slice(0, 5).toUpperCase()}`,
-      description: `Plan: ${planName}`,
-      subscriptionPlan: planName,
-      amount: baseAmount,
-      currency: 'INR',
-      gateway: 'Zoho Payments (India UPI / NetBanking)',
-      paymentMethod: 'UPI / NetBanking',
-      status: 'PAID',
-      gatewayRef: `ZOHO-INIT-${buyer.id.slice(0, 8)}`,
-      date: buyer.createdDate || new Date().toISOString(),
-      transactionDate: buyer.createdDate || new Date().toISOString(),
-      receiptUrl: `/api/buyer-accounts/${buyer.id}/payment-links/pay-init-${buyer.id}/invoice`,
-    });
-
-    // Add Zoho payment links
+    // Subscription state is not proof of a payment; only provider records count.
     for (const link of links) {
       payments.push({
         id: link.id,

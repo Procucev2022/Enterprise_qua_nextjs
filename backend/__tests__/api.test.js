@@ -33,6 +33,10 @@ describe('API Route Endpoints', () => {
       expect(res.body.data).toHaveProperty('auditLogs');
       expect(res.body.data).toHaveProperty('aiFeed');
       expect(res.body.data).toHaveProperty('systemConfig');
+      expect(res.body.data.buyerAccounts).toEqual([]);
+      expect(res.body.data.auditLogs).toEqual([]);
+      expect(res.body.data.systemConfig).toBeNull();
+      expect(res.body.data.azureHealth).toEqual([]);
     });
   });
 
@@ -44,17 +48,23 @@ describe('API Route Endpoints', () => {
     // the signed-in buyer's own account comes from the identity schema via
     // GET /api/buyer-accounts/active, and this list only holds accounts created
     // at runtime.
-    test('GET /api/buyer-accounts returns an array', async () => {
+    test('GET /api/buyer-accounts requires authentication', async () => {
       const res = await request(app).get('/api/buyer-accounts');
+      expect(res.statusCode).toBe(401);
+    });
+
+    test('GET /api/buyer-accounts returns only the signed-in buyer account', async () => {
+      const res = await request(app).get('/api/buyer-accounts').set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.data.every((account) => account.corporateEmail === TEST_USERS.buyer.email)).toBe(true);
     });
 
     test('POST /api/buyer-accounts creates new buyer account', async () => {
       const newAcc = {
         organizationName: 'Adani Heavy Engineering Ltd.',
-        corporateEmail: 'procurement@adani.com',
+        corporateEmail: TEST_USERS.buyer.email,
         contactPerson: 'Karan Adani',
         mobileNumber: '+91 98000 12345',
         industrySector: 'Infrastructure & Port Logistics',
@@ -76,6 +86,25 @@ describe('API Route Endpoints', () => {
       const res = await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({});
       expect(res.statusCode).toBe(400);
       expect(res.body.success).toBe(false);
+    });
+
+    test('a buyer cannot update, delete, or activate another buyer account', async () => {
+      const otherAccount = storeService.addBuyerAccount({
+        organizationName: 'Other Buyer Organisation',
+        corporateEmail: 'other-buyer@buyer.test',
+      });
+
+      const update = await request(app)
+        .put(`/api/buyer-accounts/${otherAccount.id}`)
+        .set(authHeader('buyer'))
+        .send({ totalSpend: '$1' });
+      const remove = await request(app).delete(`/api/buyer-accounts/${otherAccount.id}`).set(authHeader('buyer'));
+      const activate = await request(app).post(`/api/buyer-accounts/${otherAccount.id}/activate`).set(authHeader('buyer'));
+
+      expect(update.statusCode).toBe(403);
+      expect(remove.statusCode).toBe(403);
+      expect(activate.statusCode).toBe(403);
+      storeService.deleteBuyerAccount(otherAccount.id);
     });
 
     test('PUT /api/buyer-accounts/:id updates existing account', async () => {
@@ -176,12 +205,9 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(200);
     });
 
-    // The two read-only endpoints stay open to any role: the identical
-    // buyerAccounts payload is already served by the unauthenticated
-    // GET /api/bootstrap, which is what the frontend actually reads.
-    test('GET /api/buyer-accounts stays readable by a non-buyer role', async () => {
+    test('GET /api/buyer-accounts rejects a non-buyer role', async () => {
       const res = await request(app).get('/api/buyer-accounts').set(authHeader('vendor'));
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode).toBe(403);
     });
   });
 
@@ -190,10 +216,18 @@ describe('API Route Endpoints', () => {
     let testVendorId;
 
     test('GET /api/vendors returns list of vendors', async () => {
-      const res = await request(app).get('/api/vendors');
+      const res = await request(app).get('/api/vendors').set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(Array.isArray(res.body.data)).toBe(true);
+    });
+
+    test('GET /api/vendors rejects anonymous and vendor-list enumeration', async () => {
+      const anonymous = await request(app).get('/api/vendors');
+      expect(anonymous.statusCode).toBe(401);
+
+      const vendor = await request(app).get('/api/vendors').set(authHeader('vendor'));
+      expect(vendor.statusCode).toBe(403);
     });
 
     test('POST /api/vendors creates new vendor', async () => {
@@ -309,14 +343,30 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/vendors/:id returns vendor details', async () => {
-      const res = await request(app).get(`/api/vendors/${testVendorId}`);
+      const res = await request(app).get(`/api/vendors/${testVendorId}`).set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
       expect(res.body.data.id).toBe(testVendorId);
     });
 
     test('GET /api/vendors/:id returns 404 when not found', async () => {
-      const res = await request(app).get('/api/vendors/invalid-vendor');
+      const res = await request(app).get('/api/vendors/invalid-vendor').set(authHeader('buyer'));
       expect(res.statusCode).toBe(404);
+    });
+
+    test('GET /api/vendors/:id restricts vendors to their own profile', async () => {
+      const ownVendor = await request(app)
+        .get(`/api/vendors/${testVendorId}`)
+        .set(customAuthHeader({
+          id: 'usr-vendor-self',
+          email: TEST_USERS.vendor.email,
+          role: 'vendor',
+        }));
+      expect(ownVendor.statusCode).toBe(200);
+
+      const otherVendor = await request(app)
+        .get(`/api/vendors/${testVendorId}`)
+        .set(customAuthHeader({ id: 'usr-vendor-other', email: 'other@vendor.test', role: 'vendor' }));
+      expect(otherVendor.statusCode).toBe(404);
     });
 
     test('POST /api/vendors/:id/rating-revision revises score & rating', async () => {
@@ -337,7 +387,7 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/vendors/:id/onboarding-email returns email preview payload', async () => {
-      // Carries the vendor's real tempPassword, so it's now restricted to the
+      // Preview content contains no credentials and is available only to
       // buyer-side roles that actually onboard vendors (or an admin).
       const nonOwnerRes = await request(app)
         .get(`/api/vendors/${testVendorId}/onboarding-email`)
@@ -348,6 +398,7 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.data).toHaveProperty('htmlBody');
       expect(res.body.data).toHaveProperty('to');
+      expect(res.body.data).not.toHaveProperty('tempPassword');
     });
 
     test('PUT /api/vendors/:id updates the profile as the owning vendor, ignoring smuggled fields', async () => {
@@ -1147,6 +1198,12 @@ describe('API Route Endpoints', () => {
   // 5. Evaluations & Audit
   describe('Evaluations & Audit API', () => {
     test('GET /api/evaluations and POST /api/evaluations', async () => {
+      const anonymousGet = await request(app).get('/api/evaluations');
+      expect(anonymousGet.statusCode).toBe(401);
+
+      const vendorGet = await request(app).get('/api/evaluations').set(authHeader('vendor'));
+      expect(vendorGet.statusCode).toBe(403);
+
       const getRes = await request(app).get('/api/evaluations').set(authHeader('category_manager'));
       expect(getRes.statusCode).toBe(200);
 
@@ -1185,7 +1242,11 @@ describe('API Route Endpoints', () => {
 
       const verifyRes = await request(app).get('/api/audit/verify').set(authHeader('admin'));
       expect(verifyRes.statusCode).toBe(200);
-      expect(verifyRes.body.report).toMatchObject({ valid: null, complete: false, source: 'in_memory' });
+      expect(verifyRes.body.report).toMatchObject({
+        valid: null,
+        complete: false,
+        source: 'in_memory',
+      });
 
       const buyerVerify = await request(app).get('/api/audit/verify').set(authHeader('buyer'));
       expect(buyerVerify.statusCode).toBe(403);
@@ -1194,8 +1255,8 @@ describe('API Route Endpoints', () => {
     test('POST /api/audit creates new log entry', async () => {
       const res = await request(app).post('/api/audit').set(authHeader('buyer')).send({
         userEmail: 'auditor@enterprise.com',
-        ipAddress: 'spoofed-ip',
         action: 'Manual compliance check performed',
+        ipAddress: 'spoofed-ip',
       });
       expect(res.statusCode).toBe(201);
       expect(res.body.data).toHaveProperty('shaSignature');
@@ -1230,28 +1291,45 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET & POST /api/ai-feed', async () => {
-      const getRes = await request(app).get('/api/ai-feed');
+      const anonymousGet = await request(app).get('/api/ai-feed');
+      expect(anonymousGet.statusCode).toBe(401);
+
+      const vendorGet = await request(app).get('/api/ai-feed').set(authHeader('vendor'));
+      expect(vendorGet.statusCode).toBe(403);
+
+      const getRes = await request(app).get('/api/ai-feed').set(authHeader('buyer'));
       expect(getRes.statusCode).toBe(200);
 
       const postRes = await request(app).post('/api/ai-feed').set(authHeader('buyer')).send({
         title: 'SMS Alert Sent',
         message: 'Notification pushed to supplier.',
+        buyerAccountId: 'attacker-selected-account',
       });
       expect(postRes.statusCode).toBe(201);
       expect(postRes.body.data).toHaveProperty('buyerAccountId');
+      expect(postRes.body.data.buyerAccountId).not.toBe('attacker-selected-account');
 
       const failRes = await request(app).post('/api/ai-feed').set(authHeader('buyer')).send({});
       expect(failRes.statusCode).toBe(400);
 
-      // Scoped query by buyerAccountId
-      const scopedRes = await request(app).get(`/api/ai-feed?buyerAccountId=${postRes.body.data.buyerAccountId}`);
+      const scopedRes = await request(app)
+        .get(`/api/ai-feed?buyerAccountId=${postRes.body.data.buyerAccountId}`)
+        .set(authHeader('buyer'));
       expect(scopedRes.statusCode).toBe(200);
       expect(scopedRes.body.data.some((item) => item.id === postRes.body.data.id)).toBe(true);
 
-      // Other buyer query does not see this buyer's feed item
-      const otherBuyerRes = await request(app).get('/api/ai-feed?buyerAccountId=other-nonexistent-buyer');
+      // A query parameter cannot switch a buyer session into another account scope.
+      const otherBuyerRes = await request(app)
+        .get('/api/ai-feed?buyerAccountId=other-nonexistent-buyer')
+        .set(authHeader('buyer'));
       expect(otherBuyerRes.statusCode).toBe(200);
-      expect(otherBuyerRes.body.data.some((item) => item.id === postRes.body.data.id)).toBe(false);
+      expect(otherBuyerRes.body.data.some((item) => item.id === postRes.body.data.id)).toBe(true);
+
+      const vendorPost = await request(app).post('/api/ai-feed').set(authHeader('vendor')).send({
+        title: 'Spoofed alert',
+        message: 'Vendor should not create buyer activity.',
+      });
+      expect(vendorPost.statusCode).toBe(403);
     });
 
     test('GET /api/db/metrics is admin-only', async () => {

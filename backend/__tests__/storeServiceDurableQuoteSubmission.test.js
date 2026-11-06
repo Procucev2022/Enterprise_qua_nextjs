@@ -2,6 +2,7 @@ const storeService = require('../src/services/storeService');
 const domainQueries = require('../src/db/domainQueries');
 const pool = require('../src/db/pool');
 const mailerService = require('../src/services/mailerService');
+const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
 
 const RFQ_ID = 'rfq-durable-quote-test';
 const VENDOR_ID = 'vendor-durable-quote-test';
@@ -234,6 +235,12 @@ describe('durable quote submission and credit synchronization', () => {
       status: 'Closed',
       quotes: [{ id: 'quote-auto-close-1', vendorId: VENDOR_ID, unitPrice: 300 }],
     };
+    const comparisonIntent = {
+      id: 'comparison-rfq-durable-quote-test',
+      rfqId: RFQ_ID,
+      rfqNumber: currentRFQ.rfqNumber,
+      fireAt: '2026-11-06T10:05:00.000Z',
+    };
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(currentRFQ);
     jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(currentVendor);
@@ -241,6 +248,9 @@ describe('durable quote submission and credit synchronization', () => {
       buyer: { organizationName: 'Buyer Organization' },
       buyerEmail: 'buyer@example.test',
       requiresProfileCompletion: false,
+    });
+    jest.spyOn(rfqChaserScheduler, 'buildBuyerComparisonJobIntent').mockReturnValue({
+      ...comparisonIntent,
     });
     const submit = jest.spyOn(domainQueries, 'submitVendorQuoteInDB').mockResolvedValue({
       rfq: savedRFQ,
@@ -256,6 +266,8 @@ describe('durable quote submission and credit synchronization', () => {
       autoClosureEmailEventId: expect.stringContaining('rfq_auto_closure_ack_email'),
       autoClosureRecipientEmail: 'buyer@example.test',
       autoClosureRecipientName: 'Buyer Organization',
+      autoClosureComparisonJobId: 'comparison-rfq-durable-quote-test',
+      autoClosureComparisonFireAt: '2026-11-06T10:05:00.000Z',
     }));
     expect(submit).toHaveBeenCalledWith(expect.not.objectContaining({ quoteNotificationEventId: expect.anything() }));
     expect(sideEffects).toHaveBeenCalledWith(
@@ -263,7 +275,7 @@ describe('durable quote submission and credit synchronization', () => {
       savedRFQ,
       expect.objectContaining({ id: 'quote-auto-close-1' }),
       true,
-      { skipAutoClosureEmail: true }
+      { skipAutoClosureEmail: true, comparisonJob: comparisonIntent }
     );
   });
 
@@ -273,6 +285,7 @@ describe('durable quote submission and credit synchronization', () => {
     jest.spyOn(storeService, '_buildNotification').mockReturnValue({ id: 'notification-auto-close' });
     jest.spyOn(storeService, '_persistNotification').mockImplementation(() => {});
     const email = jest.spyOn(mailerService, 'sendRfqAutoClosureAcknowledgementEmail');
+    const scheduleComparison = jest.spyOn(rfqChaserScheduler, 'scheduleBuyerComparison').mockReturnValue('comparison-auto-close');
 
     storeService.notifyBuyerOfAutoClosureAndScheduleComparison(
       rfq,
@@ -281,6 +294,31 @@ describe('durable quote submission and credit synchronization', () => {
     );
 
     expect(email).not.toHaveBeenCalled();
+    expect(scheduleComparison).toHaveBeenCalledWith(rfq);
+  });
+
+  test('registers an already committed comparison job without enqueuing it twice', () => {
+    const rfq = { id: RFQ_ID, rfqNumber: 'RFQ-AUTO-CLOSE', buyerAccountId: 'buyer-auto-close' };
+    const comparisonJob = {
+      id: 'comparison-rfq-auto-close',
+      rfqId: RFQ_ID,
+      rfqNumber: rfq.rfqNumber,
+      fireAt: '2026-11-06T10:05:00.000Z',
+    };
+    jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@example.test');
+    jest.spyOn(storeService, '_buildNotification').mockReturnValue({ id: 'notification-auto-close' });
+    jest.spyOn(storeService, '_persistNotification').mockImplementation(() => {});
+    const persistSchedule = jest.spyOn(rfqChaserScheduler, 'schedulePersistedBuyerComparison').mockReturnValue(comparisonJob.id);
+    const insertSchedule = jest.spyOn(rfqChaserScheduler, 'scheduleBuyerComparison');
+
+    storeService.notifyBuyerOfAutoClosureAndScheduleComparison(
+      rfq,
+      [{ id: 'quote-auto-close-1' }],
+      { skipEmail: true, comparisonJob }
+    );
+
+    expect(persistSchedule).toHaveBeenCalledWith(rfq, comparisonJob);
+    expect(insertSchedule).not.toHaveBeenCalled();
   });
 
   test('rebuilds the quote from fresh RFQ state after a concurrent writer wins', async () => {

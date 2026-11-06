@@ -8,6 +8,7 @@ const extractionStagingService = require('../src/services/extractionStagingServi
 const rfqIngestionService = require('../src/services/rfqIngestionService');
 const rfqSummaryService = require('../src/services/rfqSummaryService');
 const geminiService = require('../src/services/geminiService');
+const { logger } = require('../src/services/loggerService');
 
 function mockRes() {
   const res = {
@@ -143,6 +144,12 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       await rfqController.inviteVendors({ params: { id: 'rfq-1' }, body: { vendorIds: ['v-1'] }, user: { role: 'admin', email: 'cm@test.com' } }, resOk, next);
       expect(resOk.statusCode).toBe(200);
       expect(resOk.data.invitedCount).toBe(1);
+
+      // The RFQ can disappear between the controller's read and durable write.
+      storeService.inviteVendorsToRFQ.mockResolvedValue(null);
+      const resMissingAfterRead = mockRes();
+      await rfqController.inviteVendors({ params: { id: 'rfq-1' }, body: { vendorIds: ['v-1'] }, user: { role: 'admin' } }, resMissingAfterRead, next);
+      expect(resMissingAfterRead.statusCode).toBe(404);
 
       // Catch block
       storeService.inviteVendorsToRFQ.mockRejectedValue(new Error('invite err'));
@@ -455,7 +462,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       );
       expect(resV2Err.statusCode).toBe(201);
 
-      // A failed durable create must not trigger a second controller-side credit operation.
+      // The store owns credit consumption; the controller must not run a second debit/refund pair.
       const buyerAcc = { id: 'buyer-refund-1', remainingFreeRFQs: 5, subscriptionPlan: 'free' };
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(buyerAcc);
       const consumeSpy = jest.spyOn(storeService, 'consumeRFQCreditIfApplicable').mockReturnValue({ consumed: true });
@@ -762,7 +769,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(resItemNoMajor.statusCode).toBe(400);
 
       // Status transition from Parsing to Quotes Pending when vendors assigned
-      jest.spyOn(storeService, 'updateRFQ').mockReturnValue({ ...rfq, status: 'Quotes Pending' });
+      jest.spyOn(storeService, 'updateRFQDurably').mockResolvedValue({ ...rfq, status: 'Quotes Pending' });
       const resOk = mockRes();
       await rfqController.updateRFQ(
         { params: { id: 'rfq-update-1' }, body: { assignedVendors: [{ id: 'v-1' }] }, user: { role: 'admin' } },
@@ -771,16 +778,20 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       );
       expect(resOk.statusCode).toBe(200);
 
-      // storeService.updateRFQ returning null
-      storeService.updateRFQ.mockReturnValue(null);
+      // storeService.updateRFQDurably returning null
+      storeService.updateRFQDurably.mockResolvedValue(null);
       const resNull = mockRes();
       await rfqController.updateRFQ({ params: { id: 'rfq-update-1' }, body: {}, user: { role: 'admin' } }, resNull, next);
       expect(resNull.statusCode).toBe(404);
 
+      storeService.updateRFQDurably.mockRejectedValueOnce(Object.assign(new Error('database unavailable'), { statusCode: 503 }));
+      await rfqController.updateRFQ({ params: { id: 'rfq-update-1' }, body: { title: 'Storage failure' }, user: { role: 'admin' } }, mockRes(), next);
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 503 }));
+
       storeService.getRFQById.mockRestore();
       storeService.getVendorById.mockRestore();
       storeService.vendorCoversRFQ.mockRestore();
-      storeService.updateRFQ.mockRestore();
+      storeService.updateRFQDurably.mockRestore();
     });
 
     test('extendRFQ 404, invalid payload, failure reason, and success', async () => {
@@ -1003,7 +1014,6 @@ describe('rfqController Comprehensive Branch Coverage', () => {
         next
       );
       expect(resUnknownFailure.statusCode).toBe(503);
-
 
       storeService.getRFQByIdAsync.mockRestore();
       storeService.getRFQById.mockRestore();
@@ -1380,7 +1390,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(resUnentitled.statusCode).toBe(403);
       expect(resUnentitled.data.error).toContain('does not include mode_2');
 
-      // Persisted credit state is authoritative when requests race or retry.
+      // The persisted transaction is authoritative for the latest balance.
       const buyerExhausted = { id: 'buyer-exh', subscriptionPlan: 'free', remainingFreeRFQs: 0 };
       storeService.getBuyerAccountByEmail.mockReturnValue(buyerExhausted);
       const creditExhaustedError = Object.assign(new Error('Free RFQ credits exhausted'), {
@@ -1389,7 +1399,6 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       });
       const createDurably = jest.spyOn(storeService, 'createRFQDurably').mockRejectedValueOnce(creditExhaustedError);
       const consumeSpy = jest.spyOn(storeService, 'consumeRFQCreditIfApplicable').mockReturnValue({ consumed: true });
-
       const resExhausted = mockRes();
       await rfqController.createRFQ(
         {
@@ -1409,42 +1418,59 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(next).toHaveBeenCalledWith(creditExhaustedError);
       expect(consumeSpy).not.toHaveBeenCalled();
 
-      // Catch block when mailerService.sendRfqAcknowledgementEmail throws inside createRFQ
-      createDurably.mockResolvedValue({
+      // A downstream acknowledgement failure does not undo the RFQ transaction.
+      const successfulRFQ = {
         id: 'rfq-created-mailfail',
         rfqNumber: 'RFQ-MAIL-FAIL',
         title: 'Test',
         category: 'Pumps & Motors',
+        sourcingMode: 'mode_0',
         deliveryLocation: 'Mumbai',
         targetDeliveryDate: '2099-01-01',
         deadline: '2099-01-10',
         assignedVendors: [],
         extractedEntities: [],
-      });
-      jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockImplementation(() => {
-        throw new Error('SMTP down');
-      });
+      };
+      createDurably.mockResolvedValue(successfulRFQ);
+      const mailError = new Error('SMTP down');
+      jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockRejectedValue(mailError);
+      const previousWaitUntil = globalThis.__CF_WAIT_UNTIL__;
+      const backgroundTasks = [];
+      globalThis.__CF_WAIT_UNTIL__ = (task) => backgroundTasks.push(task);
+      const loggerErrorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
       const resMailFail = mockRes();
-      await rfqController.createRFQ(
-        {
-          body: {
-            title: 'Test',
-            category: 'Pumps & Motors',
-            sourcingMode: 'mode_0',
-            targetDeliveryDate: '2099-01-01',
-            deliveryLocation: 'Mumbai',
-            deliveryPincode: '400001',
+      try {
+        await rfqController.createRFQ(
+          {
+            body: {
+              title: 'Test',
+              category: 'Pumps & Motors',
+              sourcingMode: 'mode_0',
+              targetDeliveryDate: '2099-01-01',
+              deliveryLocation: 'Mumbai',
+              deliveryPincode: '400001',
+            },
+            user: { role: 'buyer', email: 'b@mailfail.com' },
           },
-          user: { role: 'buyer', email: 'b@mailfail.com' },
-        },
-        resMailFail,
-        next
-      );
+          resMailFail,
+          next
+        );
+        await Promise.all(backgroundTasks);
+      } finally {
+        if (previousWaitUntil === undefined) delete globalThis.__CF_WAIT_UNTIL__;
+        else globalThis.__CF_WAIT_UNTIL__ = previousWaitUntil;
+      }
       expect(resMailFail.statusCode).toBe(201);
       expect(resMailFail.data.data.id).toBe('rfq-created-mailfail');
+      expect(backgroundTasks).toHaveLength(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'Failed to deliver RFQ creation acknowledgement email',
+        { rfqNumber: successfulRFQ.rfqNumber, error: mailError },
+        'RFQ_CONTROLLER'
+      );
 
-      // Failure during createRFQ after credit consumed refunds credit
+      // A persistence failure is forwarded; the controller no longer performs a separate best-effort refund.
       createDurably.mockRejectedValueOnce(new Error('DB creation crash'));
       const refundSpy = jest.spyOn(storeService, 'refundFreeRFQ').mockReturnValue(true);
       await rfqController.createRFQ(
@@ -1747,7 +1773,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       // deleteRFQ returns false -> 404
       const existing = { id: 'rfq-del-1', rfqNumber: 'RFQ-DEL-001' };
       jest.spyOn(storeService, 'getRFQById').mockReturnValue(existing);
-      jest.spyOn(storeService, 'deleteRFQ').mockReturnValue(false);
+      jest.spyOn(storeService, 'deleteRFQDurably').mockResolvedValue(false);
 
       const resDelFail = mockRes();
       await rfqController.deleteRFQ(
@@ -1758,7 +1784,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(resDelFail.statusCode).toBe(404);
 
       // deleteRFQ returns true -> 200
-      storeService.deleteRFQ.mockReturnValue(true);
+      storeService.deleteRFQDurably.mockResolvedValue(true);
       const resDelOk = mockRes();
       await rfqController.deleteRFQ(
         { params: { id: 'rfq-del-1' }, user: { role: 'admin' } },
@@ -1769,7 +1795,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(resDelOk.data.data.rfqNumber).toBe('RFQ-DEL-001');
 
       // deleteRFQ catch block
-      storeService.deleteRFQ.mockImplementation(() => { throw new Error('delete crash'); });
+      storeService.deleteRFQDurably.mockRejectedValue(new Error('delete crash'));
       await rfqController.deleteRFQ({ params: { id: 'rfq-del-1' }, user: { role: 'admin' } }, mockRes(), next);
       expect(next).toHaveBeenCalledWith(expect.any(Error));
 
@@ -1804,7 +1830,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(next).toHaveBeenCalledWith(expect.any(Error));
 
       storeService.getRFQById.mockRestore();
-      storeService.deleteRFQ.mockRestore();
+      storeService.deleteRFQDurably.mockRestore();
       storeService.getRFQByIdAsync.mockRestore();
       storeService.ensureVendorProfileForUser.mockRestore();
       storeService.triggerBatchChaser.mockRestore();
@@ -1918,7 +1944,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       jest.spyOn(storeService, 'getRFQById').mockReturnValue(rfqToUpdate);
       jest.spyOn(rfqIngestionService, 'canonicalMajor').mockReturnValue('Pumps & Motors');
       jest.spyOn(rfqIngestionService, 'isMinorUnderMajor').mockReturnValue(true);
-      jest.spyOn(storeService, 'updateRFQ').mockReturnValue({ ...rfqToUpdate, title: 'Updated' });
+      jest.spyOn(storeService, 'updateRFQDurably').mockResolvedValue({ ...rfqToUpdate, title: 'Updated' });
       const resUpdateEff = mockRes();
       await rfqController.updateRFQ(
         {
@@ -2105,7 +2131,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       storeService.getRFQById.mockRestore();
       rfqIngestionService.canonicalMajor.mockRestore();
       rfqIngestionService.isMinorUnderMajor.mockRestore();
-      storeService.updateRFQ.mockRestore();
+      storeService.updateRFQDurably.mockRestore();
       storeService.triggerBatchChaser.mockRestore();
       storeService.approvePurchaseOrder.mockRestore();
       storeService.addInquiryToRFQ.mockRestore();

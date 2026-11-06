@@ -4,8 +4,10 @@ const storeService = require('./services/storeService');
 const emailGatewayService = require('./services/emailGatewayService');
 const zohoReconciliationService = require('./services/zohoReconciliationService');
 const rfqChaserScheduler = require('./services/rfqChaserScheduler');
+const eventOutboxService = require('./services/eventOutboxService');
 const { logger } = require('./services/loggerService');
-const PORT = process.env.PORT || 4000; // Reloaded with SMTP_FROM=manav.procucev@gmail.com
+const { EVENT_OUTBOX_POLL_INTERVAL_MS, RFQ_AUTO_CLOSE_POLL_INTERVAL_MS } = require('./config/constants');
+const PORT = process.env.PORT || 4000;
 
 /**
  * Report database reachability at boot.
@@ -83,6 +85,15 @@ async function bootstrapServer(port = PORT) {
   await rfqChaserScheduler.recoverChasersOnBoot().catch((err) => {
     logger.warn('Failed to recover chasers on boot', { error: err.message }, 'SERVER');
   });
+  await rfqChaserScheduler.dispatchDueChaserJobs().catch((error) => {
+    logger.error('Failed to dispatch due chaser jobs during startup', { error }, 'SERVER');
+  });
+  await rfqChaserScheduler.recoverRFQComparisonJobsOnBoot().catch((err) => {
+    logger.warn('Failed to recover RFQ comparison notifications on boot', { error: err.message }, 'SERVER');
+  });
+  await eventOutboxService.dispatchDueEventOutboxJobs().catch((error) => {
+    logger.error('Failed to dispatch queued background events during startup', { error }, 'SERVER');
+  });
 
   const server = app.listen(port);
   // Allow long-running operations (such as 15-minute bulk document extractions)
@@ -101,6 +112,42 @@ async function bootstrapServer(port = PORT) {
     logger.info(`Zoho payment-link reconciliation not started: ${zohoReconciliation.reason}`, {}, 'SERVER');
   }
 
+  const rfqClosureTimer = setInterval(() => {
+    storeService.closeExpiredRFQsDurably().catch((error) => {
+      logger.error('Scheduled RFQ closure sweep failed', { error }, 'SERVER');
+    });
+  }, RFQ_AUTO_CLOSE_POLL_INTERVAL_MS);
+  if (typeof rfqClosureTimer.unref === 'function') rfqClosureTimer.unref();
+  const eventOutboxTimer = setInterval(() => {
+    rfqChaserScheduler.dispatchDueChaserJobs().catch((error) => {
+      logger.error('Scheduled chaser dispatch failed', { error }, 'SERVER');
+    });
+    eventOutboxService.dispatchDueEventOutboxJobs().catch((error) => {
+      logger.error('Scheduled event-outbox dispatch failed', { error }, 'SERVER');
+    });
+  }, EVENT_OUTBOX_POLL_INTERVAL_MS);
+  if (typeof eventOutboxTimer.unref === 'function') eventOutboxTimer.unref();
+  if (typeof server.once === 'function') {
+    server.once('close', () => {
+      clearInterval(rfqClosureTimer);
+      clearInterval(eventOutboxTimer);
+    });
+  } else {
+    clearInterval(rfqClosureTimer);
+    clearInterval(eventOutboxTimer);
+  }
+
+  const dispatchRFQComparisonJobs = () => {
+    if (!pool.hasStorage()) return;
+    rfqChaserScheduler.dispatchDueRFQComparisonJobs().catch((error) => {
+      logger.error('Scheduled RFQ comparison dispatch failed', { error }, 'SERVER');
+    });
+  };
+  dispatchRFQComparisonJobs();
+  const rfqComparisonTimer = setInterval(dispatchRFQComparisonJobs, EVENT_OUTBOX_POLL_INTERVAL_MS);
+  if (typeof rfqComparisonTimer.unref === 'function') rfqComparisonTimer.unref();
+  if (typeof server.once === 'function') server.once('close', () => clearInterval(rfqComparisonTimer));
+
 
   return server;
 }
@@ -109,7 +156,7 @@ async function start(port = PORT) {
   try {
     return await bootstrapServer(port);
   } catch (err) {
-    console.error('Failed to start server:', err);
+    logger.error('Failed to start server', err, 'SERVER');
     process.exit(1);
   }
 }

@@ -523,6 +523,9 @@ async function inviteVendors(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     const result = await storeService.inviteVendorsToRFQ(id, uniqueVendorIds, req.user && req.user.email);
+    if (!result) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
     res.json({
       success: true,
       data: result.updatedRFQ,
@@ -817,7 +820,6 @@ async function createRFQ(req, res, next) {
         ? SUBSCRIPTION_MODE_ENTITLEMENTS.unlimited
         : (SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.free_trial);
       const requestedMode = body.sourcingMode || 'mode_0';
-
       const isV0 = requestedMode === 'mode_0' || requestedMode === 'v0' || requestedMode === 'version_0';
 
       // Enterprise QUA – V0 (Free Starter Trial) is universally available to all accounts (0 credits consumed).
@@ -834,7 +836,10 @@ async function createRFQ(req, res, next) {
         });
       }
 
-      // The persisted RFQ and any trial-credit debit are checked and committed together.
+      // Credit availability and consumption are checked against the persisted
+      // buyer row inside createRFQDurably's RFQ+ledger transaction. A cache
+      // precheck here could reject a newly credited account or overspend after
+      // concurrent requests.
     }
 
     // Generated from the line items the buyer confirmed, so the summary
@@ -906,7 +911,17 @@ async function createRFQ(req, res, next) {
       try {
         const dbCount = await storeService.resolveProcucevVendorCountFromDB(finalRFQ);
         if (typeof dbCount === 'number' && dbCount > (finalRFQ.procucevVendorCount || 0)) {
+          const previousCount = finalRFQ.procucevVendorCount || 0;
           finalRFQ.procucevVendorCount = dbCount;
+          try {
+            await storeService.persistRFQDurably(finalRFQ);
+          } catch (persistError) {
+            finalRFQ.procucevVendorCount = previousCount;
+            logger.warn('Could not persist DB-backed RFQ vendor count; keeping the last saved value', {
+              rfqNumber: finalRFQ.rfqNumber,
+              error: persistError.message,
+            }, 'RFQ_CONTROLLER');
+          }
         }
       } catch (err) {
         logger.warn('Could not resolve DB-backed Procucev vendor count', { error: err.message }, 'RFQ_CONTROLLER');
@@ -1611,7 +1626,7 @@ async function updateRFQ(req, res, next) {
       }
     }
     logger.info(`Updating RFQ ${id}`, { id, fields: Object.keys(updates) }, 'RFQ_CONTROLLER');
-    const updated = storeService.updateRFQ(id, updates);
+    const updated = await storeService.updateRFQDurably(id, updates);
     if (!updated) {
       logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
@@ -1681,7 +1696,7 @@ async function deleteRFQ(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
 
-    const removed = storeService.deleteRFQ(id);
+    const removed = await storeService.deleteRFQDurably(id);
     if (!removed) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
@@ -1849,7 +1864,6 @@ function respondToVendorUnlockFailure(res, unlockResult) {
   return true;
 }
 
-
 async function downloadRFQ(req, res, next) {
   try {
     const { id } = req.params;
@@ -1981,7 +1995,7 @@ async function addInquiry(req, res, next) {
       return res.status(404).json({ success: false, error: 'RFQ not found.' });
     }
 
-    const result = storeService.addInquiryToRFQ(rfq.id, {
+    const result = await storeService.addInquiryToRFQ(rfq.id, {
       message: message.trim(),
       vendorName: vendorName || (req.user && req.user.name) || 'Vendor Partner',
       vendorEmail: vendorEmail || (req.user && req.user.email) || null,
@@ -2028,7 +2042,7 @@ async function replyInquiry(req, res, next) {
       return res.status(404).json({ success: false, error: 'RFQ not found.' });
     }
 
-    const result = storeService.replyToRFQInquiry(rfq.id, inquiryId, {
+    const result = await storeService.replyToRFQInquiry(rfq.id, inquiryId, {
       reply: reply.trim(),
       repliedBy: (req.user && req.user.name) || 'Procurement Officer',
       repliedByEmail: req.user && req.user.email,

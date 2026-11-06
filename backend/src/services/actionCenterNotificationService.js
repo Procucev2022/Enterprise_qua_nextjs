@@ -33,8 +33,10 @@ function sanitizeActionUrl(rawUrl, fallbackUrl) {
       return parsed.toString();
     }
   } catch {
-    // Malformed URL, use safe fallback
+    logger.warn('Malformed action notification URL; using the configured fallback', {}, 'ACTION_CENTER');
+    return fallbackUrl;
   }
+  logger.warn('Unsupported action notification URL protocol; using the configured fallback', {}, 'ACTION_CENTER');
   return fallbackUrl;
 }
 

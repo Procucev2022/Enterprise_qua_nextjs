@@ -24,7 +24,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
 
     jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([mockBuyer]);
     jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(mockBuyer);
-    jest.spyOn(storeService, 'updateBuyerAccount').mockImplementation((id, data) => ({
+    jest.spyOn(storeService, 'updateBuyerAccountDurably').mockImplementation(async (id, data) => ({
       ...mockBuyer,
       ...data,
     }));
@@ -83,6 +83,21 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       await buyerAccountController.addCredit(req, res, next);
       expect(res.status).toHaveBeenCalledWith(400);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+
+      const fractionalReq = { user: adminUser, params: { id: 'buyer-test-1' }, body: { amount: 1.5 } };
+      const fractionalRes = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.addCredit(fractionalReq, fractionalRes, next);
+      expect(fractionalRes.status).toHaveBeenCalledWith(400);
+
+      const invalidKeyReq = {
+        user: adminUser,
+        params: { id: 'buyer-test-1' },
+        body: { amount: 5 },
+        headers: { 'idempotency-key': 'bad-key' },
+      };
+      const invalidKeyRes = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await buyerAccountController.addCredit(invalidKeyReq, invalidKeyRes, next);
+      expect(invalidKeyRes.status).toHaveBeenCalledWith(400);
     });
 
     test('returns 404 when buyer account does not exist', async () => {
@@ -94,18 +109,46 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
+    test('returns 404 when durable credit adjustment finds the account was concurrently removed', async () => {
+      jest.spyOn(storeService, 'addBuyerCreditsDurably').mockResolvedValue(null);
+      const req = { user: adminUser, params: { id: 'buyer-test-1' }, body: { amount: 5 } };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await buyerAccountController.addCredit(req, res, jest.fn());
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(storeService.addBuyerCreditsDurably).toHaveBeenCalledWith(
+        'buyer-test-1',
+        5,
+        expect.objectContaining({ transactionType: 'Admin Credit Addition' })
+      );
+    });
+
     test('successfully adds credits, records transaction, and updates balance', async () => {
-      jest.spyOn(domainQueries, 'recordBuyerCreditTransactionInDB').mockResolvedValue({ id: 'ctx-1' });
+      jest.spyOn(storeService, 'addBuyerCreditsDurably').mockImplementation(async (id, amount, transaction) => ({
+        account: { ...mockBuyer, remainingFreeRFQs: 9 },
+        previousBalance: 4,
+        updatedBalance: 9,
+        transaction: { ...transaction, id: 'ctx-1', previousBalance: 4, updatedBalance: 9 },
+      }));
 
       const req = {
         user: adminUser,
         params: { id: 'buyer-test-1' },
         body: { amount: 5, reason: 'Special allocation', source: 'Manual Topup' },
+        headers: { 'idempotency-key': 'b714f6d8-83a1-4f34-9d89-72ebddb1186d' },
       };
       const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
       const next = jest.fn();
 
       await buyerAccountController.addCredit(req, res, next);
+      expect(storeService.addBuyerCreditsDurably).toHaveBeenCalledWith(
+        'buyer-test-1',
+        5,
+        expect.objectContaining({
+          transactionType: 'Admin Credit Addition',
+          idempotencyKey: 'b714f6d8-83a1-4f34-9d89-72ebddb1186d',
+        })
+      );
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           success: true,
@@ -118,7 +161,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
     });
 
     test('handles exceptions by delegating to next(err)', async () => {
-      jest.spyOn(domainQueries, 'recordBuyerCreditTransactionInDB').mockRejectedValue(new Error('DB failure'));
+      jest.spyOn(storeService, 'addBuyerCreditsDurably').mockRejectedValue(new Error('DB failure'));
 
       const req = { user: adminUser, params: { id: 'buyer-test-1' }, body: { amount: 5 } };
       const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
@@ -169,7 +212,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
     });
 
     test('handles exceptions by delegating to next(err)', async () => {
-      jest.spyOn(storeService, 'updateBuyerAccount').mockImplementation(() => {
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockImplementation(() => {
         throw new Error('Store failure');
       });
 
@@ -192,26 +235,11 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
-    test('generates initial transactions and RFQ deductions when none recorded in DB', async () => {
+    test('does not reconstruct or write credit history from a bounded RFQ cache', async () => {
       jest.spyOn(domainQueries, 'getBuyerCreditTransactionsFromDB')
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([
-          {
-            id: 'ctx-init-1',
-            credits_added: 5,
-            credits_consumed: 0,
-            transaction_type: 'Initial Free Credits Allocated',
-            created_at: '2026-03-01T10:00:00.000Z',
-          },
-          {
-            id: 'ctx-rfq-1',
-            credits_added: 0,
-            credits_consumed: 1,
-            transaction_type: 'Credits Consumed',
-            created_at: '2026-03-02T10:00:00.000Z',
-          },
-        ]);
-      jest.spyOn(domainQueries, 'recordBuyerCreditTransactionInDB').mockResolvedValue({ id: 'ok' });
+        .mockResolvedValue([]);
+      const recordSpy = jest.spyOn(domainQueries, 'recordBuyerCreditTransactionInDB').mockResolvedValue({ id: 'ok' });
+      const rfqSpy = jest.spyOn(storeService, 'getRFQs');
 
       const req = { user: adminUser, params: { id: 'buyer-test-1' } };
       const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
@@ -222,12 +250,16 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         expect.objectContaining({
           success: true,
           summary: expect.objectContaining({
-            totalCreditsAllocated: expect.any(Number),
+            totalCreditsAllocated: 0,
+            totalCreditsConsumed: 0,
             remainingFreeCredits: 4,
           }),
-          transactions: expect.any(Array),
+          transactions: [],
+          historyAvailable: false,
         })
       );
+      expect(recordSpy).not.toHaveBeenCalled();
+      expect(rfqSpy).not.toHaveBeenCalled();
     });
 
     test('parses existing DB transactions with purchased and adjusted types', async () => {
@@ -277,8 +309,9 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
   });
 
   describe('getBuyerCommunications & recordBuyerCommunication', () => {
-    test('getBuyerCommunications returns combined onboarding & rfq logs', async () => {
+    test('getBuyerCommunications returns persisted communication history without inferred delivery records', async () => {
       const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+      const getRfqs = jest.spyOn(storeService, 'getRFQs');
       jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValue([
         { id: 'comm-db-1', channel: 'SMS', message: 'Hello' },
       ]);
@@ -288,15 +321,11 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       const next = jest.fn();
 
       await buyerAccountController.getBuyerCommunications(req, res, next);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: true,
-          data: expect.arrayContaining([
-            expect.objectContaining({ id: 'comm-db-1' }),
-            expect.objectContaining({ id: 'comm-reg-buyer-test-1' }),
-          ]),
-        })
-      );
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: [{ id: 'comm-db-1', channel: 'SMS', message: 'Hello' }],
+      });
+      expect(getRfqs).not.toHaveBeenCalled();
     });
 
     test('getBuyerCommunications returns 404 for unknown buyer', async () => {
@@ -460,7 +489,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
   });
 
   describe('getBuyerPaymentHistory', () => {
-    test('returns payment summary and list including initial plan and payment links', async () => {
+    test('returns payment summary from provider payment links only', async () => {
       jest.spyOn(storeService, 'getPaymentLinksForBuyer').mockResolvedValue([
         {
           id: 'plink-1',
@@ -487,13 +516,19 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         expect.objectContaining({
           success: true,
           summary: expect.objectContaining({
-            totalAmountPaid: expect.any(Number),
-            totalSuccessfulPayments: expect.any(Number),
-            pendingPayments: expect.any(Number),
+            totalAmountPaid: 29999,
+            totalSuccessfulPayments: 1,
+            pendingPayments: 1,
           }),
-          payments: expect.any(Array),
+          payments: expect.arrayContaining([
+            expect.objectContaining({ id: 'plink-1', status: 'PAID', amount: 29999 }),
+            expect.objectContaining({ id: 'plink-2', status: 'PENDING', amount: 14999 }),
+          ]),
         })
       );
+      const response = res.json.mock.calls[0][0];
+      expect(response.payments).toHaveLength(2);
+      expect(response.payments.some((payment) => payment.id === `pay-init-${mockBuyer.id}`)).toBe(false);
     });
 
     test('falls back to lookup by email if buyer user calls without matching id', async () => {
@@ -599,13 +634,14 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         expect.objectContaining({
           success: true,
           summary: expect.objectContaining({
-            totalCreditsAllocated: 20,
+            totalCreditsAllocated: 15,
             purchasedCredits: 10,
             adjustedCredits: 2,
             totalCreditsConsumed: 3,
             currentEntitlementMode: 'mode_1',
           }),
           transactions: expect.any(Array),
+          historyAvailable: true,
         })
       );
     });
@@ -669,6 +705,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         { id: 'lnk-2', amount: 2000, status: 'EXPIRED' },
         { id: 'lnk-3', amount: 3000, status: 'REFUNDED' },
         { id: 'lnk-4', amount: 4000, status: 'PENDING' },
+        { id: 'lnk-5', amount: 5000, status: 'CANCELLED' },
       ];
       jest.spyOn(storeService, 'getPaymentLinksForBuyer').mockResolvedValue(mockLinks);
 
@@ -688,13 +725,8 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       );
     });
 
-    test('getBuyerPaymentHistory calculates plan amounts for version_1, version_2, version_3, and free plans', async () => {
-      for (const [plan, expectedAmt] of [
-        ['version_1', 14999],
-        ['version_2', 29999],
-        ['version_3', 49999],
-        ['custom_enterprise', 0],
-      ]) {
+    test('getBuyerPaymentHistory does not infer payments from paid or free plans', async () => {
+      for (const plan of ['version_1', 'version_2', 'version_3', 'custom_enterprise']) {
         const customBuyer = {
           id: `b-${plan}`,
           corporateEmail: `${plan}@buyer.com`,
@@ -709,8 +741,10 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         expect(res.json).toHaveBeenCalledWith(
           expect.objectContaining({
             summary: expect.objectContaining({
-              totalAmountPaid: expectedAmt,
+              totalAmountPaid: 0,
+              totalSuccessfulPayments: 0,
             }),
+            payments: [],
           })
         );
       }
@@ -802,10 +836,10 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       expect(nextErr).toHaveBeenCalledWith(expect.any(Error));
     });
 
-    test('updateBuyerAccount validates subscriptionPlan update attempts', () => {
+    test('updateBuyerAccount validates subscriptionPlan update attempts', async () => {
       const reqUnauthorized = { user: vendorUser, params: { id: 'buyer-test-1' }, body: {} };
       const resUnauthorized = { status: jest.fn().mockReturnThis(), json: jest.fn() };
-      buyerAccountController.updateBuyerAccount(reqUnauthorized, resUnauthorized, jest.fn());
+      await buyerAccountController.updateBuyerAccount(reqUnauthorized, resUnauthorized, jest.fn());
       expect(resUnauthorized.status).toHaveBeenCalledWith(403);
 
       const reqInvalidPlan = {
@@ -814,7 +848,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         body: { subscriptionPlan: 'growth' },
       };
       const resInvalidPlan = { status: jest.fn().mockReturnThis(), json: jest.fn() };
-      buyerAccountController.updateBuyerAccount(reqInvalidPlan, resInvalidPlan, jest.fn());
+      await buyerAccountController.updateBuyerAccount(reqInvalidPlan, resInvalidPlan, jest.fn());
       expect(resInvalidPlan.status).toHaveBeenCalledWith(400);
 
       const reqValidPlan = {
@@ -823,7 +857,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         body: { subscriptionPlan: 'free_trial' },
       };
       const resValidPlan = { status: jest.fn().mockReturnThis(), json: jest.fn() };
-      buyerAccountController.updateBuyerAccount(reqValidPlan, resValidPlan, jest.fn());
+      await buyerAccountController.updateBuyerAccount(reqValidPlan, resValidPlan, jest.fn());
       expect(resValidPlan.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
 
@@ -846,20 +880,21 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       expect(badRes.status).toHaveBeenCalledWith(500);
     });
 
-    test('getBuyerAccounts exercises query limit and store hydration branches', () => {
+    test('getBuyerAccounts exercises query limit and store hydration branches', async () => {
       const res = { json: jest.fn() };
-      buyerAccountController.getBuyerAccounts({ query: { limit: '25' } }, res, jest.fn());
+      const req = { user: { role: 'admin' }, query: { limit: '25' } };
+      await buyerAccountController.getBuyerAccounts(req, res, jest.fn());
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
-      buyerAccountController.getBuyerAccounts({ query: { limit: '9999' } }, res, jest.fn());
+      await buyerAccountController.getBuyerAccounts({ ...req, query: { limit: '9999' } }, res, jest.fn());
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
-      buyerAccountController.getBuyerAccounts({ query: { limit: '-5' } }, res, jest.fn());
+      await buyerAccountController.getBuyerAccounts({ ...req, query: { limit: '-5' } }, res, jest.fn());
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
       const prevHydrated = storeService.isHydratedFromDB;
       storeService.isHydratedFromDB = true;
-      buyerAccountController.getBuyerAccounts({ query: {} }, res, jest.fn());
+      await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' }, query: {} }, res, jest.fn());
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'persisted' }));
       storeService.isHydratedFromDB = prevHydrated;
     });
@@ -869,7 +904,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       const identityQueries = require('../src/db/identityQueries');
 
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
-      jest.spyOn(storeService, 'addBuyerAccount').mockReturnValueOnce(null);
+      jest.spyOn(storeService, 'addBuyerAccountDurably').mockResolvedValueOnce(null);
 
       const reqMissing = {
         user: { email: 'orphan@test.com', role: 'buyer', orgName: 'Orphan Corp' },
@@ -883,7 +918,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       // Auto-create on first use with fallback to identityQueries for phone
       const createdAccountNoPhone = { id: 'b-new', corporateEmail: 'new@buyer.com', mobileNumber: '' };
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
-      jest.spyOn(storeService, 'addBuyerAccount').mockReturnValueOnce(createdAccountNoPhone);
+      jest.spyOn(storeService, 'addBuyerAccountDurably').mockResolvedValueOnce(createdAccountNoPhone);
       jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce(null);
 
       const reqNoPhone = {
@@ -903,7 +938,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         paymentUrl: 'https://pay.zoho.in/test',
         status: 'CREATED',
       });
-      jest.spyOn(storeService, 'createPaymentLinkRecord').mockReturnValue({
+      jest.spyOn(storeService, 'createPaymentLinkRecordDurably').mockResolvedValue({
         id: 'pl-test-1',
         paymentUrl: 'https://pay.zoho.in/test',
         status: 'CREATED',
@@ -923,6 +958,53 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
           data: expect.objectContaining({ paymentLinkId: 'pl-test-1' }),
         })
       );
+    });
+
+    test('does not call Zoho when buyer mirror persistence fails during first payment-link creation', async () => {
+      const zohoPaymentService = require('../src/services/zohoPaymentService');
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'addBuyerAccountDurably').mockRejectedValueOnce(
+        Object.assign(new Error('Buyer store unavailable'), { statusCode: 503 })
+      );
+      const createLink = jest.spyOn(zohoPaymentService, 'createPaymentLink');
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await buyerAccountController.createSubscriptionPaymentLink({
+        user: { email: 'new-buyer@example.com', role: 'buyer', orgName: 'New Buyer' },
+        params: { id: 'untrusted-id' },
+        body: { plan: 'version_1' },
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(createLink).not.toHaveBeenCalled();
+    });
+
+    test('reports an untracked provider link when its durable payment record fails', async () => {
+      const zohoPaymentService = require('../src/services/zohoPaymentService');
+      const { PERSISTENCE_MESSAGES } = require('../src/config/constants');
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        id: 'buyer-payment-record-fail',
+        corporateEmail: 'payment-record-fail@example.com',
+        mobileNumber: '+919999999999',
+      });
+      jest.spyOn(zohoPaymentService, 'createPaymentLink').mockResolvedValueOnce({
+        zohoPaymentLinkId: 'zoho-created-but-untracked',
+        paymentUrl: 'https://pay.zoho.in/untracked',
+        status: 'CREATED',
+      });
+      jest.spyOn(storeService, 'createPaymentLinkRecordDurably').mockRejectedValueOnce(
+        Object.assign(new Error('database unavailable'), { statusCode: 503, code: 'PAYMENT_LINK_PERSISTENCE_UNAVAILABLE' })
+      );
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await buyerAccountController.createSubscriptionPaymentLink({
+        user: { email: 'payment-record-fail@example.com', role: 'buyer' },
+        params: { id: 'buyer-payment-record-fail' },
+        body: { plan: 'version_1' },
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: PERSISTENCE_MESSAGES.PAYMENT_LINK_TRACKING_FAILED });
     });
 
     test('assertBuyerAccountRole handles missing user', () => {
@@ -967,7 +1049,12 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       // addCredit with user without email and buyer without remainingFreeRFQs
       const buyerNoRemaining = { id: 'b-no-rem', organizationName: 'No Rem Corp', corporateEmail: 'n@b.com' };
       jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyerNoRemaining]);
-      jest.spyOn(domainQueries, 'recordBuyerCreditTransactionInDB').mockResolvedValue({ id: 'tx-new' });
+      jest.spyOn(storeService, 'addBuyerCreditsDurably').mockResolvedValue({
+        account: { ...buyerNoRemaining, remainingFreeRFQs: 8 },
+        previousBalance: 5,
+        updatedBalance: 8,
+        transaction: { id: 'tx-new' },
+      });
 
       const reqNoEmail = {
         user: { role: 'category_manager' },
@@ -1065,14 +1152,14 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         expect.objectContaining({
           success: true,
           summary: expect.objectContaining({
-            totalSuccessfulPayments: 2,
+            totalSuccessfulPayments: 1,
             pendingPayments: 2,
           }),
         })
       );
     });
 
-    test('getCreditHistory exercises v0 sourcing mode and email-matched RFQs', async () => {
+    test('getCreditHistory does not infer consumption from the isolate RFQ cache', async () => {
       const emailBuyer = {
         id: 'b-email-match',
         corporateEmail: 'match@buyer.com',
@@ -1080,8 +1167,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       };
       jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([emailBuyer]);
       jest.spyOn(domainQueries, 'getBuyerCreditTransactionsFromDB').mockResolvedValue([]);
-      jest.spyOn(domainQueries, 'recordBuyerCreditTransactionInDB').mockResolvedValue({});
-      jest.spyOn(storeService, 'getRFQs').mockReturnValue([
+      const rfqSpy = jest.spyOn(storeService, 'getRFQs').mockReturnValue([
         {
           id: 'rfq-v0',
           rfqNumber: 'RFQ-V0-1',
@@ -1105,8 +1191,11 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
           summary: expect.objectContaining({
             remainingFreeCredits: 2,
           }),
+          transactions: [],
+          historyAvailable: false,
         })
       );
+      expect(rfqSpy).not.toHaveBeenCalled();
     });
 
     test('aiCrossMatch handles errors', async () => {
@@ -1120,18 +1209,36 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
       expect(next).toHaveBeenCalledWith(expect.any(Error));
     });
 
-    test('deleteBuyerAccount and setActiveAccount success paths', () => {
-      jest.spyOn(storeService, 'deleteBuyerAccount').mockReturnValue(true);
+    test('deleteBuyerAccount and setActiveAccount success paths', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      jest.spyOn(storeService, 'deleteBuyerAccountDurably').mockResolvedValue(true);
       const reqDel = { user: adminUser, params: { id: 'buyer-test-1' } };
       const resDel = { status: jest.fn().mockReturnThis(), json: jest.fn() };
-      buyerAccountController.deleteBuyerAccount(reqDel, resDel, jest.fn());
+      await buyerAccountController.deleteBuyerAccount(reqDel, resDel, jest.fn());
       expect(resDel.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
-      jest.spyOn(storeService, 'alignActiveBuyerAccount').mockReturnValue(mockBuyer);
+      jest.spyOn(storeService, 'alignActiveBuyerAccountDurably').mockResolvedValue(mockBuyer);
       const reqActive = { user: adminUser, params: { id: 'buyer-test-1' } };
       const resActive = { status: jest.fn().mockReturnThis(), json: jest.fn() };
-      buyerAccountController.setActiveAccount(reqActive, resActive, jest.fn());
+      await buyerAccountController.setActiveAccount(reqActive, resActive, jest.fn());
       expect(resActive.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: mockBuyer }));
+    });
+
+    test('updateBuyerAccount authorizes against the persisted buyer account when storage is configured', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const persistedAccountLookup = jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValue(mockBuyer);
+      const req = {
+        user: adminUser,
+        params: { id: 'buyer-test-1' },
+        body: { organizationName: 'Updated Buyer Corp' },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await buyerAccountController.updateBuyerAccount(req, res, jest.fn());
+
+      expect(persistedAccountLookup).toHaveBeenCalledWith('buyer-test-1');
+      expect(storeService.updateBuyerAccountDurably).toHaveBeenCalledWith('buyer-test-1', req.body);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
 
     test('aiCrossMatch exercises all category branches (mechanical, electrical, civil, IT)', async () => {
@@ -1240,7 +1347,7 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
         payment_link_id: 'z-link-1',
         url: 'https://zoho.test/link',
       });
-      jest.spyOn(storeService, 'createPaymentLinkRecord').mockReturnValue({ id: 'pl-rec-new' });
+      jest.spyOn(storeService, 'createPaymentLinkRecordDurably').mockResolvedValue({ id: 'pl-rec-new' });
 
       bAcc.mobileNumber = '9876543210';
       const reqSub = {

@@ -398,7 +398,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       const next = jest.fn();
       const newVendor = { id: 'v-cm-1', name: 'CM Vendor', majorCategory: 'Tools', email: 'cm@vendor.com' };
       jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
-      jest.spyOn(storeService, 'addVendor').mockReturnValue(newVendor);
+      const addVendorSpy = jest.spyOn(storeService, 'addVendorDurably').mockResolvedValue(newVendor);
       jest.spyOn(storeService, 'provisionVendorOnboarding').mockResolvedValue({ error: null });
 
       await vendorController.createVendor(
@@ -411,6 +411,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
         next
       );
 
+      expect(addVendorSpy).toHaveBeenCalledWith(expect.objectContaining({ source: 'procucev_network' }), 'cm@procucev.com', null);
       expect(res.status).toHaveBeenCalledWith(201);
     });
 
@@ -469,7 +470,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
 
       // Valid plan 'premium'
       const resOk = mockRes();
-      jest.spyOn(storeService, 'updateVendor').mockReturnValue({ ...vendor, subscriptionPlan: 'premium' });
+      jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ ...vendor, subscriptionPlan: 'premium' });
       await vendorController.updateSubscription(
         {
           params: { id: 'v-sub-1' },
@@ -550,7 +551,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
         zohoPaymentLinkId: 'zpl_123',
         status: 'CREATED',
       });
-      jest.spyOn(storeService, 'createPaymentLinkRecord').mockReturnValue({
+      jest.spyOn(storeService, 'createPaymentLinkRecordDurably').mockResolvedValue({
         id: 'pl-123',
         paymentUrl: 'https://payment.zoho.com/test',
         status: 'CREATED',
@@ -572,6 +573,27 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
           data: expect.objectContaining({ paymentLinkId: 'pl-123' }),
         })
       );
+
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(vendorWithEmail);
+      jest.spyOn(zohoPaymentService, 'createPaymentLink').mockResolvedValueOnce({
+        paymentUrl: 'https://payment.zoho.com/untracked',
+        zohoPaymentLinkId: 'zpl-untracked',
+        status: 'CREATED',
+      });
+      jest.spyOn(storeService, 'createPaymentLinkRecordDurably').mockRejectedValueOnce(
+        Object.assign(new Error('database unavailable'), { statusCode: 503, code: 'PAYMENT_LINK_PERSISTENCE_UNAVAILABLE' })
+      );
+      const resPersistFail = mockRes();
+      await vendorController.createSubscriptionPaymentLink(
+        {
+          params: { id: 'v-ok' },
+          body: { plan: 'connect', billingDuration: '12_months' },
+          user: { role: 'admin' },
+        },
+        resPersistFail,
+        next
+      );
+      expect(resPersistFail.status).toHaveBeenCalledWith(503);
 
       // Error from Zoho service returns 502
       jest.spyOn(zohoPaymentService, 'createPaymentLink').mockRejectedValue(new Error('Zoho down'));

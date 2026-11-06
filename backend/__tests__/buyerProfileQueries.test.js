@@ -63,6 +63,25 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
     });
   });
 
+  describe('normalizeCategories', () => {
+    test('trims labels, drops blanks and collapses case-insensitive duplicate pairs', () => {
+      expect(buyerProfileQueries.normalizeCategories([
+        { major: ' IT ', minor: 'Laptop' },
+        { major: 'it', minor: ' laptop ' },
+        { major: 'IT', minor: 'Servers' },
+        { major: '', minor: 'Ignored' },
+        null,
+      ])).toEqual([
+        { major: 'IT', minor: 'Laptop' },
+        { major: 'IT', minor: 'Servers' },
+      ]);
+    });
+
+    test('returns an empty list for non-array input', () => {
+      expect(buyerProfileQueries.normalizeCategories(null)).toEqual([]);
+    });
+  });
+
   // ── Row mapping ───────────────────────────────────────────────────────────
   describe('mapRowToProfile', () => {
     const row = {
@@ -186,6 +205,8 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       expect(result).toEqual([{ major: 'IT', minor: 'Laptop' }]);
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy.mock.calls[0][0]).toContain('user_id = $1');
+      expect(spy.mock.calls[0][0]).toContain('is_active = true');
+      expect(spy.mock.calls[0][0]).toContain('trim(category) <>');
       expect(spy.mock.calls[0][1]).toEqual(['user-1']);
     });
 
@@ -208,6 +229,20 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       await buyerProfileQueries.loadCategories('org-1', null);
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy.mock.calls[0][0]).toContain('organization_id = $1');
+      expect(spy.mock.calls[0][0]).toContain('is_active = true');
+    });
+
+    test('deduplicates legacy category rows before returning them to the profile', async () => {
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([
+        { division: 'IT', category: 'Laptop' },
+        { division: ' it ', category: ' laptop ' },
+        { division: 'IT', category: 'Servers' },
+      ]);
+
+      await expect(buyerProfileQueries.loadCategories('org-1', null)).resolves.toEqual([
+        { major: 'IT', minor: 'Laptop' },
+        { major: 'IT', minor: 'Servers' },
+      ]);
     });
 
     test('returns an empty list without querying when neither scope is known', async () => {
@@ -329,7 +364,7 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       return { query: jest.fn().mockResolvedValue({ rows: [] }) };
     }
 
-    test('clears both scopes then inserts the new selection in one statement', async () => {
+    test('locks the organization, clears both scopes and inserts the new selection in one statement', async () => {
       const client = makeClient();
       const count = await buyerProfileQueries.replaceCategories(client, 'org-1', 'user-1', [
         { major: 'IT', minor: 'Laptop' },
@@ -337,17 +372,19 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       ]);
 
       expect(count).toBe(2);
-      expect(client.query.mock.calls[0][0]).toContain('delete from org_division_category');
+      expect(client.query.mock.calls[0][0]).toContain('for update');
       expect(client.query.mock.calls[0][1]).toEqual(['org-1']);
-      expect(client.query.mock.calls[1][1]).toEqual(['user-1']);
+      expect(client.query.mock.calls[1][0]).toContain('delete from org_division_category');
+      expect(client.query.mock.calls[1][1]).toEqual(['org-1']);
+      expect(client.query.mock.calls[2][1]).toEqual(['user-1']);
 
       // One multi-row INSERT, not one statement per category: a 10-category
       // selection would otherwise be 10 round trips inside an open transaction.
-      const [sql, params] = client.query.mock.calls[2];
+      const [sql, params] = client.query.mock.calls[3];
       expect(sql).toContain('insert into org_division_category');
       expect(sql).toContain('($1, $2, $3, $4, $5, true, now())');
       expect(sql).toContain('($6, $7, $8, $9, $10, true, now())');
-      expect(client.query).toHaveBeenCalledTimes(3);
+      expect(client.query).toHaveBeenCalledTimes(4);
 
       // Five bound values per row: uuid, division, category, organization_id, user_id.
       expect(params).toHaveLength(10);
@@ -363,23 +400,35 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       const client = makeClient();
       const count = await buyerProfileQueries.replaceCategories(client, 'org-1', 'user-1', []);
       expect(count).toBe(0);
-      // Two deletes, no insert.
-      expect(client.query).toHaveBeenCalledTimes(2);
+      // One row lock and two deletes, no insert.
+      expect(client.query).toHaveBeenCalledTimes(3);
     });
 
     test('treats a non-array selection as nothing to insert', async () => {
       const client = makeClient();
       await expect(buyerProfileQueries.replaceCategories(client, 'org-1', 'user-1', null)).resolves.toBe(0);
-      expect(client.query).toHaveBeenCalledTimes(2);
+      expect(client.query).toHaveBeenCalledTimes(3);
     });
 
     test('skips the user-scoped delete when there is no user id', async () => {
       const client = makeClient();
       await buyerProfileQueries.replaceCategories(client, 'org-1', null, [{ major: 'IT', minor: 'Laptop' }]);
-      expect(client.query.mock.calls[0][1]).toEqual(['org-1']);
-      expect(client.query.mock.calls[1][0]).toContain('insert into');
+      expect(client.query.mock.calls[0][0]).toContain('for update');
+      expect(client.query.mock.calls[1][1]).toEqual(['org-1']);
+      expect(client.query.mock.calls[2][0]).toContain('insert into');
       // user_id is left null rather than invented.
-      expect(client.query.mock.calls[1][1][4]).toBeNull();
+      expect(client.query.mock.calls[2][1][4]).toBeNull();
+    });
+
+    test('inserts only one row for duplicate selections', async () => {
+      const client = makeClient();
+      const count = await buyerProfileQueries.replaceCategories(client, 'org-1', 'user-1', [
+        { major: 'IT', minor: 'Laptop' },
+        { major: ' it ', minor: ' laptop ' },
+      ]);
+      expect(count).toBe(1);
+      expect(client.query).toHaveBeenCalledTimes(4);
+      expect(client.query.mock.calls[3][1]).toHaveLength(5);
     });
   });
 
@@ -539,15 +588,32 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
     });
   });
 
-  // D1 has no withTransaction/client — updateProfile branches on getD1Binding()
-  // (read via globalThis.__CF_ENV__, same as every other D1 branch this session)
-  // and runs the same steps as plain pool.query(..., { d1: true }) calls instead.
+  // D1 Worker writes use one binding batch, so the profile, user name and
+  // category selection commit or roll back together.
   describe('updateProfile (D1 path)', () => {
     const originalCfEnv = globalThis.__CF_ENV__;
     const originalPool = dbPool.pool;
+    let d1Binding;
+
+    function makeD1Binding({ organizationExists = true, failure } = {}) {
+      return {
+        prepare: jest.fn((sql) => ({
+          bind: (...params) => ({ _sql: sql, _params: params }),
+        })),
+        batch: jest.fn(async (statements) => {
+          if (failure) throw failure;
+          return statements.map((statement, index) => ({
+            results: index === 0 && organizationExists ? [{ uuid: 'org-1' }] : [],
+            meta: { changes: index === 0 ? 0 : 1 },
+            _statement: statement,
+          }));
+        }),
+      };
+    }
 
     beforeEach(() => {
-      globalThis.__CF_ENV__ = { DB: { prepare: jest.fn() } };
+      d1Binding = makeD1Binding();
+      globalThis.__CF_ENV__ = { DB: d1Binding };
       dbPool.pool = null; // no pg pool at all on Workers — D1 alone must satisfy hasStorage()
     });
 
@@ -556,16 +622,7 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       dbPool.pool = originalPool;
     });
 
-    test('updates the organisation, the user display name and the categories via sequential D1 queries', async () => {
-      const spy = jest
-        .spyOn(dbPool, 'query')
-        .mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] }) // existence check
-        .mockResolvedValueOnce({ rows: [] }) // update organization
-        .mockResolvedValueOnce({ rows: [] }) // update "user"
-        .mockResolvedValueOnce({ rows: [] }) // delete org_division_category by org
-        .mockResolvedValueOnce({ rows: [] }) // delete org_division_category by user
-        .mockResolvedValueOnce({ rows: [] }); // insert org_division_category
-
+    test('updates the organisation, user display name and categories in one atomic batch', async () => {
       const result = await buyerProfileQueries.updateProfile({
         organizationId: 'org-1',
         userId: 'user-1',
@@ -575,74 +632,62 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       });
 
       expect(result).toEqual({ updated: true, fieldsUpdated: 4, categoryCount: 1 });
-      const calls = spy.mock.calls.map((c) => ({ sql: c[0], options: c[2] }));
-      expect(calls.every((c) => c.options && c.options.d1 === true)).toBe(true);
-      const allSql = calls.map((c) => c.sql).join('\n');
+      expect(d1Binding.batch).toHaveBeenCalledTimes(1);
+      const statements = d1Binding.batch.mock.calls[0][0];
+      const allSql = statements.map((statement) => statement._sql).join('\n');
+      expect(statements).toHaveLength(6); // existence, two updates, two deletes, one insert
       expect(allSql).toContain('update organization set');
-      expect(allSql).toContain('update "user" set full_name = $1');
-      expect(allSql).toContain('delete from org_division_category where organization_id');
-      expect(allSql).toContain('delete from org_division_category where user_id');
+      expect(allSql).toContain('update "user" set full_name = ?');
+      expect(allSql).toContain('delete from org_division_category');
+      expect(allSql).toContain('where user_id = ?');
       expect(allSql).toContain('insert into org_division_category');
+      expect(allSql).toContain('exists (select 1 from organization');
     });
 
     test('reports ORG_NOT_FOUND rather than throwing when the organisation is gone', async () => {
-      const spy = jest.spyOn(dbPool, 'query').mockResolvedValueOnce({ rows: [] });
+      d1Binding = makeD1Binding({ organizationExists: false });
+      globalThis.__CF_ENV__ = { DB: d1Binding };
       const result = await buyerProfileQueries.updateProfile({
         organizationId: 'missing',
         userId: 'user-1',
         patch: { companyName: 'ACME' },
       });
       expect(result).toEqual({ updated: false, reason: 'ORG_NOT_FOUND' });
-      expect(spy).toHaveBeenCalledTimes(1);
+      expect(d1Binding.batch).toHaveBeenCalledTimes(1);
     });
 
     test('leaves categories untouched when the caller did not supply them', async () => {
-      const spy = jest
-        .spyOn(dbPool, 'query')
-        .mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] })
-        .mockResolvedValueOnce({ rows: [] })
-        .mockResolvedValueOnce({ rows: [] });
-
       const result = await buyerProfileQueries.updateProfile({
         organizationId: 'org-1',
         userId: 'user-1',
         patch: { city: 'Pune' },
       });
       expect(result.categoryCount).toBeNull();
-      expect(spy.mock.calls.map((c) => c[0]).join('\n')).not.toContain('org_division_category');
+      const allSql = d1Binding.batch.mock.calls[0][0].map((statement) => statement._sql).join('\n');
+      expect(allSql).not.toContain('org_division_category');
     });
 
     test('skips the organisation update when the patch is empty', async () => {
-      const spy = jest.spyOn(dbPool, 'query').mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] });
       const result = await buyerProfileQueries.updateProfile({
         organizationId: 'org-1',
         userId: 'user-1',
         patch: {},
       });
       expect(result.fieldsUpdated).toBe(0);
-      expect(spy.mock.calls.map((c) => c[0]).join('\n')).not.toContain('update organization set');
+      expect(d1Binding.batch.mock.calls[0][0]).toHaveLength(1);
     });
 
     test('skips the user update when there is no user id', async () => {
-      const spy = jest
-        .spyOn(dbPool, 'query')
-        .mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] })
-        .mockResolvedValueOnce({ rows: [] });
       await buyerProfileQueries.updateProfile({
         organizationId: 'org-1',
         userId: null,
         patch: { contactName: 'Someone' },
       });
-      expect(spy.mock.calls.map((c) => c[0]).join('\n')).not.toContain('update "user"');
+      const allSql = d1Binding.batch.mock.calls[0][0].map((statement) => statement._sql).join('\n');
+      expect(allSql).not.toContain('update "user"');
     });
 
     test('clears the category selection when an empty array is supplied', async () => {
-      jest
-        .spyOn(dbPool, 'query')
-        .mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] })
-        .mockResolvedValueOnce({ rows: [] }) // delete by org
-        .mockResolvedValueOnce({ rows: [] }); // delete by user
-
       const result = await buyerProfileQueries.updateProfile({
         organizationId: 'org-1',
         userId: 'user-1',
@@ -650,6 +695,98 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
         categories: [],
       });
       expect(result.categoryCount).toBe(0);
+      const statements = d1Binding.batch.mock.calls[0][0];
+      expect(statements).toHaveLength(3); // existence and both scoped deletes
+      expect(statements.map((statement) => statement._sql).join('\n')).not.toContain('insert into');
+    });
+
+    test('collapses duplicate selections and splits inserts at D1 parameter limits', async () => {
+      const categories = Array.from({ length: 17 }, (_, index) => ({ major: 'IT', minor: `Item ${index}` }));
+      categories.push({ major: ' it ', minor: ' item 0 ' });
+
+      const result = await buyerProfileQueries.updateProfile({
+        organizationId: 'org-1',
+        userId: null,
+        patch: {},
+        categories,
+      });
+
+      expect(result.categoryCount).toBe(17);
+      const statements = d1Binding.batch.mock.calls[0][0];
+      const inserts = statements.filter((statement) => statement._sql.includes('insert into org_division_category'));
+      expect(inserts).toHaveLength(2);
+      expect(inserts.map((statement) => statement._params.length)).toEqual([96, 6]);
+    });
+
+    test('rolls back the complete batch when any D1 write fails', async () => {
+      const failure = new Error('injected D1 batch failure');
+      d1Binding = makeD1Binding({ failure });
+      globalThis.__CF_ENV__ = { DB: d1Binding };
+
+      await expect(buyerProfileQueries.updateProfile({
+        organizationId: 'org-1',
+        userId: 'user-1',
+        patch: { companyName: 'ACME' },
+        categories: [{ major: 'IT', minor: 'Laptop' }],
+      })).rejects.toThrow('injected D1 batch failure');
+      expect(d1Binding.batch).toHaveBeenCalledTimes(1);
+    });
+
+    test('rejects a multi-write D1 HTTP update before sending any request', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      const keys = ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_D1_DATABASE_ID', 'CLOUDFLARE_API_TOKEN'];
+      const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+      keys.forEach((key, index) => { process.env[key] = `test-${index}`; });
+      globalThis.__CF_ENV__ = undefined;
+      d1Bridge.resetD1HttpClientCache();
+      const fetchSpy = jest.spyOn(global, 'fetch').mockRejectedValue(new Error('network should not be reached'));
+
+      try {
+        await expect(buyerProfileQueries.updateProfile({
+          organizationId: 'org-1',
+          userId: 'user-1',
+          patch: { companyName: 'ACME', contactName: 'Buyer' },
+          categories: [],
+        })).rejects.toThrow('cannot guarantee multi-statement atomicity');
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        fetchSpy.mockRestore();
+        keys.forEach((key) => {
+          if (previous[key] === undefined) delete process.env[key];
+          else process.env[key] = previous[key];
+        });
+        d1Bridge.resetD1HttpClientCache();
+      }
+    });
+
+    test('allows a single-statement D1 HTTP profile write', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      const keys = ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_D1_DATABASE_ID', 'CLOUDFLARE_API_TOKEN'];
+      const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+      keys.forEach((key, index) => { process.env[key] = `test-single-${index}`; });
+      globalThis.__CF_ENV__ = undefined;
+      d1Bridge.resetD1HttpClientCache();
+      const querySpy = jest.spyOn(dbPool, 'query')
+        .mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      try {
+        const result = await buyerProfileQueries.updateProfile({
+          organizationId: 'org-1',
+          userId: null,
+          patch: { companyName: 'ACME Ltd' },
+        });
+        expect(result.updated).toBe(true);
+        expect(querySpy).toHaveBeenCalledTimes(2);
+        expect(querySpy.mock.calls[1][0]).toContain('update organization set');
+      } finally {
+        querySpy.mockRestore();
+        keys.forEach((key) => {
+          if (previous[key] === undefined) delete process.env[key];
+          else process.env[key] = previous[key];
+        });
+        d1Bridge.resetD1HttpClientCache();
+      }
     });
   });
 

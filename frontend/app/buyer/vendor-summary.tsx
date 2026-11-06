@@ -48,6 +48,7 @@ import {
   BadgeCheck,
 } from 'lucide-react';
 import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
+import { logger } from '@/lib/logger';
 
 interface VendorSummaryProps {
   onViewEvaluation: (record: VendorEvaluationRecord) => void;
@@ -510,7 +511,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       setSelectedVendorIds([]);
       setBulkDeleteModalOpen(false);
     } catch (err) {
-      console.error('Failed to bulk delete vendors:', err);
+      logger.log('ERROR', 'Failed to bulk delete vendors', { error: err }, 'VENDOR_DIRECTORY');
       showToast('Error', 'Failed to delete selected vendors. Please try again.', 'warning');
     } finally {
       setIsDeletingBulk(false);

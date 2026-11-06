@@ -1,5 +1,6 @@
 const {
   VALIDATION_SCHEMAS,
+  CLIENT_LOG_LIMITS,
   validatePayload,
   EMAIL_REGEX,
   GSTIN_REGEX,
@@ -9,21 +10,163 @@ const {
 } = require('../src/config/validationSchemas');
 
 describe('Backend Validation Schemas Unit Tests', () => {
-  test('validates enterprise inquiry input and management boundaries', () => {
-    const validInquiry = validatePayload(VALIDATION_SCHEMAS.createEnterpriseInquiry, {
-      companyName: 'Demo Buyer',
-      email: 'buyer@example.test',
-      mobile: '+91 98765 43210',
-      notes: 'Annual contract interest',
+  test('validates AI feed creation content and allowed channel details', () => {
+    expect(validatePayload('createAIFeedItem', {
+      title: 'Vendor reminder',
+      message: 'A reminder was sent.',
+      type: 'reminder',
+      channel: 'email',
+      rfqNumber: 'RFQ-100',
+      channelDetails: { actionOutcome: 'sent' },
+    }).isValid).toBe(true);
+
+    expect(validatePayload('createAIFeedItem', { title: '', message: 'x' }).isValid).toBe(false);
+    expect(validatePayload('createAIFeedItem', { title: 'x', message: 'y', type: 'unknown' }).isValid).toBe(false);
+    expect(validatePayload('createAIFeedItem', {
+      title: 'x', message: 'y', channelDetails: { rawPayload: 'sensitive' },
+    }).isValid).toBe(false);
+  });
+
+  test('validates bot bridge email recipients, bounded attachments, and generic validator fallbacks', () => {
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, {
+      to: [' buyer@example.com ', 'copy@example.com'],
+      cc: 'cc@example.com',
+      bcc: ['bcc@example.com'],
+      subject: ' RFQ update ',
+      text: ' Plain text ',
+      html: '<p>HTML</p>',
+      attachments: [
+        { fileName: 'one-byte.txt', contentType: 'text/plain', fileData: 'QQ==' },
+        { fileName: 'two-byte.txt', contentType: 'text/plain', fileData: 'QUI=' },
+        { fileName: 'three-byte.txt', contentType: 'text/plain', fileData: 'QUJD' },
+      ],
+    }).isValid).toBe(true);
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, { to: [] }).errors.to).toMatch(/recipient/);
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, {
+      to: Array.from({ length: 51 }, (_item, index) => `user${index}@example.com`),
+    }).errors.to).toMatch(/no more than 50/);
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, { to: ['ok@example.com', 12] }).errors.to).toMatch(/valid email/);
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, { to: 'buyer@example.com', cc: {} }).errors.cc).toMatch(/valid email/);
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, { to: 'buyer@example.com', bcc: ['bad'] }).errors.bcc).toMatch(/valid email/);
+
+    const baseAttachment = { fileName: 'a.txt', contentType: 'text/plain', fileData: 'QQ==' };
+    const invalidAttachments = [
+      null,
+      [],
+      { ...baseAttachment, extra: 'not allowed' },
+      { ...baseAttachment, fileName: '' },
+      { ...baseAttachment, fileName: 'a'.repeat(256) },
+      { ...baseAttachment, contentType: '' },
+      { ...baseAttachment, contentType: 't'.repeat(256) },
+      { ...baseAttachment, fileData: '' },
+      { ...baseAttachment, fileData: 'not base64' },
+      { ...baseAttachment, fileData: 12 },
+    ];
+    invalidAttachments.forEach((attachment) => {
+      expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, { to: 'buyer@example.com', attachments: [attachment] }).errors.attachments).toBeDefined();
     });
-    expect(validInquiry.isValid).toBe(true);
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, {
+      to: 'buyer@example.com',
+      attachments: [{ ...baseAttachment, fileData: 'A'.repeat(7_000_000) }],
+    }).errors.attachments).toMatch(/5 MB/);
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, {
+      to: 'buyer@example.com',
+      attachments: Array.from({ length: 11 }, () => baseAttachment),
+    }).errors.attachments).toMatch(/no more than 10/);
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, {
+      to: 'buyer@example.com', attachments: 'not a list',
+    }).errors.attachments).toMatch(/list/);
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, { to: 'buyer@example.com', subject: 's'.repeat(999) }).errors.subject).toBeDefined();
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, { to: 'buyer@example.com', text: 'x'.repeat(1_000_001) }).errors.text).toBeDefined();
+
+    const statusSchema = VALIDATION_SCHEMAS.botBridgeWhatsAppStatus;
+    expect(validatePayload(statusSchema, { registeredViaWhatsApp: false }).isValid).toBe(true);
+    expect(validatePayload(statusSchema, { registeredViaWhatsApp: 'false' }).errors.registeredViaWhatsApp).toBeDefined();
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeOptOut, { optedOut: true }).isValid).toBe(true);
+    expect(validatePayload(VALIDATION_SCHEMAS.botBridgeIdParams, { id: 'x'.repeat(129) }).isValid).toBe(false);
+  });
+
+  test('covers conditional validators for buyer onboarding, AI-feed details, and validatePayload defaults', () => {
+    const onboardingMobile = VALIDATION_SCHEMAS.completeBuyerOnboarding.mobile.custom;
+    expect(onboardingMobile('')).toBeNull();
+    expect(validatePayload(VALIDATION_SCHEMAS.completeBuyerOnboarding, {
+      emailOtp: '123456',
+      mobile: '9876543210',
+      mobileOtp: '123456',
+      currentPassword: 'temporary',
+      newPassword: 'Strong#Password1',
+      companyName: 'Acme Corp',
+    }).isValid).toBe(true);
+
+    const channelDetails = VALIDATION_SCHEMAS.createAIFeedItem.channelDetails.custom;
+    expect(channelDetails(null)).toMatch(/JSON object/);
+    expect(channelDetails('invalid')).toMatch(/JSON object/);
+    expect(channelDetails([])).toMatch(/JSON object/);
+    expect(channelDetails({ unknown: 'x' })).toMatch(/not supported/);
+    expect(channelDetails({ duration: 5 })).toMatch(/must be a string/);
+    expect(channelDetails({ transcriptSummary: 's'.repeat(2001) })).toMatch(/must be a string/);
+    expect(channelDetails({ transcriptSummary: 'summary', actionOutcome: 'sent' })).toBeNull();
+
+    expect(validatePayload(VALIDATION_SCHEMAS.enterpriseInquiryId)).toEqual({
+      isValid: false,
+      errors: { id: expect.any(String) },
+      sanitizedData: {},
+    });
+    expect(validatePayload({ id: { type: 'string', pattern: /^safe$/ } }, { id: 'unsafe' }).errors.id)
+      .toMatch(/invalid format/);
+  });
+
+  test('validates bounded audit event descriptions and RFQ identifiers', () => {
+    expect(validatePayload('auditLogEntry', { action: 'Updated account', rfqNumber: 'RFQ-1' }).isValid).toBe(true);
+    expect(validatePayload('auditLogEntry', { action: '' }).isValid).toBe(false);
+    expect(validatePayload('auditLogEntry', { action: 'x'.repeat(5001) }).isValid).toBe(false);
+  });
+
+  test('validates client log payload size, level, and metadata boundaries', () => {
+    const valid = validatePayload('clientLogEntry', {
+      level: 'ERROR',
+      message: 'Request failed',
+      category: 'CLIENT_ERROR',
+      stackTrace: 'Error: request failed',
+      metadata: { requestId: 'req-1' },
+    });
+    expect(valid.isValid).toBe(true);
+    expect(valid.sanitizedData.message).toBe('Request failed');
+
+    expect(validatePayload('clientLogEntry', { level: 'TRACE', message: 'Invalid level' }).isValid).toBe(false);
+    expect(validatePayload('clientLogEntry', { message: 'x'.repeat(CLIENT_LOG_LIMITS.MESSAGE_LENGTH + 1) }).isValid).toBe(false);
+    expect(validatePayload('clientLogEntry', { message: 'x', stackTrace: 's'.repeat(CLIENT_LOG_LIMITS.STACK_TRACE_LENGTH + 1) }).isValid).toBe(false);
+    expect(validatePayload('clientLogEntry', { message: 'x', metadata: [] }).errors.metadata).toMatch(/JSON object/);
+
+    const tooManyMetadataFields = Object.fromEntries(
+      Array.from({ length: CLIENT_LOG_LIMITS.METADATA_KEYS + 1 }, (_item, index) => [`field${index}`, index])
+    );
+    expect(validatePayload('clientLogEntry', { message: 'x', metadata: tooManyMetadataFields }).errors.metadata).toMatch(/no more than/);
+  });
+
+  test('validates enterprise inquiry create, list, update, and path inputs at the API boundary', () => {
+    const inquiry = validatePayload(VALIDATION_SCHEMAS.createEnterpriseInquiry, {
+      companyName: '  Demo Company  ',
+      email: 'buyer@example.test',
+      mobile: '+919876543210',
+      notes: '  Follow up  ',
+      buyerAccountId: 'untrusted-client-link',
+    });
+    expect(inquiry.isValid).toBe(true);
+    expect(inquiry.sanitizedData.companyName).toBe('Demo Company');
+    expect(inquiry.sanitizedData.notes).toBe('Follow up');
 
     const invalidInquiry = validatePayload(VALIDATION_SCHEMAS.createEnterpriseInquiry, {
-      companyName: 'X', email: 'invalid', mobile: '123', notes: 'n'.repeat(2001),
+      companyName: 'X', email: 'bad-email', mobile: '123', notes: 'n'.repeat(2001),
     });
     expect(invalidInquiry.isValid).toBe(false);
-    expect(Object.keys(invalidInquiry.errors)).toEqual(expect.arrayContaining(['companyName', 'email', 'mobile', 'notes']));
+    expect(invalidInquiry.errors.companyName).toBeDefined();
+    expect(invalidInquiry.errors.email).toBeDefined();
+    expect(invalidInquiry.errors.mobile).toBeDefined();
+    expect(invalidInquiry.errors.notes).toBeDefined();
 
+    expect(validatePayload(VALIDATION_SCHEMAS.listEnterpriseInquiries, { limit: '500' }).isValid).toBe(true);
+    expect(validatePayload(VALIDATION_SCHEMAS.listEnterpriseInquiries, { limit: '1.5' }).isValid).toBe(false);
     expect(validatePayload(VALIDATION_SCHEMAS.enterpriseInquiryId, { id: 'ent-inq-1' }).isValid).toBe(true);
     expect(validatePayload(VALIDATION_SCHEMAS.enterpriseInquiryId, { id: '' }).isValid).toBe(false);
     expect(validatePayload(VALIDATION_SCHEMAS.enterpriseInquiryIdempotencyKey, {
@@ -32,10 +175,18 @@ describe('Backend Validation Schemas Unit Tests', () => {
     expect(validatePayload(VALIDATION_SCHEMAS.enterpriseInquiryIdempotencyKey, {
       idempotencyKey: 'bad-key',
     }).isValid).toBe(false);
-    expect(validatePayload(VALIDATION_SCHEMAS.listEnterpriseInquiries, { limit: '500' }).isValid).toBe(true);
-    expect(validatePayload(VALIDATION_SCHEMAS.listEnterpriseInquiries, { limit: '1.5' }).isValid).toBe(false);
     expect(validatePayload(VALIDATION_SCHEMAS.updateEnterpriseInquiry, { status: 'CLOSED' }).isValid).toBe(true);
     expect(validatePayload(VALIDATION_SCHEMAS.updateEnterpriseInquiry, { status: 'INVALID' }).isValid).toBe(false);
+
+    const credit = validatePayload(VALIDATION_SCHEMAS.addBuyerCredit, {
+      amount: '5', reason: '  Manual allocation  ', source: '  Admin console  ',
+    });
+    expect(credit.isValid).toBe(true);
+    expect(credit.sanitizedData.amount).toBe(5);
+    expect(credit.sanitizedData.reason).toBe('Manual allocation');
+    expect(validatePayload(VALIDATION_SCHEMAS.addBuyerCredit, { amount: 1.5 }).isValid).toBe(false);
+    expect(validatePayload(VALIDATION_SCHEMAS.addBuyerCredit, { amount: 0 }).isValid).toBe(false);
+    expect(validatePayload(VALIDATION_SCHEMAS.addBuyerCredit, { amount: 5, source: 'x'.repeat(101) }).isValid).toBe(false);
   });
 
   describe('login schema mobile number', () => {

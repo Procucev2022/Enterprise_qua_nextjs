@@ -29,6 +29,8 @@ jobs:
       tests: ${{ steps.tests.outcome }}
       coverage: ${{ steps.coverage.outcome }}
       migrations: ${{ steps.migrations.outcome }}
+      schema_parity: ${{ steps.schema-parity.outcome }}
+      schema_parity_tests: ${{ steps.schema-parity-tests.outcome }}
     services:
       postgres:
         image: postgres:16
@@ -58,6 +60,16 @@ jobs:
       - name: Install Dependencies
         id: install
         run: npm ci --prefix backend --legacy-peer-deps
+
+      - name: Verify PostgreSQL / D1 Schema Parity
+        id: schema-parity
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/check-db-schema-parity.cjs
+
+      - name: Test Schema Parity Checker
+        id: schema-parity-tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node --test scripts/check-db-schema-parity.test.cjs
 
       - name: Run Backend Unit Tests & 90% Per-File Coverage Gate
         id: tests
@@ -162,6 +174,8 @@ jobs:
       CI_TYPECHECK_STATUS: ${{ needs.frontend-gate.outputs.typecheck }}
       CI_LINT_STATUS: ${{ needs.frontend-gate.outputs.lint }}
       CI_MIGRATIONS_STATUS: ${{ needs.backend-gate.outputs.migrations }}
+      CI_SCHEMA_PARITY_STATUS: ${{ needs.backend-gate.outputs.schema_parity }}
+      CI_SCHEMA_PARITY_TESTS_STATUS: ${{ needs.backend-gate.outputs.schema_parity_tests }}
 
     steps:
       - name: Checkout Repository

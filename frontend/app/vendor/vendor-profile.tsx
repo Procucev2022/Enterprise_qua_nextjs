@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { findMajorForMinor, getMinorCategories, getDefaultCategoryTaxonomy } from '@/lib/categoryTaxonomy';
@@ -152,7 +152,7 @@ export default function VendorProfilePage() {
   // Groups a flat list of minor category names (as persisted by the backend)
   // back into the major->minor shape this screen's selector state uses.
   // Preserves unknown or custom categories under the custom categories group.
-  const groupMinorCategories = (flat: string[]) => {
+  const groupMinorCategories = useCallback((flat: string[]) => {
     const majors: string[] = [];
     const minorMap: Record<string, string[]> = {};
     flat.forEach((minorName) => {
@@ -168,7 +168,7 @@ export default function VendorProfilePage() {
       }
     });
     return { majors, minorMap };
-  };
+  }, [CUSTOM_CATEGORY_GROUP]);
 
   useEffect(() => {
     let cancelled = false;
@@ -230,7 +230,7 @@ export default function VendorProfilePage() {
     return () => {
       cancelled = true;
     };
-  }, [currentUserSession?.email]);
+  }, [currentUserSession?.email, groupMinorCategories]);
 
   // Calculate totals
   const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);

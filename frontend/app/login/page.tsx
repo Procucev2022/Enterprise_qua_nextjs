@@ -124,7 +124,7 @@ function LoginPageContent() {
     if (initialEmail && !loginEmail) {
       setLoginEmail(initialEmail);
     }
-  }, [initialEmail]);
+  }, [initialEmail, loginEmail]);
 
   const [loginMobile, setLoginMobile] = useState('');
   const [loginPassword, setLoginPassword] = useState('');

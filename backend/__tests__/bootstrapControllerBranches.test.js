@@ -29,7 +29,8 @@ describe('bootstrapController 100% Branch Coverage', () => {
       organizationId: 'org-full-1',
     };
     jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue(buyerAccount);
-    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [] });
+    const evaluation = { id: 'eval-buyer-view', email: 'vendor@company.test' };
+    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [], evaluations: [evaluation] });
 
     const req = {
       user: {
@@ -47,6 +48,7 @@ describe('bootstrapController 100% Branch Coverage', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.data.success).toBe(true);
+    expect(res.data.data.evaluations).toEqual([evaluation]);
     expect(getBootSpy).toHaveBeenCalledWith(
       ['acc-full-1', 'buyer@full.com', 'org-full-1', 'sub-1', 'user-id-1', 'buyer@full.com', 'org-full-1'],
       'buyer@full.com'
@@ -88,7 +90,12 @@ describe('bootstrapController 100% Branch Coverage', () => {
 
   test('non-buyer user with query buyerId and refresh = true with persisted source', async () => {
     const hydrateSpy = jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValue(undefined);
-    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [] });
+    const ownEvaluation = { id: 'eval-own', email: 'v@corp.com' };
+    const otherEvaluation = { id: 'eval-other', email: 'other@corp.com' };
+    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
+      rfqs: [],
+      evaluations: [ownEvaluation, otherEvaluation, { id: 'eval-no-email' }],
+    });
     storeService.isHydratedFromDB = true;
 
     const req = {
@@ -101,9 +108,26 @@ describe('bootstrapController 100% Branch Coverage', () => {
     expect(res.statusCode).toBe(200);
     expect(hydrateSpy).toHaveBeenCalled();
     expect(res.data.source).toBe('persisted');
+    expect(res.data.data.evaluations).toEqual([ownEvaluation]);
     expect(getBootSpy).toHaveBeenCalledWith(['query-buyer-1'], 'v@corp.com');
 
     storeService.isHydratedFromDB = false;
+  });
+
+  test('admin bootstrap includes all evaluations while a vendor without email gets none', async () => {
+    const evaluations = [
+      { id: 'eval-1', email: 'vendor-one@corp.test' },
+      { id: 'eval-2', email: 'vendor-two@corp.test' },
+    ];
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ evaluations });
+
+    const adminRes = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'admin' } }, adminRes, jest.fn());
+    expect(adminRes.data.data.evaluations).toEqual(evaluations);
+
+    const vendorRes = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'vendor' } }, vendorRes, jest.fn());
+    expect(vendorRes.data.data.evaluations).toEqual([]);
   });
 
   test('anonymous user without query params with in_memory source', async () => {
@@ -116,6 +140,7 @@ describe('bootstrapController 100% Branch Coverage', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.data.source).toBe('in_memory');
+    expect(res.data.data.evaluations).toEqual([]);
     expect(getBootSpy).toHaveBeenCalledWith(null, undefined);
   });
 

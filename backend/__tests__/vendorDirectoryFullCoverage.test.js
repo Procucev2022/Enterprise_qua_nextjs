@@ -75,7 +75,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
   });
 
   describe('buyerAccountController.js', () => {
-    test('role gating: unauthenticated, forbidden, and allowed roles', () => {
+    test('role gating: unauthenticated, forbidden, and allowed roles', async () => {
       const res1 = mockRes();
       const next1 = jest.fn();
       buyerAccountController.createBuyerAccount({ user: null }, res1, next1);
@@ -85,8 +85,9 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       buyerAccountController.createBuyerAccount({ user: { role: 'vendor' } }, res2, next1);
       expect(res2.status).toHaveBeenCalledWith(403);
 
+      jest.spyOn(storeService, 'addBuyerAccountDurably').mockResolvedValue({ id: 'ba-admin', organizationName: 'Admin Org' });
       const res3 = mockRes();
-      buyerAccountController.createBuyerAccount(
+      await buyerAccountController.createBuyerAccount(
         { user: { role: 'admin' }, body: { organizationName: 'Admin Org', corporateEmail: 'admin@org.com' } },
         res3,
         next1
@@ -97,14 +98,14 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
     test('getBuyerAccounts and getActiveAccount', async () => {
       const res = mockRes();
       const next = jest.fn();
-      buyerAccountController.getBuyerAccounts({}, res, next);
+      await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' } }, res, next);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
       // getBuyerAccounts error
       jest.spyOn(storeService, 'getBuyerAccounts').mockImplementation(() => {
         throw new Error('fail');
       });
-      buyerAccountController.getBuyerAccounts({}, res, next);
+      await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' } }, res, next);
       expect(next).toHaveBeenCalled();
     });
 
@@ -133,7 +134,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(next).toHaveBeenCalled();
     });
 
-    test('createBuyerAccount missing fields, success, and error', () => {
+    test('createBuyerAccount missing fields, success, and error', async () => {
       const res = mockRes();
       const next = jest.fn();
 
@@ -144,17 +145,16 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       );
       expect(res.status).toHaveBeenCalledWith(400);
 
-      buyerAccountController.createBuyerAccount(
+      jest.spyOn(storeService, 'addBuyerAccountDurably').mockResolvedValue({ id: 'ba-created', organizationName: 'Acme Corp' });
+      await buyerAccountController.createBuyerAccount(
         { user: { role: 'admin' }, body: { organizationName: 'Acme Corp', corporateEmail: 'acme@test.com' } },
         res,
         next
       );
       expect(res.status).toHaveBeenCalledWith(201);
 
-      jest.spyOn(storeService, 'addBuyerAccount').mockImplementation(() => {
-        throw new Error('store fail');
-      });
-      buyerAccountController.createBuyerAccount(
+      jest.spyOn(storeService, 'addBuyerAccountDurably').mockRejectedValueOnce(new Error('store fail'));
+      await buyerAccountController.createBuyerAccount(
         { user: { role: 'admin' }, body: { organizationName: 'Acme', corporateEmail: 'a@a.com' } },
         res,
         next
@@ -162,12 +162,13 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(next).toHaveBeenCalled();
     });
 
-    test('updateBuyerAccount not found, success, and error', () => {
+    test('updateBuyerAccount not found, success, and error', async () => {
       const res = mockRes();
       const next = jest.fn();
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
 
-      buyerAccountController.updateBuyerAccount(
-        { user: { role: 'buyer' }, params: { id: 'non-existent' }, body: { organizationName: 'New' } },
+      await buyerAccountController.updateBuyerAccount(
+        { user: { role: 'admin' }, params: { id: 'non-existent' }, body: { organizationName: 'New' } },
         res,
         next
       );
@@ -175,61 +176,70 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       const accounts = storeService.getBuyerAccounts();
       if (accounts.length > 0) {
-        buyerAccountController.updateBuyerAccount(
-          { user: { role: 'buyer' }, params: { id: accounts[0].id }, body: { organizationName: 'Updated Name' } },
+        jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValueOnce(null);
+        await buyerAccountController.updateBuyerAccount(
+          { user: { role: 'admin' }, params: { id: accounts[0].id }, body: { organizationName: 'Missing persisted row' } },
+          res,
+          next
+        );
+        expect(res.status).toHaveBeenCalledWith(404);
+
+        jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ ...accounts[0], organizationName: 'Updated Name' });
+        await buyerAccountController.updateBuyerAccount(
+          { user: { role: 'admin' }, params: { id: accounts[0].id }, body: { organizationName: 'Updated Name' } },
           res,
           next
         );
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
       }
 
-      jest.spyOn(storeService, 'updateBuyerAccount').mockImplementation(() => {
-        throw new Error('err');
-      });
-      buyerAccountController.updateBuyerAccount(
-        { user: { role: 'buyer' }, params: { id: 'ba-1' }, body: {} },
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockRejectedValueOnce(new Error('err'));
+      const errorTarget = storeService.addBuyerAccount({ organizationName: 'Update Error', corporateEmail: 'update-error@test.com' });
+      await buyerAccountController.updateBuyerAccount(
+        { user: { role: 'admin' }, params: { id: errorTarget.id }, body: {} },
         res,
         next
       );
       expect(next).toHaveBeenCalled();
     });
 
-    test('deleteBuyerAccount not found, success, and error', () => {
+    test('deleteBuyerAccount not found, success, and error', async () => {
       const res = mockRes();
       const next = jest.fn();
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
 
-      buyerAccountController.deleteBuyerAccount(
-        { user: { role: 'buyer' }, params: { id: 'non-existent' } },
+      await buyerAccountController.deleteBuyerAccount(
+        { user: { role: 'admin' }, params: { id: 'non-existent' } },
         res,
         next
       );
       expect(res.status).toHaveBeenCalledWith(404);
 
       const created = storeService.addBuyerAccount({ organizationName: 'To Del', corporateEmail: 'todel@test.com' });
-      buyerAccountController.deleteBuyerAccount(
-        { user: { role: 'buyer' }, params: { id: created.id } },
+      await buyerAccountController.deleteBuyerAccount(
+        { user: { role: 'admin' }, params: { id: created.id } },
         res,
         next
       );
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
-      jest.spyOn(storeService, 'deleteBuyerAccount').mockImplementation(() => {
-        throw new Error('err');
-      });
-      buyerAccountController.deleteBuyerAccount(
-        { user: { role: 'buyer' }, params: { id: 'ba-1' } },
+      jest.spyOn(storeService, 'deleteBuyerAccountDurably').mockRejectedValueOnce(new Error('err'));
+      const errorTarget = storeService.addBuyerAccount({ organizationName: 'Delete Error', corporateEmail: 'delete-error@test.com' });
+      await buyerAccountController.deleteBuyerAccount(
+        { user: { role: 'admin' }, params: { id: errorTarget.id } },
         res,
         next
       );
       expect(next).toHaveBeenCalled();
     });
 
-    test('setActiveAccount not found, success, and error', () => {
+    test('setActiveAccount not found, success, and error', async () => {
       const res = mockRes();
       const next = jest.fn();
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
 
-      buyerAccountController.setActiveAccount(
-        { user: { role: 'buyer' }, params: { id: 'non-existent' } },
+      await buyerAccountController.setActiveAccount(
+        { user: { role: 'admin' }, params: { id: 'non-existent' } },
         res,
         next
       );
@@ -237,19 +247,18 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       const accounts = storeService.getBuyerAccounts();
       if (accounts.length > 0) {
-        buyerAccountController.setActiveAccount(
-          { user: { role: 'buyer' }, params: { id: accounts[0].id } },
+        await buyerAccountController.setActiveAccount(
+          { user: { role: 'admin' }, params: { id: accounts[0].id } },
           res,
           next
         );
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
       }
 
-      jest.spyOn(storeService, 'alignActiveBuyerAccount').mockImplementation(() => {
-        throw new Error('err');
-      });
-      buyerAccountController.setActiveAccount(
-        { user: { role: 'buyer' }, params: { id: 'ba-1' } },
+      jest.spyOn(storeService, 'alignActiveBuyerAccountDurably').mockRejectedValueOnce(new Error('err'));
+      const errorTarget = storeService.addBuyerAccount({ organizationName: 'Active Error', corporateEmail: 'active-error@test.com' });
+      await buyerAccountController.setActiveAccount(
+        { user: { role: 'admin' }, params: { id: errorTarget.id } },
         res,
         next
       );
@@ -289,6 +298,11 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       // User without prior account record created on the fly with orgName
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValueOnce(null);
+      jest.spyOn(storeService, 'addBuyerAccountDurably').mockResolvedValueOnce({
+        id: 'ba-new',
+        corporateEmail: 'neworgbuyer@test.com',
+        mobileNumber: '',
+      });
       jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce({ mobile: '9123456780' });
       jest.spyOn(zohoPaymentService, 'createPaymentLink').mockResolvedValueOnce({
         zohoPaymentLinkId: 'zpl-new',
@@ -621,6 +635,8 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       const vBuyerEmail = { id: 'v-b3', buyerEmail: 'buyer-org-123' };
       const vForbidden = { id: 'v-other', buyerId: 'other-buyer-org' };
 
+      jest.spyOn(storeService, 'deleteVendorDurably').mockResolvedValue(true);
+
       jest.spyOn(storeService, 'getVendorById').mockImplementation((id) => {
         if (id === 'v-b1') return vBuyerId;
         if (id === 'v-b2') return vBuyerAccountId;
@@ -696,7 +712,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       // Vendor not found in storeService
       const res404 = mockRes();
-      jest.spyOn(storeService, 'reviseVendorRating').mockReturnValueOnce(null);
+      jest.spyOn(storeService, 'reviseVendorRatingDurably').mockResolvedValueOnce(null);
       await vendorController.reviseRating(
         { user: { role: 'buyer', email: 'buyer@test.com' }, params: { id: 'v1' }, body: { qualityScore: 90, costScore: 90, deliveryScore: 90 } },
         res404,
@@ -706,7 +722,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       // Success
       const resOk = mockRes();
-      jest.spyOn(storeService, 'reviseVendorRating').mockReturnValueOnce({ id: 'v-revised', rating: 4.8 });
+      jest.spyOn(storeService, 'reviseVendorRatingDurably').mockResolvedValueOnce({ id: 'v-revised', rating: 4.8 });
       await vendorController.reviseRating(
         { user: { role: 'buyer', email: 'buyer@test.com' }, params: { id: 'v1' }, body: { qualityScore: 95, costScore: 90, deliveryScore: 92 } },
         resOk,
@@ -715,7 +731,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(resOk.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
       // Exception handling
-      jest.spyOn(storeService, 'reviseVendorRating').mockImplementation(() => {
+      jest.spyOn(storeService, 'reviseVendorRatingDurably').mockImplementation(() => {
         throw new Error('crash');
       });
       await vendorController.reviseRating(
@@ -772,6 +788,9 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         next
       );
       expect(resEmailBuyer.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+      const preview = resEmailBuyer.json.mock.calls[0][0].data;
+      expect(preview).not.toHaveProperty('tempPassword');
+      expect(preview.htmlBody).not.toContain('temporary-pass');
     });
 
     test('assertBulkImportRole branches', async () => {
@@ -1120,14 +1139,9 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       );
       expect(res.status).toHaveBeenCalledWith(201);
 
-      // A duplicate-email add is rejected before addVendor is ever called —
-      // not after. addVendor fires real side effects (an identity-account
-      // write with a fresh temp password, a real onboarding email); a
-      // duplicate that only got caught afterward, by confirmVendorPersisted's
-      // DB check, used to let that fire anyway and silently overwrite the
-      // existing account's real password/phone even though the vendor record
-      // itself was rejected.
-      const addVendorSpy = jest.spyOn(storeService, 'addVendor');
+      // A duplicate email is rejected before the durable create path runs, so
+      // it cannot leave a cache row or start identity/onboarding side effects.
+      const addVendorSpy = jest.spyOn(storeService, 'addVendorDurably');
       await vendorController.createVendor(
         { user: { role: 'vendor', email: 'v@v.com' }, body: { name: 'Vendor 1 Again', majorCategory: 'Mechanical' } },
         res,
@@ -1138,12 +1152,10 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       addVendorSpy.mockRestore();
 
       // Exception handling. A distinct email from the "Success" case above —
-      // createVendor now checks for an existing vendor email before addVendor
+      // createVendor now checks for an existing vendor email before addVendorDurably
       // is ever called, so reusing v@v.com here would short-circuit to a 409
       // and never reach the mocked throw this test is exercising.
-      jest.spyOn(storeService, 'addVendor').mockImplementation(() => {
-        throw new Error('err');
-      });
+      jest.spyOn(storeService, 'addVendorDurably').mockRejectedValue(new Error('err'));
       await vendorController.createVendor(
         { user: { role: 'vendor', email: 'v2@v.com' }, body: { name: 'Vendor 2', majorCategory: 'Mechanical' } },
         res,
@@ -1355,10 +1367,10 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       const encrypted = cryptoService.encrypt('test plaintext');
 
       // decryptData plain object vs token string (encrypted.encoded)
-      const decryptedPlain = rootResolvers.decryptData({ input: encrypted });
+      const decryptedPlain = await rootResolvers.decryptData({ input: encrypted }, mockContext);
       expect(decryptedPlain).toHaveProperty('plaintext', 'test plaintext');
 
-      const decryptedToken = rootResolvers.decryptData({ input: { token: encrypted.encoded } });
+      const decryptedToken = await rootResolvers.decryptData({ input: { token: encrypted.encoded } }, mockContext);
       expect(decryptedToken).toHaveProperty('plaintext', 'test plaintext');
     });
 
@@ -1394,7 +1406,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       // buyerAccounts and buyerAccount resolvers
       if (rootResolvers.buyerAccounts) {
-        const baList = rootResolvers.buyerAccounts({}, mockContext);
+        const baList = await rootResolvers.buyerAccounts({}, mockContext);
         expect(Array.isArray(baList)).toBe(true);
       }
       if (rootResolvers.buyerAccount) {
@@ -1470,8 +1482,8 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(resDisconnected.isConnected).toBe(false);
     });
 
-    test('empanelIngestedVendor minimal and full attributes', () => {
-      const ingestedVendor = storeService.empanelIngestedVendor(
+    test('empanelIngestedVendor minimal and full attributes', async () => {
+      const ingestedVendor = await storeService.empanelIngestedVendor(
         {
           name: 'Ingested Supplier Ltd',
           email: 'ingested@test.com',

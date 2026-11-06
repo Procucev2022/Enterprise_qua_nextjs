@@ -55,7 +55,6 @@ import {
   createInternalTask,
   updateInternalTask,
   deleteInternalTask,
-  getExportTasksUrl,
   fetchInternalAssignees,
   completeInternalTask,
   approveCreditTask,
@@ -926,7 +925,8 @@ export default function InternalTasksDashboard() {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const due = new Date(dueDateStr);
+    const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(dueDateStr);
+    const due = isDateOnly ? new Date(`${dueDateStr}T00:00:00`) : new Date(dueDateStr);
     due.setHours(0, 0, 0, 0);
     const diffTime = due.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -940,13 +940,8 @@ export default function InternalTasksDashboard() {
     }
   };
 
-  const exportUrl = useMemo(() => {
-    return getExportTasksUrl({ search: searchQuery, ...activeFilters });
-  }, [searchQuery, activeFilters]);
-
   const clientCsvExportUri = useMemo(() => {
-    if (!tasks || tasks.length === 0) return '';
-    return 'data:text/csv;charset=utf-8,' + encodeURIComponent(exportTasksToCsv(tasks));
+    return 'data:text/csv;charset=utf-8,' + encodeURIComponent(exportTasksToCsv(tasks || []));
   }, [tasks]);
 
   // Cascading task types based on selected Category
@@ -1198,7 +1193,7 @@ export default function InternalTasksDashboard() {
 
               {/* Export Button */}
               <a
-                href={clientCsvExportUri || exportUrl}
+                href={clientCsvExportUri}
                 download="internal_tasks.csv"
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors"
                 data-testid="toolbar-export-csv-btn"

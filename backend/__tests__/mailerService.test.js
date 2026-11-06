@@ -1087,6 +1087,29 @@ describe('mailerService', () => {
       expect(email.html).toContain('Great on-time delivery record');
     });
 
+    test('buildRatingRevisionEmail escapes user content and prevents subject header injection', () => {
+      const email = mailerService.buildRatingRevisionEmail({
+        to: 'rating@test.com',
+        recipientName: '<img src=x onerror=alert(1)>',
+        buyerCompany: '<svg onload=alert(1)>\r\nBcc: attacker@example.test',
+        previousRating: 3.5,
+        newRating: 4.5,
+        previousScore: 70,
+        newScore: 90,
+        remarks: '<script>alert("bad")</script> & feedback',
+        qualityScore: 95,
+        costScore: 85,
+        deliveryScore: 90,
+      });
+
+      expect(email.html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+      expect(email.html).toContain('&lt;svg onload=alert(1)&gt;');
+      expect(email.html).toContain('&lt;script&gt;alert(&quot;bad&quot;)&lt;/script&gt; &amp; feedback');
+      expect(email.html).not.toContain('<script>');
+      expect(email.subject).not.toMatch(/[\r\n]/);
+      expect(email.subject).toContain('Bcc: attacker@example.test');
+    });
+
     test('sendVendorIngestionEmail and isConfigured work properly', async () => {
       const res = await mailerService.sendVendorIngestionEmail({ to: 'x@test.com' }, 'mapping');
       expect(res.sent).toBe(false);

@@ -150,7 +150,28 @@ async function issueCredentials(user) {
         }),
         'onboarding'
       );
-      if (vendor) storeService.updateVendor(vendor.id, { tempPassword, onboardingEmailStatus: delivery && delivery.sent ? 'sent' : 'failed' });
+      if (vendor) {
+        try {
+          const updatedVendor = await storeService.updateVendorDurably(vendor.id, {
+            onboardingEmailStatus: delivery && delivery.sent ? 'sent' : 'failed',
+          });
+          if (!updatedVendor) {
+            logger.warn('WhatsApp credential email status could not be mirrored to the vendor record', {
+              vendorId: vendor.id,
+              email: user.email,
+              emailSent: Boolean(delivery && delivery.sent),
+            }, LOG_CONTEXT);
+          }
+        } catch (err) {
+          // Email delivery has already completed. Do not report it as failed or
+          // cause a retry that could send the same temporary password again.
+          logger.error('WhatsApp credential email was sent but vendor status persistence failed', {
+            error: err,
+            vendorId: vendor.id,
+            email: user.email,
+          }, LOG_CONTEXT);
+        }
+      }
     } else {
       delivery = await mailerService.sendBuyerCredentialsEmail({
         to: user.email,
@@ -199,8 +220,17 @@ async function setWhatsAppStatus(userId, { registeredViaWhatsApp, verificationSt
 async function setVendorOptOut(vendorId, { optedOut } = {}) {
   const vendor = await storeService.getVendorByIdWithDBFallback(String(vendorId || ''), 'all');
   if (!vendor) return respond(404, { success: false, error: BOT_BRIDGE_MESSAGES.SELLER_NOT_FOUND });
-  storeService.updateVendor(vendor.id, { whatsappOptOut: optedOut === true });
-  return respond(200, { success: true, vendorId: vendor.id, optedOut: optedOut === true });
+  try {
+    const updated = await storeService.updateVendorDurably(vendor.id, { whatsappOptOut: optedOut === true });
+    if (!updated) {
+      logger.warn('WhatsApp vendor opt-out update found no durable vendor record', { vendorId: vendor.id }, LOG_CONTEXT);
+      return respond(404, { success: false, error: BOT_BRIDGE_MESSAGES.SELLER_NOT_FOUND });
+    }
+    return respond(200, { success: true, vendorId: updated.id, optedOut: updated.whatsappOptOut === true });
+  } catch (err) {
+    logger.error('Failed to persist WhatsApp vendor opt-out preference', { error: err, vendorId: vendor.id }, LOG_CONTEXT);
+    return respond(503, { success: false, error: BOT_BRIDGE_MESSAGES.PREFERENCE_SAVE_FAILED });
+  }
 }
 
 /** Send an email (text or html, optionally with base64 attachments). */

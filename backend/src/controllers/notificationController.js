@@ -55,7 +55,7 @@ async function markRead(req, res, next) {
     if (!recipient) {
       return res.status(404).json({ success: false, error: 'Notification not found.' });
     }
-    const updated = storeService.markNotificationRead(req.params.id, recipient.type, recipient.id);
+    const updated = await storeService.markNotificationReadDurably(req.params.id, recipient.type, recipient.id);
     if (!updated) {
       // Another recipient's notification reports as "not found", the same as an
       // id that does not exist, so ids cannot be probed.
@@ -74,7 +74,7 @@ async function markAllRead(req, res, next) {
     if (!recipient) {
       return res.json({ success: true, updated: 0 });
     }
-    const updated = storeService.markAllNotificationsRead(recipient.type, recipient.id);
+    const updated = await storeService.markAllNotificationsReadDurably(recipient.type, recipient.id);
     res.json({ success: true, updated });
   } catch (err) {
     logger.error('Error marking all notifications read', err, 'NOTIFICATION_CONTROLLER');

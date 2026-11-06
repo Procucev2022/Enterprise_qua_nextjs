@@ -807,7 +807,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     let mounted = true;
     const fetchPresence = async () => {
       const identifiers = vendorChannels.flatMap((c) =>
-        [c.vendorEmail, c.vendorId, c.vendorName].filter(Boolean) as string[]
+        [c.vendorEmail, c.vendorId].filter(Boolean) as string[]
       );
       if (identifiers.length === 0) return;
       const res = await getVendorPresence(identifiers);

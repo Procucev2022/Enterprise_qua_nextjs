@@ -27,9 +27,42 @@
 const crypto = require('crypto');
 const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
+const { logger } = require('../services/loggerService');
 
 function hasD1() {
   return Boolean(d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient());
+}
+
+async function runAtomicD1AccountBatch(operation, statements) {
+  const d1 = d1Bridge.getD1Binding();
+  if (!d1) {
+    const error = new Error('Identity account creation requires a Workers D1 binding with atomic batch support.');
+    logger.error('Identity account creation rejected without an atomic D1 binding', {
+      error,
+      operation,
+      statementCount: statements.length,
+    }, 'IDENTITY_D1_ACCOUNT');
+    throw error;
+  }
+
+  const startedAt = Date.now();
+  try {
+    const results = await d1Bridge.batchD1(d1, statements);
+    logger.info('Atomic D1 identity account batch completed', {
+      operation,
+      statementCount: statements.length,
+      durationMs: Date.now() - startedAt,
+    }, 'IDENTITY_D1_ACCOUNT');
+    return results;
+  } catch (err) {
+    logger.error('Atomic D1 identity account batch failed', {
+      error: err,
+      operation,
+      statementCount: statements.length,
+      durationMs: Date.now() - startedAt,
+    }, 'IDENTITY_D1_ACCOUNT');
+    throw err;
+  }
 }
 const {
   IDENTITY_ROLE_MAP,
@@ -204,10 +237,10 @@ async function findUserByEmailAndPhone(email, phone) {
 
   // If not found with submitted phone, check if the user is an auto-registered buyer with placeholder phone
   if (!result || result.length === 0) {
-    const placeholderPhone = normalizePhone('9999999999');
+    const placeholderPhone = normalizePhone(IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER);
     if (normalizedPhone === placeholderPhone) {
       result = await pool.rows(
-        `${USER_SELECT} where lower(u.username) = $1 and (u.phone = $2 or u.phone = '9999999999') order by u.is_active desc, u.created_ts desc limit 1`,
+        `${USER_SELECT} where lower(u.username) = $1 and (u.phone = $2 or u.phone = '${IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER}') order by u.is_active desc, u.created_ts desc limit 1`,
         [String(email).trim().toLowerCase(), placeholderPhone],
         { d1: true }
       );
@@ -357,58 +390,51 @@ async function insertBuyerAccount({
   if (!orgTypeUuid) throw new Error(`Org type "${IDENTITY_MASTER_DATA.BUYER_ORG_TYPE}" not found.`);
   if (!statusUuid) throw new Error(`Status "${IDENTITY_MASTER_DATA.BUYER_STATUS}" not found.`);
 
-  // D1 has no equivalent of withTransaction: its batch() API only runs a
-  // fixed list of statements decided up front, and this logic has to read
-  // (does an org with this name/type already exist?) before deciding what to
-  // write — genuinely interactive, not expressible as one atomic D1 batch.
-  // The D1 path below runs the same steps as plain sequential queries
-  // instead. That is a real, accepted gap versus the pg path's atomicity: two
-  // concurrent registrations under the same new organisation name on D1
-  // could each decide no org exists yet and both insert one, leaving two
-  // organisation rows for the same name rather than one being an inconsistent
-  // half-write — not data corruption, just a duplicate-org race window that
-  // pg's transaction closes and D1's doesn't.
+  // The lookup is advisory; the conditional insert and user creation are
+  // committed as one Workers D1 batch. The SQL guards also close the race
+  // between this read and the batch when another registration is in flight.
   if (hasD1()) {
     const orgLookup = await pool.query(
       'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
       [orgName, orgTypeUuid],
       { d1: true }
     );
-    const organizationReused = orgLookup.rows.length > 0;
-    let orgUuid = organizationReused ? orgLookup.rows[0].uuid : null;
+    const organizationReusedBeforeWrite = orgLookup.rows.length > 0;
+    const statements = [];
+    let organizationInsertIndex = -1;
 
-    if (!orgUuid) {
-      orgUuid = crypto.randomUUID();
-      await pool.query(
-        `insert into organization
-           (uuid, organization_name, contact_name, contact_person, contact_email, email,
-            contact_phone, organization_phonenumber, address1, city, state, zip_code, pincode,
-            country, gstin, pan, org_type_uuid, is_active, created_ts, last_modified_ts)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
-        [
-          orgUuid,
+    if (!organizationReusedBeforeWrite) {
+      const candidateOrganizationUuid = crypto.randomUUID();
+      organizationInsertIndex = statements.length;
+      statements.push({
+        text: `insert into organization
+                 (uuid, organization_name, contact_person, email, organization_phonenumber,
+                  address1, city, state, zip_code, pincode, country, gstin, pan, org_type_uuid,
+                  created_ts, last_modified_ts)
+               select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                      strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                where not exists (select 1 from organization where organization_name = $2 and org_type_uuid = $14)
+                  and not exists (select 1 from "user" where lower(username) = lower($4))
+               returning uuid`,
+        params: [
+          candidateOrganizationUuid,
           orgName,
           displayName,
-          displayName,
           normalizedEmail,
-          normalizedEmail,
-          normalizedPhone,
           normalizedPhone,
           streetAddress,
           addressCity,
           addressState,
-          addressPincode,
           addressPincode,
           addressCountry,
           taxGstin,
           taxPan,
           orgTypeUuid,
         ],
-        { d1: true }
-      );
+      });
     } else if (streetAddress || addressCity || addressState || addressPincode || taxGstin || taxPan) {
-      await pool.query(
-        `update organization
+      statements.push({
+        text: `update organization
             set address1 = case when coalesce($1, '') <> '' then $1 else address1 end,
                 city = case when coalesce($2, '') <> '' then $2 else city end,
                 state = case when coalesce($3, '') <> '' then $3 else state end,
@@ -419,8 +445,9 @@ async function insertBuyerAccount({
                 pan = case when coalesce($8, '') <> '' then $8 else pan end,
                 contact_person = case when coalesce($9, '') <> '' then $9 else contact_person end,
                 last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-          where uuid = $10`,
-        [
+          where uuid = $10
+            and not exists (select 1 from "user" where lower(username) = lower($11))`,
+        params: [
           streetAddress,
           addressCity,
           addressState,
@@ -430,23 +457,30 @@ async function insertBuyerAccount({
           taxGstin,
           taxPan,
           displayName,
-          orgUuid,
+          orgLookup.rows[0].uuid,
+          normalizedEmail,
         ],
-        { d1: true }
-      );
+      });
     }
 
     const userUuid = crypto.randomUUID();
-    await pool.query(
-      `insert into "user"
-         (uuid, username, email, password, full_name, first_name, phone,
-          organization_name, org_uuid, role_uuid,
-          is_active, is_approved, self_client, reset_password,
-          verification_status, created_ts, last_modified_ts)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-               1, 1, 0, $11,
-               $12, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
-      [
+    const userInsertIndex = statements.length;
+    statements.push({
+      text: `insert into "user"
+               (uuid, username, email, password, full_name, first_name, phone,
+                organization_name, org_uuid, role_uuid,
+                is_active, is_approved, self_client, reset_password,
+                verification_status, created_ts, last_modified_ts)
+             select $1, $2, $3, $4, $5, $6, $7, $8,
+                    (select uuid from organization
+                      where organization_name = $8 and org_type_uuid = $12
+                      order by created_ts, uuid limit 1),
+                    $9, 1, 1, 0, $10, $11,
+                    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
+              where exists (select 1 from organization where organization_name = $8 and org_type_uuid = $12)
+                and not exists (select 1 from "user" where lower(username) = lower($2))
+             returning uuid, org_uuid`,
+      params: [
         userUuid,
         normalizedEmail,
         normalizedEmail,
@@ -455,22 +489,36 @@ async function insertBuyerAccount({
         displayName,
         normalizedPhone,
         orgName,
-        orgUuid,
         roleUuid,
         resetPasswordRequired ? 1 : 0,
         verificationStatus,
+        orgTypeUuid,
       ],
-      { d1: true }
-    );
+    });
+
+    const results = await runAtomicD1AccountBatch('insertBuyerAccount', statements);
+    const createdRow = results[userInsertIndex]?.rows?.[0];
+    if (!createdRow) {
+      const concurrentlyCreatedUser =
+        (await findUserByEmail(normalizedEmail)) ||
+        (await findUserByEmailAndPhone(normalizedEmail, normalizedPhone));
+      if (concurrentlyCreatedUser) {
+        return { created: false, reason: 'ALREADY_EXISTS', user: concurrentlyCreatedUser };
+      }
+      throw new Error('Buyer account could not be created because its organization no longer exists. Retry the registration.');
+    }
+
+    const organizationInserted = organizationInsertIndex >= 0 && Boolean(results[organizationInsertIndex]?.rows?.[0]);
+    const organizationReused = organizationReusedBeforeWrite || !organizationInserted;
 
     return {
       created: true,
       user: {
-        id: userUuid,
+        id: createdRow.uuid,
         email: normalizedEmail,
         name: displayName,
         role: 'buyer',
-        orgId: orgUuid,
+        orgId: createdRow.org_uuid,
         orgName,
         mobile: normalizedPhone,
         status: 'ACTIVE',
@@ -650,28 +698,36 @@ async function insertStaffAccount({
   if (!orgTypeUuid) throw new Error(`Org type "${orgTypeName}" not found.`);
   if (!statusUuid) throw new Error(`Status "${statusName}" not found.`);
 
-  // See insertBuyerAccount's comment on the D1/pg split — same reasoning,
-  // same shape, applies identically here.
+  // Keep the organization and staff identity writes in one Worker batch. The
+  // conditional organization insert handles a concurrent registration under
+  // the same organization name without creating a second organization row.
   if (hasD1()) {
     const orgLookup = await pool.query(
       'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
       [orgName, orgTypeUuid],
       { d1: true }
     );
-    const organizationReused = orgLookup.rows.length > 0;
-    let orgUuid = organizationReused ? orgLookup.rows[0].uuid : null;
-
-    if (!orgUuid) {
-      orgUuid = crypto.randomUUID();
-      await pool.query(
-        `insert into organization
-           (uuid, organization_name, email, organization_phonenumber, contact_person,
-            org_type_uuid, client_status_uuid, self_client, source_type, company_id,
-            gmt_name, bfs_name, is_india, upgrade_days, rfq_credits, rfq_used_count,
-            quote_submitted, created_by, created_ts, last_modified_by, last_modified_ts)
-         values ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, true, 0, 0, 0, 0, $12, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $13, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
-        [
-          orgUuid,
+    const placeholderPhone = normalizePhone(IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER);
+    const organizationReusedBeforeWrite = orgLookup.rows.length > 0;
+    const statements = [];
+    let organizationInsertIndex = -1;
+    if (!organizationReusedBeforeWrite) {
+      organizationInsertIndex = statements.length;
+      statements.push({
+        text: `insert into organization
+                 (uuid, organization_name, email, organization_phonenumber, contact_person,
+                  org_type_uuid, client_status_uuid, self_client, source_type, company_id,
+                  gmt_name, bfs_name, is_india, upgrade_days, rfq_credits, rfq_used_count,
+                  quote_submitted, created_by, created_ts, last_modified_by, last_modified_ts)
+               select $1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, true, 0, 0, 0, 0,
+                      $12, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $13,
+                      strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                where not exists (select 1 from organization where organization_name = $2 and org_type_uuid = $6)
+                  and not exists (select 1 from "user" where lower(username) = lower($3)
+                    and (phone = $4 or ($4 = '${placeholderPhone}' and phone = '${IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER}')))
+               returning uuid`,
+        params: [
+          crypto.randomUUID(),
           orgName,
           normalizedEmail,
           normalizedPhone,
@@ -685,23 +741,31 @@ async function insertStaffAccount({
           createdBy,
           createdBy,
         ],
-        { d1: true }
-      );
+      });
     }
 
     const userUuid = crypto.randomUUID();
-    await pool.query(
-      `insert into "user"
-         (uuid, username, email, password, full_name, first_name, phone,
-          org_uuid, role_uuid, client_status_uuid, unique_id,
-          is_active, self_client, is_approved, reset_password,
-          is_web_app, is_whats_app, is_bot,
-          source_type, verification_status, created_by, created_ts,
-          last_modified_by, last_modified_ts)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-               true, false, true, false, true, false, false,
-               $12, $13, $14, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $15, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
-      [
+    const userInsertIndex = statements.length;
+    statements.push({
+      text: `insert into "user"
+               (uuid, username, email, password, full_name, first_name, phone,
+                org_uuid, role_uuid, client_status_uuid, unique_id,
+                is_active, self_client, is_approved, reset_password,
+                is_web_app, is_whats_app, is_bot,
+                source_type, verification_status, created_by, created_ts,
+                last_modified_by, last_modified_ts)
+             select $1, $2, $3, $4, $5, $6, $7,
+                    (select uuid from organization
+                      where organization_name = $8 and org_type_uuid = $16
+                      order by created_ts, uuid limit 1),
+                    $9, $10, $11, true, false, true, false, true, false, false,
+                    $12, $13, $14, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $15,
+                    strftime('%Y-%m-%dT%H:%M:%fZ','now')
+              where exists (select 1 from organization where organization_name = $8 and org_type_uuid = $16)
+                and not exists (select 1 from "user" where lower(username) = lower($2)
+                  and (phone = $7 or ($7 = '${placeholderPhone}' and phone = '${IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER}')))
+             returning uuid, org_uuid`,
+      params: [
         userUuid,
         normalizedEmail,
         normalizedEmail,
@@ -709,7 +773,7 @@ async function insertStaffAccount({
         displayName,
         displayName,
         normalizedPhone,
-        orgUuid,
+        orgName,
         roleUuid,
         statusUuid,
         buildUniqueId(),
@@ -717,18 +781,31 @@ async function insertStaffAccount({
         IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
         createdBy,
         createdBy,
+        orgTypeUuid,
       ],
-      { d1: true }
-    );
+    });
+
+    const results = await runAtomicD1AccountBatch('insertStaffAccount', statements);
+    const createdRow = results[userInsertIndex]?.rows?.[0];
+    if (!createdRow) {
+      const concurrentlyCreatedUser = await findUserByEmailAndPhone(normalizedEmail, normalizedPhone);
+      if (concurrentlyCreatedUser) {
+        return { created: false, reason: 'ALREADY_EXISTS', user: concurrentlyCreatedUser };
+      }
+      throw new Error('Staff account could not be created because its organization no longer exists. Retry the registration.');
+    }
+
+    const organizationInserted = organizationInsertIndex >= 0 && Boolean(results[organizationInsertIndex]?.rows?.[0]);
+    const organizationReused = organizationReusedBeforeWrite || !organizationInserted;
 
     return {
       created: true,
       user: {
-        id: userUuid,
+        id: createdRow.uuid,
         email: normalizedEmail,
         name: displayName,
         role: mapRoleName(roleName),
-        orgId: orgUuid,
+        orgId: createdRow.org_uuid,
         orgName,
         mobile: normalizedPhone,
         status: 'ACTIVE',
@@ -843,33 +920,27 @@ async function insertVendorAccount({
   }
 
   const normalizedEmail = String(email).trim().toLowerCase();
-  const normalizedPhone = phone ? normalizePhone(phone) : '+919999999999'; // Default phone if not provided
+  const normalizedPhone = phone ? normalizePhone(phone) : normalizePhone(IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER);
   const orgName = organizationName || `${normalizedEmail.split('@')[0]} Vendor`;
   const displayName = fullName || normalizedEmail.split('@')[0];
 
   const existing = await findUserByEmail(normalizedEmail);
   if (existing) {
     if (password && resetExisting) {
+      const phoneAssignment = phone ? ', phone = $4' : '';
+      const params = [password, createdBy, String(existing.id)];
+      if (phone) params.push(normalizedPhone);
       await pool.query(
-        'update "user" set password = $1, reset_password = true, last_modified_by = $2, last_modified_ts = now() where uuid = $3',
-        [password, createdBy, String(existing.id)],
+        `update "user" set password = $1, reset_password = true${phoneAssignment},
+           last_modified_by = $2, last_modified_ts = now() where uuid = $3`,
+        params,
         {
           d1: true,
           d1Text:
-            'update "user" set password = $1, reset_password = true, last_modified_by = $2, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where uuid = $3',
+            `update "user" set password = $1, reset_password = true${phoneAssignment},
+               last_modified_by = $2, last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now') where uuid = $3`,
         }
       );
-      if (phone) {
-        await pool.query(
-          'update "user" set phone = $1, last_modified_by = $2, last_modified_ts = now() where uuid = $3',
-          [normalizedPhone, createdBy, existing.id],
-          {
-            d1: true,
-            d1Text:
-              'update "user" set phone = $1, last_modified_by = $2, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where uuid = $3',
-          }
-        );
-      }
     }
     return {
       created: false,
@@ -888,46 +959,50 @@ async function insertVendorAccount({
   if (!orgTypeUuid) throw new Error(`Org type "${IDENTITY_MASTER_DATA.VENDOR_ORG_TYPE}" not found.`);
   if (!statusUuid) throw new Error(`Status "${IDENTITY_MASTER_DATA.VENDOR_STATUS}" not found.`);
 
-  // See insertBuyerAccount's comment on the D1/pg split — same reasoning here.
+  // Create the vendor organization and identity in one Worker batch, with SQL
+  // guards for concurrent duplicate registrations and organization creation.
   if (hasD1()) {
     const orgLookup = await pool.query(
       'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
       [orgName, orgTypeUuid],
       { d1: true }
     );
-    const organizationReused = orgLookup.rows.length > 0;
-    let orgUuid = organizationReused ? orgLookup.rows[0].uuid : null;
-
-    if (!orgUuid) {
-      orgUuid = crypto.randomUUID();
-      await pool.query(
-        `insert into organization
-           (uuid, organization_name, contact_name, contact_email, contact_phone,
-            org_type_uuid, is_active, created_ts, last_modified_ts)
-         values ($1, $2, $3, $4, $5, $6, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
-        [
-          orgUuid,
-          orgName,
-          displayName,
-          normalizedEmail,
-          normalizedPhone,
-          orgTypeUuid,
-        ],
-        { d1: true }
-      );
+    const organizationReusedBeforeWrite = orgLookup.rows.length > 0;
+    const statements = [];
+    let organizationInsertIndex = -1;
+    if (!organizationReusedBeforeWrite) {
+      organizationInsertIndex = statements.length;
+      statements.push({
+        text: `insert into organization
+                 (uuid, organization_name, contact_person, email, organization_phonenumber,
+                  org_type_uuid, created_ts, last_modified_ts)
+               select $1, $2, $3, $4, $5, $6,
+                      strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                where not exists (select 1 from organization where organization_name = $2 and org_type_uuid = $6)
+                  and not exists (select 1 from "user" where lower(username) = lower($4))
+               returning uuid`,
+        params: [crypto.randomUUID(), orgName, displayName, normalizedEmail, normalizedPhone, orgTypeUuid],
+      });
     }
 
     const userUuid = crypto.randomUUID();
-    await pool.query(
-      `insert into "user"
-         (uuid, username, email, password, full_name, first_name, phone,
-          organization_name, org_uuid, role_uuid,
-          is_active, is_approved, self_client, reset_password,
-          verification_status, created_ts, last_modified_ts)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-               1, 1, 0,
-               $11, $12, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
-      [
+    const userInsertIndex = statements.length;
+    statements.push({
+      text: `insert into "user"
+               (uuid, username, email, password, full_name, first_name, phone,
+                org_uuid, role_uuid,
+                is_active, is_approved, self_client, reset_password,
+                verification_status, created_ts, last_modified_ts)
+             select $1, $2, $3, $4, $5, $6, $7,
+                    (select uuid from organization
+                      where organization_name = $8 and org_type_uuid = $12
+                      order by created_ts, uuid limit 1),
+                    $9, 1, 1, 0, $10, $11,
+                    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
+              where exists (select 1 from organization where organization_name = $8 and org_type_uuid = $12)
+                and not exists (select 1 from "user" where lower(username) = lower($2))
+             returning uuid, org_uuid`,
+      params: [
         userUuid,
         normalizedEmail,
         normalizedEmail,
@@ -936,22 +1011,35 @@ async function insertVendorAccount({
         displayName,
         normalizedPhone,
         orgName,
-        orgUuid,
+        orgName,
         roleUuid,
         resetPasswordRequired ? 1 : 0,
         IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
+        orgTypeUuid,
       ],
-      { d1: true }
-    );
+    });
+
+    const results = await runAtomicD1AccountBatch('insertVendorAccount', statements);
+    const createdRow = results[userInsertIndex]?.rows?.[0];
+    if (!createdRow) {
+      const concurrentlyCreatedUser = await findUserByEmail(normalizedEmail);
+      if (concurrentlyCreatedUser) {
+        return { created: false, reason: 'ALREADY_EXISTS', user: concurrentlyCreatedUser };
+      }
+      throw new Error('Vendor account could not be created because its organization no longer exists. Retry the registration.');
+    }
+
+    const organizationInserted = organizationInsertIndex >= 0 && Boolean(results[organizationInsertIndex]?.rows?.[0]);
+    const organizationReused = organizationReusedBeforeWrite || !organizationInserted;
 
     return {
       created: true,
       user: {
-        id: userUuid,
+        id: createdRow.uuid,
         email: normalizedEmail,
         name: displayName,
         role: 'vendor',
-        orgId: orgUuid,
+        orgId: createdRow.org_uuid,
         orgName,
         mobile: normalizedPhone,
         status: 'ACTIVE',

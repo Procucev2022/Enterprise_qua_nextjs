@@ -148,7 +148,7 @@ describe('WhatsApp agent-bot bridge', () => {
         expect((await request(app).get('/api/bot/vendor-plans').set(BOT)).status).toBe(200);
         expect((await request(app).get('/api/bot').set(BOT)).status).toBe(404);
         expect(hydrate).not.toHaveBeenCalled();
-        await request(app).get('/health');
+        await request(app).get('/api/rfqs');
         expect(hydrate).toHaveBeenCalledTimes(1);
       } finally {
         storeService.isHydratedFromDB = wasHydrated;
@@ -164,21 +164,80 @@ describe('WhatsApp agent-bot bridge', () => {
 
     test('each route reaches its bridge function with the request data', async () => {
       const routes = [
-        ['post', '/session', 'createSession', (fn) => expect(fn).toHaveBeenCalledWith({ id: 'u1' })],
-        ['get', '/users?phone=919876543210', 'findUsersByPhone', (fn) => expect(fn).toHaveBeenCalledWith('919876543210')],
-        ['put', '/users/u1/whatsapp', 'setWhatsAppStatus', (fn) => expect(fn).toHaveBeenCalledWith('u1', { id: 'u1' })],
-        ['put', '/vendors/v-1/whatsapp-opt-out', 'setVendorOptOut', (fn) => expect(fn).toHaveBeenCalledWith('v-1', { id: 'u1' })],
-        ['post', '/email', 'sendEmail', (fn) => expect(fn).toHaveBeenCalledWith({ id: 'u1' })],
-        ['get', '/vendor-plans', 'listVendorPlans', (fn) => expect(fn).toHaveBeenCalled()],
+        ['post', '/session', 'createSession', { id: 'u1' }, (fn) => expect(fn).toHaveBeenCalledWith({ id: 'u1' })],
+        ['get', '/users?phone=919876543210', 'findUsersByPhone', null, (fn) => expect(fn).toHaveBeenCalledWith('919876543210')],
+        ['put', '/users/u1/whatsapp', 'setWhatsAppStatus', { registeredViaWhatsApp: true }, (fn) => expect(fn).toHaveBeenCalledWith('u1', { registeredViaWhatsApp: true })],
+        ['put', '/vendors/v-1/whatsapp-opt-out', 'setVendorOptOut', { optedOut: true }, (fn) => expect(fn).toHaveBeenCalledWith('v-1', { optedOut: true })],
+        ['post', '/email', 'sendEmail', { to: 'bot@example.com' }, (fn) => expect(fn).toHaveBeenCalledWith({ to: 'bot@example.com' })],
+        ['get', '/vendor-plans', 'listVendorPlans', null, (fn) => expect(fn).toHaveBeenCalled()],
       ];
-      for (const [method, path, fnName, assertCall] of routes) {
+      for (const [method, path, fnName, body, assertCall] of routes) {
         const spy = jest.spyOn(botBridgeService, fnName).mockResolvedValue({ status: 202, body: { routed: fnName } });
-        const res = await request(app)[method](`/api/bot${path}`).set(BOT).send({ id: 'u1' });
+        const call = request(app)[method](`/api/bot${path}`).set(BOT);
+        const res = body ? await call.send(body) : await call;
         expect(res.status).toBe(202);
         expect(res.body.routed).toBe(fnName);
         assertCall(spy);
         spy.mockRestore();
       }
+    });
+
+    test('accepts email and phone as an alternate session identity', async () => {
+      const sessionSpy = jest.spyOn(botBridgeService, 'createSession').mockResolvedValue({ status: 202, body: { routed: true } });
+      const res = await request(app).post('/api/bot/session').set(BOT).send({
+        email: 'bot-user@example.com',
+        phone: '+919876543210',
+      });
+
+      expect(res.status).toBe(202);
+      expect(sessionSpy).toHaveBeenCalledWith({ email: 'bot-user@example.com', phone: '+919876543210' });
+    });
+
+    test('rejects invalid bridge data before calling its service', async () => {
+      const sessionSpy = jest.spyOn(botBridgeService, 'createSession').mockResolvedValue({ status: 200, body: {} });
+      const phoneSpy = jest.spyOn(botBridgeService, 'findUsersByPhone').mockResolvedValue({ status: 200, body: {} });
+      const emailSpy = jest.spyOn(botBridgeService, 'sendEmail').mockResolvedValue({ status: 200, body: {} });
+      const statusSpy = jest.spyOn(botBridgeService, 'setWhatsAppStatus').mockResolvedValue({ status: 200, body: {} });
+
+      const missingSessionIdentity = await request(app).post('/api/bot/session').set(BOT).send({});
+      const invalidPhone = await request(app).get('/api/bot/users?phone=bad').set(BOT);
+      const invalidRecipients = await request(app).post('/api/bot/email').set(BOT).send({
+        to: 'bad-address',
+        attachments: [{ fileName: 'a.txt', contentType: 'text/plain', fileData: 'not-base64' }],
+      });
+      const invalidStatus = await request(app).put('/api/bot/users/u1/whatsapp').set(BOT).send({
+        registeredViaWhatsApp: 'yes',
+      });
+      const invalidParam = await request(app).put(`/api/bot/users/${'u'.repeat(129)}/whatsapp`).set(BOT).send({
+        registeredViaWhatsApp: true,
+      });
+      const unsupportedField = await request(app).post('/api/bot/session').set(BOT).send({ id: 'u1', password: 'unexpected' });
+      const malformedSession = await request(app).post('/api/bot/session').set(BOT).send({ email: 'bad-email' });
+      const repeatedSessionId = await request(app).post('/api/bot/session').set(BOT).send({ id: ['u1', 'u2'] });
+      const arrayBody = await request(app).post('/api/bot/email').set(BOT).send(['not', 'an', 'object']);
+
+      expect(missingSessionIdentity.status).toBe(400);
+      expect(missingSessionIdentity.body.fieldErrors.id).toBeDefined();
+      expect(invalidPhone.status).toBe(400);
+      expect(invalidPhone.body.fieldErrors.phone).toBeDefined();
+      expect(invalidRecipients.status).toBe(400);
+      expect(invalidRecipients.body.fieldErrors.to).toBeDefined();
+      expect(invalidStatus.status).toBe(400);
+      expect(invalidStatus.body.fieldErrors.registeredViaWhatsApp).toBeDefined();
+      expect(invalidParam.status).toBe(400);
+      expect(invalidParam.body.fieldErrors.id).toBeDefined();
+      expect(unsupportedField.status).toBe(400);
+      expect(unsupportedField.body.fieldErrors.password).toBe(BOT_BRIDGE_MESSAGES.UNSUPPORTED_FIELD);
+      expect(malformedSession.status).toBe(400);
+      expect(malformedSession.body.fieldErrors.email).toBeDefined();
+      expect(repeatedSessionId.status).toBe(400);
+      expect(repeatedSessionId.body.fieldErrors.id).toBe(BOT_BRIDGE_MESSAGES.INVALID_FIELD_TYPE);
+      expect(arrayBody.status).toBe(400);
+      expect(arrayBody.body.fieldErrors.to).toBeDefined();
+      expect(sessionSpy).not.toHaveBeenCalled();
+      expect(phoneSpy).not.toHaveBeenCalled();
+      expect(emailSpy).not.toHaveBeenCalled();
+      expect(statusSpy).not.toHaveBeenCalled();
     });
 
     test('a service failure reaches the global error handler', async () => {
@@ -325,7 +384,7 @@ describe('WhatsApp agent-bot bridge', () => {
       jest.spyOn(botBridgeQueries, 'setTemporaryPassword').mockResolvedValue(true);
       jest.spyOn(botBridgeQueries, 'findVendorIdByEmail').mockResolvedValue('v-1');
       const vendorLookup = jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(VENDOR);
-      const update = jest.spyOn(storeService, 'updateVendor').mockReturnValue({});
+      const update = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: 'v-1', whatsappOptOut: false });
       const build = jest.spyOn(mailerService, 'buildVendorOnboardingEmail');
       const send = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValueOnce({ sent: true }).mockResolvedValueOnce({ sent: false, reason: 'down' });
 
@@ -333,7 +392,7 @@ describe('WhatsApp agent-bot bridge', () => {
       const args = build.mock.calls[0][0];
       expect(args).toMatchObject({ to: 'seller@steel.com', recipientName: 'Bea Buyer', buyerOrganizationName: 'Procucev Enterprise', vendorCode: 'v-1', contactPhone: '+919876543210' });
       expect(send.mock.calls[0][1]).toBe('onboarding');
-      expect(update).toHaveBeenCalledWith('v-1', { tempPassword: args.tempPassword, onboardingEmailStatus: 'sent' });
+      expect(update).toHaveBeenCalledWith('v-1', { onboardingEmailStatus: 'sent' });
 
       vendorLookup.mockResolvedValue(null);
       expect(await botBridgeService.issueCredentials(vendorUser())).toEqual({ issued: true, emailSent: false });
@@ -352,11 +411,31 @@ describe('WhatsApp agent-bot bridge', () => {
 
     test('setVendorOptOut records the flag on the vendor', async () => {
       jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValueOnce(VENDOR).mockResolvedValueOnce(VENDOR).mockResolvedValue(null);
-      const update = jest.spyOn(storeService, 'updateVendor').mockReturnValue({});
+      const update = jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, changes) => ({ id, ...changes }));
       expect((await botBridgeService.setVendorOptOut('v-1', { optedOut: true })).body).toEqual({ success: true, vendorId: 'v-1', optedOut: true });
       expect(update).toHaveBeenCalledWith('v-1', { whatsappOptOut: true });
       expect((await botBridgeService.setVendorOptOut('v-1', { optedOut: 'yes' })).body.optedOut).toBe(false);
       expect((await botBridgeService.setVendorOptOut()).status).toBe(404);
+    });
+
+    test('does not claim an opt-out was saved when the durable vendor update fails', async () => {
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(VENDOR);
+      jest.spyOn(storeService, 'updateVendorDurably').mockRejectedValue(new Error('D1 unavailable'));
+
+      expect(await botBridgeService.setVendorOptOut('v-1', { optedOut: true })).toEqual({
+        status: 503,
+        body: { success: false, error: BOT_BRIDGE_MESSAGES.PREFERENCE_SAVE_FAILED },
+      });
+    });
+
+    test('keeps successful credential delivery successful when its vendor status mirror fails', async () => {
+      jest.spyOn(botBridgeQueries, 'setTemporaryPassword').mockResolvedValue(true);
+      jest.spyOn(botBridgeQueries, 'findVendorIdByEmail').mockResolvedValue('v-1');
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(VENDOR);
+      jest.spyOn(storeService, 'updateVendorDurably').mockRejectedValue(new Error('D1 unavailable'));
+      jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      await expect(botBridgeService.issueCredentials(vendorUser())).resolves.toEqual({ issued: true, emailSent: true });
     });
   });
 

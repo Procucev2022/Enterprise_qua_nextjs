@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import BuyerDossierDrawer from '@/app/category-manager/components/BuyerDossierDrawer';
 import type { BuyerAccount, RFQItem } from '@/lib/types';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/buyerProfileClient', () => ({
   fetchBuyerCreditHistory: jest.fn(),
@@ -358,8 +359,13 @@ describe('BuyerDossierDrawer', () => {
     await waitFor(() => {
       expect(screen.getByText('Error allocating credits')).toBeInTheDocument();
     });
-    const retryCalls = (buyerProfileClient.addBuyerCredit as jest.Mock).mock.calls;
-    expect(retryCalls[1][2]).toBe(retryCalls[0][2]);
+    expect(buyerProfileClient.addBuyerCredit).toHaveBeenLastCalledWith(
+      mockBuyer.id,
+      expect.objectContaining({ amount: 5, reason: 'Category Manager console allocation' }),
+      expect.stringMatching(/^[0-9a-f-]{36}$/i)
+    );
+    const creditCalls = (buyerProfileClient.addBuyerCredit as jest.Mock).mock.calls;
+    expect(creditCalls[1][2]).toBe(creditCalls[0][2]);
   });
 
   test('4. Profile tab renders categories, allows editing, adding custom category, toggling, backdrop click, Escape, and saving', async () => {
@@ -763,8 +769,73 @@ describe('BuyerDossierDrawer', () => {
     // Payments tab
     fireEvent.click(screen.getByRole('button', { name: /Payments/i }));
     await waitFor(() => {
-      expect(screen.getByText('No payment records found.')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.buyerDirectory.dossier.payments.loadFailure)).toBeInTheDocument();
     });
+    const retryButton = screen.getByRole('button', {
+      name: UI_STRINGS.buyerDirectory.dossier.payments.retry,
+    });
+    fireEvent.click(retryButton);
+    await waitFor(() => {
+      expect(buyerProfileClient.fetchBuyerPaymentHistory).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test('explains when durable credit history is missing', async () => {
+    (buyerProfileClient.fetchBuyerCreditHistory as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      historyAvailable: false,
+      summary: {
+        totalCreditsAllocated: 0,
+        totalCreditsConsumed: 0,
+        remainingFreeCredits: 4,
+        purchasedCredits: 0,
+        adjustedCredits: 0,
+        currentEntitlementMode: 'mode_1',
+        currentSubscriptionPlan: 'free_trial',
+      },
+      transactions: [],
+    });
+
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        onSelectRFQ={onSelectRFQMock}
+        buyerRfqs={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Credit$/i }));
+
+    expect(await screen.findByText(UI_STRINGS.buyerDirectory.dossier.credit.historyUnavailable)).toBeInTheDocument();
+  });
+
+  test('shows an empty payment state only after the stored history loads successfully', async () => {
+    (buyerProfileClient.fetchBuyerPaymentHistory as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      summary: {
+        totalAmountPaid: 0,
+        totalSuccessfulPayments: 0,
+        pendingPayments: 0,
+        failedPayments: 0,
+        totalRefundedAmount: 0,
+      },
+      payments: [],
+    });
+
+    render(
+      <BuyerDossierDrawer
+        buyer={mockBuyer}
+        onClose={onCloseMock}
+        onSelectRFQ={onSelectRFQMock}
+        buyerRfqs={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Payments/i }));
+
+    expect(await screen.findByText(UI_STRINGS.buyerDirectory.dossier.payments.noRecords)).toBeInTheDocument();
+    expect(screen.queryByText(UI_STRINGS.buyerDirectory.dossier.payments.loadFailure)).not.toBeInTheDocument();
   });
 
   test('11. Close Dossier button and Escape key trigger onClose callback', () => {
@@ -1362,8 +1433,8 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     await waitFor(() => {
       expect(buyerProfileClient.addBuyerCredit).toHaveBeenCalledTimes(3);
     });
-    const retryCalls = (buyerProfileClient.addBuyerCredit as jest.Mock).mock.calls;
-    expect(retryCalls[2][2]).toBe(retryCalls[1][2]);
+    const creditCalls = (buyerProfileClient.addBuyerCredit as jest.Mock).mock.calls;
+    expect(creditCalls[2][2]).toBe(creditCalls[1][2]);
 
     // Close via backdrop click
     fireEvent.click(addCreditHeaderBtn);

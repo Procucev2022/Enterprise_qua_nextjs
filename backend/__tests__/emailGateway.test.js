@@ -28,7 +28,7 @@ const taxonomyFixture = require('./fixtures/categoryTaxonomy');
 // The gateway reuses the parser and extractor wholesale, so this suite is about
 // the three things only it decides: who is allowed to raise a requisition by
 // email, that a message is never ingested twice, and that an ingested RFQ is
-// parked for review rather than circulated to vendors.
+// stored durably before its per-message idempotency record and buyer notice.
 // ==============================================================================
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -215,8 +215,7 @@ describe('emailGatewayService.processMessage', () => {
       ...overrides,
     });
 
-  // The whole point of holding these: nothing has reviewed an inbound message, so
-  // it must not reach vendors automatically.
+  // A gateway RFQ follows the buyer's active sourcing mode and quote status.
   test('raises the RFQ in Quotes Pending status awaiting quotes', async () => {
     mockExtraction();
     const created = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-1', rfqNumber: 'RFQ-2026-0001', status: 'Quotes Pending' });
@@ -227,12 +226,36 @@ describe('emailGatewayService.processMessage', () => {
     const [payload, account] = created.mock.calls[0];
     expect(payload.status).toBe(EMAIL_GATEWAY_CONFIG.INGESTED_STATUS);
     expect(payload.status).toBe('Quotes Pending');
-    // Buyer's own roster only; widening the pool is a commercial decision.
+    // The sourcing mode is resolved from the buyer plan, with the gateway
+    // default used only for accounts without an active mode.
     expect(payload.sourcingMode).toBe(EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE);
     expect(payload.source).toBe('email_gateway');
+    expect(payload.id).toMatch(/^rfq-email-[a-f0-9]{32}$/);
     expect(payload.sourceEmail).toBe(SENDER);
     expect(account.id).toBe('buyer-acc-101');
     expect(result.rfq.rfqNumber).toBe('RFQ-2026-0001');
+  });
+
+  test('does not record or charge an email RFQ when its durable create fails', async () => {
+    mockExtraction();
+    const persistenceError = Object.assign(new Error('database unavailable'), {
+      statusCode: 503,
+      code: 'PERSISTENCE_UNAVAILABLE',
+    });
+    const createDurably = jest.spyOn(storeService, 'createRFQDurably').mockRejectedValue(persistenceError);
+    const recordProcessed = jest.spyOn(emailGatewayQueries, 'recordProcessed');
+    const consumeCredit = jest.spyOn(storeService, 'consumeRFQCreditIfApplicable');
+
+    await expect(emailGatewayService.processMessage(raw(), config())).rejects.toBe(persistenceError);
+
+    expect(createDurably).toHaveBeenCalledWith(expect.objectContaining({
+      id: expect.stringMatching(/^rfq-email-[a-f0-9]{32}$/),
+      source: 'email_gateway',
+    }), expect.objectContaining({ id: 'buyer-acc-101' }));
+    expect(recordProcessed).not.toHaveBeenCalledWith(expect.objectContaining({
+      status: INGESTION_OUTCOME.RFQ_GROUP_CREATED,
+    }));
+    expect(consumeCredit).not.toHaveBeenCalled();
   });
 
   // Email-ingested RFQs must consume a sourcing credit exactly like a
@@ -451,12 +474,16 @@ describe('emailGatewayService.processMessage', () => {
     expect(sendAckSpy).toHaveBeenCalledWith(expect.objectContaining({ buyerName: 'Jane Doe' }));
 
     // 2. Without contactPerson, but with organizationName
+    const secondMessage = Buffer.from(
+      fixtures.PLAIN_REQUISITION_EML.replace(/Message-ID:.*\r?\n/i, 'Message-ID: <rfq-var-second@procucev.test>\r\n'),
+      'utf8'
+    );
     storeService.getBuyerAccountByEmail.mockReturnValueOnce({
       id: 'b2',
       organizationName: 'Acme Industries',
       corporateEmail: SENDER,
     });
-    await emailGatewayService.processMessage(raw(), config());
+    await emailGatewayService.processMessage(secondMessage, config());
     expect(sendAckSpy).toHaveBeenCalledWith(expect.objectContaining({ buyerName: 'Acme Industries' }));
 
     // 3. When classification accepted is 0 for groups
@@ -921,6 +948,21 @@ describe('emailGatewayQueries', () => {
     await expect(
       emailGatewayQueries.recordProcessed({ messageId: '<a@b.com>', status: 'FAILED' })
     ).resolves.toBe(false);
+  });
+
+  test('does not mark a message processed in memory when its durable ledger write fails', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const messageId = '<ledger-write-failure-retry-check@example.com>';
+    process.env.NODE_ENV = 'production';
+    jest.spyOn(dbPool, 'query').mockRejectedValue(new Error('db down'));
+    jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
+
+    try {
+      await expect(emailGatewayQueries.recordProcessed({ messageId, status: 'INGESTED' })).resolves.toBe(false);
+      await expect(emailGatewayQueries.hasProcessed(messageId)).resolves.toBe(false);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
   });
 
   test('lists recent entries with a bounded limit', async () => {
@@ -2934,6 +2976,7 @@ describe('emailGatewayService.processVendorQuoteMessage complex-RFQ portal redir
 
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(false);
     jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
       unitPrice: 25000,
       totalPrice: 50000,
@@ -3145,6 +3188,7 @@ describe('emailGatewayService.processVendorQuoteMessage branch coverage', () => 
     const issueSpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail').mockResolvedValue({ sent: true });
 
     const message = {
+      messageId: '<issue-query-4@suppliers.com>',
       fromAddress: vendor.email,
       subject: 'Re: RFQ-DIRECT-4',
       bodyText: 'I have a clarification query: the drawing is missing for item 2, please clarify.',
@@ -3154,6 +3198,36 @@ describe('emailGatewayService.processVendorQuoteMessage branch coverage', () => 
     expect(result.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
     expect(result.isIssueOrQuery).toBe(true);
     expect(issueSpy).toHaveBeenCalled();
+    const auditCountAfterFirstProcessing = storeService.getAuditLogs().length;
+
+    await emailGatewayService.processVendorQuoteMessage(message, rfq, vendor);
+    expect(storeService.getRFQById(rfq.id).inquiries[0].messages).toHaveLength(1);
+    expect(storeService.getAuditLogs()).toHaveLength(auditCountAfterFirstProcessing);
+  });
+
+  test('does not acknowledge an issue email when its inquiry cannot be persisted', async () => {
+    const rfq = simpleRfq({ id: 'rfq-direct-issue-write-failure', rfqNumber: 'RFQ-DIRECT-ISSUE-WRITE-FAILURE' });
+    storeService.rfqs = [rfq];
+    const vendor = { id: 'vd-issue-write-failure', name: 'Issue Vendor', email: 'issue-failure@suppliers.com', freeQuotationCredits: 5, quotedRfqIds: [] };
+    storeService.vendors = [vendor];
+
+    jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 0 });
+    const failure = new Error('database unavailable');
+    jest.spyOn(storeService, 'addInquiryToRFQ').mockRejectedValue(failure);
+    const auditSpy = jest.spyOn(storeService, 'addAuditLog');
+    const issueSpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail').mockResolvedValue({ sent: true });
+    const loggerSpy = jest.spyOn(require('../src/services/loggerService').logger, 'error').mockImplementation(() => {});
+
+    await expect(emailGatewayService.processVendorQuoteMessage({
+      messageId: '<issue-query-write-failure@suppliers.com>',
+      fromAddress: vendor.email,
+      subject: 'Re: RFQ-DIRECT-ISSUE-WRITE-FAILURE',
+      bodyText: 'I have a clarification query: the drawing is missing for item 2, please clarify.',
+    }, rfq, vendor)).rejects.toBe(failure);
+
+    expect(issueSpy).not.toHaveBeenCalled();
+    expect(auditSpy).not.toHaveBeenCalled();
+    expect(loggerSpy).toHaveBeenCalledWith('Failed to log vendor inquiry to RFQ', failure, 'EMAIL_GATEWAY');
   });
 
   test('fails validation when no positive unit price can be extracted (QUOTE_VALIDATION_FAILED)', async () => {
@@ -3351,6 +3425,7 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
 
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(false);
   });
 
   afterEach(() => {

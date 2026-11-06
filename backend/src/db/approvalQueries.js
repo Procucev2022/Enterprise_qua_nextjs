@@ -7,6 +7,8 @@
 
 const pool = require('./pool');
 const crypto = require('crypto');
+const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
+const { logger } = require('../services/loggerService');
 
 const memoryApprovals = [
   {
@@ -71,10 +73,58 @@ const memoryApprovals = [
   },
 ];
 
-/**
- * Summary metrics of management approvals.
- */
+function persistenceUnavailable(error, operation) {
+  logger.error('Management approval persistence operation failed', {
+    error,
+    operation,
+  }, 'APPROVAL_PERSISTENCE');
+  const unavailable = new Error('Management approval persistence is temporarily unavailable.');
+  unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+  unavailable.cause = error;
+  return unavailable;
+}
+
+function approvalConflict() {
+  const conflict = new Error('This approval was already decided. Refresh the list before taking another action.');
+  conflict.code = 'APPROVAL_ALREADY_DECIDED';
+  return conflict;
+}
+
+function toSummary(rows) {
+  const summary = { pending: 0, approved: 0, rejected: 0, total: 0 };
+  rows.forEach(({ status, count }) => {
+    const normalizedStatus = String(status || '').toLowerCase();
+    if (Object.hasOwn(summary, normalizedStatus)) {
+      summary[normalizedStatus] = Number(count) || 0;
+    }
+  });
+  summary.total = summary.pending + summary.approved + summary.rejected;
+  return summary;
+}
+
+async function queryApprovals(sql, params = [], options = {}) {
+  return pool.query(sql, params, { d1: true, ...options });
+}
+
+async function findApprovalInDatabase(id) {
+  const sql = 'SELECT * FROM management_approvals WHERE id = $1 OR request_number = $1 LIMIT 1';
+  const result = await queryApprovals(sql, [id]);
+  return result.rows[0] || null;
+}
+
+/** Summary metrics use one aggregate query when durable storage is configured. */
 async function getApprovalSummary() {
+  if (pool.hasStorage()) {
+    try {
+      const result = await queryApprovals(
+        'SELECT status, COUNT(*) AS count FROM management_approvals GROUP BY status'
+      );
+      return toSummary(result.rows);
+    } catch (error) {
+      throw persistenceUnavailable(error, 'get-approval-summary');
+    }
+  }
+
   const pending = memoryApprovals.filter((a) => a.status === 'Pending').length;
   const approved = memoryApprovals.filter((a) => a.status === 'Approved').length;
   const rejected = memoryApprovals.filter((a) => a.status === 'Rejected').length;
@@ -86,6 +136,67 @@ async function getApprovalSummary() {
  * List approvals with module, status, project, and search filtering.
  */
 async function getApprovals({ module = 'all', status = 'all', project = 'all', search = '', limit = 50, offset = 0 } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const safeOffset = Math.max(Number(offset) || 0, 0);
+
+  if (pool.hasStorage()) {
+    try {
+      const filters = [];
+      const params = [];
+      const addFilter = (value, predicate) => {
+        params.push(value);
+        filters.push(predicate(params.length));
+      };
+
+      if (module && module !== 'all') {
+        addFilter(String(module).toLowerCase(), (index) => `LOWER(module) = $${index}`);
+      }
+      if (status && status !== 'all') {
+        addFilter(String(status).toLowerCase(), (index) => `LOWER(status) = $${index}`);
+      }
+      if (project && project !== 'all') {
+        addFilter(`%${String(project).toLowerCase()}%`, (index) => `LOWER(project) LIKE $${index}`);
+      }
+      if (search && String(search).trim()) {
+        const searchValue = `%${String(search).trim().toLowerCase()}%`;
+        addFilter(searchValue, (index) => `(
+          LOWER(request_number) LIKE $${index}
+          OR LOWER(applicant_name) LIKE $${index}
+          OR LOWER(applicant_email) LIKE $${index}
+          OR LOWER(maker_name) LIKE $${index}
+          OR LOWER(project) LIKE $${index}
+          OR LOWER(value_impact) LIKE $${index}
+        )`);
+      }
+
+      const where = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+      const pageParams = [...params, safeLimit, safeOffset];
+      const limitIndex = pageParams.length - 1;
+      const offsetIndex = pageParams.length;
+      const sql = `SELECT *, COUNT(*) OVER() AS total
+        FROM management_approvals ${where}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}`;
+      const result = await queryApprovals(sql, pageParams);
+      if (result.rows.length > 0) {
+        const rows = result.rows.map((row) => {
+          const approval = { ...row };
+          delete approval.total;
+          return approval;
+        });
+        return { rows, total: Number(result.rows[0].total) || 0 };
+      }
+
+      const countResult = await queryApprovals(
+        `SELECT COUNT(*) AS total FROM management_approvals ${where}`,
+        params
+      );
+      return { rows: [], total: Number(countResult.rows[0]?.total) || 0 };
+    } catch (error) {
+      throw persistenceUnavailable(error, 'list-approvals');
+    }
+  }
+
   let filtered = [...memoryApprovals];
 
   if (module && module !== 'all') {
@@ -114,8 +225,6 @@ async function getApprovals({ module = 'all', status = 'all', project = 'all', s
   }
 
   const total = filtered.length;
-  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
-  const safeOffset = Math.max(Number(offset) || 0, 0);
   const rows = filtered.slice(safeOffset, safeOffset + safeLimit);
 
   return { rows, total };
@@ -125,42 +234,117 @@ async function getApprovals({ module = 'all', status = 'all', project = 'all', s
  * Process approval or rejection action.
  */
 async function processApprovalAction(id, { action, remarks = '' }, actor = {}) {
-  const item = memoryApprovals.find((a) => a.id === id || a.request_number === id);
-  if (!item) return null;
-
+  const normalizedAction = String(action || '').toUpperCase().includes('APPROV') ? 'Approved' : 'Rejected';
   const now = new Date().toISOString();
-  const normalizedAction = (action || '').toUpperCase().includes('APPROV') ? 'Approved' : 'Rejected';
+  const eventId = crypto.randomUUID();
+  const actorId = actor.uuid || actor.id || null;
+  const actorName = actor.name || actor.email || 'Management Authority';
+  const actorEmail = actor.email || null;
+  const normalizedRemarks = String(remarks || '');
 
-  item.status = normalizedAction;
-  item.approver_name = actor.name || actor.email || 'Management Authority';
-  item.approver_remarks = remarks;
-  item.updated_at = now;
-
-  // Audit log integration if database pool is available
   if (pool.hasStorage()) {
     try {
-      const logId = `audit_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
-      const sql = `
-        INSERT INTO audit_logs (id, actor_email, action, entity_type, entity_id, description, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-      `;
-      await pool.query(
-        sql,
-        [
-          logId,
-          actor.email || 'admin@procucev.com',
-          `APPROVAL_${normalizedAction.toUpperCase()}`,
-          item.module,
-          item.request_number,
-          `Management ${normalizedAction} request ${item.request_number} (${item.value_impact}). Remarks: ${remarks || 'None'}`,
-          now,
-        ],
-        { d1: true, d1Text: sql }
-      );
-    } catch {
-      // Non-fatal audit log insertion
+      const d1 = getD1Binding() || getD1HttpClient();
+      let updated;
+
+      if (d1) {
+        const statements = [
+          {
+            text: `UPDATE management_approvals
+              SET status = $2, approver_id = $3, approver_name = $4,
+                  approver_email = $5, approver_remarks = $6,
+                  last_action_id = $7, updated_at = $8
+              WHERE (id = $1 OR request_number = $1) AND status = 'Pending'
+              RETURNING *`,
+            params: [id, normalizedAction, actorId, actorName, actorEmail, normalizedRemarks, eventId, now],
+          },
+          {
+            text: `INSERT INTO management_approval_events
+              (id, approval_id, request_number, action, previous_status, new_status,
+               actor_id, actor_name, actor_email, remarks, created_at)
+              SELECT $1, id, request_number, $2, 'Pending', $2, $3, $4, $5, $6, $7
+              FROM management_approvals WHERE last_action_id = $1
+              RETURNING id`,
+            params: [eventId, normalizedAction, actorId, actorName, actorEmail, normalizedRemarks, now],
+          },
+        ];
+        const results = await batchD1(d1, statements);
+        updated = results[0]?.rows?.[0] || null;
+        if (updated && !results[1]?.rows?.[0]) {
+          throw new Error('Approval state changed but its audit event was not written.');
+        }
+      } else {
+        updated = await pool.withTransaction(async (client) => {
+          const currentResult = await client.query(
+            'SELECT * FROM management_approvals WHERE id = $1 OR request_number = $1 FOR UPDATE',
+            [id]
+          );
+          const current = currentResult.rows[0];
+          if (!current) return null;
+          if (current.status !== 'Pending') throw approvalConflict();
+
+          const updateResult = await client.query(
+            `UPDATE management_approvals
+              SET status = $1, approver_id = $2, approver_name = $3,
+                  approver_email = $4, approver_remarks = $5,
+                  last_action_id = $6, updated_at = $7
+              WHERE id = $8 AND status = 'Pending'
+              RETURNING *`,
+            [normalizedAction, actorId, actorName, actorEmail, normalizedRemarks, eventId, now, current.id]
+          );
+          const saved = updateResult.rows[0];
+          if (!saved) throw approvalConflict();
+          await client.query(
+            `INSERT INTO management_approval_events
+              (id, approval_id, request_number, action, previous_status, new_status,
+               actor_id, actor_name, actor_email, remarks, created_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [eventId, saved.id, saved.request_number, normalizedAction, current.status,
+              normalizedAction, actorId, actorName, actorEmail, normalizedRemarks, now]
+          );
+          return saved;
+        });
+      }
+
+      if (!updated) {
+        if (!d1) return null;
+        const current = await findApprovalInDatabase(id);
+        if (!current) return null;
+        throw approvalConflict();
+      }
+
+      pool.queryCache.invalidate('management_approvals');
+      pool.queryCache.invalidate('management_approval_events');
+      logger.audit(`Management approval ${normalizedAction.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
+        approvalId: updated.id,
+        requestNumber: updated.request_number,
+        actorId,
+        remarks: normalizedRemarks,
+        eventId,
+      }, updated.request_number);
+      return updated;
+    } catch (error) {
+      if (error?.code === 'APPROVAL_ALREADY_DECIDED') throw error;
+      throw persistenceUnavailable(error, 'process-approval-action');
     }
   }
+
+  const item = memoryApprovals.find((a) => a.id === id || a.request_number === id);
+  if (!item) return null;
+  if (item.status !== 'Pending') throw approvalConflict();
+
+  item.status = normalizedAction;
+  item.approver_id = actorId;
+  item.approver_name = actorName;
+  item.approver_email = actorEmail;
+  item.approver_remarks = normalizedRemarks;
+  item.updated_at = now;
+  logger.audit(`Management approval ${normalizedAction.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
+    approvalId: item.id,
+    requestNumber: item.request_number,
+    actorId,
+    remarks: normalizedRemarks,
+  }, item.request_number);
 
   return item;
 }

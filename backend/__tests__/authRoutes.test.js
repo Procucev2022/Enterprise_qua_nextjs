@@ -246,23 +246,26 @@ describe('Authentication against the account records (/api/auth)', () => {
       jest
         .spyOn(identityQueries, 'findUserByEmailAndPhone')
         .mockRejectedValue(new Error('ETIMEDOUT'));
-      await expect(authService.loadIdentityUser(EMAIL, MOBILE)).rejects.toThrow(
-        AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE
-      );
+      await expect(authService.loadIdentityUser(EMAIL, MOBILE)).rejects.toMatchObject({
+        message: AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE,
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
     });
 
     test('fails closed when the identity database is not configured', async () => {
       dbPool.pool = null;
-      await expect(authService.loadIdentityUser(EMAIL)).rejects.toThrow(
-        AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED
-      );
+      await expect(authService.loadIdentityUser(EMAIL)).rejects.toMatchObject({
+        message: AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED,
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
     });
 
     test('fails closed when the lookup query throws', async () => {
       jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValue(new Error('ETIMEDOUT'));
-      await expect(authService.loadIdentityUser(EMAIL)).rejects.toThrow(
-        AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE
-      );
+      await expect(authService.loadIdentityUser(EMAIL)).rejects.toMatchObject({
+        message: AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE,
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
     });
   });
 
@@ -516,6 +519,15 @@ describe('Authentication against the account records (/api/auth)', () => {
       await expect(
         authService.requestOtp('ghost@nowhere.test', MOBILE, 'buyer', '::1')
       ).rejects.toThrow(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
+    });
+
+    test('returns a retryable persistence error when the sign-in account lookup fails', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockRejectedValue(new Error('database unavailable'));
+
+      await expect(authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1')).rejects.toMatchObject({
+        message: AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE,
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
     });
 
     test('rejects an OTP request for an account that cannot sign in', async () => {
@@ -1079,7 +1091,7 @@ describe('Authentication against the account records (/api/auth)', () => {
       expect(next).toHaveBeenCalled();
     });
 
-    test('login surfaces an unavailable identity database as 401', async () => {
+    test('login surfaces an unavailable identity database as retryable 503', async () => {
       jest
         .spyOn(identityQueries, 'findUserByEmailAndPhone')
         .mockRejectedValue(new Error('ECONNREFUSED'));
@@ -1088,8 +1100,12 @@ describe('Authentication against the account records (/api/auth)', () => {
         .post('/api/auth/login')
         .send({ email: EMAIL, password: PASSWORD, mobile: MOBILE });
 
-      expect(res.statusCode).toBe(401);
-      expect(res.body.error).toBe(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+      expect(res.statusCode).toBe(503);
+      expect(res.body).toMatchObject({
+        success: false,
+        retryable: true,
+        error: AUTH_MESSAGES.AUTH_STORAGE_UNAVAILABLE,
+      });
     });
   });
 
@@ -1195,6 +1211,39 @@ describe('Authentication against the account records (/api/auth)', () => {
       });
     });
 
+    test('getSession returns retryable service unavailable when revocation storage cannot be read', async () => {
+      jest.spyOn(authService, 'assertSessionActive').mockResolvedValue({
+        valid: false,
+        error: AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE,
+      });
+      const res = mockRes();
+
+      await authController.getSession({ headers: { authorization: 'Bearer a.b.c' } }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        retryable: true,
+        error: AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE,
+      }));
+    });
+
+    test('requestOtp returns retryable service unavailable when configured auth storage fails', async () => {
+      jest.spyOn(authService, 'requestOtp').mockRejectedValue(
+        Object.assign(new Error('D1 unavailable'), { code: 'PERSISTENCE_UNAVAILABLE' })
+      );
+      const res = mockRes();
+
+      await authController.requestOtp({ body: { email: EMAIL, mobile: MOBILE } }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        retryable: true,
+        error: AUTH_MESSAGES.AUTH_STORAGE_UNAVAILABLE,
+      }));
+    });
+
     test('logout falls back to a placeholder identity when no email is supplied', async () => {
       const res = mockRes();
       await authController.logout({ body: {}, headers: {} }, res, jest.fn());
@@ -1281,16 +1330,16 @@ describe('Changing your own password', () => {
       );
     });
 
-    test('clears the stored vendor temporary password after a successful password change', async () => {
+    test('does not issue a redundant vendor profile write after a successful password change', async () => {
       const email = 'first-login-vendor@procucev.com';
       identityQueries.findUserByEmail.mockResolvedValue(
         signedInBuyer({ role: 'vendor', email, id: UUID })
       );
-      const updateVendorSpy = jest.spyOn(storeService, 'updateVendor');
+      const updateVendorSpy = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: 'vendor-1', tempPassword: null });
 
       await call({ email });
 
-      expect(updateVendorSpy).toHaveBeenCalledWith(email, { tempPassword: null });
+      expect(updateVendorSpy).not.toHaveBeenCalled();
     });
 
     test.each([

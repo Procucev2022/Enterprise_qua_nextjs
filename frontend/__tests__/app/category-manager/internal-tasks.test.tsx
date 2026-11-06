@@ -76,9 +76,17 @@ jest.mock('@/lib/authClient', () => ({
   },
 }));
 
-const todayStr = new Date().toISOString().slice(0, 10);
-const futureDate = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
-const pastDate = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+function getLocalDateString(dayOffset = 0) {
+  const date = new Date();
+  date.setDate(date.getDate() + dayOffset);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+const todayStr = getLocalDateString();
+const futureDate = getLocalDateString(5);
+const pastDate = getLocalDateString(-3);
 
 const mockTasks: internalTaskClient.InternalTask[] = [
   {
@@ -1098,7 +1106,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
         title: 'Credit Task',
         priority: 'Medium',
         status: 'In Progress',
-        due_date: new Date().toISOString().slice(0, 10), // test Due Today (diffDays === 0)
+        due_date: todayStr, // test Due Today (diffDays === 0)
         related_entity_type: 'CREDIT',
         notes: 'Important credit notes for audit',
         created_at: '2026-10-25T10:00:00Z',
@@ -1149,6 +1157,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
       expect(screen.getByText('Vendor Task')).toBeInTheDocument();
       expect(screen.getByText('Credit Task')).toBeInTheDocument();
       expect(screen.getAllByText('No Due Date').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Due Today')).toBeInTheDocument();
     });
 
     // Open drawer for Credit task to verify notes and entity label fallback

@@ -330,6 +330,7 @@ export async function fetchBuyerCreditHistory(buyerId: string): Promise<{
   error?: string;
   summary?: BuyerCreditSummary;
   transactions?: BuyerCreditTransaction[];
+  historyAvailable?: boolean;
 }> {
   try {
     const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/credit-history`, {

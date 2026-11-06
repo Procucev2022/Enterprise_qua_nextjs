@@ -31,9 +31,11 @@ import {
   VendorFollowUpRecord,
 } from './types';
 import { authClient } from './authClient';
+import { logger } from './logger';
 import { installApiFetchPatch } from './apiFetchPatch';
 
 installApiFetchPatch();
+
 import {
   createPaymentLink,
   createBuyerPaymentLink as createBuyerPaymentLinkRequest,
@@ -61,6 +63,19 @@ import {
   hasUnlimitedAccess,
   VENDOR_PLAN_RFQ_QUOTA,
 } from './constants';
+
+function logApiResponseFailure(
+  message: string,
+  response: Pick<Response, 'status' | 'statusText'>,
+  category: string,
+  metadata: Record<string, unknown> = {}
+): void {
+  logger.log('ERROR', message, {
+    ...metadata,
+    status: response.status,
+    statusText: response.statusText,
+  }, category);
+}
 
 // Backend write endpoints now require a session token (Phase 4 authorization
 // hardening) — every fetch() that mutates data needs this attached.
@@ -218,7 +233,7 @@ interface AppContextType {
   deleteBuyerVendor: (vendorId: string) => void;
   deleteMultipleBuyerVendors: (vendorIds: string[]) => Promise<void>;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
-  generateVendorOnboardingEmail: (vendor: VendorEntry, isExisting: boolean, tempPassword?: string) => VendorOnboardingEmailPayload;
+  generateVendorOnboardingEmail: (vendor: VendorEntry, isExisting: boolean) => VendorOnboardingEmailPayload;
   selectedOnboardingEmail: VendorOnboardingEmailPayload | null;
   setSelectedOnboardingEmail: (email: VendorOnboardingEmailPayload | null) => void;
   onboardingEmailModalOpen: boolean;
@@ -486,13 +501,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ plan }),
       });
     } catch (e) {
-      console.error('Failed to update vendor subscription:', e);
+      logger.log('ERROR', 'Failed to update vendor subscription', { error: e }, 'VENDOR_SUBSCRIPTION');
       showToast('Subscription Update Failed', 'Could not reach the server. Please try again.', 'warning');
       return false;
     }
 
     const data = await res.json().catch(() => null);
     if (!res.ok || !data?.success) {
+      logApiResponseFailure('Vendor subscription update was rejected', res, 'VENDOR_SUBSCRIPTION', {
+        responseError: data?.error,
+      });
       showToast(
         'Subscription Update Failed',
         data?.error || 'Could not update your subscription. Please try again.',
@@ -652,7 +670,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setVendorUnlockedRfqIds(res.data.unlockedRfqIds || []);
       }
     } catch (err) {
-      console.error('Failed to refresh vendor RFQ credits:', err);
+      logger.log('ERROR', 'Failed to refresh vendor RFQ credits', { error: err }, 'VENDOR_CREDITS');
     }
   };
 
@@ -708,7 +726,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try {
       const result = await fetchRFQList({ limit: 500 });
       if (!result.success) {
-        console.error('Failed to load RFQs:', result.error);
+        logger.log('ERROR', 'Failed to load RFQs', { error: result.error }, 'RFQ_STORE');
         return;
       }
 
@@ -741,6 +759,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try {
       const res = await fetch('/api/bootstrap', { headers: authFetchHeaders() });
       const json = await res.json();
+      if (!res.ok || !json?.success) {
+        logApiResponseFailure('Reference data request failed', res, 'REFERENCE_DATA', {
+          responseError: json?.error,
+        });
+      }
       if (json.success && json.data) {
         const d = json.data;
         const vendorsList = d.vendors || [];
@@ -781,7 +804,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } catch (err) {
-      console.error('Failed to load reference data:', err);
+      logger.log('ERROR', 'Failed to load reference data', { error: err }, 'REFERENCE_DATA');
       setDbConnected(false);
     } finally {
       setIsLoadingDB(false);
@@ -890,7 +913,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       loadedEntitiesRef.current.aiFeed = true;
     } catch (err) {
-      console.error('Failed to load AI feed:', err);
+      logger.log('ERROR', 'Failed to load AI feed', { error: err }, 'AI_FEED');
     }
   };
 
@@ -917,6 +940,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return ensureBootstrapData(force);
   };
 
+  // Keep effect/callback identities stable while always dispatching through
+  // the latest provider render's loaders. Adding these render-created
+  // functions directly to effect dependencies causes hydration to restart on
+  // each state update.
+  const dataLoadersRef = useRef({
+    ensureActiveBuyerAccount,
+    ensureRFQs,
+    ensureAIFeed,
+    ensureVendors,
+    ensureVendorEvaluations,
+    ensureCategoryTaxonomy,
+    refreshVendorCredits,
+    refreshFromDB,
+    refreshActiveBuyerAccount,
+    refreshCategoryTaxonomy,
+    refreshRFQs,
+    refreshAIFeed,
+  });
+  dataLoadersRef.current = {
+    ensureActiveBuyerAccount,
+    ensureRFQs,
+    ensureAIFeed,
+    ensureVendors,
+    ensureVendorEvaluations,
+    ensureCategoryTaxonomy,
+    refreshVendorCredits,
+    refreshFromDB,
+    refreshActiveBuyerAccount,
+    refreshCategoryTaxonomy,
+    refreshRFQs,
+    refreshAIFeed,
+  };
+
   /**
    * Route-based lazy data fetcher.
    * On page load or route transition, only fetches endpoints required by the active view.
@@ -924,6 +980,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
    */
   const ensureRouteData = useCallback(async (pathname?: string, currentRoleOverride?: UserRole) => {
     if (!authClient.getToken()) return;
+    const loaders = dataLoadersRef.current;
 
     const r = currentRoleOverride || currentRole || 'buyer';
     const path = pathname || (typeof window !== 'undefined' ? window.location.pathname : '');
@@ -931,48 +988,48 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const tasks: Promise<any>[] = [];
 
     if (r === 'buyer') {
-      tasks.push(ensureActiveBuyerAccount());
+      tasks.push(loaders.ensureActiveBuyerAccount());
 
       if (path === '/buyer' || path === '/buyer/dashboard' || path.startsWith('/buyer/command-center')) {
-        tasks.push(ensureRFQs());
-        tasks.push(ensureAIFeed());
+        tasks.push(loaders.ensureRFQs());
+        tasks.push(loaders.ensureAIFeed());
       } else if (path.startsWith('/buyer/rfq-summary') || path.startsWith('/buyer/rfqs') || path.startsWith('/buyer/rfq-details')) {
-        tasks.push(ensureRFQs());
+        tasks.push(loaders.ensureRFQs());
       } else if (path.startsWith('/buyer/quote-matrix')) {
-        tasks.push(ensureRFQs());
-        tasks.push(ensureVendors());
+        tasks.push(loaders.ensureRFQs());
+        tasks.push(loaders.ensureVendors());
       } else if (path.startsWith('/buyer/vendor-summary')) {
-        tasks.push(ensureVendors());
-        tasks.push(ensureVendorEvaluations());
+        tasks.push(loaders.ensureVendors());
+        tasks.push(loaders.ensureVendorEvaluations());
       } else if (path.startsWith('/buyer/vendor-evaluation-summary')) {
-        tasks.push(ensureVendorEvaluations());
-        tasks.push(ensureVendors());
+        tasks.push(loaders.ensureVendorEvaluations());
+        tasks.push(loaders.ensureVendors());
       } else if (path.startsWith('/buyer/profile')) {
-        tasks.push(ensureCategoryTaxonomy());
+        tasks.push(loaders.ensureCategoryTaxonomy());
       } else if (path.startsWith('/buyer/ingestion-wizard')) {
-        tasks.push(ensureRFQs());
-        tasks.push(ensureCategoryTaxonomy());
-        tasks.push(ensureVendors());
+        tasks.push(loaders.ensureRFQs());
+        tasks.push(loaders.ensureCategoryTaxonomy());
+        tasks.push(loaders.ensureVendors());
       } else if (path.startsWith('/buyer/buyer-directory')) {
-        tasks.push(ensureVendors());
+        tasks.push(loaders.ensureVendors());
       } else if (path.startsWith('/buyer/subscription-center') || path.startsWith('/buyer/billing-history')) {
         // Essential activeBuyerAccount already queued
       } else {
-        tasks.push(ensureRFQs());
+        tasks.push(loaders.ensureRFQs());
       }
     } else if (r === 'vendor') {
-      tasks.push(refreshVendorCredits());
-      tasks.push(ensureRFQs());
-      tasks.push(ensureVendors());
+      tasks.push(loaders.refreshVendorCredits());
+      tasks.push(loaders.ensureRFQs());
+      tasks.push(loaders.ensureVendors());
     } else if (r === 'category_manager' || r === 'admin') {
-      tasks.push(ensureRFQs());
-      tasks.push(ensureVendors());
-      tasks.push(ensureVendorEvaluations());
-      tasks.push(ensureCategoryTaxonomy());
-      tasks.push(refreshFromDB());
+      tasks.push(loaders.ensureRFQs());
+      tasks.push(loaders.ensureVendors());
+      tasks.push(loaders.ensureVendorEvaluations());
+      tasks.push(loaders.ensureCategoryTaxonomy());
+      tasks.push(loaders.refreshFromDB());
     } else {
-      tasks.push(ensureRFQs());
-      tasks.push(refreshFromDB());
+      tasks.push(loaders.ensureRFQs());
+      tasks.push(loaders.refreshFromDB());
     }
 
     await Promise.allSettled(tasks);
@@ -981,9 +1038,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     // In unit test environment without browser routing shell, hydrate test fixtures:
     if (process.env.NODE_ENV === 'test') {
-      void refreshFromDB();
-      void refreshActiveBuyerAccount();
-      void refreshCategoryTaxonomy();
+      void dataLoadersRef.current.refreshFromDB();
+      void dataLoadersRef.current.refreshActiveBuyerAccount();
+      void dataLoadersRef.current.refreshCategoryTaxonomy();
     }
   }, []);
 
@@ -991,6 +1048,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Sync state when session identity changes.
   useEffect(() => {
+    const loaders = dataLoadersRef.current;
     if (!isLoggedIn) {
       setRfqs([]);
       setVendorOpportunities([]);
@@ -1010,27 +1068,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!lastUserSessionIdRef.current || lastUserSessionIdRef.current !== currentUserSession?.id) {
       clearSessionCache();
       loadedEntitiesRef.current = {};
-      void refreshFromDB();
+      void loaders.refreshFromDB();
     }
     lastUserSessionIdRef.current = currentUserSession?.id || null;
 
-    void ensureActiveBuyerAccount(true);
+    void loaders.ensureActiveBuyerAccount(true);
 
     if (currentRole === 'vendor') {
-      void refreshVendorCredits();
+      void loaders.refreshVendorCredits();
     }
     if (currentRole === 'category_manager' || currentRole === 'admin') {
-      void ensureRFQs();
-      void ensureVendors();
+      void loaders.ensureRFQs();
+      void loaders.ensureVendors();
     }
 
     if (process.env.NODE_ENV === 'test') {
-      void refreshRFQs();
-      void refreshVendorCredits();
-      void refreshAIFeed();
+      void loaders.refreshRFQs();
+      void loaders.refreshVendorCredits();
+      void loaders.refreshAIFeed();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed strictly on identity,
-    // avoiding duplicate cascading re-renders when activeBuyerAccount resolves.
   }, [isLoggedIn, currentUserSession?.id, currentRole]);
 
   useEffect(() => {
@@ -1073,7 +1129,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       method: 'POST',
       headers: authFetchHeaders(),
       body: JSON.stringify(newAcc),
-    }).catch((e) => console.error('Failed to save buyer account to DB:', e));
+    }).then((res) => {
+      if (!res.ok) logApiResponseFailure('Buyer account creation request failed', res, 'BUYER_ACCOUNT');
+    }).catch((e) => logger.log('ERROR', 'Failed to save buyer account to backend', { error: e }, 'BUYER_ACCOUNT'));
 
     addAuditLog(`Created buyer account for ${newAcc.organizationName} (${newAcc.corporateEmail}) with source ${newAcc.accountSource}`);
     showToast('Buyer Account Created', `${newAcc.organizationName} registered and added to buyer master database.`, 'success');
@@ -1099,6 +1157,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .then(async (res) => {
         const json = await res.json().catch(() => null);
         if (!res.ok || !json?.success) {
+          logApiResponseFailure('Buyer account update request failed', res, 'BUYER_ACCOUNT', {
+            accountId: id,
+            responseError: json?.error,
+          });
           showToast(
             'Update Failed',
             json?.error || 'Could not save buyer account changes. Please try again.',
@@ -1114,7 +1176,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addAuditLog(`Updated account specifications for buyer ID ${id}`);
         showToast('Account Updated', 'Buyer account details successfully saved.', 'info');
       })
-      .catch(() => {
+      .catch((error) => {
+        logger.log('ERROR', 'Buyer account update request could not reach the backend', {
+          error,
+          accountId: id,
+        }, 'BUYER_ACCOUNT');
         showToast('Update Failed', 'Could not reach the server. Please try again.', 'warning');
       });
   };
@@ -1155,7 +1221,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         method: 'POST',
         headers: authFetchHeaders(),
         body: JSON.stringify(acc),
-      }).catch((e) => console.error('Failed to sync buyer account to DB:', e));
+      }).then((res) => {
+        if (!res.ok) {
+          logApiResponseFailure('Imported buyer account creation request failed', res, 'BUYER_ACCOUNT', {
+            accountId: acc.id,
+          });
+        }
+      }).catch((e) => logger.log('ERROR', 'Failed to sync buyer account to backend', { error: e }, 'BUYER_ACCOUNT'));
     });
 
     addAuditLog(`Synced and imported ${created.length} legacy buyer accounts from Public System Database.`);
@@ -1187,13 +1259,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        console.error('Failed to save evaluation to DB:', data?.error || res.statusText);
+        logger.log('ERROR', 'Failed to save evaluation to backend', {
+          responseError: data?.error || res.statusText,
+          status: res.status,
+        }, 'EVALUATION');
         return false;
       }
       setVendorEvaluations((prev) => [record, ...prev.filter((r) => r.id !== record.id)]);
       return true;
     } catch (e) {
-      console.error('Failed to save evaluation to DB:', e);
+      logger.log('ERROR', 'Failed to save evaluation to backend', { error: e }, 'EVALUATION');
       return false;
     }
   };
@@ -1212,24 +1287,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  // Helper to generate a realistic first-time temporary password
-  const generateTempPassword = (name?: string): string => {
-    const clean = (name || 'Vendor').replace(/[^a-zA-Z]/g, '').slice(0, 5) || 'Vendor';
-    const rand = Math.floor(1000 + Math.random() * 9000);
-    return `${clean}@Procucev${rand}#`;
-  };
-
   // Vendor Onboarding Email Generator Engine
   // Vendor Onboarding Email Generator Engine with Highlighted Assigned Categories & Unmapped Fallback
   const generateVendorOnboardingEmail = (
     vendor: VendorEntry,
-    isExisting: boolean,
-    tempPassword?: string
+    isExisting: boolean
   ): VendorOnboardingEmailPayload => {
     const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
     const buyerContact = activeBuyerAccount?.contactPerson || 'Rajesh Sharma (CPO)';
     const buyerEmail = activeBuyerAccount?.corporateEmail || 'client@procucev.com';
-    const passwordToUse = tempPassword || vendor.tempPassword || generateTempPassword(vendor.name);
     const emailId = `EML-ONBOARD-${Date.now().toString().slice(-6)}-${vendor.id}`;
     const nextDate = vendor.nextReminderDate || new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10) + ' (Day 3)';
 
@@ -1252,18 +1318,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     if (!hasMappedCategories) {
       subject = `[Action Required] Set Up Categories: ${buyerCompany} added you to their Preferred Vendor Network`;
-      authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network from their vendor master records. Because no past pre-purchase orders were found in their historical dump, the buyer did not map any product categories for your company. Please log in with your Email ID as User Name and the First-Time Temporary Password provided below. For all subsequent logins, authentication is performed via a 4-digit OTP sent directly to your registered email inbox.`;
+      authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network from their vendor master records. Because no past pre-purchase orders were found in their historical dump, the buyer did not map any product categories for your company. Sign in with your registered email and follow the verification steps shown on the portal.`;
       profileUpdateInstructions = `Please log in to complete your enterprise compliance profile (factory specs, GSTIN/PAN, plant location, capacity).`;
       categoryUpdateInstructions = `ATTENTION: The buyer didn't map any categories for you because no historical PO items were found in their purchase dump. Please log in and map your categories yourself across our 13 Major Categories and 280+ Minor Category taxonomy in order to receive enquiries and RFQ opportunities.`;
       unmappedSelfServiceMessage = `The buyer didn't map any categories for you, so please map yourself in order to receive enquiries.`;
     } else if (isExisting) {
       subject = `[Network Association] ${buyerCompany} has added you to their Preferred Vendor Network on Procucev`;
-      authInstructions = `A buyer from ${buyerCompany} has associated your verified enterprise profile into their private preferred supplier network. You can sign in using your existing credentials, or use the temporary first-time password (${passwordToUse}), or sign in directly with your registered Email ID and Instant Email OTP.`;
+      authInstructions = `A buyer from ${buyerCompany} has associated your verified enterprise profile into their private preferred supplier network. Sign in using your existing credentials or follow the account verification and password recovery steps on the portal.`;
       profileUpdateInstructions = `Please log in to review the buyer association and verify that your plant locations, operational capabilities, and statutory certifications are up to date.`;
       categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their past purchase records and mapped your company to the following taxonomy:\n• 1st Set (Primary Major Category): ${assignedMajor}\n• 2nd Set (Minor Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease log in to review, confirm, or expand your category specializations across our 280+ standard minor categories.`;
     } else {
       subject = `[Action Required] Welcome to Procucev: ${buyerCompany} has added you to their Preferred Vendor Network`;
-      authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network based on their past pre-purchase orders. Please log in with your Email ID as User Name and the First-Time Temporary Password provided below. For all subsequent logins, authentication is performed via a 4-digit OTP sent directly to your registered email inbox.`;
+      authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network based on their past pre-purchase orders. Sign in with your registered email and follow the verification steps shown on the portal.`;
       profileUpdateInstructions = `Please log in and complete your enterprise profile, including plant location, turnover, machinery, and statutory tax credentials (GSTIN / PAN).`;
       categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their purchase history and assigned your company to:\n• 1st Set (Primary Major Category): ${assignedMajor}\n• 2nd Set (Minor Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease confirm these categories upon login so you receive incoming RFQ invitations matching your product lines.`;
     }
@@ -1283,7 +1349,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       unmappedSelfServiceMessage,
       subject,
       username: vendor.email,
-      tempPassword: passwordToUse,
       authInstructions,
       profileUpdateInstructions,
       categoryUpdateInstructions,
@@ -1355,7 +1420,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }),
       });
     } catch (e: any) {
-      console.error('Failed to ingest historical purchase data:', e);
+      logger.log('ERROR', 'Failed to ingest historical purchase data', { error: e }, 'HISTORICAL_INGESTION');
       const errText = e?.message || 'Could not reach the server. Please check your network connection and server status.';
       _lastHistoricalDataError = errText;
       setLastIngestionError(errText);
@@ -1423,7 +1488,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const openOnboardingEmailModal = (vendor: VendorEntry) => {
     const isExisting = vendor.isExistingInDatabase ?? checkVendorInPlatformDatabase(vendor);
-    const payload = generateVendorOnboardingEmail(vendor, isExisting, vendor.tempPassword);
+    const payload = generateVendorOnboardingEmail(vendor, isExisting);
     setSelectedOnboardingEmail(payload);
     setOnboardingEmailModalOpen(true);
   };
@@ -1642,7 +1707,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }),
       });
     } catch (e) {
-      console.error('Failed to save rating revision to DB:', e);
+      logger.log('ERROR', 'Failed to save rating revision to backend', { error: e }, 'VENDOR_RATING');
       showToast('Rating Revision Failed', 'Could not reach the server. Please try again.', 'warning');
       return null;
     }
@@ -1823,8 +1888,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       method: 'PUT',
       headers: { ...authFetchHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
+    }).then((res) => {
+      if (!res.ok) {
+        logApiResponseFailure('Vendor update request failed', res, 'VENDOR_PROFILE', { vendorId });
+      }
     }).catch((err) => {
-      console.error('Failed to sync vendor update to backend:', err);
+      logger.log('ERROR', 'Failed to sync vendor update to backend', { error: err, vendorId }, 'VENDOR_PROFILE');
     });
 
     addAuditLog(`Updated vendor profile record for ID ${vendorId}.`);
@@ -1838,8 +1907,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, {
       method: 'DELETE',
       headers: authFetchHeaders(),
+    }).then((res) => {
+      if (!res.ok) {
+        logApiResponseFailure('Vendor deletion request failed', res, 'VENDOR_PROFILE', { vendorId });
+      }
     }).catch((err) => {
-      console.error('Failed to sync vendor deletion to backend:', err);
+      logger.log('ERROR', 'Failed to sync vendor deletion to backend', { error: err, vendorId }, 'VENDOR_PROFILE');
     });
 
     addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
@@ -1862,8 +1935,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ vendorIds }),
       });
       if (!res.ok) {
+        logApiResponseFailure('Bulk vendor deletion request failed; using individual delete fallback', res, 'VENDOR_PROFILE', {
+          requestedCount: vendorIds.length,
+        });
         // Fallback to sequential deletion if endpoint returned error
-        await Promise.allSettled(
+        const fallbackResults = await Promise.allSettled(
           vendorIds.map((id) =>
             fetch(`/api/vendors/${encodeURIComponent(id)}`, {
               method: 'DELETE',
@@ -1871,11 +1947,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             })
           )
         );
+        const rejectedCount = fallbackResults.filter((result) => result.status === 'rejected').length;
+        const unsuccessfulCount = fallbackResults.filter((result) =>
+          result.status === 'fulfilled' && !result.value.ok
+        ).length;
+        if (rejectedCount > 0 || unsuccessfulCount > 0) {
+          logger.log('ERROR', 'Individual vendor delete fallback was incomplete', {
+            requestedCount: vendorIds.length,
+            rejectedCount,
+            unsuccessfulCount,
+          }, 'VENDOR_PROFILE');
+        }
       }
     } catch (err) {
-      console.error('Failed to sync bulk vendor deletion to backend:', err);
+      logger.log('ERROR', 'Failed to sync bulk vendor deletion to backend', { error: err }, 'VENDOR_PROFILE');
       // Fallback
-      await Promise.allSettled(
+      const fallbackResults = await Promise.allSettled(
         vendorIds.map((id) =>
           fetch(`/api/vendors/${encodeURIComponent(id)}`, {
             method: 'DELETE',
@@ -1883,6 +1970,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           })
         )
       );
+      const rejectedCount = fallbackResults.filter((result) => result.status === 'rejected').length;
+      const unsuccessfulCount = fallbackResults.filter((result) =>
+        result.status === 'fulfilled' && !result.value.ok
+      ).length;
+      if (rejectedCount > 0 || unsuccessfulCount > 0) {
+        logger.log('ERROR', 'Individual vendor delete fallback was incomplete', {
+          requestedCount: vendorIds.length,
+          rejectedCount,
+          unsuccessfulCount,
+        }, 'VENDOR_PROFILE');
+      }
     }
 
     addAuditLog(`Removed ${vendorIds.length} vendor record(s) from buyer vendor master.`);
@@ -2140,7 +2238,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       method: 'POST',
       headers: authFetchHeaders(),
       body: JSON.stringify(newLog),
-    }).catch((e) => console.error('Failed to save audit log to DB:', e));
+    }).then((res) => {
+      if (!res.ok) logApiResponseFailure('Audit event persistence request failed', res, 'AUDIT_TRAIL');
+    }).catch((e) => logger.log('ERROR', 'Failed to save audit event to backend', { error: e }, 'AUDIT_TRAIL'));
   };
 
   const addFeedItem = (
@@ -2173,7 +2273,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       method: 'POST',
       headers: authFetchHeaders(),
       body: JSON.stringify(newFeed),
-    }).catch((e) => console.error('Failed to save AI feed item to DB:', e));
+    }).then((res) => {
+      if (!res.ok) logApiResponseFailure('AI feed persistence request failed', res, 'AI_FEED');
+    }).catch((e) => logger.log('ERROR', 'Failed to save AI feed item to backend', { error: e }, 'AI_FEED'));
   };
 
   const triggerChannelChaser = (

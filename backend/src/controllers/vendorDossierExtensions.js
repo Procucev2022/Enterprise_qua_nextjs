@@ -172,63 +172,7 @@ async function getVendorCommunications(req, res, next) {
 
     const paymentDuesQueries = require('../db/paymentDuesQueries');
     const comms = await paymentDuesQueries.getCommunicationHistory(vendor.id);
-    const combined = [...comms];
-
-    const hasOnboarding = combined.some((c) => c.subject && c.subject.includes('Onboarding'));
-    if (!hasOnboarding) {
-      combined.push({
-        id: `comm-vendor-reg-${vendor.id}`,
-        accountId: vendor.id,
-        accountType: 'vendor',
-        channel: 'EMAIL',
-        subject: 'Supplier Network Onboarding & Verification Confirmation',
-        sender: 'Procucev Supplier Operations',
-        recipient: vendor.email || '',
-        message: `Welcome ${vendor.contactPerson || vendor.name} to the Procucev Supplier Network. Catalog indexed across ${vendor.majorCategory || 'Industrial Supplies'}. Free quotation credits allocated.`,
-        deliveryStatus: 'Delivered',
-        notificationStatus: 'Delivered',
-        acknowledgementStatus: 'Acknowledged',
-        sentAt: vendor.createdAt || new Date().toISOString(),
-        direction: 'OUTGOING',
-      });
-    }
-
-    const allRfqs = storeService.getRFQs ? storeService.getRFQs() : [];
-    const vendorEmail = (vendor.email || '').toLowerCase();
-    const vendorName = (vendor.name || '').toLowerCase();
-    const relatedRfqs = allRfqs.filter((r) => {
-      const isAssigned = (r.assignedVendors || []).some(
-        (v) => (v.id && v.id === vendor.id) || (v.email && v.email.toLowerCase() === vendorEmail)
-      );
-      const hasQuote = (r.quotes || []).some(
-        (q) => (q.vendorId && q.vendorId === vendor.id) || (q.vendorName && q.vendorName.toLowerCase() === vendorName)
-      );
-      return isAssigned || hasQuote;
-    });
-
-    relatedRfqs.forEach((rfq, idx) => {
-      const commId = `comm-vrfq-${rfq.id}-${idx}`;
-      if (!combined.some((c) => c.id === commId)) {
-        combined.push({
-          id: commId,
-          accountId: vendor.id,
-          accountType: 'vendor',
-          channel: 'EMAIL',
-          subject: `Opportunity Invitation: RFQ ${rfq.rfqNumber || rfq.id}`,
-          sender: 'Qua AI Matchmaking Dispatcher',
-          recipient: vendor.email || '',
-          message: `Direct opportunity invitation sent for "${rfq.title || 'Procurement'}" under ${rfq.sourcingMode || 'Mode 1'}. Target submission deadline active.`,
-          deliveryStatus: 'Delivered',
-          notificationStatus: 'Dispatched',
-          acknowledgementStatus: 'Acknowledged',
-          sentAt: rfq.createdAt || new Date().toISOString(),
-          direction: 'OUTGOING',
-        });
-      }
-    });
-
-    combined.sort((a, b) => new Date(b.sentAt || 0).getTime() - new Date(a.sentAt || 0).getTime());
-    return res.json({ success: true, data: combined });
+    return res.json({ success: true, data: comms });
   } catch (err) {
     logger.error('Error fetching vendor communications', err, 'VENDOR_CONTROLLER');
     next(err);
@@ -475,28 +419,7 @@ async function getVendorPaymentHistory(req, res, next) {
 
     const payments = [];
     const planName = vendor.subscriptionPlan || 'Preferred Partner';
-    const planLower = planName.toLowerCase();
-    const baseAmount = planLower.includes('connect') ? 1999 : (planLower.includes('select') ? 9999 : 5999);
-    const regDate = vendor.createdAt || new Date().toISOString();
-
-    payments.push({
-      id: `vpay-init-${vendor.id}`,
-      paymentId: `vpay-init-${vendor.id}`,
-      invoiceNo: `SUP-INV-2026-${vendor.id.slice(0, 5).toUpperCase()}`,
-      invoiceNumber: `SUP-INV-2026-${vendor.id.slice(0, 5).toUpperCase()}`,
-      description: `Plan: ${planName}`,
-      subscriptionPlan: planName,
-      amount: baseAmount,
-      currency: 'INR',
-      gateway: 'Zoho Corporate Payments',
-      paymentMethod: 'UPI / NetBanking / Corporate Card',
-      status: 'PAID',
-      gatewayRef: `ZOHO-VINIT-${vendor.id.slice(0, 8)}`,
-      date: regDate,
-      transactionDate: regDate,
-      receiptUrl: `/api/vendors/${vendor.id}/payment-links/vpay-init-${vendor.id}/invoice`,
-    });
-
+    // Subscription state is not proof of a payment; only provider records count.
     for (const link of links) {
       const linkDate = link.createdAt || new Date().toISOString();
       payments.push({

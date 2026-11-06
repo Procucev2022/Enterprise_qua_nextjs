@@ -4,7 +4,8 @@ import React, { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useApp, clearSessionCache } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { LOGIN_ROUTE, ROLE_LANDING_ROUTE } from '@/lib/constants';
+import { LOGIN_ROUTE, PRESENCE_HEARTBEAT_INTERVAL_MS, ROLE_LANDING_ROUTE } from '@/lib/constants';
+import { sendVendorHeartbeat } from '@/lib/vendorPresenceClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { UserRole } from '@/lib/types';
 import RoleNavigation from '@/app/components/RoleNavigation';
@@ -82,7 +83,25 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
     }
   }, [isLoggedIn, sessionRole, role, router, mustChangeVendorPassword, mustCompleteBuyerOnboarding]);
 
+  useEffect(() => {
+    if (!isLoggedIn || role !== 'vendor' || sessionRole !== 'vendor' || mustChangeVendorPassword) return;
+
+    const heartbeat = () => {
+      if (document.visibilityState === 'visible') {
+        void sendVendorHeartbeat({ status: 'online' });
+      }
+    };
+    heartbeat();
+    const timer = window.setInterval(heartbeat, PRESENCE_HEARTBEAT_INTERVAL_MS);
+    document.addEventListener('visibilitychange', heartbeat);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', heartbeat);
+    };
+  }, [isLoggedIn, role, sessionRole, mustChangeVendorPassword]);
+
   const handleLogout = () => {
+    if (role === 'vendor') void sendVendorHeartbeat({ status: 'offline' });
     clearSessionCache();
     const email = undefined;
     setIsLoggedIn(false);

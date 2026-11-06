@@ -8,7 +8,7 @@
  * 2. Unit Test & Per-File 90% Code Coverage Benchmark (Backend + Frontend)
  * 3. Typecheck (TypeScript Static Type Analysis)
  * 4. Lint Verification (ESLint Core Web Vitals & Zero Warnings)
- * 5. Database Schema & Migration Verification (PostgreSQL / In-Memory Store Integrity)
+ * 5. Cross-Database Schema Parity & Migration Verification (PostgreSQL / D1)
  */
 
 const { execSync } = require('child_process');
@@ -66,6 +66,8 @@ runStep('Step 4: Linter & Static Code Analysis Verification', 'npm run lint --pr
 // 5. Database Schema & Migration Health Check
 const fs = require('fs');
 const schemaPath = path.resolve(rootDir, 'backend/src/db/schema.sql');
+runStep('Step 5A: PostgreSQL / D1 Schema Parity', 'npm run check:db-schema-parity');
+runStep('Step 5B: Schema Parity Checker Regression Tests', 'npm run test:db-schema-parity');
 // A commit gate must not write to the shared database. DATABASE_URL alone used
 // to trigger a live migration, and VS Code injects the root .env into terminals
 // ("python.terminal.useEnvFile"), so every commit applied schema.sql to the

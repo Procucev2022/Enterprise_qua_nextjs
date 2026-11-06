@@ -6,6 +6,7 @@ import { authClient } from '@/lib/authClient';
 import { RbacModal } from '@/app/components/Modals';
 import type { DBHealthStatus } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { logger } from '@/lib/logger';
 
 import {
   Cpu,
@@ -64,7 +65,7 @@ export default function InfraControl({ onNavigateToAuditLog }: InfraControlProps
         }
       }
     } catch (err: any) {
-      console.error('Failed to fetch DB status:', err);
+      logger.log('ERROR', 'Failed to fetch database status', { error: err }, 'INFRASTRUCTURE');
     } finally {
       setLoadingHealth(false);
     }

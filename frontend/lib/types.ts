@@ -735,6 +735,22 @@ export interface AuditLogEntry {
   ipAddress?: string;
 }
 
+export type EnterpriseInquiryStatus = 'NEW' | 'CONTACTED' | 'IN_DISCUSSION' | 'CONTRACT_SIGNED' | 'CLOSED';
+
+export interface EnterpriseInquiry {
+  id: string;
+  companyName: string;
+  email: string;
+  mobile: string;
+  buyerAccountId?: string | null;
+  notes?: string;
+  status: EnterpriseInquiryStatus;
+  contactedBy?: string;
+  contactedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface AuditVerificationIssue {
   id: string | null;
   index: number;
@@ -754,22 +770,6 @@ export interface AuditVerificationReport {
 }
 
 export interface AzureServiceHealth {
-export type EnterpriseInquiryStatus = 'NEW' | 'CONTACTED' | 'IN_DISCUSSION' | 'CONTRACT_SIGNED' | 'CLOSED';
-
-export interface EnterpriseInquiry {
-  id: string;
-  companyName: string;
-  email: string;
-  mobile: string;
-  buyerAccountId?: string | null;
-  notes?: string;
-  status: EnterpriseInquiryStatus;
-  contactedBy?: string;
-  contactedAt?: string;
-  createdAt: string;
-  updatedAt?: string;
-}
-
   service: string;
   status: 'ONLINE' | 'HEALTHY' | 'DEGRADED';
   latency: string;
@@ -1013,7 +1013,6 @@ export interface VendorEntry {
   isExistingInDatabase?: boolean;
   onboardingEmailStatus?: 'sent' | 'pending' | 'delivered' | 'failed' | 'account_exists';
   onboardingEmailDispatchedAt?: string;
-  tempPassword?: string;
   firstLoginCompleted?: boolean;
   reminderCadence?: 'every_3_days';
   nextReminderDate?: string;
@@ -1214,7 +1213,6 @@ export interface HistoricalPurchaseVendorRecord {
   secondSetMinorCategories: string[]; // 2nd Set: Minor Categories
   secondSetSecondaryMajors?: string[]; // 2nd Set: Secondary Major Categories
   isExistingInDatabase?: boolean;
-  tempPassword?: string;
 }
 
 export interface IngestionFailedEmail {
@@ -1738,7 +1736,6 @@ export interface VendorOnboardingEmailPayload {
   isExistingInDatabase: boolean;
   subject: string;
   username: string;
-  tempPassword: string;
   authInstructions: string;
   profileUpdateInstructions: string;
   categoryUpdateInstructions: string;

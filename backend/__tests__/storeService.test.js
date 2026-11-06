@@ -3,6 +3,8 @@ const domainPool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
 const mailerService = require('../src/services/mailerService');
 const identityQueries = require('../src/db/identityQueries');
+const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
+const eventOutboxService = require('../src/services/eventOutboxService');
 
 describe('Store Service & Business Operations', () => {
   test('initializes with no records at all', async () => {
@@ -168,12 +170,13 @@ describe('Store Service & Business Operations', () => {
 
       try {
         const v = storeService.addVendor(
-          { name: 'Invited By Buyer Co', contactPerson: 'Priya', email: 'invited-by-buyer@example.com', majorCategory: 'Fasteners' },
+          { name: 'Invited By Buyer Co', contactPerson: 'Priya', email: 'invited-by-buyer@example.com', majorCategory: 'Fasteners', tempPassword: 'client-supplied-secret' },
           'buyer@example.com'
         );
 
         // Starts pending — addVendor itself never provisions anymore.
         expect(v.onboardingEmailStatus).toBe('pending');
+        expect(v).not.toHaveProperty('tempPassword');
 
         await storeService.provisionVendorOnboarding(v, 'buyer@example.com');
 
@@ -185,8 +188,12 @@ describe('Store Service & Business Operations', () => {
           resetExisting: false,
           resetPasswordRequired: true,
         }));
+        const issuedPassword = identitySpy.mock.calls[0][0].password;
+        expect(sendSpy.mock.calls[0][0].html).toContain(issuedPassword);
         expect(sendSpy).toHaveBeenCalled();
-        expect(storeService.getVendorById(v.id).onboardingEmailStatus).toBe('sent');
+        const savedVendor = storeService.getVendorById(v.id);
+        expect(savedVendor.onboardingEmailStatus).toBe('sent');
+        expect(savedVendor).not.toHaveProperty('tempPassword');
       } finally {
         findSpy.mockRestore();
         identitySpy.mockRestore();
@@ -217,6 +224,81 @@ describe('Store Service & Business Operations', () => {
         findSpy.mockRestore();
         identitySpy.mockRestore();
         sendSpy.mockRestore();
+      }
+    });
+
+    test('provisionVendorOnboarding waits for durable status persistence before returning', async () => {
+      const originalVendors = storeService.vendors;
+      const vendor = { id: 'v-onboarding-durable', email: 'durable-status@example.com', name: 'Durable Status Co', onboardingEmailStatus: 'pending' };
+      storeService.vendors = [vendor];
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const findVendorSpy = jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(vendor);
+      const snapshotSpy = jest.spyOn(domainQueries, 'getVendorSnapshotByIdFromDB').mockResolvedValue({
+        id: vendor.id,
+        vendor,
+        raw: JSON.stringify(vendor),
+      });
+      const findIdentitySpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'existing-user-uuid' });
+      let finishWrite;
+      const writeSpy = jest.spyOn(domainQueries, 'updateVendorIfUnchangedInDB').mockImplementation((_snapshot, candidate) => new Promise((resolve) => {
+        finishWrite = () => resolve(candidate);
+      }));
+
+      try {
+        let settled = false;
+        const onboarding = storeService.provisionVendorOnboarding(vendor).then((result) => {
+          settled = true;
+          return result;
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(writeSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ id: vendor.id }),
+          expect.objectContaining({ id: vendor.id, onboardingEmailStatus: 'account_exists' })
+        );
+        expect(settled).toBe(false);
+        expect(vendor.onboardingEmailStatus).toBe('pending');
+
+        finishWrite();
+        await expect(onboarding).resolves.toMatchObject({ status: 'account_exists' });
+        expect(storeService.getVendorById(vendor.id, 'all').onboardingEmailStatus).toBe('account_exists');
+      } finally {
+        storeService.vendors = originalVendors;
+        hasStorageSpy.mockRestore();
+        findVendorSpy.mockRestore();
+        snapshotSpy.mockRestore();
+        findIdentitySpy.mockRestore();
+        writeSpy.mockRestore();
+      }
+    });
+
+    test('onboarding reports status persistence failures and keeps the prior cache value', async () => {
+      const originalVendors = storeService.vendors;
+      const vendor = { id: 'v-onboarding-status-failure', email: 'failed-status@example.com', name: 'Failed Status Co', onboardingEmailStatus: 'pending' };
+      storeService.vendors = [vendor];
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const findVendorSpy = jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(vendor);
+      const snapshotSpy = jest.spyOn(domainQueries, 'getVendorSnapshotByIdFromDB').mockResolvedValue({
+        id: vendor.id,
+        vendor,
+        raw: JSON.stringify(vendor),
+      });
+      const findIdentitySpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'existing-user-uuid' });
+      const writeSpy = jest.spyOn(domainQueries, 'updateVendorIfUnchangedInDB').mockRejectedValue(new Error('database unavailable'));
+
+      try {
+        const result = await storeService.provisionVendorOnboarding(vendor);
+        expect(result).toMatchObject({ status: 'account_exists' });
+        expect(result.error).toContain('onboarding status could not be saved');
+        expect(vendor.onboardingEmailStatus).toBe('pending');
+        expect(writeSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        storeService.vendors = originalVendors;
+        hasStorageSpy.mockRestore();
+        findVendorSpy.mockRestore();
+        snapshotSpy.mockRestore();
+        findIdentitySpy.mockRestore();
+        writeSpy.mockRestore();
       }
     });
 
@@ -283,6 +365,20 @@ describe('Store Service & Business Operations', () => {
   });
 
   describe('confirmVendorPersisted (surfaces a Postgres write failure that addVendor itself does not)', () => {
+    test('addVendor can skip its background upsert when the caller will confirm the write', () => {
+      const persistSpy = jest.spyOn(storeService, '_persistVendor');
+
+      const vendor = storeService.addVendor(
+        { name: 'Single Upsert Vendor', email: 'single-upsert@example.com', majorCategory: 'Fasteners' },
+        'admin@example.com',
+        null,
+        { deferPersistence: true }
+      );
+
+      expect(vendor.email).toBe('single-upsert@example.com');
+      expect(persistSpy).not.toHaveBeenCalled();
+    });
+
     test('no-ops when no DB pool is configured', async () => {
       const vendor = storeService.addVendor({ name: 'No Pool Vendor', email: 'no-pool-confirm@example.com', majorCategory: 'Fasteners' });
       await expect(storeService.confirmVendorPersisted(vendor)).resolves.toEqual({ persisted: null });
@@ -364,6 +460,15 @@ describe('Store Service & Business Operations', () => {
       jest.spyOn(domainQueries, 'bulkInsertVendorsInDB').mockImplementation(async (vendors) =>
         vendors.map((v) => v.email)
       );
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockImplementation(async (id) =>
+        storeService.vendors.find((vendor) => vendor.id === id) || null
+      );
+      jest.spyOn(domainQueries, 'getVendorSnapshotByIdFromDB').mockImplementation(async (id) => {
+        const vendor = storeService.vendors.find((entry) => entry.id === id);
+        return vendor ? { id, vendor, raw: JSON.stringify(vendor) } : null;
+      });
+      jest.spyOn(domainQueries, 'updateVendorIfUnchangedInDB').mockImplementation(async (_snapshot, vendor) => vendor);
+      jest.spyOn(domainQueries, 'upsertVendorInDB').mockImplementation(async (vendor) => vendor);
       // getVendors() re-syncs from Neon whenever a pool is configured; mocked
       // to resolve empty so it's a no-op against the in-memory store these
       // tests are actually exercising.
@@ -709,6 +814,127 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
+    test('historical onboarding fails closed when identity lookup is unavailable', async () => {
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValue(new Error('identity database unavailable'));
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount');
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+
+      const result = await storeService.processHistoricalPurchaseData(
+        '1_year',
+        [{ companyName: 'Identity Outage Vendor', email: 'identity-outage@example.com' }]
+      );
+
+      expect(result.overallStatus).toBe('FAILED');
+      expect(result.failedEmailCount).toBe(1);
+      expect(result.failedEmails[0].reason).toContain('identity database unavailable');
+      expect(identitySpy).not.toHaveBeenCalled();
+      expect(sendSpy).not.toHaveBeenCalled();
+      expect(findSpy).toHaveBeenCalledWith('identity-outage@example.com');
+    });
+
+    test('historical import does not create a duplicate when the authoritative vendor lookup fails', async () => {
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const lookupSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockRejectedValue(new Error('D1 read unavailable'));
+      const upsertSpy = jest.spyOn(domainQueries, 'upsertVendorInDB');
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+
+      try {
+        const result = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{ companyName: 'Lookup Outage Vendor', email: 'lookup-outage-vendor@example.com' }]
+        );
+
+        expect(lookupSpy).toHaveBeenCalledWith('lookup-outage-vendor@example.com', { fresh: true });
+        expect(result.importedCount).toBe(0);
+        expect(result.skipped).toEqual([expect.objectContaining({
+          row: 1,
+          reason: expect.stringContaining('Could not verify whether this vendor already exists'),
+        })]);
+        expect(storeService.vendors.some((vendor) => vendor.email === 'lookup-outage-vendor@example.com')).toBe(false);
+        expect(upsertSpy).not.toHaveBeenCalled();
+        expect(sendSpy).not.toHaveBeenCalled();
+      } finally {
+        sendSpy.mockRestore();
+        upsertSpy.mockRestore();
+        lookupSpy.mockRestore();
+        hasStorageSpy.mockRestore();
+      }
+    });
+
+    test('historical import preserves cached vendor state when its durable update fails', async () => {
+      const existing = {
+        id: 'vendor-history-update-outage',
+        name: 'Original Vendor Name',
+        email: 'history-update-outage@example.com',
+        majorCategory: 'Original Category',
+        minorCategories: ['Original Subcategory'],
+      };
+      storeService.vendors.push(existing);
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const upsertSpy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockRejectedValue(new Error('D1 write unavailable'));
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+
+      try {
+        const result = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{
+            companyName: 'Uncommitted Vendor Name',
+            email: existing.email,
+            majorCategory: 'Uncommitted Category',
+            minorCategories: ['Uncommitted Subcategory'],
+          }]
+        );
+
+        expect(result.importedCount).toBe(0);
+        expect(result.skippedCount).toBe(1);
+        expect(existing).toMatchObject({
+          name: 'Original Vendor Name',
+          majorCategory: 'Original Category',
+          minorCategories: ['Original Subcategory'],
+        });
+        expect(sendSpy).not.toHaveBeenCalled();
+      } finally {
+        storeService.vendors = storeService.vendors.filter((vendor) => vendor !== existing);
+        sendSpy.mockRestore();
+        upsertSpy.mockRestore();
+        hasStorageSpy.mockRestore();
+      }
+    });
+
+    test('historical onboarding keeps an existing password during a creation race and sends no temporary password', async () => {
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'Historical Race Buyer',
+        corporateEmail: 'historical-race-buyer@example.com',
+      });
+      const existingVendor = {
+        id: 'vendor-history-race',
+        name: 'Historical Race Vendor',
+        email: 'historical-race-vendor@example.com',
+        buyerId: buyer.id,
+        buyerAccountId: buyer.id,
+        buyerEmail: buyer.corporateEmail,
+        onboardingEmailStatus: 'pending',
+      };
+      storeService.vendors = [existingVendor];
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const insertSpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({
+        created: false,
+        reason: 'ALREADY_EXISTS',
+      });
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      const result = await storeService.processHistoricalPurchaseData(
+        '1_year',
+        [{ companyName: existingVendor.name, email: existingVendor.email }],
+        buyer
+      );
+
+      expect(result.mappedEmailsSent + result.unmappedEmailsSent).toBe(1);
+      expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({ resetExisting: false }));
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      expect(sendSpy.mock.calls[0][0].html).not.toContain('Temporary Password');
+    });
+
     test('processHistoricalPurchaseData rolls back a row whose Postgres write collides with an existing email (409) and reports it as skipped', async () => {
       const requestingBuyerAccount = storeService.addBuyerAccount({
         organizationName: 'Rollback Ingest Test Co',
@@ -719,6 +945,7 @@ describe('Store Service & Business Operations', () => {
       const conflictErr = new Error('duplicate key value violates unique constraint "vendors_email_key"');
       conflictErr.code = '23505';
       const spy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockRejectedValue(conflictErr);
+      const lookupSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
 
       try {
         const res = await storeService.processHistoricalPurchaseData(
@@ -733,6 +960,7 @@ describe('Store Service & Business Operations', () => {
       } finally {
         domainPool.pool = originalPool;
         spy.mockRestore();
+        lookupSpy.mockRestore();
       }
     });
 
@@ -744,6 +972,7 @@ describe('Store Service & Business Operations', () => {
       const originalPool = domainPool.pool;
       domainPool.pool = { query: jest.fn() };
       const spy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockRejectedValue(new Error('ECONNREFUSED'));
+      const lookupSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
 
       try {
         const res = await storeService.processHistoricalPurchaseData(
@@ -758,6 +987,7 @@ describe('Store Service & Business Operations', () => {
       } finally {
         domainPool.pool = originalPool;
         spy.mockRestore();
+        lookupSpy.mockRestore();
       }
     });
 
@@ -766,6 +996,8 @@ describe('Store Service & Business Operations', () => {
         organizationName: 'Repeat Ingest Test Co',
         corporateEmail: 'repeat-ingest@example.com',
       });
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({ created: true });
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
 
       try {
@@ -1073,6 +1305,169 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.getUnreadNotificationCountFor('vendor', vendor.id)).toBe(0);
       // Nothing left to change on a second sweep.
       expect(storeService.markAllNotificationsRead('vendor', vendor.id)).toBe(0);
+    });
+
+    test('durable mark-read persists before changing the cached notification', async () => {
+      const notification = {
+        id: 'ntf-durable-read-success',
+        recipientType: 'vendor',
+        recipientId: 'vendor-durable-read',
+        read: false,
+      };
+      storeService.notifications.unshift(notification);
+      const hasStorage = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const persist = jest.spyOn(domainQueries, 'markNotificationReadInDB').mockResolvedValue(true);
+
+      try {
+        const updated = await storeService.markNotificationReadDurably(
+          notification.id,
+          notification.recipientType,
+          notification.recipientId
+        );
+
+        expect(persist).toHaveBeenCalledWith(notification.id, 'vendor', 'vendor-durable-read');
+        expect(updated).toMatchObject({ id: notification.id, read: true });
+        expect(notification.read).toBe(true);
+      } finally {
+        storeService.notifications = storeService.notifications.filter((item) => item.id !== notification.id);
+        persist.mockRestore();
+        hasStorage.mockRestore();
+      }
+    });
+
+    test('durable mark-read removes a stale cached notification when the persisted row is absent', async () => {
+      const notification = {
+        id: 'ntf-durable-read-missing',
+        recipientType: 'vendor',
+        recipientId: 'vendor-durable-read',
+        read: false,
+      };
+      storeService.notifications.unshift(notification);
+      const hasStorage = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const persist = jest.spyOn(domainQueries, 'markNotificationReadInDB').mockResolvedValue(false);
+
+      try {
+        await expect(storeService.markNotificationReadDurably(
+          notification.id,
+          notification.recipientType,
+          notification.recipientId
+        )).resolves.toBeNull();
+        expect(storeService.notifications).not.toContain(notification);
+      } finally {
+        storeService.notifications = storeService.notifications.filter((item) => item.id !== notification.id);
+        persist.mockRestore();
+        hasStorage.mockRestore();
+      }
+    });
+
+    test('durable mark-read preserves cached state and returns retryable failure when persistence rejects', async () => {
+      const notification = {
+        id: 'ntf-durable-read-failure',
+        recipientType: 'vendor',
+        recipientId: 'vendor-durable-read',
+        read: false,
+      };
+      storeService.notifications.unshift(notification);
+      const hasStorage = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const persist = jest.spyOn(domainQueries, 'markNotificationReadInDB').mockRejectedValue(new Error('D1 unavailable'));
+
+      try {
+        await expect(storeService.markNotificationReadDurably(
+          notification.id,
+          notification.recipientType,
+          notification.recipientId
+        )).rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE', retryable: true });
+        expect(notification.read).toBe(false);
+      } finally {
+        storeService.notifications = storeService.notifications.filter((item) => item.id !== notification.id);
+        persist.mockRestore();
+        hasStorage.mockRestore();
+      }
+    });
+
+    test('durable mark-read uses the in-memory path only when storage is unconfigured', async () => {
+      const notification = {
+        id: 'ntf-durable-read-local',
+        recipientType: 'vendor',
+        recipientId: 'vendor-local-read',
+        read: false,
+      };
+      storeService.notifications.unshift(notification);
+      const hasStorage = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(false);
+
+      try {
+        await expect(storeService.markNotificationReadDurably(
+          notification.id,
+          notification.recipientType,
+          notification.recipientId
+        )).resolves.toMatchObject({ read: true });
+        expect(notification.read).toBe(true);
+      } finally {
+        storeService.notifications = storeService.notifications.filter((item) => item.id !== notification.id);
+        hasStorage.mockRestore();
+      }
+    });
+
+    test('durable mark-all updates scoped cache only after the database confirms success', async () => {
+      const notifications = [
+        { id: 'ntf-durable-all-a', recipientType: 'buyer', recipientId: 'buyer-durable-all', read: false },
+        { id: 'ntf-durable-all-b', recipientType: 'buyer', recipientId: 'buyer-durable-all', read: true },
+        { id: 'ntf-durable-all-other', recipientType: 'buyer', recipientId: 'buyer-other', read: false },
+      ];
+      storeService.notifications.unshift(...notifications);
+      const hasStorage = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const persist = jest.spyOn(domainQueries, 'markAllNotificationsReadInDB').mockResolvedValue(1);
+
+      try {
+        await expect(storeService.markAllNotificationsReadDurably('buyer', 'buyer-durable-all')).resolves.toBe(1);
+        expect(persist).toHaveBeenCalledWith('buyer', 'buyer-durable-all');
+        expect(notifications.map((item) => item.read)).toEqual([true, true, false]);
+      } finally {
+        storeService.notifications = storeService.notifications.filter((item) => !item.id.startsWith('ntf-durable-all-'));
+        persist.mockRestore();
+        hasStorage.mockRestore();
+      }
+    });
+
+    test('durable mark-all preserves cached unread flags when persistence rejects', async () => {
+      const notification = {
+        id: 'ntf-durable-all-failure',
+        recipientType: 'buyer',
+        recipientId: 'buyer-durable-all',
+        read: false,
+      };
+      storeService.notifications.unshift(notification);
+      const hasStorage = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const persist = jest.spyOn(domainQueries, 'markAllNotificationsReadInDB').mockRejectedValue(new Error('D1 unavailable'));
+
+      try {
+        await expect(storeService.markAllNotificationsReadDurably('buyer', 'buyer-durable-all'))
+          .rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE', retryable: true });
+        expect(notification.read).toBe(false);
+      } finally {
+        storeService.notifications = storeService.notifications.filter((item) => item.id !== notification.id);
+        persist.mockRestore();
+        hasStorage.mockRestore();
+      }
+    });
+
+    test('durable mark-all uses memory when no database is configured', async () => {
+      const notification = {
+        id: 'ntf-durable-all-local',
+        recipientType: 'buyer',
+        recipientId: 'buyer-local-all',
+        read: false,
+      };
+      storeService.notifications.unshift(notification);
+      const hasStorage = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(false);
+
+      try {
+        await expect(storeService.markAllNotificationsReadDurably('buyer', 'buyer-local-all')).resolves.toBe(1);
+        expect(notification.read).toBe(true);
+      } finally {
+        storeService.notifications = storeService.notifications.filter((item) => item.id !== notification.id);
+        hasStorage.mockRestore();
+      }
     });
 
     test('getNotificationsFor returns an empty list when no recipient id is given', () => {
@@ -1454,13 +1849,21 @@ describe('Store Service & Business Operations', () => {
       });
 
       function v0Rfq(overrides = {}) {
-        return storeService.createRFQ({
+        jest.spyOn(domainQueries, 'upsertRFQInDB').mockImplementation(async (rfq) => rfq);
+        const rfq = storeService.createRFQ({
           id: `rfq-v0-aug-${Math.random().toString(36).slice(2)}`,
           title: 'V0 Augment RFQ',
           category: 'Lighting',
           sourcingMode: 'mode_0',
           ...overrides,
         });
+        jest.spyOn(domainQueries, 'getRFQSnapshotByIdFromDB').mockResolvedValue({
+          id: rfq.id,
+          rfq: { ...rfq },
+          raw: JSON.stringify(rfq),
+        });
+        jest.spyOn(domainQueries, 'updateRFQIfUnchangedInDB').mockImplementation(async (_snapshot, candidate) => candidate);
+        return rfq;
       }
 
       test('assigns category-matched public vendors from the DB and sets the real count', async () => {
@@ -1521,7 +1924,7 @@ describe('Store Service & Business Operations', () => {
           const rfq = v0Rfq();
           const result = await storeService.augmentV0AssignmentsFromDB(rfq);
           expect(spy).not.toHaveBeenCalled();
-          expect(result).toBe(rfq);
+          expect(result).toMatchObject({ id: rfq.id, needsCategoryManagerAssignment: true });
         } finally {
           domainPool.pool = originalPool;
         }
@@ -1534,6 +1937,12 @@ describe('Store Service & Business Operations', () => {
         const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB');
         try {
           const rfq = { id: 'r2', sourcingMode: 'mode_0', category: '', extractedEntities: [], assignedVendors: [] };
+          jest.spyOn(domainQueries, 'getRFQSnapshotByIdFromDB').mockResolvedValue({
+            id: rfq.id,
+            rfq: { ...rfq, quotes: [] },
+            raw: JSON.stringify({ ...rfq, quotes: [] }),
+          });
+          jest.spyOn(domainQueries, 'updateRFQIfUnchangedInDB').mockImplementation(async (_snapshot, candidate) => candidate);
           const result = await storeService.augmentV0AssignmentsFromDB(rfq);
           expect(catSpy).not.toHaveBeenCalled();
           expect(pageSpy).not.toHaveBeenCalled();
@@ -1576,7 +1985,28 @@ describe('Store Service & Business Operations', () => {
         try {
           const rfq = v0Rfq();
           const result = await storeService.augmentV0AssignmentsFromDB(rfq);
-          expect(result).toBe(rfq);
+          expect(result).toMatchObject({ id: rfq.id, needsCategoryManagerAssignment: true });
+        } finally {
+          domainPool.pool = originalPool;
+        }
+      });
+
+      test('keeps the prior assignment state and does not schedule when assignment persistence fails', async () => {
+        const originalPool = domainPool.pool;
+        domainPool.pool = { query: jest.fn() };
+        const schedulerSpy = jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {});
+        try {
+          const rfq = v0Rfq();
+          domainQueries.updateRFQIfUnchangedInDB.mockRejectedValueOnce(new Error('D1 write failed'));
+
+          await expect(storeService.augmentV0AssignmentsFromDB(rfq)).rejects.toMatchObject({
+            statusCode: 503,
+            code: 'PERSISTENCE_UNAVAILABLE',
+          });
+
+          expect(storeService.getRFQById(rfq.id)).toMatchObject({ id: rfq.id, assignedVendors: [] });
+          expect(storeService.getRFQById(rfq.id)).not.toHaveProperty('vendorInvitationTargets');
+          expect(schedulerSpy).not.toHaveBeenCalled();
         } finally {
           domainPool.pool = originalPool;
         }
@@ -1729,6 +2159,106 @@ describe('Store Service & Business Operations', () => {
 
     test('returns null for an unknown RFQ', async () => {
       expect(await storeService.inviteVendorsToRFQ('does-not-exist', ['v-1'], 'cm@ex.com')).toBeNull();
+    });
+
+    test('does not dispatch invite side effects when the durable update reports a missing RFQ', async () => {
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(false);
+      const vendor = storeService.addVendor({ name: 'Missing Durable Invite Vendor', email: 'missing-invite@ex.com', majorCategory: 'Missing-Invite-Cat' });
+      const rfq = storeService.createRFQ({ title: 'Missing Durable Update RFQ', category: 'Missing-Invite-Cat', sourcingMode: 'mode_3' });
+      jest.spyOn(storeService, 'updateRFQDurably').mockResolvedValue(null);
+
+      await expect(storeService.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@ex.com')).resolves.toBeNull();
+      expect(inviteEmailSpy).not.toHaveBeenCalled();
+      expect(storeService.getNotificationsFor('vendor', vendor.id)).toHaveLength(0);
+    });
+
+    test('skips invite side effects when another writer already committed the vendor assignment', async () => {
+      const vendor = storeService.addVendor({ name: 'Concurrent Invite Vendor', email: 'concurrent-invite@ex.com', majorCategory: 'Concurrent-Invite-Cat' });
+      const rfq = storeService.createRFQ({ title: 'Concurrent Invite RFQ', category: 'Concurrent-Invite-Cat', sourcingMode: 'mode_3' });
+      const schedulerSpy = jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {});
+      jest.spyOn(storeService, '_appendRFQAssignmentsDurably').mockResolvedValue({
+        updatedRFQ: { ...rfq, assignedVendors: [{ id: vendor.id, name: vendor.name }] },
+        committedAdditions: [],
+      });
+
+      const result = await storeService.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@ex.com');
+
+      expect(result).toMatchObject({ invitedCount: 0, overrideCount: 0 });
+      expect(inviteEmailSpy).not.toHaveBeenCalled();
+      expect(schedulerSpy).not.toHaveBeenCalled();
+      expect(storeService.getNotificationsFor('vendor', vendor.id)).toHaveLength(0);
+    });
+
+    test('waits for the durable RFQ assignment before starting invite side effects', async () => {
+      const vendor = storeService.addVendor({ name: 'Durable Invite Vendor', email: 'durable-invite@ex.com', majorCategory: 'Durable-Invite-Cat' });
+      const rfq = storeService.createRFQ({ title: 'Durable Invite RFQ', category: 'Durable-Invite-Cat', sourcingMode: 'mode_3' });
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(false);
+      const getRFQSpy = jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(rfq);
+      let persistedRFQ;
+      let signalUpdateStarted;
+      const updateStarted = new Promise((resolve) => { signalUpdateStarted = resolve; });
+      let releaseUpdate;
+      const updateGate = new Promise((resolve) => { releaseUpdate = resolve; });
+      const snapshotSpy = jest.spyOn(domainQueries, 'getRFQSnapshotByIdFromDB').mockResolvedValue({
+        id: rfq.id,
+        rfq: { ...rfq },
+        raw: JSON.stringify(rfq),
+      });
+      const updateSpy = jest.spyOn(domainQueries, 'updateRFQIfUnchangedInDB').mockImplementation(async (_snapshot, updatedRFQ) => {
+        persistedRFQ = updatedRFQ;
+        signalUpdateStarted();
+        await updateGate;
+        return updatedRFQ;
+      });
+      const outboxDispatchSpy = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({
+        claimed: 0,
+        sent: 0,
+        failed: 0,
+      });
+      hasStorageSpy.mockReturnValue(true);
+
+      const invitePromise = storeService.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@ex.com');
+      await updateStarted;
+
+      expect(getRFQSpy).toHaveBeenCalledWith(rfq.id);
+      expect(snapshotSpy).toHaveBeenCalledWith(rfq.id);
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+      expect(persistedRFQ.assignedVendors).toEqual(expect.arrayContaining([expect.objectContaining({ id: vendor.id })]));
+      expect(inviteEmailSpy).not.toHaveBeenCalled();
+      expect(storeService.getNotificationsFor('vendor', vendor.id)).toHaveLength(0);
+
+      releaseUpdate();
+      const result = await invitePromise;
+      expect(result.invitedCount).toBe(1);
+      expect(inviteEmailSpy).not.toHaveBeenCalled();
+      expect(outboxDispatchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    test('does not send invitations when durable RFQ assignment persistence fails', async () => {
+      const vendor = storeService.addVendor({ name: 'Failed Durable Invite Vendor', email: 'failed-invite@ex.com', majorCategory: 'Failed-Invite-Cat' });
+      const rfq = storeService.createRFQ({ title: 'Failed Durable Invite RFQ', category: 'Failed-Invite-Cat', sourcingMode: 'mode_3' });
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(rfq);
+      jest.spyOn(domainQueries, 'getRFQSnapshotByIdFromDB').mockResolvedValue({
+        id: rfq.id,
+        rfq: { ...rfq },
+        raw: JSON.stringify(rfq),
+      });
+      jest.spyOn(domainQueries, 'updateRFQIfUnchangedInDB').mockRejectedValue(new Error('database unavailable'));
+      const logger = require('../src/services/loggerService').logger;
+      const loggerSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await expect(storeService.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@ex.com'))
+        .rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE' });
+
+      expect(storeService.getRFQById(rfq.id).assignedVendors).toEqual([]);
+      expect(inviteEmailSpy).not.toHaveBeenCalled();
+      expect(storeService.getNotificationsFor('vendor', vendor.id)).toHaveLength(0);
+      expect(loggerSpy).toHaveBeenCalledWith('Failed to persist RFQ mutation', expect.objectContaining({
+        error: expect.any(Error),
+        rfqId: rfq.id,
+        operation: 'update-rfq-compare-and-swap',
+      }), 'STORE_SERVICE');
     });
 
     test('skips unknown vendor ids and returns invitedCount 0 when nothing new was added', async () => {
@@ -1967,6 +2497,7 @@ describe('Store Service & Business Operations', () => {
     // database for a genuinely existing vendor account.
     test('falls back to D1 by id when the vendor is not in the in-memory cache, and caches it', async () => {
       const domainQueries = require('../src/db/domainQueries');
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
       const dbVendor = { id: 'db-only-profile-vendor', name: 'DB Only Profile Vendor', email: 'dbonlyprofile@ex.com' };
       const idSpy = jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(dbVendor);
       const emailSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB');
@@ -1982,6 +2513,7 @@ describe('Store Service & Business Operations', () => {
 
     test('falls back to D1 by email when the id lookup misses (a vendor loading their own profile by email)', async () => {
       const domainQueries = require('../src/db/domainQueries');
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
       const dbVendor = { id: 'real-vendor-id', name: 'Email Lookup Vendor', email: 'emaillookup@ex.com' };
       jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(null);
       const emailSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(dbVendor);
@@ -1994,6 +2526,7 @@ describe('Store Service & Business Operations', () => {
 
     test('returns undefined when the vendor is unknown to both the cache and D1', async () => {
       const domainQueries = require('../src/db/domainQueries');
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
       jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(null);
       jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
 
@@ -2728,15 +3261,20 @@ describe('demo RFQ seeding', () => {
       }
     });
 
-    test('syncRFQsFromDB handles database fetch errors gracefully', async () => {
+    test('syncRFQsFromDB fails closed when the database fetch errors', async () => {
       const origPool = domainPool.pool;
       const origGetRFQsFromDB = domainQueries.getRFQsFromDB;
       domainPool.pool = { query: jest.fn() };
       domainQueries.getRFQsFromDB = jest.fn().mockRejectedValue(new Error('Connection lost'));
+      storeService.rfqs = [{ id: 'rfq-cached-stale', title: 'Cached copy' }];
 
       try {
-        const result = await storeService.syncRFQsFromDB();
-        expect(Array.isArray(result)).toBe(true);
+        await expect(storeService.syncRFQsFromDB(true)).rejects.toMatchObject({
+          statusCode: 503,
+          code: 'PERSISTENCE_UNAVAILABLE',
+          retryable: true,
+        });
+        expect(storeService.rfqs).toEqual([{ id: 'rfq-cached-stale', title: 'Cached copy' }]);
       } finally {
         domainPool.pool = origPool;
         domainQueries.getRFQsFromDB = origGetRFQsFromDB;
@@ -2757,8 +3295,12 @@ describe('demo RFQ seeding', () => {
 
     test('getRFQByIdAsync syncs from DB when not found in memory', async () => {
       const origPool = domainPool.pool;
+      const origGetRFQByIdFromDB = domainQueries.getRFQByIdFromDB;
       const origGetRFQsFromDB = domainQueries.getRFQsFromDB;
       domainPool.pool = { query: jest.fn() };
+      domainQueries.getRFQByIdFromDB = jest.fn()
+        .mockResolvedValueOnce({ id: 'rfq-db-remote', rfqNumber: 'RFQREMOTE', title: 'Remote RFQ', createdAt: '2026-09-16 11:00:00 UTC' })
+        .mockResolvedValueOnce(null);
       domainQueries.getRFQsFromDB = jest.fn().mockResolvedValue([
         { id: 'rfq-db-remote', rfqNumber: 'RFQREMOTE', title: 'Remote RFQ', createdAt: '2026-09-16 11:00:00 UTC' },
       ]);
@@ -2770,6 +3312,7 @@ describe('demo RFQ seeding', () => {
         expect(notFound).toBeUndefined();
       } finally {
         domainPool.pool = origPool;
+        domainQueries.getRFQByIdFromDB = origGetRFQByIdFromDB;
         domainQueries.getRFQsFromDB = origGetRFQsFromDB;
       }
     });
@@ -3004,8 +3547,8 @@ describe('demo RFQ seeding', () => {
       expect(storeService.hasQuoteAckBeenSent(numOnlyRfq)).toBe(true);
     });
 
-    test('notifyBuyerOfAutoClosureAndScheduleComparison queues quotes and sends reminder when buyer verification is pending', () => {
-      jest.useFakeTimers();
+    test('notifyBuyerOfAutoClosureAndScheduleComparison queues quotes and sends reminder when buyer verification is pending', async () => {
+      const scheduleSpy = jest.spyOn(rfqChaserScheduler, 'scheduleBuyerComparison').mockReturnValue('comparison-id');
       const remindSpy = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
       const compareSpy = jest.spyOn(mailerService, 'sendRfqFinalComparisonEmail').mockResolvedValue({ sent: true });
 
@@ -3022,11 +3565,11 @@ describe('demo RFQ seeding', () => {
       );
 
       const quotes = [{ vendorId: 'v-10', vendorName: 'Vendor 10', totalPrice: 80000 }];
+      autoRfq.quotes = quotes;
 
       storeService.notifyBuyerOfAutoClosureAndScheduleComparison(autoRfq, quotes);
-
-      // Advance 5 minutes timer
-      jest.advanceTimersByTime(5 * 60 * 1000);
+      expect(scheduleSpy).toHaveBeenCalledWith(autoRfq);
+      await storeService.dispatchBuyerComparisonNotification(autoRfq);
 
       // Expect reminder sent instead of unsealed comparison email
       expect(remindSpy).toHaveBeenCalledWith(
@@ -3038,19 +3581,13 @@ describe('demo RFQ seeding', () => {
       );
       expect(compareSpy).not.toHaveBeenCalled();
 
-      // Second timer execution for same RFQ does not duplicate reminder
-      remindSpy.mockClear();
-      storeService.notifyBuyerOfAutoClosureAndScheduleComparison(autoRfq, quotes);
-      jest.advanceTimersByTime(5 * 60 * 1000);
-      expect(remindSpy).not.toHaveBeenCalled();
-
       remindSpy.mockRestore();
       compareSpy.mockRestore();
-      jest.useRealTimers();
+      scheduleSpy.mockRestore();
     });
 
-    test('notifyBuyerOfAutoClosureAndScheduleComparison sends final comparison email to registered buyer without queueing or demanding profile completion', () => {
-      jest.useFakeTimers();
+    test('notifyBuyerOfAutoClosureAndScheduleComparison sends final comparison email to registered buyer without queueing or demanding profile completion', async () => {
+      const scheduleSpy = jest.spyOn(rfqChaserScheduler, 'scheduleBuyerComparison').mockReturnValue('comparison-id');
       const remindSpy = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
       const compareSpy = jest.spyOn(mailerService, 'sendRfqFinalComparisonEmail').mockResolvedValue({ sent: true });
 
@@ -3070,18 +3607,20 @@ describe('demo RFQ seeding', () => {
       );
 
       const quotes = [{ vendorId: 'v-reg-1', vendorName: 'Apex Industrial', totalPrice: 45000 }];
+      registeredRfq.quotes = quotes;
 
       storeService.notifyBuyerOfAutoClosureAndScheduleComparison(registeredRfq, quotes);
-
-      // Advance 5 minutes timer
-      jest.advanceTimersByTime(5 * 60 * 1000);
+      expect(scheduleSpy).toHaveBeenCalledWith(registeredRfq);
+      await storeService.dispatchBuyerComparisonNotification(registeredRfq);
 
       // Expect final comparison sent directly to registered buyer, and NO profile completion reminder sent
       expect(compareSpy).toHaveBeenCalledWith(
         'activebuyer@enterprise.com',
         expect.objectContaining({
           rfq: expect.objectContaining({ rfqNumber: 'RFQ-REG-AUTO-1' }),
-          quotes,
+          quotes: expect.arrayContaining([
+            expect.objectContaining({ vendorId: 'v-reg-1', totalPrice: 45000 }),
+          ]),
           recipientName: 'Active Enterprise Buyer Ltd',
         })
       );
@@ -3089,7 +3628,7 @@ describe('demo RFQ seeding', () => {
 
       remindSpy.mockRestore();
       compareSpy.mockRestore();
-      jest.useRealTimers();
+      scheduleSpy.mockRestore();
     });
 
     test('emailQuoteToBuyer dispatches quotation email directly to registered buyer without queueing', () => {

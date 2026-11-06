@@ -166,7 +166,7 @@ describe('notification endpoints surface an unexpected failure', () => {
   });
 
   test('read-all propagates a thrown error to the handler', async () => {
-    jest.spyOn(storeSvc, 'markAllNotificationsRead').mockImplementation(() => {
+    jest.spyOn(storeSvc, 'markAllNotificationsReadDurably').mockImplementation(() => {
       throw new Error('boom');
     });
     const res = await request(app).post('/api/notifications/read-all').set(authHeader('vendor'));
@@ -174,7 +174,7 @@ describe('notification endpoints surface an unexpected failure', () => {
   });
 
   test('PATCH propagates a thrown error to the handler', async () => {
-    jest.spyOn(storeSvc, 'markNotificationRead').mockImplementation(() => {
+    jest.spyOn(storeSvc, 'markNotificationReadDurably').mockImplementation(() => {
       throw new Error('boom');
     });
     const res = await request(app).patch('/api/notifications/ntf-1/read').set(authHeader('vendor'));

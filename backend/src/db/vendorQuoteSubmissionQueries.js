@@ -134,6 +134,15 @@ function makeD1VendorQuoteSubmissionStatements(options) {
     error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
     throw error;
   }
+  if (options.autoClosureComparisonJobId && (
+    typeof options.quoteId !== 'string' || !options.quoteId
+    || typeof options.autoClosureComparisonFireAt !== 'string' || !options.autoClosureComparisonFireAt
+    || options.updatedRFQ.status !== 'Closed'
+  )) {
+    const error = new Error('An RFQ comparison job requires a committed closing quote and fire time.');
+    error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
+    throw error;
+  }
 
   return {
     expectedVendor,
@@ -259,6 +268,25 @@ function makeD1VendorQuoteSubmissionStatements(options) {
         options.autoClosureRecipientEmail,
         options.autoClosureRecipientName || null,
       ],
+    }] : []).concat(options.autoClosureComparisonJobId ? [{
+      text: `INSERT OR IGNORE INTO rfq_comparison_queue
+        (id, rfq_id, rfq_number, status, fire_at)
+        SELECT $1, $2, $3, 'pending', $4
+        FROM rfqs r
+        WHERE r.id = $2 AND r.status = 'Closed' AND EXISTS (
+          SELECT 1 FROM json_each(CASE
+            WHEN json_type(r.raw, '$.quotes') = 'array' THEN json_extract(r.raw, '$.quotes')
+            ELSE '[]'
+          END) AS submitted_quote
+          WHERE CAST(json_extract(submitted_quote.value, '$.id') AS TEXT) = CAST($5 AS TEXT)
+        )`,
+      params: [
+        options.autoClosureComparisonJobId,
+        options.rfqId,
+        options.rfqNumber,
+        options.autoClosureComparisonFireAt,
+        options.quoteId,
+      ],
     }] : []),
   };
 }
@@ -367,6 +395,26 @@ async function submitVendorQuoteOnPostgres(options) {
             recipientEmail: options.autoClosureRecipientEmail,
             recipientName: options.autoClosureRecipientName || null,
           }),
+        ]
+      );
+    }
+    if (options.autoClosureComparisonJobId) {
+      if (typeof options.quoteId !== 'string' || !options.quoteId
+        || typeof options.autoClosureComparisonFireAt !== 'string' || !options.autoClosureComparisonFireAt
+        || options.updatedRFQ.status !== 'Closed') {
+        const error = new Error('An RFQ comparison job requires a committed closing quote and fire time.');
+        error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
+        throw error;
+      }
+      await client.query(
+        `INSERT INTO rfq_comparison_queue (id, rfq_id, rfq_number, status, fire_at)
+         VALUES ($1, $2, $3, 'pending', $4)
+         ON CONFLICT (rfq_id) DO NOTHING`,
+        [
+          options.autoClosureComparisonJobId,
+          options.rfqId,
+          options.rfqNumber,
+          options.autoClosureComparisonFireAt,
         ]
       );
     }

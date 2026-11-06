@@ -199,7 +199,11 @@ async function recordProcessed({
   rfqNumber = null,
 }) {
   if (!messageId) return false;
-  memoryProcessedMessageIds.add(String(messageId));
+  const key = String(messageId);
+  if (!pool.hasStorage()) {
+    memoryProcessedMessageIds.add(key);
+    return true;
+  }
   try {
     // email_ingestion_log has already been ported to D1 (see d1Bridge.js).
     // CURRENT_TIMESTAMP (not now()) and CAST(... AS INTEGER) (not ::int, below
@@ -218,7 +222,7 @@ async function recordProcessed({
          detail = excluded.detail,
          processed_at = CURRENT_TIMESTAMP`,
       [
-        String(messageId),
+        key,
         rfqId,
         rfqNumber,
         fromAddress ? String(fromAddress).slice(0, 320) : null,
@@ -228,6 +232,7 @@ async function recordProcessed({
       ],
       { d1: true }
     );
+    memoryProcessedMessageIds.add(key);
     return true;
   } catch (err) {
     logger.error('Email ingestion outcome could not be recorded', err, 'EMAIL_GATEWAY');

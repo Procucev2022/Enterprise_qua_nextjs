@@ -16,6 +16,7 @@ const rfqIngestionService = require('../src/services/rfqIngestionService');
 const rfqAttachmentService = require('../src/services/rfqAttachmentService');
 const storeService = require('../src/services/storeService');
 const mailerService = require('../src/services/mailerService');
+const domainQueries = require('../src/db/domainQueries');
 const dbPool = require('../src/db/pool');
 const { logger } = require('../src/services/loggerService');
 const {
@@ -267,7 +268,8 @@ describe('free trial credits are enforced the same way as on the portal', () => 
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({ sourcingMode: 'mode_0' }),
-      expect.anything()
+      expect.anything(),
+      expect.objectContaining({ deferPersistence: true, deferSideEffects: true })
     );
   });
 
@@ -284,6 +286,25 @@ describe('free trial credits are enforced the same way as on the portal', () => 
     expect(create).not.toHaveBeenCalled();
   });
 
+  test('durable credit enforcement ignores a stale cached zero balance and attempts the atomic create', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
+    storeService.getBuyerAccountByEmail.mockReturnValue(buyerAccount({ remainingFreeRFQs: 0 }));
+    jest.spyOn(emailGatewayService, 'resolveBuyerSourcingMode').mockReturnValue('mode_2');
+    mockExtraction();
+    const exhausted = Object.assign(new Error('free RFQ credits exhausted'), {
+      statusCode: 403,
+      code: 'FREE_RFQ_CREDITS_EXHAUSTED',
+      remaining: 0,
+    });
+    const createDurably = jest.spyOn(storeService, 'createRFQDurably').mockRejectedValue(exhausted);
+
+    const result = await emailGatewayService.processMessage(raw(), config());
+
+    expect(createDurably).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe(INGESTION_OUTCOME.RFQ_CREDITS_EXHAUSTED);
+  });
+
   test('Govardhan 17 Oct rule: buyer raising RFQ via email defaults to V0 even with remaining free trial credits', async () => {
     storeService.getBuyerAccountByEmail.mockReturnValue(buyerAccount({ remainingFreeRFQs: 5 }));
     mockExtraction();
@@ -294,7 +315,8 @@ describe('free trial credits are enforced the same way as on the portal', () => 
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({ sourcingMode: 'mode_0' }),
-      expect.anything()
+      expect.anything(),
+      expect.objectContaining({ deferPersistence: true, deferSideEffects: true })
     );
   });
 
@@ -442,6 +464,45 @@ describe('a retried email does not raise the same RFQ twice', () => {
 
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     expect(emailGatewayQueries.findProcessed).not.toHaveBeenCalled();
+  });
+
+  test('treats an atomic credit rejection as final instead of retrying the same email indefinitely', async () => {
+    mockExtraction();
+    const exhausted = Object.assign(new Error('free RFQ credits exhausted'), {
+      statusCode: 403,
+      code: 'FREE_RFQ_CREDITS_EXHAUSTED',
+      remaining: 0,
+    });
+    const createDurably = jest.spyOn(storeService, 'createRFQDurably').mockRejectedValue(exhausted);
+
+    const result = await emailGatewayService.processMessage(raw(), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.RFQ_CREDITS_EXHAUSTED);
+    expect(result.detail).toContain('0 left');
+    expect(createDurably).toHaveBeenCalledTimes(1);
+    expect(notice).toHaveBeenCalled();
+  });
+
+  test('keeps already committed groups and reports when later email groups exhaust the balance', async () => {
+    mockExtraction();
+    jest.spyOn(emailGatewayService, 'processLineItemsAndGroups').mockReturnValue(twoGroups());
+    const exhausted = Object.assign(new Error('free RFQ credits exhausted'), {
+      statusCode: 403,
+      code: 'FREE_RFQ_CREDITS_EXHAUSTED',
+      remaining: 0,
+    });
+    const created = { id: 'rfq-partial-1', rfqNumber: 'RFQ-PARTIAL-1' };
+    const createDurably = jest.spyOn(storeService, 'createRFQDurably')
+      .mockResolvedValueOnce(created)
+      .mockRejectedValueOnce(exhausted);
+
+    const result = await emailGatewayService.processMessage(raw(), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(result.rfqs).toEqual([created]);
+    expect(result.detail).toContain('Remaining email groups were skipped');
+    expect(createDurably).toHaveBeenCalledTimes(2);
+    expect(notice).toHaveBeenCalled();
   });
 });
 

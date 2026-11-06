@@ -1,4 +1,5 @@
 const dbPool = require('../src/db/pool');
+const { logger } = require('../src/services/loggerService');
 
 describe('Database pool (Neon PostgreSQL)', () => {
   afterEach(() => {
@@ -65,14 +66,24 @@ describe('Database pool (Neon PostgreSQL)', () => {
 
     test('returns a pool object when configuration is present and handles idle error', () => {
       const origEnv = process.env.NODE_ENV;
+      const loggerSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
       process.env.NODE_ENV = 'production';
       const pool = dbPool.createPool({ DATABASE_URL: 'postgres://user:pass@127.0.0.1:5432/db' });
 
       expect(pool).toBeTruthy();
       expect(typeof pool.query).toBe('function');
       // Trigger error listener to verify idle client recovery log
-      pool.emit('error', new Error('Connection reset by peer'));
-      process.env.NODE_ENV = origEnv;
+      const idleError = new Error('Connection reset by peer');
+      try {
+        pool.emit('error', idleError);
+        expect(loggerSpy).toHaveBeenCalledWith('Transient idle database client error; pool recovery continues', {
+          error: idleError,
+          recovery: 'client released by pool error handler',
+        }, 'DATABASE_POOL');
+      } finally {
+        if (origEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = origEnv;
+      }
       // Created lazily, so ending it performs no network I/O.
       return pool.end().catch(() => {});
     });
@@ -163,6 +174,25 @@ describe('Database pool (Neon PostgreSQL)', () => {
       expect(dbPool.NOT_CONFIGURED_MESSAGE).toContain('DATABASE_URL');
     });
 
+    test('logs database failures with safe query metadata and rethrows the original error', async () => {
+      const error = Object.assign(new Error('database unavailable'), { code: 'ECONNRESET' });
+      const query = jest.fn().mockRejectedValue(error);
+      const logError = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      dbPool.pool = { query };
+
+      await expect(dbPool.query('SELECT * FROM rfqs WHERE id = $1', ['private-id']))
+        .rejects.toBe(error);
+
+      expect(logError).toHaveBeenCalledWith('Database query failed', expect.objectContaining({
+        error,
+        table: 'rfqs',
+        parameterCount: 1,
+        provider: 'postgres',
+        queryId: expect.any(String),
+      }), 'DATABASE_QUERY');
+      expect(JSON.stringify(logError.mock.calls[0])).not.toContain('private-id');
+    });
+
     test('ignores the d1 option when no D1 binding is available (Node/Render)', async () => {
       const result = { rows: [{ id: 1 }] };
       dbPool.pool = { query: jest.fn().mockResolvedValue(result) };
@@ -185,6 +215,217 @@ describe('Database pool (Neon PostgreSQL)', () => {
       expect(d1Bridge.queryD1).toHaveBeenCalledWith({ id: 'fake-d1' }, 'select 1', ['a']);
       expect(result).toEqual({ rows: [{ id: 'from-d1' }] });
 
+      jest.dontMock('../src/db/d1Bridge');
+      jest.resetModules();
+    });
+
+    test('samples successful D1 query telemetry without logging bound values', async () => {
+      const originalRate = process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+      const originalBinding = globalThis.__CF_ENV__;
+      const logInfo = jest.spyOn(logger, 'info').mockImplementation(() => {});
+      const random = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+      const all = jest.fn().mockResolvedValue({
+        results: [{ id: 'private-row' }],
+        meta: {
+          changes: 0,
+          rows_read: 24,
+          rows_written: 1,
+          duration: 4,
+          size_after: 4096,
+          served_by_region: 'ENAM',
+          served_by_primary: true,
+          served_by_colo: 'IAD',
+        },
+      });
+      process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = '1';
+      globalThis.__CF_ENV__ = {
+        DB: {
+          prepare: jest.fn(() => ({
+            bind: jest.fn(() => ({ all })),
+            all,
+          })),
+        },
+      };
+
+      try {
+        await dbPool.query('SELECT * FROM vendors WHERE email = $1', ['private@example.com'], { d1: true });
+
+        expect(logInfo).toHaveBeenCalledWith('D1 query completed', expect.objectContaining({
+          table: 'vendors',
+          operation: 'SELECT',
+          access: 'read',
+          parameterCount: 1,
+          returnedRows: 1,
+          changedRows: 0,
+          rowsRead: 24,
+          rowsWritten: 1,
+          databaseDurationMs: 4,
+          databaseSizeAfterBytes: 4096,
+          servedByRegion: 'ENAM',
+          servedByPrimary: true,
+          servedByColo: 'IAD',
+          highRead: false,
+          provider: 'cloudflare-d1',
+          slow: false,
+        }), 'DATABASE_QUERY');
+        expect(JSON.stringify(logInfo.mock.calls)).not.toContain('private@example.com');
+      } finally {
+        if (originalRate === undefined) delete process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+        else process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = originalRate;
+        if (originalBinding === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalBinding;
+        random.mockRestore();
+      }
+    });
+
+    test('omits sampled D1 success logs when the configured rate is zero', async () => {
+      const originalRate = process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+      const originalBinding = globalThis.__CF_ENV__;
+      const logInfo = jest.spyOn(logger, 'info').mockImplementation(() => {});
+      const random = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+      const all = jest.fn().mockResolvedValue({ results: [], meta: { changes: 0 } });
+      process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = '0';
+      globalThis.__CF_ENV__ = { DB: { prepare: jest.fn(() => ({ all })) } };
+
+      try {
+        await dbPool.query('SELECT 1', [], { d1: true });
+        expect(logInfo).not.toHaveBeenCalledWith('D1 query completed', expect.anything(), 'DATABASE_QUERY');
+      } finally {
+        if (originalRate === undefined) delete process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+        else process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = originalRate;
+        if (originalBinding === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalBinding;
+        random.mockRestore();
+      }
+    });
+
+    test('logs D1 queries at the configured rows-read threshold even when sampling is off', async () => {
+      const originalRate = process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+      const originalHighReadThreshold = process.env.D1_QUERY_HIGH_READ_ROWS_THRESHOLD;
+      const originalBinding = globalThis.__CF_ENV__;
+      const logInfo = jest.spyOn(logger, 'info').mockImplementation(() => {});
+      const random = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+      const all = jest.fn().mockResolvedValue({ results: [], meta: { rows_read: 200, rows_written: 0 } });
+      process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = '0';
+      process.env.D1_QUERY_HIGH_READ_ROWS_THRESHOLD = '200';
+      globalThis.__CF_ENV__ = { DB: { prepare: jest.fn(() => ({ all })) } };
+
+      try {
+        await dbPool.query('SELECT COUNT(*) FROM vendors', [], { d1: true });
+        expect(logInfo).toHaveBeenCalledWith('D1 query completed', expect.objectContaining({
+          rowsRead: 200,
+          highRead: true,
+          provider: 'cloudflare-d1',
+        }), 'DATABASE_QUERY');
+      } finally {
+        if (originalRate === undefined) delete process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+        else process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = originalRate;
+        if (originalHighReadThreshold === undefined) delete process.env.D1_QUERY_HIGH_READ_ROWS_THRESHOLD;
+        else process.env.D1_QUERY_HIGH_READ_ROWS_THRESHOLD = originalHighReadThreshold;
+        if (originalBinding === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalBinding;
+        random.mockRestore();
+      }
+    });
+
+    test('falls back to the safe default for an invalid D1 high-read threshold', async () => {
+      const originalRate = process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+      const originalHighReadThreshold = process.env.D1_QUERY_HIGH_READ_ROWS_THRESHOLD;
+      const originalBinding = globalThis.__CF_ENV__;
+      const logInfo = jest.spyOn(logger, 'info').mockImplementation(() => {});
+      const random = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+      const all = jest.fn().mockResolvedValue({ results: [], meta: { rows_read: 1000, rows_written: 0 } });
+      process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = '0';
+      process.env.D1_QUERY_HIGH_READ_ROWS_THRESHOLD = 'invalid';
+      globalThis.__CF_ENV__ = { DB: { prepare: jest.fn(() => ({ all })) } };
+
+      try {
+        await dbPool.query('SELECT COUNT(*) FROM vendors', [], { d1: true });
+        expect(logInfo).toHaveBeenCalledWith('D1 query completed', expect.objectContaining({
+          rowsRead: 1000,
+          highRead: true,
+        }), 'DATABASE_QUERY');
+      } finally {
+        if (originalRate === undefined) delete process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+        else process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = originalRate;
+        if (originalHighReadThreshold === undefined) delete process.env.D1_QUERY_HIGH_READ_ROWS_THRESHOLD;
+        else process.env.D1_QUERY_HIGH_READ_ROWS_THRESHOLD = originalHighReadThreshold;
+        if (originalBinding === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalBinding;
+        random.mockRestore();
+      }
+    });
+
+    test('logs slow D1 queries and clamps invalid sampling values safely', async () => {
+      const originalRate = process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+      const originalBinding = globalThis.__CF_ENV__;
+      const originalThreshold = dbPool.queryAuditor.slowQueryThresholdMs;
+      const logInfo = jest.spyOn(logger, 'info').mockImplementation(() => {});
+      const logWarn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+      const all = jest.fn().mockResolvedValue({ results: [], meta: { changes: 0 } });
+      process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = 'invalid';
+      dbPool.queryAuditor.slowQueryThresholdMs = 0;
+      globalThis.__CF_ENV__ = { DB: { prepare: jest.fn(() => ({ all })) } };
+
+      try {
+        await dbPool.query('SELECT 1', [], { d1: true });
+        expect(logInfo).toHaveBeenCalledWith('D1 query completed', expect.objectContaining({ slow: true }), 'DATABASE_QUERY');
+        expect(logWarn).toHaveBeenCalledWith(expect.stringContaining('Slow database query detected'), expect.any(Object), 'DATABASE_PERFORMANCE');
+      } finally {
+        dbPool.queryAuditor.slowQueryThresholdMs = originalThreshold;
+        if (originalRate === undefined) delete process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+        else process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = originalRate;
+        if (originalBinding === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalBinding;
+        random.mockRestore();
+      }
+    });
+
+    test('labels HTTP-backed D1 success and safely reports unknown SQL operation', async () => {
+      const originalRate = process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+      const originalBinding = globalThis.__CF_ENV__;
+      const logInfo = jest.spyOn(logger, 'info').mockImplementation(() => {});
+      const random = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+      const all = jest.fn().mockResolvedValue({ results: [], meta: {} });
+      process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = '2';
+      globalThis.__CF_ENV__ = {
+        DB: { _isHttpClient: true, prepare: jest.fn(() => ({ all })) },
+      };
+
+      try {
+        await dbPool.query('/* leading comment */ SELECT 1', [], { d1: true });
+        expect(logInfo).toHaveBeenCalledWith('D1 query completed', expect.objectContaining({
+          operation: 'UNKNOWN',
+          provider: 'cloudflare-d1-http',
+          returnedRows: 0,
+        }), 'DATABASE_QUERY');
+      } finally {
+        if (originalRate === undefined) delete process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE;
+        else process.env.D1_QUERY_SUCCESS_LOG_SAMPLE_RATE = originalRate;
+        if (originalBinding === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = originalBinding;
+        random.mockRestore();
+      }
+    });
+
+    test('keeps unported queries on PostgreSQL when a D1 binding is present', async () => {
+      jest.resetModules();
+      const postgresResult = { rows: [{ id: 'from-postgres' }] };
+      const postgresQuery = jest.fn().mockResolvedValue(postgresResult);
+      jest.doMock('../src/db/d1Bridge', () => ({
+        getD1Binding: jest.fn().mockReturnValue({ id: 'fake-d1' }),
+        getD1HttpClient: jest.fn().mockReturnValue(null),
+        queryD1: jest.fn(),
+      }));
+      const freshPool = require('../src/db/pool');
+      const d1Bridge = require('../src/db/d1Bridge');
+      freshPool.pool = { query: postgresQuery };
+
+      await expect(freshPool.query('select * from document_vault')).resolves.toBe(postgresResult);
+
+      expect(postgresQuery).toHaveBeenCalledWith('select * from document_vault', []);
+      expect(d1Bridge.queryD1).not.toHaveBeenCalled();
       jest.dontMock('../src/db/d1Bridge');
       jest.resetModules();
     });
@@ -253,6 +494,7 @@ describe('Database pool (Neon PostgreSQL)', () => {
   describe('withTransaction', () => {
     let originalPool;
     let client;
+    const originalCfEnv = globalThis.__CF_ENV__;
 
     beforeEach(() => {
       originalPool = dbPool.pool;
@@ -262,6 +504,7 @@ describe('Database pool (Neon PostgreSQL)', () => {
 
     afterEach(() => {
       dbPool.pool = originalPool;
+      globalThis.__CF_ENV__ = originalCfEnv;
     });
 
     test('wraps the callback in BEGIN/COMMIT and returns its value', async () => {
@@ -291,16 +534,23 @@ describe('Database pool (Neon PostgreSQL)', () => {
 
     test('surfaces the original error even when the rollback itself fails', async () => {
       // A dropped connection makes ROLLBACK fail too; the caller needs the cause,
-      // not the secondary failure.
+      // not the secondary failure, while the logger records both details.
       const boom = new Error('original cause');
+      const rollbackError = new Error('connection already closed');
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
       client.query.mockImplementation(async (sql) => {
-        if (sql === 'ROLLBACK') throw new Error('connection already closed');
+        if (sql === 'ROLLBACK') throw rollbackError;
         if (sql === 'BEGIN') return { rows: [] };
         throw boom;
       });
 
       await expect(dbPool.withTransaction(async (c) => c.query('select 1'))).rejects.toThrow(
         'original cause'
+      );
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Database transaction rollback failed after the original operation failed',
+        { error: rollbackError, originalError: boom },
+        'DATABASE_TRANSACTION'
       );
       expect(client.release).toHaveBeenCalled();
     });
@@ -310,23 +560,21 @@ describe('Database pool (Neon PostgreSQL)', () => {
       expect(client.release).toHaveBeenCalledTimes(1);
     });
 
-    test('executes transaction with D1 client wrapper when D1 is available', async () => {
+    test('rejects an interactive transaction on D1 instead of running unprotected writes', async () => {
+      const logSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
       globalThis.__CF_ENV__ = {
-        DB: {
-          prepare: jest.fn().mockReturnValue({
-            bind: jest.fn().mockReturnThis(),
-            all: jest.fn().mockResolvedValue({ results: [{ id: 'tx-1' }] }),
-          }),
-        },
+        DB: { prepare: jest.fn() },
       };
 
-      const result = await dbPool.withTransaction(async (client) => {
-        const res = await client.query('select 1');
-        return res.rows;
-      });
-
-      expect(result).toEqual([{ id: 'tx-1' }]);
-      delete globalThis.__CF_ENV__;
+      await expect(dbPool.withTransaction(async (transactionClient) => {
+        await transactionClient.query('insert into t values (1)');
+      })).rejects.toThrow('Interactive transactions are unavailable on D1');
+      expect(client.query).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(
+        'Interactive transaction rejected for D1',
+        expect.objectContaining({ operation: 'withTransaction', provider: 'cloudflare-d1' }),
+        'DATABASE_TRANSACTION'
+      );
     });
 
     test('throws without connecting when the pool is not configured', async () => {

@@ -71,7 +71,7 @@ const httpHandler = httpServerHandler({ port: PORT });
 // `scheduled` export) are the platform's actual mechanism for periodic
 // background work: each trigger fire is its own short-lived invocation that
 // calls the same single-shot polling functions (pollBothInboxesOnce /
-// reconcileOnce) and dispatches due D1-backed chaser and outbox jobs.
+// reconcileOnce) and dispatches due D1-backed notification jobs.
 async function scheduled(controller, workerEnv, ctx) {
   if (workerEnv && typeof workerEnv === 'object') {
     globalThis.__CF_ENV__ = workerEnv;
@@ -87,15 +87,25 @@ async function scheduled(controller, workerEnv, ctx) {
   // vendor list into this isolate. Without it, an email RFQ finds no vendors to
   // invite. Same guard and call as the lazy hydration in app.js.
   const { default: storeService } = await import('./services/storeService.js');
+  const loggerModule = await import('./services/loggerService.js');
+  const logger = loggerModule.logger || loggerModule.default?.logger;
   if (!storeService.isHydratedFromDB) {
-    await storeService.hydrateFromDB().catch((err) => console.error('[CRON] hydration failed', err));
+    await storeService.hydrateFromDB().catch((err) => {
+      if (logger?.error) {
+        logger.error('Scheduled Worker state hydration failed', err, 'WORKER_CRON');
+      } else {
+        console.error('[CRON] hydration failed', err);
+      }
+    });
   }
   const cron = controller.cron;
   if (cron === EMAIL_GATEWAY_CRON) {
     const results = await Promise.allSettled([
       emailGatewayService.pollBothInboxesOnce(),
       rfqChaserScheduler.dispatchDueChaserJobs(),
+      rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
       eventOutboxService.dispatchDueEventOutboxJobs(),
+      storeService.closeExpiredRFQsDurably(),
     ]);
     const rejected = results.find((r) => r.status === 'rejected');
     if (rejected) throw rejected.reason;
@@ -116,8 +126,10 @@ async function scheduled(controller, workerEnv, ctx) {
     emailGatewayService.pollBothInboxesOnce(),
     zohoReconciliationService.reconcileOnce(),
     rfqChaserScheduler.dispatchDueChaserJobs(),
+    rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
     eventOutboxService.dispatchDueEventOutboxJobs(),
     eventOutboxService.purgeExpiredEventOutboxRows(),
+    storeService.closeExpiredRFQsDurably(),
   ]);
   const rejected = results.find((r) => r.status === 'rejected');
   if (rejected) throw rejected.reason;

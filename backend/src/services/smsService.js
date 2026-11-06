@@ -191,7 +191,7 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
   if (!formattedNumber || formattedNumber.length !== 10) {
     logger.warn(
       'SMS dispatch skipped: Invalid mobile number format',
-      { mobile },
+      { mobileLength: String(mobile || '').length },
       'SMS_SERVICE'
     );
 
@@ -209,8 +209,8 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
     now - lastSent < SMS_THROTTLE_WINDOW_MS
   ) {
     logger.warn(
-      `SMS dispatch throttled: ${formattedNumber} requested within ${SMS_THROTTLE_WINDOW_MS / 1000}s cooldown`,
-      {},
+      'SMS dispatch throttled by the recipient cooldown window',
+      { cooldownSeconds: SMS_THROTTLE_WINDOW_MS / 1000 },
       'SMS_SERVICE'
     );
 
@@ -227,8 +227,8 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
   // In test environment, skip live HTTP dispatch to avoid spamming recipient with test OTPs
   if (process.env.NODE_ENV === 'test') {
     logger.info(
-      `[TEST MODE] Mock SMS OTP dispatched to 91${formattedNumber} (Code: ${code})`,
-      {},
+      '[TEST MODE] Mock SMS OTP dispatch completed',
+      { testMode: true },
       'SMS_SERVICE'
     );
 
@@ -276,10 +276,11 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
     const responseText = await res.text();
 
     logger.info(
-      `SMS OTP dispatched to 91${formattedNumber}`,
+      'SMS OTP delivery provider responded',
       {
         status: res.status,
-        response: responseText,
+        accepted: res.ok,
+        responseLength: responseText.length,
       },
       'SMS_SERVICE'
     );

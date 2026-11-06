@@ -107,11 +107,14 @@ describe('atomic vendor quote submission queries', () => {
       autoClosureEmailEventId: 'outbox-auto-close-1',
       autoClosureRecipientEmail: 'buyer@example.test',
       autoClosureRecipientName: 'Buyer Org',
+      autoClosureComparisonJobId: 'comparison-rfq-atomic-quote',
+      autoClosureComparisonFireAt: '2026-11-06T10:05:00.000Z',
       updatedRFQ: rfq({ status: 'Closed', quotes: [{ id: 'quote-closing-1', vendorId: VENDOR_ID }] }),
     }));
     const event = built.statements[6];
+    const comparisonJob = built.statements[7];
 
-    expect(built.statements).toHaveLength(7);
+    expect(built.statements).toHaveLength(8);
     expect(event.text).toContain('INSERT OR IGNORE INTO event_outbox');
     expect(event.text).toContain("r.status = 'Closed'");
     expect(event.text).toContain("json_each(CASE");
@@ -123,12 +126,30 @@ describe('atomic vendor quote submission queries', () => {
       'buyer@example.test',
       'Buyer Org',
     ]);
+    expect(comparisonJob.text).toContain('INSERT OR IGNORE INTO rfq_comparison_queue');
+    expect(comparisonJob.text).toContain("r.status = 'Closed'");
+    expect(comparisonJob.text).toContain("json_each(CASE");
+    expect(comparisonJob.params).toEqual([
+      'comparison-rfq-atomic-quote',
+      RFQ_ID,
+      'RFQ-ATOMIC-QUOTE',
+      '2026-11-06T10:05:00.000Z',
+      'quote-closing-1',
+    ]);
   });
 
   test('rejects an incomplete durable auto-closure acknowledgement intent', () => {
     expect(() => queries.makeD1VendorQuoteSubmissionStatements(baseOptions({
       autoClosureEmailEventId: 'outbox-auto-close-invalid',
       autoClosureRecipientEmail: 'buyer@example.test',
+    }))).toThrow(expect.objectContaining({ code: 'INVALID_VENDOR_QUOTE_SUBMISSION' }));
+  });
+
+  test('rejects a comparison job without a closed RFQ and fire time', () => {
+    expect(() => queries.makeD1VendorQuoteSubmissionStatements(baseOptions({
+      quoteId: 'quote-not-closed',
+      autoClosureComparisonJobId: 'comparison-not-closed',
+      autoClosureComparisonFireAt: '2026-11-06T10:05:00.000Z',
     }))).toThrow(expect.objectContaining({ code: 'INVALID_VENDOR_QUOTE_SUBMISSION' }));
   });
 
@@ -253,7 +274,8 @@ describe('atomic vendor quote submission queries', () => {
       .mockResolvedValueOnce({ rows: [{ raw: savedVendor }] })
       .mockResolvedValueOnce({ rows: [{ raw: savedRFQ }] })
       .mockResolvedValueOnce({ rows: [{ id: 'tx-atomic-quote', amount: -1 }] })
-      .mockResolvedValueOnce({ rows: [{ id: 'outbox-auto-close-pg-1' }] }) };
+      .mockResolvedValueOnce({ rows: [{ id: 'outbox-auto-close-pg-1' }] })
+      .mockResolvedValueOnce({ rows: [] }) };
     jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback(client));
 
     await queries.submitVendorQuoteInDB(baseOptions({
@@ -261,10 +283,12 @@ describe('atomic vendor quote submission queries', () => {
       autoClosureEmailEventId: 'outbox-auto-close-pg-1',
       autoClosureRecipientEmail: 'buyer@example.test',
       autoClosureRecipientName: 'Buyer Org',
+      autoClosureComparisonJobId: 'comparison-rfq-atomic-quote',
+      autoClosureComparisonFireAt: '2026-11-06T10:05:00.000Z',
       updatedRFQ: rfq({ status: 'Closed', quotes: [{ id: 'quote-pg-close-1', vendorId: VENDOR_ID }] }),
     }));
 
-    expect(client.query).toHaveBeenCalledTimes(7);
+    expect(client.query).toHaveBeenCalledTimes(8);
     expect(client.query.mock.calls[6][0]).toContain('INSERT INTO event_outbox');
     expect(client.query.mock.calls[6][1]).toEqual([
       'outbox-auto-close-pg-1',
@@ -275,6 +299,13 @@ describe('atomic vendor quote submission queries', () => {
         recipientEmail: 'buyer@example.test',
         recipientName: 'Buyer Org',
       }),
+    ]);
+    expect(client.query.mock.calls[7][0]).toContain('INSERT INTO rfq_comparison_queue');
+    expect(client.query.mock.calls[7][1]).toEqual([
+      'comparison-rfq-atomic-quote',
+      RFQ_ID,
+      'RFQ-ATOMIC-QUOTE',
+      '2026-11-06T10:05:00.000Z',
     ]);
   });
 

@@ -290,3 +290,9 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - When a vendor quote closes an RFQ, its buyer acknowledgement intent now commits in the same PostgreSQL transaction or D1 atomic batch as the RFQ, vendor credit, and ledger writes. The D1 insert checks the committed closed state and triggering quote ID, preventing an event from being created after a failed compare-and-set.
 - The dispatcher reloads the RFQ and triggering quote, sends the acknowledgement through the existing mail provider, retries provider rejection, and dead-letters malformed or stale records. The synchronous direct email is skipped when the durable event was committed; the delayed comparison queue remains unchanged.
 - The existing `event_outbox` table supports this event, so no schema migration is needed. Production database execution remains deferred while D1 credentials are being added; delivery retains the outbox's at-least-once behavior.
+
+## Durable RFQ comparison notification delivery
+
+- When a vendor quote closes an RFQ, its delayed comparison job now commits in the same PostgreSQL transaction or D1 atomic batch as the RFQ, vendor credit, ledger, and immediate acknowledgement intent. The stable RFQ-scoped job key prevents duplicate submissions from creating duplicate follow-ups.
+- Node schedules and periodically claims due jobs, recovering pending work on startup; Workers claim due jobs from Cron. Email and SMS completion are tracked separately, provider failures retry with bounded attempts, and malformed channel state is rejected. The existing comparison queue schema is reused.
+- Focused quote-persistence, comparison queue query, and scheduler tests passed. Full repository quality checks passed. Production PostgreSQL/D1 delivery remains unverified while the configured D1 account has no visible database; provider delivery is at-least-once if acceptance is followed by a lost completion write.

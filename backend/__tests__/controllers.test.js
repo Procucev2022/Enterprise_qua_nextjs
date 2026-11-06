@@ -10,6 +10,7 @@ const rfqController = require('../src/controllers/rfqController');
 const supportChatController = require('../src/controllers/supportChatController');
 const vendorController = require('../src/controllers/vendorController');
 const storeService = require('../src/services/storeService');
+const { logger } = require('../src/services/loggerService');
 const domainPool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
 
@@ -47,33 +48,36 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     await aiFeedController.getAIFeed({}, res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await aiFeedController.createFeedItem({ body: { title: 'Test Feed', message: 'Test Message' } }, res, next);
+    await aiFeedController.createFeedItem(buyerReq({ body: { title: 'Test Feed', message: 'Test Message' } }), res, next);
     expect(res.status).toHaveBeenCalledWith(201);
 
-    await aiFeedController.createFeedItem({ body: {} }, res, next);
+    await aiFeedController.createFeedItem(buyerReq({ body: {} }), res, next);
     expect(res.status).toHaveBeenCalledWith(400);
 
     jest.spyOn(storeService, 'getAIFeed').mockImplementationOnce(() => {
       throw new Error('AI Feed Error');
     });
-    await aiFeedController.getAIFeed({}, res, next);
+    await aiFeedController.getAIFeed({ user: { role: 'admin' } }, res, next);
     expect(next).toHaveBeenCalled();
   });
 
   test('auditController methods & error handling', async () => {
     const next = jest.fn();
     const res = mockRes();
+    const auditSpy = jest.spyOn(logger, 'audit');
 
     await auditController.getAuditLogs({}, res, next);
     expect(res.json).toHaveBeenCalled();
 
     await auditController.createAuditLog({
-      user: { email: 'test@user.com', role: 'admin' },
-      body: { action: 'TEST_ACTION', userEmail: 'forged@user.com' },
+      user: { email: 'session@user.test', role: 'admin' },
+      ip: '192.0.2.5',
+      body: { action: 'TEST_ACTION', userEmail: 'forged@user.test' },
     }, res, next);
     expect(res.status).toHaveBeenCalledWith(201);
+    expect(auditSpy).toHaveBeenCalledTimes(1);
 
-    await auditController.createAuditLog({ user: { email: 'test@user.com' }, body: {} }, res, next);
+    await auditController.createAuditLog({ user: { email: 'session@user.test' }, body: {} }, res, next);
     expect(res.status).toHaveBeenCalledWith(400);
 
     await auditController.verifyIntegrity({}, res, next);
@@ -105,10 +109,10 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     const res = mockRes();
     const buyerUser = { role: 'buyer', email: 'buyer@procucev.com' };
 
-    await buyerAccountController.getBuyerAccounts({}, res, next);
+    await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' } }, res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await buyerAccountController.getActiveAccount({}, res, next);
+    await buyerAccountController.getActiveAccount({ user: buyerUser }, res, next);
     expect(res.json).toHaveBeenCalled();
 
     await buyerAccountController.setActiveAccount({ body: { id: 'buyer-1' }, user: buyerUser }, res, next);
@@ -137,7 +141,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     jest.spyOn(storeService, 'getBuyerAccounts').mockImplementationOnce(() => {
       throw new Error('Buyer Accounts Error');
     });
-    await buyerAccountController.getBuyerAccounts({}, res, next);
+    await buyerAccountController.getBuyerAccounts({ user: { role: 'admin' } }, res, next);
     expect(next).toHaveBeenCalled();
   });
 

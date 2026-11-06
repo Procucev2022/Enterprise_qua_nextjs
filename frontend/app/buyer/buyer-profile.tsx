@@ -77,6 +77,7 @@ export default function BuyerProfilePage() {
   const pincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
+    let isCurrentValidation = true;
     const raw = pincode.trim();
     if (pincodeDebounceRef.current) clearTimeout(pincodeDebounceRef.current);
     if (!raw) {
@@ -102,6 +103,7 @@ export default function BuyerProfilePage() {
       pincodeDebounceRef.current = setTimeout(async () => {
         try {
           const res = await validatePincode(raw);
+          if (!isCurrentValidation) return;
           if (!res.isValid) {
             setPincodeError(res.message || 'Invalid PIN code');
             setPincodePostOffices([]);
@@ -117,10 +119,16 @@ export default function BuyerProfilePage() {
               if (matchedState) setState(matchedState);
             }
           }
-        } catch {
-          setPincodeError(null);
+        } catch (error: unknown) {
+          if (isCurrentValidation) {
+            logger.warn('Buyer profile postal-code validation failed; retaining format-only validation', {
+              error,
+              pincodeLength: raw.length,
+            }, 'BUYER_PROFILE');
+            setPincodeError(null);
+          }
         } finally {
-          setPincodeValidating(false);
+          if (isCurrentValidation) setPincodeValidating(false);
         }
       }, 350);
     } else {
@@ -128,12 +136,19 @@ export default function BuyerProfilePage() {
       setPincodeValidating(false);
       setPincodePostOffices([]);
     }
+
+    return () => {
+      isCurrentValidation = false;
+      if (pincodeDebounceRef.current) {
+        clearTimeout(pincodeDebounceRef.current);
+        pincodeDebounceRef.current = null;
+      }
+    };
   }, [pincode]);
   const [country, setCountry] = useState('');
 
-  // Contact Person State. Email and mobile belong to the signed-in account's
-  // `user` row and are shown as loaded; the save endpoint ignores them so a
-  // profile edit can never reassign the login identity.
+  // Contact Person State. Email and registered mobile belong to the signed-in
+  // account's `user` row; profile edits cannot reassign login identity.
   const [contactName, setContactName] = useState('');
   const [contactDesignation, setContactDesignation] = useState('');
   const [contactEmail, setContactEmail] = useState('');
@@ -151,6 +166,8 @@ export default function BuyerProfilePage() {
     categoryTaxonomy && categoryTaxonomy.length > 0
       ? categoryTaxonomy
       : getDefaultCategoryTaxonomy();
+  const fallbackTaxonomyRef = useRef(fallbackTaxonomy);
+  fallbackTaxonomyRef.current = fallbackTaxonomy;
 
   const [taxonomy, setTaxonomy] = useState<MajorMinorCategory[]>(() => fallbackTaxonomy);
 
@@ -223,7 +240,7 @@ export default function BuyerProfilePage() {
       if (!taxonomyResult.success) {
         showToastRef.current(UI_STRINGS.buyerProfile.loadFailedTitle, taxonomyResult.error || '', 'warning');
       }
-      setTaxonomy((prev) => (prev.length > 0 ? prev : fallbackTaxonomy));
+      setTaxonomy((prev) => (prev.length > 0 ? prev : fallbackTaxonomyRef.current));
     }
 
     if (!profileResult.success || !profileResult.data) {
@@ -849,13 +866,15 @@ export default function BuyerProfilePage() {
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Mobile Number</label>
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{UI_STRINGS.buyerProfile.registeredMobileNumberLabel}</label>
                   <input
                     type="text"
                     value={contactPhone}
-                    onChange={(e) => setContactPhone(e.target.value)}
+                    readOnly
+                    aria-readonly="true"
                     className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
                   />
+                  <p className="mt-1 text-[10px] text-slate-500">{UI_STRINGS.buyerProfile.registeredMobileReadOnlyHint}</p>
                 </div>
               </div>
             </div>
