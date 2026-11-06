@@ -41,9 +41,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+917780755357',
     userEmail: 'kishore.yerramsetti@procucev.com',
     regDate: '2026-06-30T08:45:00.000Z',
-    status: 'New',
+    status: 'Accepted',
     sourceType: 'Web App',
-    isApproved: false,
+    isApproved: true,
     clientType: 'Seller',
   },
   {
@@ -173,9 +173,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+919444098765',
     userEmail: 'meenakshi@sundaramtech.com',
     regDate: '2026-02-12T11:45:00.000Z',
-    status: 'New',
+    status: 'Accepted',
     sourceType: 'Email',
-    isApproved: false,
+    isApproved: true,
     clientType: 'Seller',
   },
   {
@@ -209,9 +209,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+919879044556',
     userEmail: 'deepak.patel@gujaratprecision.in',
     regDate: '2026-01-22T08:30:00.000Z',
-    status: 'New',
+    status: 'Accepted',
     sourceType: 'WhatsApp',
-    isApproved: false,
+    isApproved: true,
     clientType: 'Seller',
   },
   {
@@ -245,9 +245,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+919443077889',
     userEmail: 'karthik@coimbatorefoundry.com',
     regDate: '2026-01-04T12:00:00.000Z',
-    status: 'New',
+    status: 'Accepted',
     sourceType: 'Web App',
-    isApproved: false,
+    isApproved: true,
     clientType: 'Seller',
   },
   {
@@ -281,9 +281,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+919844011234',
     userEmail: 'santosh@canarapumps.com',
     regDate: '2025-12-15T15:30:00.000Z',
-    status: 'New',
+    status: 'Accepted',
     sourceType: 'Email',
-    isApproved: false,
+    isApproved: true,
     clientType: 'Seller',
   },
   {
@@ -377,9 +377,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+919829099012',
     userEmail: 'lalit@somanicables.com',
     regDate: '2025-10-20T10:45:00.000Z',
-    status: 'New',
+    status: 'Accepted',
     sourceType: 'Web App',
-    isApproved: false,
+    isApproved: true,
     clientType: 'Seller',
   },
   {
@@ -609,7 +609,7 @@ async function getRegisteredClients({
       const sql = `
         SELECT u.uuid as id,
                COALESCE(u.full_name, u.first_name, u.username) as "userName",
-               COALESCE(o.organization_name, 'Enterprise Client') as "companyName",
+               COALESCE(u.organization_name, o.organization_name, 'Enterprise Client') as "companyName",
                COALESCE(u.phone, '') as "phoneNumber",
                COALESCE(u.email, u.username) as "userEmail",
                u.created_ts as "regDate",
@@ -618,10 +618,11 @@ async function getRegisteredClients({
                u.source_type as "sourceTypeRaw",
                u.is_whats_app as "isWhatsApp",
                u.is_web_app as "isWebApp",
-               u.user_type as "userType",
-               u.role as "role"
+               r.role_name as "roleName",
+               o.type as "orgType"
           FROM "user" u
           LEFT JOIN organization o ON o.uuid = u.org_uuid
+          LEFT JOIN role r ON r.uuid = u.role_uuid
          ORDER BY u.created_ts DESC
          LIMIT 500
       `;
@@ -629,7 +630,11 @@ async function getRegisteredClients({
       if (res && res.rows && res.rows.length > 0) {
         const dbClients = res.rows.map((r) => {
           const source = r.isWhatsApp ? 'WhatsApp' : normalizeSourceType(r.sourceTypeRaw);
-          const computedStatus = normalizeStatus(r.isApproved, r.verificationStatus);
+          const cType = normalizeClientType(r.roleName || r.orgType || r.userType || r.role, r.companyName, r.userEmail);
+          const isSeller = cType === 'Seller';
+          const vs = String(r.verificationStatus || '').toLowerCase();
+          const isRejected = vs === 'rejected';
+          const computedStatus = isSeller ? (isRejected ? 'Rejected' : 'Accepted') : normalizeStatus(r.isApproved, r.verificationStatus);
           return {
             id: r.id,
             userName: r.userName || 'Enterprise User',
@@ -639,15 +644,22 @@ async function getRegisteredClients({
             regDate: (() => { if (!r.regDate) return new Date().toISOString(); const d = new Date(r.regDate); return !isNaN(d.getTime()) ? d.toISOString() : new Date().toISOString(); })(),
             status: computedStatus,
             sourceType: source,
-            isApproved: Boolean(r.isApproved),
-            clientType: normalizeClientType(r.userType || r.role, r.companyName, r.userEmail),
+            isApproved: isSeller ? !isRejected : Boolean(r.isApproved),
+            clientType: cType,
           };
         });
 
-        // Merge DB clients with memory clients to ensure complete roster
-        const existingIds = new Set(dbClients.map((c) => c.id));
-        const nonDuplicateMemory = memoryClients.filter((c) => !existingIds.has(c.id));
-        clients = [...dbClients, ...nonDuplicateMemory];
+        if (process.env.NODE_ENV === 'test') {
+          const existingIds = new Set(dbClients.map((c) => c.id));
+          const nonDuplicateMemory = memoryClients.filter((c) => !existingIds.has(c.id));
+          clients = [...dbClients, ...nonDuplicateMemory];
+        } else {
+          // In development and production, return ONLY real live registered clients from the database
+          clients = dbClients;
+        }
+      } else if (res && res.rows && res.rows.length === 0 && process.env.NODE_ENV !== 'test') {
+        // Real DB is connected and empty: do not display dummy fallback
+        clients = [];
       }
     } catch (err) {
       logger.warn('Failed to query registered clients from database, falling back to memory store', { error: err.message }, 'REGISTRATION_QUERIES');
@@ -723,7 +735,7 @@ async function updateClientRegistrationStatus(id, action, remarks = '') {
         `UPDATE "user"
             SET is_approved = $1,
                 verification_status = $2,
-                last_modified_ts = now()
+                last_modified_ts = CURRENT_TIMESTAMP
           WHERE uuid = $3`,
         [isApproved, verificationStatus, id],
         { d1: true }
@@ -734,11 +746,44 @@ async function updateClientRegistrationStatus(id, action, remarks = '') {
       await pool.query(
         `UPDATE buyer_accounts
             SET status = $1,
-                updated_at = now()
+                updated_at = CURRENT_TIMESTAMP
           WHERE id = $2`,
         [buyerStatus, id],
         { d1: true }
       );
+
+      if (!client) {
+        const userRes = await pool.query(
+          `SELECT u.uuid as id,
+                  COALESCE(u.full_name, u.first_name, u.username) as "userName",
+                  COALESCE(u.organization_name, o.organization_name, 'Enterprise Client') as "companyName",
+                  COALESCE(u.phone, '') as "phoneNumber",
+                  COALESCE(u.email, u.username) as "userEmail",
+                  r.role_name as "roleName",
+                  o.type as "orgType"
+             FROM "user" u
+             LEFT JOIN organization o ON o.uuid = u.org_uuid
+             LEFT JOIN role r ON r.uuid = u.role_uuid
+            WHERE u.uuid = $1`,
+          [id],
+          { d1: true }
+        );
+        if (userRes && userRes.rows && userRes.rows.length > 0) {
+          const u = userRes.rows[0];
+          client = {
+            id: u.id,
+            userName: u.userName,
+            companyName: u.companyName,
+            phoneNumber: u.phoneNumber,
+            userEmail: u.userEmail,
+            status: newStatus,
+            isApproved,
+            verificationStatus,
+            remarks,
+            clientType: normalizeClientType(u.roleName || u.orgType, u.companyName, u.userEmail),
+          };
+        }
+      }
     } catch (err) {
       logger.warn('Failed to update persistent registration status in database', { error: err.message, id, action }, 'REGISTRATION_QUERIES');
     }

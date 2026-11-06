@@ -1234,6 +1234,7 @@ async function extractRFQFromDocument(req, res, next) {
       estimatedBudget: extraction.estimatedBudget,
       targetDeliveryDate: derivedDeliveryDate,
       source: 'ai_extraction',
+      allowEmptyDeliveryDate: true,
       sourceFileName: body.fileName,
       ...(sourceEmail ? { sourceEmail } : {}),
       requireValidQuantity: true,

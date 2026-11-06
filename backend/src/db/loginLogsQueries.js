@@ -142,7 +142,9 @@ const DEFAULT_LOGS = [
 ];
 
 const inMemoryLogs = new Map();
-DEFAULT_LOGS.forEach((item) => inMemoryLogs.set(item.id, { ...item }));
+if (process.env.NODE_ENV === 'test') {
+  DEFAULT_LOGS.forEach((item) => inMemoryLogs.set(item.id, { ...item }));
+}
 
 /**
  * List login logs with optional filters for role, status, date range, search, and pagination.
@@ -171,8 +173,8 @@ async function listLoginLogs(options = {}) {
       }
 
       if (search && typeof search === 'string' && search.trim()) {
-        const escaped = `%${escapeLikeWildcards(search.trim())}%`;
-        conditions.push(`(user_name ILIKE $${idx} OR email ILIKE $${idx + 1} OR company_name ILIKE $${idx + 2} OR phone_number ILIKE $${idx + 3})`);
+        const escaped = `%${escapeLikeWildcards(search.trim().toLowerCase())}%`;
+        conditions.push(`(LOWER(user_name) LIKE $${idx} ESCAPE '\\' OR LOWER(email) LIKE $${idx + 1} ESCAPE '\\' OR LOWER(company_name) LIKE $${idx + 2} ESCAPE '\\' OR LOWER(phone_number) LIKE $${idx + 3} ESCAPE '\\')`);
         values.push(escaped, escaped, escaped, escaped);
         idx += 4;
       }
@@ -274,6 +276,58 @@ async function listLoginLogs(options = {}) {
  * Returns summary KPI metrics for the real-time login logs dashboard.
  */
 async function getLoginLogsSummary() {
+  if (pool && pool.hasStorage && pool.hasStorage()) {
+    try {
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const startOfTodayIso = now.toISOString();
+
+      const todayRes = await pool.query(
+        'SELECT COUNT(*) as count FROM user_login_logs WHERE login_at >= $1',
+        [startOfTodayIso],
+        { d1: true }
+      );
+      const activeRes = await pool.query(
+        "SELECT COUNT(*) as count FROM user_login_logs WHERE status = 'ACTIVE'",
+        [],
+        { d1: true }
+      );
+      const buyerRes = await pool.query(
+        "SELECT COUNT(*) as count FROM user_login_logs WHERE LOWER(user_type) = 'buyer'",
+        [],
+        { d1: true }
+      );
+      const sellerRes = await pool.query(
+        "SELECT COUNT(*) as count FROM user_login_logs WHERE LOWER(user_type) IN ('seller', 'vendor', 'supplier')",
+        [],
+        { d1: true }
+      );
+      const durationRes = await pool.query(
+        "SELECT AVG(duration_seconds) as avg_sec FROM user_login_logs WHERE duration_seconds > 0",
+        [],
+        { d1: true }
+      );
+
+      const totalToday = parseInt(todayRes.rows[0]?.count || 0, 10);
+      const activeNow = parseInt(activeRes.rows[0]?.count || 0, 10);
+      const buyerLogins = parseInt(buyerRes.rows[0]?.count || 0, 10);
+      const sellerLogins = parseInt(sellerRes.rows[0]?.count || 0, 10);
+      const avgDurationSec = parseFloat(durationRes.rows[0]?.avg_sec || 0);
+      const avgDurationMinutes = Math.round(avgDurationSec / 60) || 0;
+
+      return {
+        totalToday,
+        activeNow,
+        buyerLogins,
+        sellerLogins,
+        avgDurationMinutes,
+        todayPeakHour: totalToday > 0 ? 'Live Telemetry Active' : 'None',
+      };
+    } catch (err) {
+      logger.warn('getLoginLogsSummary: DB query failed, falling back to memory', { error: err.message }, 'LOGIN_LOGS_QUERIES');
+    }
+  }
+
   const items = Array.from(inMemoryLogs.values());
   const now = new Date();
   now.setHours(0, 0, 0, 0);
@@ -305,15 +359,15 @@ async function getLoginLogsSummary() {
     }
   });
 
-  const avgDurationMinutes = durationCount > 0 ? Math.round(totalDurationSec / durationCount / 60) : 42;
+  const avgDurationMinutes = durationCount > 0 ? Math.round(totalDurationSec / durationCount / 60) : 0;
 
   return {
-    totalToday: Math.max(totalToday, 148),
-    activeNow: Math.max(activeNow, 24),
-    buyerLogins: Math.max(buyerLogins, 82),
-    sellerLogins: Math.max(sellerLogins, 66),
+    totalToday,
+    activeNow,
+    buyerLogins,
+    sellerLogins,
     avgDurationMinutes,
-    todayPeakHour: '10:00 AM - 11:30 AM',
+    todayPeakHour: totalToday > 0 ? 'Live Telemetry Active' : 'None',
   };
 }
 

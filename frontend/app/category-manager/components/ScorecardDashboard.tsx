@@ -273,7 +273,7 @@ export function ScorecardDashboard() {
   }, [scorecardData, viewMode, selectedExecutiveId, scorecardSortField, scorecardSortOrder]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 w-full min-w-0 max-w-full">
       {/* Top Filter Bar 1: View Toggle, Periods, Project Filter, Export */}
       <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <div className="flex flex-wrap items-center gap-3">

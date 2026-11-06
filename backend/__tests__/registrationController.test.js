@@ -166,5 +166,54 @@ describe('internalTaskController - Registrations', () => {
       );
     });
 
+    test('dispatches credentials email when buyer registration is accepted', async () => {
+      req.params = { id: 'reg-buyer-101' };
+      req.body = { action: 'accept' };
+
+      const mockBuyer = {
+        id: 'reg-buyer-101',
+        userName: 'Priya Verma',
+        userEmail: 'priya@acme.com',
+        phoneNumber: '+919876543210',
+        clientType: 'Buyer',
+        status: 'Accepted',
+        isApproved: true,
+      };
+      jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockResolvedValue(mockBuyer);
+      const mailerService = require('../src/services/mailerService');
+      const mailSpy = jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ success: true });
+
+      await internalTaskController.handleRegistrationAction(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(mailSpy).toHaveBeenCalledWith(expect.objectContaining({
+        to: 'priya@acme.com',
+        recipientName: 'Priya Verma',
+      }));
+    });
+
+    test('handles mailer error gracefully when credentials email dispatch fails', async () => {
+      req.params = { id: 'reg-buyer-102' };
+      req.body = { action: 'accept' };
+
+      const mockBuyer = {
+        id: 'reg-buyer-102',
+        userName: 'Amit Singh',
+        userEmail: 'amit@acme.com',
+        phoneNumber: '+919876543211',
+        clientType: 'Buyer',
+        status: 'Accepted',
+        isApproved: true,
+      };
+      jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockResolvedValue(mockBuyer);
+      const mailerService = require('../src/services/mailerService');
+      jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockRejectedValue(new Error('SMTP connection error'));
+
+      await internalTaskController.handleRegistrationAction(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    });
+
   });
 });
