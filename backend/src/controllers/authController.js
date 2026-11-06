@@ -23,15 +23,17 @@ async function login(req, res, next) {
     if (code) {
       const result = await authService.verifyOtp(email, code, ipAddress, mobile);
       if (result && result.success && result.user) {
-        loginLogsQueries.recordLoginLog({
-          userId: result.user.id,
-          userName: result.user.name,
-          email: result.user.email,
-          phoneNumber: result.user.mobile,
-          companyName: result.user.orgName || result.user.companyName || 'Enterprise Partner',
-          userType: result.user.role === 'vendor' ? 'vendor' : 'buyer',
-          ipAddress,
-        }).catch(() => {});
+        try {
+          await loginLogsQueries.recordLoginLog({
+            userId: result.user.id,
+            userName: result.user.name,
+            email: result.user.email,
+            phoneNumber: result.user.mobile,
+            companyName: result.user.orgName || result.user.companyName || 'Enterprise Partner',
+            userType: result.user.role === 'vendor' ? 'vendor' : 'buyer',
+            ipAddress,
+          });
+        } catch (_) {}
       }
       return res.json(result);
     }
@@ -39,15 +41,17 @@ async function login(req, res, next) {
     if (password) {
       const result = await authService.authenticateWithPassword(email, password, ipAddress, mobile);
       if (result && result.success && result.user) {
-        loginLogsQueries.recordLoginLog({
-          userId: result.user.id,
-          userName: result.user.name,
-          email: result.user.email,
-          phoneNumber: result.user.mobile,
-          companyName: result.user.orgName || result.user.companyName || 'Enterprise Partner',
-          userType: result.user.role === 'vendor' ? 'vendor' : 'buyer',
-          ipAddress,
-        }).catch(() => {});
+        try {
+          await loginLogsQueries.recordLoginLog({
+            userId: result.user.id,
+            userName: result.user.name,
+            email: result.user.email,
+            phoneNumber: result.user.mobile,
+            companyName: result.user.orgName || result.user.companyName || 'Enterprise Partner',
+            userType: result.user.role === 'vendor' ? 'vendor' : 'buyer',
+            ipAddress,
+          });
+        } catch (_) {}
       }
       return res.json(result);
     }
