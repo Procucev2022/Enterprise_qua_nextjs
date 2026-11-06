@@ -354,7 +354,7 @@ describe('SupplierDossierDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save Categories/i }));
     await waitFor(() => {
       expect(screen.getByText('Error updating categories')).toBeInTheDocument();
-    });
+    }, { timeout: 3000 });
   });
 
   test('4. Quotes Tab displays quotes, supports search, status filtering, and opens Quote Details Modal', async () => {

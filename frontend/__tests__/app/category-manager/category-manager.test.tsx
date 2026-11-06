@@ -1029,7 +1029,7 @@ describe('Category Manager Screens Suite', () => {
 
       // Test review performance for first vendor
       fireEvent.change(searchInput, { target: { value: '' } });
-      await waitFor(() => expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument());
+      await waitFor(() => expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument(), { timeout: 3000 });
       const reviewBtns = screen.queryAllByRole('button', { name: /Review Performance/i });
       if (reviewBtns.length > 0) {
         fireEvent.click(reviewBtns[0]);

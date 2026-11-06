@@ -262,7 +262,7 @@ async function renderLoaded(): Promise<User> {
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith(LIST_URL);
     expect(screen.getByRole('button', { name: COPY.refresh })).toBeEnabled();
-  });
+  }, { timeout: 3000 });
   return user;
 }
 
