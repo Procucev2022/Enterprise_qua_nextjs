@@ -231,5 +231,24 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       expect(res[0].id).toBe('v-high');
       expect(res[1].id).toBe('v-low');
     });
+
+    test('extracts domain keywords from lineItems and titles in _rfqCategorySignals', () => {
+      const rfqPipes = {
+        title: 'Need 2-inch PVC Pipe urgently',
+        category: 'Engineering Spares - Mechanical',
+        lineItems: [{ description: 'PVC Pipe 2-inch diameter schedule 40' }],
+      };
+      const signals = storeService._rfqCategorySignals(rfqPipes);
+      expect(signals).toContain('Pipes & Pipe Fittings');
+      expect(signals).toContain('Plumbing');
+
+      const rfqPacking = {
+        title: 'Packing Supplies',
+        category: 'Industrial',
+        extractedEntities: [{ description: 'Bubble Rolls for packaging' }],
+      };
+      const packSignals = storeService._rfqCategorySignals(rfqPacking);
+      expect(packSignals).toContain('Packing Material');
+    });
   });
 });

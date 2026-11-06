@@ -3751,11 +3751,38 @@ class StoreService {
       if (ent.majorCategory) rawSignals.push(ent.majorCategory);
       if (ent.minorCategory) rawSignals.push(ent.minorCategory);
       if (ent.category) rawSignals.push(ent.category);
+      const text = [ent.description, ent.itemName, ent.name, ent.materialDescription].filter(Boolean).join(' ').toLowerCase();
+      if (text) {
+        if (text.includes('pipe') || text.includes('plumbing') || text.includes('fitting') || text.includes('flange') || text.includes('pvc')) {
+          rawSignals.push('Pipes & Pipe Fittings', 'Plumbing');
+        }
+        if (text.includes('bubble roll') || text.includes('bubble wrap') || text.includes('packing') || text.includes('corrugated')) {
+          rawSignals.push('Packing Material', 'Packaging Material');
+        }
+      }
     }
     for (const item of Array.isArray(rfq.lineItems) ? rfq.lineItems : []) {
       if (item.majorCategory) rawSignals.push(item.majorCategory);
       if (item.minorCategory) rawSignals.push(item.minorCategory);
       if (item.category) rawSignals.push(item.category);
+      const text = [item.description, item.itemName, item.name, item.materialDescription].filter(Boolean).join(' ').toLowerCase();
+      if (text) {
+        if (text.includes('pipe') || text.includes('plumbing') || text.includes('fitting') || text.includes('flange') || text.includes('pvc')) {
+          rawSignals.push('Pipes & Pipe Fittings', 'Plumbing');
+        }
+        if (text.includes('bubble roll') || text.includes('bubble wrap') || text.includes('packing') || text.includes('corrugated')) {
+          rawSignals.push('Packing Material', 'Packaging Material');
+        }
+      }
+    }
+    const titleText = String(rfq.title || '').toLowerCase();
+    if (titleText) {
+      if (titleText.includes('pipe') || titleText.includes('plumbing') || titleText.includes('fitting') || titleText.includes('flange') || titleText.includes('pvc')) {
+        rawSignals.push('Pipes & Pipe Fittings', 'Plumbing');
+      }
+      if (titleText.includes('bubble roll') || titleText.includes('bubble wrap') || titleText.includes('packing') || titleText.includes('corrugated')) {
+        rawSignals.push('Packing Material', 'Packaging Material');
+      }
     }
 
     const expanded = new Set();
@@ -4414,13 +4441,14 @@ class StoreService {
     const merged = [...existing, ...additions];
     const followUpData = rfq.followUpData
       ? { ...rfq.followUpData, totalInvited: merged.length, vendors: merged }
-      : rfq.followUpData;
+      : { totalInvited: merged.length, vendors: merged };
 
     const updated = this.updateRFQ(rfq.id, {
       assignedVendors: merged,
       procucevVendorCount: merged.length,
-      ...(followUpData ? { followUpData } : {}),
+      followUpData,
     }) || { ...rfq, assignedVendors: merged, procucevVendorCount: merged.length, followUpData };
+    this._persistRFQ(updated);
 
     // Schedule multi-channel / 5-minute SMS chasers for newly assigned V0 vendors
     const resolvedAdditions = additions.map((v) => {
@@ -4594,6 +4622,7 @@ class StoreService {
       procucevVendorCount: merged.length,
       followUpData,
     }) || { ...rfq, assignedVendors: merged, procucevVendorCount: merged.length, followUpData };
+    this._persistRFQ(updated);
 
     try {
       const resolvedAdditions = additions.map((v) => {
@@ -5411,6 +5440,7 @@ class StoreService {
       }
       rfq.followUpData.emailStats.delivered = allEmails.size;
       rfq.followUpData.emailStats.total = Math.max(rfq.followUpData.emailStats.total || 0, allEmails.size);
+      this._persistRFQ(rfq);
     }
 
     return allEmails.size;

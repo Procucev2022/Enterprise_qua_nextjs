@@ -456,9 +456,15 @@ async function countPublicVendorsMatchingCategories(signals) {
  */
 async function getPublicVendorsMatchingCategories(signals, limit = 100) {
   if (!pool.hasStorage()) return [];
-  const cleaned = Array.from(
+  const rawList = Array.from(
     new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, 20);
+  );
+  // Prioritize specific minor terms and domain keywords ahead of generic high-level major categories
+  const cleaned = rawList.sort((a, b) => {
+    const aSpecific = a.includes('pipe') || a.includes('plumb') || a.includes('pack') || a.includes('fitting') || a.includes('&') ? 2 : 1;
+    const bSpecific = b.includes('pipe') || b.includes('plumb') || b.includes('pack') || b.includes('fitting') || b.includes('&') ? 2 : 1;
+    return bSpecific - aSpecific;
+  }).slice(0, 50);
   if (cleaned.length === 0) return [];
 
   const params = [];
