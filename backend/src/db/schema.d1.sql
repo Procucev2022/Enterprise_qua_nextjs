@@ -228,6 +228,8 @@ CREATE TABLE IF NOT EXISTS vendors (
   raw TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_vendors_email ON vendors (email);
+CREATE INDEX IF NOT EXISTS idx_vendors_email_nocase ON vendors (email COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_vendors_corporate_email ON vendors (json_extract(raw, '$.corporateEmail'));
 CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category);
 CREATE INDEX IF NOT EXISTS idx_vendors_created_at ON vendors (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vendors_source ON vendors (source);
@@ -275,6 +277,7 @@ CREATE TABLE IF NOT EXISTS vendor_catalogue (
 CREATE INDEX IF NOT EXISTS idx_vendor_catalogue_vendor_id ON vendor_catalogue (vendor_id);
 CREATE INDEX IF NOT EXISTS idx_vendor_catalogue_category ON vendor_catalogue (category);
 CREATE INDEX IF NOT EXISTS idx_vendor_catalogue_sku ON vendor_catalogue (sku);
+CREATE INDEX IF NOT EXISTS idx_vendor_catalogue_created_at ON vendor_catalogue (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS buyer_accounts (
   id TEXT PRIMARY KEY,
@@ -286,8 +289,10 @@ CREATE TABLE IF NOT EXISTS buyer_accounts (
   raw TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_buyer_accounts_corporate_email ON buyer_accounts (corporate_email);
+CREATE INDEX IF NOT EXISTS idx_buyer_accounts_corp_email_nocase ON buyer_accounts (corporate_email COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_buyer_accounts_is_active ON buyer_accounts (is_active);
 CREATE INDEX IF NOT EXISTS idx_buyer_accounts_status ON buyer_accounts (status);
+CREATE INDEX IF NOT EXISTS idx_buyer_accounts_created_at ON buyer_accounts (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS ai_feed (
   id TEXT PRIMARY KEY,
@@ -333,6 +338,7 @@ CREATE TABLE IF NOT EXISTS email_ingestion_log (
 );
 CREATE INDEX IF NOT EXISTS idx_email_ingestion_log_processed_at ON email_ingestion_log (processed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_email_ingestion_log_status ON email_ingestion_log (status);
+CREATE INDEX IF NOT EXISTS idx_email_ingestion_log_message_id ON email_ingestion_log (message_id);
 
 CREATE TABLE IF NOT EXISTS zoho_oauth_token (
   id TEXT PRIMARY KEY DEFAULT 'default',
@@ -355,6 +361,7 @@ CREATE TABLE IF NOT EXISTS payment_links (
 CREATE INDEX IF NOT EXISTS idx_payment_links_vendor_id ON payment_links (vendor_id);
 CREATE INDEX IF NOT EXISTS idx_payment_links_buyer_account_id ON payment_links (buyer_account_id);
 CREATE INDEX IF NOT EXISTS idx_payment_links_status ON payment_links (status);
+CREATE INDEX IF NOT EXISTS idx_payment_links_created_at ON payment_links (created_at DESC);
 
 -- =============================================================================
 -- VENDOR MASTER & PO DATA INGESTION

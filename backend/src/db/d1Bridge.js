@@ -221,7 +221,8 @@ async function queryD1(db, text, params = []) {
   const boundParams = expandD1Params(text, params);
   const bound = boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
   let attempts = 0;
-  const maxAttempts = 3;
+  const isErrorLog = typeof text === 'string' && text.includes('system_error_logs');
+  const maxAttempts = isErrorLog ? 1 : 3;
   while (attempts < maxAttempts) {
     try {
       const result = await bound.all();
@@ -229,7 +230,7 @@ async function queryD1(db, text, params = []) {
     } catch (err) {
       attempts++;
       if (attempts < maxAttempts && isRetryableD1Error(err)) {
-        await sleep(100 * attempts + Math.floor(Math.random() * 50));
+        await sleep(250 * attempts + Math.floor(Math.random() * 100));
         continue;
       }
       throw err;
@@ -277,7 +278,7 @@ async function batchD1(db, statements) {
     } catch (err) {
       attempts++;
       if (attempts < maxAttempts && isRetryableD1Error(err)) {
-        await sleep(100 * attempts + Math.floor(Math.random() * 50));
+        await sleep(250 * attempts + Math.floor(Math.random() * 100));
         continue;
       }
       throw err;

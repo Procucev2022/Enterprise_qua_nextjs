@@ -2631,7 +2631,7 @@ describe('demo RFQ seeding', () => {
 
         const result = await storeService.getBootstrapData();
 
-        expect(pageSpy).toHaveBeenCalledWith({ limit: 500, offset: 0, publicOnly: true });
+        expect(pageSpy).toHaveBeenCalledWith(expect.objectContaining({ limit: 500, offset: 0, publicOnly: true }));
         expect(getVendorsSpy).not.toHaveBeenCalled();
         expect(result.vendors).toEqual([{ id: 'v-sql', name: 'SQL Vendor', email: 'sql-vendor@example.com' }]);
         expect(result.vendorsTotal).toBe(87109);

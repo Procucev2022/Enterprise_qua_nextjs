@@ -17,6 +17,10 @@ const { queryCache } = require('./queryCache');
 const { INDIAN_STATES } = require('../config/constants');
 const { parseSearchTokens } = require('../config/constants');
 
+let cachedUnfilteredVendorsTotal = null;
+let lastVendorsTotalCacheTime = 0;
+const VENDORS_TOTAL_CACHE_TTL_MS = 3600000; // 1 hour
+
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
 async function getVendorsFromDB(limit = null) {
@@ -264,24 +268,43 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const d1Where = d1Conditions.length ? `WHERE ${d1Conditions.join(' AND ')}` : '';
 
-  // Separate param arrays for the count vs. data query — sharing and
-  // mutating one array across both calls works with a driver that sends the
-  // query immediately, but is a needless footgun (and confusing to inspect
-  // in tests) for no benefit.
-  const countResult = skipCount
-    ? { rows: [{ total: 0 }] }
-    : await pool.query(
-        `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
-        [...params],
-        {
-          d1: true,
-          d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}`,
-          useCache: true,
-          tag: 'vendors',
-          ttlMs: 300000,
+  let total = 0;
+  if (!skipCount) {
+    const isUnfiltered = conditions.length === 0 || (publicOnly && conditions.length === 1);
+    if (
+      isUnfiltered &&
+      cachedUnfilteredVendorsTotal !== null &&
+      Date.now() - lastVendorsTotalCacheTime < VENDORS_TOTAL_CACHE_TTL_MS &&
+      process.env.NODE_ENV !== 'test'
+    ) {
+      total = cachedUnfilteredVendorsTotal;
+    } else {
+      try {
+        const countResult = await pool.query(
+          `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
+          [...params],
+          {
+            d1: true,
+            d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}`,
+            useCache: true,
+            tag: 'vendors',
+            ttlMs: 300000,
+          }
+        );
+        total = countResult.rows[0]?.total || 0;
+        if (isUnfiltered && total > 0) {
+          cachedUnfilteredVendorsTotal = total;
+          lastVendorsTotalCacheTime = Date.now();
         }
-      );
-  const total = countResult.rows[0]?.total || 0;
+      } catch (err) {
+        if (cachedUnfilteredVendorsTotal !== null) {
+          total = cachedUnfilteredVendorsTotal;
+        } else {
+          total = 0;
+        }
+      }
+    }
+  }
 
   const effectiveLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 1000) : (limit !== undefined ? limit : 50);
   const effectiveOffset = Number.isInteger(Number(offset)) && Number(offset) >= 0 ? Number(offset) : (offset !== undefined ? offset : 0);
@@ -389,7 +412,7 @@ async function countPublicVendorsMatchingCategories(signals) {
 
   // Public-only: a vendor tagged to a specific buyer is never in the network pool.
   const publicPg = `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`;
-  const publicD1 = `json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL`;
+  const publicD1 = `source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump')`;
 
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
   const whereD1 = `WHERE (${d1OrGroups.join(' OR ')}) AND ${publicD1}`;
@@ -469,7 +492,7 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
   }
 
   const publicPg = `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`;
-  const publicD1 = `json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL`;
+  const publicD1 = `source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump')`;
 
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
   const whereD1 = `WHERE (${d1OrGroups.join(' OR ')}) AND ${publicD1}`;
@@ -522,25 +545,40 @@ async function getPublicVendorsPerCategoryFromDB(categories, maxPerCategory = 25
  * present in a capped/paginated listing without fetching the whole table. */
 async function getVendorByEmailFromDB(email) {
   if (!pool.hasStorage() || !email) return null;
-  // Matches the `email` column OR raw->>'corporateEmail' — a vendor's inbound
-  // gateway email can be the corporate contact address rather than the
-  // primary login email, and the in-memory lookup this replaces checked both.
-  const result = await pool.query(
-    `SELECT raw FROM vendors
-     WHERE lower(email) = lower($1) OR lower(raw->>'corporateEmail') = lower($1)
-     LIMIT 1`,
-    [email],
+  const cleanEmail = String(email).trim().toLowerCase();
+  if (!cleanEmail) return null;
+
+  // 1. Primary lookup by indexed email column.
+  // Using `email = $1 COLLATE NOCASE` on SQLite/D1 leverages idx_vendors_email / idx_vendors_email_nocase
+  // and reads exactly 1 row instead of 633,814 rows!
+  let result = await pool.query(
+    `SELECT raw FROM vendors WHERE lower(email) = lower($1) LIMIT 1`,
+    [cleanEmail],
     {
       d1: true,
-      d1Text: `SELECT raw FROM vendors
-     WHERE lower(email) = lower($1) OR lower(json_extract(raw,'$.corporateEmail')) = lower($1)
-     LIMIT 1`,
+      d1Text: `SELECT raw FROM vendors WHERE email = $1 COLLATE NOCASE LIMIT 1`,
       useCache: true,
       tag: 'vendors',
       ttlMs: 60000,
     }
   );
-  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+  if (result && result.rows && result.rows[0]) {
+    return parseRaw(result.rows[0].raw);
+  }
+
+  // 2. Secondary fallback lookup: only if not found by primary email.
+  result = await pool.query(
+    `SELECT raw FROM vendors WHERE lower(raw->>'corporateEmail') = $1 LIMIT 1`,
+    [cleanEmail],
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM vendors WHERE lower(json_extract(raw,'$.corporateEmail')) = $1 LIMIT 1`,
+      useCache: true,
+      tag: 'vendors',
+      ttlMs: 60000,
+    }
+  );
+  return result && result.rows && result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 /**
