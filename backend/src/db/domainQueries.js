@@ -45,12 +45,12 @@ async function getVendorsFromDB(limit = null) {
   );
   return (result && result.rows)
     ? result.rows.map((row) => {
-      const v = parseRaw(row.raw);
-      if (row.created_at && !v.created_at) v.created_at = row.created_at;
-      if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
-      if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
-      return v;
-    })
+        const v = parseRaw(row.raw);
+        if (row.created_at && !v.created_at) v.created_at = row.created_at;
+        if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+        if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+        return v;
+      })
     : [];
 }
 
@@ -625,7 +625,7 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
         if (acc && acc.id) {
           addCandidate(acc.id);
         }
-      } catch (_) { }
+      } catch (_) {}
     }
   }
 
@@ -1624,8 +1624,8 @@ async function insertChaserJobInDB(job) {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
      ON CONFLICT (id) DO NOTHING`,
     [id, rfqNumber, rfqId, vendorId, vendorName,
-      vendorPhone || null, vendorEmail || null, vendorContactPerson || null,
-      rfqTitle || null, channel, fireAt],
+     vendorPhone || null, vendorEmail || null, vendorContactPerson || null,
+     rfqTitle || null, channel, fireAt],
     { d1: true }
   );
   return job;
@@ -2063,13 +2063,13 @@ async function getPublicVendorFiltersFromDB() {
 
     const categories = (catResult && catResult.rows)
       ? catResult.rows
-        .map((r) => (r && r.category ? String(r.category).trim() : ''))
-        .filter((c) => (
-          c &&
-          c.length >= 2 &&
-          !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
-          !c.includes('(No Past POs)')
-        ))
+          .map((r) => (r && r.category ? String(r.category).trim() : ''))
+          .filter((c) => (
+            c &&
+            c.length >= 2 &&
+            !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
+            !c.includes('(No Past POs)')
+          ))
       : [];
 
     return { categories, states: defaultStates };

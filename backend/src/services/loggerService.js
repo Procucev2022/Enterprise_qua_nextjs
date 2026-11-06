@@ -196,7 +196,7 @@ class LoggerService {
         metaStr,
         entry.timestamp || new Date().toISOString(),
       ];
-      const p = pool.query(sql, params, { d1: true, d1Text: sql }).catch(() => { });
+      const p = pool.query(sql, params, { d1: true, d1Text: sql }).catch(() => {});
       const { getWaitUntil } = require('../db/d1Bridge');
       const waitUntil = getWaitUntil();
       if (waitUntil) waitUntil(p);

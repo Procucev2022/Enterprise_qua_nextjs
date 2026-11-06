@@ -263,7 +263,7 @@ async function withTransaction(fn) {
   } catch (err) {
     // A rollback can itself fail if the connection has already dropped. The
     // original error is what the caller needs to see, so this one is swallowed.
-    await client.query('ROLLBACK').catch(() => { });
+    await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
     client.release();
