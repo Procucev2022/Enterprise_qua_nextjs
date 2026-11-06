@@ -1815,7 +1815,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             const found = (buyerVendors || []).find((bv) => bv.id === v || bv.name === v || bv.email === v);
             const isProc = checkIsProcucevVendor(v, found?.name || v, found?.email || null, found);
             const foundMajor = found?.majorCategory || (isProc ? activeRfq?.category || null : null) || 'General';
-
             const vMajorClean = (foundMajor || '').trim().toLowerCase();
             const matchingLineItems = rfqEntities.filter((e) => {
               const itemMajor = (e.majorCategory || (e as any).major || '').trim().toLowerCase();
@@ -1846,7 +1845,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 resolvedMinor = 'General';
               }
             }
-
             return {
               id: v || `vendor-${idx}`,
               name: found?.name || v,
