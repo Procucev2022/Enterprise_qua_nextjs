@@ -110,10 +110,10 @@ async function fetchRawBuyers() {
 async function fetchRawVendors() {
   if (pool.hasStorage()) {
     try {
-      const sql = 'SELECT id, email, status, raw, created_at, updated_at FROM vendors ORDER BY created_at DESC';
+      const sql = 'SELECT id, email, status, raw, created_at, updated_at FROM vendors ORDER BY created_at DESC LIMIT 500';
       const result = await pool.query(sql, [], {
         d1: true,
-        d1Text: 'SELECT id, email, status, raw, created_at, updated_at FROM vendors ORDER BY created_at DESC',
+        d1Text: 'SELECT id, email, status, raw, created_at, updated_at FROM vendors ORDER BY created_at DESC LIMIT 500',
         useCache: true,
         tag: 'vendors',
         ttlMs: 30000,

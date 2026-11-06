@@ -259,22 +259,34 @@ async function getVendors(req, res, next) {
         MAX_VENDOR_PAGE_SIZE,
         Math.max(1, parseInt(req.query.pageSize, 10) || DEFAULT_VENDOR_PAGE_SIZE)
       );
-      const { rows, total } = await domainQueries.getVendorsPageFromDB({
-        limit: pageSize,
-        offset: (pageNumber - 1) * pageSize,
-        search: search ? String(search).trim() : '',
-        email: email ? String(email).trim() : '',
-        category: category ? String(category) : '',
-        ...(state ? { state: String(state).trim() } : {}),
-        ...(city ? { city: String(city).trim() } : {}),
-        scopedBuyerId: buyerId && buyerId !== 'all' ? buyerId : '',
-      });
-      return res.json({
-        success: true,
-        source: 'persisted',
-        data: rows.map(withoutTemporaryPassword),
-        pagination: { page: pageNumber, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
-      });
+      try {
+        const { rows, total } = await domainQueries.getVendorsPageFromDB({
+          limit: pageSize,
+          offset: (pageNumber - 1) * pageSize,
+          search: search ? String(search).trim() : '',
+          email: email ? String(email).trim() : '',
+          category: category ? String(category) : '',
+          ...(state ? { state: String(state).trim() } : {}),
+          ...(city ? { city: String(city).trim() } : {}),
+          scopedBuyerId: buyerId && buyerId !== 'all' ? buyerId : '',
+        });
+        return res.json({
+          success: true,
+          source: 'persisted',
+          data: rows.map(withoutTemporaryPassword),
+          pagination: { page: pageNumber, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
+        });
+      } catch (err) {
+        // Fallback gracefully to in-memory store if DB query fails or D1 is overloaded
+        console.warn('[VENDOR_CONTROLLER] getVendorsPageFromDB failed, falling back to memory:', err.message);
+        const fallbackVendors = await storeService.getVendors(buyerId, pageSize);
+        return res.json({
+          success: true,
+          source: 'in_memory_fallback',
+          data: fallbackVendors.slice(0, pageSize).map(withoutTemporaryPassword),
+          pagination: { page: pageNumber, pageSize, total: fallbackVendors.length, totalPages: Math.max(1, Math.ceil(fallbackVendors.length / pageSize)) },
+        });
+      }
     }
 
     const hasFilters = Boolean(search || email || category || state || city);
