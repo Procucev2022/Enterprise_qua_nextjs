@@ -1830,7 +1830,7 @@ export default function IngestionWizard({
                           <option value="">
                             {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
                           </option>
-                          {minorsFor(item.majorCategory).map((minor) => (
+                          {withStoredValue(minorsFor(item.majorCategory), item.minorCategory).map((minor) => (
                             <option key={minor} value={minor}>
                               {minor}
                             </option>
