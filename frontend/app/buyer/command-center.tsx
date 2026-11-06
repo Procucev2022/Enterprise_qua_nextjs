@@ -90,11 +90,20 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const manualRFQs = rfqs.filter((r) => r.source === 'manual_entry');
 
   // Multi-channel totals calculation
-  const totalCalls = rfqs.reduce((acc, r) => acc + (r.followUpData?.callStats.total || 0), 0);
-  const connectedCalls = rfqs.reduce((acc, r) => acc + (r.followUpData?.callStats.connected || 0), 0);
-  const totalWhatsApp = rfqs.reduce((acc, r) => acc + (r.followUpData?.whatsappStats.total || 0), 0);
-  const readWhatsApp = rfqs.reduce((acc, r) => acc + (r.followUpData?.whatsappStats.read || 0), 0);
-  const totalSMS = rfqs.reduce((acc, r) => acc + (r.followUpData?.smsStats.total || 0), 0);
+  const totalCalls = rfqs.reduce((acc, r) => {
+    const vCount = r.assignedVendors?.length || r.followUpData?.totalInvited || 0;
+    return acc + (r.followUpData?.callStats?.total || vCount);
+  }, 0);
+  const connectedCalls = rfqs.reduce((acc, r) => acc + (r.followUpData?.callStats?.connected || 0), 0);
+  const totalWhatsApp = rfqs.reduce((acc, r) => {
+    const vCount = r.assignedVendors?.length || r.followUpData?.totalInvited || 0;
+    return acc + (r.followUpData?.whatsappStats?.total || vCount);
+  }, 0);
+  const readWhatsApp = rfqs.reduce((acc, r) => acc + (r.followUpData?.whatsappStats?.read || 0), 0);
+  const totalSMS = rfqs.reduce((acc, r) => {
+    const vCount = r.assignedVendors?.length || r.followUpData?.totalInvited || 0;
+    return acc + (r.followUpData?.smsStats?.total || vCount);
+  }, 0);
   const totalFollowupsToday = totalCalls + totalWhatsApp + totalSMS;
 
   const getSourceBadge = (source?: string, autoCirculated?: boolean) => {
@@ -526,24 +535,39 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                   {/* Row 3: Channel stats + Quotes */}
                   <div className="flex items-center justify-between pt-1 border-t border-slate-100/80 dark:border-gray-800/40">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      {rfq.followUpData ? (
-                        <>
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-300 border border-purple-100 dark:border-purple-800">
-                            📞 {rfq.followUpData.callStats.connected}/{rfq.followUpData.callStats.total}
-                          </span>
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-300 border border-emerald-100 dark:border-emerald-800">
-                            💬 {rfq.followUpData.whatsappStats.read}/{rfq.followUpData.whatsappStats.total}
-                          </span>
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-sky-50 dark:bg-cyan-950/50 text-sky-600 dark:text-cyan-300 border border-sky-100 dark:border-cyan-800">
-                            📱 {rfq.followUpData.smsStats.delivered}
-                          </span>
-                          <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-medium ml-1">
-                            {rfq.followUpData.respondedCount}/{rfq.followUpData.totalInvited} responded
-                          </span>
-                        </>
-                      ) : (
-                        <span className="text-[10px] text-slate-300 dark:text-gray-600 italic">Queued</span>
-                      )}
+                      {(() => {
+                        const followUp = rfq.followUpData;
+                        const vCount = rfq.assignedVendors?.length || followUp?.totalInvited || 0;
+                        const callTotal = followUp?.callStats?.total || vCount;
+                        const callConnected = followUp?.callStats?.connected || 0;
+                        const waTotal = followUp?.whatsappStats?.total || vCount;
+                        const waRead = followUp?.whatsappStats?.read || followUp?.whatsappStats?.delivered || 0;
+                        const smsTotal = followUp?.smsStats?.total || vCount;
+                        const smsDelivered = followUp?.smsStats?.delivered || 0;
+                        const totalInvited = followUp?.totalInvited || vCount;
+                        const responded = followUp?.respondedCount || 0;
+
+                        if (!followUp && vCount === 0) {
+                          return <span className="text-[10px] text-slate-300 dark:text-gray-600 italic">Queued</span>;
+                        }
+
+                        return (
+                          <>
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-300 border border-purple-100 dark:border-purple-800">
+                              📞 {callConnected}/{callTotal}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-300 border border-emerald-100 dark:border-emerald-800">
+                              💬 {waRead}/{waTotal}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-sky-50 dark:bg-cyan-950/50 text-sky-600 dark:text-cyan-300 border border-sky-100 dark:border-cyan-800">
+                              📱 {smsDelivered}/{smsTotal}
+                            </span>
+                            <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-medium ml-1">
+                              {responded}/{totalInvited} responded
+                            </span>
+                          </>
+                        );
+                      })()}
                     </div>
                     <span className="text-[10px] font-bold text-slate-600 dark:text-gray-300 mono bg-slate-100 dark:bg-gray-800 px-2 py-0.5 rounded">
                       {rfq.quotesCount || (rfq.quotes ? rfq.quotes.length : 0)} quotes
