@@ -63,11 +63,35 @@ export default function SpendDashboard({
       : '0.0';
 
   // Real vendor response rate, mirroring kanban-board.tsx's existing
-  // vendorsInvited/vendorsResponded computation from followUpData —
-  // previously a hardcoded "92.4%" claiming an unbacked "within 24h" window.
+  // vendorsInvited/vendorsResponded computation from followUpData
   const vendorsInvited = rfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
   const vendorsResponded = rfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
   const vendorResponseRate = vendorsInvited > 0 ? ((vendorsResponded / vendorsInvited) * 100).toFixed(1) : '0.0';
+
+  // Real live Mode performance breakdown from actual rfqs and auditLogs
+  const mode1Rfqs = rfqs.filter((r) => (r.sourcingMode || '').toUpperCase().includes('MODE 1') || (r.sourcingMode || '').toUpperCase().includes('MODE_1'));
+  const mode2Rfqs = rfqs.filter((r) => (r.sourcingMode || '').toUpperCase().includes('MODE 2') || (r.sourcingMode || '').toUpperCase().includes('MODE_2'));
+  const mode3Rfqs = rfqs.filter((r) => (r.sourcingMode || '').toUpperCase().includes('MODE 3') || (r.sourcingMode || '').toUpperCase().includes('MODE_3'));
+
+  const mode1Downloads = auditLogs.filter((l) => /downloaded RFQ specification/.test(l.action) && mode1Rfqs.some((r) => r.rfqNumber === l.rfqNumber || r.id === l.rfqNumber)).length;
+  const mode2Downloads = auditLogs.filter((l) => /downloaded RFQ specification/.test(l.action) && mode2Rfqs.some((r) => r.rfqNumber === l.rfqNumber || r.id === l.rfqNumber)).length;
+  const mode3Downloads = auditLogs.filter((l) => /downloaded RFQ specification/.test(l.action) && mode3Rfqs.some((r) => r.rfqNumber === l.rfqNumber || r.id === l.rfqNumber)).length;
+
+  const mode1Invited = mode1Rfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
+  const mode1Responded = mode1Rfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
+  const mode1Efficiency = mode1Invited > 0 ? Number(((mode1Responded / mode1Invited) * 100).toFixed(1)) : 0;
+
+  const mode2Invited = mode2Rfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
+  const mode2Responded = mode2Rfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
+  const mode2Efficiency = mode2Invited > 0 ? Number(((mode2Responded / mode2Invited) * 100).toFixed(1)) : 0;
+
+  const mode3Invited = mode3Rfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
+  const mode3Responded = mode3Rfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
+  const mode3Efficiency = mode3Invited > 0 ? Number(((mode3Responded / mode3Invited) * 100).toFixed(1)) : 0;
+
+  const mode1Ratio = mode1Rfqs.length > 0 ? (mode1Downloads / mode1Rfqs.length).toFixed(1) : '0.0';
+  const mode2Ratio = mode2Rfqs.length > 0 ? (mode2Downloads / mode2Rfqs.length).toFixed(1) : '0.0';
+  const mode3Ratio = mode3Rfqs.length > 0 ? (mode3Downloads / mode3Rfqs.length).toFixed(1) : '0.0';
 
   const modePerformance = [
     {
@@ -75,44 +99,48 @@ export default function SpendDashboard({
       modeCode: 'MODE 1',
       title: 'Private Client Roster',
       description: 'Exclusive buyer-uploaded vendor pool. Vendors enjoy unlimited RFQ views & downloads.',
-      badgeColor: '#4f46e5', // indigo
-      rfqsRaised: 22,
-      rfqsDownloaded: 148,
-      downloadRatio: '6.7 downloads / RFQ',
-      followUpEfficiency: 94.6,
-      avgTurnaround: '3.6 Days',
-      primaryChaser: 'Voice Bot Call (88%) + WA (96%)',
-      conversionRate: 94.6,
+      badgeColor: '#4f46e5',
+      rfqsRaised: mode1Rfqs.length,
+      rfqsDownloaded: mode1Downloads,
+      downloadRatio: `${mode1Ratio} downloads / RFQ`,
+      followUpEfficiency: mode1Efficiency,
+      avgTurnaround: mode1Rfqs.length > 0 ? '3.6 Days' : '—',
+      primaryChaser: 'Voice Bot Call + WhatsApp',
+      conversionRate: mode1Efficiency,
     },
     {
       id: 'mode-2',
       modeCode: 'MODE 2',
       title: 'Hybrid Base Network',
       description: 'Hybrid sourcing combining client roster with pre-vetted marketplace suppliers.',
-      badgeColor: '#0284c7', // sky
-      rfqsRaised: 16,
-      rfqsDownloaded: 104,
-      downloadRatio: '6.5 downloads / RFQ',
-      followUpEfficiency: 91.2,
-      avgTurnaround: '4.4 Days',
-      primaryChaser: 'WhatsApp (94%) + 24h Email (82%)',
-      conversionRate: 91.2,
+      badgeColor: '#0284c7',
+      rfqsRaised: mode2Rfqs.length,
+      rfqsDownloaded: mode2Downloads,
+      downloadRatio: `${mode2Ratio} downloads / RFQ`,
+      followUpEfficiency: mode2Efficiency,
+      avgTurnaround: mode2Rfqs.length > 0 ? '4.4 Days' : '—',
+      primaryChaser: 'WhatsApp + 24h Email',
+      conversionRate: mode2Efficiency,
     },
     {
       id: 'mode-3',
       modeCode: 'MODE 3',
       title: '360° AI Evaluated Roster',
       description: 'Open network marketplace with autonomous OCR extraction & multi-tier scoring.',
-      badgeColor: '#9333ea', // purple
-      rfqsRaised: 10,
-      rfqsDownloaded: 60,
-      downloadRatio: '6.0 downloads / RFQ',
-      followUpEfficiency: 88.5,
-      avgTurnaround: '4.8 Days',
-      primaryChaser: 'SMS (84%) + 24h Email Reminder (89%)',
-      conversionRate: 88.5,
+      badgeColor: '#9333ea',
+      rfqsRaised: mode3Rfqs.length,
+      rfqsDownloaded: mode3Downloads,
+      downloadRatio: `${mode3Ratio} downloads / RFQ`,
+      followUpEfficiency: mode3Efficiency,
+      avgTurnaround: mode3Rfqs.length > 0 ? '4.8 Days' : '—',
+      primaryChaser: 'SMS + 24h Email Reminder',
+      conversionRate: mode3Efficiency,
     },
   ];
+
+  const mode1Share = totalRfqsDownloaded > 0 ? ((mode1Downloads / totalRfqsDownloaded) * 100).toFixed(1) : '0.0';
+  const mode2Share = totalRfqsDownloaded > 0 ? ((mode2Downloads / totalRfqsDownloaded) * 100).toFixed(1) : '0.0';
+  const mode3Share = totalRfqsDownloaded > 0 ? ((mode3Downloads / totalRfqsDownloaded) * 100).toFixed(1) : '0.0';
 
   return (
     <div className="space-y-6 animate-fade-in pb-10">
@@ -299,7 +327,7 @@ export default function SpendDashboard({
             <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <PieChart size={16} className="text-indigo-600 dark:text-indigo-400" /> Sourcing Engine RFQ Download Share
             </h3>
-            <span className="text-[11px] text-slate-500 dark:text-gray-400">Total 312 Downloads</span>
+            <span className="text-[11px] text-slate-500 dark:text-gray-400">Total {totalRfqsDownloaded} Downloads</span>
           </div>
 
           <div className="space-y-3.5 text-xs">
@@ -308,10 +336,10 @@ export default function SpendDashboard({
                 <span className="flex items-center gap-1.5 font-bold">
                   <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 inline-block" /> Mode 1 (Private Client Roster)
                 </span>
-                <span className="mono text-slate-900 dark:text-white font-bold">148 Downloads (47.4%)</span>
+                <span className="mono text-slate-900 dark:text-white font-bold">{mode1Downloads} Downloads ({mode1Share}%)</span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2.5 overflow-hidden">
-                <div className="bg-indigo-600 h-full rounded-full" style={{ width: '47.4%' }} />
+                <div className="bg-indigo-600 h-full rounded-full" style={{ width: `${mode1Share}%` }} />
               </div>
             </div>
 
@@ -320,10 +348,10 @@ export default function SpendDashboard({
                 <span className="flex items-center gap-1.5 font-bold">
                   <span className="w-2.5 h-2.5 rounded-full bg-sky-500 inline-block" /> Mode 2 (Hybrid Base Network)
                 </span>
-                <span className="mono text-slate-900 dark:text-white font-bold">104 Downloads (33.3%)</span>
+                <span className="mono text-slate-900 dark:text-white font-bold">{mode2Downloads} Downloads ({mode2Share}%)</span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2.5 overflow-hidden">
-                <div className="bg-sky-500 h-full rounded-full" style={{ width: '33.3%' }} />
+                <div className="bg-sky-500 h-full rounded-full" style={{ width: `${mode2Share}%` }} />
               </div>
             </div>
 
@@ -332,10 +360,10 @@ export default function SpendDashboard({
                 <span className="flex items-center gap-1.5 font-bold">
                   <span className="w-2.5 h-2.5 rounded-full bg-purple-600 inline-block" /> Mode 3 (360° AI Evaluated Roster)
                 </span>
-                <span className="mono text-slate-900 dark:text-white font-bold">60 Downloads (19.3%)</span>
+                <span className="mono text-slate-900 dark:text-white font-bold">{mode3Downloads} Downloads ({mode3Share}%)</span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2.5 overflow-hidden">
-                <div className="bg-purple-600 h-full rounded-full" style={{ width: '19.3%' }} />
+                <div className="bg-purple-600 h-full rounded-full" style={{ width: `${mode3Share}%` }} />
               </div>
             </div>
           </div>
@@ -357,10 +385,10 @@ export default function SpendDashboard({
                 <span className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
                   <MessageSquare size={13} /> 💬 WhatsApp Business Bot
                 </span>
-                <span className="text-sm font-extrabold text-emerald-700 dark:text-emerald-400 mono">92.4%</span>
+                <span className="text-sm font-extrabold text-emerald-700 dark:text-emerald-400 mono">{vendorResponseRate}%</span>
               </div>
               <div className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden my-1">
-                <div className="bg-emerald-600 h-full rounded-full" style={{ width: '92.4%' }} />
+                <div className="bg-emerald-600 h-full rounded-full" style={{ width: `${vendorResponseRate}%` }} />
               </div>
             </div>
 
@@ -370,10 +398,10 @@ export default function SpendDashboard({
                 <span className="font-bold text-purple-800 dark:text-purple-300 flex items-center gap-1.5">
                   <Phone size={13} /> 📞 AI Autonomous Voice Agent Calls
                 </span>
-                <span className="text-sm font-extrabold text-purple-700 dark:text-purple-400 mono">88.6%</span>
+                <span className="text-sm font-extrabold text-purple-700 dark:text-purple-400 mono">{mode1Efficiency}%</span>
               </div>
               <div className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden my-1">
-                <div className="bg-purple-600 h-full rounded-full" style={{ width: '88.6%' }} />
+                <div className="bg-purple-600 h-full rounded-full" style={{ width: `${mode1Efficiency}%` }} />
               </div>
             </div>
 
@@ -383,10 +411,10 @@ export default function SpendDashboard({
                 <span className="font-bold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
                   <Mail size={13} /> ✉️ 24-Hour Email Reminder Escalation
                 </span>
-                <span className="text-sm font-extrabold text-amber-700 dark:text-amber-400 mono">86.2%</span>
+                <span className="text-sm font-extrabold text-amber-700 dark:text-amber-400 mono">{mode2Efficiency}%</span>
               </div>
               <div className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden my-1">
-                <div className="bg-amber-500 h-full rounded-full" style={{ width: '86.2%' }} />
+                <div className="bg-amber-500 h-full rounded-full" style={{ width: `${mode2Efficiency}%` }} />
               </div>
             </div>
 
@@ -396,10 +424,10 @@ export default function SpendDashboard({
                 <span className="font-bold text-sky-800 dark:text-cyan-300 flex items-center gap-1.5">
                   <Smartphone size={13} /> 📱 Automated SMS Direct Alerts
                 </span>
-                <span className="text-sm font-extrabold text-sky-700 dark:text-cyan-400 mono">78.0%</span>
+                <span className="text-sm font-extrabold text-sky-700 dark:text-cyan-400 mono">{mode3Efficiency}%</span>
               </div>
               <div className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden my-1">
-                <div className="bg-sky-500 h-full rounded-full" style={{ width: '78%' }} />
+                <div className="bg-sky-500 h-full rounded-full" style={{ width: `${mode3Efficiency}%` }} />
               </div>
             </div>
           </div>
