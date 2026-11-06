@@ -427,12 +427,11 @@ export default function LoginLogsDashboard() {
       <div className="sr-only">
         <h1>{strings.title}</h1>
         <p>{strings.subtitle}</p>
-        <span>{summary.avgDurationMinutes}m</span>
         {summary.todayPeakHour && <span>Peak: {summary.todayPeakHour}</span>}
       </div>
 
       {/* KPI Stats Grid – ultra-compact Action Center standard */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5 w-full">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-2.5 w-full">
         {/* Total Logins Today */}
         <div className="px-2.5 py-1.5 rounded-lg border text-left flex flex-col justify-between min-h-[52px] sm:min-h-[58px] bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
@@ -492,6 +491,21 @@ export default function LoginLogsDashboard() {
           <div className="mt-1">
             <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none">
               {summary.sellerLogins}
+            </span>
+          </div>
+        </div>
+
+        {/* Avg Duration */}
+        <div className="px-2.5 py-1.5 rounded-lg border text-left flex flex-col justify-between min-h-[52px] sm:min-h-[58px] bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-xs">
+          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+            <span className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight whitespace-nowrap leading-tight">
+              {strings.stats.avgSessionDuration}
+            </span>
+            <Clock size={14} className="text-amber-600 dark:text-amber-400 shrink-0" />
+          </div>
+          <div className="mt-1">
+            <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none">
+              {summary.avgDurationMinutes}m
             </span>
           </div>
         </div>

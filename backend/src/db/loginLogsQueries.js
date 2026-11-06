@@ -173,8 +173,8 @@ async function listLoginLogs(options = {}) {
       }
 
       if (search && typeof search === 'string' && search.trim()) {
-        const escaped = `%${escapeLikeWildcards(search.trim())}%`;
-        conditions.push(`(user_name LIKE $${idx} OR email LIKE $${idx + 1} OR company_name LIKE $${idx + 2} OR phone_number LIKE $${idx + 3})`);
+        const escaped = `%${escapeLikeWildcards(search.trim().toLowerCase())}%`;
+        conditions.push(`(LOWER(user_name) LIKE $${idx} ESCAPE '\\' OR LOWER(email) LIKE $${idx + 1} ESCAPE '\\' OR LOWER(company_name) LIKE $${idx + 2} ESCAPE '\\' OR LOWER(phone_number) LIKE $${idx + 3} ESCAPE '\\')`);
         values.push(escaped, escaped, escaped, escaped);
         idx += 4;
       }
@@ -214,15 +214,6 @@ async function listLoginLogs(options = {}) {
 
   // In-memory fallback
   let items = Array.from(inMemoryLogs.values());
-
-  if (process.env.NODE_ENV !== 'test' && inMemoryLogs.size === 0) {
-    return {
-      logs: [],
-      total: 0,
-      page: sanitizedPage,
-      totalPages: 1,
-    };
-  }
 
   if (userType && userType !== 'all') {
     items = items.filter((l) => l.userType === userType.toLowerCase());
@@ -324,17 +315,6 @@ async function getLoginLogsSummary() {
       const avgDurationSec = parseFloat(durationRes.rows[0]?.avg_sec || 0);
       const avgDurationMinutes = Math.round(avgDurationSec / 60) || 0;
 
-      if (process.env.NODE_ENV === 'test') {
-        return {
-          totalToday: Math.max(totalToday, 148),
-          activeNow: Math.max(activeNow, 24),
-          buyerLogins: Math.max(buyerLogins, 82),
-          sellerLogins: Math.max(sellerLogins, 66),
-          avgDurationMinutes: avgDurationMinutes || 42,
-          todayPeakHour: '10:00 AM - 11:30 AM',
-        };
-      }
-
       return {
         totalToday,
         activeNow,
@@ -379,18 +359,7 @@ async function getLoginLogsSummary() {
     }
   });
 
-  const avgDurationMinutes = durationCount > 0 ? Math.round(totalDurationSec / durationCount / 60) : (process.env.NODE_ENV === 'test' ? 42 : 0);
-
-  if (process.env.NODE_ENV === 'test') {
-    return {
-      totalToday: Math.max(totalToday, 148),
-      activeNow: Math.max(activeNow, 24),
-      buyerLogins: Math.max(buyerLogins, 82),
-      sellerLogins: Math.max(sellerLogins, 66),
-      avgDurationMinutes,
-      todayPeakHour: '10:00 AM - 11:30 AM',
-    };
-  }
+  const avgDurationMinutes = durationCount > 0 ? Math.round(totalDurationSec / durationCount / 60) : 0;
 
   return {
     totalToday,
