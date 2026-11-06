@@ -45,12 +45,12 @@ async function getVendorsFromDB(limit = null) {
   );
   return (result && result.rows)
     ? result.rows.map((row) => {
-        const v = parseRaw(row.raw);
-        if (row.created_at && !v.created_at) v.created_at = row.created_at;
-        if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
-        if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
-        return v;
-      })
+      const v = parseRaw(row.raw);
+      if (row.created_at && !v.created_at) v.created_at = row.created_at;
+      if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+      if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+      return v;
+    })
     : [];
 }
 
@@ -309,17 +309,26 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   const effectiveLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 1000) : (limit !== undefined ? limit : 50);
   const effectiveOffset = Number.isInteger(Number(offset)) && Number(offset) >= 0 ? Number(offset) : (offset !== undefined ? offset : 0);
   const dataParams = [...params, effectiveLimit, effectiveOffset];
-  const dataResult = await pool.query(
-    `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
-    dataParams,
-    {
-      d1: true,
-      d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
-      useCache: true,
-      tag: 'vendors',
-      ttlMs: 120000,
+  let dataResult;
+  try {
+    dataResult = await pool.query(
+      `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      dataParams,
+      {
+        d1: true,
+        d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+        useCache: true,
+        tag: 'vendors',
+        ttlMs: 120000,
+      }
+    );
+  } catch (err) {
+    if (cacheKey) {
+      const stale = queryCache.getStale(cacheKey, []);
+      if (stale) return stale;
     }
-  );
+    throw err;
+  }
   const response = {
     rows: dataResult.rows.map((row) => {
       const v = parseRaw(row.raw);
@@ -368,7 +377,7 @@ async function countPublicVendorsMatchingCategories(signals) {
   if (!pool.hasStorage()) return 0;
   const cleaned = Array.from(
     new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, 45);
+  ).slice(0, 20);
   if (cleaned.length === 0) return 0;
 
   const params = [];
@@ -449,7 +458,7 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
   if (!pool.hasStorage()) return [];
   const cleaned = Array.from(
     new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, 45);
+  ).slice(0, 20);
   if (cleaned.length === 0) return [];
 
   const params = [];
@@ -616,7 +625,7 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
         if (acc && acc.id) {
           addCandidate(acc.id);
         }
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -1615,8 +1624,8 @@ async function insertChaserJobInDB(job) {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
      ON CONFLICT (id) DO NOTHING`,
     [id, rfqNumber, rfqId, vendorId, vendorName,
-     vendorPhone || null, vendorEmail || null, vendorContactPerson || null,
-     rfqTitle || null, channel, fireAt],
+      vendorPhone || null, vendorEmail || null, vendorContactPerson || null,
+      rfqTitle || null, channel, fireAt],
     { d1: true }
   );
   return job;
@@ -2054,13 +2063,13 @@ async function getPublicVendorFiltersFromDB() {
 
     const categories = (catResult && catResult.rows)
       ? catResult.rows
-          .map((r) => (r && r.category ? String(r.category).trim() : ''))
-          .filter((c) => (
-            c &&
-            c.length >= 2 &&
-            !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
-            !c.includes('(No Past POs)')
-          ))
+        .map((r) => (r && r.category ? String(r.category).trim() : ''))
+        .filter((c) => (
+          c &&
+          c.length >= 2 &&
+          !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
+          !c.includes('(No Past POs)')
+        ))
       : [];
 
     return { categories, states: defaultStates };

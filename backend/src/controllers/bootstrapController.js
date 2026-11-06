@@ -1,5 +1,6 @@
 const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
+const { isRetryableD1Error } = require('../db/d1Bridge');
 
 async function getBootstrap(req, res, next) {
   try {
@@ -8,7 +9,12 @@ async function getBootstrap(req, res, next) {
     let buyerId = null;
     const candidateBuyerIds = [];
     if (user && user.role === 'buyer') {
-      const buyerAccount = await storeService.ensureBuyerAccountForUser(user);
+      let buyerAccount = null;
+      try {
+        buyerAccount = await storeService.ensureBuyerAccountForUser(user);
+      } catch (err) {
+        logger.warn('Failed to ensure buyer account during bootstrap (degraded fallback)', { error: err.message }, 'BOOTSTRAP_CONTROLLER');
+      }
       if (buyerAccount) {
         if (buyerAccount.id) candidateBuyerIds.push(buyerAccount.id);
         if (buyerAccount.corporateEmail) candidateBuyerIds.push(buyerAccount.corporateEmail);
@@ -29,7 +35,28 @@ async function getBootstrap(req, res, next) {
       });
     }
     const scopedBuyerArg = candidateBuyerIds.length > 0 ? candidateBuyerIds : buyerId;
-    const data = await storeService.getBootstrapData(scopedBuyerArg, user && user.email);
+    let data;
+    try {
+      data = await storeService.getBootstrapData(scopedBuyerArg, user && user.email);
+    } catch (err) {
+      if (isRetryableD1Error(err)) {
+        logger.warn('D1 overloaded during bootstrap; serving in-memory degraded bootstrap payload', { error: err.message }, 'BOOTSTRAP_CONTROLLER');
+        data = {
+          buyerAccounts: (storeService.buyerAccounts || []).slice(0, 500),
+          activeBuyerAccount: storeService.activeBuyerAccount,
+          vendors: (storeService.vendors || []).slice(0, 500),
+          vendorsTotal: (storeService.vendors || []).length,
+          evaluations: (storeService.evaluations || []).slice(0, 50),
+          auditLogs: (storeService.auditLogs || []).slice(0, 50),
+          aiFeed: [],
+          systemConfig: storeService.systemConfig,
+          azureHealth: storeService.azureHealth,
+          vendorCatalogue: [],
+        };
+      } else {
+        throw err;
+      }
+    }
     res.json({
       success: true,
       source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',

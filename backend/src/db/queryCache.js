@@ -25,7 +25,7 @@ class QueryCache {
   }
 
   get(queryText, params = []) {
-    const key = this.generateKey(queryText, params);
+    const key = queryText && queryText.includes('::') ? queryText : this.generateKey(queryText, params);
     const entry = this.cache.get(key);
 
     if (!entry) {
@@ -34,7 +34,6 @@ class QueryCache {
     }
 
     if (Date.now() > entry.expiresAt) {
-      this.delete(key);
       this.metrics.misses += 1;
       return null;
     }
@@ -48,8 +47,15 @@ class QueryCache {
     return entry.data;
   }
 
+  getStale(queryText, params = []) {
+    const key = queryText && queryText.includes('::') ? queryText : this.generateKey(queryText, params);
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    return entry.data;
+  }
+
   set(queryText, params = [], data, options = {}) {
-    const key = this.generateKey(queryText, params);
+    const key = queryText && queryText.includes('::') ? queryText : this.generateKey(queryText, params);
 
     // Enforce LRU eviction if capacity reached
     if (this.cache.size >= this.maxEntries && !this.cache.has(key)) {
