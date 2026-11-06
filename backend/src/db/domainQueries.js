@@ -209,7 +209,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     params.push(category.trim());
     const p = params.length;
     conditions.push(`(major_category = $${p} OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}) OR (raw->'minorCategories')::text ILIKE ('%"' || $${p} || '"%'))`);
-    d1Conditions.push(`(major_category = $${p} COLLATE NOCASE OR (raw LIKE ('%' || lower($${p}) || '%') AND (lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || lower($${p}) || '"%'))))`);
+    d1Conditions.push(`(major_category = $${p} COLLATE NOCASE OR major_category = $${p})`);
   }
   if (state) {
     params.push(`%${state.trim()}%`);
@@ -262,10 +262,12 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       OR lower(raw->>'buyerEmail') = lower($${p})
     )`);
     d1Conditions.push(`(
-      (json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL)
-      OR lower(json_extract(raw,'$.buyerId')) = lower($${p})
-      OR lower(json_extract(raw,'$.buyerAccountId')) = lower($${p})
-      OR lower(json_extract(raw,'$.buyerEmail')) = lower($${p})
+      source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump')
+      OR (raw LIKE ('%' || $${p} || '%') AND (
+        lower(json_extract(raw,'$.buyerId')) = lower($${p})
+        OR lower(json_extract(raw,'$.buyerAccountId')) = lower($${p})
+        OR lower(json_extract(raw,'$.buyerEmail')) = lower($${p})
+      ))
     )`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -273,7 +275,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
 
   let total = 0;
   if (!skipCount) {
-    const isUnfiltered = conditions.length === 0 || (publicOnly && conditions.length === 1);
+    const isUnfiltered = conditions.length === 0 || (publicOnly && conditions.length === 1) || (scopedBuyerId && !search && !category && !email && !state && !city);
     if (
       isUnfiltered &&
       cachedUnfilteredVendorsTotal !== null &&
@@ -599,7 +601,17 @@ async function getVendorByEmailFromDB(email) {
     return parseRaw(result.rows[0].raw);
   }
 
-  // 2. Secondary fallback lookup: only if not found by primary email.
+  // 2. On D1, all vendors are indexed by `email`. An unindexed full table scan across
+  // 633,823 rows on D1 exhausts CPU and daily read limits (e.g. 21.5M rows read).
+  // Return null immediately if not found in indexed email column on D1.
+  const isD1Active = !!(d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient());
+  if (isD1Active && process.env.NODE_ENV !== 'test') {
+    if (nonVendorEmailCache.size > 5000) nonVendorEmailCache.clear();
+    nonVendorEmailCache.set(cleanEmail, now);
+    return null;
+  }
+
+  // 3. Secondary fallback lookup for Neon/Postgres: only if not found by primary email.
   result = await pool.query(
     `SELECT raw FROM vendors WHERE lower(raw->>'corporateEmail') = $1 LIMIT 1`,
     [cleanEmail],
