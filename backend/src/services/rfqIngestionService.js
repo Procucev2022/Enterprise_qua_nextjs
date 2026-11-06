@@ -775,17 +775,18 @@ async function buildRFQDraft(payload = {}, options = {}) {
   ).length;
   const estimatedBudget = deriveEstimatedBudget(payload.estimatedBudget, lineValues);
 
+  const candidateDates = entities.map((e) => e && e.targetDate).filter(Boolean);
+  const earliestEntityDate = candidateDates.length > 0 ? [...candidateDates].sort()[0] : null;
+
   const draft = {
     title,
     category: headerCategory,
     targetDeliveryDate: (options.ensureFutureDate || payload.ensureFutureDate)
       ? ensureFutureDeliveryDate(
-          payload.targetDeliveryDate ||
-          (entities.find((e) => e && e.targetDate)?.targetDate || null),
+          payload.targetDeliveryDate || earliestEntityDate,
           DELIVERY_DATE_OFFSET_DAYS
         )
-      : (payload.targetDeliveryDate ||
-         (entities.find((e) => e && e.targetDate)?.targetDate || defaultTargetDate())),
+      : (payload.targetDeliveryDate || earliestEntityDate || defaultTargetDate()),
     // Null rather than a placeholder figure: the wizard shows an empty budget
     // field so the buyer supplies the number the document did not state.
     estimatedBudget,
