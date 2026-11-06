@@ -404,44 +404,46 @@ export default function Header() {
             </div>
           )}
 
-          {/* Active Session Countdown & Auto Logout Indicator */}
-          <div
-            data-testid="header-session-timer"
-            onClick={handleExtendSession}
-            title={`Active Session: ${formatSessionCountdown(sessionSecondsLeft)} remaining. ${isBuyerOrVendorRole ? 'Automatically resets on activity. Inactivity timeout: 5 minutes.' : `Click to extend by ${currentRole === 'category_manager' ? '3 hrs' : '30 mins'}.`}`}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                handleExtendSession();
-              }
-            }}
-            className={`cursor-pointer select-none flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold shadow-xs transition-all ${
-              sessionSecondsLeft <= 60
-                ? 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-700 animate-pulse'
-                : sessionSecondsLeft <= 300
-                ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700'
-                : 'bg-slate-100 dark:bg-gray-800 border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700'
-            }`}
-          >
-            <Clock
-              size={14}
-              className={`${
+          {/* Active Session Countdown & Auto Logout Indicator (hidden for Buyer and Vendor, shown for internal roles like Category Manager) */}
+          {!isBuyerOrVendorRole && (
+            <div
+              data-testid="header-session-timer"
+              onClick={handleExtendSession}
+              title={`Active Session: ${formatSessionCountdown(sessionSecondsLeft)} remaining. ${isBuyerOrVendorRole ? 'Automatically resets on activity. Inactivity timeout: 5 minutes.' : `Click to extend by ${currentRole === 'category_manager' ? '3 hrs' : '30 mins'}.`}`}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleExtendSession();
+                }
+              }}
+              className={`cursor-pointer select-none flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold shadow-xs transition-all ${
                 sessionSecondsLeft <= 60
-                  ? 'text-rose-600 dark:text-rose-400 animate-spin'
+                  ? 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-700 animate-pulse'
                   : sessionSecondsLeft <= 300
-                  ? 'text-amber-500 fill-amber-500/20'
-                  : 'text-indigo-600 dark:text-indigo-400'
+                  ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700'
+                  : 'bg-slate-100 dark:bg-gray-800 border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700'
               }`}
-            />
-            <span className="hidden sm:inline text-[11px] font-semibold text-slate-500 dark:text-gray-400">
-              Session:
-            </span>
-            <span className="font-mono text-xs font-bold">
-              {formatSessionCountdown(sessionSecondsLeft)}
-            </span>
-          </div>
+            >
+              <Clock
+                size={14}
+                className={`${
+                  sessionSecondsLeft <= 60
+                    ? 'text-rose-600 dark:text-rose-400 animate-spin'
+                    : sessionSecondsLeft <= 300
+                    ? 'text-amber-500 fill-amber-500/20'
+                    : 'text-indigo-600 dark:text-indigo-400'
+                }`}
+              />
+              <span className="hidden sm:inline text-[11px] font-semibold text-slate-500 dark:text-gray-400">
+                Session:
+              </span>
+              <span className="font-mono text-xs font-bold">
+                {formatSessionCountdown(sessionSecondsLeft)}
+              </span>
+            </div>
+          )}
 
           {/* Theme Toggle (Light / Dark) */}
           <button

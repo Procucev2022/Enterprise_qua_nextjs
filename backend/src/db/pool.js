@@ -342,6 +342,15 @@ const HEALTH_CHECK_SQL = `select (select count(*) from "user" where is_active = 
     (select count(*) from vendors) as vendor_count,
     (select count(*) from rfqs) as rfq_count`;
 
+const D1_HEALTH_CHECK_SQL = `SELECT 1 AS ok,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM "user" WHERE is_active = true LIMIT 50)) AS user_count,
+  (SELECT COUNT(*) FROM (SELECT 1 from vendors LIMIT 50)) AS vendor_count,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM rfqs LIMIT 50)) AS rfq_count`;
+
+let cachedD1Health = null;
+let lastD1HealthCheckTime = 0;
+const D1_HEALTH_CACHE_TTL_MS = 60000; // 60s in-memory cache
+
 /**
  * Runs the health-check count query, bounded with a hard timeout —
  * confirmed live via `wrangler tail` that an unbounded query occasionally
@@ -379,11 +388,18 @@ async function checkDatabaseHealth() {
   // actually reads and writes.
   const d1 = getD1Binding() || getD1HttpClient();
   if (d1) {
+    if (
+      cachedD1Health &&
+      Date.now() - lastD1HealthCheckTime < D1_HEALTH_CACHE_TTL_MS &&
+      process.env.NODE_ENV !== 'test'
+    ) {
+      return { ...cachedD1Health, timestamp };
+    }
     const startedAt = Date.now();
     try {
-      const result = await runHealthCheckQuery(() => queryD1(d1, HEALTH_CHECK_SQL));
+      const result = await runHealthCheckQuery(() => queryD1(d1, D1_HEALTH_CHECK_SQL));
       const row = (result.rows && result.rows[0]) || {};
-      return {
+      const healthData = {
         isConfigured: true,
         isConnected: true,
         provider: 'cloudflare_d1',
@@ -396,6 +412,9 @@ async function checkDatabaseHealth() {
         rfqCount: Number(row.rfq_count || 0),
         timestamp,
       };
+      cachedD1Health = healthData;
+      lastD1HealthCheckTime = Date.now();
+      return healthData;
     } catch (err) {
       return {
         isConfigured: true,

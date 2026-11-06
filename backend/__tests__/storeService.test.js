@@ -463,6 +463,9 @@ describe('Store Service & Business Operations', () => {
       jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockImplementation(async (id) =>
         storeService.vendors.find((vendor) => vendor.id === id) || null
       );
+      jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockImplementation(async (email) =>
+        storeService.vendors.find((vendor) => vendor.email?.toLowerCase() === String(email).toLowerCase()) || null
+      );
       jest.spyOn(domainQueries, 'getVendorSnapshotByIdFromDB').mockImplementation(async (id) => {
         const vendor = storeService.vendors.find((entry) => entry.id === id);
         return vendor ? { id, vendor, raw: JSON.stringify(vendor) } : null;
@@ -3165,7 +3168,7 @@ describe('demo RFQ seeding', () => {
 
         const result = await storeService.getBootstrapData();
 
-        expect(pageSpy).toHaveBeenCalledWith({ limit: 500, offset: 0, publicOnly: true });
+        expect(pageSpy).toHaveBeenCalledWith(expect.objectContaining({ limit: 500, offset: 0, publicOnly: true }));
         expect(getVendorsSpy).not.toHaveBeenCalled();
         expect(result.vendors).toEqual([{ id: 'v-sql', name: 'SQL Vendor', email: 'sql-vendor@example.com' }]);
         expect(result.vendorsTotal).toBe(87109);

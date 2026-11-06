@@ -6196,6 +6196,7 @@ class StoreService {
             limit,
             offset: 0,
             publicOnly: true,
+            skipCount: true,
           });
           dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
         } catch (err) {
@@ -6384,6 +6385,7 @@ class StoreService {
             limit,
             offset: 0,
             publicOnly: true,
+            skipCount: true,
           });
           dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
         } catch (err) {
@@ -8941,32 +8943,54 @@ class StoreService {
         vendors = this.vendors.slice(0, MAX_BOOTSTRAP_VENDORS);
         vendorsTotal = this.vendorsTotal || vendors.length;
       } else {
-        const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true });
-        vendors = page.rows;
-        vendorsTotal = page.total;
+        try {
+          const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true, skipCount: true });
+          vendors = page.rows;
+          vendorsTotal = page.total || (Array.isArray(this.vendors) ? this.vendors.length : 0);
+        } catch (err) {
+          vendors = Array.isArray(this.vendors) ? this.vendors.slice(0, MAX_BOOTSTRAP_VENDORS) : [];
+          vendorsTotal = vendors.length;
+        }
       }
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();
         if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
-          const own = await domainQueries.getVendorByEmailFromDB(email);
-          if (own) vendors = [own, ...vendors];
+          try {
+            const own = await domainQueries.getVendorByEmailFromDB(email);
+            if (own) vendors = [own, ...vendors];
+          } catch {}
         }
       }
     } else if (scopedBuyerId && pool.hasStorage()) {
-      const ownVendors = sessionEmail
-        ? await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS, sessionEmail)
-        : await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
+      let ownVendors = [];
+      try {
+        ownVendors = sessionEmail
+          ? await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS, sessionEmail)
+          : await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
+      } catch {
+        ownVendors = [];
+      }
       const remaining = Math.max(0, MAX_BOOTSTRAP_VENDORS - ownVendors.length);
-      const publicPage = remaining > 0
-        ? await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true })
-        : { rows: [], total: 0 };
-      vendors = [...ownVendors, ...publicPage.rows];
-      vendorsTotal = ownVendors.length + publicPage.total;
+      let publicRows = [];
+      let publicTotal = 0;
+      if (remaining > 0) {
+        try {
+          const publicPage = await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true, skipCount: true });
+          publicRows = publicPage.rows || [];
+          publicTotal = publicPage.total || 0;
+        } catch {
+          publicRows = [];
+        }
+      }
+      vendors = [...ownVendors, ...publicRows];
+      vendorsTotal = ownVendors.length + publicTotal;
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();
         if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
-          const own = await domainQueries.getVendorByEmailFromDB(email);
-          if (own) vendors = [own, ...vendors];
+          try {
+            const own = await domainQueries.getVendorByEmailFromDB(email);
+            if (own) vendors = [own, ...vendors];
+          } catch {}
         }
       }
     } else {

@@ -85,9 +85,8 @@ async function scheduled(controller, workerEnv, ctx) {
       }
     } catch {}
   }
-  // The cron entry point never serves a web request, so nothing else loads the
-  // vendor list into this isolate. Without it, an email RFQ finds no vendors to
-  // invite. Same guard and call as the lazy hydration in app.js.
+  const cron = controller.cron;
+  const isEmailGateway = cron === EMAIL_GATEWAY_CRON || cron === '* * * * *' || cron === '*/5 * * * *';
   const { default: storeService } = await import('./services/storeService.js');
   const loggerModule = await import('./services/loggerService.js');
   const logger = loggerModule.logger || loggerModule.default?.logger;
@@ -100,8 +99,7 @@ async function scheduled(controller, workerEnv, ctx) {
       }
     });
   }
-  const cron = controller.cron;
-  if (cron === EMAIL_GATEWAY_CRON) {
+  if (isEmailGateway) {
     const results = await Promise.allSettled([
       emailGatewayService.pollBothInboxesOnce(),
       rfqChaserScheduler.dispatchDueChaserJobs(),
@@ -143,7 +141,7 @@ async function scheduled(controller, workerEnv, ctx) {
 
 // Must match the `crons` entries in wrangler.jsonc exactly — Cloudflare
 // passes the matched cron expression string back on `controller.cron`.
-const EMAIL_GATEWAY_CRON = '* * * * *';
+const EMAIL_GATEWAY_CRON = '*/5 * * * *';
 const ZOHO_RECONCILIATION_CRON = '*/10 * * * *';
 const DAILY_RFQ_REPORT_CRON = '30 0 * * *';
 

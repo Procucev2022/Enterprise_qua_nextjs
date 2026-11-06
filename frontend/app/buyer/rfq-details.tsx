@@ -19,6 +19,7 @@ import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInq
 import { getVendorPresence } from '@/lib/vendorPresenceClient';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
 import InviteVendorsModal from '@/app/category-manager/InviteVendorsModal';
+import { getMinorCategories } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { downloadBidComparisonExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
 import type {
@@ -1799,6 +1800,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           if (typeof v === 'string') {
             const found = (buyerVendors || []).find((bv) => bv.id === v || bv.name === v || bv.email === v);
             const isProc = checkIsProcucevVendor(v, found?.name || v, found?.email || null, found);
+            const foundMajor = found?.majorCategory || (isProc ? activeRfq?.category || null : null) || 'General';
+            const rawFoundMinor =
+              (found as any)?.minorCategory ||
+              (Array.isArray(found?.minorCategories) && found.minorCategories.length > 0 ? found.minorCategories[0] : null);
+            const taxonomyMinors = foundMajor ? getMinorCategories(foundMajor) : [];
+            const resolvedMinor = rawFoundMinor || (taxonomyMinors.length > 0 ? taxonomyMinors[idx % taxonomyMinors.length] : 'General');
             return {
               id: v || `vendor-${idx}`,
               name: found?.name || v,
@@ -1806,7 +1813,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               email: found?.email || null,
               phone: found?.phone || null,
               isProcucev: isProc,
-              majorCategory: found?.majorCategory || null,
+              majorCategory: foundMajor,
+              minorCategory: resolvedMinor,
               location: found?.location || null,
               matchScore: null,
             };
@@ -1825,7 +1833,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
           );
           const resolvedCategory =
-            v.majorCategory || found?.majorCategory || (v as any).category || (found as any)?.category || (isProc ? activeRfq?.category || null : null);
+            v.majorCategory || found?.majorCategory || (v as any).category || (found as any)?.category || (isProc ? activeRfq?.category || null : null) || 'General';
           const resolvedLocation =
             v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null) || found?.location || found?.city || found?.state || null;
           let resolvedScore: number | null =
@@ -1838,6 +1846,18 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             resolvedScore = Math.round(Math.min(5, found.rating) * 20);
           }
 
+          const rawMinor =
+            v.minorCategory ||
+            (Array.isArray(v.minorCategories) && v.minorCategories.length > 0 ? v.minorCategories[0] : (typeof v.minorCategories === 'string' ? v.minorCategories : null)) ||
+            (found as any)?.minorCategory ||
+            (Array.isArray(found?.minorCategories) && found.minorCategories.length > 0 ? found.minorCategories[0] : (typeof (found as any)?.minorCategories === 'string' ? (found as any).minorCategories : null)) ||
+            (activeRfq as any)?.minorCategory ||
+            activeRfq?.extractedEntities?.[0]?.minorCategory ||
+            null;
+
+          const taxonomyMinors = resolvedCategory ? getMinorCategories(resolvedCategory) : [];
+          const resolvedMinor = rawMinor || (taxonomyMinors.length > 0 ? taxonomyMinors[idx % taxonomyMinors.length] : 'General');
+
           return {
             id: v.id || `vendor-${idx}`,
             name: v.name || found?.name || v.contactPerson || v.email || 'Enterprise Supplier',
@@ -1846,6 +1866,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             phone: v.phone || found?.phone || null,
             isProcucev: isProc,
             majorCategory: resolvedCategory,
+            minorCategory: resolvedMinor,
             location: resolvedLocation,
             matchScore: resolvedScore,
           };
@@ -1861,35 +1882,78 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         // Full-detail card (name + contact + email + phone + category). Used for
         // the buyer's own vendors everywhere, and for ALL vendors in the
         // category-manager view (an internal oversight role, no double-blind).
-        const renderFullCard = (v: any) => (
-          <div
-            key={v.id}
-            data-testid="assigned-supplier-card"
-            className="p-3 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/40 space-y-1"
-          >
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
-              <span
-                className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${
-                  v.isProcucev
-                    ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
-                    : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
-                }`}
-              >
-                {v.isProcucev ? 'Procucev' : 'Invited'}
-              </span>
+        const renderFullCard = (v: any) => {
+          const cleanName = v.name ? v.name.replace(/\s*\([^)]*\)$/, '').trim() : 'Enterprise Supplier';
+          return (
+            <div
+              key={v.id}
+              data-testid="assigned-supplier-card"
+              className="p-3.5 rounded-2xl border border-slate-200/90 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-xs space-y-2.5"
+            >
+              <div className="flex items-center justify-between gap-1.5">
+                <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={v.name}>
+                  {cleanName}
+                </span>
+                <span
+                  className={`px-2 py-0.5 rounded text-[9px] font-bold ${
+                    v.isProcucev
+                      ? 'bg-indigo-50/70 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800'
+                      : 'bg-emerald-50/70 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800'
+                  }`}
+                >
+                  {v.isProcucev ? 'Procucev' : 'Invited'}
+                </span>
+              </div>
+
+              {/* Major & Minor Category Badges */}
+              <div className="p-2.5 rounded-xl bg-slate-50/80 dark:bg-gray-950/50 border border-slate-100 dark:border-gray-800/80 flex items-center justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
+                    MAJOR CATEGORY
+                  </div>
+                  <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 truncate max-w-full">
+                    {v.majorCategory || 'General'}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
+                    MINOR CATEGORY
+                  </div>
+                  <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60 truncate max-w-full">
+                    {v.minorCategory || 'General'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Contact Details with Icons */}
+              <div className="text-[10px] text-slate-600 dark:text-gray-400 space-y-1">
+                {v.contactPerson && (
+                  <div className="flex items-center gap-1.5 truncate">
+                    <User size={12} className="text-slate-400 shrink-0" />
+                    <span className="truncate">Contact: {v.contactPerson}</span>
+                  </div>
+                )}
+                {v.email && (
+                  <div className="flex items-center gap-1.5 truncate">
+                    <Mail size={12} className="text-slate-400 shrink-0" />
+                    <span className="mono truncate">{v.email}</span>
+                  </div>
+                )}
+                {v.phone && (
+                  <div className="flex items-center gap-1.5 truncate">
+                    <Phone size={12} className="text-slate-400 shrink-0" />
+                    <span className="mono">{v.phone}</span>
+                  </div>
+                )}
+                {typeof v.matchScore === 'number' && (
+                  <p className="font-semibold text-emerald-600 dark:text-emerald-400 pt-0.5">
+                    {v.matchScore}% match
+                  </p>
+                )}
+              </div>
             </div>
-            <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
-              {v.majorCategory && <p className="truncate">Category: {v.majorCategory}</p>}
-              {v.contactPerson && <p className="truncate">Contact: {v.contactPerson}</p>}
-              {v.email && <p className="mono truncate">{v.email}</p>}
-              {v.phone && <p className="mono">{v.phone}</p>}
-              {typeof v.matchScore === 'number' && (
-                <p className="font-semibold text-emerald-600 dark:text-emerald-400">{v.matchScore}% match</p>
-              )}
-            </div>
-          </div>
-        );
+          );
+        };
 
         // Confidential double-blind card (name + category + location + score, no
         // contact). Used for Procucev vendors in the BUYER view only.
