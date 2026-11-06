@@ -4,6 +4,7 @@ const { VALIDATION_SCHEMAS, validatePayload, AUTH_MESSAGES } = require('../confi
 const { extractToken } = require('../middleware/auth');
 const vendorPresenceService = require('../services/vendorPresenceService');
 const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueries');
+const loginLogsQueries = require('../db/loginLogsQueries');
 
 function getClientIp(req) {
   return req.ip || (req.headers && req.headers['x-forwarded-for']) || '127.0.0.1';
@@ -21,11 +22,37 @@ async function login(req, res, next) {
 
     if (code) {
       const result = await authService.verifyOtp(email, code, ipAddress, mobile);
+      if (result && result.success && result.user) {
+        try {
+          await loginLogsQueries.recordLoginLog({
+            userId: result.user.id,
+            userName: result.user.name,
+            email: result.user.email,
+            phoneNumber: result.user.mobile,
+            companyName: result.user.orgName || result.user.companyName || 'Enterprise Partner',
+            userType: result.user.role === 'vendor' ? 'vendor' : 'buyer',
+            ipAddress,
+          });
+        } catch (_) {}
+      }
       return res.json(result);
     }
 
     if (password) {
       const result = await authService.authenticateWithPassword(email, password, ipAddress, mobile);
+      if (result && result.success && result.user) {
+        try {
+          await loginLogsQueries.recordLoginLog({
+            userId: result.user.id,
+            userName: result.user.name,
+            email: result.user.email,
+            phoneNumber: result.user.mobile,
+            companyName: result.user.orgName || result.user.companyName || 'Enterprise Partner',
+            userType: result.user.role === 'vendor' ? 'vendor' : 'buyer',
+            ipAddress,
+          });
+        } catch (_) {}
+      }
       return res.json(result);
     }
 
@@ -190,9 +217,16 @@ async function logout(req, res, next) {
     if (token) {
       try {
         const decoded = authService.verifySessionToken(token);
-        if (decoded && decoded.valid && decoded.user && decoded.user.sessionId) {
+        if (decoded && decoded.valid && decoded.user) {
           const reason = (req.body && req.body.logoutReason) || 'MANUAL';
-          await vendorDirectorySessionQueries.closeSession(decoded.user.sessionId, { logoutReason: reason });
+          if (decoded.user.sessionId) {
+            await vendorDirectorySessionQueries.closeSession(decoded.user.sessionId, { logoutReason: reason });
+          }
+          await loginLogsQueries.recordLogoutLog({
+            email: decoded.user.email,
+            userUuid: decoded.user.id || decoded.user.uuid,
+            logoutReason: reason,
+          });
         }
       } catch (sessionErr) {
         logger.warn('Failed to close directory session on logout', { error: sessionErr.message }, 'AUTH_CONTROLLER');

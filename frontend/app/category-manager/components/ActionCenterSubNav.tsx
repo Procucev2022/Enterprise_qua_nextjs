@@ -109,9 +109,9 @@ export default function ActionCenterSubNav({
   ];
 
   return (
-    <div className="w-full border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 sticky top-0 z-30 mb-4 -mx-2 sm:-mx-3 px-2 sm:px-3">
+    <div className="w-full border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 sticky top-0 z-30 mb-3">
       <h1 className="sr-only">Action Center</h1>
-      <div role="tablist" aria-label="Action Center Navigation" className="flex items-center gap-1 overflow-x-auto no-scrollbar py-1">
+      <div role="tablist" aria-label="Action Center Navigation" className="flex items-center gap-0.5 sm:gap-1 overflow-x-auto no-scrollbar py-0.5 sm:py-1">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -123,7 +123,7 @@ export default function ActionCenterSubNav({
               aria-selected={isActive}
               type="button"
               onClick={() => onSelectTab(item.id)}
-              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold whitespace-nowrap rounded-lg border-b-2 transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 text-xs font-semibold whitespace-nowrap rounded-lg border-b-2 transition-all cursor-pointer ${
                 isActive
                   ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/30'
                   : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/40'

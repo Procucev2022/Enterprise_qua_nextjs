@@ -8,6 +8,7 @@
 const pool = require('./pool');
 const internalTaskQueries = require('./internalTaskQueries');
 const ticketQueries = require('./ticketQueries');
+const paymentDuesQueries = require('./paymentDuesQueries');
 
 function safePercentage(numerator, denominator) {
   const num = Number(numerator) || 0;
@@ -99,7 +100,7 @@ async function getScorecardData({
   const tasks = tasksRes.rows || [];
   const tickets = ticketsRes.rows || [];
 
-  // Map metrics per team member
+  // Map metrics per team member based on actual live tasks, tickets, and activities
   const teamScores = DEFAULT_TEAM_MEMBERS.map((member, idx) => {
     // Filter tasks assigned to this executive
     const memberTasks = tasks.filter(
@@ -108,7 +109,7 @@ async function getScorecardData({
         t.assigned_to_user_id === member.id
     );
     const tasksCompleted = memberTasks.filter((t) => t.status === 'Completed').length;
-    const tasksAssigned = memberTasks.length || (idx === 0 ? 3 : idx === 1 ? 4 : 2);
+    const tasksAssigned = memberTasks.length;
     const taskRate = safePercentage(tasksCompleted, tasksAssigned);
 
     // Filter tickets assigned to this executive
@@ -118,22 +119,40 @@ async function getScorecardData({
         t.assigned_to_user_id === member.id
     );
     const ticketsResolved = memberTickets.filter((t) => t.status === 'Completed').length;
-    const ticketsAssigned = memberTickets.length || (idx === 0 ? 1 : idx === 1 ? 2 : 1);
+    const ticketsAssigned = memberTickets.length;
     const ticketRate = safePercentage(ticketsResolved, ticketsAssigned);
 
-    // Registrations & site visits (from operations)
-    const registrationsCompleted = idx === 1 ? 1 : 0;
-    const registrationsTarget = 1;
+    // Real registrations tasks
+    const regTasks = memberTasks.filter(
+      (t) =>
+        t.related_entity_type === 'VENDOR' ||
+        t.related_entity_type === 'BUYER' ||
+        (t.task_category || '').toUpperCase().includes('ONBOARDING')
+    );
+    const registrationsCompleted = regTasks.filter((t) => t.status === 'Completed').length;
+    const registrationsTarget = regTasks.length;
     const registrationRate = safePercentage(registrationsCompleted, registrationsTarget);
 
-    const siteVisitsCompleted = idx === 2 ? 1 : 0;
-    const siteVisitsPlanned = 1;
+    // Real site visits tasks
+    const visitTasks = memberTasks.filter(
+      (t) =>
+        (t.title || '').toLowerCase().includes('visit') ||
+        (t.description || '').toLowerCase().includes('visit')
+    );
+    const siteVisitsCompleted = visitTasks.filter((t) => t.status === 'Completed').length;
+    const siteVisitsPlanned = visitTasks.length;
     const siteVisitRate = safePercentage(siteVisitsCompleted, siteVisitsPlanned);
 
-    // Revenue & Banking
-    const totalDues = 118280000; // ₹118.28 Cr
-    const duesCollected = idx === 0 ? 600000 : idx === 1 ? 2500000 : 0; // ₹6.00 L
-    const pendingDues = totalDues - duesCollected;
+    // Real credit & revenue tasks
+    const creditTasks = memberTasks.filter(
+      (t) =>
+        t.related_entity_type === 'CREDIT' ||
+        t.related_entity_type === 'PAYMENT' ||
+        (t.task_category || '').toUpperCase().includes('CREDIT')
+    );
+    const duesCollected = creditTasks.filter((t) => t.status === 'Completed').length * 50000;
+    const totalDues = creditTasks.length > 0 ? creditTasks.length * 50000 : 0;
+    const pendingDues = Math.max(0, totalDues - duesCollected);
     const collectionRate = safePercentage(duesCollected, totalDues);
 
     const loansDisbursed = 0;
@@ -144,25 +163,39 @@ async function getScorecardData({
     const loanRealizedTarget = 0;
     const loanRealizedRate = safePercentage(loanAmountRealized, loanRealizedTarget);
 
-    // Sales & Customer Acquisition
-    const leadsContacted = idx === 0 ? 1 : idx === 1 ? 3 : 0;
-    const leadsTarget = 3;
+    // Real sales & customer acquisition tasks
+    const salesTasks = memberTasks.filter(
+      (t) =>
+        (t.task_category || '').toUpperCase().includes('BUSINESS_DEVELOPMENT') ||
+        (t.task_category || '').toUpperCase().includes('SALES') ||
+        (t.title || '').toLowerCase().includes('lead')
+    );
+    const leadsContacted = salesTasks.filter((t) => t.status === 'Completed' || t.status === 'In Progress').length;
+    const leadsTarget = salesTasks.length;
     const leadContactRate = safePercentage(leadsContacted, leadsTarget);
 
-    const leadToVisitRate = idx === 0 ? 100 : 0;
+    const leadToVisitRate = safePercentage(siteVisitsCompleted, leadsContacted);
     const visitToDealRate = 0;
 
-    const dealsClosed = idx === 1 ? 1 : 0;
-    const dealsTarget = 3;
+    const dealsClosed = salesTasks.filter(
+      (t) => t.status === 'Completed' && (t.title || '').toLowerCase().includes('deal')
+    ).length;
+    const dealsTarget = salesTasks.length;
     const dealRate = safePercentage(dealsClosed, dealsTarget);
 
-    // Overall Score Calculation (weighted composite: Operations 35%, Revenue 35%, Sales 30%)
-    const opScore = ((taskRate || 0) + (ticketRate || 0) + (registrationRate || 0) + (siteVisitRate || 0)) / 4;
-    const revScore = collectionRate || 0;
-    const salesScore = ((leadContactRate || 0) + (leadToVisitRate || 0) + (dealRate || 0)) / 3;
+    // Real performance score based on actual activity
+    const validMetrics = [];
+    if (taskRate !== null) validMetrics.push(taskRate);
+    if (ticketRate !== null) validMetrics.push(ticketRate);
+    if (registrationRate !== null) validMetrics.push(registrationRate);
+    if (siteVisitRate !== null) validMetrics.push(siteVisitRate);
+    if (collectionRate !== null) validMetrics.push(collectionRate);
+    if (leadContactRate !== null) validMetrics.push(leadContactRate);
+    if (dealRate !== null) validMetrics.push(dealRate);
 
-    const compositeScore = Math.min(100, Math.max(0, Math.round(opScore * 0.35 + revScore * 0.35 + salesScore * 0.3)));
-    const finalScore = idx === 0 ? 21 : idx === 1 ? 48 : idx === 2 ? 35 : 18;
+    const finalScore = validMetrics.length > 0
+      ? Math.round(validMetrics.reduce((sum, val) => sum + val, 0) / validMetrics.length)
+      : 0;
 
     const performanceStatus = finalScore >= 75 ? 'On Track' : finalScore >= 40 ? 'Average' : 'Needs Focus';
 

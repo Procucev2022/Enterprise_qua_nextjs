@@ -616,6 +616,8 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     'surgical instrument': 'Surgical Instruments',
     'health equipment': 'Health Equipments',
     'health equipments': 'Health Equipments',
+    automation: 'Controllers',
+    instrumentation: 'Control & Instrument',
   },
 
   // Aliases for major category abbreviations/legacy names to canonical taxonomy names
@@ -845,8 +847,16 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     tools: { major: 'Engineering Spares - Mechanical', minor: 'Tools & Tackles' },
     'welding machine': { major: 'Engineering Spares - Mechanical', minor: 'Welding Equipment & Cutting Machines' },
     'welding electrode': { major: 'Engineering Spares - Mechanical', minor: 'Welding Materials' },
+    'pressure gauge': { major: 'Engineering Spares - Mechanical', minor: 'Gauges & Instruments' },
+    'pressure gauges': { major: 'Engineering Spares - Mechanical', minor: 'Gauges & Instruments' },
+    gauge: { major: 'Engineering Spares - Mechanical', minor: 'Gauges & Instruments' },
+    gauges: { major: 'Engineering Spares - Mechanical', minor: 'Gauges & Instruments' },
 
     // ── Engineering Spares - Electrical ──
+    'plc controller': { major: 'Engineering Spares - Electrical', minor: 'Controllers' },
+    plc: { major: 'Engineering Spares - Electrical', minor: 'Controllers' },
+    controller: { major: 'Engineering Spares - Electrical', minor: 'Controllers' },
+    controllers: { major: 'Engineering Spares - Electrical', minor: 'Controllers' },
     'circuit breaker': { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
     'air circuit breaker': { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
     'flood light': { major: 'Engineering Spares - Electrical', minor: 'Lights' },

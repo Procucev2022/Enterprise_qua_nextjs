@@ -14,6 +14,7 @@
 // ==============================================================================
 
 import type { MajorMinorCategory } from './types';
+import { MASTER_CATEGORY_GROUPS } from './categoryTaxonomySeed';
 
 // ==============================================================================
 // KEYWORD MATCHING AND RULE DEFINITIONS
@@ -807,7 +808,7 @@ export function hasMinorCategory(major: string, minor: string): boolean {
 
 /** Standard procurement category taxonomy fallback when database is unseeded. */
 export function getDefaultCategoryTaxonomy(): MajorMinorCategory[] {
-  return groups;
+  return groups.length > 0 ? groups : MASTER_CATEGORY_GROUPS;
 }
 
 /**
@@ -940,3 +941,6 @@ export function countMinorCategories(): number {
 export function clearCategoryTaxonomy(): void {
   setCategoryTaxonomy([]);
 }
+
+// Prime the registry with the default master category groups on initial load
+setCategoryTaxonomy(MASTER_CATEGORY_GROUPS);
