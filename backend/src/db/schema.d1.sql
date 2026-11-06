@@ -102,6 +102,8 @@ CREATE TABLE IF NOT EXISTS organization (
 CREATE INDEX IF NOT EXISTS idx_organization_org_type_uuid ON organization (org_type_uuid);
 
 CREATE INDEX IF NOT EXISTS idx_organization_gstin ON organization (gstin);
+CREATE INDEX IF NOT EXISTS idx_organization_name_nocase ON organization (organization_name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_organization_email_nocase ON organization (email COLLATE NOCASE);
 
 CREATE TABLE IF NOT EXISTS "user" (
     uuid TEXT PRIMARY KEY,

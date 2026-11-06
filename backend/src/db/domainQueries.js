@@ -127,10 +127,11 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
             OR lower(raw->>'majorCategory') = $${pExact}
           )`;
           d1CatCondition = `(
-            lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = $${pExact}
-            OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ($${pExact} || ' %')
-            OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ('% ' || $${pExact})
-            OR lower(coalesce(major_category, json_extract(raw,\'$.majorCategory\'), json_extract(raw,\'$.category\'), \'\')) LIKE ('% ' || $${pExact} || ' %')
+            major_category = $${pExact} COLLATE NOCASE
+            OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) = $${pExact}
+            OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) LIKE ($${pExact} || ' %')
+            OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) LIKE ('% ' || $${pExact})
+            OR lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) LIKE ('% ' || $${pExact} || ' %')
             OR lower(json_extract(raw,'$.majorCategory')) = $${pExact}
           )`;
           nameCondition = `(
@@ -206,7 +207,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     params.push(category.trim());
     const p = params.length;
     conditions.push(`(major_category = $${p} OR lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(raw->>'majorCategory') = lower($${p}) OR (raw->'minorCategories')::text ILIKE ('%"' || $${p} || '"%'))`);
-    d1Conditions.push(`(major_category = $${p} COLLATE NOCASE OR (raw LIKE ('%' || lower($${p}) || '%') AND (lower(coalesce(major_category, raw->>\'majorCategory\', raw->>\'category\', \'\')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || lower($${p}) || '"%'))))`);
+    d1Conditions.push(`(major_category = $${p} COLLATE NOCASE OR (raw LIKE ('%' || lower($${p}) || '%') AND (lower(coalesce(major_category, json_extract(raw,'$.majorCategory'), json_extract(raw,'$.category'), '')) = lower($${p}) OR lower(json_extract(raw,'$.majorCategory')) = lower($${p}) OR lower(json_extract(raw,'$.minorCategories')) LIKE ('%"' || lower($${p}) || '"%'))))`);
   }
   if (state) {
     params.push(`%${state.trim()}%`);
@@ -581,7 +582,7 @@ async function getVendorByEmailFromDB(email) {
     [cleanEmail],
     {
       d1: true,
-      d1Text: `SELECT raw FROM vendors WHERE json_extract(raw,'$.corporateEmail') = $1 COLLATE NOCASE LIMIT 1`,
+      d1Text: `SELECT raw FROM vendors WHERE raw LIKE '%"corporateEmail"%' AND raw LIKE ('%' || $1 || '%') AND json_extract(raw,'$.corporateEmail') = $1 COLLATE NOCASE LIMIT 1`,
       useCache: true,
       tag: 'vendors',
       ttlMs: 60000,

@@ -26,11 +26,9 @@ const rfq: RFQItem = {
   sourcingMode: 'mode_1', status: 'PO Generated', quotesCount: 1,
   targetDeliveryDate: '2026-12-01', budget: 2000, createdAt: '2026-10-01',
   chasingActive: false, extractedEntities: [], awardedVendor: candidate.name, awardedAmount: 1000,
-  quotes: [{
-    vendorId: candidate.id, vendorName: candidate.name, vendorCategory: 'Client List',
+  quotes: [{ vendorId: candidate.id, vendorName: candidate.name, vendorCategory: 'Client List',
     unitPrice: 100, totalPrice: 1000, leadTimeDays: 5, aiMatchScore: 95,
-    warrantyYears: 0, complianceStatus: 'Minor Exception', paymentTerms: 'Advance', remarks: 'Quote audit remarks'
-  }],
+    warrantyYears: 0, complianceStatus: 'Minor Exception', paymentTerms: 'Advance', remarks: 'Quote audit remarks' }],
 };
 
 beforeEach(() => {
@@ -76,10 +74,8 @@ describe('vendor source classification', () => {
 });
 
 test('filters the two supplier streams and audits a quotation with real metrics and matrix navigation', async () => {
-  (useApp as jest.Mock).mockReturnValue({
-    rfqs: [rfq, { ...rfq, id: 'no-quote', quotes: [] }],
-    categoryTaxonomy: [null, {}, { majorCategory: ' Store Category ' }]
-  });
+  (useApp as jest.Mock).mockReturnValue({ rfqs: [rfq, { ...rfq, id: 'no-quote', quotes: [] }],
+    categoryTaxonomy: [null, {}, { majorCategory: ' Store Category ' }] });
   (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: [{ majorCategory: 'API Category' }] });
   (fetchAllVendors as jest.Mock).mockResolvedValue(page([
     candidate,
