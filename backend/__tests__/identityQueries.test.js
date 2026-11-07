@@ -778,10 +778,23 @@ describe('Identity queries (Neon PostgreSQL)', () => {
     });
 
     test('creates vendor account in postgres transaction', async () => {
-      const res = await identityQueries.insertVendorAccount(payload);
+      const onboardingEvent = {
+        id: 'retry:vendor_onboarding_email:hashed-vendor-id',
+        eventType: 'vendor_onboarding_email',
+        payload: { vendorId: 'vendor-1', encryptedTempPassword: 'enc:v1:opaque-token' },
+      };
+      const res = await identityQueries.insertVendorAccount({ ...payload, onboardingEvent });
       expect(res.created).toBe(true);
       expect(res.user.role).toBe('vendor');
       expect(res.user.orgName).toBe('Vendor Org');
+      expect(client.query).toHaveBeenCalledTimes(4);
+      expect(client.query.mock.calls[3][0]).toContain('INSERT INTO event_outbox');
+      expect(client.query.mock.calls[3][1]).toEqual([
+        onboardingEvent.id,
+        onboardingEvent.eventType,
+        JSON.stringify(onboardingEvent.payload),
+      ]);
+      expect(JSON.stringify(client.query.mock.calls[3][1])).not.toContain(payload.password);
     });
 
     test('creates vendor account under D1 path', async () => {
@@ -791,13 +804,25 @@ describe('Identity queries (Neon PostgreSQL)', () => {
       const res = await identityQueries.insertVendorAccount({
         email: 'd1vendor@example.com',
         password: 'Pass@123',
+        onboardingEvent: {
+          id: 'retry:vendor_onboarding_email:hashed-d1-vendor-id',
+          eventType: 'vendor_onboarding_email',
+          payload: { vendorId: 'd1-vendor-id', encryptedTempPassword: 'enc:v1:d1-token' },
+        },
       });
       expect(res.created).toBe(true);
       expect(res.user.role).toBe('vendor');
       const batchCall = d1Bridge.batchD1.mock.calls[0][1];
-      expect(batchCall).toHaveLength(2);
+      expect(batchCall).toHaveLength(3);
       expect(batchCall.some(({ text }) => text.includes('not exists (select 1 from organization'))).toBe(true);
       expect(batchCall.some(({ text }) => text.includes('returning uuid, org_uuid'))).toBe(true);
+      expect(batchCall[2].text).toContain('INSERT INTO event_outbox');
+      expect(batchCall[2].text).toContain('WHERE EXISTS (SELECT 1 FROM "user" WHERE uuid = $4)');
+      expect(batchCall[2].params[2]).toBe(JSON.stringify({
+        vendorId: 'd1-vendor-id',
+        encryptedTempPassword: 'enc:v1:d1-token',
+      }));
+      expect(JSON.stringify(batchCall[2].params)).not.toContain('Pass@123');
       expect(batchCall[0].text).toContain('contact_person, email, organization_phonenumber');
       expect(batchCall[0].text).not.toMatch(/contact_name|contact_email|contact_phone/);
       expect(batchCall[1].text).not.toContain('organization_name, org_uuid');

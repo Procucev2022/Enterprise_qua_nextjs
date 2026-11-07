@@ -9,6 +9,16 @@ export const UI_STRINGS = {
   appName: 'Procucev Enterprise',
   engineVersion: 'QUA AI 2.0',
   tagline: 'Autonomous Industrial Procurement & Supplier Telemetry Orchestration',
+  vendorOnboarding: {
+    addedTitle: 'Vendor Added',
+    credentialsFailedTitle: 'Vendor Added — Credentials Email Failed',
+    credentialsFailedMessage: '{name} was added, but login credentials could not be delivered. Please contact support to retry the invitation.',
+    accountExistsMessage: '{name} already has a Procucev login; no new credentials were sent.',
+    credentialsQueuedTitle: 'Vendor Added — Credentials Email Queued',
+    credentialsQueuedMessage: '{name} was added. Secure delivery of login credentials to {email} is queued; the vendor must change the temporary password at first login.',
+    credentialsSentMessage: '{name} was added. Login credentials were sent to {email} with instructions to change the temporary password at first login.',
+    registeredAndSelectedMessage: '{name} was added to Procucev Vendors and selected for this RFQ.',
+  },
   enterpriseInquiry: {
     submitSuccessTitle: 'Enquiry Submitted',
     submitSuccessMessage: 'Our Enterprise Contracts team will reach out to you within 24 hours.',

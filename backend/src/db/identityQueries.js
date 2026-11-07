@@ -937,6 +937,7 @@ async function insertVendorAccount({
   createdBy = 'vendor-ingestion',
   resetExisting = true,
   resetPasswordRequired = true,
+  onboardingEvent = null,
 }) {
   if (!pool.hasStorage()) {
     throw new Error(pool.NOT_CONFIGURED_MESSAGE);
@@ -1045,6 +1046,21 @@ async function insertVendorAccount({
       ],
     });
 
+    if (onboardingEvent) {
+      statements.push({
+        text: `INSERT INTO event_outbox (id, event_type, raw)
+               SELECT $1, $2, $3
+                WHERE EXISTS (SELECT 1 FROM "user" WHERE uuid = $4)
+               ON CONFLICT (id) DO NOTHING`,
+        params: [
+          onboardingEvent.id,
+          onboardingEvent.eventType,
+          JSON.stringify(onboardingEvent.payload),
+          userUuid,
+        ],
+      });
+    }
+
     const results = await runAtomicD1AccountBatch('insertVendorAccount', statements);
     const createdRow = results[userInsertIndex]?.rows?.[0];
     if (!createdRow) {
@@ -1142,6 +1158,15 @@ async function insertVendorAccount({
         createdBy,
       ]
     );
+
+    if (onboardingEvent) {
+      await client.query(
+        `INSERT INTO event_outbox (id, event_type, raw)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO NOTHING`,
+        [onboardingEvent.id, onboardingEvent.eventType, JSON.stringify(onboardingEvent.payload)]
+      );
+    }
 
     queryCache.invalidate('user');
     return {

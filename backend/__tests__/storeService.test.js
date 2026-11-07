@@ -3,6 +3,7 @@ const domainPool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
 const mailerService = require('../src/services/mailerService');
 const identityQueries = require('../src/db/identityQueries');
+const cryptoService = require('../src/services/cryptoService');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
 const eventOutboxService = require('../src/services/eventOutboxService');
 
@@ -197,6 +198,163 @@ describe('Store Service & Business Operations', () => {
       } finally {
         findSpy.mockRestore();
         identitySpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
+    test('durable onboarding stores only encrypted credentials in the identity transaction and leaves email pending', async () => {
+      const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+      const originalSecretKey = process.env.AES_SECRET_KEY;
+      process.env.AES_ENCRYPTION_KEY = 'a'.repeat(64);
+      delete process.env.AES_SECRET_KEY;
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({ created: true });
+      const encryptSpy = jest.spyOn(cryptoService, 'encrypt').mockReturnValue({ encoded: 'enc:v1:opaque-temp-password' });
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+      const vendor = {
+        id: 'vendor-onboarding-outbox-1',
+        name: 'Durable Invite Co',
+        contactPerson: 'Asha',
+        email: 'durable-invite@example.com',
+        phone: '+919999999999',
+        onboardingEmailStatus: 'pending',
+      };
+
+      try {
+        const result = await storeService.provisionVendorOnboarding(vendor, 'buyer@example.com');
+        const insertedAccount = identitySpy.mock.calls[0][0];
+
+        expect(result).toEqual({ status: 'pending', error: null });
+        expect(encryptSpy).toHaveBeenCalledWith(insertedAccount.password, {
+          additionalData: `vendor-onboarding-email:${vendor.id}`,
+        });
+        expect(insertedAccount.onboardingEvent).toMatchObject({
+          eventType: 'vendor_onboarding_email',
+          payload: {
+            vendorId: vendor.id,
+            encryptedTempPassword: 'enc:v1:opaque-temp-password',
+          },
+        });
+        expect(JSON.stringify(insertedAccount.onboardingEvent)).not.toContain(insertedAccount.password);
+        expect(sendSpy).not.toHaveBeenCalled();
+      } finally {
+        process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+        if (originalSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+        else process.env.AES_SECRET_KEY = originalSecretKey;
+        hasStorageSpy.mockRestore();
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        encryptSpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
+    test('durable onboarding refuses to persist credentials without an encryption key', async () => {
+      const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+      const originalSecretKey = process.env.AES_SECRET_KEY;
+      delete process.env.AES_ENCRYPTION_KEY;
+      delete process.env.AES_SECRET_KEY;
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({ created: true });
+      const statusSpy = jest.spyOn(storeService, '_persistVendorOnboardingStatus').mockResolvedValue({ warning: null });
+      const vendor = {
+        id: 'vendor-onboarding-no-key',
+        name: 'No Encryption Key Co',
+        email: 'no-key@example.com',
+        onboardingEmailStatus: 'pending',
+      };
+
+      try {
+        const result = await storeService.provisionVendorOnboarding(vendor);
+        expect(result.status).toBe('failed');
+        expect(result.error).toContain('AES_ENCRYPTION_KEY or AES_SECRET_KEY');
+        expect(identitySpy).not.toHaveBeenCalled();
+        expect(statusSpy).toHaveBeenCalledWith(vendor, 'failed');
+      } finally {
+        process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+        if (originalSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+        else process.env.AES_SECRET_KEY = originalSecretKey;
+        hasStorageSpy.mockRestore();
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        statusSpy.mockRestore();
+      }
+    });
+
+    test('durable onboarding reports encryption failures before creating the identity', async () => {
+      const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+      const originalSecretKey = process.env.AES_SECRET_KEY;
+      process.env.AES_ENCRYPTION_KEY = 'a'.repeat(64);
+      delete process.env.AES_SECRET_KEY;
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({ created: true });
+      const encryptSpy = jest.spyOn(cryptoService, 'encrypt').mockImplementation(() => {
+        throw new Error('encryption unavailable');
+      });
+      const statusSpy = jest.spyOn(storeService, '_persistVendorOnboardingStatus').mockResolvedValue({ warning: null });
+      const vendor = {
+        id: 'vendor-onboarding-encrypt-failure',
+        name: 'Encryption Failure Co',
+        email: 'encrypt-failure@example.com',
+        onboardingEmailStatus: 'pending',
+      };
+
+      try {
+        const result = await storeService.provisionVendorOnboarding(vendor);
+        expect(result.status).toBe('failed');
+        expect(result.error).toContain('credentials could not be secured');
+        expect(identitySpy).not.toHaveBeenCalled();
+        expect(statusSpy).toHaveBeenCalledWith(vendor, 'failed');
+      } finally {
+        process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+        if (originalSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+        else process.env.AES_SECRET_KEY = originalSecretKey;
+        hasStorageSpy.mockRestore();
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        encryptSpy.mockRestore();
+        statusSpy.mockRestore();
+      }
+    });
+
+    test('durable onboarding honors intentional email skips without requiring encryption', async () => {
+      const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+      const originalSecretKey = process.env.AES_SECRET_KEY;
+      delete process.env.AES_ENCRYPTION_KEY;
+      delete process.env.AES_SECRET_KEY;
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({ created: true });
+      const encryptSpy = jest.spyOn(cryptoService, 'encrypt');
+      const statusSpy = jest.spyOn(storeService, '_persistVendorOnboardingStatus').mockResolvedValue({ warning: null });
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+      const vendor = {
+        id: 'vendor-onboarding-skip-email',
+        name: 'Skip Email Co',
+        email: 'skip-email@example.com',
+        onboardingEmailStatus: 'pending',
+      };
+
+      try {
+        const result = await storeService.provisionVendorOnboarding(vendor, 'bulk-import', { skipEmail: true });
+        expect(result.status).toBe('skipped');
+        expect(identitySpy).toHaveBeenCalled();
+        expect(identitySpy.mock.calls[0][0]).not.toHaveProperty('onboardingEvent');
+        expect(encryptSpy).not.toHaveBeenCalled();
+        expect(sendSpy).not.toHaveBeenCalled();
+        expect(statusSpy).toHaveBeenCalledWith(vendor, 'skipped');
+      } finally {
+        process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+        if (originalSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+        else process.env.AES_SECRET_KEY = originalSecretKey;
+        hasStorageSpy.mockRestore();
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        encryptSpy.mockRestore();
+        statusSpy.mockRestore();
         sendSpy.mockRestore();
       }
     });

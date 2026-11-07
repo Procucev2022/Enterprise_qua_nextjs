@@ -6,6 +6,7 @@ const domainQueries = require('../db/domainQueries');
 const enterpriseInquiryQueries = require('../db/enterpriseInquiryQueries');
 const eventOutboxQueries = require('../db/eventOutboxQueries');
 const mailerService = require('./mailerService');
+const cryptoService = require('./cryptoService');
 const {
   EVENT_OUTBOX_TYPES,
   EVENT_OUTBOX_MAX_ATTEMPTS,
@@ -227,6 +228,89 @@ async function dispatchEvent(job) {
       logger.info('Vendor rating revision email accepted by a provider', {
         vendorId,
         revisionId,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
+    case EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL: {
+      const { vendorId, encryptedTempPassword } = job.raw || {};
+      if (
+        typeof vendorId !== 'string' || !vendorId
+        || typeof encryptedTempPassword !== 'string' || !encryptedTempPassword
+      ) {
+        const error = new Error('Vendor onboarding email retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const vendor = await domainQueries.getVendorByIdFromDB(vendorId, { fresh: true });
+      if (!vendor) {
+        const error = new Error('Vendor onboarding email retry references a missing vendor.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      if (vendor.onboardingEmailStatus === 'sent') return;
+      if (vendor.onboardingEmailStatus !== 'pending') {
+        const error = new Error('Vendor onboarding email retry references a vendor that is no longer pending.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const recipient = String(vendor.email || '').trim();
+      if (!EMAIL_REGEX.test(recipient)) {
+        const error = new Error('Vendor onboarding email has no valid persisted recipient.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      let tempPassword;
+      try {
+        tempPassword = cryptoService.decrypt(encryptedTempPassword, {
+          additionalData: `vendor-onboarding-email:${vendorId}`,
+        });
+      } catch {
+        const error = new Error('Vendor onboarding credential payload could not be decrypted.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      if (!tempPassword) {
+        const error = new Error('Vendor onboarding credential payload is empty.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const emailPayload = mailerService.buildVendorOnboardingEmail({
+        to: recipient,
+        recipientName: vendor.contactPerson || vendor.name,
+        buyerOrganizationName: 'Procucev Enterprise',
+        vendorCode: vendor.id,
+        tempPassword,
+        contactPhone: vendor.phone,
+      });
+      let delivery;
+      try {
+        delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
+      } catch {
+        const error = new Error('Vendor onboarding email provider request failed.');
+        error.code = 'VENDOR_ONBOARDING_EMAIL_FAILED';
+        throw error;
+      }
+      if (!delivery?.sent) {
+        const error = new Error('Vendor onboarding email provider did not accept the message.');
+        error.code = 'VENDOR_ONBOARDING_EMAIL_FAILED';
+        throw error;
+      }
+
+      const saved = await require('./storeService').updateVendorDurably(vendorId, {
+        onboardingEmailStatus: 'sent',
+      });
+      if (!saved) {
+        const error = new Error('Vendor onboarding email was accepted but its status was not persisted.');
+        error.code = 'VENDOR_ONBOARDING_STATUS_NOT_SAVED';
+        throw error;
+      }
+      logger.info('Vendor onboarding email accepted and status persisted', {
+        vendorId,
         outboxId: job.id,
       }, 'EVENT_OUTBOX');
       return;
@@ -691,6 +775,30 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE) {
           logger.error('Could not mark dead-lettered communication as failed', {
             error: communicationError,
             communicationId: job.raw.communicationId,
+            outboxId: job.id,
+          }, 'EVENT_OUTBOX');
+        }
+      }
+      if (
+        isDead
+        && job.event_type === EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL
+        && typeof job.raw?.vendorId === 'string'
+        && job.raw.vendorId
+      ) {
+        try {
+          const updated = await require('./storeService').updateVendorDurably(job.raw.vendorId, {
+            onboardingEmailStatus: 'failed',
+          });
+          if (!updated) {
+            logger.warn('Dead-lettered vendor onboarding email has no matching vendor record', {
+              vendorId: job.raw.vendorId,
+              outboxId: job.id,
+            }, 'EVENT_OUTBOX');
+          }
+        } catch (vendorError) {
+          logger.error('Could not mark dead-lettered vendor onboarding email as failed', {
+            error: vendorError,
+            vendorId: job.raw.vendorId,
             outboxId: job.id,
           }, 'EVENT_OUTBOX');
         }

@@ -6,6 +6,7 @@ const paymentDuesQueries = require('../src/db/paymentDuesQueries');
 const eventOutboxService = require('../src/services/eventOutboxService');
 const dailyRfqReportService = require('../src/services/dailyRfqReportService');
 const mailerService = require('../src/services/mailerService');
+const cryptoService = require('../src/services/cryptoService');
 const { DAILY_RFQ_REPORT_CONFIG, EVENT_OUTBOX_TYPES } = require('../src/config/constants');
 const { logger } = require('../src/services/loggerService');
 
@@ -197,6 +198,41 @@ describe('background event retry outbox', () => {
     }));
   });
 
+  test('dead-letters an encrypted vendor onboarding credential that decrypts to an empty password', async () => {
+    const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+    process.env.AES_ENCRYPTION_KEY = 'f'.repeat(64);
+    const vendorId = 'vendor-onboarding-empty-password';
+    const encryptedTempPassword = cryptoService.encrypt('', {
+      additionalData: `vendor-onboarding-email:${vendorId}`,
+    }).encoded;
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'vendor-onboarding-empty-password-event',
+      event_type: EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
+      raw: { vendorId, encryptedTempPassword },
+      attempts: 1,
+      lease_token: 'lease-vendor-onboarding-empty-password',
+    }]);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue({
+      id: vendorId,
+      email: 'empty-password@example.test',
+      onboardingEmailStatus: 'pending',
+    });
+    const storeService = require('../src/services/storeService');
+    const statusSpy = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: vendorId });
+    const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    try {
+      await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ dead: 1 });
+      expect(sendSpy).not.toHaveBeenCalled();
+      expect(statusSpy).toHaveBeenCalledWith(vendorId, { onboardingEmailStatus: 'failed' });
+      expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'dead' }));
+    } finally {
+      process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+    }
+  });
+
   test('skips dispatch when no backing store is configured', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
     await expect(eventOutboxService.dispatchDueEventOutboxJobs()).resolves.toEqual({
@@ -319,6 +355,197 @@ describe('background event retry outbox', () => {
       deliveryScore: 90,
     });
     expect(sendSpy).toHaveBeenCalledWith({ subject: 'Rating update' }, 'rating-revision');
+  });
+
+  test('dispatches encrypted vendor onboarding credentials and saves sent status', async () => {
+    const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+    process.env.AES_ENCRYPTION_KEY = 'b'.repeat(64);
+    const vendor = {
+      id: 'vendor-onboarding-dispatch-1',
+      name: 'Dispatch Vendor Co',
+      contactPerson: 'Mira',
+      email: 'dispatch-vendor@example.test',
+      phone: '+919999999999',
+      onboardingEmailStatus: 'pending',
+    };
+    const encryptedTempPassword = cryptoService.encrypt('Temporary123!', {
+      additionalData: `vendor-onboarding-email:${vendor.id}`,
+    }).encoded;
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'vendor-onboarding-email-1',
+      event_type: EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
+      raw: { vendorId: vendor.id, encryptedTempPassword },
+      attempts: 1,
+      lease_token: 'lease-vendor-onboarding-1',
+    }]);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(vendor);
+    const buildSpy = jest.spyOn(mailerService, 'buildVendorOnboardingEmail').mockReturnValue({ html: 'credential email' });
+    const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+    const storeService = require('../src/services/storeService');
+    const statusSpy = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ ...vendor, onboardingEmailStatus: 'sent' });
+    jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    try {
+      await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+      expect(domainQueries.getVendorByIdFromDB).toHaveBeenCalledWith(vendor.id, { fresh: true });
+      expect(buildSpy).toHaveBeenCalledWith({
+        to: vendor.email,
+        recipientName: vendor.contactPerson,
+        buyerOrganizationName: 'Procucev Enterprise',
+        vendorCode: vendor.id,
+        tempPassword: 'Temporary123!',
+        contactPhone: vendor.phone,
+      });
+      expect(sendSpy).toHaveBeenCalledWith({ html: 'credential email' }, 'onboarding');
+      expect(statusSpy).toHaveBeenCalledWith(vendor.id, { onboardingEmailStatus: 'sent' });
+    } finally {
+      process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+    }
+  });
+
+  test('does not resend a vendor onboarding email after its sent status was persisted', async () => {
+    const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+    process.env.AES_ENCRYPTION_KEY = 'c'.repeat(64);
+    const vendorId = 'vendor-onboarding-already-sent';
+    const encryptedTempPassword = cryptoService.encrypt('Temporary123!', {
+      additionalData: `vendor-onboarding-email:${vendorId}`,
+    }).encoded;
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'vendor-onboarding-email-sent',
+      event_type: EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
+      raw: { vendorId, encryptedTempPassword },
+      attempts: 2,
+      lease_token: 'lease-vendor-onboarding-sent',
+    }]);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue({
+      id: vendorId,
+      onboardingEmailStatus: 'sent',
+    });
+    const buildSpy = jest.spyOn(mailerService, 'buildVendorOnboardingEmail');
+    const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+    const storeService = require('../src/services/storeService');
+    const statusSpy = jest.spyOn(storeService, 'updateVendorDurably');
+    jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    try {
+      await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+      expect(buildSpy).not.toHaveBeenCalled();
+      expect(sendSpy).not.toHaveBeenCalled();
+      expect(statusSpy).not.toHaveBeenCalled();
+    } finally {
+      process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+    }
+  });
+
+  test.each([
+    ['missing vendor identifier', { encryptedTempPassword: 'enc:v1:opaque' }, null],
+    ['missing encrypted credential', { vendorId: 'vendor-bad-payload' }, null],
+    ['missing persisted vendor', { vendorId: 'vendor-missing', encryptedTempPassword: 'enc:v1:opaque' }, null],
+    ['vendor no longer pending', { vendorId: 'vendor-not-pending', encryptedTempPassword: 'enc:v1:opaque' }, { id: 'vendor-not-pending', onboardingEmailStatus: 'failed' }],
+    ['invalid persisted email', { vendorId: 'vendor-invalid-email', encryptedTempPassword: 'enc:v1:opaque' }, { id: 'vendor-invalid-email', email: 'not-an-email', onboardingEmailStatus: 'pending' }],
+    ['invalid encrypted credential', { vendorId: 'vendor-bad-ciphertext', encryptedTempPassword: 'not-a-token' }, { id: 'vendor-bad-ciphertext', email: 'ciphertext@example.test', onboardingEmailStatus: 'pending' }],
+  ])('dead-letters %s vendor onboarding events', async (_scenario, raw, vendor) => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'vendor-onboarding-invalid-event',
+      event_type: EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
+      raw,
+      attempts: 1,
+      lease_token: 'lease-vendor-onboarding-invalid',
+    }]);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(vendor);
+    const storeService = require('../src/services/storeService');
+    const statusSpy = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: raw.vendorId });
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ dead: 1 });
+    expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'dead' }));
+    if (raw.vendorId) {
+      expect(statusSpy).toHaveBeenCalledWith(raw.vendorId, { onboardingEmailStatus: 'failed' });
+    } else {
+      expect(statusSpy).not.toHaveBeenCalled();
+    }
+  });
+
+  test.each([
+    ['provider rejection', { sent: false }],
+    ['provider exception', new Error('provider response must not leak credentials')],
+  ])('reschedules vendor onboarding after %s', async (_scenario, delivery) => {
+    const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+    process.env.AES_ENCRYPTION_KEY = 'd'.repeat(64);
+    const vendorId = `vendor-onboarding-retry-${_scenario.replaceAll(' ', '-')}`;
+    const encryptedTempPassword = cryptoService.encrypt('Temporary123!', {
+      additionalData: `vendor-onboarding-email:${vendorId}`,
+    }).encoded;
+    const vendor = {
+      id: vendorId,
+      name: 'Retry Vendor Co',
+      email: 'retry-vendor@example.test',
+      onboardingEmailStatus: 'pending',
+    };
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'vendor-onboarding-email-retry',
+      event_type: EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
+      raw: { vendorId, encryptedTempPassword },
+      attempts: 1,
+      lease_token: 'lease-vendor-onboarding-retry',
+    }]);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(vendor);
+    jest.spyOn(mailerService, 'buildVendorOnboardingEmail').mockReturnValue({ html: 'credential email' });
+    const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+    if (delivery instanceof Error) sendSpy.mockRejectedValue(delivery);
+    else sendSpy.mockResolvedValue(delivery);
+    const storeService = require('../src/services/storeService');
+    const statusSpy = jest.spyOn(storeService, 'updateVendorDurably');
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+    const errorSpy = jest.spyOn(logger, 'error');
+
+    try {
+      await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ retried: 1 });
+      expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending' }));
+      expect(statusSpy).not.toHaveBeenCalled();
+      const errorCall = errorSpy.mock.calls.find(([message]) => message === 'Background event delivery failed and was rescheduled');
+      expect(JSON.stringify(errorCall)).not.toContain('provider response must not leak credentials');
+    } finally {
+      process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+    }
+  });
+
+  test('retries a vendor onboarding event when delivery succeeds but status persistence fails', async () => {
+    const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+    process.env.AES_ENCRYPTION_KEY = 'e'.repeat(64);
+    const vendorId = 'vendor-onboarding-status-write-failure';
+    const encryptedTempPassword = cryptoService.encrypt('Temporary123!', {
+      additionalData: `vendor-onboarding-email:${vendorId}`,
+    }).encoded;
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'vendor-onboarding-email-status-failure',
+      event_type: EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
+      raw: { vendorId, encryptedTempPassword },
+      attempts: 1,
+      lease_token: 'lease-vendor-onboarding-status-failure',
+    }]);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue({
+      id: vendorId,
+      email: 'status-failure@example.test',
+      onboardingEmailStatus: 'pending',
+    });
+    jest.spyOn(mailerService, 'buildVendorOnboardingEmail').mockReturnValue({ html: 'credential email' });
+    jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+    const storeService = require('../src/services/storeService');
+    jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue(null);
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    try {
+      await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ retried: 1 });
+      expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending' }));
+    } finally {
+      process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+    }
   });
 
   test.each([

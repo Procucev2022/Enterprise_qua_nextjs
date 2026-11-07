@@ -48,6 +48,7 @@ const rfqChaserScheduler = require('./rfqChaserScheduler');
 const rfqIngestionService = require('./rfqIngestionService');
 const purchaseOrderService = require('./purchaseOrderService');
 const eventOutboxService = require('./eventOutboxService');
+const cryptoService = require('./cryptoService');
 const { logger } = require('./loggerService');
 
 // Bound on the vendors table read at boot hydration (see hydrateFromDB) —
@@ -1513,6 +1514,58 @@ class StoreService {
 
     const tempPassword = this._generateTempPassword();
 
+    let onboardingEvent = null;
+    if (pool.hasStorage() && !skipEmail) {
+      const configuredKey = String(process.env.AES_ENCRYPTION_KEY || process.env.AES_SECRET_KEY || '').trim();
+      if (!configuredKey) {
+        logger.error('Vendor onboarding was stopped because durable credential encryption is not configured', {
+          vendorId: vendor.id,
+          email: vendor.email,
+          operation: 'provision-vendor-onboarding',
+          requiredConfiguration: 'AES_ENCRYPTION_KEY or AES_SECRET_KEY',
+        }, 'STORE_SERVICE');
+        const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
+        return {
+          status: 'failed',
+          error: [
+            'The vendor was added, but secure onboarding email delivery is not configured. Set AES_ENCRYPTION_KEY or AES_SECRET_KEY, then retry the invitation.',
+            statusWrite.warning,
+          ].join(' ').trim(),
+        };
+      }
+
+      try {
+        const encryptedTempPassword = cryptoService.encrypt(tempPassword, {
+          additionalData: `vendor-onboarding-email:${vendor.id}`,
+        });
+        onboardingEvent = {
+          id: eventOutboxService.buildEventOutboxId(
+            EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
+            vendor.id
+          ),
+          eventType: EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
+          payload: {
+            vendorId: vendor.id,
+            encryptedTempPassword: encryptedTempPassword.encoded,
+          },
+        };
+      } catch (error) {
+        logger.error('Vendor onboarding credentials could not be encrypted for durable delivery', {
+          error,
+          vendorId: vendor.id,
+          operation: 'provision-vendor-onboarding',
+        }, 'STORE_SERVICE');
+        const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
+        return {
+          status: 'failed',
+          error: [
+            'The vendor was added, but their credentials could not be secured for email delivery. Please contact support to retry the invitation.',
+            statusWrite.warning,
+          ].join(' ').trim(),
+        };
+      }
+    }
+
     let identityCreated = false;
     for (let attempt = 1; attempt <= 2 && !identityCreated; attempt += 1) {
       try {
@@ -1526,6 +1579,7 @@ class StoreService {
           createdBy: actorEmail || 'buyer-manual-add',
           resetExisting: false,
           resetPasswordRequired: true,
+          ...(onboardingEvent ? { onboardingEvent } : {}),
         });
         identityCreated = result.created === true;
         if (!identityCreated) {
@@ -1563,6 +1617,15 @@ class StoreService {
         'STORE_SERVICE'
       );
       return { status: 'skipped', error: statusWrite.warning };
+    }
+
+    if (onboardingEvent) {
+      logger.info('Vendor onboarding email recorded for durable delivery', {
+        vendorId: vendor.id,
+        email: vendor.email,
+        outboxId: onboardingEvent.id,
+      }, 'STORE_SERVICE');
+      return { status: 'pending', error: null };
     }
 
     const emailPayload = mailerService.buildVendorOnboardingEmail({

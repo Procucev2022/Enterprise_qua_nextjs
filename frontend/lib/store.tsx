@@ -1876,16 +1876,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     addAuditLog(`Added vendor ${newV.name} (${newV.email})`);
     if (newV.onboardingEmailStatus === 'failed') {
       showToast(
-        'Vendor Added — Credentials Email Failed',
-        body.warning || 'The vendor was added, but their login credentials could not be delivered. Please contact support to resend the invitation.',
+        UI_STRINGS.vendorOnboarding.credentialsFailedTitle,
+        body.warning || formatString(UI_STRINGS.vendorOnboarding.credentialsFailedMessage, { name: newV.name }),
         'warning'
       );
     } else if (newV.onboardingEmailStatus === 'account_exists') {
-      showToast('Vendor Added', `${newV.name} already has a Procucev login; no new credentials were sent.`, 'success');
+      showToast(
+        UI_STRINGS.vendorOnboarding.addedTitle,
+        formatString(UI_STRINGS.vendorOnboarding.accountExistsMessage, { name: newV.name }),
+        'success'
+      );
+    } else if (newV.onboardingEmailStatus === 'pending') {
+      showToast(
+        UI_STRINGS.vendorOnboarding.credentialsQueuedTitle,
+        formatString(UI_STRINGS.vendorOnboarding.credentialsQueuedMessage, { name: newV.name, email: newV.email || '' }),
+        'success'
+      );
     } else {
       showToast(
-        'Vendor Added',
-        `${newV.name} was added. Login credentials were sent to ${newV.email} with instructions to change the temporary password at first login.`,
+        UI_STRINGS.vendorOnboarding.addedTitle,
+        formatString(UI_STRINGS.vendorOnboarding.credentialsSentMessage, { name: newV.name, email: newV.email || '' }),
         'success'
       );
     }

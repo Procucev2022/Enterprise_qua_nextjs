@@ -243,6 +243,7 @@ const EVENT_OUTBOX_TYPES = Object.freeze({
   NOTIFICATION_BATCH: 'notification_batch',
   ENTERPRISE_INQUIRY_EMAIL: 'enterprise_inquiry_email',
   VENDOR_RATING_REVISION_EMAIL: 'vendor_rating_revision_email',
+  VENDOR_ONBOARDING_EMAIL: 'vendor_onboarding_email',
   PAYMENT_DUES_EMAIL: 'payment_dues_email',
   COMMUNICATION_DELIVERY: 'communication_delivery',
   RFQ_CREATED_EMAIL: 'rfq_created_email',
