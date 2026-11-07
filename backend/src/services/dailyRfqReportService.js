@@ -555,9 +555,18 @@ async function sendDailyRfqReport(options = {}) {
   }, LOG_CATEGORY);
 
   const deliverResult = await mailerService.deliver(message, `Daily RFQ Report (${data.reportDate})`);
+  const deliveryConfirmed = deliverResult?.sent === true;
+
+  if (!deliveryConfirmed) {
+    logger.warn('Daily RFQ report delivery was not confirmed', {
+      reportDate: data.reportDate,
+      totalRFQs: data.summary.totalRFQs,
+      reason: deliverResult?.reason || 'Mailer returned no successful delivery result',
+    }, LOG_CATEGORY);
+  }
 
   return {
-    success: deliverResult ? deliverResult.success !== false : true,
+    success: deliveryConfirmed,
     reportDate: data.reportDate,
     totalRFQs: data.summary.totalRFQs,
     summary: data.summary,
@@ -589,8 +598,15 @@ async function checkAndTriggerScheduledReport(
     return { triggered: false, reason: `Report already dispatched today (${todayStr})` };
   }
 
-  runtimeState.lastSentDateStr = todayStr;
   const dispatchResult = await sendDailyRfqReport({ timezone });
+  if (dispatchResult.success) {
+    runtimeState.lastSentDateStr = todayStr;
+  } else {
+    logger.warn('Daily RFQ report remains eligible for a later delivery attempt', {
+      scheduledDate: todayStr,
+      reportDate: dispatchResult.reportDate,
+    }, LOG_CATEGORY);
+  }
   return { triggered: true, dispatchResult };
 }
 

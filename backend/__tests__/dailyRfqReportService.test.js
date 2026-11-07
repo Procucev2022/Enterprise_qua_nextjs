@@ -358,24 +358,29 @@ describe('dailyRfqReportService Suite', () => {
       expect(deliverSpy).not.toHaveBeenCalled();
     });
 
-    test('delivers live email via mailerService.deliver with and without fromAddress helper', async () => {
+    test('reports delivery only when the mailer confirms provider acceptance', async () => {
       jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue();
       jest.spyOn(storeService, 'getRFQs').mockReturnValue([]);
 
       const origFrom = mailerService.fromAddress;
       delete mailerService.fromAddress;
 
-      jest.spyOn(mailerService, 'deliver').mockResolvedValueOnce(null);
+      jest.spyOn(mailerService, 'deliver')
+        .mockResolvedValueOnce({ sent: true, messageId: 'daily-report-accepted' })
+        .mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' })
+        .mockResolvedValueOnce(null);
 
       const res1 = await dailyRfqReportService.sendDailyRfqReport({ date: '2026-11-03' });
       expect(res1.success).toBe(true);
-      expect(res1.messageId).toBeUndefined();
+      expect(res1.messageId).toBe('daily-report-accepted');
 
       mailerService.fromAddress = origFrom;
 
-      jest.spyOn(mailerService, 'deliver').mockResolvedValueOnce({ success: false });
       const res2 = await dailyRfqReportService.sendDailyRfqReport({ date: '2026-11-03' });
       expect(res2.success).toBe(false);
+
+      const res3 = await dailyRfqReportService.sendDailyRfqReport({ date: '2026-11-03' });
+      expect(res3.success).toBe(false);
     });
   });
 
@@ -387,19 +392,26 @@ describe('dailyRfqReportService Suite', () => {
       expect(res.reason).toContain('Not scheduled time');
     });
 
-    test('checkAndTriggerScheduledReport fires at 06:00 and avoids double firing on same day', async () => {
+    test('checkAndTriggerScheduledReport retries unconfirmed delivery and avoids duplicate success', async () => {
       const scheduledTime = new Date('2026-11-04T00:30:00.000Z');
 
       jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue();
       jest.spyOn(storeService, 'getRFQs').mockReturnValue([]);
-      jest.spyOn(mailerService, 'deliver').mockResolvedValue({ success: true });
+      jest.spyOn(mailerService, 'deliver')
+        .mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' })
+        .mockResolvedValueOnce({ sent: true, messageId: 'daily-report-retry-accepted' });
 
-      const firstRun = await dailyRfqReportService.checkAndTriggerScheduledReport(scheduledTime, 'Asia/Kolkata', 6, 0);
-      expect(firstRun.triggered).toBe(true);
+      const failedRun = await dailyRfqReportService.checkAndTriggerScheduledReport(scheduledTime, 'Asia/Kolkata', 6, 0);
+      expect(failedRun.triggered).toBe(true);
+      expect(failedRun.dispatchResult.success).toBe(false);
 
-      const secondRun = await dailyRfqReportService.checkAndTriggerScheduledReport(scheduledTime, 'Asia/Kolkata', 6, 0);
-      expect(secondRun.triggered).toBe(false);
-      expect(secondRun.reason).toContain('already dispatched today');
+      const firstSuccessfulRun = await dailyRfqReportService.checkAndTriggerScheduledReport(scheduledTime, 'Asia/Kolkata', 6, 0);
+      expect(firstSuccessfulRun.triggered).toBe(true);
+      expect(firstSuccessfulRun.dispatchResult.success).toBe(true);
+
+      const duplicateRun = await dailyRfqReportService.checkAndTriggerScheduledReport(scheduledTime, 'Asia/Kolkata', 6, 0);
+      expect(duplicateRun.triggered).toBe(false);
+      expect(duplicateRun.reason).toContain('already dispatched today');
     });
 
     test('startDailyReportScheduler executes timer tick and handles errors inside setInterval', async () => {
