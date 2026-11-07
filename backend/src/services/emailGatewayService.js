@@ -2095,7 +2095,8 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     quotationValidity: extraction.quotationValidity || null,
   };
 
-  const updatedRFQ = await storeService.submitVendorQuoteDurably(targetRfq.id, quote);
+  const quoteSubmission = await storeService.submitVendorQuoteDurably(targetRfq.id, quote, { includeDeliveryState: true });
+  const updatedRFQ = quoteSubmission?.rfq;
   if (!updatedRFQ && pool.hasStorage()) {
     const submissionError = new Error(`RFQ ${targetRfq.rfqNumber} could not be found in storage while saving its quote.`);
     submissionError.statusCode = 503;
@@ -2164,11 +2165,19 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           });
         }
       } else {
-        await mailerService.sendQuoteReceivedEmail(buyerEmail, {
-          rfq: updatedRFQ || targetRfq,
-          quote,
-          recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
-        });
+        const committedRFQ = updatedRFQ || targetRfq;
+        if (quoteSubmission?.buyerQuoteNotificationQueued === true) {
+          logger.info('Buyer quote email is queued in the durable event outbox', {
+            rfqNumber: targetRfq.rfqNumber,
+            quoteId: quote.id || null,
+          }, 'EMAIL_GATEWAY');
+        } else {
+          await mailerService.sendQuoteReceivedEmail(buyerEmail, {
+            rfq: committedRFQ,
+            quote,
+            recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+          });
+        }
       }
     } catch (mailErr) {
       logger.error('Failed to send buyer quote received email', mailErr, 'EMAIL_GATEWAY');

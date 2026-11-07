@@ -172,8 +172,18 @@ describe('durable quote submission and credit synchronization', () => {
     jest.spyOn(storeService, '_notifyRFQUpdate').mockImplementation(() => {});
     const sideEffects = jest.spyOn(storeService, '_dispatchQuoteSubmissionSideEffects').mockImplementation(() => {});
 
-    await storeService.submitVendorQuoteDurably(RFQ_ID, { vendorId: VENDOR_ID, unitPrice: 300 });
+    const submission = await storeService.submitVendorQuoteDurably(
+      RFQ_ID,
+      { vendorId: VENDOR_ID, unitPrice: 300 },
+      { includeDeliveryState: true }
+    );
 
+    expect(submission).toEqual({
+      rfq: savedRFQ,
+      buyerQuoteNotificationQueued: true,
+      autoClosureEmailQueued: false,
+      autoClosedByQuote: false,
+    });
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({
       rfqId: RFQ_ID,
       quoteId: expect.any(String),
@@ -260,8 +270,18 @@ describe('durable quote submission and credit synchronization', () => {
     jest.spyOn(storeService, '_notifyRFQUpdate').mockImplementation(() => {});
     const sideEffects = jest.spyOn(storeService, '_dispatchQuoteSubmissionSideEffects').mockImplementation(() => {});
 
-    await storeService.submitVendorQuoteDurably(RFQ_ID, { id: 'quote-auto-close-1', vendorId: VENDOR_ID, unitPrice: 300 });
+    const submission = await storeService.submitVendorQuoteDurably(
+      RFQ_ID,
+      { id: 'quote-auto-close-1', vendorId: VENDOR_ID, unitPrice: 300 },
+      { includeDeliveryState: true }
+    );
 
+    expect(submission).toEqual({
+      rfq: savedRFQ,
+      buyerQuoteNotificationQueued: false,
+      autoClosureEmailQueued: true,
+      autoClosedByQuote: true,
+    });
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({
       autoClosureEmailEventId: expect.stringContaining('rfq_auto_closure_ack_email'),
       autoClosureRecipientEmail: 'buyer@example.test',

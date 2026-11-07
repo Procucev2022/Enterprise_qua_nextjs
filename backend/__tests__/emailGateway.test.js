@@ -2146,6 +2146,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
         fromAddress: VENDOR_EMAIL,
         bodyText: 'Unit Price: 10000',
       };
+      jest.spyOn(dbPool, 'hasStorage').mockReturnValue(false);
       jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
         unitPrice: 10000,
         totalPrice: 40000,
@@ -2162,6 +2163,71 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
         sampleVendor
       );
       expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+    });
+
+    test('does not directly duplicate a verified buyer quote email owned by the durable outbox', async () => {
+      const emailRecord = {
+        messageId: '<quote-buyer-outbox@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Unit Price: 10000',
+      };
+      const committedRfq = { ...sampleRfq, status: 'In Evaluation' };
+      jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 10000, totalPrice: 40000 });
+      jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@test.com');
+      jest.spyOn(storeService, 'checkVendorQuotationEligibility').mockReturnValue({ eligible: true });
+      jest.spyOn(storeService, 'submitVendorQuoteDurably').mockResolvedValue({
+        rfq: committedRfq,
+        buyerQuoteNotificationQueued: true,
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'buyer-outbox-test',
+        organizationName: 'Buyer Organization',
+      });
+      jest.spyOn(storeService, 'isBuyerProfileUpdateRequired').mockReturnValue(false);
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+      const buyerEmailSpy = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(emailRecord, sampleRfq, sampleVendor);
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(buyerEmailSpy).not.toHaveBeenCalled();
+    });
+
+    test('keeps the direct buyer quote email when this quote triggers RFQ auto-closure', async () => {
+      const emailRecord = {
+        messageId: '<quote-buyer-autoclose@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Unit Price: 10000',
+      };
+      const closedRfq = { ...sampleRfq, status: 'Closed' };
+      const openRfq = { ...sampleRfq, status: 'Active' };
+      jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 10000, totalPrice: 40000 });
+      jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@test.com');
+      jest.spyOn(storeService, 'checkVendorQuotationEligibility').mockReturnValue({ eligible: true });
+      jest.spyOn(storeService, 'submitVendorQuoteDurably').mockResolvedValue({
+        rfq: closedRfq,
+        buyerQuoteNotificationQueued: false,
+        autoClosureEmailQueued: true,
+        autoClosedByQuote: true,
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'buyer-autoclose-test',
+        organizationName: 'Buyer Organization',
+      });
+      jest.spyOn(storeService, 'isBuyerProfileUpdateRequired').mockReturnValue(false);
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+      const buyerEmailSpy = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(emailRecord, openRfq, sampleVendor);
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(buyerEmailSpy).toHaveBeenCalledWith('buyer@test.com', expect.objectContaining({ rfq: closedRfq }));
     });
 
     test('processMessage falls back to extractionInput.documentText when message.bodyText is missing', async () => {

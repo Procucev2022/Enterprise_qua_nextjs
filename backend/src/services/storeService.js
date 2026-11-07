@@ -4662,12 +4662,18 @@ class StoreService {
     return persisted;
   }
 
-  async submitVendorQuoteDurably(rfqId, quote) {
+  async submitVendorQuoteDurably(rfqId, quote, { includeDeliveryState = false } = {}) {
     if (!pool.hasStorage()) {
       const updated = this.addQuoteToRFQ(rfqId, quote);
-      if (!updated) return null;
+      if (!updated) {
+        return includeDeliveryState
+          ? { rfq: null, buyerQuoteNotificationQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+          : null;
+      }
       if (quote && quote.vendorId) this.consumeVendorQuotationCredit(quote.vendorId, rfqId);
-      return updated;
+      return includeDeliveryState
+        ? { rfq: updated, buyerQuoteNotificationQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+        : updated;
     }
 
     const durableQuoteId = quote.id || crypto.randomUUID();
@@ -4692,7 +4698,11 @@ class StoreService {
         throw persistError;
       }
 
-      if (!rfq) return null;
+      if (!rfq) {
+        return includeDeliveryState
+          ? { rfq: null, buyerQuoteNotificationQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+          : null;
+      }
       if (!vendor) {
         const persistError = new Error('The vendor could not be verified in storage. Try again.');
         persistError.statusCode = 503;
@@ -4827,7 +4837,14 @@ class StoreService {
         creditCharged: saved.creditCharged,
         attempt: attempt + 1,
       }, 'STORE_SERVICE');
-      return savedRFQ;
+      return includeDeliveryState
+        ? {
+          rfq: savedRFQ,
+          buyerQuoteNotificationQueued: Boolean(quoteNotificationEventId),
+          autoClosureEmailQueued: Boolean(autoClosureEmailEventId),
+          autoClosedByQuote: autoClosed,
+        }
+        : savedRFQ;
     }
 
     const conflictError = new Error('This RFQ changed while the quote was being submitted. Please retry your submission.');
