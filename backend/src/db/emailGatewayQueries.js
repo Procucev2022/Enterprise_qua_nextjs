@@ -249,7 +249,7 @@ async function recordProcessed({
 async function listRecent(limit = 15) {
   const capped = Math.min(Math.max(Number(limit) || 15, 1), 100);
   try {
-    return await pool.rows(
+    const rows = await pool.rows(
       `select message_id, rfq_id, rfq_number, from_address, subject, status, detail, processed_at
          from email_ingestion_log
         order by processed_at desc
@@ -257,6 +257,22 @@ async function listRecent(limit = 15) {
       [capped],
       { d1: true }
     );
+    return rows.map((row) => {
+      if (!row || typeof row.detail !== 'string') return row;
+      try {
+        const detail = JSON.parse(row.detail);
+        if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return row;
+        const hasCredentials = Object.prototype.hasOwnProperty.call(detail, 'tempPassword') ||
+          Object.prototype.hasOwnProperty.call(detail, 'encryptedTempPassword');
+        if (!hasCredentials) return row;
+        delete detail.tempPassword;
+        delete detail.encryptedTempPassword;
+        detail.credentialFieldsRedacted = true;
+        return { ...row, detail: JSON.stringify(detail) };
+      } catch {
+        return row;
+      }
+    });
   } catch (err) {
     logger.error('Email ingestion ledger could not be listed', err, 'EMAIL_GATEWAY');
     return [];

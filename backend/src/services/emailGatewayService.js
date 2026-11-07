@@ -30,6 +30,7 @@ const storeService = require('./storeService');
 const rfqAttachmentService = require('./rfqAttachmentService');
 const domainQueries = require('../db/domainQueries');
 const mailerService = require('./mailerService');
+const cryptoService = require('./cryptoService');
 const emailGatewayQueries = require('../db/emailGatewayQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const identityQueries = require('../db/identityQueries');
@@ -1463,6 +1464,29 @@ async function sendAutoReply(message, kind, send, { rfqNumber = null, config = {
 // long since seen the RFQ (or asked about it), and a late "Great news!" confuses.
 const ACK_RETRY_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 const ACK_RETRIES_PER_POLL = 5;
+const ACK_CREDENTIAL_AAD_PREFIX = 'email-gateway-ack:';
+
+function hasAcknowledgementEncryptionKey() {
+  return Boolean(process.env.AES_ENCRYPTION_KEY || process.env.AES_SECRET_KEY);
+}
+
+function encryptAcknowledgementPassword(password, messageId) {
+  if (!hasAcknowledgementEncryptionKey()) {
+    throw new Error('AES_ENCRYPTION_KEY is required to persist onboarding credentials.');
+  }
+  return cryptoService.encrypt(password, {
+    additionalData: `${ACK_CREDENTIAL_AAD_PREFIX}${messageId}`,
+  }).encoded;
+}
+
+function decryptAcknowledgementPassword(encryptedPassword, messageId) {
+  if (!hasAcknowledgementEncryptionKey()) {
+    throw new Error('AES_ENCRYPTION_KEY is required to decrypt onboarding credentials.');
+  }
+  return cryptoService.decrypt(encryptedPassword, {
+    additionalData: `${ACK_CREDENTIAL_AAD_PREFIX}${messageId}`,
+  });
+}
 
 /**
  * Keep an acknowledgement that could not be sent, so a later poll retries it.
@@ -1472,16 +1496,38 @@ const ACK_RETRIES_PER_POLL = 5;
 async function queueAcknowledgement(rfqKey, ack) {
   if (!rfqKey) return;
   const detailObj = { buyerName: ack.buyerName, rfqTitle: ack.rfqTitle };
-  if (ack.tempPassword) detailObj.tempPassword = ack.tempPassword;
+  const messageId = `${rfqKey}#ack`;
+  if (ack.tempPassword) {
+    try {
+      detailObj.encryptedTempPassword = encryptAcknowledgementPassword(ack.tempPassword, messageId);
+    } catch (error) {
+      detailObj.credentialDeliveryUnavailable = true;
+      logger.error('Buyer onboarding credentials were omitted from the retry ledger', {
+        error,
+        rfqKey,
+        credentialOmitted: true,
+      }, 'EMAIL_GATEWAY');
+    }
+  }
   if (ack.deliveryDate) detailObj.deliveryDate = ack.deliveryDate;
-  await emailGatewayQueries.recordProcessed({
-    messageId: `${rfqKey}#ack`,
+  const recorded = await emailGatewayQueries.recordProcessed({
+    messageId,
     status: INGESTION_OUTCOME.ACK_PENDING,
     detail: JSON.stringify(detailObj),
     fromAddress: ack.to,
     subject: ack.rfqTitle,
     rfqNumber: ack.rfqNumber,
   });
+  if (!recorded) {
+    logger.error('Pending RFQ acknowledgement could not be persisted', {
+      messageId,
+      credentialIncluded: Boolean(detailObj.encryptedTempPassword),
+    }, 'EMAIL_GATEWAY');
+  } else if (!pool.hasStorage()) {
+    logger.warn('Pending RFQ acknowledgement is tracked only in local memory without configured storage', {
+      messageId,
+    }, 'EMAIL_GATEWAY');
+  }
 }
 
 /** Ledger timestamps are `YYYY-MM-DD HH:MM:SS` UTC (D1) or a Date (Postgres). */
@@ -1521,12 +1567,56 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
     } catch {
       saved = {};
     }
+    let retryTempPassword = null;
+    if (saved.encryptedTempPassword) {
+      try {
+        retryTempPassword = decryptAcknowledgementPassword(saved.encryptedTempPassword, row.message_id);
+      } catch (error) {
+        outcome.stillPending += 1;
+        logger.error('Pending buyer onboarding credentials could not be decrypted for retry', {
+          error,
+          messageId: row.message_id,
+          rfqNumber: row.rfq_number,
+        }, 'EMAIL_GATEWAY');
+        continue;
+      }
+    } else if (saved.tempPassword) {
+      try {
+        const encryptedTempPassword = encryptAcknowledgementPassword(saved.tempPassword, row.message_id);
+        const sanitizedDetail = { ...saved, encryptedTempPassword };
+        delete sanitizedDetail.tempPassword;
+        const rewritten = await record(INGESTION_OUTCOME.ACK_PENDING, JSON.stringify(sanitizedDetail));
+        if (!rewritten) {
+          outcome.stillPending += 1;
+          logger.error('Legacy plaintext onboarding credentials could not be scrubbed from the retry ledger', {
+            messageId: row.message_id,
+            rfqNumber: row.rfq_number,
+          }, 'EMAIL_GATEWAY');
+          continue;
+        }
+        retryTempPassword = saved.tempPassword;
+        saved = sanitizedDetail;
+      } catch (error) {
+        delete saved.tempPassword;
+        saved.credentialDeliveryUnavailable = true;
+        const scrubbed = await record(INGESTION_OUTCOME.ACK_ABANDONED, JSON.stringify(saved));
+        if (scrubbed) outcome.abandoned += 1;
+        else outcome.stillPending += 1;
+        logger.error('Legacy plaintext onboarding credentials could not be re-encrypted and were scrubbed', {
+          error,
+          messageId: row.message_id,
+          rfqNumber: row.rfq_number,
+        }, 'EMAIL_GATEWAY');
+        continue;
+      }
+    }
+
     try {
-      if (saved.tempPassword) {
+      if (retryTempPassword) {
         await mailerService.sendBuyerOnboardingWithRfqEmail({
           to: row.from_address,
           buyerName: saved.buyerName,
-          tempPassword: saved.tempPassword,
+          tempPassword: retryTempPassword,
           rfqNumber: row.rfq_number,
           rfqTitle: saved.rfqTitle || row.subject,
           deliveryDate: saved.deliveryDate,

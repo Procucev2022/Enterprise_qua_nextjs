@@ -973,6 +973,27 @@ describe('emailGatewayQueries', () => {
     expect(rows.mock.calls[1][1]).toEqual([15]);
   });
 
+  test('redacts plaintext and encrypted onboarding credentials from recent entries', async () => {
+    const rows = jest.spyOn(dbPool, 'rows').mockResolvedValue([
+      {
+        message_id: 'legacy-ack',
+        detail: JSON.stringify({ buyerName: 'Buyer', tempPassword: 'legacy-secret' }),
+      },
+      {
+        message_id: 'encrypted-ack',
+        detail: JSON.stringify({ buyerName: 'Buyer', encryptedTempPassword: 'enc:v1:secret' }),
+      },
+    ]);
+
+    const recent = await emailGatewayQueries.listRecent();
+
+    expect(rows).toHaveBeenCalled();
+    expect(JSON.parse(recent[0].detail)).toEqual({ buyerName: 'Buyer', credentialFieldsRedacted: true });
+    expect(JSON.parse(recent[1].detail)).toEqual({ buyerName: 'Buyer', credentialFieldsRedacted: true });
+    expect(JSON.stringify(recent)).not.toContain('legacy-secret');
+    expect(JSON.stringify(recent)).not.toContain('enc:v1:secret');
+  });
+
   test('returns an empty list when the ledger cannot be read', async () => {
     jest.spyOn(dbPool, 'rows').mockRejectedValue(new Error('db down'));
     await expect(emailGatewayQueries.listRecent()).resolves.toEqual([]);

@@ -5,10 +5,16 @@ const mailerService = require('../src/services/mailerService');
 const storeService = require('../src/services/storeService');
 const geminiService = require('../src/services/geminiService');
 const rfqAttachmentService = require('../src/services/rfqAttachmentService');
+const cryptoService = require('../src/services/cryptoService');
 const { INGESTION_OUTCOME } = emailGatewayQueries;
 
 describe('emailGatewayService remaining branch coverage', () => {
+  let originalAesEncryptionKey;
+  let originalAesSecretKey;
+
   beforeEach(() => {
+    originalAesEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+    originalAesSecretKey = process.env.AES_SECRET_KEY;
     emailGatewayService.resetAutoReplyMemory();
     jest.spyOn(emailGatewayQueries, 'countRecentOutcomes').mockResolvedValue(0);
   });
@@ -16,6 +22,10 @@ describe('emailGatewayService remaining branch coverage', () => {
   afterEach(() => {
     jest.restoreAllMocks();
     emailGatewayService.stopPolling();
+    if (originalAesEncryptionKey === undefined) delete process.env.AES_ENCRYPTION_KEY;
+    else process.env.AES_ENCRYPTION_KEY = originalAesEncryptionKey;
+    if (originalAesSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+    else process.env.AES_SECRET_KEY = originalAesSecretKey;
   });
 
   describe('resolveSenderAuthorisation branch coverage', () => {
@@ -343,15 +353,20 @@ describe('emailGatewayService remaining branch coverage', () => {
 
   describe('retryPendingAcknowledgements tempPassword branch', () => {
     test('dispatches onboarding email when pending acknowledgement contains tempPassword', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'email-gateway-branches-test-key';
+      delete process.env.AES_SECRET_KEY;
+      const messageId = 'ack-1';
       jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([
         {
-          message_id: 'ack-1',
+          message_id: messageId,
           from_address: 'buyer@procucev.com',
           rfq_number: 'RFQ-ACK-01',
           subject: 'RFQ Subject',
           processed_at: new Date().toISOString(),
           detail: JSON.stringify({
-            tempPassword: 'initial-password-123',
+            encryptedTempPassword: cryptoService.encrypt('initial-password-123', {
+              additionalData: `email-gateway-ack:${messageId}`,
+            }).encoded,
             buyerName: 'Procurement Officer',
             rfqTitle: 'Pumps Requirement',
             deliveryDate: '2026-12-01',
@@ -365,7 +380,9 @@ describe('emailGatewayService remaining branch coverage', () => {
 
       const res = await emailGatewayService.retryPendingAcknowledgements();
       expect(res.sent).toBe(1);
-      expect(mailerService.sendBuyerOnboardingWithRfqEmail).toHaveBeenCalled();
+      expect(mailerService.sendBuyerOnboardingWithRfqEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ tempPassword: 'initial-password-123' })
+      );
     });
   });
 
