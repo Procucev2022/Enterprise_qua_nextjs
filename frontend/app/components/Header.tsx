@@ -186,7 +186,7 @@ export default function Header() {
     setSessionSecondsLeft(SESSION_DURATION_SECONDS);
     const durationLabel = isBuyerOrVendorRole ? '5 minutes' : currentRole === 'category_manager' ? '3 hours' : '30 minutes';
     showToast('Session Extended', `Your session has been extended by ${durationLabel}.`, 'info');
-  }, [SESSION_DURATION_SECONDS, currentRole, showToast]);
+  }, [SESSION_DURATION_SECONDS, currentRole, isBuyerOrVendorRole, showToast]);
 
   // Inactivity activity tracker: resets the 5-minute inactivity countdown on any user interaction for Buyer & Vendor
   useEffect(() => {

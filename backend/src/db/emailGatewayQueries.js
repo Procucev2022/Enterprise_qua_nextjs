@@ -199,7 +199,11 @@ async function recordProcessed({
   rfqNumber = null,
 }) {
   if (!messageId) return false;
-  memoryProcessedMessageIds.add(String(messageId));
+  const key = String(messageId);
+  if (!pool.hasStorage()) {
+    memoryProcessedMessageIds.add(key);
+    return true;
+  }
   try {
     // email_ingestion_log has already been ported to D1 (see d1Bridge.js).
     // CURRENT_TIMESTAMP (not now()) and CAST(... AS INTEGER) (not ::int, below
@@ -218,7 +222,7 @@ async function recordProcessed({
          detail = excluded.detail,
          processed_at = CURRENT_TIMESTAMP`,
       [
-        String(messageId),
+        key,
         rfqId,
         rfqNumber,
         fromAddress ? String(fromAddress).slice(0, 320) : null,
@@ -228,6 +232,7 @@ async function recordProcessed({
       ],
       { d1: true }
     );
+    memoryProcessedMessageIds.add(key);
     return true;
   } catch (err) {
     logger.error('Email ingestion outcome could not be recorded', err, 'EMAIL_GATEWAY');
@@ -244,7 +249,7 @@ async function recordProcessed({
 async function listRecent(limit = 15) {
   const capped = Math.min(Math.max(Number(limit) || 15, 1), 100);
   try {
-    return await pool.rows(
+    const rows = await pool.rows(
       `select message_id, rfq_id, rfq_number, from_address, subject, status, detail, processed_at
          from email_ingestion_log
         order by processed_at desc
@@ -252,6 +257,22 @@ async function listRecent(limit = 15) {
       [capped],
       { d1: true }
     );
+    return rows.map((row) => {
+      if (!row || typeof row.detail !== 'string') return row;
+      try {
+        const detail = JSON.parse(row.detail);
+        if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return row;
+        const hasCredentials = Object.prototype.hasOwnProperty.call(detail, 'tempPassword') ||
+          Object.prototype.hasOwnProperty.call(detail, 'encryptedTempPassword');
+        if (!hasCredentials) return row;
+        delete detail.tempPassword;
+        delete detail.encryptedTempPassword;
+        detail.credentialFieldsRedacted = true;
+        return { ...row, detail: JSON.stringify(detail) };
+      } catch {
+        return row;
+      }
+    });
   } catch (err) {
     logger.error('Email ingestion ledger could not be listed', err, 'EMAIL_GATEWAY');
     return [];

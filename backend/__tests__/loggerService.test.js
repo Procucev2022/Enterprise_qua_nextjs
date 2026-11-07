@@ -98,6 +98,102 @@ describe('Backend LoggerService Unit Tests', () => {
     expect(fs.existsSync(path.join(testLogsDir, 'audit.log'))).toBe(true);
   });
 
+  test('keeps the audit actor in the audit file while masking it from stdout', () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      process.env.NODE_ENV = 'production';
+      const auditEntry = testLogger.audit('Updated vendor profile', 'admin@enterprise.example', {
+        vendorId: 'vendor-audit-1',
+      });
+      const auditFileEntry = JSON.parse(
+        fs.readFileSync(path.join(testLogsDir, 'audit.log'), 'utf8').trim()
+      );
+
+      expect(auditEntry.userEmail).toBe('admin@enterprise.example');
+      expect(auditFileEntry.userEmail).toBe('admin@enterprise.example');
+      expect(consoleSpy).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(consoleSpy.mock.calls)).toContain('a***@enterprise.example');
+      expect(JSON.stringify(consoleSpy.mock.calls)).not.toContain('admin@enterprise.example');
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('redacts contact details and credentials while preserving safe identifiers', () => {
+    const entry = testLogger.warn(
+      'SMS to +91 98765 43210 failed for buyer@example.com',
+      {
+        recipientEmail: 'buyer@example.com',
+        formattedNumber: '919876543210',
+        authorization: 'Bearer secret-value',
+        sessionId: 'session-secret-value',
+        privateKey: 'private-key-value',
+        inviteUrl: 'https://example.test/invite?email=buyer%40example.com&token=secret-value&rfq=RFQ-100',
+        rfqNumber: 'RFQ-100',
+        vendorId: 'v-1793740320475-u1ff',
+        messageId: '123456789012',
+      },
+      'DELIVERY'
+    );
+
+    const serialized = JSON.stringify(entry);
+    expect(entry.message).toContain('b***@example.com');
+    expect(entry.message).toContain('***10');
+    expect(entry.metadata.recipientEmail).toBe('b***@example.com');
+    expect(entry.metadata.formattedNumber).toBe('***10');
+    expect(entry.metadata.authorization).toBe('[REDACTED]');
+    expect(entry.metadata.sessionId).toBe('[REDACTED]');
+    expect(entry.metadata.privateKey).toBe('[REDACTED]');
+    expect(entry.metadata.inviteUrl).toContain('email=[REDACTED]');
+    expect(entry.metadata.inviteUrl).toContain('token=[REDACTED]');
+    expect(entry.metadata.inviteUrl).toContain('rfq=RFQ-100');
+    expect(entry.metadata.rfqNumber).toBe('RFQ-100');
+    expect(entry.metadata.vendorId).toBe('v-1793740320475-u1ff');
+    expect(entry.metadata.messageId).toBe('123456789012');
+    expect(serialized).not.toContain('buyer@example.com');
+    expect(serialized).not.toContain('919876543210');
+    expect(serialized).not.toContain('secret-value');
+    expect(serialized).not.toContain('private-key-value');
+  });
+
+  test('accepts client stack traces and redacts them before persistence', () => {
+    const entry = testLogger.error('Browser request failed', {
+      stackTrace: 'Error: request failed at buyer@example.com?token=private-token',
+      requestId: 'req-client-1',
+    }, 'CLIENT_ERROR');
+
+    expect(entry.stackTrace).toContain('b***@example.com');
+    expect(entry.stackTrace).toContain('token=[REDACTED]');
+    expect(entry.metadata.stackTrace).toBeUndefined();
+    expect(entry.metadata.requestId).toBe('req-client-1');
+    expect(JSON.stringify(entry)).not.toContain('private-token');
+    expect(JSON.stringify(entry)).not.toContain('buyer@example.com');
+  });
+
+  test('handles malformed contacts, nested errors, arrays, and cyclic metadata safely', () => {
+    const circular = { requestId: 'req-123' };
+    circular.parent = circular;
+    const entry = testLogger.error('Failed lookup for @example.com', {
+      malformedEmail: '@example.com',
+      phone: '123',
+      values: ['owner@example.com', '919876543210', null],
+      errorDetails: new Error('Gateway failed for owner@example.com'),
+      circular,
+      empty: null,
+    });
+
+    expect(entry.message).toContain('@example.com');
+    expect(entry.metadata.malformedEmail).toBe('[REDACTED]');
+    expect(entry.metadata.phone).toBe('123');
+    expect(entry.metadata.values).toEqual(['o***@example.com', '***10', null]);
+    expect(entry.metadata.errorDetails.errorMessage).toContain('o***@example.com');
+    expect(entry.metadata.circular.parent).toBe('[Circular]');
+    expect(entry.metadata.empty).toBeNull();
+  });
+
   test('respects maxBufferSize and evicts oldest items in memory ring buffer', () => {
     for (let i = 0; i < 15; i++) {
       testLogger.info(`Log message ${i}`);
@@ -161,6 +257,61 @@ describe('Backend LoggerService Unit Tests', () => {
     expect(purgeReport.success).toBe(true);
     expect(purgeReport.purgedMemoryCount).toBe(1);
     expect(purgeReport.diskFilesPurged).toBeGreaterThanOrEqual(1);
+  });
+
+  test('purges expired disk entries automatically after the configured write threshold', () => {
+    const automaticLogger = new LoggerService({
+      logsDir: testLogsDir,
+      maxFileSizeBytes: 4096,
+      purgeAfterWrites: 2,
+      purgeCheckIntervalMs: Number.MAX_SAFE_INTEGER,
+      isLocalLoggingEnabled: true,
+    });
+    const oldEntry = {
+      timestamp: '2020-01-01 00:00:00.000 UTC',
+      level: 'INFO',
+      message: 'expired disk entry',
+    };
+    fs.writeFileSync(path.join(testLogsDir, 'app.log'), `${JSON.stringify(oldEntry)}\n`, 'utf8');
+    automaticLogger.lastPurgeAt = Date.now();
+
+    automaticLogger.info('first recent entry');
+    expect(fs.readFileSync(path.join(testLogsDir, 'app.log'), 'utf8')).toContain('expired disk entry');
+    automaticLogger.info('second recent entry');
+
+    const diskContents = fs.readFileSync(path.join(testLogsDir, 'app.log'), 'utf8');
+    expect(diskContents).not.toContain('expired disk entry');
+    expect(diskContents).toContain('second recent entry');
+  });
+
+  test('reports local log persistence failures outside tests and rate limits repeats', () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const now = Date.now();
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    process.env.NODE_ENV = 'production';
+
+    try {
+      testLogger.reportDiskFailure('write log entry', new Error('disk unavailable'));
+      testLogger.reportDiskFailure('write log entry', new Error('disk unavailable'));
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0][0]).toContain('disk unavailable');
+
+      nowSpy.mockReturnValue(now + 60 * 1000 + 1);
+      testLogger.reportDiskFailure('write log entry', new Error('disk unavailable again'));
+      expect(errorSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      nowSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  test('does not emit disk failure warnings from the test environment', () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    testLogger.reportDiskFailure('write log entry', new Error('test disk failure'));
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 
   test('getLogStats returns counts and disk log file metadata', () => {

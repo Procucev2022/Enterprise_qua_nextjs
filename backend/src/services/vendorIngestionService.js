@@ -1144,10 +1144,9 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
   if (!mapping || !mapping.email) return null;
 
   const record = await queries.findVendorMasterRecord(mapping.vendorRecordId, context.organizationId);
-  // 'all': checking for an existing vendor by email to decide create-vs-update
-  // — omitting this would miss any buyer-uploaded vendor (buyerId set) and
-  // create a duplicate record instead of updating theirs.
-  const existing = storeService.getVendorById(mapping.email, 'all');
+  // Re-read by normalized email before deciding whether to create a record.
+  // The bootstrap cache is capped and can be stale across Worker isolates.
+  const existing = await storeService.getVendorByIdWithDBFallback(mapping.email, 'all', { fresh: true });
 
   const categories = mapping.buyerMinorCategories.length > 0
     ? mapping.buyerMinorCategories
@@ -1168,11 +1167,17 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
   };
 
   const vendor = existing
-    ? storeService.updateVendor(existing.id, payload)
-    : storeService.empanelIngestedVendor(payload, context.email);
+    ? await storeService.updateVendorDurably(existing.id, payload)
+    : await storeService.empanelIngestedVendor(payload, context.email);
 
   if (vendor) {
     await queries.attachVendorId(mapping.id, context.organizationId, vendor.id);
+  } else {
+    logger.warn('Approved vendor mapping was saved but its vendor record was not available for attachment', {
+      mappingId: mapping.id,
+      vendorRecordId: mapping.vendorRecordId,
+      organizationId: context.organizationId,
+    }, LOG_CATEGORY);
   }
   void sessionId;
   return vendor;

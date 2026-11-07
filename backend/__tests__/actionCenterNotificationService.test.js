@@ -455,6 +455,8 @@ describe('actionCenterNotificationService', () => {
     });
 
     it('covers sanitizeActionUrl and escapeHtml edge-cases', () => {
+      const { logger } = require('../src/services/loggerService');
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
       expect(actionCenterNotificationService.sanitizeActionUrl(null, 'https://fallback.com')).toBe('https://fallback.com');
       expect(actionCenterNotificationService.sanitizeActionUrl('not a valid url', 'https://fallback.com')).toBe('https://fallback.com');
       expect(actionCenterNotificationService.sanitizeActionUrl('javascript:alert(1)', 'https://fallback.com')).toBe('https://fallback.com');
@@ -463,6 +465,17 @@ describe('actionCenterNotificationService', () => {
 
       expect(actionCenterNotificationService.escapeHtml(null)).toBe('');
       expect(actionCenterNotificationService.escapeHtml('&<>"\'')).toBe('&amp;&lt;&gt;&quot;&#39;');
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Malformed action notification URL; using the configured fallback',
+        {},
+        'ACTION_CENTER'
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Unsupported action notification URL protocol; using the configured fallback',
+        {},
+        'ACTION_CENTER'
+      );
+      warnSpy.mockRestore();
     });
   });
 

@@ -1100,7 +1100,7 @@ export const ROLE_ROUTE_PREFIX: Record<UserRole, string> = {
 
 /** Vendor live presence threshold & polling intervals (ms) */
 export const PRESENCE_ONLINE_THRESHOLD_MS = 10 * 60 * 1000;
-export const PRESENCE_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+export const PRESENCE_HEARTBEAT_INTERVAL_MS = 4 * 60 * 1000;
 export const PRESENCE_POLL_INTERVAL_MS = 30 * 1000;
 
 /** RFQ vendor assignment limits per category (configurable via env) */

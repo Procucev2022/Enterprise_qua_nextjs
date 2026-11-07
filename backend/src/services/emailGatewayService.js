@@ -23,12 +23,14 @@
 // ==============================================================================
 
 const emailIngestionService = require('./emailIngestionService');
+const crypto = require('crypto');
 const geminiService = require('./geminiService');
 const rfqIngestionService = require('./rfqIngestionService');
 const storeService = require('./storeService');
 const rfqAttachmentService = require('./rfqAttachmentService');
 const domainQueries = require('../db/domainQueries');
 const mailerService = require('./mailerService');
+const cryptoService = require('./cryptoService');
 const emailGatewayQueries = require('../db/emailGatewayQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const identityQueries = require('../db/identityQueries');
@@ -906,34 +908,83 @@ async function getOrCreateBuyerAccount(email) {
         createdBy: 'email-gateway-autonomous',
       });
     } catch (dbErr) {
-      logger.error('Failed to create identity user for unregistered buyer', dbErr, 'EMAIL_GATEWAY');
+      logger.error('Failed to create identity user for unregistered buyer', {
+        error: dbErr,
+        email: normEmail,
+        operation: 'email-gateway-buyer-onboarding',
+        retryable: pool.hasStorage(),
+      }, 'EMAIL_GATEWAY');
+      if (pool.hasStorage()) {
+        throw new RetryableIngestionError(
+          'Buyer identity storage is unavailable; the incoming request will be retried.',
+          { message: { fromAddress: normEmail } }
+        );
+      }
+    }
+
+    if (pool.hasStorage() && (!userResult || !userResult.user || !userResult.user.id)) {
+      logger.error('Buyer identity creation returned no durable user record', {
+        email: normEmail,
+        operation: 'email-gateway-buyer-onboarding',
+        retryable: true,
+      }, 'EMAIL_GATEWAY');
+      throw new RetryableIngestionError(
+        'Buyer identity storage returned no user record; the incoming request will be retried.',
+        { message: { fromAddress: normEmail } }
+      );
+    }
+
+    if (userResult && userResult.created === false && userResult.user && userResult.user.role === 'vendor') {
+      logger.warn('Rejected vendor identity as an email-gateway buyer', {
+        email: normEmail,
+        userId: userResult.user.id,
+        actualRole: userResult.user.role,
+      }, 'EMAIL_GATEWAY');
+      throw new Error('This sender address belongs to a vendor account and cannot create buyer RFQs.');
     }
 
     const userId = userResult?.user?.id || `buyer-user-${Date.now()}`;
     const orgId = userResult?.user?.orgId || `org-${Date.now()}`;
 
-    // Create in storeService (buyer_accounts)
-    const newBuyerAccount = storeService.addBuyerAccount({
-      id: userId,
-      organizationName: orgName,
-      brandName: displayName,
-      organizationType: 'Private Limited',
-      corporateEmail: normEmail,
-      contactPerson: displayName,
-      contactDesignation: 'Procurement Specialist',
-      mobileNumber: '+919999999999',
-      organizationId: orgId,
-      sourcingMode: 'mode_0',
-      subscriptionPlan: 'free_trial',
-      remainingFreeRFQs: 5,
-      status: 'PENDING_ONBOARDING',
-      onboardingRequired: true,
-      profileVerified: false,
-      emailVerified: false,
-      phoneVerified: false,
-      tempPasswordRequired: true,
-      isAutoRegistered: true,
-    });
+    // Create in buyer_accounts before RFQ processing. When configured storage
+    // is unavailable, preserve the email for retry and do not invent an
+    // isolate-only buyer identity that no future request can resolve.
+    let newBuyerAccount;
+    try {
+      newBuyerAccount = await storeService.addBuyerAccountDurably({
+        id: userId,
+        organizationName: orgName,
+        brandName: displayName,
+        organizationType: 'Private Limited',
+        corporateEmail: normEmail,
+        contactPerson: displayName,
+        contactDesignation: 'Procurement Specialist',
+        mobileNumber: '+919999999999',
+        organizationId: orgId,
+        sourcingMode: 'mode_0',
+        subscriptionPlan: 'free_trial',
+        remainingFreeRFQs: 5,
+        status: 'PENDING_ONBOARDING',
+        onboardingRequired: true,
+        profileVerified: false,
+        emailVerified: false,
+        phoneVerified: false,
+        tempPasswordRequired: true,
+        isAutoRegistered: true,
+      });
+    } catch (accountError) {
+      logger.error('Buyer identity exists but its buyer-account mirror could not be persisted', {
+        error: accountError,
+        email: normEmail,
+        userId,
+        operation: 'email-gateway-buyer-onboarding',
+        retryable: true,
+      }, 'EMAIL_GATEWAY');
+      throw new RetryableIngestionError(
+        'Buyer account storage is unavailable; the incoming request will be retried.',
+        { message: { fromAddress: normEmail } }
+      );
+    }
 
     logger.info(
       `Autonomous buyer account created for unregistered sender ${normEmail}`,
@@ -1413,6 +1464,29 @@ async function sendAutoReply(message, kind, send, { rfqNumber = null, config = {
 // long since seen the RFQ (or asked about it), and a late "Great news!" confuses.
 const ACK_RETRY_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 const ACK_RETRIES_PER_POLL = 5;
+const ACK_CREDENTIAL_AAD_PREFIX = 'email-gateway-ack:';
+
+function hasAcknowledgementEncryptionKey() {
+  return Boolean(process.env.AES_ENCRYPTION_KEY || process.env.AES_SECRET_KEY);
+}
+
+function encryptAcknowledgementPassword(password, messageId) {
+  if (!hasAcknowledgementEncryptionKey()) {
+    throw new Error('AES_ENCRYPTION_KEY is required to persist onboarding credentials.');
+  }
+  return cryptoService.encrypt(password, {
+    additionalData: `${ACK_CREDENTIAL_AAD_PREFIX}${messageId}`,
+  }).encoded;
+}
+
+function decryptAcknowledgementPassword(encryptedPassword, messageId) {
+  if (!hasAcknowledgementEncryptionKey()) {
+    throw new Error('AES_ENCRYPTION_KEY is required to decrypt onboarding credentials.');
+  }
+  return cryptoService.decrypt(encryptedPassword, {
+    additionalData: `${ACK_CREDENTIAL_AAD_PREFIX}${messageId}`,
+  });
+}
 
 /**
  * Keep an acknowledgement that could not be sent, so a later poll retries it.
@@ -1422,16 +1496,38 @@ const ACK_RETRIES_PER_POLL = 5;
 async function queueAcknowledgement(rfqKey, ack) {
   if (!rfqKey) return;
   const detailObj = { buyerName: ack.buyerName, rfqTitle: ack.rfqTitle };
-  if (ack.tempPassword) detailObj.tempPassword = ack.tempPassword;
+  const messageId = `${rfqKey}#ack`;
+  if (ack.tempPassword) {
+    try {
+      detailObj.encryptedTempPassword = encryptAcknowledgementPassword(ack.tempPassword, messageId);
+    } catch (error) {
+      detailObj.credentialDeliveryUnavailable = true;
+      logger.error('Buyer onboarding credentials were omitted from the retry ledger', {
+        error,
+        rfqKey,
+        credentialOmitted: true,
+      }, 'EMAIL_GATEWAY');
+    }
+  }
   if (ack.deliveryDate) detailObj.deliveryDate = ack.deliveryDate;
-  await emailGatewayQueries.recordProcessed({
-    messageId: `${rfqKey}#ack`,
+  const recorded = await emailGatewayQueries.recordProcessed({
+    messageId,
     status: INGESTION_OUTCOME.ACK_PENDING,
     detail: JSON.stringify(detailObj),
     fromAddress: ack.to,
     subject: ack.rfqTitle,
     rfqNumber: ack.rfqNumber,
   });
+  if (!recorded) {
+    logger.error('Pending RFQ acknowledgement could not be persisted', {
+      messageId,
+      credentialIncluded: Boolean(detailObj.encryptedTempPassword),
+    }, 'EMAIL_GATEWAY');
+  } else if (!pool.hasStorage()) {
+    logger.warn('Pending RFQ acknowledgement is tracked only in local memory without configured storage', {
+      messageId,
+    }, 'EMAIL_GATEWAY');
+  }
 }
 
 /** Ledger timestamps are `YYYY-MM-DD HH:MM:SS` UTC (D1) or a Date (Postgres). */
@@ -1471,12 +1567,56 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
     } catch {
       saved = {};
     }
+    let retryTempPassword = null;
+    if (saved.encryptedTempPassword) {
+      try {
+        retryTempPassword = decryptAcknowledgementPassword(saved.encryptedTempPassword, row.message_id);
+      } catch (error) {
+        outcome.stillPending += 1;
+        logger.error('Pending buyer onboarding credentials could not be decrypted for retry', {
+          error,
+          messageId: row.message_id,
+          rfqNumber: row.rfq_number,
+        }, 'EMAIL_GATEWAY');
+        continue;
+      }
+    } else if (saved.tempPassword) {
+      try {
+        const encryptedTempPassword = encryptAcknowledgementPassword(saved.tempPassword, row.message_id);
+        const sanitizedDetail = { ...saved, encryptedTempPassword };
+        delete sanitizedDetail.tempPassword;
+        const rewritten = await record(INGESTION_OUTCOME.ACK_PENDING, JSON.stringify(sanitizedDetail));
+        if (!rewritten) {
+          outcome.stillPending += 1;
+          logger.error('Legacy plaintext onboarding credentials could not be scrubbed from the retry ledger', {
+            messageId: row.message_id,
+            rfqNumber: row.rfq_number,
+          }, 'EMAIL_GATEWAY');
+          continue;
+        }
+        retryTempPassword = saved.tempPassword;
+        saved = sanitizedDetail;
+      } catch (error) {
+        delete saved.tempPassword;
+        saved.credentialDeliveryUnavailable = true;
+        const scrubbed = await record(INGESTION_OUTCOME.ACK_ABANDONED, JSON.stringify(saved));
+        if (scrubbed) outcome.abandoned += 1;
+        else outcome.stillPending += 1;
+        logger.error('Legacy plaintext onboarding credentials could not be re-encrypted and were scrubbed', {
+          error,
+          messageId: row.message_id,
+          rfqNumber: row.rfq_number,
+        }, 'EMAIL_GATEWAY');
+        continue;
+      }
+    }
+
     try {
-      if (saved.tempPassword) {
+      if (retryTempPassword) {
         await mailerService.sendBuyerOnboardingWithRfqEmail({
           to: row.from_address,
           buyerName: saved.buyerName,
-          tempPassword: saved.tempPassword,
+          tempPassword: retryTempPassword,
           rfqNumber: row.rfq_number,
           rfqTitle: saved.rfqTitle || row.subject,
           deliveryDate: saved.deliveryDate,
@@ -1883,23 +2023,33 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
       'EMAIL_GATEWAY'
     );
 
-    storeService.addAuditLog({
-      userEmail: message.fromAddress || SYSTEM_ACTOR_EMAIL,
-      action: `Quotation creation failed for ${targetRfq.rfqNumber} from ${vendorRecord.name}: Reply identified as vendor issue/query. Bid not generated.`,
-      rfqNumber: targetRfq.rfqNumber,
-    });
-
+    let inquiryResult;
     if (typeof storeService.addInquiryToRFQ === 'function') {
       try {
-        storeService.addInquiryToRFQ(targetRfq.id, {
+        inquiryResult = await storeService.addInquiryToRFQ(targetRfq.id, {
           message: emailText,
           vendorName: vendorRecord.name,
           vendorEmail: message.fromAddress,
           vendorId: vendorRecord.id,
+          messageId: message.messageId,
         });
+        if (!inquiryResult) {
+          throw new Error(`RFQ ${targetRfq.rfqNumber} disappeared before its vendor inquiry could be saved.`);
+        }
       } catch (inqErr) {
         logger.error('Failed to log vendor inquiry to RFQ', inqErr, 'EMAIL_GATEWAY');
+        // Leave this inbound message retryable instead of acknowledging and
+        // marking it processed while its clarification is missing from the RFQ.
+        throw inqErr;
       }
+    }
+
+    if (!inquiryResult?.duplicate) {
+      storeService.addAuditLog({
+        userEmail: message.fromAddress || SYSTEM_ACTOR_EMAIL,
+        action: `Quotation creation failed for ${targetRfq.rfqNumber} from ${vendorRecord.name}: Reply identified as vendor issue/query. Bid not generated.`,
+        rfqNumber: targetRfq.rfqNumber,
+      });
     }
 
     await sendAutoReply(
@@ -2035,8 +2185,14 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     quotationValidity: extraction.quotationValidity || null,
   };
 
-  const updatedRFQ = storeService.addQuoteToRFQ(targetRfq.id, quote);
-  storeService.consumeVendorQuotationCredit(vendorRecord.id, targetRfq.id);
+  const quoteSubmission = await storeService.submitVendorQuoteDurably(targetRfq.id, quote, { includeDeliveryState: true });
+  const updatedRFQ = quoteSubmission?.rfq;
+  if (!updatedRFQ && pool.hasStorage()) {
+    const submissionError = new Error(`RFQ ${targetRfq.rfqNumber} could not be found in storage while saving its quote.`);
+    submissionError.statusCode = 503;
+    submissionError.code = 'PERSISTENCE_UNAVAILABLE';
+    throw submissionError;
+  }
 
   storeService.addAuditLog({
     userEmail: message.fromAddress || SYSTEM_ACTOR_EMAIL,
@@ -2099,11 +2255,19 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           });
         }
       } else {
-        await mailerService.sendQuoteReceivedEmail(buyerEmail, {
-          rfq: updatedRFQ || targetRfq,
-          quote,
-          recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
-        });
+        const committedRFQ = updatedRFQ || targetRfq;
+        if (quoteSubmission?.buyerQuoteNotificationQueued === true) {
+          logger.info('Buyer quote email is queued in the durable event outbox', {
+            rfqNumber: targetRfq.rfqNumber,
+            quoteId: quote.id || null,
+          }, 'EMAIL_GATEWAY');
+        } else {
+          await mailerService.sendQuoteReceivedEmail(buyerEmail, {
+            rfq: committedRFQ,
+            quote,
+            recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+          });
+        }
       }
     } catch (mailErr) {
       logger.error('Failed to send buyer quote received email', mailErr, 'EMAIL_GATEWAY');
@@ -2363,8 +2527,14 @@ async function processMessage(rawSource, config = resolveConfig()) {
     },
     'EMAIL_GATEWAY'
   );
-  const credits = checkRfqCredits(authorisation.buyerAccount, sourcingMode, groups.length);
-  if (!credits.ok) {
+  // The cached buyer balance is only a useful guard when there is no durable
+  // store. With persistence enabled, the atomic RFQ write is authoritative:
+  // this isolate may have stale credits, and a separate balance read would add
+  // another database roundtrip before the transaction that enforces the limit.
+  const credits = pool.hasStorage()
+    ? null
+    : checkRfqCredits(authorisation.buyerAccount, sourcingMode, groups.length);
+  if (credits && !credits.ok) {
     logger.warn(
       'Email RFQ refused: free trial RFQ credits exhausted',
       { buyerAccountId: authorisation.buyerAccount.id, sourcingMode, remaining: credits.remaining, needed: credits.needed },
@@ -2383,6 +2553,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
   const createdRFQs = [];
   let totalAccepted = 0;
   let totalNeedsReview = 0;
+  let creditsExhaustedAfterSomeRfqs = false;
   // Uploaded once, when the first RFQ is actually created, and shared by every
   // RFQ the email raises.
   let attachmentsPromise = null;
@@ -2423,12 +2594,18 @@ async function processMessage(rawSource, config = resolveConfig()) {
     totalAccepted += classification.accepted;
     totalNeedsReview += classification.needsReview;
 
-    const created = storeService.createRFQ(
-      {
+    const rfqData = {
+        // The message-group ledger may fail after the RFQ write commits. A
+        // stable ID lets a retry find and reuse that record instead of raising
+        // a second RFQ for the same Message-ID group.
+        id: groupKey
+          ? `rfq-email-${crypto.createHash('sha256').update(groupKey).digest('hex').slice(0, 32)}`
+          : undefined,
         title: draft.title,
         category: draft.category,
         sourcingMode,
-        // Held for review rather than circulated. Nothing has checked this yet.
+        // The gateway records the same active quote state used by the configured
+        // buyer sourcing plan; the create workflow handles routing after save.
         status: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
         source: 'email_gateway',
         sourceEmail: message.fromAddress,
@@ -2447,9 +2624,42 @@ async function processMessage(rawSource, config = resolveConfig()) {
         sharedBuyerEmails: attribution.sharedBuyerEmails || [],
         isSharedRfq: Boolean(attribution.isSharedRfq),
         emailRfqScenario: attribution.scenario || null,
-      },
-      attribution.primaryBuyerAccount
-    );
+      };
+
+    let created;
+    try {
+      created = await storeService.createRFQDurably(rfqData, attribution.primaryBuyerAccount);
+    } catch (createErr) {
+      if (createErr.code === 'FREE_RFQ_CREDITS_EXHAUSTED') {
+        logger.warn('Email RFQ creation stopped after the persisted free-credit check rejected a group', {
+          buyerAccountId: authorisation.buyerAccount.id,
+          sourcingMode,
+          groupIndex,
+          createdCount: createdRFQs.length,
+          remaining: createErr.remaining,
+        }, 'EMAIL_GATEWAY');
+        await notifyRfqNotCreated(message, 'CREDITS_EXHAUSTED', notifyContext);
+        if (createdRFQs.length === 0) {
+          return {
+            status: INGESTION_OUTCOME.RFQ_CREDITS_EXHAUSTED,
+            detail: EMAIL_GATEWAY_MESSAGES.RFQ_CREDITS_EXHAUSTED_DETAIL
+              .replace('{remaining}', String(createErr.remaining ?? 0))
+              .replace('{needed}', String(groups.length)),
+            message,
+          };
+        }
+        creditsExhaustedAfterSomeRfqs = true;
+        break;
+      }
+      logger.error('Failed to durably create email-ingested RFQ', {
+        error: createErr,
+        messageId: message.messageId || null,
+        groupKey,
+        groupIndex,
+        sender: message.fromAddress || null,
+      }, 'EMAIL_GATEWAY');
+      throw createErr;
+    }
 
     storeService.addAuditLog({
       userEmail: attribution.primaryBuyerAccount?.corporateEmail || message.fromAddress,
@@ -2465,7 +2675,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
     }
 
     if (groupKey) {
-      await emailGatewayQueries.recordProcessed({
+      const recorded = await emailGatewayQueries.recordProcessed({
         messageId: groupKey,
         status: INGESTION_OUTCOME.RFQ_GROUP_CREATED,
         detail: `RFQ ${groupIndex + 1} of ${groups.length} raised from this email`,
@@ -2474,19 +2684,12 @@ async function processMessage(rawSource, config = resolveConfig()) {
         rfqId: created.id,
         rfqNumber: created.rfqNumber,
       });
-    }
-
-    // Email-ingested RFQs must draw down sourcing credits the same way a
-    // portal/AI-created RFQ does — the HTTP createRFQ controller is bypassed
-    // here, so the credit rule is applied explicitly. V0 and paid plans are
-    // exempt (handled inside consumeRFQCreditIfApplicable).
-    const creditResult = storeService.consumeRFQCreditIfApplicable(authorisation.buyerAccount, sourcingMode);
-    if (creditResult.consumed) {
-      logger.info(
-        `Consumed 1 sourcing credit for email-ingested RFQ ${created.rfqNumber}`,
-        { rfqNumber: created.rfqNumber, sourcingMode, remaining: creditResult.remaining },
-        'EMAIL_GATEWAY'
-      );
+      if (!recorded) {
+        throw new RetryableIngestionError('The RFQ was saved, but its email idempotency record was not. Retry after storage recovers.', {
+          message,
+          onGiveUp: giveUpNotice,
+        });
+      }
     }
 
     createdRFQs.push(created);
@@ -2606,12 +2809,15 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
+  const ingestionDetail = EMAIL_GATEWAY_MESSAGES.INGESTED_DETAIL.replace(
+    '{count}',
+    String(totalAccepted)
+  ).replace('{needsReview}', String(totalNeedsReview));
   return {
     status: INGESTION_OUTCOME.INGESTED,
-    detail: EMAIL_GATEWAY_MESSAGES.INGESTED_DETAIL.replace(
-      '{count}',
-      String(totalAccepted)
-    ).replace('{needsReview}', String(totalNeedsReview)),
+    detail: creditsExhaustedAfterSomeRfqs
+      ? `${ingestionDetail} Remaining email groups were skipped because the buyer's free RFQ credits were exhausted.`
+      : ingestionDetail,
     message,
     rfq: createdRFQs[0],
     rfqs: createdRFQs,

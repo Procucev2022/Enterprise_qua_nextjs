@@ -107,27 +107,29 @@ describe('Email Template Generation Service', () => {
     expect(payload.htmlBody).toContain('Attachment');
   });
 
-  test('generateVendorOnboardingEmail generates credentials payload', () => {
+  test('generateVendorOnboardingEmail preview omits credentials and gives safe sign-in guidance', () => {
     const vendor = {
       name: 'Precision Hydraulics',
       contactPerson: 'Sanjay',
       email: 'sanjay@hydro.com',
     };
 
-    const payload = generateVendorOnboardingEmail(vendor, false, 'TempPass#123');
+    const payload = generateVendorOnboardingEmail(vendor);
     expect(payload.to).toBe('sanjay@hydro.com');
     expect(payload.subject).toContain('Onboarding');
-    expect(payload.htmlBody).toContain('TempPass#123');
+    expect(payload).not.toHaveProperty('tempPassword');
+    expect(payload.htmlBody).toContain('follow the verification steps shown on the portal');
+    expect(payload.htmlBody).not.toContain('Temporary Password');
   });
 
-  test('generateVendorOnboardingEmail falls back to default contactPerson, tempPassword and isExisting flag', () => {
+  test('generateVendorOnboardingEmail falls back to a default contactPerson without inventing credentials', () => {
     const vendor = { name: 'No Contact Vendor', email: 'nocontact@vendor.com' };
 
     const payload = generateVendorOnboardingEmail(vendor, true);
     expect(payload.recipientName).toBe('Vendor Partner');
     expect(payload.htmlBody).toContain('>Partner<');
-    expect(payload.tempPassword).toBe('Procucev#2026!Vendor');
-    expect(payload.htmlBody).toContain('Procucev#2026!Vendor');
+    expect(payload).not.toHaveProperty('tempPassword');
+    expect(payload.htmlBody).not.toContain('Procucev#2026!Vendor');
   });
 
   test('generateStandardRFQEmail and generateVendorOnboardingEmail render real procucev logo and dynamic URLs', () => {

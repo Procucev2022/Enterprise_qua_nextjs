@@ -1,5 +1,6 @@
 const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
+const { validatePayload } = require('../config/validationSchemas');
 
 function getAuditLogs(req, res, next) {
   try {
@@ -14,15 +15,28 @@ function getAuditLogs(req, res, next) {
   }
 }
 
-function createAuditLog(req, res, next) {
+async function createAuditLog(req, res, next) {
   try {
-    const { userEmail, action, rfqNumber, ipAddress } = req.body;
-    if (!action) {
-      logger.warn('Failed to create audit log: Missing action description', { body: req.body }, 'AUDIT_CONTROLLER');
-      return res.status(400).json({ success: false, error: 'action description is required.' });
+    if (!req.user || !req.user.email) {
+      return res.status(401).json({ success: false, error: 'An authenticated user identity is required to create an audit event.' });
     }
-    logger.audit(action, userEmail || 'system@procucev.ai', { rfqNumber, ipAddress }, rfqNumber);
-    const entry = storeService.addAuditLog({ userEmail, action, rfqNumber, ipAddress });
+
+    const { isValid, errors, sanitizedData } = validatePayload('auditLogEntry', req.body || {});
+    if (!isValid) {
+      logger.warn('Rejected invalid audit event payload', {
+        fields: Object.keys(errors),
+        role: req.user.role,
+        requestId: req.id || req.requestId || null,
+      }, 'AUDIT_CONTROLLER');
+      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
+    }
+
+    const entry = await storeService.addAuditLogDurably({
+      userEmail: req.user.email,
+      action: sanitizedData.action,
+      rfqNumber: sanitizedData.rfqNumber || null,
+      ipAddress: req.ip || null,
+    });
     res.status(201).json({ success: true, data: entry });
   } catch (err) {
     logger.error('Error creating audit log entry', err, 'AUDIT_CONTROLLER');
@@ -30,10 +44,10 @@ function createAuditLog(req, res, next) {
   }
 }
 
-function verifyIntegrity(req, res, next) {
+async function verifyIntegrity(req, res, next) {
   try {
-    logger.info('Running SHA-256 cryptographic audit verification check', {}, 'AUDIT_CONTROLLER');
-    const report = storeService.verifyAuditIntegrity();
+    logger.info('Running persisted SHA-256 audit-chain verification', {}, 'AUDIT_CONTROLLER');
+    const report = await storeService.verifyAuditIntegrityDurably();
     res.json({ success: true, report });
   } catch (err) {
     logger.error('Error verifying audit trail integrity', err, 'AUDIT_CONTROLLER');

@@ -8,15 +8,19 @@ const mailerService = require('../src/services/mailerService');
 const authService = require('../src/services/authService');
 const authSessionQueries = require('../src/db/authSessionQueries');
 const identityQueries = require('../src/db/identityQueries');
+const domainQueries = require('../src/db/domainQueries');
 const geminiService = require('../src/services/geminiService');
 const pool = require('../src/db/pool');
 const rfqAttachmentService = require('../src/services/rfqAttachmentService');
+const cryptoService = require('../src/services/cryptoService');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
 const { EMAIL_GATEWAY_STATE } = require('../src/config/constants');
 
 describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation', () => {
   const SENDER = 'newprocurement.buyer@industrial-corp.com';
+  let originalAesEncryptionKey;
+  let originalAesSecretKey;
 
   const makeRawEmail = (fromEmail, bodyText, subject = 'Requisition Enquiry') => {
     return Buffer.from(
@@ -37,6 +41,8 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
   };
 
   beforeEach(() => {
+    originalAesEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+    originalAesSecretKey = process.env.AES_SECRET_KEY;
     emailGatewayService.resetAutoReplyMemory();
     jest.spyOn(emailGatewayQueries, 'countRecentOutcomes').mockResolvedValue(0);
     jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
@@ -46,10 +52,23 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
     jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ success: true, messageId: 'msg-remind-101' });
     jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ success: true, messageId: 'msg-quote-101' });
     jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ success: true, messageId: 'msg-cred-101' });
+    jest.spyOn(domainQueries, 'getBuyerAccountSnapshotByEmailFromDB').mockImplementation(async (email) => {
+      const account = storeService.buyerAccounts.find((entry) => (entry.corporateEmail || '').toLowerCase() === email.toLowerCase());
+      return account ? { id: account.id, account: { ...account }, raw: JSON.stringify(account) } : null;
+    });
+    jest.spyOn(domainQueries, 'getBuyerAccountSnapshotByIdFromDB').mockImplementation(async (id) => {
+      const account = storeService.buyerAccounts.find((entry) => entry.id === id);
+      return account ? { id: account.id, account: { ...account }, raw: JSON.stringify(account) } : null;
+    });
+    jest.spyOn(domainQueries, 'updateBuyerAccountIfUnchangedInDB').mockImplementation(async (_snapshot, account) => account);
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
+    if (originalAesEncryptionKey === undefined) delete process.env.AES_ENCRYPTION_KEY;
+    else process.env.AES_ENCRYPTION_KEY = originalAesEncryptionKey;
+    if (originalAesSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+    else process.env.AES_SECRET_KEY = originalAesSecretKey;
   });
 
   describe('Scenario 1 & 2 & 3: Unregistered buyer auto-registration with placeholder phone and V0 config', () => {
@@ -243,6 +262,10 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
 
     test('validates email OTP, phone OTP, replaces placeholder phone, and updates password', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB').mockImplementation(async (email) => (
+        storeService.buyerAccounts.find((account) => account.corporateEmail === email) || null
+      ));
+      jest.spyOn(domainQueries, 'upsertBuyerAccountInDB').mockImplementation(async (account) => account);
       const buyerEmail = 'flow.buyer@testcorp.com';
       const initialPass = 'TempPassSecure123!';
       const newPhone = '9876543210';
@@ -333,6 +356,10 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
 
     test('exercises all error branches during completeBuyerOnboarding', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB').mockImplementation(async (email) => (
+        storeService.buyerAccounts.find((account) => account.corporateEmail === email) || null
+      ));
+      jest.spyOn(domainQueries, 'upsertBuyerAccountInDB').mockImplementation(async (account) => account);
       const buyerEmail = 'branch.buyer@testcorp.com';
       const initialPass = 'TempPassSecure123!';
       const newPhone = '9876543211';
@@ -808,6 +835,8 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
     });
 
     test('retryPendingAcknowledgements sends onboarding email when tempPassword is saved in detail', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'buyer-onboarding-test-encryption-key';
+      delete process.env.AES_SECRET_KEY;
       jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
         {
           message_id: 'msg-ack-test#ack',
@@ -833,6 +862,12 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
           rfqNumber: 'RFQ-RETRY-001',
         })
       );
+      const rewrittenDetail = JSON.parse(emailGatewayQueries.recordProcessed.mock.calls[0][0].detail);
+      expect(rewrittenDetail).not.toHaveProperty('tempPassword');
+      expect(rewrittenDetail).toHaveProperty('encryptedTempPassword');
+      expect(cryptoService.decrypt(rewrittenDetail.encryptedTempPassword, {
+        additionalData: 'email-gateway-ack:msg-ack-test#ack',
+      })).toBe('RetryTempPass456');
     });
 
     test('queues acknowledgement when sendBuyerOnboardingWithRfqEmail throws', async () => {
@@ -971,6 +1006,8 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
     });
 
     test('retryPendingAcknowledgements handles invalid JSON detail and sending failures', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'buyer-onboarding-test-encryption-key';
+      delete process.env.AES_SECRET_KEY;
       jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
         {
           id: 'ack-bad-json',
@@ -1345,7 +1382,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       expect(updatePwSpy).not.toHaveBeenCalled();
     });
 
-    test('falls back to auto-registration when the identity lookup fails or the login is not a buyer', async () => {
+    test('auto-registers after an identity lookup miss but rejects an existing vendor login', async () => {
       jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValueOnce(new Error('Identity down'));
       const failed = await emailGatewayService.getOrCreateBuyerAccount('lookup.fails@industrial-corp.com');
       expect(failed.isNew).toBe(true);
@@ -1354,10 +1391,39 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       const vendorUser = { ...importedUser(vendorEmail), role: 'vendor' };
       jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(vendorUser);
       jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({ created: false, user: vendorUser });
-      const vendorRes = await emailGatewayService.getOrCreateBuyerAccount(vendorEmail);
-      expect(vendorRes.isNew).toBe(true);
-      // The generated password was never saved over the existing login, so none is mailed.
-      expect(vendorRes.tempPassword).toBeNull();
+      const createMirror = jest.spyOn(storeService, 'addBuyerAccountDurably');
+      await expect(emailGatewayService.getOrCreateBuyerAccount(vendorEmail)).rejects.toThrow(
+        'This sender address belongs to a vendor account and cannot create buyer RFQs.'
+      );
+      expect(createMirror).not.toHaveBeenCalled();
+    });
+
+    test('retries instead of inventing an identity when configured identity storage fails', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      jest.spyOn(identityQueries, 'insertBuyerAccount').mockRejectedValue(new Error('D1 unavailable'));
+      const createMirror = jest.spyOn(storeService, 'addBuyerAccountDurably');
+
+      await expect(emailGatewayService.getOrCreateBuyerAccount('db-down@industrial-corp.com')).rejects.toMatchObject({
+        name: 'RetryableIngestionError',
+      });
+      expect(createMirror).not.toHaveBeenCalled();
+    });
+
+    test('retries when the identity exists but its durable buyer mirror cannot be saved', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({
+        created: true,
+        user: { id: 'buyer-durable-1', email: 'mirror-down@industrial-corp.com', role: 'buyer', orgId: 'org-durable-1' },
+      });
+      jest.spyOn(storeService, 'addBuyerAccountDurably').mockRejectedValue(new Error('D1 unavailable'));
+
+      await expect(emailGatewayService.getOrCreateBuyerAccount('mirror-down@industrial-corp.com')).rejects.toMatchObject({
+        name: 'RetryableIngestionError',
+      });
     });
 
     test('mails the stored temp password when the existing login is itself still pending', async () => {

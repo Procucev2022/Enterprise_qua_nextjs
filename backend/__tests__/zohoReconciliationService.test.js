@@ -1,23 +1,54 @@
 jest.mock('../src/services/storeService');
 jest.mock('../src/services/zohoPaymentService');
+jest.mock('../src/db/zohoWebhookQueries');
 
 const storeService = require('../src/services/storeService');
 const zohoPaymentService = require('../src/services/zohoPaymentService');
+const zohoWebhookQueries = require('../src/db/zohoWebhookQueries');
 const zohoReconciliationService = require('../src/services/zohoReconciliationService');
 
 describe('zohoReconciliationService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    storeService.activatePaymentLinkDurably.mockResolvedValue({ activated: true });
+    storeService.updatePaymentLinkRecordDurably.mockImplementation(async (id, updates) => ({ id, ...updates }));
+    zohoWebhookQueries.purgeExpiredWebhookEvents.mockResolvedValue(0);
     zohoReconciliationService.stopPolling();
     jest.useFakeTimers();
   });
 
   afterEach(() => {
     zohoReconciliationService.stopPolling();
+    jest.restoreAllMocks();
     jest.useRealTimers();
   });
 
   describe('reconcileOnce', () => {
+    test('purges expired webhook receipts during reconciliation without blocking payment checks', async () => {
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([]);
+      zohoWebhookQueries.purgeExpiredWebhookEvents.mockResolvedValue(4);
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 0 });
+
+      expect(zohoWebhookQueries.purgeExpiredWebhookEvents).toHaveBeenCalledTimes(1);
+    });
+
+    test('logs receipt cleanup failures and continues payment reconciliation', async () => {
+      const logger = require('../src/services/loggerService').logger;
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const cleanupError = new Error('cleanup unavailable');
+      zohoWebhookQueries.purgeExpiredWebhookEvents.mockRejectedValue(cleanupError);
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([]);
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 0 });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Expired Zoho webhook receipt cleanup failed',
+        { error: cleanupError },
+        'ZOHO_RECONCILIATION'
+      );
+    });
+
     test('checks every CREATED/pending link and updates its status', async () => {
       storeService.getPaymentLinksByStatusIn.mockReturnValue([
         { id: 'pl-1', zohoPaymentLinkId: 'zoho-1' },
@@ -31,11 +62,11 @@ describe('zohoReconciliationService', () => {
 
       expect(result).toEqual({ checked: 2 });
       expect(storeService.getPaymentLinksByStatusIn).toHaveBeenCalledWith(['CREATED', 'pending', 'active']);
-      expect(storeService.updatePaymentLinkRecord).toHaveBeenCalledWith('pl-1', { status: 'CREATED', rawResponse: {} });
-      expect(storeService.updatePaymentLinkRecord).toHaveBeenCalledWith('pl-2', { status: 'PAID', rawResponse: {} });
+      expect(storeService.updatePaymentLinkRecordDurably).toHaveBeenCalledWith('pl-1', { status: 'CREATED', rawResponse: {} });
+      expect(storeService.updatePaymentLinkRecordDurably).toHaveBeenCalledTimes(1);
       // Only the link discovered PAID triggers activation.
-      expect(storeService.activateVendorSubscriptionFromPayment).toHaveBeenCalledTimes(1);
-      expect(storeService.activateVendorSubscriptionFromPayment).toHaveBeenCalledWith('pl-2');
+      expect(storeService.activatePaymentLinkDurably).toHaveBeenCalledTimes(1);
+      expect(storeService.activatePaymentLinkDurably).toHaveBeenCalledWith('pl-2', {});
     });
 
     test('recognizes Zoho\'s real lowercase "paid" status, not just the app\'s own uppercase PAID', async () => {
@@ -47,7 +78,7 @@ describe('zohoReconciliationService', () => {
 
       await zohoReconciliationService.reconcileOnce();
 
-      expect(storeService.activateVendorSubscriptionFromPayment).toHaveBeenCalledWith('pl-real-1');
+      expect(storeService.activatePaymentLinkDurably).toHaveBeenCalledWith('pl-real-1', {});
     });
 
     test('does not activate when Zoho returns no status at all', async () => {
@@ -56,7 +87,7 @@ describe('zohoReconciliationService', () => {
 
       await zohoReconciliationService.reconcileOnce();
 
-      expect(storeService.activateVendorSubscriptionFromPayment).not.toHaveBeenCalled();
+      expect(storeService.activatePaymentLinkDurably).not.toHaveBeenCalled();
     });
 
     test('activates a buyer subscription (not a vendor one) for a link with payerType buyer', async () => {
@@ -65,8 +96,7 @@ describe('zohoReconciliationService', () => {
 
       await zohoReconciliationService.reconcileOnce();
 
-      expect(storeService.activateBuyerSubscriptionFromPayment).toHaveBeenCalledWith('pl-buyer-1');
-      expect(storeService.activateVendorSubscriptionFromPayment).not.toHaveBeenCalled();
+      expect(storeService.activatePaymentLinkDurably).toHaveBeenCalledWith('pl-buyer-1', {});
     });
 
     test('logs and continues when one link fails to reconcile', async () => {
@@ -81,8 +111,8 @@ describe('zohoReconciliationService', () => {
       const result = await zohoReconciliationService.reconcileOnce();
 
       expect(result).toEqual({ checked: 2 });
-      expect(storeService.updatePaymentLinkRecord).toHaveBeenCalledTimes(1);
-      expect(storeService.updatePaymentLinkRecord).toHaveBeenCalledWith('pl-2', { status: 'PAID', rawResponse: {} });
+      expect(storeService.updatePaymentLinkRecordDurably).not.toHaveBeenCalled();
+      expect(storeService.activatePaymentLinkDurably).toHaveBeenCalledWith('pl-2', {});
     });
 
     test('marks link as expired when Zoho reports Payment Link does not exist (400)', async () => {
@@ -97,11 +127,11 @@ describe('zohoReconciliationService', () => {
       const result = await zohoReconciliationService.reconcileOnce();
 
       expect(result).toEqual({ checked: 1 });
-      expect(storeService.updatePaymentLinkRecord).toHaveBeenCalledWith('pl-dead-1', {
+      expect(storeService.updatePaymentLinkRecordDurably).toHaveBeenCalledWith('pl-dead-1', {
         status: 'expired',
         rawResponse: expect.objectContaining({ error: expect.stringContaining('Payment Link does not exist') }),
       });
-      expect(storeService.activateVendorSubscriptionFromPayment).not.toHaveBeenCalled();
+      expect(storeService.activatePaymentLinkDurably).not.toHaveBeenCalled();
     });
 
     test('marks link as expired when Zoho returns 404', async () => {
@@ -115,10 +145,46 @@ describe('zohoReconciliationService', () => {
 
       await zohoReconciliationService.reconcileOnce();
 
-      expect(storeService.updatePaymentLinkRecord).toHaveBeenCalledWith('pl-dead-404', {
+      expect(storeService.updatePaymentLinkRecordDurably).toHaveBeenCalledWith('pl-dead-404', {
         status: 'expired',
         rawResponse: expect.objectContaining({ error: expect.stringContaining('Not found') }),
       });
+    });
+
+    test('logs and continues when the durable expiration write returns no row', async () => {
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([{ id: 'pl-expire-missing', zohoPaymentLinkId: 'zoho-expire-missing' }]);
+      const notFound = new Error('Payment Link does not exist');
+      notFound.status = 404;
+      zohoPaymentService.getPaymentLinkStatus.mockRejectedValueOnce(notFound);
+      storeService.updatePaymentLinkRecordDurably.mockResolvedValueOnce(null);
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 1 });
+      expect(storeService.updatePaymentLinkRecordDurably).toHaveBeenCalledWith('pl-expire-missing', expect.objectContaining({ status: 'expired' }));
+    });
+
+    test('treats a missing activation result as a retryable reconciliation failure', async () => {
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([{ id: 'pl-activation-missing', zohoPaymentLinkId: 'zoho-paid' }]);
+      zohoPaymentService.getPaymentLinkStatus.mockResolvedValueOnce({ status: 'paid', rawResponse: {} });
+      storeService.activatePaymentLinkDurably.mockResolvedValueOnce(null);
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 1 });
+      expect(storeService.activatePaymentLinkDurably).toHaveBeenCalledWith('pl-activation-missing', {});
+    });
+
+    test('logs a status update that did not return a durable row', async () => {
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([{ id: 'pl-status-missing', zohoPaymentLinkId: 'zoho-active' }]);
+      zohoPaymentService.getPaymentLinkStatus.mockResolvedValueOnce({ status: 'active', rawResponse: {} });
+      storeService.updatePaymentLinkRecordDurably.mockResolvedValueOnce(null);
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 1 });
+    });
+
+    test('handles a rejection without a message without inventing an expiration', async () => {
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([{ id: 'pl-error-no-message', zohoPaymentLinkId: 'zoho-error' }]);
+      zohoPaymentService.getPaymentLinkStatus.mockRejectedValueOnce({ status: 503 });
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 1 });
+      expect(storeService.updatePaymentLinkRecordDurably).not.toHaveBeenCalled();
     });
 
     test('marks link as expired when zohoPaymentLinkId is missing', async () => {
@@ -129,7 +195,7 @@ describe('zohoReconciliationService', () => {
       await zohoReconciliationService.reconcileOnce();
 
       expect(zohoPaymentService.getPaymentLinkStatus).not.toHaveBeenCalled();
-      expect(storeService.updatePaymentLinkRecord).toHaveBeenCalledWith('pl-no-zoho-id', {
+      expect(storeService.updatePaymentLinkRecordDurably).toHaveBeenCalledWith('pl-no-zoho-id', {
         status: 'expired',
         rawResponse: expect.objectContaining({ error: 'Missing zohoPaymentLinkId' }),
       });
@@ -149,8 +215,8 @@ describe('zohoReconciliationService', () => {
       ]);
 
       expect(count).toBe(2);
-      expect(storeService.updatePaymentLinkRecord).toHaveBeenCalledWith('pl-active-1', { status: 'PAID', rawResponse: {} });
-      expect(storeService.updatePaymentLinkRecord).toHaveBeenCalledWith('pl-dead-2', {
+      expect(storeService.activatePaymentLinkDurably).toHaveBeenCalledWith('pl-active-1', {});
+      expect(storeService.updatePaymentLinkRecordDurably).toHaveBeenCalledWith('pl-dead-2', {
         status: 'expired',
         rawResponse: expect.objectContaining({ error: expect.stringContaining('Payment Link does not exist') }),
       });
@@ -174,7 +240,7 @@ describe('zohoReconciliationService', () => {
       expect(result).toEqual({ started: false, reason: expect.stringContaining('ZOHO_REFRESH_TOKEN') });
     });
 
-    test('starts, polls on the interval, and refuses to start a second time', () => {
+    test('starts, polls on the interval, and refuses to start a second time', async () => {
       storeService.getPaymentLinksByStatusIn.mockReturnValue([]);
       const config = { RECONCILIATION_ENABLED: true, REFRESH_TOKEN: 'x', RECONCILIATION_INTERVAL_MS: 1000 };
 
@@ -185,6 +251,7 @@ describe('zohoReconciliationService', () => {
       expect(second).toEqual({ started: false, reason: expect.any(String) });
 
       jest.advanceTimersByTime(1000);
+      await Promise.resolve();
       expect(storeService.getPaymentLinksByStatusIn).toHaveBeenCalled();
     });
 
@@ -206,6 +273,17 @@ describe('zohoReconciliationService', () => {
       zohoReconciliationService.startPolling({ RECONCILIATION_ENABLED: true, REFRESH_TOKEN: 'x', RECONCILIATION_INTERVAL_MS: 1000 });
       expect(zohoReconciliationService.stopPolling()).toBe(true);
       expect(zohoReconciliationService.stopPolling()).toBe(false);
+    });
+
+    test('starts polling when the runtime timer has no unref method', () => {
+      jest.spyOn(global, 'setInterval').mockReturnValue({});
+      const result = zohoReconciliationService.startPolling({
+        RECONCILIATION_ENABLED: true,
+        REFRESH_TOKEN: 'refresh-token',
+        RECONCILIATION_INTERVAL_MS: 60000,
+      });
+      expect(result).toEqual({ started: true, intervalMs: 60000 });
+      expect(zohoReconciliationService.stopPolling()).toBe(true);
     });
   });
 });

@@ -1,5 +1,6 @@
 const vendorDirectorySessionQueries = require('../src/db/vendorDirectorySessionQueries');
 const pool = require('../src/db/pool');
+const { logger } = require('../src/services/loggerService');
 const {
   VENDOR_DIRECTORY_SESSION_STATUS,
   VENDOR_DIRECTORY_LOGOUT_REASONS,
@@ -150,7 +151,7 @@ describe('vendorDirectorySessionQueries', () => {
 
     test('handles DB write failure gracefully with memory fallback', async () => {
       jest.spyOn(pool, 'query').mockRejectedValue(new Error('DB Connection Timeout'));
-      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
       const session = await vendorDirectorySessionQueries.createSession({
         email: 'FALLBACK@PROCUCEV.COM',
@@ -160,6 +161,31 @@ describe('vendorDirectorySessionQueries', () => {
       expect(session.email).toBe('fallback@procucev.com');
       expect(session.status).toBe(VENDOR_DIRECTORY_SESSION_STATUS.ACTIVE);
       expect(warnSpy).toHaveBeenCalled();
+    });
+
+    test('fails closed and removes the isolate-local session when configured storage rejects the write', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('D1 unavailable'));
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(vendorDirectorySessionQueries.createSession({ id: 'sess-durable-fail' }))
+        .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+      expect(vendorDirectorySessionQueries.getMemoryStoreForTesting().has('sess-durable-fail')).toBe(false);
+    });
+
+    test('fails closed when automatic table creation cannot make the configured session write durable', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('INSERT INTO vendor_directory_sessions')) {
+          throw new Error('no such table: vendor_directory_sessions');
+        }
+        return { rowCount: 0 };
+      });
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(vendorDirectorySessionQueries.createSession({ id: 'sess-durable-retry-fail' }))
+        .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+      expect(vendorDirectorySessionQueries.getMemoryStoreForTesting().has('sess-durable-retry-fail')).toBe(false);
     });
   });
 
@@ -202,9 +228,40 @@ describe('vendorDirectorySessionQueries', () => {
       expect(found.email).toBe('mem@procucev.com');
     });
 
+    test('does not authenticate an isolate-local session when configured storage is unavailable', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'rows').mockRejectedValue(new Error('D1 unavailable'));
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(vendorDirectorySessionQueries.findSessionById('sess-not-durable'))
+        .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+    });
+
+    test('fails closed when configured storage remains unavailable after table self-healing', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'rows').mockRejectedValue(new Error('no such table: vendor_directory_sessions'));
+      jest.spyOn(pool, 'query').mockResolvedValue({ rowCount: 0 });
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(vendorDirectorySessionQueries.findSessionById('sess-missing-table'))
+        .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+    });
+
     test('returns null if not in DB and not in memory', async () => {
       jest.spyOn(pool, 'rows').mockResolvedValue([]);
       expect(await vendorDirectorySessionQueries.findSessionById('non-existent')).toBeNull();
+    });
+
+    test('does not return a cached session when configured storage confirms no row exists', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      vendorDirectorySessionQueries.getMemoryStoreForTesting().set('sess-stale-cache', {
+        id: 'sess-stale-cache',
+        userUuid: 'u-1',
+        status: VENDOR_DIRECTORY_SESSION_STATUS.ACTIVE,
+      });
+      jest.spyOn(pool, 'rows').mockResolvedValue([]);
+
+      await expect(vendorDirectorySessionQueries.findSessionById('sess-stale-cache')).resolves.toBeNull();
     });
   });
 
@@ -243,9 +300,30 @@ describe('vendorDirectorySessionQueries', () => {
       expect(session.id).toBe('sess-mem-act');
     });
 
+    test('does not accept an isolate-local active session when configured storage is unavailable', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'rows').mockRejectedValue(new Error('D1 unavailable'));
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(vendorDirectorySessionQueries.findActiveSession('sess-not-durable-active'))
+        .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+    });
+
     test('returns null if DB returns no rows and memory store is empty', async () => {
       jest.spyOn(pool, 'rows').mockResolvedValue([]);
       expect(await vendorDirectorySessionQueries.findActiveSession('sess-no-rows')).toBeNull();
+    });
+
+    test('does not accept a cached session when configured storage confirms no active row exists', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      vendorDirectorySessionQueries.getMemoryStoreForTesting().set('sess-stale-active-cache', {
+        id: 'sess-stale-active-cache',
+        userUuid: 'u-1',
+        status: VENDOR_DIRECTORY_SESSION_STATUS.ACTIVE,
+      });
+      jest.spyOn(pool, 'rows').mockResolvedValue([]);
+
+      await expect(vendorDirectorySessionQueries.findActiveSession('sess-stale-active-cache')).resolves.toBeNull();
     });
 
     test('returns null if memory session is CLOSED when DB fails', async () => {
@@ -307,6 +385,20 @@ describe('vendorDirectorySessionQueries', () => {
       const result = await vendorDirectorySessionQueries.updateSessionActivity('sess-act-err');
       expect(result).toBe(true); // updated in memory
     });
+
+    test('reports activity persistence failure instead of keeping an in-memory-only timestamp', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockResolvedValueOnce({ rowCount: 1 });
+      await vendorDirectorySessionQueries.createSession({ id: 'sess-act-durable-fail' });
+      const memoryStore = vendorDirectorySessionQueries.getMemoryStoreForTesting();
+      const previousActivity = memoryStore.get('sess-act-durable-fail').lastActivityAt;
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('D1 unavailable'));
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(vendorDirectorySessionQueries.updateSessionActivity('sess-act-durable-fail'))
+        .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+      expect(memoryStore.get('sess-act-durable-fail').lastActivityAt).toBe(previousActivity);
+    });
   });
 
   describe('closeSession', () => {
@@ -353,9 +445,34 @@ describe('vendorDirectorySessionQueries', () => {
       expect(closed).not.toBeNull();
       expect(closed.status).toBe(VENDOR_DIRECTORY_SESSION_STATUS.CLOSED);
     });
+
+    test('does not report logout complete when configured storage rejects the closure', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'rows').mockResolvedValue([{
+        id: 'sess-close-durable-fail',
+        user_uuid: 'u-close-fail',
+        email: 'close-fail@example.com',
+        status: VENDOR_DIRECTORY_SESSION_STATUS.ACTIVE,
+        login_at: new Date().toISOString(),
+      }]);
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('D1 unavailable'));
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(vendorDirectorySessionQueries.closeSession('sess-close-durable-fail'))
+        .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+    });
   });
 
   describe('listSessionHistory', () => {
+    test('does not return a successful in-memory history report when configured storage fails', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'rows').mockRejectedValue(new Error('D1 unavailable'));
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(vendorDirectorySessionQueries.listSessionHistory())
+        .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+    });
+
     test('queries DB with all filter conditions and pagination', async () => {
       jest.spyOn(pool, 'rows')
         .mockResolvedValueOnce([{ total: 1 }]) // count
@@ -425,6 +542,15 @@ describe('vendorDirectorySessionQueries', () => {
   });
 
   describe('reconcileAbandonedSessions', () => {
+    test('fails the configured reconciliation instead of reporting memory-only cleanup as durable', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'rows').mockRejectedValue(new Error('D1 unavailable'));
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(vendorDirectorySessionQueries.reconcileAbandonedSessions())
+        .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
+    });
+
     test('reconciles stale active sessions in DB and memory', async () => {
       const now = Date.now();
       const staleLoginIso = new Date(now - 600000).toISOString();
@@ -525,7 +651,7 @@ describe('vendorDirectorySessionQueries', () => {
 
     test('handles table DDL failure gracefully and logs warning', async () => {
       jest.spyOn(pool, 'query').mockRejectedValue(new Error('DDL restricted'));
-      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
       await expect(vendorDirectorySessionQueries.ensureVendorDirectorySessionsTable()).resolves.not.toThrow();
       expect(warnSpy).toHaveBeenCalled();

@@ -218,10 +218,10 @@ function generateStandardRFQEmail(rfq, vendor) {
   };
 }
 
-function generateVendorOnboardingEmail(vendor, isExisting = false, tempPassword = 'Procucev#2026!Vendor') {
+function generateVendorOnboardingEmail(vendor) {
   const frontendUrl = getPublicFrontendUrl();
   const logoUrl = getLogoUrl();
-  const subject = `Welcome to Procucev Enterprise Supplier Network - Onboarding & Credentials`;
+  const subject = `Welcome to Procucev Enterprise Supplier Network - Onboarding Instructions`;
   const portalUrl = `${frontendUrl}/login`;
 
   const htmlBody = `
@@ -248,10 +248,10 @@ function generateVendorOnboardingEmail(vendor, isExisting = false, tempPassword 
               <p>Your enterprise profile for <strong>${vendor.name}</strong> has been registered on the Procucev platform.</p>
               
               <div style="background: #f8fafc; padding: 16px; border-radius: 6px; border: 1px solid #cbd5e1; margin: 20px 0; box-sizing: border-box;">
-                <h4 style="margin: 0 0 10px 0; color: #0f172a;">Your Access Credentials:</h4>
+                <h4 style="margin: 0 0 10px 0; color: #0f172a;">Portal Access:</h4>
                 <p style="margin: 4px 0;"><strong>Portal URL:</strong> <a href="${portalUrl}">${portalUrl}</a></p>
                 <p style="margin: 4px 0;"><strong>Login Email:</strong> ${vendor.email}</p>
-                <p style="margin: 4px 0;"><strong>Temporary Password:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${tempPassword}</code></p>
+                <p style="margin: 4px 0;"><strong>Sign-in:</strong> Use your registered email and follow the verification steps shown on the portal.</p>
               </div>
 
               <div style="text-align: center; margin: 24px 0;">
@@ -276,7 +276,6 @@ function generateVendorOnboardingEmail(vendor, isExisting = false, tempPassword 
     recipientName: vendor.contactPerson || 'Vendor Partner',
     vendorName: vendor.name,
     subject,
-    tempPassword,
     htmlBody,
     sentAt: new Date().toISOString(),
   };

@@ -2,6 +2,8 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import AuditLog from '@/app/admin/audit-log';
 import InfraControl from '@/app/admin/infra-control';
+import { logger } from '@/lib/logger';
+import type { AuditLogEntry, AuditVerificationReport } from '@/lib/types';
 import { AppProvider } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 
@@ -38,10 +40,46 @@ function routeInfraFetch(overrides: Record<string, unknown> = {}) {
   });
 }
 
+function routeAuditFetch(report: AuditVerificationReport, auditLogs: AuditLogEntry[]) {
+  (global.fetch as jest.Mock).mockImplementation((url: string) => {
+    if (String(url).includes('/api/audit/verify')) {
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, report }) });
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          isConfigured: true,
+          isConnected: true,
+          provider: 'local_postgres',
+          providerLabel: 'Dedicated / Local PostgreSQL Cluster',
+          latencyMs: 12,
+          tablesCount: 8,
+          totalRecords: {},
+          auditLogs,
+        },
+      }),
+    });
+  });
+}
+
 describe('Admin Components (AuditLog & InfraControl)', () => {
+  const originalLoggerRemoteSyncEnabled = logger.isRemoteSyncEnabled;
+
+  afterAll(() => {
+    logger.isRemoteSyncEnabled = originalLoggerRemoteSyncEnabled;
+    logger.clearLogs();
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
+    logger.isRemoteSyncEnabled = false;
+    logger.clearLogs();
     (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
       json: async () => ({
         success: true,
         data: {
@@ -85,6 +123,14 @@ describe('Admin Components (AuditLog & InfraControl)', () => {
             },
           ],
         },
+        report: {
+          valid: true,
+          complete: true,
+          source: 'persisted',
+          expectedCount: 24,
+          verifiedCount: 24,
+          compromisedEntries: [],
+        },
         message: 'Success',
       }),
     });
@@ -96,7 +142,7 @@ describe('Admin Components (AuditLog & InfraControl)', () => {
       renderWithProvider(<AuditLog onBackToInfra={onBack} />);
 
       await waitFor(() => {
-        expect(screen.getByText(/Immutable Compliance Audit Trail/i)).toBeInTheDocument();
+        expect(screen.getByText(/Enterprise Audit Trail/i)).toBeInTheDocument();
         expect(screen.getByText(/Dispatched RFQ-2026-0881/i)).toBeInTheDocument();
       });
 
@@ -126,8 +172,10 @@ describe('Admin Components (AuditLog & InfraControl)', () => {
       fireEvent.click(backBtn);
       expect(onBack).toHaveBeenCalled();
 
-      const exportBtn = screen.getByRole('button', { name: /Export Immutable CSV/i });
-      fireEvent.click(exportBtn);
+      const exportLink = screen.getByRole('link', { name: /Export Visible CSV/i });
+      expect(exportLink).toHaveAttribute('download', 'audit-trail.csv');
+      expect(exportLink).toHaveAttribute('href', expect.stringContaining('data:text/csv'));
+      expect(screen.getAllByText('VERIFIED').length).toBeGreaterThan(0);
     });
 
     test('opens detail modal on log row click and copies SHA signature', async () => {
@@ -146,14 +194,16 @@ describe('Admin Components (AuditLog & InfraControl)', () => {
       const logText = screen.getByText(/Dispatched RFQ-2026-0881/i);
       fireEvent.click(logText);
 
-      expect(screen.getByText(/Cryptographic Signature Verification Stamp/i)).toBeInTheDocument();
+      expect(screen.getByText(/Audit Entry Details/i)).toBeInTheDocument();
 
-      const copyBtn = screen.getByTitle('Copy Hash');
-      fireEvent.click(copyBtn);
+      const copyBtn = screen.getByRole('button', { name: 'Copy Hash' });
+      await act(async () => {
+        fireEvent.click(copyBtn);
+      });
       expect(navigator.clipboard.writeText).toHaveBeenCalled();
 
-      const closeBtn = screen.getByRole('button', { name: /Close/i });
-      fireEvent.click(closeBtn);
+      const closeButtons = screen.getAllByRole('button', { name: /Close/i });
+      fireEvent.click(closeButtons[closeButtons.length - 1]);
     });
 
     test('closes signature modal via X button', async () => {
@@ -168,6 +218,140 @@ describe('Admin Components (AuditLog & InfraControl)', () => {
 
       const xBtn = screen.getByText('✕');
       fireEvent.click(xBtn);
+    });
+
+    test('does not label cached rows verified when persisted verification is unavailable', async () => {
+      (global.fetch as jest.Mock).mockImplementation((url: string) => {
+        if (String(url).includes('/api/audit/verify')) {
+          return Promise.resolve({ ok: false, status: 503, json: async () => ({ success: false, error: 'Database migration is required.' }) });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { isConfigured: true, isConnected: true, totalRecords: {}, auditLogs: [
+            { id: 'audit-001', timestamp: '2026-08-29 14:30:22 UTC', user: 'VP Procurement Manager', action: 'Persisted check pending', shaSignature: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' },
+          ] } }),
+        });
+      });
+
+      renderWithProvider(<AuditLog onBackToInfra={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('NOT VERIFIED')).toBeInTheDocument();
+        expect(screen.getByText('Database migration is required.')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('VERIFIED')).not.toBeInTheDocument();
+    });
+
+    test('shows persisted integrity issues, missing audit fields, and clipboard recovery', async () => {
+      const issueReport: AuditVerificationReport = {
+        valid: false,
+        complete: true,
+        source: 'persisted',
+        expectedCount: null,
+        verifiedCount: 1,
+        compromisedEntries: [{ id: 'audit-damaged', index: 0, reason: 'Hash mismatch' }],
+      };
+      const issueEntry: AuditLogEntry = {
+        id: 'audit-damaged',
+        timestamp: '2026-11-05 00:00:00 UTC',
+        action: 'Damaged audit record',
+        shaSignature: 'broken-signature',
+      };
+      routeAuditFetch(issueReport, [issueEntry]);
+      const clipboardErrorSpy = jest.spyOn(logger, 'error');
+      Object.assign(navigator, {
+        clipboard: { writeText: jest.fn().mockRejectedValue(new Error('clipboard blocked')) },
+      });
+
+      renderWithProvider(<AuditLog onBackToInfra={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('INTEGRITY ISSUE')).toBeInTheDocument();
+        expect(screen.getByText(/1 integrity issue\(s\)/i)).toBeInTheDocument();
+        expect(screen.getByText('Unknown')).toBeInTheDocument();
+        expect(screen.getByText('identity')).toBeInTheDocument();
+      });
+      expect(screen.getByText(/Total Recorded Events:/).parentElement).toHaveTextContent('1');
+
+      fireEvent.click(screen.getByText('Damaged audit record'));
+      expect(screen.getByText('Not available')).toBeInTheDocument();
+      expect(screen.getByText(/failed verification/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Copy Hash' }));
+      await waitFor(() => expect(clipboardErrorSpy).toHaveBeenCalledWith(
+        'Clipboard access failed while copying an audit signature',
+        expect.any(Object),
+        'AUDIT_VERIFICATION'
+      ));
+      clipboardErrorSpy.mockRestore();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Verify Again' }));
+      await waitFor(() => expect((global.fetch as jest.Mock).mock.calls.filter(([url]) => String(url).includes('/api/audit/verify')).length).toBeGreaterThan(1));
+    });
+
+    test('shows an incomplete in-memory report without claiming rows are verified', async () => {
+      const incompleteReport: AuditVerificationReport = {
+        valid: null,
+        complete: false,
+        source: 'in_memory',
+        expectedCount: null,
+        verifiedCount: 0,
+        compromisedEntries: [{ id: null, index: 0, reason: 'Only process cache is available.' }],
+      };
+      routeAuditFetch(incompleteReport, [{
+        id: 'audit-local',
+        timestamp: '2026-11-05 00:00:00 UTC',
+        userEmail: 'buyer@example.test',
+        action: 'Cached audit record',
+        shaSignature: 'cached-signature',
+      }]);
+
+      renderWithProvider(<AuditLog onBackToInfra={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Verification is incomplete: The full persisted audit chain has not been verified/i)).toBeInTheDocument();
+        expect(screen.getByText('NOT VERIFIED')).toBeInTheDocument();
+        expect(screen.getByText('buyer@example.test')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByText('Cached audit record'));
+      expect(screen.getByText(/has not been confirmed by a complete persisted hash-chain verification/i)).toBeInTheDocument();
+    });
+
+    test('ignores late verification success and failure after the page unmounts', async () => {
+      let resolveSuccess: ((response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void) | undefined;
+      (global.fetch as jest.Mock).mockImplementation((url: string) => String(url).includes('/api/audit/verify')
+        ? new Promise((resolve) => { resolveSuccess = resolve; })
+        : Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: { auditLogs: [] } }) }));
+      const successView = renderWithProvider(<AuditLog onBackToInfra={jest.fn()} />);
+      await waitFor(() => expect(resolveSuccess).toBeDefined());
+      successView.unmount();
+      await act(async () => {
+        resolveSuccess?.({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            report: {
+              valid: true,
+              complete: true,
+              source: 'persisted',
+              expectedCount: 0,
+              verifiedCount: 0,
+              compromisedEntries: [],
+            },
+          }),
+        });
+      });
+
+      let rejectFailure: ((error: Error) => void) | undefined;
+      (global.fetch as jest.Mock).mockImplementation((url: string) => String(url).includes('/api/audit/verify')
+        ? new Promise((_resolve, reject) => { rejectFailure = reject; })
+        : Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: { auditLogs: [] } }) }));
+      const failureView = renderWithProvider(<AuditLog onBackToInfra={jest.fn()} />);
+      await waitFor(() => expect(rejectFailure).toBeDefined());
+      failureView.unmount();
+      await act(async () => {
+        rejectFailure?.(new Error('late verification failure'));
+      });
     });
   });
 
@@ -409,6 +593,16 @@ describe('Admin Components (AuditLog & InfraControl)', () => {
     test('handles fetchDbHealth catch branch when fetch fails', async () => {
       (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('Fatal DB health error'));
       renderWithProvider(<InfraControl onNavigateToAuditLog={jest.fn()} />);
+      await waitFor(() => {
+        expect(logger.buffer).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            level: 'ERROR',
+            category: 'INFRASTRUCTURE',
+            message: 'Failed to fetch database status',
+            metadata: expect.objectContaining({ error: expect.any(Error) }),
+          }),
+        ]));
+      });
     });
   });
 });

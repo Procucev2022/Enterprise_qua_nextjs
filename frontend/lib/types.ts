@@ -728,12 +728,48 @@ export interface VendorOpportunity {
 export interface AuditLogEntry {
   id: string;
   timestamp: string;
-  user: string;
+  user?: string;
+  userEmail?: string;
   action: string;
   rfqNumber?: string;
   shaSignature: string;
-  status: 'VERIFIED' | 'TAMPER_CHECK_OK';
-  ipAddress: string;
+  previousHash?: string;
+  status?: 'VERIFIED' | 'TAMPER_CHECK_OK';
+  ipAddress?: string;
+}
+
+export type EnterpriseInquiryStatus = 'NEW' | 'CONTACTED' | 'IN_DISCUSSION' | 'CONTRACT_SIGNED' | 'CLOSED';
+
+export interface EnterpriseInquiry {
+  id: string;
+  companyName: string;
+  email: string;
+  mobile: string;
+  buyerAccountId?: string | null;
+  notes?: string;
+  status: EnterpriseInquiryStatus;
+  contactedBy?: string;
+  contactedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface AuditVerificationIssue {
+  id: string | null;
+  index: number;
+  reason: string;
+}
+
+export interface AuditVerificationReport {
+  valid: boolean | null;
+  complete: boolean;
+  source: 'persisted' | 'in_memory';
+  expectedCount: number | null;
+  verifiedCount: number;
+  compromisedEntries: AuditVerificationIssue[];
+  timestamp?: string;
+  chainRevision?: number;
+  reason?: string;
 }
 
 export interface AzureServiceHealth {
@@ -980,7 +1016,6 @@ export interface VendorEntry {
   isExistingInDatabase?: boolean;
   onboardingEmailStatus?: 'sent' | 'pending' | 'delivered' | 'failed' | 'account_exists';
   onboardingEmailDispatchedAt?: string;
-  tempPassword?: string;
   firstLoginCompleted?: boolean;
   reminderCadence?: 'every_3_days';
   nextReminderDate?: string;
@@ -1181,7 +1216,6 @@ export interface HistoricalPurchaseVendorRecord {
   secondSetMinorCategories: string[]; // 2nd Set: Minor Categories
   secondSetSecondaryMajors?: string[]; // 2nd Set: Secondary Major Categories
   isExistingInDatabase?: boolean;
-  tempPassword?: string;
 }
 
 export interface IngestionFailedEmail {
@@ -1197,8 +1231,10 @@ export interface IngestionSummary {
   totalProcessed: number;
   mappedCount: number;
   mappedEmailsSent: number;
+  mappedEmailsQueued: number;
   unmappedCount: number;
   unmappedEmailsSent: number;
+  unmappedEmailsQueued: number;
   failedEmailCount: number;
   failedEmails: IngestionFailedEmail[];
   skippedCount?: number;
@@ -1705,7 +1741,6 @@ export interface VendorOnboardingEmailPayload {
   isExistingInDatabase: boolean;
   subject: string;
   username: string;
-  tempPassword: string;
   authInstructions: string;
   profileUpdateInstructions: string;
   categoryUpdateInstructions: string;

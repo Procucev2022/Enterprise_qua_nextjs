@@ -3,18 +3,20 @@
  *
  * The primary suite renders the happy path: a populated server list, the status tabs,
  * a search and one note save. This file drives what it leaves out: the cold start (the
- * bundled starter lead) and the merge with cached leads, malformed server and cache
- * payloads, the refresh action, the search clear controls, status changes from the list
- * and from the dialog (server saved, server unreachable, unusable server answer), the
+ * empty server state, malformed server payloads, the refresh action, the search clear
+ * controls, status changes from the list and from the dialog (server saved, server
+ * unreachable, unusable server answer), the
  * "last handled by" rules, note saving, and the fallbacks for leads with a missing
  * timestamp or an unrecognised status.
  */
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import EnterpriseInquiriesConsole, { type EnterpriseInquiry } from '@/app/category-manager/enterprise-inquiries';
+import EnterpriseInquiriesConsole from '@/app/category-manager/enterprise-inquiries';
 import { formatIndianDateTime } from '@/lib/constants';
 import { useApp } from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import type { EnterpriseInquiry } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -51,13 +53,8 @@ const mockShowToast = jest.fn();
 const fetchMock = jest.fn();
 const originalFetch = global.fetch;
 
-const STORAGE_KEY = 'procucev_enterprise_inquiries';
 const LIST_URL = '/api/enterprise-inquiries?limit=100';
-const SESSION_NAME = 'Vikas Sharma';
-const DEFAULT_HANDLER = 'Category Manager';
-const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const SEED_COMPANY = 'Procucev Navin Buyer';
-const SEED_HEADING = /^Procucev\s+Navin Buyer$/;
+const AUTHENTICATED_ACTOR = 'Verified Manager';
 
 // The console hard-codes its copy (none of it lives in UI_STRINGS), so it is asserted literally.
 const COPY = {
@@ -187,10 +184,6 @@ const ROW_WITHOUT_ID = {
   createdAt: '2026-10-12T08:00:00Z',
 };
 
-function setSession(session: { name?: string } | null): void {
-  mockUseApp.mockReturnValue({ showToast: mockShowToast, currentUserSession: session });
-}
-
 const okJson = (payload: unknown) => ({ ok: true, status: 200, json: async () => payload });
 
 const unreadableJson = () => ({
@@ -240,10 +233,6 @@ function patchRequests(): PatchRequest[] {
     }));
 }
 
-function cachedLeads(): EnterpriseInquiry[] {
-  return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as EnterpriseInquiry[];
-}
-
 /** Company names of the listed leads, top to bottom. Only valid while the dialog is closed. */
 function headingNames(): string[] {
   return screen
@@ -260,75 +249,56 @@ async function renderLoaded(): Promise<User> {
   render(<EnterpriseInquiriesConsole />);
   // The refresh control stays disabled and reads "Refreshing..." until the first load settles.
   await waitFor(() => {
-    expect(fetchMock).toHaveBeenCalledWith(LIST_URL);
+    expect(fetchMock).toHaveBeenCalledWith(
+      LIST_URL,
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer test-session-token' },
+      })
+    );
     expect(screen.getByRole('button', { name: COPY.refresh })).toBeEnabled();
   }, { timeout: 3000 });
   return user;
 }
 
 describe('EnterpriseInquiriesConsole coverage companion', () => {
-  let storageSpy: jest.SpyInstance | undefined;
-
   beforeEach(() => {
     mockShowToast.mockClear();
     fetchMock.mockReset();
     global.fetch = fetchMock as unknown as typeof fetch;
-    localStorage.removeItem(STORAGE_KEY);
-    setSession({ name: SESSION_NAME });
+    mockUseApp.mockReturnValue({ showToast: mockShowToast, currentUserSession: { name: 'Vikas Sharma' } });
   });
 
   afterEach(() => {
-    storageSpy?.mockRestore();
-    storageSpy = undefined;
     global.fetch = originalFetch;
-    localStorage.removeItem(STORAGE_KEY);
   });
 
   describe('loading leads', () => {
-    it('falls back to the bundled starter lead and caches it when the server has no leads', async () => {
+    it('shows an empty state when the database has no inquiry rows', async () => {
       routeFetch({ list: () => listing([]) });
       await renderLoaded();
 
-      expect(screen.getByRole('heading', { name: SEED_HEADING })).toBeInTheDocument();
+      expect(screen.getByText(COPY.emptyTitle)).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(kpi(KPI.total)).toBe('1');
-      expect(kpi(KPI.pending)).toBe('1');
-      expect(cachedLeads()).toHaveLength(1);
+      expect(kpi(KPI.total)).toBe('0');
+      expect(kpi(KPI.pending)).toBe('0');
     });
 
-    it('merges cached leads with the starter lead, newest first, when the server is unreachable', async () => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([CACHED_OLDER, CACHED_NEWER]));
+    it('does not display stale browser records when the database is unreachable', async () => {
+      localStorage.setItem('procucev_enterprise_inquiries', JSON.stringify([CACHED_OLDER, CACHED_NEWER]));
       routeFetch({ list: dropped });
       await renderLoaded();
 
-      expect(headingNames()).toEqual([CACHED_NEWER.companyName, SEED_COMPANY, CACHED_OLDER.companyName]);
-      expect(cachedLeads().map((cached) => cached.id)).toEqual([
-        CACHED_NEWER.id,
-        expect.any(String),
-        CACHED_OLDER.id,
-      ]);
+      expect(screen.queryByText(CACHED_OLDER.companyName)).not.toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.enterpriseInquiry.loadErrorMessage);
+      expect(screen.queryByText(CACHED_NEWER.companyName)).not.toBeInTheDocument();
     });
 
-    it('skips unusable cached entries and keeps the valid cached lead', async () => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([null, ROW_WITHOUT_ID, CACHED_OLDER]));
-      routeFetch({ list: () => listing([]) });
-      await renderLoaded();
-
-      expect(headingNames()).toEqual([SEED_COMPANY, CACHED_OLDER.companyName]);
-      expect(screen.queryByText(ROW_WITHOUT_ID.companyName)).not.toBeInTheDocument();
-    });
-
-    it('prefers the server copy of a lead, keeps cached-only leads and drops server rows without an id', async () => {
-      const staleCopy = { ...BRAVO, companyName: 'Stale Cached Bravo' };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([staleCopy, CACHED_NEWER]));
+    it('drops unusable server rows and shows only database records with ids', async () => {
       routeFetch({ list: () => listing([null, ROW_WITHOUT_ID, ALPHA, BRAVO]) });
       await renderLoaded();
 
-      expect(headingNames()).toEqual([CACHED_NEWER.companyName, ALPHA.companyName, BRAVO.companyName]);
-      expect(screen.queryByText('Stale Cached Bravo')).not.toBeInTheDocument();
+      expect(headingNames()).toEqual([ALPHA.companyName, BRAVO.companyName]);
       expect(screen.queryByText(ROW_WITHOUT_ID.companyName)).not.toBeInTheDocument();
-      expect(screen.queryByRole('heading', { name: SEED_HEADING })).not.toBeInTheDocument();
-      expect(cachedLeads().map((cached) => cached.id)).toEqual([CACHED_NEWER.id, ALPHA.id, BRAVO.id]);
     });
 
     it.each([
@@ -339,40 +309,12 @@ describe('EnterpriseInquiriesConsole coverage companion', () => {
       },
       { label: 'is an empty body', answer: () => Promise.resolve(okJson(null)) },
       { label: 'cannot be parsed', answer: () => Promise.resolve(unreadableJson()) },
-    ])('ignores a server answer that $label and shows the starter lead', async ({ answer }) => {
+    ])('reports a server answer that $label instead of inventing or merging leads', async ({ answer }) => {
       routeFetch({ list: answer });
       await renderLoaded();
 
-      expect(headingNames()).toEqual([SEED_COMPANY]);
       expect(screen.queryByText(ALPHA.companyName)).not.toBeInTheDocument();
-    });
-
-    it.each([
-      { label: 'an object rather than a list', stored: JSON.stringify({ id: 'inq-lone' }) },
-      { label: 'text that is not valid JSON', stored: 'not-json{' },
-    ])('ignores a cached value that is $label and rewrites the cache from the server', async ({ stored }) => {
-      localStorage.setItem(STORAGE_KEY, stored);
-      routeFetch({ list: () => listing([ALPHA]) });
-      await renderLoaded();
-
-      expect(headingNames()).toEqual([ALPHA.companyName]);
-      expect(cachedLeads().map((cached) => cached.id)).toEqual([ALPHA.id]);
-    });
-
-    it('still lists leads and saves changes when the browser refuses to store the cache', async () => {
-      storageSpy = jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
-      });
-      routeFetch({ list: () => listing([ALPHA]), patch: echoPatch() });
-      const user = await renderLoaded();
-      expect(headingNames()).toEqual([ALPHA.companyName]);
-
-      const status = screen.getByRole('combobox');
-      await user.selectOptions(status, 'CONTACTED');
-
-      await waitFor(() => expect(kpi(KPI.pending)).toBe('0'));
-      expect(status).toHaveValue('CONTACTED');
-      expect(mockShowToast).toHaveBeenCalledWith(COPY.toastTitle, COPY.toastMessage, 'success');
+      expect(screen.getByRole('alert')).toHaveTextContent(UI_STRINGS.enterpriseInquiry.loadErrorMessage);
     });
   });
 
@@ -606,7 +548,7 @@ describe('EnterpriseInquiriesConsole coverage companion', () => {
   });
 
   describe('changing a lead status', () => {
-    it('sends the status and handler to an encoded URL, then shows the record the server saved', async () => {
+    it('sends the status to an encoded URL, then shows the record the server saved', async () => {
       const spaced: EnterpriseInquiry = { ...ALPHA, id: 'inq/alpha 1' };
       routeFetch({
         list: () => listing([spaced, BRAVO]),
@@ -623,8 +565,11 @@ describe('EnterpriseInquiriesConsole coverage companion', () => {
       expect(patchRequests()).toEqual([
         {
           url: '/api/enterprise-inquiries/inq%2Falpha%201',
-          headers: { 'Content-Type': 'application/json' },
-          body: { status: 'CONTACTED', contactedBy: SESSION_NAME },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer test-session-token',
+          },
+          body: { status: 'CONTACTED' },
         },
       ]);
       expect(kpi(KPI.talks)).toBe('2');
@@ -632,33 +577,22 @@ describe('EnterpriseInquiriesConsole coverage companion', () => {
       expect(screen.getByText(COPY.contactedBadge, { selector: 'span' })).toBeInTheDocument();
       expect(mockShowToast).toHaveBeenCalledTimes(1);
       expect(mockShowToast).toHaveBeenCalledWith(COPY.toastTitle, COPY.toastMessage, 'success');
-      expect(cachedLeads().find((cached) => cached.id === spaced.id)).toMatchObject({
-        status: 'CONTACTED',
-        contactedBy: SESSION_NAME,
-        contactedAt: '2026-10-16T10:00:00Z',
-      });
     });
 
-    it('applies the change locally and credits the signed-in handler when the server cannot be reached', async () => {
+    it('keeps the persisted record unchanged and reports an error when the server cannot be reached', async () => {
       routeFetch({ list: () => listing([ALPHA, BRAVO]), patch: dropped });
       const user = await renderLoaded();
 
       const [alphaStatus] = screen.getAllByRole('combobox');
       await user.selectOptions(alphaStatus, 'IN_DISCUSSION');
-      await waitFor(() => expect(kpi(KPI.talks)).toBe('2'));
+      await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.enterpriseInquiry.updateErrorTitle,
+        UI_STRINGS.enterpriseInquiry.updateErrorMessage,
+        'warning'
+      ));
 
-      expect(alphaStatus).toHaveValue('IN_DISCUSSION');
-      expect(kpi(KPI.pending)).toBe('0');
-      expect(mockShowToast).toHaveBeenCalledWith(COPY.toastTitle, COPY.toastMessage, 'success');
-      expect(cachedLeads().find((cached) => cached.id === ALPHA.id)).toMatchObject({
-        status: 'IN_DISCUSSION',
-        contactedBy: SESSION_NAME,
-        contactedAt: expect.stringMatching(ISO_TIMESTAMP),
-        updatedAt: expect.stringMatching(ISO_TIMESTAMP),
-      });
-
-      await user.click(screen.getAllByRole('button', { name: COPY.manage })[0]);
-      expect(screen.getByText(COPY.lastHandledBy).parentElement).toHaveTextContent(SESSION_NAME);
+      expect(alphaStatus).toHaveValue('NEW');
+      expect(kpi(KPI.pending)).toBe('1');
     });
 
     it.each([
@@ -668,55 +602,47 @@ describe('EnterpriseInquiriesConsole coverage companion', () => {
       },
       { label: 'has no record', answer: () => Promise.resolve(okJson({ success: true })) },
       { label: 'cannot be parsed', answer: () => Promise.resolve(unreadableJson()) },
-    ])('keeps the change locally when the save answer $label', async ({ answer }) => {
+    ])('keeps the database value visible and reports an error when the save answer $label', async ({ answer }) => {
       routeFetch({ list: () => listing([ALPHA]), patch: answer });
       const user = await renderLoaded();
 
       const status = screen.getByRole('combobox');
       await user.selectOptions(status, 'CLOSED');
-      await waitFor(() => expect(kpi(KPI.pending)).toBe('0'));
+      await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.enterpriseInquiry.updateErrorTitle,
+        UI_STRINGS.enterpriseInquiry.updateErrorMessage,
+        'warning'
+      ));
 
-      expect(status).toHaveValue('CLOSED');
+      expect(status).toHaveValue('NEW');
       expect(patchRequests()).toHaveLength(1);
-      expect(mockShowToast).toHaveBeenCalledWith(COPY.toastTitle, COPY.toastMessage, 'success');
-      expect(cachedLeads()[0]).toMatchObject({
-        id: ALPHA.id,
-        status: 'CLOSED',
-        contactedBy: SESSION_NAME,
-        updatedAt: expect.stringMatching(ISO_TIMESTAMP),
-      });
     });
 
-    it.each([
-      { label: 'server saved the change', session: null, patch: echoPatch() },
-      { label: 'server was unreachable', session: { name: '' }, patch: dropped },
-    ])('credits the default handler when the session has no name and the $label', async ({ session, patch }) => {
-      setSession(session);
-      routeFetch({ list: () => listing([ALPHA]), patch });
+    it('uses the actor attribution returned by the authenticated server', async () => {
+      routeFetch({ list: () => listing([ALPHA]), patch: echoPatch({ contactedBy: AUTHENTICATED_ACTOR }) });
       const user = await renderLoaded();
 
       await user.selectOptions(screen.getByRole('combobox'), 'CONTACTED');
       await waitFor(() => expect(kpi(KPI.talks)).toBe('1'));
 
-      expect(patchRequests()[0].body).toEqual({ status: 'CONTACTED', contactedBy: DEFAULT_HANDLER });
+      expect(patchRequests()[0].body).toEqual({ status: 'CONTACTED' });
       await user.click(screen.getByRole('button', { name: COPY.manage }));
-      expect(screen.getByText(COPY.lastHandledBy).parentElement).toHaveTextContent(DEFAULT_HANDLER);
+      expect(screen.getByText(COPY.lastHandledBy).parentElement).toHaveTextContent(AUTHENTICATED_ACTOR);
     });
 
-    it('keeps the earlier handler when a lead is moved back to New while offline', async () => {
+    it('keeps the earlier handler when moving a lead back to New fails on the server', async () => {
       routeFetch({ list: () => listing([BRAVO]), patch: dropped });
       const user = await renderLoaded();
 
       const status = screen.getByRole('combobox');
       await user.selectOptions(status, 'NEW');
-      await waitFor(() => expect(kpi(KPI.pending)).toBe('1'));
+      await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.enterpriseInquiry.updateErrorTitle,
+        UI_STRINGS.enterpriseInquiry.updateErrorMessage,
+        'warning'
+      ));
 
-      expect(status).toHaveValue('NEW');
-      expect(cachedLeads()[0]).toMatchObject({
-        status: 'NEW',
-        contactedBy: BRAVO.contactedBy,
-        contactedAt: BRAVO.contactedAt,
-      });
+      expect(status).toHaveValue('IN_DISCUSSION');
       await user.click(screen.getByRole('button', { name: COPY.manage }));
       expect(screen.getByText(COPY.lastHandledBy).parentElement).toHaveTextContent('Asha Rao');
     });
@@ -742,7 +668,7 @@ describe('EnterpriseInquiriesConsole coverage companion', () => {
       expect(screen.getByText(COPY.lastHandledBy).parentElement).toHaveTextContent('Billing Desk');
       expect(screen.getByText(COPY.modalSubtitle)).toBeInTheDocument();
       expect(patchRequests().map((request) => request.body)).toEqual([
-        { status: 'CONTRACT_SIGNED', contactedBy: SESSION_NAME },
+        { status: 'CONTRACT_SIGNED' },
       ]);
     });
 
@@ -776,14 +702,14 @@ describe('EnterpriseInquiriesConsole coverage companion', () => {
 
       expect(await screen.findByRole('button', { name: COPY.saving })).toBeDisabled();
       expect(patchRequests().map((request) => request.body)).toEqual([
-        { notes: 'Agreed 15% volume rebate.', contactedBy: SESSION_NAME },
+        { notes: 'Agreed 15% volume rebate.' },
       ]);
 
       await act(async () => {
         pending.resolve(
           okJson({
             success: true,
-            data: { id: ALPHA.id, notes: 'Agreed 15% volume rebate.', contactedBy: SESSION_NAME },
+            data: { id: ALPHA.id, notes: 'Agreed 15% volume rebate.', contactedBy: AUTHENTICATED_ACTOR },
           })
         );
       });
@@ -794,7 +720,7 @@ describe('EnterpriseInquiriesConsole coverage companion', () => {
       expect(mockShowToast).toHaveBeenCalledWith(COPY.toastTitle, COPY.toastMessage, 'success');
     });
 
-    it('saves notes locally without crediting a handler when the server cannot be reached', async () => {
+    it('leaves notes unchanged and shows a retryable error when the server cannot be reached', async () => {
       routeFetch({ list: () => listing([CHARLIE]), patch: dropped });
       const user = await renderLoaded();
       expect(screen.queryByText(COPY.internalNotes)).not.toBeInTheDocument();
@@ -805,12 +731,15 @@ describe('EnterpriseInquiriesConsole coverage companion', () => {
       });
       await user.click(screen.getByRole('button', { name: COPY.saveNotes }));
 
-      expect(await screen.findByText(COPY.internalNotes)).toBeInTheDocument();
-      expect(screen.getByText(COPY.internalNotes).parentElement).toHaveTextContent('Call back on Monday.');
+      expect(await screen.findByRole('button', { name: COPY.saveNotes })).toBeEnabled();
+      expect(screen.queryByText(COPY.internalNotes)).not.toBeInTheDocument();
       expect(screen.queryByText(COPY.lastHandledBy)).not.toBeInTheDocument();
-      expect(cachedLeads()[0]).toMatchObject({ id: CHARLIE.id, notes: 'Call back on Monday.' });
-      expect(cachedLeads()[0]).not.toHaveProperty('contactedBy');
-      expect(mockShowToast).toHaveBeenCalledWith(COPY.toastTitle, COPY.toastMessage, 'success');
+      expect(screen.getByLabelText(COPY.notesLabel)).toHaveValue('  Call back on Monday.  ');
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.enterpriseInquiry.updateErrorTitle,
+        UI_STRINGS.enterpriseInquiry.updateErrorMessage,
+        'warning'
+      );
     });
   });
 });

@@ -583,6 +583,7 @@ describe('ZOHO_SUBSCRIPTION_PRICING and ZOHO_BUYER_SUBSCRIPTION_PRICING proxies'
 });
 
 describe('unwrapAccountData and unlimited access helpers', () => {
+  const { logger } = require('../src/services/loggerService');
   const {
     unwrapAccountData,
     hasUnlimitedRfqAccess,
@@ -592,11 +593,17 @@ describe('unwrapAccountData and unlimited access helpers', () => {
   } = require('../src/config/constants');
 
   test('unwrapAccountData unwraps JSON raw string and raw object via hasUnlimitedRfqAccess', () => {
+    const warnSpy = jest.spyOn(logger, 'warn');
     expect(hasUnlimitedRfqAccess(null)).toBe(false);
     expect(hasUnlimitedRfqAccess('string')).toBe(false);
     expect(hasUnlimitedRfqAccess({ raw: '{"unlimitedRfqAccess":true}' })).toBe(true);
     expect(hasUnlimitedRfqAccess({ raw: 'invalid-json', isUnlimited: true })).toBe(true);
     expect(hasUnlimitedRfqAccess({ raw: { isUnlimited: true } })).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Buyer account raw payload was not valid JSON',
+      expect.objectContaining({ operation: 'unwrap-account-data' }),
+      'CONFIG_CONSTANTS'
+    );
   });
 
   test('hasUnlimitedRfqAccess detects all database flags', () => {
@@ -725,5 +732,13 @@ describe('parseSearchTokens', () => {
   test('parses semicolons, newlines, and space-separated emails', () => {
     expect(parseSearchTokens('a@b.com; c@d.com\r\ne@f.com')).toEqual(['a@b.com', 'c@d.com', 'e@f.com']);
     expect(parseSearchTokens('user1@x.com user2@y.com')).toEqual(['user1@x.com', 'user2@y.com']);
+  });
+});
+
+describe('persistence recovery messages', () => {
+  test('warns staff before retrying an email with an unconfirmed delivery state', () => {
+    const { PERSISTENCE_MESSAGES } = loadConstants();
+    expect(PERSISTENCE_MESSAGES.PAYMENT_DUES_DELIVERY_STATUS_FAILED)
+      .toContain('Check communication history before retrying.');
   });
 });

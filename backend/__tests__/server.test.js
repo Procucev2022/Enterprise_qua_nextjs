@@ -2,7 +2,13 @@ const request = require('supertest');
 const { EventEmitter } = require('events');
 const { app, bootstrapServer, installCrashHandlers } = require('../src/server');
 const dbPool = require('../src/db/pool');
+const storeService = require('../src/services/storeService');
+const eventOutboxService = require('../src/services/eventOutboxService');
+const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
 const { logger } = require('../src/services/loggerService');
+const emailGatewayService = require('../src/services/emailGatewayService');
+const zohoReconciliationService = require('../src/services/zohoReconciliationService');
+const dailyRfqReportService = require('../src/services/dailyRfqReportService');
 
 function restoreEnvVar(name, originalValue) {
   if (originalValue === undefined) delete process.env[name];
@@ -10,6 +16,20 @@ function restoreEnvVar(name, originalValue) {
 }
 
 describe('Server & Health Endpoints', () => {
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    jest.spyOn(emailGatewayService, 'startPolling').mockReturnValue({ started: false, reason: 'disabled in server tests' });
+    jest.spyOn(emailGatewayService, 'stopPolling').mockReturnValue(false);
+    jest.spyOn(zohoReconciliationService, 'startPolling').mockReturnValue({ started: false, reason: 'disabled in server tests' });
+    jest.spyOn(zohoReconciliationService, 'stopPolling').mockReturnValue(false);
+    jest.spyOn(dailyRfqReportService, 'startDailyReportScheduler').mockReturnValue({ started: false, reason: 'disabled in server tests' });
+    jest.spyOn(dailyRfqReportService, 'stopDailyReportScheduler').mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   test('GET /health should return 200 and system health metadata', async () => {
     const res = await request(app).get('/health');
     expect(res.statusCode).toBe(200);
@@ -43,6 +63,102 @@ describe('Server & Health Endpoints', () => {
     const server = await bootstrapServer(0);
     expect(server).toBeDefined();
     await new Promise((resolve) => server.close(resolve));
+    expect(emailGatewayService.stopPolling).toHaveBeenCalled();
+    expect(zohoReconciliationService.stopPolling).toHaveBeenCalled();
+    expect(dailyRfqReportService.stopDailyReportScheduler).toHaveBeenCalled();
+  });
+
+  test('scheduled RFQ closure logs sweep failures and clears its timer when the server closes', async () => {
+    const timerCallbacks = [];
+    const timer = { unref: jest.fn() };
+    const intervalSpy = jest.spyOn(global, 'setInterval').mockImplementation((callback, interval) => {
+      expect(interval).toBeGreaterThan(0);
+      timerCallbacks.push(callback);
+      return timer;
+    });
+    const clearIntervalSpy = jest.spyOn(global, 'clearInterval').mockImplementation(() => {});
+    const error = new Error('closure storage unavailable');
+    const chaserRecoveryError = new Error('chaser recovery unavailable');
+    const chaserDispatchError = new Error('chaser queue unavailable');
+    const comparisonRecoveryError = new Error('comparison recovery unavailable');
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockResolvedValue({
+      isConnected: true,
+      providerLabel: 'Test PostgreSQL',
+      database: 'test_db',
+      userCount: 0,
+      vendorCount: 0,
+      rfqCount: 0,
+      latencyMs: 1,
+    });
+    jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValue(undefined);
+    jest.spyOn(storeService, 'closeExpiredRFQsDurably').mockRejectedValue(error);
+    jest.spyOn(rfqChaserScheduler, 'recoverChasersOnBoot').mockRejectedValue(chaserRecoveryError);
+    jest.spyOn(rfqChaserScheduler, 'dispatchDueChaserJobs').mockRejectedValue(chaserDispatchError);
+    jest.spyOn(rfqChaserScheduler, 'recoverRFQComparisonJobsOnBoot').mockRejectedValue(comparisonRecoveryError);
+    jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockRejectedValue(error);
+    const loggerErrorSpy = jest.spyOn(logger, 'error');
+    const loggerWarnSpy = jest.spyOn(logger, 'warn');
+
+    const server = await bootstrapServer(0);
+    timerCallbacks[0]();
+    timerCallbacks[1]();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(timer.unref).toHaveBeenCalled();
+    expect(loggerErrorSpy).toHaveBeenCalledWith('Scheduled RFQ closure sweep failed', { error }, 'SERVER');
+    expect(loggerErrorSpy).toHaveBeenCalledWith(
+      'Failed to dispatch queued background events during startup', { error }, 'SERVER'
+    );
+    expect(loggerErrorSpy).toHaveBeenCalledWith(
+      'Failed to dispatch due chaser jobs during startup', { error: chaserDispatchError }, 'SERVER'
+    );
+    expect(loggerErrorSpy).toHaveBeenCalledWith(
+      'Scheduled chaser dispatch failed', { error: chaserDispatchError }, 'SERVER'
+    );
+    expect(loggerErrorSpy).toHaveBeenCalledWith('Scheduled event-outbox dispatch failed', { error }, 'SERVER');
+    expect(loggerWarnSpy).toHaveBeenCalledWith(
+      'Failed to recover chasers on boot', { error: chaserRecoveryError.message }, 'SERVER'
+    );
+    expect(loggerWarnSpy).toHaveBeenCalledWith(
+      'Failed to recover RFQ comparison notifications on boot', { error: comparisonRecoveryError.message }, 'SERVER'
+    );
+    await new Promise((resolve) => server.close(resolve));
+    expect(clearIntervalSpy).toHaveBeenCalledWith(timer);
+    intervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
+  });
+
+  test('bootstrapServer supports storage-backed dispatch with timer handles that cannot be unrefed', async () => {
+    const timerHandles = [{ id: 'closure' }, { id: 'outbox' }, { id: 'comparison' }];
+    const setIntervalSpy = jest.spyOn(global, 'setInterval').mockImplementation(() => timerHandles.shift());
+    const clearIntervalSpy = jest.spyOn(global, 'clearInterval').mockImplementation(() => {});
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockResolvedValue({ isConnected: true, providerLabel: 'test' });
+    jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValue(undefined);
+    jest.spyOn(storeService, 'closeExpiredRFQsDurably').mockResolvedValue([]);
+    jest.spyOn(rfqChaserScheduler, 'recoverChasersOnBoot').mockResolvedValue(undefined);
+    jest.spyOn(rfqChaserScheduler, 'dispatchDueChaserJobs').mockResolvedValue({ claimed: 0 });
+    jest.spyOn(rfqChaserScheduler, 'recoverRFQComparisonJobsOnBoot').mockResolvedValue(undefined);
+    const comparisonDispatch = jest.spyOn(rfqChaserScheduler, 'dispatchDueRFQComparisonJobs')
+      .mockResolvedValue({ claimed: 0, sent: 0, failed: 0 });
+    jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ claimed: 0, completed: 0 });
+
+    let server;
+    try {
+      server = await bootstrapServer(0);
+      expect(comparisonDispatch).toHaveBeenCalledTimes(1);
+      await new Promise((resolve) => server.close(resolve));
+      expect(clearIntervalSpy).toHaveBeenCalledWith({ id: 'closure' });
+      expect(clearIntervalSpy).toHaveBeenCalledWith({ id: 'outbox' });
+      expect(clearIntervalSpy).toHaveBeenCalledWith({ id: 'comparison' });
+      expect(setIntervalSpy).toHaveBeenCalledTimes(3);
+      expect(emailGatewayService.stopPolling).toHaveBeenCalled();
+      expect(zohoReconciliationService.stopPolling).toHaveBeenCalled();
+      expect(dailyRfqReportService.stopDailyReportScheduler).toHaveBeenCalled();
+    } finally {
+      if (server?.listening) await new Promise((resolve) => server.close(resolve));
+      jest.restoreAllMocks();
+    }
   });
 
   test('bootstrapServer survives a database health check that throws', async () => {
@@ -110,23 +226,74 @@ describe('Server & Health Endpoints', () => {
     // No server was started, so port 4000 is still free for the next test/file to use.
   });
 
-  test('module load: auto-starts when NODE_ENV is not "test" and AUTO_START_SERVER is true', () => {
+  test('module load: auto-starts when NODE_ENV is not "test" and AUTO_START_SERVER is true', async () => {
     const originalNodeEnv = process.env.NODE_ENV;
     const originalPort = process.env.PORT;
     const originalAutoStart = process.env.AUTO_START_SERVER;
+    const originalUnhandledListeners = new Set(process.listeners('unhandledRejection'));
+    const originalExceptionListeners = new Set(process.listeners('uncaughtException'));
+    const listen = jest.fn(() => ({ requestTimeout: 300000, headersTimeout: 330000 }));
+    const stopPolling = jest.fn();
+    const dispatchOutbox = jest.fn().mockResolvedValue({ claimed: 0, completed: 0 });
+
+    // Keep this module-load test isolated from developer credentials and real
+    // email, database, or Zoho services. It only needs to verify the startup
+    // branch reaches app.listen.
+    jest.doMock('../src/app', () => ({ listen }));
+    jest.doMock('../src/db/pool', () => ({
+      checkDatabaseHealth: jest.fn().mockResolvedValue({ isConnected: false, providerLabel: 'test', errorMessage: 'offline' }),
+      hasStorage: jest.fn().mockReturnValue(false),
+    }));
+    jest.doMock('../src/services/storeService', () => ({
+      hydrateFromDB: jest.fn().mockResolvedValue(),
+      closeExpiredRFQsDurably: jest.fn().mockResolvedValue([]),
+    }));
+    jest.doMock('../src/services/rfqChaserScheduler', () => ({
+      recoverChasersOnBoot: jest.fn().mockResolvedValue(),
+      dispatchDueChaserJobs: jest.fn().mockResolvedValue({ claimed: 0, sent: 0, failed: 0, skipped: 0 }),
+      recoverRFQComparisonJobsOnBoot: jest.fn().mockResolvedValue(),
+      dispatchDueRFQComparisonJobs: jest.fn().mockResolvedValue({ claimed: 0, sent: 0, failed: 0 }),
+    }));
+    jest.doMock('../src/services/eventOutboxService', () => ({
+      dispatchDueEventOutboxJobs: dispatchOutbox,
+    }));
+    jest.doMock('../src/services/emailGatewayService', () => ({
+      startPolling: jest.fn().mockReturnValue({ started: false, reason: 'disabled in test' }),
+      stopPolling,
+    }));
+    jest.doMock('../src/services/zohoReconciliationService', () => ({
+      startPolling: jest.fn().mockReturnValue({ started: false, reason: 'disabled in test' }),
+      stopPolling,
+    }));
 
     process.env.NODE_ENV = 'staging';
-    process.env.PORT = '0'; // ephemeral — can't collide with anything even though it's never explicitly closed
+    delete process.env.PORT;
     process.env.AUTO_START_SERVER = 'true';
 
     try {
       jest.isolateModules(() => {
         require('../src/server');
       });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(listen).toHaveBeenCalledWith(4000);
+      expect(dispatchOutbox).toHaveBeenCalledTimes(1);
     } finally {
       restoreEnvVar('NODE_ENV', originalNodeEnv);
       restoreEnvVar('PORT', originalPort);
       restoreEnvVar('AUTO_START_SERVER', originalAutoStart);
+      jest.dontMock('../src/app');
+      jest.dontMock('../src/db/pool');
+      jest.dontMock('../src/services/storeService');
+      jest.dontMock('../src/services/rfqChaserScheduler');
+      jest.dontMock('../src/services/eventOutboxService');
+      jest.dontMock('../src/services/emailGatewayService');
+      jest.dontMock('../src/services/zohoReconciliationService');
+      process.listeners('unhandledRejection').forEach((listener) => {
+        if (!originalUnhandledListeners.has(listener)) process.removeListener('unhandledRejection', listener);
+      });
+      process.listeners('uncaughtException').forEach((listener) => {
+        if (!originalExceptionListeners.has(listener)) process.removeListener('uncaughtException', listener);
+      });
     }
   });
 });

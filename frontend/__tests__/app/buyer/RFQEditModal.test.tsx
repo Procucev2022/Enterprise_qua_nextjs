@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, within, cleanup } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within, cleanup } from '@testing-library/react';
 import { RFQDeleteDialog, RFQEditModal, changedFields, toFormState, validateRFQEdit } from '@/app/buyer/RFQEditModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { formatIndianDateTime } from '@/lib/constants';
@@ -1350,10 +1350,12 @@ describe('RFQDeleteDialog', () => {
       // Empty pincode blur
       fireEvent.change(pinInput, { target: { value: '' } });
       fireEvent.blur(pinInput);
+      await act(async () => new Promise<void>((resolve) => setTimeout(resolve, 0)));
 
       // Dummy pincode blur
       fireEvent.change(pinInput, { target: { value: '111111' } });
       fireEvent.blur(pinInput);
+      await act(async () => new Promise<void>((resolve) => setTimeout(resolve, 0)));
 
       // API returns failure
       global.fetch = jest.fn().mockResolvedValue({
@@ -1362,6 +1364,7 @@ describe('RFQDeleteDialog', () => {
       } as unknown as Response);
       fireEvent.change(pinInput, { target: { value: '560001' } });
       fireEvent.blur(pinInput);
+      await act(async () => new Promise<void>((resolve) => setTimeout(resolve, 0)));
 
       // API returns success with empty post offices (resolvedLoc is null)
       global.fetch = jest.fn().mockResolvedValue({
@@ -1370,11 +1373,13 @@ describe('RFQDeleteDialog', () => {
       } as unknown as Response);
       fireEvent.change(pinInput, { target: { value: '560002' } });
       fireEvent.blur(pinInput);
+      await act(async () => new Promise<void>((resolve) => setTimeout(resolve, 0)));
 
       // API throws network error (caught silently in blur)
       global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
       fireEvent.change(pinInput, { target: { value: '560003' } });
       fireEvent.blur(pinInput);
+      await act(async () => new Promise<void>((resolve) => setTimeout(resolve, 0)));
     });
 
     it('covers handleAutoCategorizeAll with no blank items, invalid taxonomy and missing match', async () => {
@@ -1414,6 +1419,9 @@ describe('RFQDeleteDialog', () => {
 
       await waitFor(() => {
         expect(rfqClient.classifyLineItems).toHaveBeenCalled();
+      });
+      await waitFor(() => {
+        expect(autoBtn2).toBeEnabled();
       });
 
       // API failure with no error message fallback

@@ -4,10 +4,17 @@ import { AppProvider, useApp } from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount, VendorEvaluationRecord, ExtractedEntity } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
 
 // Mock global fetch for API calls triggered by store
 const mockFetch = jest.fn();
 global.fetch = mockFetch;
+const originalLoggerRemoteSyncEnabled = logger.isRemoteSyncEnabled;
+
+afterAll(() => {
+  logger.isRemoteSyncEnabled = originalLoggerRemoteSyncEnabled;
+  logger.clearLogs();
+});
 
 // RFQs are served from the authenticated GET /api/rfqs, which returns a bare
 // array, while /api/bootstrap returns the reference-data object. The mock has to
@@ -97,6 +104,8 @@ const STORE_RFQ_FIXTURES = [
 describe('lib/store.tsx - AppProvider and useApp', () => {
   beforeEach(() => {
     mockFetch.mockReset();
+    logger.isRemoteSyncEnabled = false;
+    logger.clearLogs();
     // RFQs come from GET /api/rfqs as a bare array; /api/bootstrap returns the
     // reference-data object. Distinguished here or the store reads the wrong shape.
     const bootstrapPayload = {
@@ -436,16 +445,34 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       const netErrSub = await contextValue.updateVendorSubscription('connect');
       expect(netErrSub).toBe(false);
     });
+    expect(logger.buffer).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        level: 'ERROR',
+        category: 'VENDOR_SUBSCRIPTION',
+        message: 'Failed to update vendor subscription',
+        metadata: expect.objectContaining({ error: expect.any(Error) }),
+      }),
+    ]));
 
     // updateVendorSubscription failed response with error message
     mockFetch.mockResolvedValueOnce({
       ok: false,
+      status: 403,
+      statusText: 'Forbidden',
       json: async () => ({ success: false, error: 'Cannot upgrade' }),
     });
     await act(async () => {
       const failSub = await contextValue.updateVendorSubscription('connect');
       expect(failSub).toBe(false);
     });
+    expect(logger.buffer).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        level: 'ERROR',
+        category: 'VENDOR_SUBSCRIPTION',
+        message: 'Vendor subscription update was rejected',
+        metadata: expect.objectContaining({ status: 403, responseError: 'Cannot upgrade' }),
+      }),
+    ]));
 
     // updateVendorSubscription failed response with no error message (fallback)
     mockFetch.mockResolvedValueOnce({
@@ -926,13 +953,15 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     const emailNew = contextValue.generateVendorOnboardingEmail({
       ...addedVendor!,
       minorCategories: ['Centrifugal Pumps'],
-    }, false, 'CustomPass123#');
+    }, false);
     expect(emailNew.subject).toContain('Preferred Vendor Network');
+    expect(emailNew).not.toHaveProperty('tempPassword');
+    expect(emailNew.authInstructions).toContain('verification steps shown on the portal');
 
     const emailExistingMapped = contextValue.generateVendorOnboardingEmail({
       ...addedVendor!,
       minorCategories: ['Centrifugal Pumps'],
-    }, true, 'CustomPass123#');
+    }, true);
     expect(emailExistingMapped.subject).toContain('Network Association');
 
     const emailUnmapped = contextValue.generateVendorOnboardingEmail({
@@ -1512,14 +1541,21 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     // awaits the real POST /api/buyer-accounts/historical-data and returns
     // whatever importedCount the server reports (dedup happens server-side),
     // so each call needs its own mocked response.
-    const mockIngestResponse = (importedCount: number) => ({
+    const mockIngestResponse = (importedCount: number, summary = {}) => ({
       ok: true,
       status: 200,
-      json: async () => ({ success: true, importedCount, period: '1_year', totalVendors: importedCount }),
+      json: async () => ({ success: true, importedCount, period: '1_year', totalVendors: importedCount, ...summary }),
     });
 
     await act(async () => {
-      mockFetch.mockResolvedValueOnce(mockIngestResponse(1));
+      mockFetch.mockResolvedValueOnce(mockIngestResponse(1, {
+        mappedCount: 1,
+        mappedEmailsSent: 0,
+        mappedEmailsQueued: 1,
+        unmappedCount: 0,
+        unmappedEmailsSent: 0,
+        unmappedEmailsQueued: 0,
+      }));
       const processedCount1 = await contextValue.processHistoricalPurchaseData('1_year', [
         {
           id: 'h-0',
@@ -1573,8 +1609,15 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       ]);
       expect(processedCount2).toBe(2);
 
-      // Process 3_years with unmapped categories and custom tempPassword
-      mockFetch.mockResolvedValueOnce(mockIngestResponse(1));
+      // Process 3_years with unmapped categories.
+      mockFetch.mockResolvedValueOnce(mockIngestResponse(1, {
+        mappedCount: 1,
+        mappedEmailsSent: 0,
+        mappedEmailsQueued: 1,
+        unmappedCount: 0,
+        unmappedEmailsSent: 0,
+        unmappedEmailsQueued: 0,
+      }));
       const processedCount3 = await contextValue.processHistoricalPurchaseData('3_years', [
         {
           id: 'h-3',
@@ -1588,12 +1631,16 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
           categoriesMappedByBuyer: true,
           itemsSupplied: ['Valves'],
           vendorRatingScore: undefined,
-          tempPassword: 'CustomPassword123#',
           firstSetMajorCategory: '',
           secondSetMinorCategories: [],
         },
       ]);
       expect(processedCount3).toBe(1);
+    });
+    expect(contextValue.lastIngestionSummary).toMatchObject({
+      mappedEmailsSent: 0,
+      mappedEmailsQueued: 1,
+      unmappedEmailsQueued: 0,
     });
 
     // Failure paths: the caller must learn the import did NOT happen, whether
@@ -2455,6 +2502,45 @@ describe('lib/store.tsx - channel chasers and bids', () => {
 
       expect(ctx().buyerVendors.some((v: any) => v.id === v1.id)).toBe(false);
       expect(ctx().buyerVendors.some((v: any) => v.id === v2.id)).toBe(false);
+    });
+
+    it('logs incomplete individual deletion fallback after bulk deletion fails', async () => {
+      const ctx = await mountStore();
+      mockFetch.mockImplementation((url: string) => {
+        if (url === '/api/vendors/bulk-delete') {
+          return Promise.resolve({ ok: false, status: 503, statusText: 'Unavailable' });
+        }
+        if (url === '/api/vendors/vendor-delete-rejected') {
+          return Promise.reject(new Error('Individual delete network failure'));
+        }
+        return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' });
+      });
+
+      await act(async () => {
+        await ctx().deleteMultipleBuyerVendors([
+          'vendor-delete-rejected',
+          'vendor-delete-unsuccessful',
+        ]);
+      });
+
+      expect(logger.buffer).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          level: 'ERROR',
+          category: 'VENDOR_PROFILE',
+          message: 'Bulk vendor deletion request failed; using individual delete fallback',
+          metadata: expect.objectContaining({ status: 503, requestedCount: 2 }),
+        }),
+        expect.objectContaining({
+          level: 'ERROR',
+          category: 'VENDOR_PROFILE',
+          message: 'Individual vendor delete fallback was incomplete',
+          metadata: expect.objectContaining({
+            requestedCount: 2,
+            rejectedCount: 1,
+            unsuccessfulCount: 1,
+          }),
+        }),
+      ]));
     });
 
     it('handles addBuyerVendor API error and network failure in update/delete', async () => {

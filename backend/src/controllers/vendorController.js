@@ -10,7 +10,16 @@ const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
-const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig,parseSearchTokens, DEFAULT_VENDOR_DIRECTORY_PASSKEY, VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
+const {
+  ZOHO_CONFIG,
+  computeZohoPlanAmount,
+  VENDOR_SUBSCRIPTION_PLANS,
+  getSubscriptionPricingConfig,
+  parseSearchTokens,
+  DEFAULT_VENDOR_DIRECTORY_PASSKEY,
+  VENDOR_FREE_CREDITS_LIMIT,
+  PERSISTENCE_MESSAGES,
+} = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
 /**
@@ -414,34 +423,27 @@ async function getVendorById(req, res, next) {
     const { id } = req.params;
     const user = req.user;
     let buyerId = null;
-    if (user && user.role === 'buyer') {
+    let vendor = null;
+    if (user && user.role === 'vendor') {
+      vendor = await storeService.getVendorByIdWithDBFallback(id, 'all');
+      const requestedEmail = String(user.email || '').trim().toLowerCase();
+      const recordEmail = String(vendor?.email || '').trim().toLowerCase();
+      if (!requestedEmail || !vendor || recordEmail !== requestedEmail) {
+        logger.warn('Vendor profile read denied outside the signed-in vendor identity', {
+          requestedId: id,
+          subject: user.sub || user.id || null,
+        }, 'VENDOR_CONTROLLER');
+        return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
+      }
+      buyerId = 'all';
+    } else if (user && user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
       buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
-    } else if (
-      user &&
-      user.role === 'vendor' &&
-      user.email &&
-      id &&
-      (id.toLowerCase() === user.email.toLowerCase() ||
-        (storeService.getVendorById(id, 'all') &&
-          storeService.getVendorById(id, 'all').email &&
-          storeService.getVendorById(id, 'all').email.toLowerCase() === user.email.toLowerCase()))
-    ) {
-      // A vendor looking up their own record by their own email or vendor ID. Without
-      // this, storeService.getVendorById's ownership scoping (only ever
-      // populated for the 'buyer' role above) requires a scope to return
-      // ANY vendor a buyer has uploaded — which every buyer-uploaded vendor
-      // is — so a buyer-uploaded vendor could never resolve their own record
-      // at all. That resolution is what quotation-form.tsx uses to find "my
-      // submitted quotes" (matched by vendorId), so it silently showed 0
-      // submitted quotes for every buyer-uploaded vendor regardless of how
-      // many they'd actually sent.
-      buyerId = 'all';
     } else if (req.query && req.query.buyerId) {
       buyerId = req.query.buyerId;
     }
     logger.info(`Fetching vendor with ID ${id}`, { id, buyerId }, 'VENDOR_CONTROLLER');
-    const vendor = await storeService.getVendorByIdWithDBFallback(id, buyerId);
+    if (!vendor) vendor = await storeService.getVendorByIdWithDBFallback(id, buyerId);
     if (!vendor) {
       logger.warn(`Vendor not found: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -505,14 +507,9 @@ async function createVendor(req, res, next) {
     if (addedByBuyerCompany) {
       body.addedByBuyerCompany = addedByBuyerCompany;
     }
-    // Checked before addVendor runs at all, not just before reporting success:
-    // addVendor kicks off real side effects (an identity-account write with a
-    // fresh temp password, a real onboarding email) as soon as it's called.
-    // Deferring the uniqueness check to confirmVendorPersisted (below) let a
-    // vendor-add for an email that already had its own identity account
-    // silently overwrite that account's real password/phone on every retried
-    // duplicate submission, even though the vendor record itself never
-    // persisted — a real account got its login clobbered this way.
+    // Check uniqueness before mutating the cache. Durable confirmation below
+    // still handles a concurrent insert; onboarding is only provisioned after
+    // that confirmation succeeds.
     if (body.email) {
       // A migrated vendor who signed in first already has an auto-created,
       // unowned profile; this add takes it over rather than 409ing.
@@ -534,14 +531,10 @@ async function createVendor(req, res, next) {
       }
     }
     logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory, buyerId, role: req.user.role }, 'VENDOR_CONTROLLER');
-    const created = storeService.addVendor(body, req.user && req.user.email, buyerId);
-    // Confirms the write actually landed in Postgres before reporting
-    // success — a duplicate email (vendors.email is UNIQUE) used to fail
-    // silently in the background while this endpoint still returned 201.
-    // Still the authoritative check for a genuine race (two concurrent
-    // requests for the same new email) that the in-memory check above can't
-    // catch — the pre-check above only stops the common, already-hydrated case.
-    await storeService.confirmVendorPersisted(created);
+    // Persist before adding the record to the isolate cache or starting vendor
+    // onboarding side effects. This also resolves concurrent duplicate-email
+    // races against the database unique constraint.
+    const created = await storeService.addVendorDurably(body, req.user && req.user.email, buyerId);
     // Awaited here rather than left to addVendor's internal fire-and-forget
     // waitUntil call: that path can silently never complete on Workers (the
     // request-scoped bindings it depends on aren't guaranteed to survive
@@ -578,8 +571,8 @@ async function updateVendor(req, res, next) {
     // A vendor editing their own record only gets the self-service field set;
     // an admin or buyer retains full field access.
     const updates = req.user.role === 'vendor' ? pickVendorSelfEditFields(req.body) : req.body;
-    logger.info(`Updating vendor ${id}`, { id, updates }, 'VENDOR_CONTROLLER');
-    const updated = storeService.updateVendor(existing.id, updates);
+    logger.info(`Updating vendor ${id}`, { id, updatedFields: Object.keys(updates || {}) }, 'VENDOR_CONTROLLER');
+    const updated = await storeService.updateVendorDurably(existing.id, updates);
     res.json({ success: true, data: withoutTemporaryPassword(updated) });
   } catch (err) {
     logger.error(`Error updating vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
@@ -598,7 +591,7 @@ async function deleteVendor(req, res, next) {
         (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('v-navin-') || id.startsWith('v-1788') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
       ) {
         logger.info(`Cleaning up vendor ID ${id}`, { id }, 'VENDOR_CONTROLLER');
-        storeService.deleteVendor(id, req.user && req.user.email);
+        await storeService.deleteVendorDurably(id, req.user && req.user.email);
         return res.json({ success: true, message: `Vendor ${id} deleted successfully.` });
       }
       logger.warn(`Vendor not found for deletion: ${id}`, { id }, 'VENDOR_CONTROLLER');
@@ -606,7 +599,7 @@ async function deleteVendor(req, res, next) {
     }
     if (!(await assertVendorOwnership(req, res, existing))) return;
     logger.info(`Deleting vendor ${id}`, { id }, 'VENDOR_CONTROLLER');
-    storeService.deleteVendor(existing.id, req.user && req.user.email);
+    await storeService.deleteVendorDurably(existing.id, req.user && req.user.email);
     res.json({ success: true, message: `Vendor ${id} deleted successfully.` });
   } catch (err) {
     logger.error(`Error deleting vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
@@ -641,7 +634,7 @@ async function bulkDeleteVendors(req, res, next) {
           (user.role === 'buyer' || user.role === 'admin') &&
           (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('v-navin-') || id.startsWith('v-1788') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
         ) {
-          storeService.deleteVendor(id, user.email);
+          await storeService.deleteVendorDurably(id, user.email);
           deletedIds.push(id);
           continue;
         }
@@ -650,8 +643,9 @@ async function bulkDeleteVendors(req, res, next) {
       }
 
       if (await checkVendorOwnership(user, existing)) {
-        storeService.deleteVendor(existing.id, user.email);
-        deletedIds.push(existing.id);
+        const deleted = await storeService.deleteVendorDurably(existing.id, user.email);
+        if (deleted) deletedIds.push(existing.id);
+        else skippedIds.push(id);
       } else {
         skippedIds.push(id);
       }
@@ -711,8 +705,8 @@ async function reviseRating(req, res, next) {
       }
       logger.info(`Resolved buyer scope for rating revision`, { email: req.user.email, buyerId, buyerAccountExists: !!buyerAccount }, 'VENDOR_CONTROLLER');
     }
-    logger.info(`Revising rating for vendor ${id}`, { id, ratingData, buyerId }, 'VENDOR_CONTROLLER');
-    const result = storeService.reviseVendorRating(id, ratingData, buyerId);
+    logger.info(`Revising rating for vendor ${id}`, { id, ratingFields: Object.keys(ratingData || {}), buyerId }, 'VENDOR_CONTROLLER');
+    const result = await storeService.reviseVendorRatingDurably(id, ratingData, buyerId);
     if (!result) {
       logger.warn(`Vendor not found for rating revision: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -727,15 +721,13 @@ async function reviseRating(req, res, next) {
 async function generateOnboardingEmailPreview(req, res, next) {
   try {
     const { id } = req.params;
-    // This preview includes the vendor's real tempPassword — was reachable by
-    // anyone who knew a vendor's email, no auth at all. Only the buyer-side
-    // roles that actually onboard vendors (or an admin) should see it; a
-    // vendor's own temp password isn't something they need via this route.
+    // Preview content is credential-free. Limit it to the buyer-side roles
+    // that onboard vendors (or an admin), and still verify buyer ownership.
     if (!req.user) {
       return res.status(401).json({ success: false, error: 'Authentication required.' });
     }
     if (!['buyer', 'category_manager', 'admin'].includes(req.user.role)) {
-      return res.status(403).json({ success: false, error: 'You do not have permission to view vendor onboarding credentials.' });
+      return res.status(403).json({ success: false, error: 'You do not have permission to view the vendor onboarding preview.' });
     }
     logger.info(`Generating onboarding email preview for vendor ${id}`, { id }, 'VENDOR_CONTROLLER');
     const vendor = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
@@ -744,7 +736,7 @@ async function generateOnboardingEmailPreview(req, res, next) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
     if (req.user.role === 'buyer' && !(await assertVendorOwnership(req, res, vendor))) return;
-    const emailPayload = generateVendorOnboardingEmail(vendor, vendor.isExistingInDatabase, vendor.tempPassword);
+    const emailPayload = generateVendorOnboardingEmail(vendor);
     res.json({ success: true, data: emailPayload });
   } catch (err) {
     logger.error(`Error generating onboarding email preview for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
@@ -779,7 +771,7 @@ async function updateSubscription(req, res, next) {
       });
     }
     logger.info(`Updating subscription for vendor ${id} to ${plan}`, { id, plan }, 'VENDOR_CONTROLLER');
-    const updated = storeService.updateVendor(existing.id, { subscriptionPlan: plan });
+    const updated = await storeService.updateVendorDurably(existing.id, { subscriptionPlan: plan });
     res.json({ success: true, data: updated });
   } catch (err) {
     logger.error(`Error updating subscription for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
@@ -831,7 +823,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
       returnUrl,
     });
 
-    const link = storeService.createPaymentLinkRecord({
+    const link = await storeService.createPaymentLinkRecordDurably({
       id: linkId,
       zohoPaymentLinkId: result.zohoPaymentLinkId,
       vendorId: existing.id,
@@ -848,7 +840,13 @@ async function createSubscriptionPaymentLink(req, res, next) {
     res.json({ success: true, data: { paymentUrl: link.paymentUrl, paymentLinkId: link.id, status: link.status } });
   } catch (err) {
     logger.error(`Error creating Zoho payment link for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
-    res.status(502).json({ success: false, error: 'Unable to create a payment link right now. Please try again shortly.' });
+    const paymentLinkPersistenceFailed = err && err.code === 'PAYMENT_LINK_PERSISTENCE_UNAVAILABLE';
+    res.status(paymentLinkPersistenceFailed ? 503 : 502).json({
+      success: false,
+      error: paymentLinkPersistenceFailed
+        ? PERSISTENCE_MESSAGES.PAYMENT_LINK_TRACKING_FAILED
+        : 'Unable to create a payment link right now. Please try again shortly.',
+    });
   }
 }
 
@@ -939,7 +937,7 @@ async function updateCategories(req, res, next) {
     // for a vendor they themselves uploaded.
     if (!(await assertVendorOwnership(req, res, existing))) return;
     logger.info(`Updating category taxonomy for vendor ${id}`, { id, clientMappedCategories, vendorSelectedCategories }, 'VENDOR_CONTROLLER');
-    const updated = storeService.updateVendorCategories(existing.id, { clientMappedCategories, vendorSelectedCategories });
+    const updated = await storeService.updateVendorCategoriesDurably(existing.id, { clientMappedCategories, vendorSelectedCategories });
     res.json({ success: true, data: updated });
   } catch (err) {
     logger.error(`Error updating categories for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
@@ -1163,7 +1161,7 @@ async function getVendorsPresence(req, res, next) {
     if (!isValid) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
-    const result = vendorPresenceService.getPresence(identifiers);
+    const result = await vendorPresenceService.getPresenceDurably(identifiers);
     res.json(result);
   } catch (err) {
     logger.error('Error fetching vendor presence', err, 'VENDOR_CONTROLLER');
@@ -1174,18 +1172,34 @@ async function getVendorsPresence(req, res, next) {
 async function recordVendorHeartbeat(req, res, next) {
   try {
     const user = req.user;
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'An authenticated vendor session is required.' });
+    }
+    if (user.role !== 'vendor') {
+      return res.status(403).json({ success: false, error: 'Only a vendor session can update vendor presence.' });
+    }
+
     const body = req.body || {};
     const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.vendorHeartbeat, body);
     if (!isValid) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
-    const identifier = body.identifier || (user && (user.email || user.sub));
+    const identifier = user.email;
     if (!identifier) {
-      return res.status(400).json({ success: false, error: 'Identifier is required for heartbeat.' });
+      return res.status(400).json({ success: false, error: 'The authenticated vendor session has no email identity.' });
     }
-    const role = body.role || (user && user.role) || 'vendor';
+    if (body.identifier && body.identifier.trim().toLowerCase() !== identifier.trim().toLowerCase()) {
+      logger.warn('Ignored client-supplied vendor presence identity that did not match the session', {
+        sessionSubject: user.sub || user.id || null,
+      }, 'VENDOR_CONTROLLER');
+    }
     const status = body.status || 'online';
-    const result = vendorPresenceService.recordHeartbeat({ identifier, role, status });
+    const result = await vendorPresenceService.recordHeartbeatDurably({
+      identifier,
+      role: 'vendor',
+      vendorId: user.vendorId || null,
+      status,
+    });
     res.json(result);
   } catch (err) {
     logger.error('Error recording vendor heartbeat', err, 'VENDOR_CONTROLLER');
@@ -1391,5 +1405,6 @@ module.exports = {
   getPublicVendorById,
   authenticateVendorDirectory,
   getSubscriptionPricing,
+  sanitizePublicVendor,
   ...vendorDossierExtensions,
 };

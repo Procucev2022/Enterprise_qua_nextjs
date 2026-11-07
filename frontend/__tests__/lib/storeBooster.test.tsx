@@ -11,6 +11,7 @@ import {
 import { authClient } from '@/lib/authClient';
 import * as rfqClient from '@/lib/rfqClient';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 jest.mock('@/lib/rfqClient', () => {
   const actual = jest.requireActual('@/lib/rfqClient');
@@ -228,6 +229,13 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       );
       await waitFor(() => expect(screen.getByTestId('ready')).toBeInTheDocument());
 
+      // Load bootstrap once, then verify both shared loaders use its warm cache.
+      await act(async () => {
+        await capturedApp?.ensureVendors(true);
+        await capturedApp?.ensureVendors(false);
+        await capturedApp?.ensureVendorEvaluations(false);
+      });
+
       // ensureRFQs
       await act(async () => {
         await capturedApp?.ensureRFQs(true);
@@ -261,6 +269,12 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       });
 
       expect(capturedApp?.categoryTaxonomy.length).toBeGreaterThan(0);
+
+      // A signed-out caller clears the AI feed without making a request.
+      jest.spyOn(authClient, 'getToken').mockReturnValue(null);
+      await act(async () => {
+        await capturedApp?.ensureAIFeed(true);
+      });
     });
 
     test('signed out state clears RFQs, activeBuyerAccount, and taxonomy', async () => {
@@ -789,6 +803,35 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
         email: 'exist@vendor.com',
       } as any);
       expect(added?.name).toBe('Existing Account Vendor');
+
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            id: 'v-pending-1',
+            name: 'Queued Email Vendor',
+            email: 'queued@vendor.com',
+            onboardingEmailStatus: 'pending',
+          },
+        }),
+      });
+
+      await act(async () => {
+        added = await capturedApp?.addBuyerVendor({
+          name: 'Queued Email Vendor',
+          email: 'queued@vendor.com',
+        } as any);
+      });
+      expect(added?.onboardingEmailStatus).toBe('pending');
+      expect(capturedApp?.toastMessage).toEqual({
+        title: UI_STRINGS.vendorOnboarding.credentialsQueuedTitle,
+        description: formatString(UI_STRINGS.vendorOnboarding.credentialsQueuedMessage, {
+          name: 'Queued Email Vendor',
+          email: 'queued@vendor.com',
+        }),
+        type: 'success',
+      });
     });
 
     test('getSessionCache and setSessionCache handle non-test environment and sessionStorage errors', () => {

@@ -325,6 +325,7 @@ describe('Account Documents & Credit Workflows API', () => {
     it('handles fallback vendor balances and database sync branches', async () => {
       const origHasStorage = pool.hasStorage;
       const origQuery = pool.query;
+      const origHydrated = storeService.isHydratedFromDB;
 
       try {
         // Create vendor with no freeQuotationCredits but credits property
@@ -354,6 +355,9 @@ describe('Account Documents & Credit Workflows API', () => {
         delete createdV3.credits;
 
         // Test with pool.hasStorage = true (success branch)
+        // This test supplies a fake database connection, so bypass the app's
+        // real lazy-hydration gate before exercising the credit transaction.
+        storeService.isHydratedFromDB = true;
         pool.hasStorage = () => true;
         pool.query = jest.fn().mockResolvedValue({ rowCount: 1 });
 
@@ -415,6 +419,7 @@ describe('Account Documents & Credit Workflows API', () => {
       } finally {
         pool.hasStorage = origHasStorage;
         pool.query = origQuery;
+        storeService.isHydratedFromDB = origHydrated;
       }
     });
 
@@ -784,19 +789,13 @@ describe('Account Documents & Credit Workflows API', () => {
     it('vendorDossierExtensions deep branch coverage: RFQ comms, payment statuses, task/mail failures', async () => {
       const vendorDossierExtensions = require('../src/controllers/vendorDossierExtensions');
       const internalTaskQueries = require('../src/db/internalTaskQueries');
+      const paymentDuesQueries = require('../src/db/paymentDuesQueries');
       const mailerService = require('../src/services/mailerService');
       const smsService = require('../src/services/smsService');
 
       // 1. getVendorCommunications with assigned RFQ
-      jest.spyOn(storeService, 'getRFQs').mockReturnValueOnce([
-        {
-          id: 'rfq-comm-1',
-          rfqNumber: 'RFQ-COMM-101',
-          title: 'Steel Pipe Order',
-          sourcingMode: 'Mode 1',
-          assignedVendors: [{ id: mockVendor.id }],
-          quotes: [{ vendorId: mockVendor.id }],
-        },
+      jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValueOnce([
+        { id: 'comm-rfq-101', subject: 'RFQ-COMM-101 invitation', channel: 'EMAIL', status: 'SENT' },
       ]);
       const resComm = await request(app)
         .get(`/api/vendors/${mockVendor.id}/communications`)
@@ -1528,8 +1527,9 @@ describe('Account Documents & Credit Workflows API', () => {
         pool.query = async () => { throw new Error('Postgres fail'); };
         const dbBuyerCrash = await accountDocumentController.findBuyerSafe('buyer-db-crash');
         expect(dbBuyerCrash).toBeUndefined();
-        const userFallback = await accountDocumentController.findBuyerSafe('non-existent', { role: 'buyer', email: mockBuyer.corporateEmail });
-        expect(userFallback).toBeDefined();
+        await expect(accountDocumentController.findBuyerSafe('non-existent', {
+          role: 'buyer', email: mockBuyer.corporateEmail,
+        })).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
         const memVendor = await accountDocumentController.findVendorSafe(mockVendor.id);
         expect(memVendor.id).toBe(mockVendor.id);
         const nullVendor = await accountDocumentController.findVendorSafe('missing-vendor');

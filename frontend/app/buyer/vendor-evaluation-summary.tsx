@@ -248,7 +248,7 @@ export default function VendorEvaluationSummary({
       setCapaNotes(record.capaNotes || '');
       setDropdownTab(isBuyerUploaded(record) ? 'buyer' : 'procucev');
     }
-  }, [record?.id, record?.vendorId]);
+  }, [record]);
 
   // Combined company list for dropdown
   const companyOptions = useMemo(() => {

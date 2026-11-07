@@ -11,6 +11,8 @@ const authService = require('../services/authService');
 const { extractToken } = require('../middleware/auth');
 const rfqSummaryService = require('../services/rfqSummaryService');
 const { AUTH_MESSAGES } = require('../config/constants');
+const { sanitizePublicVendor } = require('../controllers/vendorController');
+const graphqlUserCache = new WeakMap();
 
 /**
  * Mutations go through the same rootValue-as-plain-functions path as queries,
@@ -22,24 +24,47 @@ const { AUTH_MESSAGES } = require('../config/constants');
 // so a logged-out token is rejected here too — while that check lived in a
 // per-process Set, GraphQL was a second route a revoked token could still pass
 // after a restart or on a different worker.
-async function requireAuth(context) {
-  const token = extractToken(context && context.req);
-  if (!token) {
-    throw new Error(AUTH_MESSAGES.NO_SESSION_TOKEN);
+async function resolveOptionalUser(context) {
+  const req = context && context.req;
+  if (!req || typeof req !== 'object') return null;
+  if (req.user) return req.user;
+
+  let verificationPromise = graphqlUserCache.get(req);
+  if (!verificationPromise) {
+    verificationPromise = (async () => {
+      const token = extractToken(req);
+      if (!token) return null;
+      const verification = await authService.assertSessionActive(token);
+      return verification.valid ? verification.user : null;
+    })();
+    graphqlUserCache.set(req, verificationPromise);
   }
-  const verification = await authService.assertSessionActive(token);
-  if (!verification.valid) {
-    throw new Error(verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK);
-  }
-  return verification.user;
+
+  const user = await verificationPromise;
+  if (user) req.user = user;
+  return user;
 }
 
-async function requireAdmin(context) {
+async function requireAuth(context) {
+  const req = context && context.req;
+  const token = extractToken(req);
+  const user = await resolveOptionalUser(context);
+  if (!user) {
+    throw new Error(token ? AUTH_MESSAGES.INVALID_SESSION_FALLBACK : AUTH_MESSAGES.NO_SESSION_TOKEN);
+  }
+  return user;
+}
+
+async function requireRole(context, ...allowedRoles) {
   const user = await requireAuth(context);
-  if (user.role !== 'admin') {
+  if (!allowedRoles.includes(user.role)) {
     throw new Error('You do not have permission to perform this action.');
   }
   return user;
+}
+
+async function requireAdmin(context) {
+  return requireRole(context, 'admin');
 }
 
 /**
@@ -92,6 +117,49 @@ function rfqInScope(scope, rfq) {
   return rfq.buyerAccountId === scope.buyerAccountId;
 }
 
+function isManagementUser(user) {
+  return Boolean(user && (user.role === 'admin' || user.role === 'category_manager'));
+}
+
+function canReadPrivateVendor(vendor, user, buyerId) {
+  if (isManagementUser(user)) return true;
+  if (!vendor.buyerId && !vendor.buyerAccountId) return false;
+  if (!user || user.role !== 'buyer') return false;
+  const ownerValues = [vendor.buyerId, vendor.buyerAccountId, vendor.buyerEmail]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+  return [buyerId, user.email].filter(Boolean).some((value) => ownerValues.includes(String(value).toLowerCase()));
+}
+
+function vendorForGraphQL(vendor, user, buyerId) {
+  if (!vendor || typeof vendor !== 'object') return null;
+  if (canReadPrivateVendor(vendor, user, buyerId)) return vendor;
+  const safeVendor = sanitizePublicVendor(vendor);
+  return { ...safeVendor, email: safeVendor.email || 'contact@vendor.example.invalid' };
+}
+
+async function requireVendorMutationScope(context, vendorId) {
+  const user = await requireAuth(context);
+  const vendor = await storeService.getVendorByIdWithDBFallback(vendorId, 'all');
+  if (!vendor) return { user, vendor: null };
+  if (isManagementUser(user)) return { user, vendor };
+
+  if (user.role === 'buyer') {
+    const account = await storeService.getBuyerAccountByEmail(user.email);
+    const allowedIds = [account && account.id, user.sub, user.email].filter(Boolean).map((value) => String(value).toLowerCase());
+    const ownerIds = [vendor.buyerId, vendor.buyerAccountId, vendor.buyerEmail]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+    if (ownerIds.some((ownerId) => allowedIds.includes(ownerId))) return { user, vendor };
+  }
+
+  if (user.role === 'vendor' && String(vendor.email || '').toLowerCase() === String(user.email || '').toLowerCase()) {
+    return { user, vendor };
+  }
+
+  throw new Error('You do not have permission to modify this vendor.');
+}
+
 /**
  * GraphQL Root Resolvers
  */
@@ -131,13 +199,13 @@ const rootResolvers = {
   vendors: async (args = {}, context = {}) => {
     const { majorCategory, source, search, offset = 0 } = args;
     const limit = Math.min(args.limit || 50, 500);
-    const user = context && context.req ? context.req.user : null;
+    const user = await resolveOptionalUser(context);
     let buyerId = null;
     if (user && user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
       buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
-    } else if (args.buyerId) {
-      buyerId = args.buyerId;
+    } else if (isManagementUser(user)) {
+      buyerId = 'all';
     }
     let result;
     if (pool.hasStorage()) {
@@ -171,54 +239,64 @@ const rootResolvers = {
       }
       result = result.slice(offset, offset + limit);
     }
-    result = Array.isArray(result) ? result : [];
-    return source ? result.filter((v) => v && v.source === source) : result;
+    if (source) result = result.filter((vendorItem) => vendorItem && vendorItem.source === source);
+    return result.map((vendorItem) => vendorForGraphQL(vendorItem, user, buyerId)).filter(Boolean);
   },
 
   vendor: async (args = {}, context = {}) => {
-    const user = context && context.req ? context.req.user : null;
+    const user = await resolveOptionalUser(context);
     let buyerId = null;
     if (user && user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
       buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
-    } else if (args.buyerId) {
-      buyerId = args.buyerId;
+    } else if (isManagementUser(user)) {
+      buyerId = 'all';
     }
     if (args.id) {
-      return (await storeService.getVendorByIdWithDBFallback(args.id, buyerId)) || null;
+      const found = await storeService.getVendorByIdWithDBFallback(args.id, buyerId);
+      return vendorForGraphQL(found, user, buyerId);
     }
     if (args.email) {
       if (!pool.hasStorage()) {
         const vendors = await storeService.getVendors(buyerId);
-        return vendors.find((v) => v.email && v.email.toLowerCase() === args.email.toLowerCase()) || null;
+        const found = vendors.find((v) => v.email && v.email.toLowerCase() === args.email.toLowerCase()) || null;
+        return vendorForGraphQL(found, user, buyerId);
       }
       // Bounded single-row lookup instead of a full-table getVendors() fetch
       // just to find one row by email.
       const vendor = await domainQueries.getVendorByEmailFromDB(args.email);
       if (!vendor) return null;
       if (buyerId === 'all') return vendor;
-      if (!vendor.buyerId && !vendor.buyerAccountId) return vendor;
+      if (!vendor.buyerId && !vendor.buyerAccountId) return vendorForGraphQL(vendor, user, buyerId);
       if (!buyerId) return null;
       const sId = String(buyerId).toLowerCase();
       const matches =
         (vendor.buyerId && String(vendor.buyerId).toLowerCase() === sId) ||
         (vendor.buyerAccountId && String(vendor.buyerAccountId).toLowerCase() === sId) ||
         (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId);
-      return matches ? vendor : null;
+      return matches ? vendorForGraphQL(vendor, user, buyerId) : null;
     }
     return null;
   },
 
-  buyerAccounts: (args = {}) => {
+  buyerAccounts: async (args = {}, context) => {
+    const user = await requireRole(context, 'admin', 'category_manager', 'buyer');
+    if (user.role === 'buyer') {
+      const account = await storeService.getBuyerAccountByEmail(user.email);
+      return account ? [account] : [];
+    }
     const limit = Math.min(args.limit || 20, 500);
     return storeService.getBuyerAccounts(limit);
   },
 
-  activeBuyerAccount: () => {
+  activeBuyerAccount: async (args, context) => {
+    const user = await requireRole(context, 'admin', 'category_manager', 'buyer');
+    if (user.role === 'buyer') return storeService.getBuyerAccountByEmail(user.email);
     return storeService.getActiveBuyerAccount();
   },
 
-  evaluations: (args = {}) => {
+  evaluations: async (args = {}, context) => {
+    await requireRole(context, 'admin', 'category_manager', 'buyer');
     const limit = Math.min(args.limit || 50, 500);
     let evals = storeService.getEvaluations(args.vendorName ? null : limit);
     if (args.vendorName) {
@@ -227,7 +305,8 @@ const rootResolvers = {
     return evals.slice(0, limit);
   },
 
-  auditLogs: (args = {}) => {
+  auditLogs: async (args = {}, context) => {
+    await requireAdmin(context);
     const { search } = args;
     const limit = Math.min(args.limit || 50, 500);
     let logs = storeService.getAuditLogs(search ? null : limit);
@@ -253,13 +332,18 @@ const rootResolvers = {
   },
 
   aiFeed: async (args = {}, context) => {
+    const user = await requireRole(context, 'admin', 'category_manager', 'buyer');
     const limit = Math.min(args.limit || 20, 500);
-    const isBuyer = Boolean(context && context.req && context.req.user && context.req.user.role === 'buyer');
-    const all = storeService.getAIFeed(isBuyer ? null : limit);
+    const isBuyer = user.role === 'buyer';
+    let buyerAccountId = null;
     if (isBuyer) {
       const account = await storeService.getBuyerAccountByEmail(context.req.user.email);
-      const buyerAccountId = account ? account.id : null;
+      buyerAccountId = account ? account.id : null;
       if (!buyerAccountId) return [];
+    }
+
+    const all = await storeService.getAIFeedDurably(100);
+    if (isBuyer) {
       const buyerRfqs = storeService.getRFQs(buyerAccountId).filter((r) => r.buyerAccountId === buyerAccountId);
       const buyerRfqNumbers = new Set(buyerRfqs.map((r) => r.rfqNumber).filter(Boolean));
       return all
@@ -269,31 +353,38 @@ const rootResolvers = {
     return all.slice(0, limit);
   },
 
-  systemConfig: () => {
+  systemConfig: async (args, context) => {
+    await requireRole(context, 'admin', 'category_manager');
     return storeService.getSystemConfig();
   },
 
-  dbHealth: async () => {
+  dbHealth: async (args, context) => {
+    await requireAdmin(context);
     return await pool.checkDatabaseHealth();
   },
 
-  optimizationMetrics: () => {
+  optimizationMetrics: async (args, context) => {
+    await requireAdmin(context);
     return getOptimizationMetrics();
   },
 
-  diagnoseLogErrors: () => {
+  diagnoseLogErrors: async (args, context) => {
+    await requireAdmin(context);
     return logErrorResolver.diagnoseErrors();
   },
 
-  auditPerformance: () => {
+  auditPerformance: async (args, context) => {
+    await requireAdmin(context);
     return performanceOptimizer.auditPerformance();
   },
 
-  cryptoStatus: () => {
+  cryptoStatus: async (args, context) => {
+    await requireAdmin(context);
     return cryptoService.verifyCryptoHealth();
   },
 
-  decryptData: ({ input }) => {
+  decryptData: async ({ input }, context) => {
+    await requireAdmin(context);
     if (input.token) {
       const plaintext = cryptoService.decrypt(input.token, {
         secretKey: input.secretKey,
@@ -310,7 +401,7 @@ const rootResolvers = {
   },
 
   createRFQ: async ({ input }, context) => {
-    const user = await requireAuth(context);
+    const user = await requireRole(context, 'buyer', 'admin', 'category_manager');
     logger.info('GraphQL Mutation: createRFQ', { title: input.title }, 'GRAPHQL_MUTATION');
     const lineItems = Array.isArray(input.extractedEntities) ? input.extractedEntities : input.lineItems || [];
     // A model or network failure here must not block RFQ creation —
@@ -321,7 +412,7 @@ const rootResolvers = {
       { orgName: user.orgName || '' }
     );
     const requestingBuyerAccount = await storeService.getBuyerAccountByEmail(user.email);
-    return storeService.createRFQ({ ...input, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
+    return storeService.createRFQDurably({ ...input, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
   },
 
   updateRFQ: async ({ id, input }, context) => {
@@ -334,37 +425,37 @@ const rootResolvers = {
       return null;
     }
     logger.info(`GraphQL Mutation: updateRFQ ${id}`, { id, input }, 'GRAPHQL_MUTATION');
-    return storeService.updateRFQ(id, input);
+    return storeService.updateRFQDurably(id, input);
   },
 
   createVendor: async ({ input }, context) => {
-    const user = await requireAuth(context);
+    const user = await requireRole(context, 'buyer', 'admin', 'category_manager');
     logger.info('GraphQL Mutation: createVendor', { name: input.name }, 'GRAPHQL_MUTATION');
-    const created = storeService.addVendor(input, user.email);
-    await storeService.confirmVendorPersisted(created);
-    return created;
+    const buyerAccount = user.role === 'buyer' ? await storeService.getBuyerAccountByEmail(user.email) : null;
+    const buyerId = user.role === 'buyer' ? (buyerAccount ? buyerAccount.id : user.sub || user.email) : null;
+    return storeService.addVendorDurably(input, user.email, buyerId);
   },
 
   updateVendor: async ({ id, input }, context) => {
-    await requireAuth(context);
-    logger.info(`GraphQL Mutation: updateVendor ${id}`, { id, input }, 'GRAPHQL_MUTATION');
-    return storeService.updateVendor(id, input);
+    await requireVendorMutationScope(context, id);
+    logger.info(`GraphQL Mutation: updateVendor ${id}`, { id, updatedFields: Object.keys(input || {}) }, 'GRAPHQL_MUTATION');
+    return storeService.updateVendorDurably(id, input);
   },
 
   deleteVendor: async ({ id }, context) => {
-    await requireAuth(context);
+    await requireVendorMutationScope(context, id);
     logger.info(`GraphQL Mutation: deleteVendor ${id}`, { id }, 'GRAPHQL_MUTATION');
-    return storeService.deleteVendor(id);
+    return storeService.deleteVendorDurably(id);
   },
 
   createBuyerAccount: async ({ input }, context) => {
-    await requireAuth(context);
+    await requireRole(context, 'buyer', 'admin');
     logger.info('GraphQL Mutation: createBuyerAccount', { org: input.organizationName }, 'GRAPHQL_MUTATION');
-    return storeService.addBuyerAccount(input);
+    return storeService.addBuyerAccountDurably(input);
   },
 
   clearQueryCache: async (args, context) => {
-    await requireAuth(context);
+    await requireAdmin(context);
     queryCache.clear();
     return true;
   },

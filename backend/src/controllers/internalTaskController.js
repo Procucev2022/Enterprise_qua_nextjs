@@ -7,10 +7,14 @@
 const internalTaskQueries = require('../db/internalTaskQueries');
 const registrationQueries = require('../db/registrationQueries');
 const storeService = require('../services/storeService');
-const { validatePayload } = require('../config/validationSchemas');
+const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const { logger } = require('../services/loggerService');
 const actionCenterNotificationService = require('../services/actionCenterNotificationService');
-const { CREDIT_APPROVER_ROLES, DEFAULT_CREDIT_APPROVER_EMAIL } = require('../config/constants');
+const {
+  CREDIT_APPROVER_ROLES,
+  DEFAULT_CREDIT_APPROVER_EMAIL,
+  REGISTRATION_MESSAGES,
+} = require('../config/constants');
 
 /**
  * List internal tasks with database-side filtering, searching, and pagination.
@@ -570,6 +574,14 @@ async function exportTasks(req, res) {
 
 async function getRegistrations(req, res) {
   try {
+    const validation = validatePayload(VALIDATION_SCHEMAS.registrationList, req.query ?? {});
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Registration filters are invalid. Check the search, source, status, and page boundaries.',
+        details: validation.errors,
+      });
+    }
     const {
       search = '',
       sourceType = 'all',
@@ -577,16 +589,24 @@ async function getRegistrations(req, res) {
       clientType = 'all',
       limit = 100,
       offset = 0,
-    } = req.query ?? {};
+    } = validation.sanitizedData;
 
-    logger.info('Fetching registered clients', { search, sourceType, status, clientType }, 'INTERNAL_TASK_CONTROLLER');
+    logger.info('Fetching registered clients', {
+      hasSearch: Boolean(search),
+      searchLength: String(search).length,
+      sourceType,
+      status,
+      clientType,
+      limit,
+      offset,
+    }, 'INTERNAL_TASK_CONTROLLER');
     const result = await registrationQueries.getRegisteredClients({
       search,
       sourceType,
       status,
+      limit,
+      offset,
       clientType,
-      limit: parseInt(limit, 10) || 100,
-      offset: parseInt(offset, 10) || 0,
     });
 
     return res.status(200).json({
@@ -597,7 +617,10 @@ async function getRegistrations(req, res) {
       offset: result.offset,
     });
   } catch (error) {
-    logger.error('Failed to fetch registered clients', { error: error.message }, 'INTERNAL_TASK_CONTROLLER');
+    logger.error('Failed to fetch registered clients', { error }, 'INTERNAL_TASK_CONTROLLER');
+    if (error?.code === 'PERSISTENCE_UNAVAILABLE') {
+      return res.status(503).json({ success: false, error: REGISTRATION_MESSAGES.DATABASE_UNAVAILABLE, retryable: true });
+    }
     return res.status(500).json({ success: false, error: 'Failed to retrieve registered clients.' });
   }
 }
@@ -605,23 +628,21 @@ async function getRegistrations(req, res) {
 async function handleRegistrationAction(req, res) {
   try {
     const { id } = req.params;
-    const { action, remarks } = req.body ?? {};
-
-    if (!['accept', 'reject'].includes(action)) {
+    const validation = validatePayload(VALIDATION_SCHEMAS.registrationAction, req.body);
+    if (!validation.isValid) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid action provided. Expected "accept" or "reject".',
+        error: REGISTRATION_MESSAGES.ACTION_INVALID,
+        details: validation.errors,
       });
     }
+    const { action, remarks = '' } = validation.sanitizedData;
 
     logger.info('Processing client registration action', { id, action }, 'INTERNAL_TASK_CONTROLLER');
-    const client = await registrationQueries.updateClientRegistrationStatus(id, action, remarks);
+    const client = await registrationQueries.updateClientRegistrationStatus(id, action, remarks, req.user || {});
 
     if (!client) {
-      return res.status(400).json({
-        success: false,
-        error: 'Registration record not found or already processed.',
-      });
+      return res.status(404).json({ success: false, error: REGISTRATION_MESSAGES.NOT_FOUND });
     }
 
     const actionText = action === 'accept' ? 'ACCEPTED' : 'REJECTED';
@@ -639,7 +660,7 @@ async function handleRegistrationAction(req, res) {
           recipientName: client.userName,
           contactPhone: client.phoneNumber,
           mobileNumber: client.phoneNumber,
-          tempPassword: client.tempPassword || 'Procucev#2026Auto',
+          ...(client.tempPassword ? { tempPassword: client.tempPassword } : {}),
         });
         logger.info('Buyer credentials email dispatched successfully upon registration approval', { id, email: client.userEmail }, 'INTERNAL_TASK_CONTROLLER');
       } catch (mailErr) {
@@ -657,7 +678,16 @@ async function handleRegistrationAction(req, res) {
       client,
     });
   } catch (error) {
-    logger.error('Failed to process client registration action', { error: error.message }, 'INTERNAL_TASK_CONTROLLER');
+    logger.error('Failed to process client registration action', { error }, 'INTERNAL_TASK_CONTROLLER');
+    if (error?.code === 'PERSISTENCE_UNAVAILABLE') {
+      return res.status(503).json({ success: false, error: REGISTRATION_MESSAGES.DATABASE_UNAVAILABLE, retryable: true });
+    }
+    if (error?.code === 'REGISTRATION_ALREADY_PROCESSED') {
+      return res.status(409).json({ success: false, error: REGISTRATION_MESSAGES.ALREADY_PROCESSED, retryable: false });
+    }
+    if (error?.code === 'INVALID_REGISTRATION_ACTION') {
+      return res.status(400).json({ success: false, error: REGISTRATION_MESSAGES.ACTION_INVALID });
+    }
     return res.status(500).json({
       success: false,
       error: 'Failed to update client registration status.',

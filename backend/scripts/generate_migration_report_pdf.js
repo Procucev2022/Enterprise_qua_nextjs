@@ -231,7 +231,7 @@ curY += 106;
 // 6. SQL Migration Blueprint
 curY = drawSectionBar('6. Production SQL / D1 Migration Script', curY);
 
-const sqlSnippet = 
+const sqlSnippet =
 `-- 1. Realignment for Inverted "mechanical clamps" / "Raw Material" Vendors in D1 / SQLite
 UPDATE vendors
 SET raw = json_set(

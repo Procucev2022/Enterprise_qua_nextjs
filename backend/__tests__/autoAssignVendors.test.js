@@ -8,6 +8,11 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
 
   beforeEach(() => {
     originalPool = domainPool.pool;
+    jest.spyOn(domainQueries, 'getRFQSnapshotByIdFromDB').mockImplementation(async (id) => {
+      const rfq = storeService.getRFQById(id);
+      return rfq ? { id: rfq.id, rfq, raw: JSON.stringify(rfq) } : null;
+    });
+    jest.spyOn(domainQueries, 'updateRFQIfUnchangedInDB').mockImplementation(async (_snapshot, rfq) => rfq);
   });
 
   afterEach(() => {
@@ -31,7 +36,7 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       const rfq = { id: 'rfq-m0', sourcingMode: 'mode_0', category: 'Electrical' };
       const spy = jest.spyOn(storeService, 'augmentV0AssignmentsFromDB').mockResolvedValue({ ...rfq, augmented: true });
       const res = await storeService.autoAssignVendorsFromDB(rfq);
-      expect(spy).toHaveBeenCalledWith(rfq);
+      expect(spy).toHaveBeenCalledWith(rfq, { deferChasers: false });
       expect(res.augmented).toBe(true);
     });
 
@@ -59,7 +64,7 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       ];
 
       jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue(mockVendors);
-      jest.spyOn(domainQueries, 'upsertRFQInDB').mockResolvedValue();
+      jest.spyOn(domainQueries, 'upsertRFQInDB').mockImplementation(async (updatedRfq) => updatedRfq);
       const chaserSpy = jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {});
 
       const updated = await storeService.autoAssignVendorsFromDB(rfq);
@@ -69,6 +74,67 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       expect(updated.assignedVendors[1].id).toBe('v-far');
       expect(updated.procucevVendorCount).toBe(2);
       expect(chaserSpy).toHaveBeenCalled();
+    });
+
+    test('reapplies assignment additions after a CAS conflict without dropping concurrent vendors or duplicating chasers', async () => {
+      domainPool.pool = { query: jest.fn() };
+      jest.spyOn(domainQueries, 'upsertRFQInDB').mockImplementation(async (rfq) => rfq);
+      const rfq = storeService.createRFQ({
+        id: 'rfq-auto-cas-merge',
+        title: 'Concurrent Assignment RFQ',
+        category: 'Tools',
+        sourcingMode: 'mode_3',
+        assignedVendors: [],
+      });
+      const initial = { ...rfq, assignedVendors: [] };
+      const concurrent = { ...initial, assignedVendors: [{ id: 'v-concurrent', name: 'Concurrent Vendor' }] };
+      const newVendor = { id: 'v-new', name: 'New Vendor', majorCategory: 'Tools', source: 'procucev_network' };
+      const getSnapshotSpy = domainQueries.getRFQSnapshotByIdFromDB
+        .mockResolvedValueOnce({ id: rfq.id, rfq: initial, raw: JSON.stringify(initial) })
+        .mockResolvedValueOnce({ id: rfq.id, rfq: concurrent, raw: JSON.stringify(concurrent) });
+      jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([newVendor, newVendor]);
+      jest.spyOn(storeService, 'selectVendorsPerCategory').mockReturnValue([newVendor, newVendor]);
+      const compareAndSwapSpy = domainQueries.updateRFQIfUnchangedInDB
+        .mockResolvedValueOnce(null)
+        .mockImplementationOnce(async (_snapshot, updatedRFQ) => updatedRFQ);
+      const chaserSpy = jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {});
+
+      const updated = await storeService.autoAssignVendorsFromDB(rfq);
+
+      expect(getSnapshotSpy).toHaveBeenCalledTimes(2);
+      expect(compareAndSwapSpy).toHaveBeenCalledTimes(2);
+      expect(updated.assignedVendors.map((vendor) => vendor.id)).toEqual(['v-concurrent', 'v-new']);
+      expect(chaserSpy).toHaveBeenCalledTimes(1);
+      expect(chaserSpy.mock.calls[0][1].map((vendor) => vendor.id)).toEqual(['v-new']);
+    });
+
+    test('does not schedule a second chaser when another writer already assigned the same vendor', async () => {
+      domainPool.pool = { query: jest.fn() };
+      jest.spyOn(domainQueries, 'upsertRFQInDB').mockImplementation(async (rfq) => rfq);
+      const rfq = storeService.createRFQ({
+        id: 'rfq-auto-cas-same-vendor',
+        title: 'Concurrent Duplicate Assignment RFQ',
+        category: 'Tools',
+        sourcingMode: 'mode_3',
+        assignedVendors: [],
+      });
+      const initial = { ...rfq, assignedVendors: [] };
+      const concurrent = { ...initial, assignedVendors: [{ id: 'v-already-assigned', name: 'Already Assigned' }] };
+      const concurrentVendor = { id: 'v-already-assigned', name: 'Already Assigned', majorCategory: 'Tools', source: 'procucev_network' };
+      domainQueries.getRFQSnapshotByIdFromDB
+        .mockResolvedValueOnce({ id: rfq.id, rfq: initial, raw: JSON.stringify(initial) })
+        .mockResolvedValueOnce({ id: rfq.id, rfq: concurrent, raw: JSON.stringify(concurrent) });
+      jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([concurrentVendor]);
+      jest.spyOn(storeService, 'selectVendorsPerCategory').mockReturnValue([concurrentVendor]);
+      domainQueries.updateRFQIfUnchangedInDB
+        .mockResolvedValueOnce(null)
+        .mockImplementationOnce(async (_snapshot, updatedRFQ) => updatedRFQ);
+      const chaserSpy = jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {});
+
+      const updated = await storeService.autoAssignVendorsFromDB(rfq);
+
+      expect(updated.assignedVendors.map((vendor) => vendor.id)).toEqual(['v-already-assigned']);
+      expect(chaserSpy).not.toHaveBeenCalled();
     });
 
     test('falls back to getVendorsPageFromDB if getPublicVendorsMatchingCategories returns empty array', async () => {
@@ -87,7 +153,7 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
         ],
         total: 1,
       });
-      jest.spyOn(domainQueries, 'upsertRFQInDB').mockResolvedValue();
+      jest.spyOn(domainQueries, 'upsertRFQInDB').mockImplementation(async (updatedRfq) => updatedRfq);
 
       const updated = await storeService.autoAssignVendorsFromDB(rfq);
       expect(updated.assignedVendors.some((v) => v.id === 'v-fallback')).toBe(true);
@@ -107,7 +173,7 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       jest.spyOn(storeService, 'candidateVendorsForRFQ').mockReturnValue([
         { id: 'v-mem', name: 'Memory Vendor', category: 'Hardware', majorCategory: 'Hardware', source: 'procucev_network' },
       ]);
-      jest.spyOn(domainQueries, 'upsertRFQInDB').mockResolvedValue();
+      jest.spyOn(domainQueries, 'upsertRFQInDB').mockImplementation(async (updatedRfq) => updatedRfq);
 
       const updated = await storeService.autoAssignVendorsFromDB(rfq);
       expect(updated.assignedVendors.some((v) => v.id === 'v-mem')).toBe(true);
@@ -148,7 +214,7 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       expect(updated.assignedVendors.length).toBe(1);
     });
 
-    test('handles chaser scheduling errors and DB upsert errors gracefully', async () => {
+    test('logs chaser scheduling errors after the RFQ update is durable', async () => {
       domainPool.pool = { query: jest.fn() };
       const rfq = storeService.createRFQ({
         id: 'rfq-auto-test-6',
@@ -163,10 +229,33 @@ describe('autoAssignVendorsFromDB and candidateVendorsForRFQAsync', () => {
       jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {
         throw new Error('Chaser error');
       });
-      jest.spyOn(domainQueries, 'upsertRFQInDB').mockRejectedValue(new Error('DB upsert error'));
+      jest.spyOn(domainQueries, 'upsertRFQInDB').mockImplementation(async (updatedRfq) => updatedRfq);
 
       const updated = await storeService.autoAssignVendorsFromDB(rfq);
       expect(updated.assignedVendors.some((v) => v.id === 'v-err')).toBe(true);
+    });
+
+    test('does not publish assignments or schedule chasers when the durable RFQ update fails', async () => {
+      domainPool.pool = { query: jest.fn() };
+      const rfq = storeService.createRFQ({
+        id: 'rfq-auto-persist-failure',
+        title: 'Persistence Failure',
+        category: 'Tools',
+        sourcingMode: 'mode_3',
+      });
+      jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([
+        { id: 'v-persist-failure', name: 'Persist Failure Vendor', source: 'procucev_network', category: 'Tools' },
+      ]);
+      const chaserSpy = jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {});
+      jest.spyOn(domainQueries, 'updateRFQIfUnchangedInDB').mockRejectedValue(new Error('DB compare-and-swap error'));
+
+      await expect(storeService.autoAssignVendorsFromDB(rfq)).rejects.toMatchObject({
+        statusCode: 503,
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
+
+      expect(rfq.assignedVendors).toEqual([]);
+      expect(chaserSpy).not.toHaveBeenCalled();
     });
   });
 

@@ -7,6 +7,7 @@
 const pool = require('./pool');
 const crypto = require('crypto');
 const storeService = require('../services/storeService');
+const { logger } = require('../services/loggerService');
 const { VENDOR_PLAN_RFQ_QUOTA, VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
 
 function parseRaw(val, fallback = {}) {
@@ -61,6 +62,40 @@ function getSellerCreditsUsed(v, totalCredits, available) {
 // In-memory communications storage when pool.hasStorage() is false (e.g. tests / offline)
 const inMemoryCommunications = new Map();
 
+function throwPersistenceUnavailable(operation, cause) {
+  const error = new Error(`Payment dues ${operation} failed because configured database persistence is unavailable.`);
+  error.code = 'PERSISTENCE_UNAVAILABLE';
+  error.cause = cause;
+  logger.error('Payment dues persistence failed; refusing in-memory fallback', {
+    operation,
+    error: cause,
+  }, 'PAYMENT_DUES');
+  throw error;
+}
+
+function mapCommunicationRow(row) {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    accountType: row.account_type,
+    channel: row.channel,
+    recipient: row.recipient,
+    subject: row.subject,
+    message: row.message,
+    notificationStatus: row.notification_status,
+    deliveryStatus: row.delivery_status,
+    acknowledgementStatus: row.acknowledgement_status,
+    communicatedBy: row.communicated_by,
+    sentAt: row.sent_at,
+    acknowledgedAt: row.acknowledged_at,
+    acknowledgedBy: row.acknowledged_by,
+    notes: row.notes,
+    metadata: parseRaw(row.metadata, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 /**
  * Reset in-memory communications (used by unit tests)
  */
@@ -94,8 +129,8 @@ async function fetchRawBuyers() {
           };
         });
       }
-    } catch {
-      // fallback to storeService below
+    } catch (error) {
+      throwPersistenceUnavailable('buyer account read', error);
     }
   }
 
@@ -131,8 +166,8 @@ async function fetchRawVendors() {
           };
         });
       }
-    } catch {
-      // fallback to storeService below
+    } catch (error) {
+      throwPersistenceUnavailable('vendor account read', error);
     }
   }
 
@@ -144,54 +179,66 @@ async function fetchRawVendors() {
 /**
  * Fetch communications for accounts
  */
-async function fetchCommunicationsMap() {
+async function fetchCommunicationsMap(accountIds) {
   const commMap = new Map();
+  const hasAccountFilter = Array.isArray(accountIds);
+  const selectedAccountIds = hasAccountFilter ? [...new Set(accountIds.filter(Boolean))] : null;
+  const selectedAccountIdSet = hasAccountFilter ? new Set(selectedAccountIds) : null;
+  if (hasAccountFilter && selectedAccountIds.length === 0) return commMap;
 
   if (pool.hasStorage()) {
     try {
-      const sql = 'SELECT * FROM payment_dues_communications ORDER BY sent_at DESC';
-      const result = await pool.query(sql, [], {
+      const accountFilterSql = hasAccountFilter ? 'WHERE account_id = ANY($1::text[])' : '';
+      const accountFilterD1Sql = hasAccountFilter
+        ? 'WHERE account_id IN (SELECT value FROM json_each($1))'
+        : '';
+      const sql = `SELECT account_id, channel, notification_status, delivery_status, acknowledgement_status, sent_at
+        FROM (
+          SELECT account_id, channel, notification_status, delivery_status, acknowledgement_status, sent_at,
+            ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY sent_at DESC) AS row_num
+          FROM payment_dues_communications
+          ${accountFilterSql}
+        ) latest
+        WHERE row_num = 1`;
+      const d1Sql = `SELECT account_id, channel, notification_status, delivery_status, acknowledgement_status, sent_at
+        FROM (
+          SELECT account_id, channel, notification_status, delivery_status, acknowledgement_status, sent_at,
+            ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY sent_at DESC) AS row_num
+          FROM payment_dues_communications
+          ${accountFilterD1Sql}
+        ) latest
+        WHERE row_num = 1`;
+      const params = hasAccountFilter ? [selectedAccountIds] : [];
+      const result = await pool.query(sql, params, {
         d1: true,
-        d1Text: 'SELECT * FROM payment_dues_communications ORDER BY sent_at DESC',
+        d1Text: d1Sql,
+        ...(hasAccountFilter ? { d1Params: [JSON.stringify(selectedAccountIds)] } : {}),
         useCache: true,
         tag: 'payment_dues_communications',
         ttlMs: 15000,
       });
       if (result && Array.isArray(result.rows)) {
         result.rows.forEach((row) => {
-          const list = commMap.get(row.account_id) || [];
-          list.push({
-            id: row.id,
+          commMap.set(row.account_id, [{
             accountId: row.account_id,
-            accountType: row.account_type,
             channel: row.channel,
-            recipient: row.recipient,
-            subject: row.subject,
-            message: row.message,
             notificationStatus: row.notification_status,
             deliveryStatus: row.delivery_status,
             acknowledgementStatus: row.acknowledgement_status,
-            communicatedBy: row.communicated_by,
             sentAt: row.sent_at,
-            acknowledgedAt: row.acknowledged_at,
-            acknowledgedBy: row.acknowledged_by,
-            notes: row.notes,
-            metadata: parseRaw(row.metadata, {}),
-            createdAt: row.created_at,
-            updatedAt: row.updated_at,
-          });
-          commMap.set(row.account_id, list);
+          }]);
         });
         return commMap;
       }
-    } catch {
-      // fallback to in-memory map
+    } catch (error) {
+      throwPersistenceUnavailable('latest communication lookup', error);
     }
   }
 
   // In-memory fallback
   for (const [accId, list] of inMemoryCommunications.entries()) {
-    commMap.set(accId, [...list]);
+    if (hasAccountFilter && !selectedAccountIdSet.has(accId)) continue;
+    if (list[0]) commMap.set(accId, [list[0]]);
   }
   return commMap;
 }
@@ -212,11 +259,25 @@ async function getLowCreditAccounts({
   page = 1,
   limit = 25,
 } = {}) {
-  const [buyers, vendors, commMap] = await Promise.all([
+  const [buyers, vendors] = await Promise.all([
     module.exports.fetchRawBuyers(),
     module.exports.fetchRawVendors(),
-    fetchCommunicationsMap(),
   ]);
+  const lowCreditAccountIds = [
+    ...buyers
+      .filter((buyer) => {
+        const available = parseCredits(buyer.remainingFreeRFQs, 5);
+        return available <= 2 && available >= 0;
+      })
+      .map((buyer) => buyer.id),
+    ...vendors
+      .filter((vendor) => {
+        const available = getSellerAvailableCredits(vendor);
+        return available <= 2 && available >= 0;
+      })
+      .map((vendor) => vendor.id),
+  ].filter(Boolean);
+  const commMap = await fetchCommunicationsMap(lowCreditAccountIds);
 
   const allEligibleAccounts = [];
 
@@ -477,8 +538,8 @@ async function recordCommunication({
         ],
         { d1: true, d1Text: d1Sql }
       );
-    } catch {
-      // store in memory on DB failure
+    } catch (err) {
+      throwPersistenceUnavailable('communication insert', err);
     }
   }
 
@@ -488,6 +549,54 @@ async function recordCommunication({
   inMemoryCommunications.set(accountId, list);
 
   return record;
+}
+
+async function updateCommunicationDeliveryStatus({
+  communicationId,
+  notificationStatus,
+  deliveryStatus,
+  acknowledgementStatus,
+}) {
+  if (!communicationId) return null;
+
+  const now = new Date().toISOString();
+  if (pool.hasStorage()) {
+    const sql = `
+      UPDATE payment_dues_communications
+      SET notification_status = $2,
+          delivery_status = $3,
+          acknowledgement_status = $4,
+          updated_at = $5
+      WHERE id = $1
+      RETURNING *
+    `;
+    try {
+      const result = await pool.query(sql, [
+        communicationId,
+        notificationStatus,
+        deliveryStatus,
+        acknowledgementStatus,
+        now,
+      ], { d1: true, d1Text: sql });
+      const row = result?.rows?.[0];
+      if (!row) return null;
+      return mapCommunicationRow(row);
+    } catch (error) {
+      throwPersistenceUnavailable('delivery status update', error);
+    }
+  }
+
+  for (const communications of inMemoryCommunications.values()) {
+    const communication = communications.find((item) => item.id === communicationId);
+    if (!communication) continue;
+    communication.notificationStatus = notificationStatus;
+    communication.deliveryStatus = deliveryStatus;
+    communication.acknowledgementStatus = acknowledgementStatus;
+    communication.updatedAt = now;
+    return communication;
+  }
+
+  return null;
 }
 
 /**
@@ -520,6 +629,7 @@ async function updateAcknowledgementStatus({
           WHERE id = $6
              OR metadata->>'gatewayMessageId' = $6
              OR metadata->>'msgid' = $6
+              OR metadata->>'messageId' = $6
              OR metadata->'smsResult'->>'messageId' = $6
              OR metadata->'emailResult'->>'messageId' = $6
           RETURNING *
@@ -540,6 +650,24 @@ async function updateAcknowledgementStatus({
           )
           RETURNING *
         `;
+      const d1Sql = communicationId
+        ? `
+          UPDATE payment_dues_communications
+          SET acknowledgement_status = COALESCE($1, acknowledgement_status),
+              delivery_status = COALESCE($2, delivery_status),
+              notes = COALESCE($3, notes),
+              acknowledged_at = CASE WHEN $1 = 'Acknowledged' THEN $4 ELSE acknowledged_at END,
+              acknowledged_by = CASE WHEN $1 = 'Acknowledged' THEN $5 ELSE acknowledged_by END,
+              updated_at = $4
+          WHERE id = $6
+             OR json_extract(metadata, '$.gatewayMessageId') = $6
+             OR json_extract(metadata, '$.msgid') = $6
+             OR json_extract(metadata, '$.messageId') = $6
+             OR json_extract(metadata, '$.smsResult.messageId') = $6
+             OR json_extract(metadata, '$.emailResult.messageId') = $6
+          RETURNING *
+        `
+        : sql;
       const queryParams = [
         acknowledgementStatus || null,
         deliveryStatus || null,
@@ -548,7 +676,7 @@ async function updateAcknowledgementStatus({
         updatedBy,
         targetParam,
       ];
-      const result = await pool.query(sql, queryParams);
+      const result = await pool.query(sql, queryParams, { d1: true, d1Text: d1Sql });
       if (result && result.rows && result.rows.length > 0) {
         const row = result.rows[0];
         updatedRecord = {
@@ -572,10 +700,12 @@ async function updateAcknowledgementStatus({
           updatedAt: row.updated_at,
         };
       }
-    } catch {
-      // fallback to in-memory
+    } catch (err) {
+      throwPersistenceUnavailable('acknowledgement update', err);
     }
   }
+
+  if (pool.hasStorage()) return updatedRecord;
 
   // Update in-memory storage
   if (communicationId) {
@@ -697,29 +827,10 @@ async function getCommunicationHistory(accountId, options = {}) {
         d1Text: sql,
       });
       if (result && Array.isArray(result.rows)) {
-        return result.rows.map((row) => ({
-          id: row.id,
-          accountId: row.account_id,
-          accountType: row.account_type,
-          channel: row.channel,
-          recipient: row.recipient,
-          subject: row.subject,
-          message: row.message,
-          notificationStatus: row.notification_status,
-          deliveryStatus: row.delivery_status,
-          acknowledgementStatus: row.acknowledgement_status,
-          communicatedBy: row.communicated_by,
-          sentAt: row.sent_at,
-          acknowledgedAt: row.acknowledged_at,
-          acknowledgedBy: row.acknowledged_by,
-          notes: row.notes,
-          metadata: parseRaw(row.metadata, {}),
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        }));
+        return result.rows.map(mapCommunicationRow);
       }
-    } catch {
-      // fallback
+    } catch (error) {
+      throwPersistenceUnavailable('communication history read', error);
     }
   }
 
@@ -734,6 +845,26 @@ async function getCommunicationHistory(accountId, options = {}) {
 
   const list = inMemoryCommunications.get(accountId) || [];
   return list.slice(offset, offset + limit);
+}
+
+async function getCommunicationById(communicationId) {
+  if (!communicationId) return null;
+
+  if (pool.hasStorage()) {
+    const sql = 'SELECT * FROM payment_dues_communications WHERE id = $1 LIMIT 1';
+    try {
+      const result = await pool.query(sql, [communicationId], { d1: true, d1Text: sql });
+      return result?.rows?.[0] ? mapCommunicationRow(result.rows[0]) : null;
+    } catch (error) {
+      throwPersistenceUnavailable('communication lookup', error);
+    }
+  }
+
+  for (const communications of inMemoryCommunications.values()) {
+    const record = communications.find((communication) => communication.id === communicationId);
+    if (record) return record;
+  }
+  return null;
 }
 
 
@@ -784,30 +915,11 @@ async function queryCommunications({
       const rows = Array.isArray(dataResult?.rows) ? dataResult.rows : [];
 
       return {
-        items: rows.map((row) => ({
-          id: row.id,
-          accountId: row.account_id,
-          accountType: row.account_type,
-          channel: row.channel,
-          recipient: row.recipient,
-          subject: row.subject,
-          message: row.message,
-          notificationStatus: row.notification_status,
-          deliveryStatus: row.delivery_status,
-          acknowledgementStatus: row.acknowledgement_status,
-          communicatedBy: row.communicated_by,
-          sentAt: row.sent_at,
-          acknowledgedAt: row.acknowledged_at,
-          acknowledgedBy: row.acknowledged_by,
-          notes: row.notes,
-          metadata: parseRaw(row.metadata, {}),
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        })),
+        items: rows.map(mapCommunicationRow),
         total,
       };
-    } catch {
-      // fallback to in-memory
+    } catch (error) {
+      throwPersistenceUnavailable('communications query', error);
     }
   }
 
@@ -844,8 +956,10 @@ module.exports = {
   getLowCreditAccounts,
   getPaymentDuesSummary,
   recordCommunication,
+  updateCommunicationDeliveryStatus,
   updateAcknowledgementStatus,
   getCommunicationHistory,
+  getCommunicationById,
   queryCommunications,
   resetInMemoryCommunications,
   fetchRawBuyers,

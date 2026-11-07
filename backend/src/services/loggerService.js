@@ -11,14 +11,80 @@ const LOG_LEVELS = {
   AUDIT: 4,
 };
 
+const REDACTED_VALUE = '[REDACTED]';
+const SENSITIVE_LOG_KEYS = new Set([
+  'password', 'passwordhash', 'passcode', 'otp', 'otpcode', 'token', 'accesstoken',
+  'refreshtoken', 'bearertoken', 'secret', 'authorization', 'cookie', 'apikey', 'apitoken',
+  'sessionid', 'sessiontoken', 'jwt', 'privatekey', 'encryptionkey', 'secretkey', 'clientsecret',
+]);
+const IDENTIFIER_LOG_KEYS = new Set([
+  'vendorid', 'buyerid', 'userid', 'rfqid', 'rfqnumber', 'requestid', 'correlationid',
+  'taskid', 'approvalid', 'registrationid', 'documentid', 'paymentlinkid',
+  'messageid', 'smsgid', 'jobid', 'shasignature', 'externalid',
+]);
+
+function maskEmail(value) {
+  const separator = value.lastIndexOf('@');
+  if (separator <= 0) return REDACTED_VALUE;
+  return `${value.slice(0, 1)}***${value.slice(separator)}`;
+}
+
+function maskPhone(value) {
+  const digits = String(value).replace(/\D/g, '');
+  return `***${digits.slice(-2)}`;
+}
+
+function redactLogText(value) {
+  return String(value)
+    .replace(/([?&](?:email|recipient|phone|mobile|token|otp|password|authorization)=)[^&#\s]*/gi, `$1${REDACTED_VALUE}`)
+    .replace(/\b([A-Z0-9._%+-]{1,64})@([A-Z0-9.-]+\.[A-Z]{2,})\b/gi, (_match, local, domain) => `${local.slice(0, 1)}***@${domain}`)
+    .replace(/(^|[^A-Z0-9-])(\+?\d{10,15})(?=$|[^A-Z0-9-])/gi, (_match, prefix, phone) => `${prefix}${maskPhone(phone)}`)
+    .replace(/(^|[^A-Z0-9-])(\+?\d{1,3}[\s.-]\d{3,5}[\s.-]\d{4,6})(?=$|[^A-Z0-9-])/gi, (_match, prefix, phone) => `${prefix}${maskPhone(phone)}`);
+}
+
+function redactLogValue(value, key = '', seen = new WeakSet(), preserveAuditIdentity = false) {
+  const normalizedKey = String(key).replace(/[^a-z0-9]/gi, '').toLowerCase();
+  if (SENSITIVE_LOG_KEYS.has(normalizedKey)) return REDACTED_VALUE;
+  if (IDENTIFIER_LOG_KEYS.has(normalizedKey)) return value;
+  if (preserveAuditIdentity && normalizedKey === 'useremail') return value;
+
+  if (typeof value === 'string') {
+    if (/(email|recipientemail|^to)$/.test(normalizedKey) && value.includes('@')) return maskEmail(value);
+    if (/(phone|mobile|msisdn|telephone|formattednumber)/.test(normalizedKey) && value.replace(/\D/g, '').length >= 7) {
+      return maskPhone(value);
+    }
+    return redactLogText(value);
+  }
+  if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Error) {
+    return {
+      errorName: value.name,
+      errorMessage: redactLogText(value.message),
+      stackTrace: value.stack ? redactLogText(value.stack) : undefined,
+    };
+  }
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((item) => redactLogValue(item, key, seen, preserveAuditIdentity));
+  return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [
+    childKey,
+    redactLogValue(childValue, childKey, seen, preserveAuditIdentity),
+  ]));
+}
+
 class LoggerService {
   constructor(options = {}) {
     this.logsDir = options.logsDir || LoggerService.resolveDefaultLogsDir();
-    this.maxBufferSize = options.maxBufferSize || 1000;
-    this.retentionDays = options.retentionDays || 30;
-    this.maxFileSizeBytes = options.maxFileSizeBytes || 10 * 1024 * 1024; // 10MB default
+    this.maxBufferSize = options.maxBufferSize ?? 1000;
+    this.retentionDays = options.retentionDays ?? 30;
+    this.maxFileSizeBytes = options.maxFileSizeBytes ?? 10 * 1024 * 1024; // 10MB default
+    this.purgeAfterWrites = options.purgeAfterWrites ?? 500;
+    this.purgeCheckIntervalMs = options.purgeCheckIntervalMs ?? 15 * 60 * 1000;
     this.isLocalLoggingEnabled = options.isLocalLoggingEnabled !== undefined ? options.isLocalLoggingEnabled : true;
     this.inMemoryLogs = [];
+    this.writesSincePurge = 0;
+    this.lastPurgeAt = 0;
+    this.lastDiskFailureNotificationAt = 0;
 
     this.ensureLogsDirectory();
   }
@@ -46,9 +112,21 @@ class LoggerService {
           fs.mkdirSync(this.logsDir, { recursive: true });
         }
       } catch (err) {
-        // Fallback for restricted environments
+        this.reportDiskFailure('create log directory', err);
       }
     }
+  }
+
+  reportDiskFailure(operation, error) {
+    if (process.env.NODE_ENV === 'test') return;
+
+    const now = Date.now();
+    if (now - this.lastDiskFailureNotificationAt < 60 * 1000) return;
+    this.lastDiskFailureNotificationAt = now;
+    const detail = error instanceof Error
+      ? { errorName: error.name, errorMessage: error.message, stackTrace: error.stack }
+      : { errorMessage: String(error) };
+    console.error(`[ERROR] [LOCAL_LOG_STORAGE] ${operation} failed ${JSON.stringify(detail)}`);
   }
 
   formatTimestamp(date = new Date()) {
@@ -69,19 +147,26 @@ class LoggerService {
       stackTrace = meta.error.stack;
       metadata = { ...meta, errorMessage: meta.error.message };
       delete metadata.error;
+    } else if (meta && typeof meta.stackTrace === 'string') {
+      stackTrace = meta.stackTrace;
+      delete metadata.stackTrace;
     }
 
+    const auditLevel = level === 'AUDIT';
+    metadata = redactLogValue(metadata, 'metadata', new WeakSet(), auditLevel);
     const logEntry = {
       id,
       timestamp,
       level,
       category,
-      message,
+      message: redactLogText(message),
       metadata,
       correlationId: metadata.correlationId || metadata.requestId || `corr-${Date.now()}`,
-      userEmail: metadata.userEmail || 'system@procucev.ai',
+      userEmail: auditLevel
+        ? (metadata.userEmail || 'system@procucev.ai')
+        : redactLogText(metadata.userEmail || 'system@procucev.ai'),
       ipAddress: metadata.ipAddress || '127.0.0.1 (Local Environment)',
-      ...(stackTrace ? { stackTrace } : {}),
+      ...(stackTrace ? { stackTrace: redactLogText(stackTrace) } : {}),
     };
 
     return logEntry;
@@ -109,8 +194,19 @@ class LoggerService {
         const auditLogPath = path.join(this.logsDir, 'audit.log');
         fs.appendFileSync(auditLogPath, line, 'utf8');
       }
-    } catch {
-      // Graceful fallback if filesystem write fails
+      this.writesSincePurge += 1;
+      const now = Date.now();
+      if (
+        this.writesSincePurge >= this.purgeAfterWrites ||
+        now - this.lastPurgeAt >= this.purgeCheckIntervalMs
+      ) {
+        this.writesSincePurge = 0;
+        this.lastPurgeAt = now;
+        this.purgeExpiredLogs();
+      }
+    } catch (error) {
+      // Keep console logging available while making local persistence failures visible.
+      this.reportDiskFailure('write log entry', error);
     }
   }
 
@@ -122,14 +218,20 @@ class LoggerService {
       // Use entry.metadata/entry.stackTrace (already normalized by createLogEntry) rather than the
       // raw `meta` — a plain Error's message/stack are non-enumerable, so Object.keys(meta) on the
       // raw value is empty and JSON.stringify(meta) silently drops the actual error detail.
-      const metaStr = entry.metadata && Object.keys(entry.metadata).length > 0 ? ` ${JSON.stringify(entry.metadata)}` : '';
+      // Audit entries keep the full actor identity in the restricted audit
+      // record, but stdout is also forwarded to hosted log providers. Redact
+      // that console projection so the provider stream does not expose PII.
+      const consoleMetadata = redactLogValue(entry.metadata, 'metadata');
+      const metaStr = consoleMetadata && Object.keys(consoleMetadata).length > 0
+        ? ` ${JSON.stringify(consoleMetadata)}`
+        : '';
       const stackStr = entry.stackTrace ? `\n${entry.stackTrace}` : '';
       if (level === 'ERROR') {
-        console.error(`[${level}] [${category}] ${message}${metaStr}${stackStr}`);
+        console.error(`[${level}] [${category}] ${entry.message}${metaStr}${stackStr}`);
       } else if (level === 'WARN') {
-        console.warn(`[${level}] [${category}] ${message}${metaStr}`);
+        console.warn(`[${level}] [${category}] ${entry.message}${metaStr}`);
       } else {
-        console.log(`[${level}] [${category}] ${message}${metaStr}`);
+        console.log(`[${level}] [${category}] ${entry.message}${metaStr}`);
       }
     }
 
@@ -272,7 +374,8 @@ class LoggerService {
   }
 
   purgeExpiredLogs(options = {}) {
-    const maxAgeDays = options.maxAgeDays || this.retentionDays;
+    const maxAgeDays = options.maxAgeDays ?? this.retentionDays;
+    const maxFileSizeBytes = options.maxSizeBytes ?? this.maxFileSizeBytes;
     const now = Date.now();
     const cutoffTime = now - maxAgeDays * 24 * 60 * 60 * 1000;
 
@@ -283,27 +386,50 @@ class LoggerService {
     });
     const purgedCount = initialCount - this.inMemoryLogs.length;
 
-    // Prune disk files if local logging is active
+    // Prune expired entries and cap every local log file at the configured size.
     let diskFilesPurged = 0;
     if (this.isLocalLoggingEnabled && fs.existsSync(this.logsDir)) {
       try {
         const files = fs.readdirSync(this.logsDir);
         files.forEach((file) => {
           const filePath = path.join(this.logsDir, file);
-          const stats = fs.statSync(filePath);
-          if (stats.isFile()) {
-            if (stats.size > this.maxFileSizeBytes) {
-              // Rotate / truncate oversized files, keeping last 500KB
-              const content = fs.readFileSync(filePath, 'utf8');
-              const lines = content.split('\n');
-              const retainedLines = lines.slice(Math.floor(lines.length / 2)).join('\n');
-              fs.writeFileSync(filePath, retainedLines, 'utf8');
+          try {
+            if (!fs.statSync(filePath).isFile()) return;
+            const content = fs.readFileSync(filePath, 'utf8');
+            const lines = content.split('\n').filter(Boolean);
+            const recentLines = lines.filter((line) => {
+              try {
+                const entry = JSON.parse(line);
+                const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : NaN;
+                return !Number.isFinite(timestamp) || timestamp >= cutoffTime;
+              } catch {
+                // Preserve unstructured lines; age cannot be established safely.
+                return true;
+              }
+            });
+
+            const retainedLines = [];
+            let retainedBytes = 0;
+            for (let index = recentLines.length - 1; index >= 0; index -= 1) {
+              const line = recentLines[index];
+              const lineBytes = Buffer.byteLength(`${line}\n`, 'utf8');
+              if (retainedBytes + lineBytes <= maxFileSizeBytes) {
+                retainedLines.unshift(line);
+                retainedBytes += lineBytes;
+              }
+            }
+
+            const nextContent = retainedLines.length > 0 ? `${retainedLines.join('\n')}\n` : '';
+            if (nextContent !== content) {
+              fs.writeFileSync(filePath, nextContent, 'utf8');
               diskFilesPurged += 1;
             }
+          } catch (error) {
+            this.reportDiskFailure('purge log file', error);
           }
         });
-      } catch {
-        // Disk purge fallback
+      } catch (error) {
+        this.reportDiskFailure('list log files for purge', error);
       }
     }
 

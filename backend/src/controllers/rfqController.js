@@ -8,6 +8,8 @@ const rfqAttachmentService = require('../services/rfqAttachmentService');
 const quoteAttachmentService = require('../services/quoteAttachmentService');
 const rfqSummaryService = require('../services/rfqSummaryService');
 const { logger } = require('../services/loggerService');
+const { getWaitUntil } = require('../db/d1Bridge');
+const pool = require('../db/pool');
 const emailGatewayService = require('../services/emailGatewayService');
 const emailIngestionService = require('../services/emailIngestionService');
 const mailerService = require('../services/mailerService');
@@ -21,16 +23,38 @@ const {
   RFQ_MODES,
   RFQ_MODE_LABELS,
   RFQ_MODE_MAP,
+  RFQ_DOWNLOAD_ERRORS,
   hasUnlimitedRfqAccess,
   hasUnlimitedQuoteAccess,
   hasUnlimitedDownloadAccess,
   resolveBuyerSourcingMode,
   MAX_INVITE_VENDORS_PER_REQUEST,
+  EVENT_OUTBOX_TYPES,
   VENDOR_FREE_CREDITS_LIMIT,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
 const RFQ_DEFAULT_STATUS = 'Quotes Pending';
+
+function trackBackgroundRfqEmail(sendEmail, failureMessage, rfqNumber) {
+  const tracked = Promise.resolve()
+    .then(sendEmail)
+    .catch((error) => {
+      logger.error(failureMessage, { rfqNumber, error }, 'RFQ_CONTROLLER');
+    });
+  const waitUntil = getWaitUntil();
+  if (waitUntil) {
+    try {
+      waitUntil(tracked);
+    } catch (error) {
+      logger.error('Could not register RFQ email delivery with the Worker lifecycle', {
+        rfqNumber,
+        error,
+      }, 'RFQ_CONTROLLER');
+    }
+  }
+  return tracked;
+}
 
 // Which sourcing modes each buyer subscription plan includes. Cumulative —
 // each paid tier adds one mode on top of the last, matching store.tsx's
@@ -515,6 +539,9 @@ async function inviteVendors(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     const result = await storeService.inviteVendorsToRFQ(id, uniqueVendorIds, req.user && req.user.email);
+    if (!result) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
     res.json({
       success: true,
       data: result.updatedRFQ,
@@ -665,7 +692,6 @@ async function getRFQById(req, res, next) {
  * Create an RFQ owned by the signed-in buyer's account.
  */
 async function createRFQ(req, res, next) {
-  let consumedFreeTrial = false;
   let requestingBuyerAccount = null;
   try {
     const body = req.body || {};
@@ -806,16 +832,10 @@ async function createRFQ(req, res, next) {
     if (requestingBuyerAccount) {
       const isUnlimited = hasUnlimitedRfqAccess(requestingBuyerAccount) || hasUnlimitedRfqAccess(req.user);
       const plan = requestingBuyerAccount.subscriptionPlan || 'free_trial';
-      const isPaidPlan = ['version_1', 'version_2', 'version_3', 'unlimited'].includes(plan) || isUnlimited;
       const entitledModes = isUnlimited
         ? SUBSCRIPTION_MODE_ENTITLEMENTS.unlimited
         : (SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.free_trial);
       const requestedMode = body.sourcingMode || 'mode_0';
-      const remainingCredits =
-        requestingBuyerAccount.remainingFreeRFQs !== undefined
-          ? requestingBuyerAccount.remainingFreeRFQs
-          : 5;
-
       const isV0 = requestedMode === 'mode_0' || requestedMode === 'v0' || requestedMode === 'version_0';
 
       // Enterprise QUA – V0 (Free Starter Trial) is universally available to all accounts (0 credits consumed).
@@ -832,37 +852,10 @@ async function createRFQ(req, res, next) {
         });
       }
 
-      // Enterprise QUA – V0 (Free Starter Trial) Flow:
-      // V0 RFQ = No credit deduction (0 credits consumed). Allowed unconditionally even when remaining credits are 0.
-      // V1 / V2 / V3 RFQ = 1 credit deducted per RFQ from buyer's 5 free RFQ credits (if on free trial).
-      // Once 5 free credits are 0, V1/V2/V3 RFQs require paid subscription.
-      // Unlimited RFQ accounts are exempt from all credit deductions across all modes.
-      if (isV0 || isUnlimited) {
-        // V0 RFQ or unlimited account: No credit deduction
-        consumedFreeTrial = false;
-      } else {
-        // V1, V2, or V3:
-        if (!isPaidPlan) {
-          if (remainingCredits <= 0) {
-            logger.warn('Rejected RFQ creation: free credits exhausted for V1/V2/V3', { buyerAccountId: requestingBuyerAccount.id, requestedMode }, 'RFQ_CONTROLLER');
-            return res.status(403).json({
-              success: false,
-              error: 'Your 5 free trial RFQ credits for V1/V2/V3 have been fully used. Upgrade to a paid plan to raise more V1/V2/V3 RFQs, or continue using V0 Free Starter for Procucev Network RFQs.',
-            });
-          }
-          // Same credit rule the email-ingestion path applies — kept in one
-          // place on the store so both RFQ-creation methods stay in agreement.
-          const consumeResult = storeService.consumeRFQCreditIfApplicable(requestingBuyerAccount, requestedMode);
-          if (!consumeResult.consumed) {
-            logger.warn('Rejected RFQ creation: free trial exhausted', { buyerAccountId: requestingBuyerAccount.id }, 'RFQ_CONTROLLER');
-            return res.status(403).json({
-              success: false,
-              error: 'Your free trial RFQs are used up. Upgrade to a paid plan to raise more.',
-            });
-          }
-          consumedFreeTrial = true;
-        }
-      }
+      // Credit availability and consumption are checked against the persisted
+      // buyer row inside createRFQDurably's RFQ+ledger transaction. A cache
+      // precheck here could reject a newly credited account or overspend after
+      // concurrent requests.
     }
 
     // Generated from the line items the buyer confirmed, so the summary
@@ -876,7 +869,26 @@ async function createRFQ(req, res, next) {
 
     logger.info(`Creating new RFQ: ${body.title}`, { title: body.title, category: body.category, budget: body.budget }, 'RFQ_CONTROLLER');
 
-    const created = storeService.createRFQ({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
+    const buyerAcknowledgementRecipient = req.user && req.user.email ? req.user.email : body.sourceEmail;
+    const shouldSendBuyerAcknowledgement = Boolean(
+      buyerAcknowledgementRecipient && body.source !== 'email_gateway'
+    );
+    const shouldSendGatewayNotification = body.source === 'email_gateway' || body.targetGatewayEmail;
+    const gatewayNotificationTarget = shouldSendGatewayNotification && pool.hasStorage()
+      ? {
+        recipientEmail: String(body.targetGatewayEmail || 'RFQ@procucev.com').trim(),
+        sourceEmail: body.sourceEmail || (req.user && req.user.email) || null,
+      }
+      : null;
+    const created = await storeService.createRFQDurably({
+      ...body,
+      extractedEntities: lineItems,
+      aiSummary,
+      ...(buyerAcknowledgementRecipient ? { buyerEmail: buyerAcknowledgementRecipient } : {}),
+      ...(req.user && req.user.name ? { raisedByName: req.user.name } : {}),
+      creationAcknowledgementRequested: shouldSendBuyerAcknowledgement,
+      ...(gatewayNotificationTarget ? { gatewayNotificationTarget } : {}),
+    }, requestingBuyerAccount);
 
     // createRFQ counts matched Procucev vendors against the capped in-memory
     // vendor subset, which undercounts (often to 0) once the directory grows
@@ -915,7 +927,17 @@ async function createRFQ(req, res, next) {
       try {
         const dbCount = await storeService.resolveProcucevVendorCountFromDB(finalRFQ);
         if (typeof dbCount === 'number' && dbCount > (finalRFQ.procucevVendorCount || 0)) {
+          const previousCount = finalRFQ.procucevVendorCount || 0;
           finalRFQ.procucevVendorCount = dbCount;
+          try {
+            await storeService.persistRFQDurably(finalRFQ);
+          } catch (persistError) {
+            finalRFQ.procucevVendorCount = previousCount;
+            logger.warn('Could not persist DB-backed RFQ vendor count; keeping the last saved value', {
+              rfqNumber: finalRFQ.rfqNumber,
+              error: persistError.message,
+            }, 'RFQ_CONTROLLER');
+          }
         }
       } catch (err) {
         logger.warn('Could not resolve DB-backed Procucev vendor count', { error: err.message }, 'RFQ_CONTROLLER');
@@ -923,18 +945,28 @@ async function createRFQ(req, res, next) {
     }
 
     // Dispatch real email notification to target gateway address (e.g. RFQ@procucev.com)
-    if (body.source === 'email_gateway' || body.targetGatewayEmail) {
+    if (shouldSendGatewayNotification && !pool.hasStorage()) {
       const recipientEmail = body.targetGatewayEmail || 'RFQ@procucev.com';
-      void mailerService.sendRequisitionNotificationEmail(
-        recipientEmail,
-        finalRFQ,
-        body.sourceEmail || (req.user && req.user.email)
+      trackBackgroundRfqEmail(
+        () => mailerService.sendRequisitionNotificationEmail(
+          recipientEmail,
+          finalRFQ,
+          body.sourceEmail || (req.user && req.user.email)
+        ),
+        'Failed to deliver RFQ gateway notification email',
+        finalRFQ.rfqNumber
       );
+    } else if (gatewayNotificationTarget) {
+      logger.info('RFQ gateway email intent persisted with RFQ creation', {
+        rfqId: finalRFQ.id,
+        rfqNumber: finalRFQ.rfqNumber,
+        eventType: EVENT_OUTBOX_TYPES.RFQ_GATEWAY_NOTIFICATION_EMAIL,
+      }, 'RFQ_CONTROLLER');
     }
 
     // Qua AI Email 2: Send RFQ created acknowledgement to registered buyer
-    const buyerEmail = req.user && req.user.email ? req.user.email : body.sourceEmail;
-    if (buyerEmail && body.source !== 'email_gateway') {
+    const buyerEmail = buyerAcknowledgementRecipient;
+    if (shouldSendBuyerAcknowledgement && !pool.hasStorage()) {
       try {
         const rawEntities = Array.isArray(finalRFQ.extractedEntities) && finalRFQ.extractedEntities.length > 0
           ? finalRFQ.extractedEntities
@@ -954,21 +986,25 @@ async function createRFQ(req, res, next) {
           ? finalRFQ.assignedVendors.length
           : (finalRFQ.procucevVendorCount || 5);
 
-        void mailerService.sendRfqAcknowledgementEmail({
-          to: buyerEmail,
-          buyerName,
-          rfqNumber: finalRFQ.rfqNumber,
-          rfqTitle: finalRFQ.title,
-          category: finalRFQ.category,
-          itemCount: normalizedLineItems.length || 1,
-          deliveryLocation: finalRFQ.deliveryLocation,
-          deliveryDate: finalRFQ.targetDeliveryDate,
-          requiredBy: finalRFQ.targetDeliveryDate,
-          quoteDeadline: finalRFQ.deadline,
-          deadline: finalRFQ.deadline,
-          suppliersInvited: suppliersCount,
-          items: normalizedLineItems,
-        });
+        trackBackgroundRfqEmail(
+          () => mailerService.sendRfqAcknowledgementEmail({
+            to: buyerEmail,
+            buyerName,
+            rfqNumber: finalRFQ.rfqNumber,
+            rfqTitle: finalRFQ.title,
+            category: finalRFQ.category,
+            itemCount: normalizedLineItems.length || 1,
+            deliveryLocation: finalRFQ.deliveryLocation,
+            deliveryDate: finalRFQ.targetDeliveryDate,
+            requiredBy: finalRFQ.targetDeliveryDate,
+            quoteDeadline: finalRFQ.deadline,
+            deadline: finalRFQ.deadline,
+            suppliersInvited: suppliersCount,
+            items: normalizedLineItems,
+          }),
+          'Failed to deliver RFQ creation acknowledgement email',
+          finalRFQ.rfqNumber
+        );
       } catch (buyerMailErr) {
         logger.warn('Could not dispatch buyer RFQ created email', { error: buyerMailErr.message }, 'RFQ_CONTROLLER');
       }
@@ -982,9 +1018,6 @@ async function createRFQ(req, res, next) {
 
     res.status(201).json({ success: true, data: finalRFQ });
   } catch (err) {
-    if (consumedFreeTrial && requestingBuyerAccount) {
-      storeService.refundFreeRFQ(requestingBuyerAccount.id);
-    }
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
     next(err);
   }
@@ -1620,7 +1653,7 @@ async function updateRFQ(req, res, next) {
       }
     }
     logger.info(`Updating RFQ ${id}`, { id, fields: Object.keys(updates) }, 'RFQ_CONTROLLER');
-    const updated = storeService.updateRFQ(id, updates);
+    const updated = await storeService.updateRFQDurably(id, updates);
     if (!updated) {
       logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
@@ -1638,7 +1671,7 @@ async function updateRFQ(req, res, next) {
 async function extendRFQ(req, res, next) {
   const { id } = req.params;
   try {
-    const existing = storeService.getRFQById(id);
+    const existing = await storeService.getRFQByIdAsync(id);
     if (!existing || !(await canAccessRfq(req, existing))) {
       logger.warn(`RFQ not found for extension: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
@@ -1652,7 +1685,7 @@ async function extendRFQ(req, res, next) {
 
     const hours = Number(req.body.hours);
     const userEmail = req.user && req.user.email;
-    const result = storeService.extendRFQ(existing.id, { hours, userEmail });
+    const result = await storeService.extendRFQDurably(existing.id, { hours, userEmail });
 
     if (!result.success) {
       const statusCode = result.reason === 'NOT_FOUND' ? 404 : 400;
@@ -1690,7 +1723,7 @@ async function deleteRFQ(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
 
-    const removed = storeService.deleteRFQ(id);
+    const removed = await storeService.deleteRFQDurably(id);
     if (!removed) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
@@ -1744,14 +1777,9 @@ async function addQuote(req, res, next) {
     // Workers-specific reason: each isolate hydrates its own copy of `rfqs`
     // once, lazily, on its first request, and nothing re-syncs it afterward
     // except this async path's own D1 fallback. A vendor quoting an RFQ some
-    // *other* isolate created got a guaranteed, permanent 404 on whichever
-    // isolate served their POST until that isolate happened to restart —
-    // confirmed live: 10/10 attempts against a real RFQ failed with "not
-    // found" even immediately after a full hydrateFromDB() refresh, because
-    // that refresh ran on a different isolate than the one serving the next
-    // request. getRFQByIdAsync's DB fallback also backfills this.rfqs, so
-    // the addQuoteToRFQ call below (which still uses the sync, in-memory
-    // getRFQById) finds it too.
+    // other isolate created must use the persisted row as the source of truth;
+    // submitVendorQuoteDurably repeats that read and commits the RFQ, vendor
+    // credit, and idempotency ledger together before acknowledging the quote.
     const targetRfq = await storeService.getRFQByIdAsync(id);
     if (!targetRfq || !(await canAccessRfq(req, targetRfq))) {
       logger.warn(`RFQ not found or out of scope for quote submission: ${id}`, { id }, 'RFQ_CONTROLLER');
@@ -1775,7 +1803,10 @@ async function addQuote(req, res, next) {
     }
 
     const eligibility = storeService.checkVendorQuotationEligibility(vendorRecord, targetRfq);
-    if (!eligibility.eligible && !isUnlimitedVendor) {
+    const isResubmission =
+      (Array.isArray(targetRfq.quotes) && targetRfq.quotes.some((quote) => String(quote.vendorId) === String(vendorRecord.id))) ||
+      (Array.isArray(vendorRecord.quotedRfqIds) && vendorRecord.quotedRfqIds.some((quotedRfqId) => String(quotedRfqId) === String(targetRfq.id)));
+    if (!eligibility.eligible && !isUnlimitedVendor && !isResubmission) {
       logger.warn(
         `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits are exhausted`,
         { id, vendorId: vendorRecord.id, freeCreditsRemaining: eligibility.freeCreditsRemaining, subscriptionPlan: eligibility.subscriptionPlan },
@@ -1825,18 +1856,39 @@ async function addQuote(req, res, next) {
       ...(bidAttachments.length > 0 ? { attachments: bidAttachments } : {}),
     };
     logger.info(`Adding quote from ${quote.vendorName} to RFQ ${id}`, { id, vendorName: quote.vendorName, price: quote.unitPrice }, 'RFQ_CONTROLLER');
-    const updatedRFQ = storeService.addQuoteToRFQ(id, quote);
+    const updatedRFQ = await storeService.submitVendorQuoteDurably(targetRfq.id, quote);
     if (!updatedRFQ) {
       logger.warn(`RFQ not found for quote submission: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    storeService.consumeVendorQuotationCredit(vendorRecord.id, targetRfq.id);
     const finalData = applyVendorBuyerPrivacy(updatedRFQ, vendorRecord);
     res.json({ success: true, data: finalData });
   } catch (err) {
     logger.error(`Error adding quote to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);
   }
+}
+
+function respondToVendorUnlockFailure(res, unlockResult) {
+  if (unlockResult && unlockResult.success) return false;
+
+  const creditsExhausted = Boolean(unlockResult && unlockResult.creditsExhausted);
+  const notFound = Boolean(unlockResult && unlockResult.notFound);
+  const status = creditsExhausted || (unlockResult && unlockResult.unauthorized) ? 403 : (notFound ? 404 : 503);
+  const error = unlockResult && unlockResult.error
+    ? unlockResult.error
+    : (creditsExhausted
+      ? RFQ_DOWNLOAD_ERRORS.CREDITS_EXHAUSTED
+      : ((unlockResult && unlockResult.unauthorized)
+        ? RFQ_DOWNLOAD_ERRORS.UNAUTHORIZED
+        : RFQ_DOWNLOAD_ERRORS.UNKNOWN_FAILURE));
+  const payload = { success: false, error };
+  if (creditsExhausted) {
+    payload.freeCreditsRemaining = unlockResult.freeCreditsRemaining ?? 0;
+    payload.exhausted = true;
+  }
+  res.status(status).json(payload);
+  return true;
 }
 
 async function downloadRFQ(req, res, next) {
@@ -1854,18 +1906,10 @@ async function downloadRFQ(req, res, next) {
         return res.status(400).json({ success: false, error: 'Vendor profile not found.' });
       }
 
-      const isUnlimitedVendor = hasUnlimitedDownloadAccess(requestingVendor) || hasUnlimitedDownloadAccess(req.user);
       // Counted inside unlockRFQForVendor, and only when the download is new.
 
       const unlockResult = await storeService.unlockRFQForVendor(requestingVendor.id, rfq.id);
-      if (!unlockResult.success && unlockResult.creditsExhausted && !isUnlimitedVendor) {
-        return res.status(403).json({
-          success: false,
-          error: unlockResult.error || 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.',
-          freeCreditsRemaining: unlockResult.freeCreditsRemaining ?? 0,
-          exhausted: true,
-        });
-      }
+      if (respondToVendorUnlockFailure(res, unlockResult)) return;
 
       const vendor = (await resolveVendorForUser(req.user)) || requestingVendor;
       const emailPayload = generateStandardRFQEmail(rfq, vendor);
@@ -1901,17 +1945,9 @@ async function generateEmailPreview(req, res, next) {
     if (req.user && req.user.role === 'vendor') {
       const requestingVendor = await resolveVendorForUser(req.user);
       if (requestingVendor) {
-        const isUnlimitedVendor = hasUnlimitedDownloadAccess(requestingVendor) || hasUnlimitedDownloadAccess(req.user);
         // Counted inside unlockRFQForVendor, and only when the download is new.
         const unlockResult = await storeService.unlockRFQForVendor(requestingVendor.id, rfq.id);
-        if (!unlockResult.success && unlockResult.creditsExhausted && !isUnlimitedVendor) {
-          return res.status(403).json({
-            success: false,
-            error: unlockResult.error || 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.',
-            freeCreditsRemaining: unlockResult.freeCreditsRemaining ?? 0,
-            exhausted: true,
-          });
-        }
+        if (respondToVendorUnlockFailure(res, unlockResult)) return;
       }
     }
 
@@ -1941,7 +1977,7 @@ function triggerBatchChaser(req, res, next) {
   }
 }
 
-function approvePO(req, res, next) {
+async function approvePO(req, res, next) {
   try {
     const { id } = req.params;
     // Awarding a PO is a buyer-side decision — a vendor has no business
@@ -1955,7 +1991,14 @@ function approvePO(req, res, next) {
       return res.status(400).json({ success: false, error: 'vendorName and totalAmount are required.' });
     }
     logger.info(`Approving Pre-Purchase Order for RFQ ${id}`, { id, vendorId, vendorName, totalAmount, approverNotes }, 'RFQ_CONTROLLER');
-    const result = storeService.approvePurchaseOrder(id, vendorId, vendorName, totalAmount, approverNotes, req.user.email);
+    const result = await storeService.approvePurchaseOrderDurably(
+      id,
+      vendorId,
+      vendorName,
+      totalAmount,
+      approverNotes,
+      req.user.email
+    );
     if (!result) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
@@ -1979,7 +2022,7 @@ async function addInquiry(req, res, next) {
       return res.status(404).json({ success: false, error: 'RFQ not found.' });
     }
 
-    const result = storeService.addInquiryToRFQ(rfq.id, {
+    const result = await storeService.addInquiryToRFQ(rfq.id, {
       message: message.trim(),
       vendorName: vendorName || (req.user && req.user.name) || 'Vendor Partner',
       vendorEmail: vendorEmail || (req.user && req.user.email) || null,
@@ -2026,7 +2069,7 @@ async function replyInquiry(req, res, next) {
       return res.status(404).json({ success: false, error: 'RFQ not found.' });
     }
 
-    const result = storeService.replyToRFQInquiry(rfq.id, inquiryId, {
+    const result = await storeService.replyToRFQInquiry(rfq.id, inquiryId, {
       reply: reply.trim(),
       repliedBy: (req.user && req.user.name) || 'Procurement Officer',
       repliedByEmail: req.user && req.user.email,

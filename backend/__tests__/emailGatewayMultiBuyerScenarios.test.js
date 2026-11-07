@@ -805,9 +805,8 @@ describe('CC-Based Buyer Identification & Multi-Buyer Email-to-RFQ Scenarios', (
         subject: 'Clarification query on RFQ-INQ-1',
         bodyText: 'Please clarify specification and drawings',
       };
-      const result = await emailGatewayService.processVendorQuoteMessage(message, targetRfq, vendorRecord);
-      expect(result.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
-      expect(result.isIssueOrQuery).toBe(true);
+      await expect(emailGatewayService.processVendorQuoteMessage(message, targetRfq, vendorRecord))
+        .rejects.toThrow('Inquiry DB error');
     });
 
     test('covers resolveMultiBuyerAttribution with legacy to/cc fields and restriction branches', async () => {

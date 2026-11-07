@@ -330,6 +330,7 @@ export async function fetchBuyerCreditHistory(buyerId: string): Promise<{
   error?: string;
   summary?: BuyerCreditSummary;
   transactions?: BuyerCreditTransaction[];
+  historyAvailable?: boolean;
 }> {
   try {
     const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/credit-history`, {
@@ -344,7 +345,8 @@ export async function fetchBuyerCreditHistory(buyerId: string): Promise<{
 
 export async function addBuyerCredit(
   buyerId: string,
-  payload: { amount: number; reason?: string; source?: string }
+  payload: { amount: number; reason?: string; source?: string },
+  idempotencyKey: string
 ): Promise<{
   success: boolean;
   error?: string;
@@ -354,7 +356,7 @@ export async function addBuyerCredit(
   try {
     const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/add-credit`, {
       method: 'POST',
-      headers: authHeaders(),
+      headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey },
       body: JSON.stringify(payload),
     });
     const body = await res.json();

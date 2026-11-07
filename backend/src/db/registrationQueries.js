@@ -8,6 +8,13 @@
 
 const pool = require('./pool');
 const { logger } = require('../services/loggerService');
+const crypto = require('crypto');
+const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
+const { IDENTITY_ROLE_MAP } = require('../config/constants');
+
+const REGISTRATION_ROLE_NAMES = Object.freeze(
+  Object.keys(IDENTITY_ROLE_MAP).filter((roleName) => ['buyer', 'vendor'].includes(IDENTITY_ROLE_MAP[roleName]))
+);
 
 const INITIAL_CLIENTS = [
   {
@@ -41,9 +48,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+917780755357',
     userEmail: 'kishore.yerramsetti@procucev.com',
     regDate: '2026-06-30T08:45:00.000Z',
-    status: 'Accepted',
+    status: 'New',
     sourceType: 'Web App',
-    isApproved: true,
+    isApproved: false,
     clientType: 'Seller',
   },
   {
@@ -173,9 +180,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+919444098765',
     userEmail: 'meenakshi@sundaramtech.com',
     regDate: '2026-02-12T11:45:00.000Z',
-    status: 'Accepted',
+    status: 'New',
     sourceType: 'Email',
-    isApproved: true,
+    isApproved: false,
     clientType: 'Seller',
   },
   {
@@ -209,9 +216,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+919879044556',
     userEmail: 'deepak.patel@gujaratprecision.in',
     regDate: '2026-01-22T08:30:00.000Z',
-    status: 'Accepted',
+    status: 'New',
     sourceType: 'WhatsApp',
-    isApproved: true,
+    isApproved: false,
     clientType: 'Seller',
   },
   {
@@ -245,9 +252,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+919443077889',
     userEmail: 'karthik@coimbatorefoundry.com',
     regDate: '2026-01-04T12:00:00.000Z',
-    status: 'Accepted',
+    status: 'New',
     sourceType: 'Web App',
-    isApproved: true,
+    isApproved: false,
     clientType: 'Seller',
   },
   {
@@ -281,9 +288,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+919844011234',
     userEmail: 'santosh@canarapumps.com',
     regDate: '2025-12-15T15:30:00.000Z',
-    status: 'Accepted',
+    status: 'New',
     sourceType: 'Email',
-    isApproved: true,
+    isApproved: false,
     clientType: 'Seller',
   },
   {
@@ -377,9 +384,9 @@ const INITIAL_CLIENTS = [
     phoneNumber: '+919829099012',
     userEmail: 'lalit@somanicables.com',
     regDate: '2025-10-20T10:45:00.000Z',
-    status: 'Accepted',
+    status: 'New',
     sourceType: 'Web App',
-    isApproved: true,
+    isApproved: false,
     clientType: 'Seller',
   },
   {
@@ -591,6 +598,83 @@ function normalizeStatus(isApproved, verificationStatus) {
   return 'New';
 }
 
+function createPersistenceError(error, operation, id = undefined, action = undefined) {
+  logger.error('Client registration persistence failed', {
+    error,
+    operation,
+    ...(id ? { registrationId: id } : {}),
+    ...(action ? { action } : {}),
+  }, 'REGISTRATION_QUERIES');
+  const unavailable = new Error('Registration storage is temporarily unavailable. No action was completed. Please retry shortly.');
+  unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+  unavailable.status = 503;
+  unavailable.statusCode = 503;
+  unavailable.cause = error;
+  return unavailable;
+}
+
+function registrationConflict() {
+  const conflict = new Error('This registration has already been processed. Refresh the list before taking another action.');
+  conflict.code = 'REGISTRATION_ALREADY_PROCESSED';
+  conflict.status = 409;
+  conflict.statusCode = 409;
+  return conflict;
+}
+
+function normalizeClientRow(row) {
+  const source = row.isWhatsApp ? 'WhatsApp' : normalizeSourceType(row.sourceTypeRaw);
+  const computedStatus = normalizeStatus(row.isApproved, row.verificationStatus);
+  const registeredAt = row.regDate ? new Date(row.regDate) : new Date();
+  return {
+    id: row.id,
+    userName: row.userName || 'Enterprise User',
+    companyName: row.companyName || 'Enterprise Client',
+    phoneNumber: row.phoneNumber || '',
+    userEmail: row.userEmail || '',
+    regDate: Number.isNaN(registeredAt.getTime()) ? new Date().toISOString() : registeredAt.toISOString(),
+    status: computedStatus,
+    sourceType: source,
+    isApproved: Boolean(row.isApproved),
+    clientType: normalizeClientType(row.roleName, row.companyName, row.userEmail),
+  };
+}
+
+function buildRegistrationRolePredicate(startIndex) {
+  const placeholders = REGISTRATION_ROLE_NAMES.map((_, index) => `$${startIndex + index}`).join(', ');
+  return `LOWER(REPLACE(COALESCE(r.role_name, ''), ' ', '')) IN (${placeholders})`;
+}
+
+function buildRegistrationSelect(whereClause) {
+  return `SELECT u.uuid AS id,
+      COALESCE(u.full_name, u.first_name, u.username) AS "userName",
+      COALESCE(o.organization_name, 'Enterprise Client') AS "companyName",
+      COALESCE(u.phone, '') AS "phoneNumber",
+      COALESCE(u.email, u.username) AS "userEmail",
+      u.created_ts AS "regDate",
+      u.is_approved AS "isApproved",
+      u.verification_status AS "verificationStatus",
+      u.source_type AS "sourceTypeRaw",
+      u.is_whats_app AS "isWhatsApp",
+      u.is_web_app AS "isWebApp",
+      r.role_name AS "roleName",
+      COUNT(*) OVER() AS total
+    FROM "user" u
+    INNER JOIN role r ON r.uuid = u.role_uuid
+    LEFT JOIN organization o ON o.uuid = u.org_uuid
+    ${whereClause}`;
+}
+
+async function queryRegistrationRows(sql, params) {
+  return pool.query(sql, params, { d1: true, useCache: false });
+}
+
+async function findRegistrationInDatabase(id) {
+  const rolePredicate = buildRegistrationRolePredicate(2);
+  const sql = buildRegistrationSelect(`WHERE u.uuid = $1 AND ${rolePredicate}`);
+  const result = await queryRegistrationRows(sql, [id, ...REGISTRATION_ROLE_NAMES]);
+  return result.rows[0] ? normalizeClientRow(result.rows[0]) : null;
+}
+
 /**
  * Get registered clients list with search, filter, and pagination
  */
@@ -602,69 +686,72 @@ async function getRegisteredClients({
   limit = 100,
   offset = 0,
 } = {}) {
-  let clients = memoryClients;
-
   if (pool.hasStorage()) {
     try {
-      const sql = `
-        SELECT u.uuid as id,
-               COALESCE(u.full_name, u.first_name, u.username) as "userName",
-               COALESCE(u.organization_name, o.organization_name, 'Enterprise Client') as "companyName",
-               COALESCE(u.phone, '') as "phoneNumber",
-               COALESCE(u.email, u.username) as "userEmail",
-               u.created_ts as "regDate",
-               u.is_approved as "isApproved",
-               u.verification_status as "verificationStatus",
-               u.source_type as "sourceTypeRaw",
-               u.is_whats_app as "isWhatsApp",
-               u.is_web_app as "isWebApp",
-               r.role_name as "roleName",
-               o.type as "orgType"
-          FROM "user" u
-          LEFT JOIN organization o ON o.uuid = u.org_uuid
-          LEFT JOIN role r ON r.uuid = u.role_uuid
-         ORDER BY u.created_ts DESC
-         LIMIT 500
-      `;
-      const res = await pool.query(sql, [], { d1: true, useCache: false });
-      if (res && res.rows && res.rows.length > 0) {
-        const dbClients = res.rows.map((r) => {
-          const source = r.isWhatsApp ? 'WhatsApp' : normalizeSourceType(r.sourceTypeRaw);
-          const cType = normalizeClientType(r.roleName || r.orgType || r.userType || r.role, r.companyName, r.userEmail);
-          const isSeller = cType === 'Seller';
-          const vs = String(r.verificationStatus || '').toLowerCase();
-          const isRejected = vs === 'rejected';
-          const computedStatus = isSeller ? (isRejected ? 'Rejected' : 'Accepted') : normalizeStatus(r.isApproved, r.verificationStatus);
-          return {
-            id: r.id,
-            userName: r.userName || 'Enterprise User',
-            companyName: r.companyName || 'Enterprise Client',
-            phoneNumber: r.phoneNumber || '',
-            userEmail: r.userEmail || '',
-            regDate: (() => { if (!r.regDate) return new Date().toISOString(); const d = new Date(r.regDate); return !isNaN(d.getTime()) ? d.toISOString() : new Date().toISOString(); })(),
-            status: computedStatus,
-            sourceType: source,
-            isApproved: isSeller ? !isRejected : Boolean(r.isApproved),
-            clientType: cType,
-          };
-        });
+      const filters = [buildRegistrationRolePredicate(1)];
+      const params = [...REGISTRATION_ROLE_NAMES];
+      const addFilter = (value, predicate) => {
+        params.push(value);
+        filters.push(predicate(params.length));
+      };
 
-        if (process.env.NODE_ENV === 'test') {
-          const existingIds = new Set(dbClients.map((c) => c.id));
-          const nonDuplicateMemory = memoryClients.filter((c) => !existingIds.has(c.id));
-          clients = [...dbClients, ...nonDuplicateMemory];
-        } else {
-          // In development and production, return ONLY real live registered clients from the database
-          clients = dbClients;
-        }
-      } else if (res && res.rows && res.rows.length === 0 && process.env.NODE_ENV !== 'test') {
-        // Real DB is connected and empty: do not display dummy fallback
-        clients = [];
+
+      if (sourceType && sourceType.toLowerCase() !== 'all') {
+        addFilter(sourceType.toLowerCase(), (index) => `(CASE
+          WHEN u.is_whats_app = true OR LOWER(COALESCE(u.source_type, '')) LIKE '%whatsapp%' THEN 'whatsapp'
+          WHEN LOWER(COALESCE(u.source_type, '')) LIKE '%email%' THEN 'email'
+          ELSE 'web app' END) = $${index}`);
       }
+      if (status && status.toLowerCase() !== 'all') {
+        addFilter(status.toLowerCase(), (index) => `(CASE
+          WHEN LOWER(COALESCE(u.verification_status, '')) = 'rejected' THEN 'rejected'
+          WHEN u.is_approved = true OR LOWER(COALESCE(u.verification_status, '')) IN ('verified', 'accepted', 'active') THEN 'accepted'
+          ELSE 'new' END) = $${index}`);
+      }
+      if (clientType && clientType.toLowerCase() !== 'all') {
+        addFilter(clientType.toLowerCase(), (index) => `(CASE
+          WHEN LOWER(COALESCE(r.role_name, '')) LIKE '%vendor%' OR LOWER(COALESCE(r.role_name, '')) LIKE '%supplier%' THEN 'seller'
+          ELSE 'buyer' END) = $${index}`);
+      }
+      if (search && search.trim()) {
+        const searchValue = `%${search.trim().toLowerCase()}%`;
+        addFilter(searchValue, (index) => `(
+          LOWER(COALESCE(u.full_name, u.first_name, u.username, '')) LIKE $${index}
+          OR LOWER(COALESCE(o.organization_name, '')) LIKE $${index}
+          OR LOWER(COALESCE(u.phone, '')) LIKE $${index}
+          OR LOWER(COALESCE(u.email, u.username, '')) LIKE $${index}
+        )`);
+      }
+
+      const safeLimit = Math.min(Math.max(parseInt(String(limit), 10) || 100, 1), 200);
+      const safeOffset = Math.max(parseInt(String(offset), 10) || 0, 0);
+      const where = `WHERE ${filters.join(' AND ')}`;
+      const pageParams = [...params, safeLimit, safeOffset];
+      const limitIndex = pageParams.length - 1;
+      const offsetIndex = pageParams.length;
+      const registrationQuery = buildRegistrationSelect(where);
+      const sql = `${registrationQuery}
+        ORDER BY u.created_ts DESC, u.uuid DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}`;
+      const result = await queryRegistrationRows(sql, pageParams);
+      let rows = result.rows || [];
+      let total = rows.length > 0 ? Number(rows[0].total) || 0 : 0;
+
+      if (rows.length === 0 || rows[0].total === undefined) {
+        const fromClause = registrationQuery.slice(registrationQuery.indexOf('FROM'));
+        const countSql = `SELECT COUNT(*) AS total ${fromClause}`;
+        const countResult = await queryRegistrationRows(countSql, params);
+        total = Number(countResult.rows[0]?.total) || 0;
+      }
+
+      rows = rows.map((row) => normalizeClientRow(row));
+      return { total, clients: rows, limit: safeLimit, offset: safeOffset };
     } catch (err) {
-      logger.warn('Failed to query registered clients from database, falling back to memory store', { error: err.message }, 'REGISTRATION_QUERIES');
+      throw createPersistenceError(err, 'list-registrations');
     }
   }
+
+  let clients = memoryClients;
 
   // Filter in memory
   let filtered = clients;
@@ -697,7 +784,7 @@ async function getRegisteredClients({
   }
 
   const total = filtered.length;
-  const numLimit = Math.max(1, parseInt(String(limit), 10) || 100);
+  const numLimit = Math.min(Math.max(parseInt(String(limit), 10) || 100, 1), 200);
   const numOffset = Math.max(0, parseInt(String(offset), 10) || 0);
   const paginated = filtered.slice(numOffset, numOffset + numLimit);
 
@@ -712,103 +799,158 @@ async function getRegisteredClients({
 /**
  * Accept or reject a client registration
  */
-async function updateClientRegistrationStatus(id, action, remarks = '') {
+async function updateClientRegistrationStatus(id, action, remarks = '', actor = {}) {
   const normAction = String(action || '').toLowerCase().trim();
+  if (!['accept', 'reject'].includes(normAction)) {
+    const invalidAction = new Error('Registration action must be accept or reject.');
+    invalidAction.code = 'INVALID_REGISTRATION_ACTION';
+    throw invalidAction;
+  }
   const isAccept = normAction === 'accept';
   const newStatus = isAccept ? 'Accepted' : 'Rejected';
   const isApproved = isAccept;
   const verificationStatus = isAccept ? 'VERIFIED' : 'REJECTED';
+  const normalizedRemarks = String(remarks || '');
+  const actorId = actor.uuid || actor.id || actor.sub || null;
+  const actorName = actor.fullName || actor.name || actor.email || 'Management Authority';
+  const actorEmail = actor.email || null;
 
-  // 1. Update memory store
-  let client = memoryClients.find((c) => c.id === id);
-  if (client) {
-    client.status = newStatus;
-    client.isApproved = isApproved;
-    client.verificationStatus = verificationStatus;
-    if (remarks) client.remarks = remarks;
-  }
-
-  // 2. Update persistent database if available
   if (pool.hasStorage()) {
     try {
-      await pool.query(
-        `UPDATE "user"
-            SET is_approved = $1,
-                verification_status = $2,
-                last_modified_ts = CURRENT_TIMESTAMP
-          WHERE uuid = $3`,
-        [isApproved, verificationStatus, id],
-        { d1: true }
-      );
+      const eventId = crypto.randomUUID();
+      const d1 = getD1Binding() || getD1HttpClient();
+      let updatedRow;
 
-      // Also update buyer_accounts status if this user is a buyer
-      const buyerStatus = isAccept ? 'ACTIVE_VERIFIED' : 'REJECTED';
-      await pool.query(
-        `UPDATE buyer_accounts
-            SET status = $1,
-                updated_at = CURRENT_TIMESTAMP
-          WHERE id = $2`,
-        [buyerStatus, id],
-        { d1: true }
-      );
-
-      if (!client) {
-        const userRes = await pool.query(
-          `SELECT u.uuid as id,
-                  COALESCE(u.full_name, u.first_name, u.username) as "userName",
-                  COALESCE(u.organization_name, o.organization_name, 'Enterprise Client') as "companyName",
-                  COALESCE(u.phone, '') as "phoneNumber",
-                  COALESCE(u.email, u.username) as "userEmail",
-                  r.role_name as "roleName",
-                  o.type as "orgType"
-             FROM "user" u
-             LEFT JOIN organization o ON o.uuid = u.org_uuid
-             LEFT JOIN role r ON r.uuid = u.role_uuid
-            WHERE u.uuid = $1`,
-          [id],
-          { d1: true }
-        );
-        if (userRes && userRes.rows && userRes.rows.length > 0) {
-          const u = userRes.rows[0];
-          client = {
-            id: u.id,
-            userName: u.userName,
-            companyName: u.companyName,
-            phoneNumber: u.phoneNumber,
-            userEmail: u.userEmail,
-            status: newStatus,
-            isApproved,
-            verificationStatus,
-            remarks,
-            clientType: normalizeClientType(u.roleName || u.orgType, u.companyName, u.userEmail),
-          };
+      if (d1) {
+        const statements = [
+          {
+            text: `UPDATE "user"
+              SET is_approved = $1, verification_status = $2, last_modified_ts = CURRENT_TIMESTAMP
+              WHERE uuid = $3
+                AND COALESCE(is_approved, false) = false
+                AND LOWER(COALESCE(verification_status, '')) NOT IN ('verified', 'accepted', 'active', 'rejected')
+                AND role_uuid IN (SELECT uuid FROM role WHERE LOWER(REPLACE(role_name, ' ', '')) IN ($4, $5, $6, $7, $8, $9))
+              RETURNING uuid AS id, COALESCE(full_name, first_name, username) AS "userName",
+                COALESCE(phone, '') AS "phoneNumber", COALESCE(email, username) AS "userEmail",
+                created_ts AS "regDate", is_approved AS "isApproved", verification_status AS "verificationStatus",
+                source_type AS "sourceTypeRaw", is_whats_app AS "isWhatsApp"`,
+            params: [isApproved, verificationStatus, id, ...REGISTRATION_ROLE_NAMES],
+          },
+          {
+            text: `INSERT INTO client_registration_events
+              (id, user_id, user_email, action, previous_status, new_status,
+               actor_id, actor_name, actor_email, remarks, created_at)
+              SELECT $1, u.uuid, u.email, $3, 'New', $3, $4, $5, $6, $7, CURRENT_TIMESTAMP
+              FROM "user" u WHERE u.uuid = $2 AND changes() = 1
+              RETURNING id`,
+            params: [eventId, id, newStatus, actorId, actorName, actorEmail, normalizedRemarks],
+          },
+          {
+            text: `UPDATE buyer_accounts SET status = $1, updated_at = CURRENT_TIMESTAMP
+              WHERE EXISTS (SELECT 1 FROM client_registration_events WHERE id = $2)
+                AND (id = $3 OR LOWER(corporate_email) =
+                  (SELECT LOWER(email) FROM "user" WHERE uuid = $3))`,
+            params: [isAccept ? 'ACTIVE_VERIFIED' : 'REJECTED', eventId, id],
+          },
+        ];
+        const results = await batchD1(d1, statements);
+        updatedRow = results[0]?.rows?.[0] || null;
+        if (updatedRow && !results[1]?.rows?.[0]) {
+          throw new Error('Registration status changed without a durable event record.');
         }
+      } else {
+        updatedRow = await pool.withTransaction(async (client) => {
+          const rolePredicate = buildRegistrationRolePredicate(2);
+          const currentSql = `${buildRegistrationSelect(`WHERE u.uuid = $1 AND ${rolePredicate}`)} FOR UPDATE OF u`;
+          const currentResult = await client.query(currentSql, [id, ...REGISTRATION_ROLE_NAMES]);
+          const current = currentResult.rows[0];
+          if (!current) return null;
+          if (normalizeStatus(current.isApproved, current.verificationStatus) !== 'New') {
+            throw registrationConflict();
+          }
+
+          const updateSql = `UPDATE "user"
+            SET is_approved = $1, verification_status = $2, last_modified_ts = CURRENT_TIMESTAMP
+            WHERE uuid = $3 AND COALESCE(is_approved, false) = false
+              AND LOWER(COALESCE(verification_status, '')) NOT IN ('verified', 'accepted', 'active', 'rejected')
+              AND role_uuid IN (SELECT uuid FROM role WHERE LOWER(REPLACE(role_name, ' ', '')) IN ($4, $5, $6, $7, $8, $9))
+            RETURNING uuid AS id, COALESCE(full_name, first_name, username) AS "userName",
+              COALESCE(phone, '') AS "phoneNumber", COALESCE(email, username) AS "userEmail",
+              created_ts AS "regDate", is_approved AS "isApproved", verification_status AS "verificationStatus",
+              source_type AS "sourceTypeRaw", is_whats_app AS "isWhatsApp"`;
+          const updateResult = await client.query(updateSql, [isApproved, verificationStatus, id, ...REGISTRATION_ROLE_NAMES]);
+          const saved = updateResult.rows[0];
+          if (!saved) throw registrationConflict();
+
+          await client.query(
+            `UPDATE buyer_accounts SET status = $1, updated_at = CURRENT_TIMESTAMP
+              WHERE id = $2 OR LOWER(corporate_email) = LOWER($3)`,
+            [isAccept ? 'ACTIVE_VERIFIED' : 'REJECTED', id, saved.userEmail]
+          );
+          await client.query(
+            `INSERT INTO client_registration_events
+              (id, user_id, user_email, action, previous_status, new_status,
+               actor_id, actor_name, actor_email, remarks, created_at)
+              VALUES ($1, $2, $3, $4, 'New', $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)`,
+            [eventId, saved.id, saved.userEmail, newStatus, actorId, actorName, actorEmail, normalizedRemarks]
+          );
+          return { ...saved, companyName: current.companyName };
+        });
       }
+
+      if (!updatedRow) {
+        const current = await findRegistrationInDatabase(id);
+        if (!current) return null;
+        throw registrationConflict();
+      }
+
+      const updated = normalizeClientRow({ ...updatedRow, companyName: updatedRow.companyName || 'Enterprise Client' });
+      syncBuyerAccountCache(id, updated.userEmail, newStatus, isApproved, verificationStatus);
+      logger.audit(`Client registration ${newStatus.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
+        registrationId: id,
+        actorId,
+        eventId,
+      });
+      return { ...updated, remarks: normalizedRemarks };
     } catch (err) {
-      logger.warn('Failed to update persistent registration status in database', { error: err.message, id, action }, 'REGISTRATION_QUERIES');
+      if (err?.code === 'REGISTRATION_ALREADY_PROCESSED') throw err;
+      throw createPersistenceError(err, 'update-registration-status', id, normAction);
     }
   }
 
-  // Also check storeService buyer accounts
+  const client = memoryClients.find((candidate) => candidate.id === id);
+  if (!client) return null;
+  if (client.status !== 'New') throw registrationConflict();
+  client.status = newStatus;
+  client.isApproved = isApproved;
+  client.verificationStatus = verificationStatus;
+  if (normalizedRemarks) client.remarks = normalizedRemarks;
+  syncBuyerAccountCache(id, client.userEmail, newStatus, isApproved, verificationStatus);
+  logger.audit(`Client registration ${newStatus.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
+    registrationId: id,
+    actorId,
+  });
+  return client;
+}
+
+function syncBuyerAccountCache(id, email, status, isApproved, verificationStatus) {
   try {
     const storeService = require('../services/storeService');
-    const matchingBuyer = (storeService.buyerAccounts || []).find((b) => b.id === id || b.corporateEmail === (client && client.userEmail));
+    const matchingBuyer = (storeService.buyerAccounts || []).find((buyer) => (
+      buyer.id === id || String(buyer.corporateEmail || '').toLowerCase() === String(email || '').toLowerCase()
+    ));
     if (matchingBuyer) {
-      matchingBuyer.status = isAccept ? 'ACTIVE_VERIFIED' : 'REJECTED';
-      matchingBuyer.profileVerified = isAccept;
-      matchingBuyer.verificationStatus = isAccept ? 'VERIFIED' : 'REJECTED';
+      matchingBuyer.status = status === 'Accepted' ? 'ACTIVE_VERIFIED' : 'REJECTED';
+      matchingBuyer.profileVerified = isApproved;
+      matchingBuyer.verificationStatus = verificationStatus;
     }
-  } catch {
-    // ignore
+  } catch (error) {
+    logger.warn('Could not synchronize the registration decision to the process-local buyer cache', {
+      error,
+      operation: 'sync-registration-cache',
+      registrationId: id,
+    }, 'REGISTRATION_QUERIES');
   }
-
-  return client || {
-    id,
-    status: newStatus,
-    isApproved,
-    verificationStatus,
-    remarks,
-  };
 }
 
 module.exports = {

@@ -11,8 +11,13 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const pool = require('./pool');
+const { logger } = require('../services/loggerService');
 
 const DEFAULT_PORT = parseInt(process.env.DB_VIEW_PORT || process.env.PORT || '5005', 10);
+const LOOPBACK_BIND_ADDRESS = '127.0.0.1';
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
+const LOCAL_VIEWER_ONLY_ERROR = 'Database viewer only accepts same-machine requests.';
+const SHOW_RAW_FLAG = '--show-raw';
 
 const KNOWN_POSTGRES_TABLES = [
   'vendors',
@@ -26,6 +31,9 @@ const KNOWN_POSTGRES_TABLES = [
   'org_division_category',
   'ai_feed',
   'audit_logs',
+  'management_approvals',
+  'management_approval_events',
+  'client_registration_events',
 ];
 
 /**
@@ -58,7 +66,8 @@ async function fetchPostgresTable(tableName) {
     const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
     const pkColumn = getPrimaryKeyColumn(tableName, rows[0]);
     return { rows, columns, count, pkColumn };
-  } catch {
+  } catch (error) {
+    logger.error('Failed to inspect PostgreSQL table', { tableName, error }, 'DATABASE_VIEW');
     return { rows: [], columns: [], count: 0, pkColumn: 'id' };
   }
 }
@@ -79,8 +88,12 @@ async function getAllPostgresData() {
       const dynamicList = res.rows.map((r) => r.table_name);
       tableList = Array.from(new Set([...KNOWN_POSTGRES_TABLES, ...dynamicList]));
     }
-  } catch {
-    // Keep standard KNOWN_POSTGRES_TABLES
+  } catch (error) {
+    logger.warn(
+      'Failed to discover PostgreSQL tables; using the known table list',
+      { error, knownTableCount: KNOWN_POSTGRES_TABLES.length },
+      'DATABASE_VIEW'
+    );
   }
 
   for (const table of tableList) {
@@ -1502,6 +1515,7 @@ function getViewerHtml() {
  */
 function createViewerApp() {
   const app = express();
+  app.use(requireLocalViewerRequest);
   app.use(express.json());
 
   app.get('/api/overview', async (req, res) => {
@@ -1608,16 +1622,16 @@ function startViewerServer(port = DEFAULT_PORT) {
   const server = http.createServer(app);
 
   return new Promise((resolve, reject) => {
-    server.listen(port, () => {
+    server.listen(port, LOOPBACK_BIND_ADDRESS, () => {
       const actualPort = server.address().port;
-      const url = `http://localhost:${actualPort}`;
+      const url = `http://${LOOPBACK_BIND_ADDRESS}:${actualPort}`;
       resolve({ server, port: actualPort, url, close: () => new Promise((cb) => server.close(cb)) });
     });
     server.on('error', (err) => {
       if (err.code === 'EADDRINUSE') {
-        server.listen(0, () => {
+        server.listen(0, LOOPBACK_BIND_ADDRESS, () => {
           const actualPort = server.address().port;
-          const url = `http://localhost:${actualPort}`;
+          const url = `http://${LOOPBACK_BIND_ADDRESS}:${actualPort}`;
           resolve({ server, port: actualPort, url, close: () => new Promise((cb) => server.close(cb)) });
         });
       } else {
@@ -1625,6 +1639,48 @@ function startViewerServer(port = DEFAULT_PORT) {
       }
     });
   });
+}
+
+function isLoopbackHostname(hostname) {
+  return LOOPBACK_HOSTNAMES.has(String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase());
+}
+
+function requireLocalViewerRequest(req, res, next) {
+  const hostHeader = req.get('host') || '';
+  let requestUrl;
+  try {
+    requestUrl = new URL(`http://${hostHeader}`);
+  } catch {
+    requestUrl = null;
+  }
+
+  const originHeader = req.get('origin');
+  let originUrl = null;
+  if (originHeader) {
+    try {
+      originUrl = new URL(originHeader);
+    } catch {
+      originUrl = null;
+    }
+  }
+
+  const requestIsLocal = requestUrl
+    && isLoopbackHostname(requestUrl.hostname)
+    && requestUrl.host.toLowerCase() === hostHeader.toLowerCase();
+  const originIsLocal = !originHeader || (originUrl
+    && originUrl.protocol === 'http:'
+    && isLoopbackHostname(originUrl.hostname)
+    && originUrl.host.toLowerCase() === requestUrl?.host.toLowerCase());
+
+  if (!requestIsLocal || !originIsLocal) {
+    logger.warn('Rejected non-local database viewer request', {
+      host: hostHeader,
+      origin: originHeader || undefined,
+    }, 'DATABASE_VIEW');
+    return res.status(403).json({ error: LOCAL_VIEWER_ONLY_ERROR });
+  }
+
+  return next();
 }
 
 function printSummaryTable(title, rows, columns) {
@@ -1649,7 +1705,7 @@ function printSummaryTable(title, rows, columns) {
  */
 async function view() {
   if (!pool.pool) {
-    console.error('[db:view] DATABASE_URL is not set — nothing to view.');
+    logger.error('Database viewer cannot start because DATABASE_URL is not configured', {}, 'DATABASE_VIEW');
     process.exitCode = 1;
     return;
   }
@@ -1664,14 +1720,16 @@ async function view() {
     'SELECT id, rfq_number, category, status, sourcing_mode, budget, created_at, raw FROM rfqs ORDER BY created_at DESC LIMIT 500'
   );
 
-  viewModule.printSummaryTable('Vendors', vendors.rows, ['id', 'email', 'major_category', 'status', 'source', 'created_at']);
-  viewModule.printSummaryTable('RFQs', rfqs.rows, ['id', 'rfq_number', 'category', 'status', 'sourcing_mode', 'budget', 'created_at']);
+  viewModule.printSummaryTable('Vendors', vendors.rows, ['id', 'major_category', 'status', 'source', 'created_at']);
+  viewModule.printSummaryTable('RFQs', rfqs.rows, ['id', 'rfq_number', 'category', 'status', 'sourcing_mode', 'created_at']);
 
-  console.log('\n[db:view] Full stored records (the `raw` JSONB column each row hydrates from):');
-  console.log('\n--- Vendors (raw) ---');
-  console.log(JSON.stringify(vendors.rows.map((r) => r.raw), null, 2));
-  console.log('\n--- RFQs (raw) ---');
-  console.log(JSON.stringify(rfqs.rows.map((r) => r.raw), null, 2));
+  if (process.argv.includes(SHOW_RAW_FLAG)) {
+    console.log('\n[db:view] Explicit raw output requested (sensitive fields may be present):');
+    console.log('\n--- Vendors (raw) ---');
+    console.log(JSON.stringify(vendors.rows.map((r) => r.raw), null, 2));
+    console.log('\n--- RFQs (raw) ---');
+    console.log(JSON.stringify(rfqs.rows.map((r) => r.raw), null, 2));
+  }
 }
 
 /** Runs view() and starts the interactive localhost server. */
@@ -1692,7 +1750,7 @@ async function runCli(options = {}) {
     console.log('Press Ctrl+C to stop.');
     console.log('================================================================================\n');
   } catch (err) {
-    console.error('[db:view] Failed:', err.message);
+    logger.error('Database viewer CLI failed', err, 'DATABASE_VIEW');
     process.exit(1);
   }
 }

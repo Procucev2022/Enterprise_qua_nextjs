@@ -192,7 +192,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       expect(resBad.status).toHaveBeenCalledWith(400);
 
       // Valid identifiers
-      jest.spyOn(vendorPresenceService, 'getPresence').mockReturnValue({ onlineCount: 2 });
+      jest.spyOn(vendorPresenceService, 'getPresenceDurably').mockResolvedValue({ onlineCount: 2 });
       await vendorController.getVendorsPresence(
         { query: { identifiers: 'v1,v2' } },
         res,
@@ -201,9 +201,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       expect(res.json).toHaveBeenCalledWith({ onlineCount: 2 });
 
       // Error forwarding
-      jest.spyOn(vendorPresenceService, 'getPresence').mockImplementation(() => {
-        throw new Error('Presence query failed');
-      });
+      jest.spyOn(vendorPresenceService, 'getPresenceDurably').mockRejectedValue(new Error('Presence query failed'));
       await vendorController.getVendorsPresence(
         { query: { identifiers: 'v1' } },
         res,
@@ -219,36 +217,58 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       // Invalid body schema
       const resBad = mockRes();
       await vendorController.recordVendorHeartbeat(
-        { body: { status: 9999 }, user: null },
+        { body: { status: 9999 }, user: { role: 'vendor', email: 'vendor@example.com' } },
         resBad,
         next
       );
       expect(resBad.status).toHaveBeenCalledWith(400);
 
-      // Missing identifier
+      // Missing session
       await vendorController.recordVendorHeartbeat(
         { body: { status: 'online' }, user: null },
         res,
         next
       );
-      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.status).toHaveBeenCalledWith(401);
+
+      const resBuyer = mockRes();
+      await vendorController.recordVendorHeartbeat(
+        { body: { status: 'online' }, user: { role: 'buyer', email: 'buyer@example.com' } },
+        resBuyer,
+        next
+      );
+      expect(resBuyer.status).toHaveBeenCalledWith(403);
+
+      const resMissingEmail = mockRes();
+      await vendorController.recordVendorHeartbeat(
+        { body: { status: 'online' }, user: { role: 'vendor' } },
+        resMissingEmail,
+        next
+      );
+      expect(resMissingEmail.status).toHaveBeenCalledWith(400);
 
       // Successful heartbeat
-      jest.spyOn(vendorPresenceService, 'recordHeartbeat').mockReturnValue({ recorded: true });
+      jest.spyOn(vendorPresenceService, 'recordHeartbeatDurably').mockResolvedValue({ recorded: true });
       const resOk = mockRes();
       await vendorController.recordVendorHeartbeat(
-        { body: { identifier: 'v-test-hb', role: 'vendor', status: 'online' }, user: { role: 'vendor' } },
+        {
+          body: { identifier: 'spoofed@example.com', role: 'admin', status: 'online' },
+          user: { role: 'vendor', email: 'owner@example.com', sub: 'vendor-subject' },
+        },
         resOk,
         next
       );
       expect(resOk.json).toHaveBeenCalledWith({ recorded: true });
+      expect(vendorPresenceService.recordHeartbeatDurably).toHaveBeenCalledWith(expect.objectContaining({
+        identifier: 'owner@example.com',
+        role: 'vendor',
+        vendorId: null,
+      }));
 
       // Error forwarding
-      jest.spyOn(vendorPresenceService, 'recordHeartbeat').mockImplementation(() => {
-        throw new Error('Heartbeat error');
-      });
+      jest.spyOn(vendorPresenceService, 'recordHeartbeatDurably').mockRejectedValue(new Error('Heartbeat error'));
       await vendorController.recordVendorHeartbeat(
-        { body: { identifier: 'v-err' }, user: { role: 'vendor' } },
+        { body: { identifier: 'v-err' }, user: { role: 'vendor', email: 'owner@example.com' } },
         res,
         next
       );
@@ -378,7 +398,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       const next = jest.fn();
       const newVendor = { id: 'v-cm-1', name: 'CM Vendor', majorCategory: 'Tools', email: 'cm@vendor.com' };
       jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
-      jest.spyOn(storeService, 'addVendor').mockReturnValue(newVendor);
+      const addVendorSpy = jest.spyOn(storeService, 'addVendorDurably').mockResolvedValue(newVendor);
       jest.spyOn(storeService, 'provisionVendorOnboarding').mockResolvedValue({ error: null });
 
       await vendorController.createVendor(
@@ -391,6 +411,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
         next
       );
 
+      expect(addVendorSpy).toHaveBeenCalledWith(expect.objectContaining({ source: 'procucev_network' }), 'cm@procucev.com', null);
       expect(res.status).toHaveBeenCalledWith(201);
     });
 
@@ -449,7 +470,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
 
       // Valid plan 'premium'
       const resOk = mockRes();
-      jest.spyOn(storeService, 'updateVendor').mockReturnValue({ ...vendor, subscriptionPlan: 'premium' });
+      jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ ...vendor, subscriptionPlan: 'premium' });
       await vendorController.updateSubscription(
         {
           params: { id: 'v-sub-1' },
@@ -530,7 +551,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
         zohoPaymentLinkId: 'zpl_123',
         status: 'CREATED',
       });
-      jest.spyOn(storeService, 'createPaymentLinkRecord').mockReturnValue({
+      jest.spyOn(storeService, 'createPaymentLinkRecordDurably').mockResolvedValue({
         id: 'pl-123',
         paymentUrl: 'https://payment.zoho.com/test',
         status: 'CREATED',
@@ -552,6 +573,27 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
           data: expect.objectContaining({ paymentLinkId: 'pl-123' }),
         })
       );
+
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(vendorWithEmail);
+      jest.spyOn(zohoPaymentService, 'createPaymentLink').mockResolvedValueOnce({
+        paymentUrl: 'https://payment.zoho.com/untracked',
+        zohoPaymentLinkId: 'zpl-untracked',
+        status: 'CREATED',
+      });
+      jest.spyOn(storeService, 'createPaymentLinkRecordDurably').mockRejectedValueOnce(
+        Object.assign(new Error('database unavailable'), { statusCode: 503, code: 'PAYMENT_LINK_PERSISTENCE_UNAVAILABLE' })
+      );
+      const resPersistFail = mockRes();
+      await vendorController.createSubscriptionPaymentLink(
+        {
+          params: { id: 'v-ok' },
+          body: { plan: 'connect', billingDuration: '12_months' },
+          user: { role: 'admin' },
+        },
+        resPersistFail,
+        next
+      );
+      expect(resPersistFail.status).toHaveBeenCalledWith(503);
 
       // Error from Zoho service returns 502
       jest.spyOn(zohoPaymentService, 'createPaymentLink').mockRejectedValue(new Error('Zoho down'));
@@ -876,17 +918,18 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       );
     });
 
-    test('recordVendorHeartbeat with user.sub and fallback role', async () => {
+    test('recordVendorHeartbeat rejects vendor sessions without an email identity', async () => {
       const next = jest.fn();
       const res = mockRes();
-      jest.spyOn(vendorPresenceService, 'recordHeartbeat').mockReturnValue({ recorded: true });
+      const recordHeartbeat = jest.spyOn(vendorPresenceService, 'recordHeartbeat').mockReturnValue({ recorded: true });
 
       await vendorController.recordVendorHeartbeat(
-        { body: {}, user: { sub: 'usr-sub-only' } },
+        { body: {}, user: { role: 'vendor', sub: 'usr-sub-only' } },
         res,
         next
       );
-      expect(res.json).toHaveBeenCalledWith({ recorded: true });
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(recordHeartbeat).not.toHaveBeenCalled();
     });
 
     test('covers updateVendor, updateSubscription, and catch branches in vendorController', async () => {

@@ -28,6 +28,7 @@ import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { RegisteredClient, ActionCenterSummaryPopupColumn, RegistrationColumnConfig, RegistrationColumnKey } from '@/lib/types';
 import { REGISTRATION_CLIENT_TYPES, REGISTRATION_COLUMN_PREF_KEY, DEFAULT_REGISTRATION_COLUMNS } from '@/lib/constants';
+import { authClient } from '@/lib/authClient';
 
 export interface RegistrationsDashboardProps {
   onTotalCountChange?: (count: number) => void;
@@ -187,7 +188,10 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
       params.append('limit', String(pageSize));
       params.append('offset', String((currentPage - 1) * pageSize));
 
-      const res = await fetch(`/api/internal-tasks/registrations?${params.toString()}`);
+      const token = authClient.getToken();
+      const res = await fetch(`/api/internal-tasks/registrations?${params.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
         setClients(json.data);
@@ -222,9 +226,13 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
     setProcessingId(id);
     setActionFeedback(null);
     try {
+      const token = authClient.getToken();
       const res = await fetch(`/api/internal-tasks/registrations/${encodeURIComponent(id)}/action`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ action }),
       });
       const json = await res.json();

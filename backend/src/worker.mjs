@@ -49,11 +49,13 @@ const appModule = await import('./app.js');
 const emailGatewayModule = await import('./services/emailGatewayService.js');
 const zohoReconciliationModule = await import('./services/zohoReconciliationService.js');
 const rfqChaserSchedulerModule = await import('./services/rfqChaserScheduler.js');
+const eventOutboxModule = await import('./services/eventOutboxService.js');
 const dailyRfqReportModule = await import('./services/dailyRfqReportService.js');
 const app = appModule.default || appModule;
 const emailGatewayService = emailGatewayModule.default || emailGatewayModule;
 const zohoReconciliationService = zohoReconciliationModule.default || zohoReconciliationModule;
 const rfqChaserScheduler = rfqChaserSchedulerModule.default || rfqChaserSchedulerModule;
+const eventOutboxService = eventOutboxModule.default || eventOutboxModule;
 const dailyRfqReportService = dailyRfqReportModule.default || dailyRfqReportModule;
 
 const PORT = 4000;
@@ -71,7 +73,7 @@ const httpHandler = httpServerHandler({ port: PORT });
 // `scheduled` export) are the platform's actual mechanism for periodic
 // background work: each trigger fire is its own short-lived invocation that
 // calls the same single-shot polling functions (pollBothInboxesOnce /
-// reconcileOnce) and dispatches due D1-backed chaser jobs.
+// reconcileOnce) and dispatches due D1-backed notification jobs.
 async function scheduled(controller, workerEnv, ctx) {
   if (workerEnv && typeof workerEnv === 'object') {
     globalThis.__CF_ENV__ = workerEnv;
@@ -86,24 +88,43 @@ async function scheduled(controller, workerEnv, ctx) {
   const cron = controller.cron;
   const isEmailGateway = cron === EMAIL_GATEWAY_CRON || cron === '* * * * *' || cron === '*/5 * * * *';
   const { default: storeService } = await import('./services/storeService.js');
+  const loggerModule = await import('./services/loggerService.js');
+  const logger = loggerModule.logger || loggerModule.default?.logger;
   if (!storeService.isHydratedFromDB) {
-    await storeService.hydrateFromDB().catch((err) => console.error('[CRON] hydration failed', err));
+    await storeService.hydrateFromDB().catch((err) => {
+      if (logger?.error) {
+        logger.error('Scheduled Worker state hydration failed', err, 'WORKER_CRON');
+      } else {
+        console.error('[CRON] hydration failed', err);
+      }
+    });
   }
   if (isEmailGateway) {
     const results = await Promise.allSettled([
       emailGatewayService.pollBothInboxesOnce(),
       rfqChaserScheduler.dispatchDueChaserJobs(),
+      rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
+      eventOutboxService.dispatchDueEventOutboxJobs(),
+      storeService.closeExpiredRFQsDurably(),
     ]);
     const rejected = results.find((r) => r.status === 'rejected');
     if (rejected) throw rejected.reason;
     return;
   }
   if (cron === DAILY_RFQ_REPORT_CRON) {
-    await dailyRfqReportService.sendDailyRfqReport();
+    const scheduledTime = controller?.scheduledTime == null
+      ? new Date()
+      : new Date(controller.scheduledTime);
+    await dailyRfqReportService.runScheduledDailyRfqReport(scheduledTime);
     return;
   }
   if (cron === ZOHO_RECONCILIATION_CRON) {
-    await zohoReconciliationService.reconcileOnce();
+    const results = await Promise.allSettled([
+      zohoReconciliationService.reconcileOnce(),
+      eventOutboxService.purgeExpiredEventOutboxRows(),
+    ]);
+    const rejected = results.find((result) => result.status === 'rejected');
+    if (rejected) throw rejected.reason;
     return;
   }
   // Unrecognised cron pattern: run all rather than silently doing nothing,
@@ -112,6 +133,10 @@ async function scheduled(controller, workerEnv, ctx) {
     emailGatewayService.pollBothInboxesOnce(),
     zohoReconciliationService.reconcileOnce(),
     rfqChaserScheduler.dispatchDueChaserJobs(),
+    rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
+    eventOutboxService.dispatchDueEventOutboxJobs(),
+    eventOutboxService.purgeExpiredEventOutboxRows(),
+    storeService.closeExpiredRFQsDurably(),
   ]);
   const rejected = results.find((r) => r.status === 'rejected');
   if (rejected) throw rejected.reason;

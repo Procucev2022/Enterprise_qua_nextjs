@@ -625,6 +625,7 @@ describe('InviteVendorsModal — All Vendors tab', () => {
             contactPerson: 'Amit Sharma',
             majorCategory: 'Mechanical & Fluid Equipment',
             minorCategories: [],
+            onboardingEmailStatus: 'pending',
           },
         }),
       } as any);
@@ -638,6 +639,11 @@ describe('InviteVendorsModal — All Vendors tab', () => {
         expect(screen.queryByTestId('add-vendor-modal')).not.toBeInTheDocument();
         expect(screen.getByText('New Test Vendor')).toBeInTheDocument();
       });
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.vendorOnboarding.addedTitle,
+        formatString(UI_STRINGS.vendorOnboarding.registeredAndSelectedMessage, { name: 'New Test Vendor' }),
+        'success'
+      );
     });
   });
 });

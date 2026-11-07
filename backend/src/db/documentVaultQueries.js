@@ -12,7 +12,8 @@ const { logger } = require('../services/loggerService');
 
 function escapeLikeWildcards(str) {
   if (typeof str !== 'string') return '';
-  return str.replace(/([%_\\])/g, '\\$1');
+  // `!` is the SQL LIKE escape character in both PostgreSQL and SQLite.
+  return str.replace(/([!%_])/g, '!$1');
 }
 
 function mapRow(row) {
@@ -152,6 +153,17 @@ function resetInMemoryStore() {
   inMemoryDocuments = JSON.parse(JSON.stringify(DEFAULT_DOCUMENTS));
 }
 
+function throwPersistenceUnavailable(operation, cause) {
+  const error = new Error(`Document vault ${operation} failed because configured database persistence is unavailable.`);
+  error.code = 'PERSISTENCE_UNAVAILABLE';
+  error.cause = cause;
+  logger.error('Document vault persistence failed; refusing in-memory fallback', {
+    operation,
+    error: cause,
+  }, 'DOCUMENT_VAULT');
+  throw error;
+}
+
 async function listDocuments(filters = {}) {
   const { category, search, activeOnly, source, accountType } = filters;
   const targetSource = (source || accountType || 'all').toLowerCase();
@@ -174,7 +186,7 @@ async function listDocuments(filters = {}) {
       if (search && search.trim()) {
         values.push(`%${escapeLikeWildcards(search.trim())}%`);
         const pIndex = values.length;
-        conditions.push(`(document_name ILIKE $${pIndex} OR file_name ILIKE $${pIndex} OR description ILIKE $${pIndex})`);
+        conditions.push(`(LOWER(document_name) LIKE LOWER($${pIndex}) ESCAPE '!' OR LOWER(file_name) LIKE LOWER($${pIndex}) ESCAPE '!' OR LOWER(description) LIKE LOWER($${pIndex}) ESCAPE '!')`);
       }
 
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -183,8 +195,7 @@ async function listDocuments(filters = {}) {
       const result = await pool.query(queryText, values, { d1: true });
       vaultDocs = result.rows.map(mapRow);
     } catch (err) {
-      logger.error('documentVaultQueries: PostgreSQL listDocuments query failed, falling back to memory', { error: err.message });
-      vaultDocs = inMemoryDocuments.slice();
+      throwPersistenceUnavailable('list', err);
     }
   } else {
     vaultDocs = inMemoryDocuments.slice();
@@ -273,7 +284,7 @@ async function getDocumentById(id) {
       }
       return null;
     } catch (err) {
-      logger.error('documentVaultQueries: PostgreSQL getDocumentById query failed, falling back to memory', { error: err.message, id });
+      throwPersistenceUnavailable('lookup', err);
     }
   }
 
@@ -322,7 +333,7 @@ async function createDocument(payload = {}, actor) {
       );
       return mapRow(result.rows[0]);
     } catch (err) {
-      logger.error('documentVaultQueries: PostgreSQL createDocument insert failed, falling back to memory', { error: err.message });
+      throwPersistenceUnavailable('creation', err);
     }
   }
 
@@ -401,7 +412,7 @@ async function updateDocument(id, updates = {}) {
       }
       return null;
     } catch (err) {
-      logger.error('documentVaultQueries: PostgreSQL updateDocument failed, falling back to memory', { error: err.message, id });
+      throwPersistenceUnavailable('update', err);
     }
   }
 
@@ -434,7 +445,7 @@ async function deleteDocument(id) {
       const result = await pool.query('DELETE FROM document_vault WHERE id = $1', [id], { d1: true });
       return result.rowCount > 0;
     } catch (err) {
-      logger.error('documentVaultQueries: PostgreSQL deleteDocument query failed, falling back to memory', { error: err.message, id });
+      throwPersistenceUnavailable('deletion', err);
     }
   }
 

@@ -6,6 +6,7 @@ const smsService = require('../src/services/smsService');
 const mailerService = require('../src/services/mailerService');
 const whatsAppService = require('../src/services/whatsAppService');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
+const domainQueries = require('../src/db/domainQueries');
 
 describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
   const BUYER_EMAIL = 'v0buyer@enterprise.com';
@@ -14,8 +15,10 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
   let buyerAccount;
   let matchedVendor;
   let buyerAuthHeader;
+  let originalNodeEnv;
 
   beforeEach(() => {
+    originalNodeEnv = process.env.NODE_ENV;
     storeService.reset();
     smsService.clearSmsThrottleCache();
     whatsAppService.clearWhatsAppThrottleCache();
@@ -59,7 +62,10 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
 
   afterEach(() => {
     rfqChaserScheduler.clearScheduledChasers('all');
+    jest.useRealTimers();
     jest.restoreAllMocks();
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
   });
 
   test('Step 1: RFQ Creation works without subscription and with 0 credit deduction', async () => {
@@ -92,8 +98,9 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
     jest.useFakeTimers();
     const smsSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-v0-test' });
     const waSpy = jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: true });
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+    jest.spyOn(domainQueries, 'insertChaserJobInDB').mockResolvedValue(null);
 
-    const origEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
 
     const rfq = storeService.createRFQ({
@@ -110,11 +117,11 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
     expect(rfqChaserScheduler.pendingTimers.get(rfq.rfqNumber)).toHaveLength(1);
 
     // Before 5 minutes: SMS not fired yet
-    jest.advanceTimersByTime(4 * 60 * 1000);
+    await jest.advanceTimersByTimeAsync(4 * 60 * 1000);
     expect(smsSpy).not.toHaveBeenCalled();
 
     // At 5 minutes: SMS is dispatched using existing template
-    jest.advanceTimersByTime(60 * 1000 + 100);
+    await jest.advanceTimersByTimeAsync(60 * 1000 + 100);
     expect(smsSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         mobile: VENDOR_PHONE,
@@ -123,11 +130,9 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
     );
 
     // After 6h, 12h, 24h: No follow-up reminders
-    jest.advanceTimersByTime(25 * 60 * 60 * 1000);
+    await jest.advanceTimersByTimeAsync(25 * 60 * 60 * 1000);
     expect(waSpy).not.toHaveBeenCalled();
 
-    process.env.NODE_ENV = origEnv;
-    jest.useRealTimers();
   });
 
   test('Step 4, 5, 6, 7: Vendor quote updates V0 status to Quotes Received, does NOT auto-close to Closed, asks buyer to update profile', async () => {

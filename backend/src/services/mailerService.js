@@ -2239,14 +2239,20 @@ async function sendBuyerProfileCompletionReminderEmail(params) {
 
 /** Template D — Rating revision notification to vendor */
 function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany, buyerName, previousRating, newRating, previousScore, newScore, remarks, qualityScore, costScore, deliveryScore }) {
+  const safeRecipientName = recipientName ? escapeHtml(recipientName) : '';
+  const safeBuyerCompany = escapeHtml(buyerCompany || 'A buyer on Procucev');
+  const safeRemarks = escapeHtml(remarks || '');
+  const subjectBuyerCompany = String(buyerCompany || 'A buyer on Procucev')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .trim();
   const inner = `
     <div style="font-family: Arial, sans-serif; width: 100%; box-sizing: border-box;">
       <p style="font-size: 16px; color: #1e293b; margin-bottom: 20px;">
-        ${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}
+        ${safeRecipientName ? `Dear <strong>${safeRecipientName}</strong>,` : 'Hello,'}
       </p>
       
       <p style="font-size: 15px; color: #334155; margin-bottom: 20px; line-height: 1.6;">
-        <strong>${buyerCompany}</strong> has updated your performance rating on <strong>Procucev Enterprise</strong>.
+        <strong>${safeBuyerCompany}</strong> has updated your performance rating on <strong>Procucev Enterprise</strong>.
       </p>
       
       <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #86efac; border-radius: 12px; padding: 24px; margin: 24px 0;">
@@ -2287,7 +2293,7 @@ function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany,
       
       <div style="background: #eff6ff; border-left: 4px solid #3b82f6; padding: 16px; margin: 24px 0; border-radius: 4px;">
         <p style="font-size: 13px; color: #1e40af; margin: 0; line-height: 1.5;">
-          <strong>📝 Remarks:</strong> ${remarks}
+          <strong>📝 Remarks:</strong> ${safeRemarks}
         </p>
       </div>
       
@@ -2300,7 +2306,7 @@ function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany,
       </p>
       
       <p style="font-size: 13px; color: #64748b; margin: 0; line-height: 1.6;">
-        If you have any questions about this rating update, please contact <strong>${buyerCompany}</strong> directly or reach out to our support team at <a href="mailto:support@procucev.ai" style="color: #0284c7;">support@procucev.ai</a>
+        If you have any questions about this rating update, please contact <strong>${safeBuyerCompany}</strong> directly or reach out to our support team at <a href="mailto:support@procucev.ai" style="color: #0284c7;">support@procucev.ai</a>
       </p>
     </div>
   `;
@@ -2308,7 +2314,7 @@ function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany,
   return {
     from: fromAddress(),
     to,
-    subject: `[Rating Update] Your performance rating has been updated by ${buyerCompany}`,
+    subject: `[Rating Update] Your performance rating has been updated by ${subjectBuyerCompany}`,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Vendor Rating Revision', inner),
   };
 }

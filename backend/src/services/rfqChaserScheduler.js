@@ -18,34 +18,50 @@
  *
  * Design decisions
  * ─────────────────
- * • Node deployments use timers for low-latency dispatch. Cloudflare Workers
- *   persist jobs to D1 and dispatch due jobs from a Cron Trigger, since request-
- *   scoped timers cannot reliably survive for hours.
+ * • Node deployments use timers to wake the durable queue for low-latency
+ *   dispatch. Cloudflare Workers dispatch due D1 jobs from a Cron Trigger,
+ *   since request-scoped timers cannot reliably survive for hours.
  *
  * • Node timers are re-armed from the persisted queue on server boot. Workers
  *   claim due queue rows directly from the Cron Trigger instead.
  *
- * • Each channel send is fire-and-forget: a failure logs but never re-throws
- *   so one bad vendor number cannot abort the rest of the fan-out.
+ * • Provider failures are recorded with bounded backoff retries; one bad vendor
+ *   number never aborts the rest of the fan-out.
  *
  * • Timers are trackable via `pendingTimers` (Map rfqNumber → timer ids[])
  *   so the test suite can inspect or cancel them without going async.
  */
 
-const { CHASER_DELAYS } = require('../config/constants');
+const {
+  CHASER_DELAYS,
+  RFQ_COMPARISON_NOTIFICATION_DELAY_MS,
+  RFQ_COMPARISON_STALE_CLAIM_MS,
+  RFQ_COMPARISON_QUEUE_MAX_LIMIT,
+  RFQ_COMPARISON_MEMORY_DEDUPE_LIMIT,
+} = require('../config/constants');
 const smsService = require('./smsService');
 const whatsAppService = require('./whatsAppService');
 const mailerService = require('./mailerService');
 const { logger } = require('./loggerService');
 const domainQueries = require('../db/domainQueries');
+const rfqComparisonQueueQueries = require('../db/rfqComparisonQueueQueries');
 const { getD1Binding, getWaitUntil } = require('../db/d1Bridge');
 
-const _ignoreError = () => {};
+const _ignoreError = (error) => logger.warn(
+  'Best-effort chaser job persistence failed',
+  { error },
+  'RFQ_CHASER'
+);
 
 // ── Timer registry ────────────────────────────────────────────────────────────
 // Maps rfqNumber → array of NodeJS.Timeout handles.
 // Only used by tests (clearScheduledChasers) and graceful shutdown.
 const pendingTimers = new Map();
+
+// Maps durable RFQ comparison job IDs to Node timer handles. Workers rely on
+// Cron and never populate this registry.
+const pendingComparisonTimers = new Map();
+const completedMemoryComparisonJobs = new Set();
 
 // Maps `${rfqNumber}:${vendorKey}:${channel}` → NodeJS.Timeout handle.
 // Ensures identical chaser timers are never scheduled twice for the same vendor & channel.
@@ -54,6 +70,245 @@ const activeScheduledTimers = new Map();
 function _registerTimer(rfqNumber, handle) {
   if (!pendingTimers.has(rfqNumber)) pendingTimers.set(rfqNumber, []);
   pendingTimers.get(rfqNumber).push(handle);
+}
+
+function _comparisonJobId(rfqId) {
+  const safeRfqId = String(rfqId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48);
+  return `comparison-${safeRfqId}`;
+}
+
+function buildBuyerComparisonJobIntent(rfq, delayMs = RFQ_COMPARISON_NOTIFICATION_DELAY_MS) {
+  if (!rfq || !(rfq.id || rfq.rfqNumber) || !rfq.rfqNumber) return null;
+  const fireAt = new Date(Date.now() + Math.max(0, Number(delayMs) || 0)).toISOString();
+  return {
+    id: _comparisonJobId(rfq.id || rfq.rfqNumber),
+    rfqId: rfq.id || rfq.rfqNumber,
+    rfqNumber: rfq.rfqNumber,
+    fireAt,
+  };
+}
+
+async function _persistBuyerComparisonJob(rfq, fireAt) {
+  try {
+    return await rfqComparisonQueueQueries.insertRFQComparisonJobInDB({
+      id: _comparisonJobId(rfq.id || rfq.rfqNumber),
+      rfqId: rfq.id || rfq.rfqNumber,
+      rfqNumber: rfq.rfqNumber,
+      fireAt,
+    });
+  } catch (error) {
+    logger.error('Failed to persist durable RFQ comparison notification', {
+      error,
+      rfqId: rfq.id,
+      rfqNumber: rfq.rfqNumber,
+      fireAt,
+    }, 'RFQ_COMPARISON_QUEUE');
+    return null;
+  }
+}
+
+function _scheduleComparisonTimer(job, fallbackRfq, persistPromise) {
+  if (!job || !job.id || pendingComparisonTimers.has(job.id)) return false;
+  const delay = Math.max(0, new Date(job.fire_at || job.fireAt).getTime() - Date.now());
+  const handle = setTimeout(async () => {
+    pendingComparisonTimers.delete(job.id);
+    try {
+      const persisted = await persistPromise;
+      if (persisted) {
+        await dispatchDueRFQComparisonJobs(1, job.id);
+      } else {
+        await _dispatchRFQComparisonNotification(job, fallbackRfq);
+        if (completedMemoryComparisonJobs.size >= RFQ_COMPARISON_MEMORY_DEDUPE_LIMIT) {
+          const oldestJobId = completedMemoryComparisonJobs.values().next().value;
+          if (oldestJobId !== undefined) completedMemoryComparisonJobs.delete(oldestJobId);
+        }
+        completedMemoryComparisonJobs.add(job.id);
+      }
+    } catch (error) {
+      logger.error('Node RFQ comparison notification timer failed', {
+        error,
+        jobId: job.id,
+        rfqId: job.rfq_id || job.rfqId,
+        rfqNumber: job.rfq_number || job.rfqNumber,
+      }, 'RFQ_COMPARISON_QUEUE');
+    }
+  }, delay);
+  if (handle && handle.unref) handle.unref();
+  pendingComparisonTimers.set(job.id, handle);
+  logger.info('Scheduled Node RFQ comparison notification', {
+    jobId: job.id,
+    rfqId: job.rfq_id || job.rfqId,
+    rfqNumber: job.rfq_number || job.rfqNumber,
+    delayMs: delay,
+  }, 'RFQ_COMPARISON_QUEUE');
+  return true;
+}
+
+/** Persist a buyer comparison notification and dispatch it through Cron on Workers. */
+function scheduleBuyerComparison(rfq, delayMs = RFQ_COMPARISON_NOTIFICATION_DELAY_MS) {
+  const intent = buildBuyerComparisonJobIntent(rfq, delayMs);
+  if (!intent) {
+    logger.warn('Skipped RFQ comparison scheduling because RFQ identifiers are incomplete', {
+      rfqId: rfq && rfq.id,
+      rfqNumber: rfq && rfq.rfqNumber,
+    }, 'RFQ_COMPARISON_QUEUE');
+    return null;
+  }
+  const job = {
+    id: intent.id,
+    rfq_id: intent.rfqId,
+    rfq_number: intent.rfqNumber,
+    fire_at: intent.fireAt,
+  };
+  if (completedMemoryComparisonJobs.has(job.id)) {
+    logger.info('Skipped duplicate in-memory RFQ comparison notification', {
+      jobId: job.id,
+      rfqNumber: job.rfq_number,
+    }, 'RFQ_COMPARISON_QUEUE');
+    return job.id;
+  }
+  const persistPromise = _persistBuyerComparisonJob(rfq, intent.fireAt);
+
+  if (getD1Binding()) {
+    const waitUntil = getWaitUntil();
+    if (waitUntil) waitUntil(persistPromise);
+    logger.info('Queued durable Worker RFQ comparison notification for Cron dispatch', {
+      jobId: job.id,
+      rfqId: job.rfq_id,
+      rfqNumber: job.rfq_number,
+      fireAt: intent.fireAt,
+    }, 'RFQ_COMPARISON_QUEUE');
+    return job.id;
+  }
+
+  _scheduleComparisonTimer(job, rfq, persistPromise);
+  return job.id;
+}
+
+function schedulePersistedBuyerComparison(rfq, intent) {
+  if (!rfq || !intent || !intent.id || !intent.fireAt || !intent.rfqNumber) return null;
+  const job = {
+    id: intent.id,
+    rfq_id: intent.rfqId,
+    rfq_number: intent.rfqNumber,
+    fire_at: intent.fireAt,
+  };
+  if (getD1Binding()) {
+    logger.info('Registered atomically persisted Worker RFQ comparison job for Cron dispatch', {
+      jobId: job.id,
+      rfqId: job.rfq_id,
+      rfqNumber: job.rfq_number,
+      fireAt: job.fire_at,
+    }, 'RFQ_COMPARISON_QUEUE');
+    return job.id;
+  }
+  _scheduleComparisonTimer(job, rfq, Promise.resolve(job));
+  return job.id;
+}
+
+async function _dispatchRFQComparisonNotification(job, fallbackRfq = null) {
+  const rfqId = job.rfq_id || job.rfqId;
+  const rfqNumber = job.rfq_number || job.rfqNumber;
+  let rfq = null;
+  if (rfqId) rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+  if (!rfq && rfqNumber) rfq = await domainQueries.getRFQByNumberFromDB(rfqNumber);
+  if (!rfq) rfq = fallbackRfq;
+  if (!rfq) throw new Error(`RFQ ${rfqNumber || rfqId || 'unknown'} was not found for comparison notification`);
+
+  // Lazy require avoids a module initialization cycle: storeService owns the
+  // scheduler for enqueueing, while this dispatcher calls back after startup.
+  const storeService = require('./storeService');
+  const deliveryState = await storeService.dispatchBuyerComparisonNotification(rfq, {
+    emailCompleted: Boolean(job.email_completed_at),
+    smsCompleted: Boolean(job.sms_completed_at),
+  });
+  if (deliveryState.emailCompleted) {
+    await rfqComparisonQueueQueries.markRFQComparisonChannelCompleteInDB(job.id, 'email');
+  }
+  if (deliveryState.smsCompleted) {
+    await rfqComparisonQueueQueries.markRFQComparisonChannelCompleteInDB(job.id, 'sms');
+  }
+  if (!deliveryState.emailCompleted || !deliveryState.smsCompleted) {
+    const failedChannels = [
+      !deliveryState.emailCompleted ? 'email' : null,
+      !deliveryState.smsCompleted ? 'sms' : null,
+    ].filter(Boolean);
+    throw new Error(`RFQ comparison delivery remains incomplete for ${failedChannels.join(', ')}`);
+  }
+}
+
+/** Claim and deliver due comparison notifications from the durable queue. */
+async function dispatchDueRFQComparisonJobs(limit = 25, jobId = null) {
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - RFQ_COMPARISON_STALE_CLAIM_MS);
+  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), RFQ_COMPARISON_QUEUE_MAX_LIMIT);
+  const jobs = await rfqComparisonQueueQueries.claimDueRFQComparisonJobsFromDB(
+    now.toISOString(),
+    staleBefore.toISOString(),
+    safeLimit,
+    jobId
+  );
+  let sent = 0;
+  let failed = 0;
+  for (const job of jobs) {
+    try {
+      await _dispatchRFQComparisonNotification(job);
+      await rfqComparisonQueueQueries.markRFQComparisonJobCompleteInDB(job.id);
+      sent++;
+    } catch (error) {
+      failed++;
+      logger.error('Durable RFQ comparison notification dispatch failed', {
+        error,
+        jobId: job.id,
+        rfqId: job.rfq_id,
+        rfqNumber: job.rfq_number,
+        attempts: job.attempts,
+      }, 'RFQ_COMPARISON_QUEUE');
+      try {
+        await rfqComparisonQueueQueries.markRFQComparisonJobFailedInDB(job.id, error.message);
+      } catch (stateError) {
+        logger.error('Failed to update durable RFQ comparison job after dispatch failure', {
+          error: stateError,
+          jobId: job.id,
+          rfqNumber: job.rfq_number,
+        }, 'RFQ_COMPARISON_QUEUE');
+      }
+    }
+  }
+
+  logger.info('RFQ comparison Cron dispatch complete', {
+    claimed: jobs.length,
+    sent,
+    failed,
+    jobId,
+  }, 'RFQ_COMPARISON_QUEUE');
+
+  if (!getD1Binding() && failed > 0) {
+    await recoverRFQComparisonJobsOnBoot();
+  }
+  return { claimed: jobs.length, sent, failed };
+}
+
+/** Re-arm pending comparison jobs after Node process startup. */
+async function recoverRFQComparisonJobsOnBoot() {
+  if (process.env.NODE_ENV === 'test' || getD1Binding()) return;
+  try {
+    const pending = await rfqComparisonQueueQueries.getPendingRFQComparisonJobsFromDB(1000);
+    if (!pending.length) {
+      logger.info('RFQ comparison queue recovery found no pending jobs', {}, 'RFQ_COMPARISON_QUEUE');
+      return;
+    }
+    let recovered = 0;
+    for (const row of pending) {
+      if (_scheduleComparisonTimer(row, null, Promise.resolve(row))) recovered++;
+    }
+    logger.info('Recovered pending Node RFQ comparison notification jobs', {
+      pending: pending.length,
+      recovered,
+    }, 'RFQ_COMPARISON_QUEUE');
+  } catch (error) {
+    logger.error('Failed to recover Node RFQ comparison notification jobs', { error }, 'RFQ_COMPARISON_QUEUE');
+  }
 }
 
 /**
@@ -92,11 +347,13 @@ function clearScheduledChasers(rfqNumber) {
 /**
  * Updates in-memory RFQ follow-up stats upon successful chaser dispatch.
  */
-function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null) {
+function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null, options = {}) {
   if (!rfqNumber) return;
   try {
     const storeService = require('./storeService');
-    const liveRfq = (storeService.getRFQById ? storeService.getRFQById(rfqNumber) : null) || fallbackRfq;
+    const liveRfq = options.preferFallback && fallbackRfq
+      ? fallbackRfq
+      : (storeService.getRFQById ? storeService.getRFQById(rfqNumber) : null) || fallbackRfq;
     if (!liveRfq || !liveRfq.followUpData) return;
     const fup = liveRfq.followUpData;
 
@@ -105,9 +362,7 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
       fup.whatsappStats.delivered = (fup.whatsappStats.delivered || 0) + 1;
       if (Array.isArray(fup.vendors) && vendor) {
         const vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.vendorName === vendor.name));
-        if (vRecord) {
-          vRecord.whatsapp = { status: 'delivered', lastAttempt: new Date().toISOString() };
-        }
+        if (vRecord) vRecord.whatsapp = { status: 'delivered', lastAttempt: new Date().toISOString() };
       }
     } else if (channel === 'sms') {
       if (!fup.smsStats) fup.smsStats = { total: 0, delivered: 0, clicked: 0 };
@@ -134,15 +389,31 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
       }
     }
 
-    if (storeService && typeof storeService._persistRFQ === 'function') {
-      storeService._persistRFQ(liveRfq);
-    } else if (domainQueries && typeof domainQueries.upsertRFQInDB === 'function') {
-      domainQueries.upsertRFQInDB(liveRfq).catch(_ignoreError);
+    if (options.updatedRfqNumbers instanceof Set) options.updatedRfqNumbers.add(rfqNumber);
+    if (options.persist !== false) {
+      if (typeof storeService._persistRFQ === 'function') {
+        storeService._persistRFQ(liveRfq);
+      } else if (typeof domainQueries.upsertRFQInDB === 'function') {
+        domainQueries.upsertRFQInDB(liveRfq).catch((error) => {
+          logger.warn('RFQ follow-up status persistence failed after chaser dispatch', {
+            rfqNumber,
+            channel,
+            error,
+          }, 'RFQ_CHASER');
+        });
+      }
     }
-  } catch (_err) {}
+  } catch (error) {
+    logger.warn('Could not update live RFQ follow-up statistics after chaser dispatch', {
+      rfqNumber,
+      channel,
+      vendorId: vendor?.id || null,
+      error,
+    }, 'RFQ_CHASER');
+  }
 }
 
-async function _dispatchWhatsApp(rfq, vendor, jobId) {
+async function _dispatchWhatsApp(rfq, vendor, jobId, attempt = 1, followUpOptions = {}) {
   if (process.env.NODE_ENV === 'test') return { channel: 'whatsapp', skipped: true };
   const phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
   if (!phone) {
@@ -168,15 +439,13 @@ async function _dispatchWhatsApp(rfq, vendor, jobId) {
     );
     if (jobId) {
       if (result.success) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
-      else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error').catch(_ignoreError);
+      else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error', attempt).catch(_ignoreError);
     }
-    if (result.success) {
-      _updateLiveFollowUpStats(rfq.rfqNumber, 'whatsapp', vendor, rfq);
-    }
+    if (result.success) _updateLiveFollowUpStats(rfq.rfqNumber, 'whatsapp', vendor, rfq, followUpOptions);
     return { channel: 'whatsapp', success: result.success };
   } catch (err) {
     logger.error(`[CHASER] WhatsApp error for ${vendor.name}: ${err.message}`, err, 'RFQ_CHASER');
-    if (jobId) await domainQueries.markChaserJobFailedInDB(jobId, err.message).catch(_ignoreError);
+    if (jobId) await domainQueries.markChaserJobFailedInDB(jobId, err.message, attempt).catch(_ignoreError);
     return { channel: 'whatsapp', success: false, error: err.message };
   }
 }
@@ -184,7 +453,7 @@ async function _dispatchWhatsApp(rfq, vendor, jobId) {
 /**
  * Fire-and-forget SMS chaser for one vendor.
  */
-async function _dispatchSms(rfq, vendor, jobId) {
+async function _dispatchSms(rfq, vendor, jobId, attempt = 1, followUpOptions = {}) {
   if (process.env.NODE_ENV === 'test') return { channel: 'sms', skipped: true };
   let phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
   if (!phone && vendor.id) {
@@ -192,8 +461,12 @@ async function _dispatchSms(rfq, vendor, jobId) {
       const storeService = require('./storeService');
       const full = storeService.getVendorById ? storeService.getVendorById(vendor.id, 'all') : null;
       if (full) phone = full.phone || full.mobile || full.mobileNumber;
-    } catch {
-      // ignore
+    } catch (error) {
+      logger.warn(
+        'Could not load vendor contact for SMS chaser; continuing with supplied contact fields',
+        { vendorId: vendor.id, error },
+        'RFQ_CHASER'
+      );
     }
   }
   if (!phone) {
@@ -217,15 +490,13 @@ async function _dispatchSms(rfq, vendor, jobId) {
     );
     if (jobId) {
       if (result.success) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
-      else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error').catch(_ignoreError);
+      else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error', attempt).catch(_ignoreError);
     }
-    if (result.success) {
-      _updateLiveFollowUpStats(rfq.rfqNumber, 'sms', vendor, rfq);
-    }
+    if (result.success) _updateLiveFollowUpStats(rfq.rfqNumber, 'sms', vendor, rfq, followUpOptions);
     return { channel: 'sms', success: result.success };
   } catch (err) {
     logger.error(`[CHASER] SMS error for ${vendor.name}: ${err.message}`, err, 'RFQ_CHASER');
-    if (jobId) await domainQueries.markChaserJobFailedInDB(jobId, err.message).catch(_ignoreError);
+    if (jobId) await domainQueries.markChaserJobFailedInDB(jobId, err.message, attempt).catch(_ignoreError);
     return { channel: 'sms', success: false, error: err.message };
   }
 }
@@ -235,7 +506,7 @@ async function _dispatchSms(rfq, vendor, jobId) {
  * Uses the same sendRfqInviteEmail used on creation — vendors receive the full
  * RFQ detail email again as a formal reminder, labelled as a follow-up.
  */
-async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId) {
+async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attempt = 1, followUpOptions = {}) {
   if (process.env.NODE_ENV === 'test') return { channel: 'email', skipped: true };
   if (!vendor.email) {
     logger.debug(`[CHASER] Reminder email skipped for ${vendor.name} — no email`, {}, 'RFQ_CHASER');
@@ -262,15 +533,15 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId) {
     );
     if (jobId) {
       if (result.sent) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
-      else await domainQueries.markChaserJobFailedInDB(jobId, result.reason || 'email delivery failed').catch(_ignoreError);
+      else await domainQueries.markChaserJobFailedInDB(jobId, result.reason || 'email delivery failed', attempt).catch(_ignoreError);
     }
     if (result.sent) {
-      _updateLiveFollowUpStats(rfq.rfqNumber, 'email', vendor, rfq);
+      _updateLiveFollowUpStats(rfq.rfqNumber, 'email', vendor, rfq, followUpOptions);
     }
     return { channel: 'email', sent: result.sent };
   } catch (err) {
     logger.error(`[CHASER] Reminder email error for ${vendor.email}: ${err.message}`, err, 'RFQ_CHASER');
-    if (jobId) await domainQueries.markChaserJobFailedInDB(jobId, err.message).catch(_ignoreError);
+    if (jobId) await domainQueries.markChaserJobFailedInDB(jobId, err.message, attempt).catch(_ignoreError);
     return { channel: 'email', sent: false, error: err.message };
   }
 }
@@ -323,7 +594,7 @@ function _chaserJobId(rfqNumber, vendorIdOrKey, channel) {
 async function _persistChaserJob(jobId, rfq, vendor, channel, delayMs) {
   try {
     const fireAt = new Date(Date.now() + delayMs).toISOString();
-    await domainQueries.insertChaserJobInDB({
+    const saved = await domainQueries.insertChaserJobInDB({
       id: jobId,
       rfqNumber: rfq.rfqNumber,
       rfqId: rfq.id || rfq.rfqNumber,
@@ -336,10 +607,20 @@ async function _persistChaserJob(jobId, rfq, vendor, channel, delayMs) {
       channel,
       fireAt,
     });
+    return Boolean(saved);
   } catch (err) {
     // Never block scheduling — chaser DB persistence is best-effort
     logger.warn(`[CHASER] Failed to persist ${channel} job for ${rfq.rfqNumber}: ${err.message}`, {}, 'RFQ_CHASER');
+    return false;
   }
+}
+
+async function _dispatchPersistedChaserOrFallback(persistPromise, fallbackDispatch) {
+  if (await persistPromise) {
+    await dispatchDueChaserJobs();
+    return;
+  }
+  await fallbackDispatch();
 }
 
 /**
@@ -408,11 +689,15 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
   const smsKey = `${rfqNumber}:${vendorKey}:sms`;
   if (!activeScheduledTimers.has(smsKey)) {
     const smsJobId = _chaserJobId(rfqNumber, vendorKey, 'sms');
+    const persistPromise = _persistChaserJob(smsJobId, rfq, vendor, 'sms', smsDelay);
     let smsPromiseResolve;
     const smsPromise = new Promise((resolve) => { smsPromiseResolve = resolve; });
     const smsHandle = setTimeout(async () => {
       try {
-        await _dispatchSms(rfq, vendor, smsJobId).catch(_ignoreError);
+        await _dispatchPersistedChaserOrFallback(
+          persistPromise,
+          () => _dispatchSms(rfq, vendor, smsJobId)
+        ).catch(_ignoreError);
       } finally {
         activeScheduledTimers.delete(smsKey);
         smsPromiseResolve();
@@ -420,7 +705,6 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
     }, smsDelay);
     activeScheduledTimers.set(smsKey, smsHandle);
     _registerTimer(rfqNumber, smsHandle);
-    _persistChaserJob(smsJobId, rfq, vendor, 'sms', smsDelay);
     if (waitUntil) waitUntil(smsPromise);
   }
 
@@ -438,11 +722,15 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
   const callKey = `${rfqNumber}:${vendorKey}:call`;
   if (!activeScheduledTimers.has(callKey)) {
     const callJobId = _chaserJobId(rfqNumber, vendorKey, 'call');
+    const persistPromise = _persistChaserJob(callJobId, rfq, vendor, 'call', callDelay);
     let callPromiseResolve;
     const callPromise = new Promise((resolve) => { callPromiseResolve = resolve; });
     const callHandle = setTimeout(async () => {
       try {
-        await _dispatchCall(rfq, vendor, callJobId).catch(_ignoreError);
+        await _dispatchPersistedChaserOrFallback(
+          persistPromise,
+          () => _dispatchCall(rfq, vendor, callJobId)
+        ).catch(_ignoreError);
       } finally {
         activeScheduledTimers.delete(callKey);
         callPromiseResolve();
@@ -450,7 +738,6 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
     }, callDelay);
     activeScheduledTimers.set(callKey, callHandle);
     _registerTimer(rfqNumber, callHandle);
-    _persistChaserJob(callJobId, rfq, vendor, 'call', callDelay);
     if (waitUntil) waitUntil(callPromise);
   }
 
@@ -458,11 +745,15 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
   const waKey = `${rfqNumber}:${vendorKey}:whatsapp`;
   if (!activeScheduledTimers.has(waKey)) {
     const waJobId = _chaserJobId(rfqNumber, vendorKey, 'whatsapp');
+    const persistPromise = _persistChaserJob(waJobId, rfq, vendor, 'whatsapp', waDelay);
     let waPromiseResolve;
     const waPromise = new Promise((resolve) => { waPromiseResolve = resolve; });
     const waHandle = setTimeout(async () => {
       try {
-        await _dispatchWhatsApp(rfq, vendor, waJobId).catch(_ignoreError);
+        await _dispatchPersistedChaserOrFallback(
+          persistPromise,
+          () => _dispatchWhatsApp(rfq, vendor, waJobId)
+        ).catch(_ignoreError);
       } finally {
         activeScheduledTimers.delete(waKey);
         waPromiseResolve();
@@ -470,7 +761,6 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
     }, waDelay);
     activeScheduledTimers.set(waKey, waHandle);
     _registerTimer(rfqNumber, waHandle);
-    _persistChaserJob(waJobId, rfq, vendor, 'whatsapp', waDelay);
     if (waitUntil) waitUntil(waPromise);
   }
 
@@ -478,16 +768,19 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
   const emailKey = `${rfqNumber}:${vendorKey}:email`;
   if (!activeScheduledTimers.has(emailKey)) {
     const emailJobId = _chaserJobId(rfqNumber, vendorKey, 'email');
+    const persistPromise = _persistChaserJob(emailJobId, rfq, vendor, 'email', emailDelay);
     const emailHandle = setTimeout(async () => {
       try {
-        await _dispatchReminderEmail(rfq, vendor, creditInfo, emailJobId).catch(_ignoreError);
+        await _dispatchPersistedChaserOrFallback(
+          persistPromise,
+          () => _dispatchReminderEmail(rfq, vendor, creditInfo, emailJobId)
+        ).catch(_ignoreError);
       } finally {
         activeScheduledTimers.delete(emailKey);
       }
     }, emailDelay);
     activeScheduledTimers.set(emailKey, emailHandle);
     _registerTimer(rfqNumber, emailHandle);
-    _persistChaserJob(emailJobId, rfq, vendor, 'email', emailDelay);
   }
 
   logger.info(
@@ -511,6 +804,12 @@ async function dispatchDueChaserJobs(limit = 25) {
     limit
   );
   const rfqCache = new Map();
+  const updatedRfqNumbers = new Set();
+  const followUpOptions = {
+    persist: false,
+    preferFallback: true,
+    updatedRfqNumbers,
+  };
   let sent = 0;
   let failed = 0;
   let skipped = 0;
@@ -534,11 +833,11 @@ async function dispatchDueChaserJobs(limit = 25) {
         contactPerson: job.vendor_contact_person || null,
       };
       const result = job.channel === 'email'
-        ? await _dispatchReminderEmail(rfq, vendor, {}, job.id)
+        ? await _dispatchReminderEmail(rfq, vendor, {}, job.id, job.attempts, followUpOptions)
         : job.channel === 'whatsapp'
-          ? await _dispatchWhatsApp(rfq, vendor, job.id)
+          ? await _dispatchWhatsApp(rfq, vendor, job.id, job.attempts, followUpOptions)
           : job.channel === 'sms'
-            ? await _dispatchSms(rfq, vendor, job.id)
+            ? await _dispatchSms(rfq, vendor, job.id, job.attempts, followUpOptions)
             : job.channel === 'call'
               ? await _dispatchCall(rfq, vendor, job.id)
               : null;
@@ -552,13 +851,20 @@ async function dispatchDueChaserJobs(limit = 25) {
     } catch (err) {
       failed++;
       logger.error(`[CHASER] Scheduled dispatch failed for job ${job.id}: ${err.message}`, err, 'RFQ_CHASER');
-      await domainQueries.markChaserJobFailedInDB(job.id, err.message);
+      await domainQueries.markChaserJobFailedInDB(job.id, err.message, job.attempts);
     }
   }
 
-  for (const updatedRfq of rfqCache.values()) {
-    if (updatedRfq && typeof domainQueries.upsertRFQInDB === 'function') {
-      await domainQueries.upsertRFQInDB(updatedRfq).catch(_ignoreError);
+  for (const rfqNumber of updatedRfqNumbers) {
+    const updatedRfq = rfqCache.get(rfqNumber);
+    if (!updatedRfq) continue;
+    try {
+      await domainQueries.upsertRFQInDB(updatedRfq);
+    } catch (error) {
+      logger.error('Could not persist RFQ follow-up status after scheduled chaser batch', {
+        rfqNumber,
+        error,
+      }, 'RFQ_CHASER');
     }
   }
 
@@ -643,30 +949,9 @@ async function recoverChasersOnBoot() {
       const fireAt = new Date(row.fire_at).getTime();
       const delay = Math.max(0, fireAt - now);
       const jobId = row.id;
-      const rfqStub = {
-        rfqNumber: row.rfq_number,
-        id: row.rfq_id,
-        title: row.rfq_title || '',
-      };
-      const vendorStub = {
-        id: row.vendor_id,
-        name: row.vendor_name,
-        phone: row.vendor_phone || null,
-        email: row.vendor_email || null,
-        contactPerson: row.vendor_contact_person || null,
-      };
-
-      const dispatchFn = row.channel === 'whatsapp'
-        ? () => _dispatchWhatsApp(rfqStub, vendorStub, jobId).catch(_ignoreError)
-        : row.channel === 'sms'
-          ? () => _dispatchSms(rfqStub, vendorStub, jobId).catch(_ignoreError)
-          : row.channel === 'call'
-            ? () => _dispatchCall(rfqStub, vendorStub, jobId).catch(_ignoreError)
-            : () => _dispatchReminderEmail(rfqStub, vendorStub, {}, jobId).catch(_ignoreError);
-
       const handle = setTimeout(async () => {
         try {
-          await dispatchFn();
+          await dispatchDueChaserJobs();
         } finally {
           activeScheduledTimers.delete(jobKey);
         }
@@ -695,7 +980,14 @@ module.exports = {
   clearScheduledChasers,
   recoverChasersOnBoot,
   dispatchDueChaserJobs,
+  buildBuyerComparisonJobIntent,
+  scheduleBuyerComparison,
+  schedulePersistedBuyerComparison,
+  recoverRFQComparisonJobsOnBoot,
+  dispatchDueRFQComparisonJobs,
   pendingTimers,
+  pendingComparisonTimers,
+  completedMemoryComparisonJobs,
   activeScheduledTimers,
   // Exported for unit tests only — not part of the public contract
   _dispatchWhatsApp,

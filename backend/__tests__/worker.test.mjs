@@ -5,7 +5,10 @@ let app;
 let emailGateway;
 let reconciliation;
 let chasers;
+let eventOutbox;
+let dailyReport;
 let store;
+let loggerService;
 let originalFetch;
 let waitUntil;
 let createHandler;
@@ -17,8 +20,21 @@ beforeEach(() => {
   app = { listen: jest.fn() };
   emailGateway = { pollBothInboxesOnce: jest.fn().mockResolvedValue({}) };
   reconciliation = { reconcileOnce: jest.fn().mockResolvedValue({}) };
-  chasers = { dispatchDueChaserJobs: jest.fn().mockResolvedValue([]) };
-  store = { isHydratedFromDB: false, hydrateFromDB: jest.fn().mockResolvedValue(undefined) };
+  chasers = {
+    dispatchDueChaserJobs: jest.fn().mockResolvedValue([]),
+    dispatchDueRFQComparisonJobs: jest.fn().mockResolvedValue([]),
+  };
+  eventOutbox = {
+    dispatchDueEventOutboxJobs: jest.fn().mockResolvedValue([]),
+    purgeExpiredEventOutboxRows: jest.fn().mockResolvedValue([]),
+  };
+  dailyReport = { runScheduledDailyRfqReport: jest.fn().mockResolvedValue({ triggered: true }) };
+  store = {
+    isHydratedFromDB: false,
+    hydrateFromDB: jest.fn().mockResolvedValue(undefined),
+    closeExpiredRFQsDurably: jest.fn().mockResolvedValue([]),
+  };
+  loggerService = { error: jest.fn() };
   originalFetch = jest.fn().mockResolvedValue('response');
   waitUntil = jest.fn();
   createHandler = jest.fn(() => ({ fetch: originalFetch }));
@@ -28,7 +44,10 @@ beforeEach(() => {
   jest.unstable_mockModule('../src/services/emailGatewayService.js', () => ({ default: emailGateway }));
   jest.unstable_mockModule('../src/services/zohoReconciliationService.js', () => ({ default: reconciliation }));
   jest.unstable_mockModule('../src/services/rfqChaserScheduler.js', () => ({ default: chasers }));
+  jest.unstable_mockModule('../src/services/eventOutboxService.js', () => ({ default: eventOutbox }));
+  jest.unstable_mockModule('../src/services/dailyRfqReportService.js', () => ({ default: dailyReport }));
   jest.unstable_mockModule('../src/services/storeService.js', () => ({ default: store }));
+  jest.unstable_mockModule('../src/services/loggerService.js', () => ({ logger: loggerService }));
 });
 
 afterEach(() => {
@@ -81,6 +100,8 @@ describe('Worker runtime bindings and fetch bridge', () => {
     jest.unstable_mockModule('../src/services/emailGatewayService.js', () => emailGateway);
     jest.unstable_mockModule('../src/services/zohoReconciliationService.js', () => reconciliation);
     jest.unstable_mockModule('../src/services/rfqChaserScheduler.js', () => chasers);
+    jest.unstable_mockModule('../src/services/eventOutboxService.js', () => eventOutbox);
+    jest.unstable_mockModule('../src/services/dailyRfqReportService.js', () => dailyReport);
     const worker = await loadWorker();
     await worker.scheduled({ cron: '* * * * *' }, {}, {});
     expect(app.listen).toHaveBeenCalled();
@@ -97,6 +118,8 @@ describe('Worker cron jobs', () => {
     expect(store.hydrateFromDB.mock.invocationCallOrder[0]).toBeLessThan(emailGateway.pollBothInboxesOnce.mock.invocationCallOrder[0]);
     expect(emailGateway.pollBothInboxesOnce).toHaveBeenCalledTimes(1);
     expect(chasers.dispatchDueChaserJobs).toHaveBeenCalledTimes(1);
+    expect(chasers.dispatchDueRFQComparisonJobs).toHaveBeenCalledTimes(1);
+    expect(store.closeExpiredRFQsDurably).toHaveBeenCalledTimes(1);
     expect(reconciliation.reconcileOnce).not.toHaveBeenCalled();
     expect(process.env.WORKER_TEST_SETTING).toBe('cron');
     expect(globalThis.__CF_ENV__).toBe(runtimeBindings);
@@ -109,6 +132,18 @@ describe('Worker cron jobs', () => {
     expect(store.hydrateFromDB).not.toHaveBeenCalled();
     expect(reconciliation.reconcileOnce).toHaveBeenCalledTimes(1);
     expect(emailGateway.pollBothInboxesOnce).not.toHaveBeenCalled();
+    expect(store.closeExpiredRFQsDurably).not.toHaveBeenCalled();
+  });
+
+  test('runs only the daily report for the daily report trigger', async () => {
+    store.isHydratedFromDB = true;
+    const worker = await loadWorker();
+    const scheduledTime = new Date('2026-11-04T00:30:00.000Z');
+    await worker.scheduled({ cron: '30 0 * * *', scheduledTime: scheduledTime.getTime() }, {}, {});
+    expect(dailyReport.runScheduledDailyRfqReport).toHaveBeenCalledWith(scheduledTime);
+    expect(dailyReport.runScheduledDailyRfqReport).toHaveBeenCalledTimes(1);
+    expect(emailGateway.pollBothInboxesOnce).not.toHaveBeenCalled();
+    expect(reconciliation.reconcileOnce).not.toHaveBeenCalled();
   });
 
   test('runs all jobs for an unrecognized trigger and reports rejected jobs', async () => {
@@ -117,6 +152,7 @@ describe('Worker cron jobs', () => {
     expect(reconciliation.reconcileOnce).toHaveBeenCalledTimes(1);
     expect(emailGateway.pollBothInboxesOnce).toHaveBeenCalledTimes(1);
     expect(chasers.dispatchDueChaserJobs).toHaveBeenCalledTimes(1);
+    expect(chasers.dispatchDueRFQComparisonJobs).toHaveBeenCalledTimes(1);
     reconciliation.reconcileOnce.mockRejectedValue(new Error('payment failure'));
     await expect(worker.scheduled({ cron: 'custom' }, {}, {})).rejects.toThrow('payment failure');
   });
@@ -126,16 +162,20 @@ describe('Worker cron jobs', () => {
     emailGateway.pollBothInboxesOnce.mockRejectedValue(new Error('mail failure'));
     await expect(worker.scheduled({ cron: '* * * * *' }, {}, {})).rejects.toThrow('mail failure');
     expect(chasers.dispatchDueChaserJobs).toHaveBeenCalled();
+    expect(chasers.dispatchDueRFQComparisonJobs).toHaveBeenCalled();
   });
 
-  test('logs hydration errors and tolerates nonenumerable cron bindings', async () => {
+  test('logs hydration errors through the structured logger and tolerates nonenumerable cron bindings', async () => {
     const worker = await loadWorker();
     const error = new Error('hydration failure');
     store.hydrateFromDB.mockRejectedValue(error);
-    jest.spyOn(console, 'error').mockImplementation(() => {});
     const badBindings = new Proxy({}, { ownKeys() { throw new Error('binding failure'); } });
     await worker.scheduled({ cron: '* * * * *' }, badBindings, {});
-    expect(console.error).toHaveBeenCalledWith('[CRON] hydration failed', error);
+    expect(loggerService.error).toHaveBeenCalledWith(
+      'Scheduled Worker state hydration failed',
+      error,
+      'WORKER_CRON'
+    );
     expect(emailGateway.pollBothInboxesOnce).toHaveBeenCalled();
   });
 });
