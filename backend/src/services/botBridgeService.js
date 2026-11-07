@@ -15,10 +15,12 @@ const { logger } = require('./loggerService');
 const storeService = require('./storeService');
 const authService = require('./authService');
 const mailerService = require('./mailerService');
+const cryptoService = require('./cryptoService');
+const eventOutboxService = require('./eventOutboxService');
 const identityQueries = require('../db/identityQueries');
 const botBridgeQueries = require('../db/botBridgeQueries');
 const { getEnv } = require('./mailTransport');
-const { VENDOR_SUBSCRIPTION_PLANS, ZOHO_SUBSCRIPTION_PRICING, computeZohoPlanAmount } = require('../config/constants');
+const { VENDOR_SUBSCRIPTION_PLANS, ZOHO_SUBSCRIPTION_PRICING, computeZohoPlanAmount, EVENT_OUTBOX_TYPES } = require('../config/constants');
 const { BOT_BRIDGE_CONFIG, BOT_BRIDGE_MESSAGES } = require('../config/botBridgeConfig');
 
 const LOG_CONTEXT = 'BOT_BRIDGE';
@@ -123,72 +125,100 @@ function requiresApproval() {
 }
 
 /**
- * Email a WhatsApp-registered account its login credentials.
+ * Queue a WhatsApp-registered account's login credentials after first email verification.
  *
  * QUA sent login credentials once a WhatsApp registration's email was verified;
  * here the account gets a fresh temporary password (flagged for change on first
- * sign-in) and the same credentials email EQUA's own onboarding sends — the
- * supplier onboarding email for sellers, its buyer counterpart for buyers.
+ * sign-in). The verification, password update and encrypted delivery intent are
+ * committed together so a mail outage or process restart cannot lose the email.
  */
-async function issueCredentials(user) {
+async function issueCredentials(user, {
+  registeredViaWhatsApp = false,
+  requireApproval = false,
+  retryCredentialDelivery = false,
+} = {}) {
   const tempPassword = storeService._generateTempPassword();
-  if (!(await botBridgeQueries.setTemporaryPassword(user.id, tempPassword))) {
-    return { issued: false, emailSent: false };
+  const configuredKey = String(process.env.AES_ENCRYPTION_KEY || process.env.AES_SECRET_KEY || '').trim();
+  if (!configuredKey) {
+    logger.error('WhatsApp verification credentials were not issued because durable encryption is not configured', {
+      accountId: user.id,
+      operation: 'whatsapp-credentials-outbox',
+      requiredConfiguration: 'AES_ENCRYPTION_KEY or AES_SECRET_KEY',
+    }, LOG_CONTEXT);
+    return { issued: false, emailSent: false, deliveryQueued: false, error: 'ENCRYPTION_NOT_CONFIGURED' };
   }
-  let delivery;
+
+  let vendor = null;
+  if (user.role === 'vendor') {
+    try {
+      vendor = await vendorForUser(user);
+    } catch (error) {
+      logger.error('Could not load the vendor profile before queueing WhatsApp credentials', {
+        error,
+        accountId: user.id,
+        operation: 'whatsapp-credentials-outbox',
+      }, LOG_CONTEXT);
+    }
+  }
+
   try {
-    if (user.role === 'vendor') {
-      const vendor = await vendorForUser(user);
-      delivery = await mailerService.sendVendorIngestionEmail(
-        mailerService.buildVendorOnboardingEmail({
-          to: user.email,
-          recipientName: user.name,
-          buyerOrganizationName: 'Procucev Enterprise',
-          vendorCode: vendor ? vendor.id : user.id,
-          tempPassword,
-          contactPhone: user.mobile,
-        }),
-        'onboarding'
-      );
-      if (vendor) {
-        try {
-          const updatedVendor = await storeService.updateVendorDurably(vendor.id, {
-            onboardingEmailStatus: delivery && delivery.sent ? 'sent' : 'failed',
-          });
-          if (!updatedVendor) {
-            logger.warn('WhatsApp credential email status could not be mirrored to the vendor record', {
-              vendorId: vendor.id,
-              email: user.email,
-              emailSent: Boolean(delivery && delivery.sent),
-            }, LOG_CONTEXT);
-          }
-        } catch (err) {
-          // Email delivery has already completed. Do not report it as failed or
-          // cause a retry that could send the same temporary password again.
-          logger.error('WhatsApp credential email was sent but vendor status persistence failed', {
-            error: err,
+    const eventType = EVENT_OUTBOX_TYPES.WHATSAPP_CREDENTIALS_EMAIL;
+    const outboxId = eventOutboxService.buildEventOutboxId(eventType, user.id);
+    const encryptedTempPassword = cryptoService.encrypt(tempPassword, {
+      additionalData: `whatsapp-registration-credentials:${user.id}`,
+    }).encoded;
+    const payload = {
+      accountId: user.id,
+      role: user.role,
+      encryptedTempPassword,
+      ...(vendor?.id ? { vendorId: vendor.id } : {}),
+    };
+    const persistCredentials = retryCredentialDelivery
+      ? botBridgeQueries.retryWhatsAppCredentialDelivery
+      : botBridgeQueries.verifyWhatsAppEmailAndQueueCredentials;
+    const transitioned = await persistCredentials(user.id, {
+      password: tempPassword,
+      eventId: outboxId,
+      payload,
+      registeredViaWhatsApp,
+      requireApproval,
+    });
+    if (!transitioned) return { issued: false, emailSent: false, deliveryQueued: false };
+
+    if (vendor?.id) {
+      try {
+        const updatedVendor = await storeService.updateVendorDurably(vendor.id, {
+          onboardingEmailStatus: 'pending',
+        });
+        if (!updatedVendor) {
+          logger.warn('WhatsApp credentials were queued but vendor status could not be marked pending', {
             vendorId: vendor.id,
-            email: user.email,
+            outboxId,
           }, LOG_CONTEXT);
         }
+      } catch (error) {
+        logger.error('WhatsApp credentials were queued but vendor pending status could not be saved', {
+          error,
+          vendorId: vendor.id,
+          outboxId,
+        }, LOG_CONTEXT);
       }
-    } else {
-      delivery = await mailerService.sendBuyerCredentialsEmail({
-        to: user.email,
-        recipientName: user.name,
-        tempPassword,
-        contactPhone: user.mobile,
-      });
     }
-  } catch (err) {
-    logger.error('WhatsApp registration credentials email failed', err, LOG_CONTEXT);
-    delivery = null;
+    logger.info('WhatsApp registration credentials queued for durable delivery', {
+      accountId: user.id,
+      role: user.role,
+      outboxId,
+      vendorId: vendor?.id || null,
+    }, LOG_CONTEXT);
+    return { issued: true, emailSent: false, deliveryQueued: true };
+  } catch (error) {
+    logger.error('WhatsApp registration credentials could not be queued durably', {
+      error,
+      accountId: user.id,
+      operation: 'whatsapp-credentials-outbox',
+    }, LOG_CONTEXT);
+    return { issued: false, emailSent: false, deliveryQueued: false, error: 'QUEUE_FAILED' };
   }
-  const emailSent = Boolean(delivery && delivery.sent);
-  if (!emailSent) {
-    logger.warn('WhatsApp registration credentials were not emailed', { email: user.email, reason: delivery && delivery.reason }, LOG_CONTEXT);
-  }
-  return { issued: true, emailSent };
 }
 
 /**
@@ -203,16 +233,36 @@ async function setWhatsAppStatus(userId, { registeredViaWhatsApp, verificationSt
   if (verificationStatus && !BOT_BRIDGE_CONFIG.VERIFICATION_STATES.includes(verificationStatus)) {
     return respond(400, { success: false, error: BOT_BRIDGE_MESSAGES.INVALID_VERIFICATION_STATE });
   }
-  const before = verificationStatus === VERIFIED ? await botBridgeQueries.findUserByUuid(userId) : null;
+  const before = verificationStatus === VERIFIED ? await botBridgeQueries.findUserByUuid(userId, { fresh: true }) : null;
+  const retryCredentialDelivery = Boolean(before && before.verificationStatus === VERIFIED && before.resetPasswordRequired === true);
+  if (
+    before
+    && BOT_ROLES.includes(before.role)
+    && (before.verificationStatus === PENDING || retryCredentialDelivery)
+  ) {
+    const credentials = await issueCredentials(before, {
+      registeredViaWhatsApp: registeredViaWhatsApp === true,
+      requireApproval: requiresApproval(),
+      retryCredentialDelivery,
+    });
+    if (credentials.error) {
+      return respond(503, {
+        success: false,
+        error: BOT_BRIDGE_MESSAGES.CREDENTIALS_QUEUE_FAILED,
+        retryable: true,
+      });
+    }
+    return respond(200, {
+      success: true,
+      ...(credentials.issued ? { credentials } : {}),
+    });
+  }
   const updated = await botBridgeQueries.setWhatsAppStatus(userId, {
     registeredViaWhatsApp: registeredViaWhatsApp === true,
     verificationStatus: verificationStatus || null,
     requireApproval: requiresApproval(),
   });
   if (!updated) return respond(404, { success: false, error: BOT_BRIDGE_MESSAGES.ACCOUNT_NOT_FOUND });
-  if (before && before.verificationStatus === PENDING) {
-    return respond(200, { success: true, credentials: await issueCredentials(before) });
-  }
   return respond(200, { success: true });
 }
 

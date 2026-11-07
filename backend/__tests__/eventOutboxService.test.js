@@ -3,6 +3,7 @@ const domainQueries = require('../src/db/domainQueries');
 const eventOutboxQueries = require('../src/db/eventOutboxQueries');
 const enterpriseInquiryQueries = require('../src/db/enterpriseInquiryQueries');
 const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+const botBridgeQueries = require('../src/db/botBridgeQueries');
 const eventOutboxService = require('../src/services/eventOutboxService');
 const dailyRfqReportService = require('../src/services/dailyRfqReportService');
 const mailerService = require('../src/services/mailerService');
@@ -178,6 +179,56 @@ describe('background event retry outbox', () => {
     await expect(eventOutboxService.dispatchDueEventOutboxJobs()).resolves.toMatchObject({ claimed: 1, completed: 1 });
     expect(domainQueries.upsertAIFeedItemInDB).toHaveBeenCalledWith({ id: 'feed-1' });
     expect(completeSpy).toHaveBeenCalledWith('retry-feed', 'lease-1');
+  });
+
+  test('dispatches WhatsApp credential email intents through the shared retry queue', async () => {
+    const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+    process.env.AES_ENCRYPTION_KEY = 'whatsapp-outbox-test-key';
+    const encryptedTempPassword = cryptoService.encrypt('Temp#123', {
+      additionalData: 'whatsapp-registration-credentials:bot-buyer-1',
+    }).encoded;
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'retry-whatsapp-buyer',
+      event_type: EVENT_OUTBOX_TYPES.WHATSAPP_CREDENTIALS_EMAIL,
+      raw: { accountId: 'bot-buyer-1', role: 'buyer', encryptedTempPassword },
+      attempts: 1,
+      lease_token: 'lease-whatsapp-buyer',
+    }]);
+    jest.spyOn(botBridgeQueries, 'findUserByUuid').mockResolvedValue({
+      id: 'bot-buyer-1', email: 'buyer@example.test', name: 'Buyer', role: 'buyer', mobile: '+919876543210',
+      isActive: true, resetPasswordRequired: true, verificationStatus: 'EMAIL_VERIFIED',
+    });
+    const send = jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ sent: true });
+    const complete = jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    try {
+      await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ claimed: 1, completed: 1 });
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ tempPassword: 'Temp#123' }));
+      expect(complete).toHaveBeenCalledWith('retry-whatsapp-buyer', 'lease-whatsapp-buyer');
+    } finally {
+      if (originalEncryptionKey === undefined) delete process.env.AES_ENCRYPTION_KEY;
+      else process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+    }
+  });
+
+  test('dead-letters an invalid vendor WhatsApp credential event and records failed delivery status', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'retry-whatsapp-invalid-vendor',
+      event_type: EVENT_OUTBOX_TYPES.WHATSAPP_CREDENTIALS_EMAIL,
+      raw: { accountId: 'missing-account', role: 'vendor', vendorId: 'vendor-1', encryptedTempPassword: 'cipher' },
+      attempts: 1,
+      lease_token: 'lease-whatsapp-invalid-vendor',
+    }]);
+    jest.spyOn(botBridgeQueries, 'findUserByUuid').mockResolvedValue(null);
+    const storeService = require('../src/services/storeService');
+    const update = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: 'vendor-1' });
+    const reschedule = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ dead: 1 });
+    expect(update).toHaveBeenCalledWith('vendor-1', { onboardingEmailStatus: 'failed' });
+    expect(reschedule).toHaveBeenCalledWith(expect.objectContaining({ status: 'dead' }));
   });
 
   test.each([

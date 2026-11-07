@@ -1,6 +1,8 @@
 const request = require('supertest');
 const app = require('../src/app');
 const pool = require('../src/db/pool');
+const d1Bridge = require('../src/db/d1Bridge');
+const { queryCache } = require('../src/db/queryCache');
 const botBridgeService = require('../src/services/botBridgeService');
 const botBridgeQueries = require('../src/db/botBridgeQueries');
 const identityQueries = require('../src/db/identityQueries');
@@ -36,7 +38,12 @@ function vendorUser(overrides = {}) {
 const VENDOR = { id: 'v-1', email: 'seller@steel.com', name: 'Steel Co' };
 
 describe('WhatsApp agent-bot bridge', () => {
+  let previousAesEncryptionKey;
+  let previousAesSecretKey;
+
   beforeEach(() => {
+    previousAesEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+    previousAesSecretKey = process.env.AES_SECRET_KEY;
     process.env.BOT_API_KEY = KEY;
   });
 
@@ -44,6 +51,10 @@ describe('WhatsApp agent-bot bridge', () => {
     jest.restoreAllMocks();
     delete process.env.BOT_API_KEY;
     delete process.env.BOT_REGISTRATION_REQUIRES_APPROVAL;
+    if (previousAesEncryptionKey === undefined) delete process.env.AES_ENCRYPTION_KEY;
+    else process.env.AES_ENCRYPTION_KEY = previousAesEncryptionKey;
+    if (previousAesSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+    else process.env.AES_SECRET_KEY = previousAesSecretKey;
   });
 
   // ── Data access ────────────────────────────────────────────────────────────
@@ -117,15 +128,212 @@ describe('WhatsApp agent-bot bridge', () => {
       query.mockResolvedValue({});
       expect(await botBridgeQueries.setWhatsAppStatus('u1', { verificationStatus: 'EMAIL_VERIFIED' })).toBe(false);
     });
-    test('setTemporaryPassword stores a must-change password in both SQL dialects', async () => {
-      const query = jest.spyOn(pool, 'query').mockResolvedValueOnce({ rowCount: 1 }).mockResolvedValueOnce({});
-      expect(await botBridgeQueries.setTemporaryPassword('u1', 'Tmp#1')).toBe(true);
-      expect(query.mock.calls[0][0]).toBe(
-        'update "user" set password = $1, reset_password = true, last_modified_by = $2, last_modified_ts = now() where uuid = $3'
-      );
-      expect(query.mock.calls[0][1]).toEqual(['Tmp#1', 'whatsapp-bot', 'u1']);
-      expect(query.mock.calls[0][2].d1Text).toContain("strftime('%Y-%m-%dT%H:%M:%fZ','now')");
-      expect(await botBridgeQueries.setTemporaryPassword('u1', 'Tmp#1')).toBe(false);
+    test('verification, temporary password and encrypted delivery intent commit in one PostgreSQL transaction', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      const client = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ uuid: 'u1' }] })
+          .mockResolvedValueOnce({ rows: [{ id: 'event-1' }] }),
+      };
+      jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback(client));
+      const invalidate = jest.spyOn(queryCache, 'invalidate');
+      const payload = { accountId: 'u1', role: 'buyer', encryptedTempPassword: 'enc:v1:credential' };
+
+      await expect(botBridgeQueries.verifyWhatsAppEmailAndQueueCredentials('u1', {
+        password: 'Tmp#1', eventId: 'event-1', payload,
+      })).resolves.toBe(true);
+
+      expect(client.query).toHaveBeenCalledTimes(2);
+      expect(client.query.mock.calls[0][0]).toContain('verification_status = $1, password = $2, reset_password = true');
+      expect(client.query.mock.calls[0][0]).toContain('verification_status = $5');
+      expect(client.query.mock.calls[0][0]).toContain("status <> 'dead'");
+      expect(client.query.mock.calls[0][1]).toEqual(['EMAIL_VERIFIED', 'Tmp#1', 'whatsapp-bot', 'u1', 'PENDING_EMAIL_VERIFICATION', 'event-1']);
+      expect(client.query.mock.calls[1][0]).toContain('INSERT INTO event_outbox');
+      expect(client.query.mock.calls[1][0]).toContain("WHERE event_outbox.status = 'dead'");
+      expect(client.query.mock.calls[1][1]).toEqual(['event-1', 'whatsapp_credentials_email', JSON.stringify(payload)]);
+      expect(invalidate).toHaveBeenCalledWith('user');
+    });
+
+    test('verification includes WhatsApp provenance and approval fields in an atomic D1 batch', async () => {
+      const binding = { prepare: jest.fn() };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      const batch = jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([
+        { rows: [{ uuid: 'u1' }] },
+        { rows: [{ id: 'event-1' }] },
+      ]);
+      const invalidate = jest.spyOn(queryCache, 'invalidate');
+
+      await expect(botBridgeQueries.verifyWhatsAppEmailAndQueueCredentials('u1', {
+        password: 'Tmp#1',
+        eventId: 'event-1',
+        payload: { accountId: 'u1', role: 'buyer', encryptedTempPassword: 'ciphertext' },
+        registeredViaWhatsApp: true,
+        requireApproval: true,
+      })).resolves.toBe(true);
+
+      const statements = batch.mock.calls[0][1];
+      expect(batch).toHaveBeenCalledWith(binding, expect.any(Array));
+      expect(statements[0].text).toContain('is_whats_app = true, source_type = $3, is_approved = false');
+      expect(statements[0].text).toContain("last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')");
+      expect(statements[1].text).toContain('SELECT $1, $2, $3 WHERE changes() = 1');
+      expect(invalidate).toHaveBeenCalledWith('user');
+    });
+
+    test('does not invalidate identity cache when a concurrent verifier already changed the status', async () => {
+      const binding = { prepare: jest.fn() };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([{ rows: [] }, { rows: [] }]);
+      const invalidate = jest.spyOn(queryCache, 'invalidate');
+
+      await expect(botBridgeQueries.verifyWhatsAppEmailAndQueueCredentials('u1', {
+        password: 'Tmp#1', eventId: 'event-1', payload: { accountId: 'u1' },
+      })).resolves.toBe(false);
+      expect(invalidate).not.toHaveBeenCalled();
+    });
+
+    test('rejects verification without storage or complete durable event inputs', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      await expect(botBridgeQueries.verifyWhatsAppEmailAndQueueCredentials('u1', {})).rejects.toThrow(pool.NOT_CONFIGURED_MESSAGE);
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      await expect(botBridgeQueries.verifyWhatsAppEmailAndQueueCredentials('u1', {})).rejects.toThrow('A user, temporary password and durable credential event are required.');
+    });
+
+    test('surfaces a D1 batch that reports a verification update without its matching outbox row', async () => {
+      const binding = { prepare: jest.fn() };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([{ rows: [{ uuid: 'u1' }] }, { rows: [] }]);
+      await expect(botBridgeQueries.verifyWhatsAppEmailAndQueueCredentials('u1', {
+        password: 'Tmp#1', eventId: 'event-1', payload: { accountId: 'u1' },
+      })).rejects.toThrow('WhatsApp verification changed without a durable credential delivery event.');
+    });
+
+    test('requeues expired or dead-lettered credentials and resets the persisted password in one PostgreSQL transaction', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      const client = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ uuid: 'u1' }] })
+          .mockResolvedValueOnce({ rows: [{ id: 'event-1' }] }),
+      };
+      jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback(client));
+      const invalidate = jest.spyOn(queryCache, 'invalidate');
+
+      await expect(botBridgeQueries.retryWhatsAppCredentialDelivery('u1', {
+        password: 'Tmp#2', eventId: 'event-1', payload: { accountId: 'u1', encryptedTempPassword: 'cipher-2' },
+      })).resolves.toBe(true);
+
+      expect(client.query.mock.calls[0][0]).toContain("status <> 'dead'");
+      expect(client.query.mock.calls[0][0]).toContain('NOT EXISTS');
+      expect(client.query.mock.calls[0][1]).toEqual(['Tmp#2', 'whatsapp-bot', 'u1', 'EMAIL_VERIFIED', 'event-1']);
+      expect(client.query.mock.calls[1][0]).toContain('raw = EXCLUDED.raw');
+      expect(invalidate).toHaveBeenCalledWith('user');
+    });
+
+    test('does not replace a credential while its prior event is pending, leased, or complete', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      const client = { query: jest.fn().mockResolvedValueOnce({ rows: [] }) };
+      jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback(client));
+
+      await expect(botBridgeQueries.retryWhatsAppCredentialDelivery('u1', {
+        password: 'Tmp#2', eventId: 'event-1', payload: { accountId: 'u1' },
+      })).resolves.toBe(false);
+      expect(client.query).toHaveBeenCalledTimes(1);
+    });
+
+    test('requeues expired or dead credentials through one atomic D1 Worker batch', async () => {
+      const binding = { prepare: jest.fn() };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      const batch = jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([
+        { rows: [{ uuid: 'u1' }] },
+        { rows: [{ id: 'event-1' }] },
+      ]);
+
+      await expect(botBridgeQueries.retryWhatsAppCredentialDelivery('u1', {
+        password: 'Tmp#2', eventId: 'event-1', payload: { accountId: 'u1' },
+      })).resolves.toBe(true);
+
+      expect(batch.mock.calls[0][1][0].text).toContain('reset_password = 1');
+      expect(batch.mock.calls[0][1][0].text).toContain("status <> 'dead'");
+      expect(batch.mock.calls[0][1][1].text).toContain("WHERE event_outbox.status = 'dead'");
+    });
+
+    test('rejects a credential retry without database storage or required payload fields', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      await expect(botBridgeQueries.retryWhatsAppCredentialDelivery('u1', {})).rejects.toThrow(pool.NOT_CONFIGURED_MESSAGE);
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      await expect(botBridgeQueries.retryWhatsAppCredentialDelivery('u1', {})).rejects.toThrow('A user, temporary password and durable credential event are required.');
+    });
+
+    test('surfaces a D1 batch that reports a password update without its replacement event', async () => {
+      const binding = { prepare: jest.fn() };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([{ rows: [{ uuid: 'u1' }] }, { rows: [] }]);
+      await expect(botBridgeQueries.retryWhatsAppCredentialDelivery('u1', {
+        password: 'Tmp#2', eventId: 'event-1', payload: { accountId: 'u1' },
+      })).rejects.toThrow('WhatsApp credential retry was not durably queued.');
+    });
+
+    test('rejects a credential retry when only the non-atomic D1 HTTP adapter is configured', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue({ _isHttpClient: true });
+      await expect(botBridgeQueries.retryWhatsAppCredentialDelivery('u1', {
+        password: 'Tmp#2', eventId: 'event-1', payload: { accountId: 'u1' },
+      })).rejects.toMatchObject({ code: 'ATOMIC_BATCH_REQUIRED' });
+    });
+
+      test('rolls back a credential retry if its outbox payload cannot be replaced', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      const client = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ uuid: 'u1' }] })
+          .mockRejectedValueOnce(new Error('outbox update failed')),
+      };
+      jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback(client));
+      await expect(botBridgeQueries.retryWhatsAppCredentialDelivery('u1', {
+        password: 'Tmp#2', eventId: 'event-1', payload: { accountId: 'u1' },
+      })).rejects.toThrow('outbox update failed');
+    });
+
+    test('rejects credential verification over the non-atomic D1 HTTP adapter', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue({ _isHttpClient: true });
+      await expect(botBridgeQueries.verifyWhatsAppEmailAndQueueCredentials('u1', {
+        password: 'Tmp#1', eventId: 'event-1', payload: { accountId: 'u1' },
+      })).rejects.toMatchObject({ code: 'ATOMIC_BATCH_REQUIRED' });
+    });
+
+    test('rolls back the PostgreSQL verification transaction if outbox insertion fails', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      const client = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ uuid: 'u1' }] })
+          .mockRejectedValueOnce(new Error('outbox insert failed')),
+      };
+      jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback(client));
+      await expect(botBridgeQueries.verifyWhatsAppEmailAndQueueCredentials('u1', {
+        password: 'Tmp#1', eventId: 'event-1', payload: { accountId: 'u1' },
+      })).rejects.toThrow('outbox insert failed');
     });
   });
 
@@ -358,55 +566,125 @@ describe('WhatsApp agent-bot bridge', () => {
       expect((await botBridgeService.setWhatsAppStatus('u1')).status).toBe(404);
     });
 
-    test('the first email verification of a WhatsApp account emails its login credentials', async () => {
-      const find = jest.spyOn(botBridgeQueries, 'findUserByUuid').mockResolvedValue(buyerUser({ verificationStatus: 'PENDING_EMAIL_VERIFICATION' }));
-      jest.spyOn(botBridgeQueries, 'setWhatsAppStatus').mockResolvedValue(true);
-      const issue = jest.spyOn(botBridgeQueries, 'setTemporaryPassword').mockResolvedValue(true);
-      const send = jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ sent: true });
+    test('the first email verification atomically queues encrypted buyer credentials without direct mail', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'bot-bridge-test-key';
+      process.env.BOT_REGISTRATION_REQUIRES_APPROVAL = 'TRUE';
+      const find = jest.spyOn(botBridgeQueries, 'findUserByUuid')
+        .mockResolvedValue(buyerUser({ verificationStatus: 'PENDING_EMAIL_VERIFICATION' }));
+      const queue = jest.spyOn(botBridgeQueries, 'verifyWhatsAppEmailAndQueueCredentials').mockResolvedValue(true);
+      jest.spyOn(storeService, '_generateTempPassword').mockReturnValue('Temporary#123');
+      const send = jest.spyOn(mailerService, 'sendBuyerCredentialsEmail');
 
-      expect(await botBridgeService.setWhatsAppStatus('u-buyer', { verificationStatus: 'EMAIL_VERIFIED' })).toEqual({
+      expect(await botBridgeService.setWhatsAppStatus('u-buyer', {
+        verificationStatus: 'EMAIL_VERIFIED',
+        registeredViaWhatsApp: true,
+      })).toEqual({
         status: 200,
-        body: { success: true, credentials: { issued: true, emailSent: true } },
+        body: { success: true, credentials: { issued: true, emailSent: false, deliveryQueued: true } },
       });
-      const tempPassword = issue.mock.calls[0][1];
-      expect(tempPassword).toHaveLength(12);
-      expect(send).toHaveBeenCalledWith({ to: 'buyer@acme.com', recipientName: 'Bea Buyer', tempPassword, contactPhone: '+919876543210' });
+      const options = queue.mock.calls[0][1];
+      expect(options.password).toBe('Temporary#123');
+      expect(options.payload).toMatchObject({ accountId: 'u-buyer', role: 'buyer' });
+      expect(options.payload.encryptedTempPassword).not.toContain('Temporary#123');
+      expect(queue).toHaveBeenCalledWith('u-buyer', expect.objectContaining({
+        registeredViaWhatsApp: true,
+        requireApproval: true,
+      }));
+      expect(find).toHaveBeenCalledWith('u-buyer', { fresh: true });
+      expect(send).not.toHaveBeenCalled();
 
-      // Already verified (or a web account) - no new password, no email.
+      // A repeated callback for an already verified account does not reissue credentials.
       find.mockResolvedValue(buyerUser({ verificationStatus: 'EMAIL_VERIFIED' }));
+      jest.spyOn(botBridgeQueries, 'setWhatsAppStatus').mockResolvedValue(true);
       expect((await botBridgeService.setWhatsAppStatus('u-buyer', { verificationStatus: 'EMAIL_VERIFIED' })).body).toEqual({ success: true });
-      find.mockResolvedValue(null);
-      expect((await botBridgeService.setWhatsAppStatus('u-buyer', { verificationStatus: 'EMAIL_VERIFIED' })).body).toEqual({ success: true });
-      expect(send).toHaveBeenCalledTimes(1);
+      expect(queue).toHaveBeenCalledTimes(1);
     });
 
-    test('issueCredentials sends sellers the supplier onboarding email and records it on the vendor', async () => {
-      jest.spyOn(botBridgeQueries, 'setTemporaryPassword').mockResolvedValue(true);
+    test('verification stays pending and returns retryable failure when the credential event cannot be saved', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'bot-bridge-test-key';
+      jest.spyOn(botBridgeQueries, 'findUserByUuid').mockResolvedValue(buyerUser({ verificationStatus: 'PENDING_EMAIL_VERIFICATION' }));
+      jest.spyOn(botBridgeQueries, 'verifyWhatsAppEmailAndQueueCredentials').mockRejectedValue(new Error('D1 unavailable'));
+      const statusUpdate = jest.spyOn(botBridgeQueries, 'setWhatsAppStatus');
+      const result = await botBridgeService.setWhatsAppStatus('u-buyer', { verificationStatus: 'EMAIL_VERIFIED' });
+
+      expect(result).toEqual({
+        status: 503,
+        body: { success: false, error: BOT_BRIDGE_MESSAGES.CREDENTIALS_QUEUE_FAILED, retryable: true },
+      });
+      expect(statusUpdate).not.toHaveBeenCalled();
+    });
+
+    test('a repeated verification callback requeues credentials only after an earlier delivery dead-letters', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'bot-bridge-test-key';
+      jest.spyOn(botBridgeQueries, 'findUserByUuid').mockResolvedValue(buyerUser({
+        verificationStatus: 'EMAIL_VERIFIED',
+        resetPasswordRequired: true,
+      }));
+      jest.spyOn(storeService, '_generateTempPassword').mockReturnValue('Replacement#123');
+      const retry = jest.spyOn(botBridgeQueries, 'retryWhatsAppCredentialDelivery').mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+      await expect(botBridgeService.setWhatsAppStatus('u-buyer', { verificationStatus: 'EMAIL_VERIFIED' })).resolves.toEqual({
+        status: 200,
+        body: { success: true, credentials: { issued: true, emailSent: false, deliveryQueued: true } },
+      });
+      expect(retry.mock.calls[0][1].password).toBe('Replacement#123');
+
+      await expect(botBridgeService.setWhatsAppStatus('u-buyer', { verificationStatus: 'EMAIL_VERIFIED' })).resolves.toEqual({
+        status: 200,
+        body: { success: true },
+      });
+      expect(retry).toHaveBeenCalledTimes(2);
+    });
+
+    test('verification refuses to change state without a configured encryption key', async () => {
+      delete process.env.AES_ENCRYPTION_KEY;
+      delete process.env.AES_SECRET_KEY;
+      jest.spyOn(botBridgeQueries, 'findUserByUuid').mockResolvedValue(buyerUser({ verificationStatus: 'PENDING_EMAIL_VERIFICATION' }));
+      const queue = jest.spyOn(botBridgeQueries, 'verifyWhatsAppEmailAndQueueCredentials');
+      const statusUpdate = jest.spyOn(botBridgeQueries, 'setWhatsAppStatus');
+
+      const result = await botBridgeService.setWhatsAppStatus('u-buyer', { verificationStatus: 'EMAIL_VERIFIED' });
+      expect(result.status).toBe(503);
+      expect(queue).not.toHaveBeenCalled();
+      expect(statusUpdate).not.toHaveBeenCalled();
+    });
+
+    test('vendor credentials are queued and vendor status mirrors pending state', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'bot-bridge-test-key';
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
       jest.spyOn(botBridgeQueries, 'findVendorIdByEmail').mockResolvedValue('v-1');
-      const vendorLookup = jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(VENDOR);
-      const update = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: 'v-1', whatsappOptOut: false });
-      const build = jest.spyOn(mailerService, 'buildVendorOnboardingEmail');
-      const send = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValueOnce({ sent: true }).mockResolvedValueOnce({ sent: false, reason: 'down' });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(VENDOR);
+      const update = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: 'v-1' });
+      const queue = jest.spyOn(botBridgeQueries, 'verifyWhatsAppEmailAndQueueCredentials').mockResolvedValue(true);
+      jest.spyOn(storeService, '_generateTempPassword').mockReturnValue('Temporary#123');
+      const send = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
 
-      expect(await botBridgeService.issueCredentials(vendorUser())).toEqual({ issued: true, emailSent: true });
-      const args = build.mock.calls[0][0];
-      expect(args).toMatchObject({ to: 'seller@steel.com', recipientName: 'Bea Buyer', buyerOrganizationName: 'Procucev Enterprise', vendorCode: 'v-1', contactPhone: '+919876543210' });
-      expect(send.mock.calls[0][1]).toBe('onboarding');
-      expect(update).toHaveBeenCalledWith('v-1', { onboardingEmailStatus: 'sent' });
-
-      vendorLookup.mockResolvedValue(null);
-      expect(await botBridgeService.issueCredentials(vendorUser())).toEqual({ issued: true, emailSent: false });
-      expect(build.mock.calls[1][0].vendorCode).toBe('u-vendor');
-      expect(update).toHaveBeenCalledTimes(1);
+      await expect(botBridgeService.issueCredentials(vendorUser())).resolves.toEqual({
+        issued: true,
+        emailSent: false,
+        deliveryQueued: true,
+      });
+      expect(queue.mock.calls[0][1].payload).toMatchObject({ accountId: 'u-vendor', role: 'vendor', vendorId: 'v-1' });
+      expect(update).toHaveBeenCalledWith('v-1', { onboardingEmailStatus: 'pending' });
+      expect(send).not.toHaveBeenCalled();
     });
 
-    test('issueCredentials reports failures without throwing', async () => {
-      const issue = jest.spyOn(botBridgeQueries, 'setTemporaryPassword').mockResolvedValueOnce(false).mockResolvedValue(true);
-      expect(await botBridgeService.issueCredentials(buyerUser())).toEqual({ issued: false, emailSent: false });
-      jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockRejectedValueOnce(new Error('smtp')).mockResolvedValueOnce({ sent: false, reason: 'quota' });
-      expect(await botBridgeService.issueCredentials(buyerUser())).toEqual({ issued: true, emailSent: false });
-      expect(await botBridgeService.issueCredentials(buyerUser())).toEqual({ issued: true, emailSent: false });
-      expect(issue).toHaveBeenCalledTimes(3);
+    test('issueCredentials reports persistence and encryption failures without throwing', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'bot-bridge-test-key';
+      jest.spyOn(storeService, '_generateTempPassword').mockReturnValue('Temporary#123');
+      const queue = jest.spyOn(botBridgeQueries, 'verifyWhatsAppEmailAndQueueCredentials').mockResolvedValueOnce(false).mockRejectedValueOnce(new Error('D1 unavailable'));
+      await expect(botBridgeService.issueCredentials(buyerUser())).resolves.toEqual({
+        issued: false, emailSent: false, deliveryQueued: false,
+      });
+      await expect(botBridgeService.issueCredentials(buyerUser())).resolves.toEqual({
+        issued: false, emailSent: false, deliveryQueued: false, error: 'QUEUE_FAILED',
+      });
+      delete process.env.AES_ENCRYPTION_KEY;
+      delete process.env.AES_SECRET_KEY;
+      await expect(botBridgeService.issueCredentials(buyerUser())).resolves.toMatchObject({
+        issued: false, emailSent: false, deliveryQueued: false, error: 'ENCRYPTION_NOT_CONFIGURED',
+      });
+      expect(queue).toHaveBeenCalledTimes(2);
     });
 
     test('setVendorOptOut records the flag on the vendor', async () => {
@@ -428,14 +706,17 @@ describe('WhatsApp agent-bot bridge', () => {
       });
     });
 
-    test('keeps successful credential delivery successful when its vendor status mirror fails', async () => {
-      jest.spyOn(botBridgeQueries, 'setTemporaryPassword').mockResolvedValue(true);
+    test('keeps a durable vendor credential queue accepted when status mirror fails', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'bot-bridge-test-key';
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
       jest.spyOn(botBridgeQueries, 'findVendorIdByEmail').mockResolvedValue('v-1');
       jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(VENDOR);
       jest.spyOn(storeService, 'updateVendorDurably').mockRejectedValue(new Error('D1 unavailable'));
-      jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+      jest.spyOn(botBridgeQueries, 'verifyWhatsAppEmailAndQueueCredentials').mockResolvedValue(true);
 
-      await expect(botBridgeService.issueCredentials(vendorUser())).resolves.toEqual({ issued: true, emailSent: true });
+      await expect(botBridgeService.issueCredentials(vendorUser())).resolves.toEqual({
+        issued: true, emailSent: false, deliveryQueued: true,
+      });
     });
   });
 

@@ -5,6 +5,7 @@ const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
 const enterpriseInquiryQueries = require('../db/enterpriseInquiryQueries');
 const eventOutboxQueries = require('../db/eventOutboxQueries');
+const { dispatchWhatsAppCredentialEmail } = require('./whatsAppCredentialOutboxService');
 const mailerService = require('./mailerService');
 const cryptoService = require('./cryptoService');
 const {
@@ -389,6 +390,10 @@ async function dispatchEvent(job) {
         vendorId,
         outboxId: job.id,
       }, 'EVENT_OUTBOX');
+      return;
+    }
+    case EVENT_OUTBOX_TYPES.WHATSAPP_CREDENTIALS_EMAIL: {
+      await dispatchWhatsAppCredentialEmail(job);
       return;
     }
     case EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL: {
@@ -860,6 +865,7 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE) {
         && [
           EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
           EVENT_OUTBOX_TYPES.HISTORICAL_VENDOR_ONBOARDING_EMAIL,
+          EVENT_OUTBOX_TYPES.WHATSAPP_CREDENTIALS_EMAIL,
         ].includes(job.event_type)
         && typeof job.raw?.vendorId === 'string'
         && job.raw.vendorId

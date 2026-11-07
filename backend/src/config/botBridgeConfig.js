@@ -52,6 +52,7 @@ const BOT_BRIDGE_MESSAGES = {
   SELLER_NOT_FOUND: 'Seller not found.',
   INVALID_VERIFICATION_STATE: 'verificationStatus must be PENDING_EMAIL_VERIFICATION or EMAIL_VERIFIED.',
   PREFERENCE_SAVE_FAILED: 'The seller notification preference could not be saved. Please retry shortly.',
+  CREDENTIALS_QUEUE_FAILED: 'Email verification could not be completed because secure credential delivery could not be queued. Please retry shortly.',
   INVALID_RECIPIENTS: 'Invalid email addresses found.',
   NO_RECIPIENTS: 'At least one recipient is required.',
   INVALID_REQUEST: 'The WhatsApp bot request is invalid. Correct the highlighted fields and retry.',
