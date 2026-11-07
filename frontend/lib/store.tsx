@@ -1463,8 +1463,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       totalProcessed: data.totalProcessed ?? vendors.length,
       mappedCount: data.mappedCount ?? mappedCount,
       mappedEmailsSent: data.mappedEmailsSent ?? (data.mappedCount ?? mappedCount),
+      mappedEmailsQueued: data.mappedEmailsQueued ?? 0,
       unmappedCount: data.unmappedCount ?? unmappedCount,
       unmappedEmailsSent: data.unmappedEmailsSent ?? (data.unmappedCount ?? unmappedCount),
+      unmappedEmailsQueued: data.unmappedEmailsQueued ?? 0,
       failedEmailCount: data.failedEmailCount ?? (Array.isArray(data.failedEmails) ? data.failedEmails.length : 0),
       failedEmails: Array.isArray(data.failedEmails) ? data.failedEmails : [],
       skippedCount: data.skippedCount ?? 0,
@@ -1479,9 +1481,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setInitialSetupCompleted(true);
     // Note: Modal remains open so InitialSetupModal can display the Completion Summary to the user
 
+    const deliverySummary = formatString(UI_STRINGS.historicalIngestion.deliverySummary, {
+      mappedSent: summary.mappedEmailsSent,
+      mappedQueued: summary.mappedEmailsQueued,
+      unmappedSent: summary.unmappedEmailsSent,
+      unmappedQueued: summary.unmappedEmailsQueued,
+      failed: summary.failedEmailCount,
+    });
+
     addFeedItem(
       `Historical Purchase & Vendor Master Ingestion Complete: ${data.importedCount} Vendors`,
-      `Processed separate Vendor Master & ${periodLabel} PO dumps. ${summary.mappedEmailsSent}/${summary.mappedCount} Template A sent. ${summary.unmappedEmailsSent}/${summary.unmappedCount} Template B sent. ${summary.failedEmailCount} failed.`,
+      formatString(UI_STRINGS.historicalIngestion.feedSummary, { periodLabel, deliverySummary }),
       'invitation',
       undefined,
       `${data.importedCount} Ingested Vendors`,
@@ -1489,12 +1499,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
 
     addAuditLog(
-      `Ingested separate Vendor Master & ${periodLabel} PO files (${vendors.length} submitted, ${data.importedCount} new: ${summary.mappedEmailsSent} Template A sent, ${summary.unmappedEmailsSent} Template B sent, ${summary.failedEmailCount} failed).`
+      formatString(UI_STRINGS.historicalIngestion.auditSummary, {
+        periodLabel,
+        submitted: vendors.length,
+        imported: data.importedCount,
+        deliverySummary,
+      })
     );
 
     showToast(
       summary.failedEmailCount > 0 ? 'Setup Completed with Warnings' : 'Initial Setup Completed',
-      `Processed ${periodLabel} PO dump & Vendor Master. Dispatched ${summary.mappedEmailsSent} Template A and ${summary.unmappedEmailsSent} Template B emails (${summary.failedEmailCount} failed).`,
+      formatString(UI_STRINGS.historicalIngestion.toastSummary, { periodLabel, deliverySummary }),
       summary.failedEmailCount > 0 ? 'warning' : 'success'
     );
 

@@ -1541,14 +1541,21 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     // awaits the real POST /api/buyer-accounts/historical-data and returns
     // whatever importedCount the server reports (dedup happens server-side),
     // so each call needs its own mocked response.
-    const mockIngestResponse = (importedCount: number) => ({
+    const mockIngestResponse = (importedCount: number, summary = {}) => ({
       ok: true,
       status: 200,
-      json: async () => ({ success: true, importedCount, period: '1_year', totalVendors: importedCount }),
+      json: async () => ({ success: true, importedCount, period: '1_year', totalVendors: importedCount, ...summary }),
     });
 
     await act(async () => {
-      mockFetch.mockResolvedValueOnce(mockIngestResponse(1));
+      mockFetch.mockResolvedValueOnce(mockIngestResponse(1, {
+        mappedCount: 1,
+        mappedEmailsSent: 0,
+        mappedEmailsQueued: 1,
+        unmappedCount: 0,
+        unmappedEmailsSent: 0,
+        unmappedEmailsQueued: 0,
+      }));
       const processedCount1 = await contextValue.processHistoricalPurchaseData('1_year', [
         {
           id: 'h-0',
@@ -1603,7 +1610,14 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       expect(processedCount2).toBe(2);
 
       // Process 3_years with unmapped categories.
-      mockFetch.mockResolvedValueOnce(mockIngestResponse(1));
+      mockFetch.mockResolvedValueOnce(mockIngestResponse(1, {
+        mappedCount: 1,
+        mappedEmailsSent: 0,
+        mappedEmailsQueued: 1,
+        unmappedCount: 0,
+        unmappedEmailsSent: 0,
+        unmappedEmailsQueued: 0,
+      }));
       const processedCount3 = await contextValue.processHistoricalPurchaseData('3_years', [
         {
           id: 'h-3',
@@ -1622,6 +1636,11 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
         },
       ]);
       expect(processedCount3).toBe(1);
+    });
+    expect(contextValue.lastIngestionSummary).toMatchObject({
+      mappedEmailsSent: 0,
+      mappedEmailsQueued: 1,
+      unmappedEmailsQueued: 0,
     });
 
     // Failure paths: the caller must learn the import did NOT happen, whether

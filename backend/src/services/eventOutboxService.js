@@ -315,6 +315,82 @@ async function dispatchEvent(job) {
       }, 'EVENT_OUTBOX');
       return;
     }
+    case EVENT_OUTBOX_TYPES.HISTORICAL_VENDOR_ONBOARDING_EMAIL: {
+      const { vendorId, encryptedEmailPayload } = job.raw || {};
+      if (
+        typeof vendorId !== 'string' || !vendorId
+        || typeof encryptedEmailPayload !== 'string' || !encryptedEmailPayload
+      ) {
+        const error = new Error('Historical vendor onboarding email retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const vendor = await domainQueries.getVendorByIdFromDB(vendorId, { fresh: true });
+      if (!vendor) {
+        const error = new Error('Historical vendor onboarding email retry references a missing vendor.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      if (vendor.onboardingEmailStatus === 'sent') return;
+      if (!['pending', 'failed'].includes(vendor.onboardingEmailStatus)) {
+        const error = new Error('Historical vendor onboarding email retry references a vendor that is no longer eligible for delivery.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      let emailPayload;
+      try {
+        const serializedPayload = cryptoService.decrypt(encryptedEmailPayload, {
+          additionalData: `vendor-historical-onboarding-email:${vendorId}`,
+        });
+        emailPayload = JSON.parse(serializedPayload);
+      } catch {
+        const error = new Error('Historical vendor onboarding email payload could not be decrypted.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const recipient = String(vendor.email || '').trim();
+      if (
+        !emailPayload || typeof emailPayload !== 'object' || Array.isArray(emailPayload)
+        || !EMAIL_REGEX.test(recipient)
+        || String(emailPayload.to || '').trim().toLowerCase() !== recipient.toLowerCase()
+        || typeof emailPayload.subject !== 'string' || !emailPayload.subject.trim()
+        || (typeof emailPayload.html !== 'string' && typeof emailPayload.text !== 'string')
+      ) {
+        const error = new Error('Historical vendor onboarding email payload does not match its persisted vendor.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      let delivery;
+      try {
+        delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
+      } catch {
+        const error = new Error('Historical vendor onboarding email provider request failed.');
+        error.code = 'HISTORICAL_VENDOR_ONBOARDING_EMAIL_FAILED';
+        throw error;
+      }
+      if (!delivery?.sent) {
+        const error = new Error('Historical vendor onboarding email provider did not accept the message.');
+        error.code = 'HISTORICAL_VENDOR_ONBOARDING_EMAIL_FAILED';
+        throw error;
+      }
+
+      const saved = await require('./storeService').updateVendorDurably(vendorId, {
+        onboardingEmailStatus: 'sent',
+      });
+      if (!saved) {
+        const error = new Error('Historical vendor onboarding email was accepted but its status was not persisted.');
+        error.code = 'VENDOR_ONBOARDING_STATUS_NOT_SAVED';
+        throw error;
+      }
+      logger.info('Historical vendor onboarding email accepted and status persisted', {
+        vendorId,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
     case EVENT_OUTBOX_TYPES.PAYMENT_DUES_EMAIL: {
       const paymentDuesQueries = require('../db/paymentDuesQueries');
       const communicationId = job.raw?.communicationId;
@@ -781,7 +857,10 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE) {
       }
       if (
         isDead
-        && job.event_type === EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL
+        && [
+          EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
+          EVENT_OUTBOX_TYPES.HISTORICAL_VENDOR_ONBOARDING_EMAIL,
+        ].includes(job.event_type)
         && typeof job.raw?.vendorId === 'string'
         && job.raw.vendorId
       ) {

@@ -233,6 +233,89 @@ describe('background event retry outbox', () => {
     }
   });
 
+  test('dispatches a persisted historical vendor email without changing its custom template', async () => {
+    const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+    process.env.AES_ENCRYPTION_KEY = '9'.repeat(64);
+    const vendorId = 'vendor-historical-outbox-success';
+    const emailPayload = {
+      to: 'historical-outbox@example.test',
+      subject: 'Buyer mapped category invitation',
+      html: '<p>Custom mapping and temporary credential content</p>',
+    };
+    const encryptedEmailPayload = cryptoService.encrypt(JSON.stringify(emailPayload), {
+      additionalData: `vendor-historical-onboarding-email:${vendorId}`,
+    }).encoded;
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'historical-vendor-email-event',
+      event_type: EVENT_OUTBOX_TYPES.HISTORICAL_VENDOR_ONBOARDING_EMAIL,
+      raw: { vendorId, encryptedEmailPayload },
+      attempts: 1,
+      lease_token: 'lease-historical-vendor-email',
+    }]);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue({
+      id: vendorId,
+      name: 'Historical Outbox Vendor',
+      email: emailPayload.to,
+      onboardingEmailStatus: 'failed',
+    });
+    const storeService = require('../src/services/storeService');
+    const statusSpy = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: vendorId });
+    const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+    jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    try {
+      await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+      expect(sendSpy).toHaveBeenCalledWith(emailPayload, 'onboarding');
+      expect(statusSpy).toHaveBeenCalledWith(vendorId, { onboardingEmailStatus: 'sent' });
+    } finally {
+      process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+    }
+  });
+
+  test.each([
+    ['invalid ciphertext', 'not-a-token', 'historical-invalid-cipher@example.test'],
+    ['recipient mismatch', null, 'historical-other-recipient@example.test'],
+  ])('dead-letters historical vendor email with %s', async (_scenario, ciphertext, persistedEmail) => {
+    const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+    process.env.AES_ENCRYPTION_KEY = '8'.repeat(64);
+    const vendorId = `vendor-historical-invalid-${_scenario.replaceAll(' ', '-')}`;
+    const payload = {
+      to: 'historical-target@example.test',
+      subject: 'Historical invitation',
+      html: '<p>Template content</p>',
+    };
+    const encryptedEmailPayload = ciphertext || cryptoService.encrypt(JSON.stringify(payload), {
+      additionalData: `vendor-historical-onboarding-email:${vendorId}`,
+    }).encoded;
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: `historical-vendor-invalid-${_scenario}`,
+      event_type: EVENT_OUTBOX_TYPES.HISTORICAL_VENDOR_ONBOARDING_EMAIL,
+      raw: { vendorId, encryptedEmailPayload },
+      attempts: 1,
+      lease_token: 'lease-historical-vendor-invalid',
+    }]);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue({
+      id: vendorId,
+      email: persistedEmail,
+      onboardingEmailStatus: 'pending',
+    });
+    const storeService = require('../src/services/storeService');
+    const statusSpy = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: vendorId });
+    const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+    const rescheduleSpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    try {
+      await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ dead: 1 });
+      expect(sendSpy).not.toHaveBeenCalled();
+      expect(statusSpy).toHaveBeenCalledWith(vendorId, { onboardingEmailStatus: 'failed' });
+      expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'dead' }));
+    } finally {
+      process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+    }
+  });
+
   test('skips dispatch when no backing store is configured', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
     await expect(eventOutboxService.dispatchDueEventOutboxJobs()).resolves.toEqual({

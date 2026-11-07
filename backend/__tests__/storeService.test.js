@@ -6,6 +6,7 @@ const identityQueries = require('../src/db/identityQueries');
 const cryptoService = require('../src/services/cryptoService');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
 const eventOutboxService = require('../src/services/eventOutboxService');
+const { EVENT_OUTBOX_TYPES } = require('../src/config/constants');
 
 describe('Store Service & Business Operations', () => {
   test('initializes with no records at all', async () => {
@@ -1063,6 +1064,9 @@ describe('Store Service & Business Operations', () => {
     });
 
     test('historical onboarding keeps an existing password during a creation race and sends no temporary password', async () => {
+      const originalVendors = storeService.vendors;
+      const originalBuyerAccounts = storeService.buyerAccounts;
+      const originalActiveBuyerAccount = storeService.activeBuyerAccount;
       const buyer = storeService.addBuyerAccount({
         organizationName: 'Historical Race Buyer',
         corporateEmail: 'historical-race-buyer@example.com',
@@ -1077,23 +1081,378 @@ describe('Store Service & Business Operations', () => {
         onboardingEmailStatus: 'pending',
       };
       storeService.vendors = [existingVendor];
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
       const insertSpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({
         created: false,
         reason: 'ALREADY_EXISTS',
       });
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
 
-      const result = await storeService.processHistoricalPurchaseData(
-        '1_year',
-        [{ companyName: existingVendor.name, email: existingVendor.email }],
-        buyer
-      );
+      try {
+        const result = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{ companyName: existingVendor.name, email: existingVendor.email }],
+          buyer
+        );
 
-      expect(result.mappedEmailsSent + result.unmappedEmailsSent).toBe(1);
-      expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({ resetExisting: false }));
-      expect(sendSpy).toHaveBeenCalledTimes(1);
-      expect(sendSpy.mock.calls[0][0].html).not.toContain('Temporary Password');
+        expect(result.mappedEmailsSent + result.unmappedEmailsSent).toBe(1);
+        expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({ resetExisting: false }));
+        expect(sendSpy).toHaveBeenCalledTimes(1);
+        expect(sendSpy.mock.calls[0][0].html).not.toContain('Temporary Password');
+      } finally {
+        storeService.vendors = originalVendors;
+        storeService.buyerAccounts = originalBuyerAccounts;
+        storeService.activeBuyerAccount = originalActiveBuyerAccount;
+        findSpy.mockRestore();
+        insertSpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
+    test('historical onboarding atomically queues an encrypted custom email with a newly created identity', async () => {
+      const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+      const originalSecretKey = process.env.AES_SECRET_KEY;
+      const originalVendors = storeService.vendors;
+      process.env.AES_ENCRYPTION_KEY = 'b'.repeat(64);
+      delete process.env.AES_SECRET_KEY;
+      const buyer = { id: 'buyer-historical-durable', corporateEmail: null, organizationName: 'Durable Buyer' };
+      const vendor = {
+        id: 'vendor-historical-durable',
+        name: 'Historical Durable Vendor',
+        email: 'historical-durable@example.com',
+        buyerId: null,
+        buyerAccountId: buyer.id,
+        buyerEmail: null,
+        onboardingEmailStatus: 'pending',
+        majorCategory: null,
+        minorCategories: [],
+      };
+      storeService.vendors = [vendor];
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const upsertSpy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockResolvedValue(vendor);
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({ created: true });
+      const buildSpy = jest.spyOn(mailerService, 'buildVendorCategoryMappingEmail').mockReturnValue({
+        to: vendor.email,
+        subject: 'Historical template A',
+        html: '<p>Secure Temporary Password: DurableTemp123!</p>',
+      });
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+      const enqueueSpy = jest.spyOn(eventOutboxService, 'enqueueEventOutbox');
+
+      try {
+        const result = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{
+            companyName: vendor.name,
+            email: vendor.email,
+            contactPerson: 'Mapped Contact',
+            phone: '+919999999991',
+            location: 'Pune',
+            majorCategory: 'Mechanical',
+            minorCategories: ['Valves'],
+            rating: 4.2,
+            score: 84,
+            categoriesMappedByBuyer: true,
+          }],
+          buyer
+        );
+        expect(domainPool.hasStorage()).toBe(true);
+        const identityInput = identitySpy.mock.calls.at(-1)[0];
+        expect(identitySpy).toHaveBeenCalled();
+        expect(identityInput).toHaveProperty('onboardingEvent');
+        const event = identityInput.onboardingEvent;
+        const decryptedPayload = cryptoService.decrypt(event.payload.encryptedEmailPayload, {
+          additionalData: `vendor-historical-onboarding-email:${vendor.id}`,
+        });
+
+        expect(result).toMatchObject({
+          mappedEmailsSent: 0,
+          mappedEmailsQueued: 1,
+          unmappedEmailsSent: 0,
+          unmappedEmailsQueued: 0,
+          failedEmailCount: 0,
+          overallStatus: 'COMPLETED',
+        });
+        expect(event.eventType).toBe(EVENT_OUTBOX_TYPES.HISTORICAL_VENDOR_ONBOARDING_EMAIL);
+        expect(JSON.parse(decryptedPayload)).toEqual(buildSpy.mock.results.at(-1).value);
+        expect(JSON.stringify(event)).not.toContain('DurableTemp123!');
+        expect(upsertSpy).toHaveBeenCalled();
+        expect(sendSpy).not.toHaveBeenCalled();
+        expect(enqueueSpy).not.toHaveBeenCalled();
+      } finally {
+        process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+        if (originalSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+        else process.env.AES_SECRET_KEY = originalSecretKey;
+        storeService.vendors = originalVendors;
+        hasStorageSpy.mockRestore();
+        upsertSpy.mockRestore();
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        buildSpy.mockRestore();
+        sendSpy.mockRestore();
+        enqueueSpy.mockRestore();
+      }
+    });
+
+    test('historical onboarding queues an encrypted reminder for an existing scoped identity', async () => {
+      const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+      const originalSecretKey = process.env.AES_SECRET_KEY;
+      const originalVendors = storeService.vendors;
+      process.env.AES_ENCRYPTION_KEY = 'c'.repeat(64);
+      delete process.env.AES_SECRET_KEY;
+      const buyer = { id: 'buyer-historical-existing', corporateEmail: 'existing-buyer@example.com', organizationName: 'Existing Buyer' };
+      const vendor = {
+        id: 'vendor-historical-existing',
+        name: 'Historical Existing Vendor',
+        email: 'historical-existing@example.com',
+        buyerId: null,
+        buyerAccountId: null,
+        buyerEmail: 'existing-buyer@example.com',
+        onboardingEmailStatus: 'failed',
+        majorCategory: null,
+        minorCategories: [],
+      };
+      storeService.vendors = [vendor];
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const upsertSpy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockResolvedValue(vendor);
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail')
+        .mockResolvedValueOnce({ id: 'buyer-identity', orgId: null })
+        .mockResolvedValueOnce({ id: 'existing-identity' });
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount');
+      const statusSpy = jest.spyOn(storeService, '_persistVendorOnboardingStatus').mockResolvedValue({
+        updated: { ...vendor, onboardingEmailStatus: 'pending' },
+        warning: null,
+      });
+      const enqueueSpy = jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue({ id: 'outbox-historical-existing', status: 'pending' });
+      const buildSpy = jest.spyOn(mailerService, 'buildVendorSelfMappingEmail').mockReturnValue({
+        to: vendor.email,
+        subject: 'Historical reminder',
+        html: '<p>Please map your categories.</p>',
+      });
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+
+      try {
+        const result = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{
+            companyName: vendor.name,
+            email: vendor.email,
+            contactPerson: 'Existing Vendor Contact',
+            phone: '+919999999992',
+            location: 'Nagpur',
+            majorCategory: 'Electrical',
+            minorCategories: ['Switchgear'],
+            rating: 4.5,
+            score: 90,
+            categoriesMappedByBuyer: false,
+          }],
+          buyer
+        );
+
+        expect(result.unmappedEmailsQueued).toBe(1);
+        expect(result.unmappedEmailsSent).toBe(0);
+        expect(identitySpy).not.toHaveBeenCalled();
+        expect(statusSpy).toHaveBeenCalledWith(vendor, 'pending');
+        expect(enqueueSpy).toHaveBeenCalledWith(EVENT_OUTBOX_TYPES.HISTORICAL_VENDOR_ONBOARDING_EMAIL, vendor.id, expect.objectContaining({
+          vendorId: vendor.id,
+          encryptedEmailPayload: expect.any(String),
+        }));
+        expect(sendSpy).not.toHaveBeenCalled();
+      } finally {
+        process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+        if (originalSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+        else process.env.AES_SECRET_KEY = originalSecretKey;
+        storeService.vendors = originalVendors;
+        hasStorageSpy.mockRestore();
+        upsertSpy.mockRestore();
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        statusSpy.mockRestore();
+        enqueueSpy.mockRestore();
+        buildSpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
+    test.each([
+      ['completed', 1, 0, 0],
+      ['processing', 0, 1, 0],
+      ['dead', 0, 0, 1],
+      ['missing', 0, 0, 1],
+    ])('historical mapped email reports the %s outbox state accurately', async (outboxStatus, sent, queued, failed) => {
+      const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+      const originalSecretKey = process.env.AES_SECRET_KEY;
+      const originalVendors = storeService.vendors;
+      process.env.AES_ENCRYPTION_KEY = 'd'.repeat(64);
+      delete process.env.AES_SECRET_KEY;
+      const buyer = { id: `buyer-historical-${outboxStatus}`, corporateEmail: null, organizationName: 'Outbox State Buyer' };
+      const vendor = {
+        id: `vendor-historical-${outboxStatus}`,
+        name: 'Historical Outbox State Vendor',
+        email: `historical-${outboxStatus}@example.com`,
+        buyerId: buyer.id,
+        buyerAccountId: buyer.id,
+        buyerEmail: null,
+        onboardingEmailStatus: 'pending',
+        majorCategory: null,
+        minorCategories: [],
+      };
+      storeService.vendors = [vendor];
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const upsertSpy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockResolvedValue(vendor);
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'existing-identity' });
+      const statusSpy = jest.spyOn(storeService, '_persistVendorOnboardingStatus').mockResolvedValue({
+        updated: { ...vendor, onboardingEmailStatus: outboxStatus === 'dead' ? 'failed' : 'sent' },
+        warning: null,
+      });
+      const enqueueSpy = jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue(
+        outboxStatus === 'missing' ? null : { id: `outbox-${vendor.id}`, status: outboxStatus }
+      );
+      const buildSpy = jest.spyOn(mailerService, 'buildVendorCategoryMappingEmail').mockReturnValue({
+        to: vendor.email,
+        subject: 'Historical mapped invite',
+        html: '<p>Mapped category invitation</p>',
+      });
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+
+      try {
+        const result = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{ companyName: vendor.name, email: vendor.email, categoriesMappedByBuyer: true }],
+          buyer
+        );
+
+        expect(result.mappedEmailsSent).toBe(sent);
+        expect(result.mappedEmailsQueued).toBe(queued);
+        expect(result.failedEmailCount).toBe(failed);
+        expect(result.overallStatus).toBe(failed ? 'FAILED' : 'COMPLETED');
+        if (outboxStatus === 'completed') {
+          expect(statusSpy).toHaveBeenCalledWith(vendor, 'sent');
+        } else if (outboxStatus === 'dead') {
+          expect(statusSpy).toHaveBeenCalledWith(vendor, 'failed');
+        }
+        expect(buildSpy).toHaveBeenCalled();
+        expect(sendSpy).not.toHaveBeenCalled();
+      } finally {
+        process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+        if (originalSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+        else process.env.AES_SECRET_KEY = originalSecretKey;
+        storeService.vendors = originalVendors;
+        hasStorageSpy.mockRestore();
+        upsertSpy.mockRestore();
+        findSpy.mockRestore();
+        statusSpy.mockRestore();
+        enqueueSpy.mockRestore();
+        buildSpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
+    test('historical onboarding fails closed when a stale vendor status cannot be restored to pending', async () => {
+      const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+      const originalSecretKey = process.env.AES_SECRET_KEY;
+      const originalVendors = storeService.vendors;
+      process.env.AES_ENCRYPTION_KEY = 'e'.repeat(64);
+      delete process.env.AES_SECRET_KEY;
+      const buyer = { id: 'buyer-historical-status-write', corporateEmail: null, organizationName: 'Status Write Buyer' };
+      const vendor = {
+        id: 'vendor-historical-status-write',
+        name: 'Historical Status Write Vendor',
+        email: 'historical-status-write@example.com',
+        buyerId: buyer.id,
+        buyerAccountId: buyer.id,
+        buyerEmail: null,
+        onboardingEmailStatus: 'failed',
+        majorCategory: null,
+        minorCategories: [],
+      };
+      storeService.vendors = [vendor];
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const upsertSpy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockResolvedValue(vendor);
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'existing-identity' });
+      const statusSpy = jest.spyOn(storeService, '_persistVendorOnboardingStatus')
+        .mockResolvedValueOnce({ updated: null, warning: '' })
+        .mockResolvedValue({ updated: { ...vendor, onboardingEmailStatus: 'failed' }, warning: null });
+      const enqueueSpy = jest.spyOn(eventOutboxService, 'enqueueEventOutbox');
+
+      try {
+        const result = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{ companyName: vendor.name, email: vendor.email, categoriesMappedByBuyer: false }],
+          buyer
+        );
+
+        expect(result.failedEmailCount).toBe(1);
+        expect(result.failedEmails[0].reason).toContain('Vendor onboarding status could not be saved');
+        expect(statusSpy).toHaveBeenCalledWith(vendor, 'pending');
+        expect(enqueueSpy).not.toHaveBeenCalled();
+      } finally {
+        process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+        if (originalSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+        else process.env.AES_SECRET_KEY = originalSecretKey;
+        storeService.vendors = originalVendors;
+        hasStorageSpy.mockRestore();
+        upsertSpy.mockRestore();
+        findSpy.mockRestore();
+        statusSpy.mockRestore();
+        enqueueSpy.mockRestore();
+      }
+    });
+
+    test('historical onboarding does not create credentials when durable encryption is unconfigured', async () => {
+      const originalEncryptionKey = process.env.AES_ENCRYPTION_KEY;
+      const originalSecretKey = process.env.AES_SECRET_KEY;
+      const originalVendors = storeService.vendors;
+      delete process.env.AES_ENCRYPTION_KEY;
+      delete process.env.AES_SECRET_KEY;
+      const buyer = { id: 'buyer-historical-no-key', corporateEmail: null, organizationName: 'Encryption Required Buyer' };
+      const vendor = {
+        id: 'vendor-historical-no-key',
+        name: 'Historical No Key Vendor',
+        email: 'historical-no-key@example.com',
+        buyerId: buyer.id,
+        buyerAccountId: buyer.id,
+        buyerEmail: null,
+        onboardingEmailStatus: 'pending',
+        majorCategory: null,
+        minorCategories: [],
+      };
+      storeService.vendors = [vendor];
+      const hasStorageSpy = jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const upsertSpy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockResolvedValue(vendor);
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount');
+      const statusSpy = jest.spyOn(storeService, '_persistVendorOnboardingStatus').mockResolvedValue({
+        updated: { ...vendor, onboardingEmailStatus: 'failed' },
+        warning: null,
+      });
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail');
+
+      try {
+        const result = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{ companyName: vendor.name, email: vendor.email, categoriesMappedByBuyer: false }],
+          buyer
+        );
+
+        expect(result.failedEmailCount).toBe(1);
+        expect(result.failedEmails[0].reason).toContain('AES_ENCRYPTION_KEY or AES_SECRET_KEY');
+        expect(identitySpy).not.toHaveBeenCalled();
+        expect(statusSpy).toHaveBeenCalledWith(vendor, 'failed');
+        expect(sendSpy).not.toHaveBeenCalled();
+      } finally {
+        process.env.AES_ENCRYPTION_KEY = originalEncryptionKey;
+        if (originalSecretKey === undefined) delete process.env.AES_SECRET_KEY;
+        else process.env.AES_SECRET_KEY = originalSecretKey;
+        storeService.vendors = originalVendors;
+        hasStorageSpy.mockRestore();
+        upsertSpy.mockRestore();
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        statusSpy.mockRestore();
+        sendSpy.mockRestore();
+      }
     });
 
     test('processHistoricalPurchaseData rolls back a row whose Postgres write collides with an existing email (409) and reports it as skipped', async () => {

@@ -1231,8 +1231,10 @@ export interface IngestionSummary {
   totalProcessed: number;
   mappedCount: number;
   mappedEmailsSent: number;
+  mappedEmailsQueued: number;
   unmappedCount: number;
   unmappedEmailsSent: number;
+  unmappedEmailsQueued: number;
   failedEmailCount: number;
   failedEmails: IngestionFailedEmail[];
   skippedCount?: number;

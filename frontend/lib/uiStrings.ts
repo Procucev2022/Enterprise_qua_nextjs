@@ -19,6 +19,12 @@ export const UI_STRINGS = {
     credentialsSentMessage: '{name} was added. Login credentials were sent to {email} with instructions to change the temporary password at first login.',
     registeredAndSelectedMessage: '{name} was added to Procucev Vendors and selected for this RFQ.',
   },
+  historicalIngestion: {
+    deliverySummary: 'Template A: {mappedSent} sent, {mappedQueued} queued; Template B: {unmappedSent} sent, {unmappedQueued} queued; {failed} failed.',
+    feedSummary: 'Processed separate Vendor Master & {periodLabel} PO dumps. {deliverySummary}',
+    auditSummary: 'Ingested separate Vendor Master & {periodLabel} PO files ({submitted} submitted, {imported} new: {deliverySummary})',
+    toastSummary: 'Processed {periodLabel} PO dump & Vendor Master. {deliverySummary}',
+  },
   enterpriseInquiry: {
     submitSuccessTitle: 'Enquiry Submitted',
     submitSuccessMessage: 'Our Enterprise Contracts team will reach out to you within 24 hours.',

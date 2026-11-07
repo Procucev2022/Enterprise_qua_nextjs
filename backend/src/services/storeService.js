@@ -19,6 +19,7 @@ const {
   RFQ_STATE_WRITE_RETRIES,
   PERSISTED_RECORD_WRITE_RETRIES,
   EVENT_OUTBOX_TYPES,
+  EMAIL_REGEX,
   MAJOR_CATEGORY_ALIASES,
   KEYWORD_TAXONOMY_MAP,
   DEFAULT_CATEGORY_TAXONOMY,
@@ -8066,10 +8067,41 @@ class StoreService {
       };
     };
 
+    const buildHistoricalOnboardingEvent = (vendorId, emailPayload) => {
+      const configuredKey = String(process.env.AES_ENCRYPTION_KEY || process.env.AES_SECRET_KEY || '').trim();
+      if (!configuredKey) {
+        const error = new Error('Secure historical vendor email delivery is not configured. Set AES_ENCRYPTION_KEY or AES_SECRET_KEY.');
+        error.code = 'ONBOARDING_ENCRYPTION_NOT_CONFIGURED';
+        throw error;
+      }
+      const encryptedEmailPayload = cryptoService.encrypt(JSON.stringify(emailPayload), {
+        additionalData: `vendor-historical-onboarding-email:${vendorId}`,
+      });
+      const eventType = EVENT_OUTBOX_TYPES.HISTORICAL_VENDOR_ONBOARDING_EMAIL;
+      return {
+        id: eventOutboxService.buildEventOutboxId(eventType, vendorId),
+        eventType,
+        payload: {
+          vendorId,
+          encryptedEmailPayload: encryptedEmailPayload.encoded,
+        },
+      };
+    };
+
+    const ensureVendorEmailPending = async (vendor) => {
+      if (vendor.onboardingEmailStatus === 'pending') return;
+      const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'pending');
+      if (!statusWrite.updated) {
+        throw new Error(statusWrite.warning || 'Vendor onboarding status could not be saved before email delivery.');
+      }
+    };
+
     let mappedCount = 0;
     let mappedEmailsSent = 0;
+    let mappedEmailsQueued = 0;
     let unmappedCount = 0;
     let unmappedEmailsSent = 0;
+    let unmappedEmailsQueued = 0;
     const failedEmails = [];
     const vendorsToEmail = [];
 
@@ -8226,8 +8258,7 @@ class StoreService {
 
     // Process email dispatches for both mapped (Template A) and unmapped (Template B) vendors in a single action
     for (const { rec, vendor, isNew, isMapped } of vendorsToEmail) {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!vendor.email || !emailRegex.test(vendor.email)) {
+      if (!vendor.email || !EMAIL_REGEX.test(vendor.email)) {
         const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
         failedEmails.push({
           vendorId: vendor.id,
@@ -8251,6 +8282,9 @@ class StoreService {
       }
 
       let tempPassword = null;
+      let templateType = isMapped ? 'Template A' : 'Template B';
+      let payload = null;
+      let onboardingEvent = null;
       try {
         const existingIdentity = await identityQueries.findUserByEmail(vendor.email);
         if (existingIdentity) {
@@ -8261,6 +8295,22 @@ class StoreService {
           }
         } else {
           tempPassword = this._generateTempPassword();
+        }
+
+        ({ templateType, payload } = buildMappingEmail(rec, {
+          to: vendor.email,
+          recipientName: vendor.contactPerson || vendor.name,
+          vendorCode: vendor.id,
+          tempPassword,
+          contactPhone: String(rec.phone || vendor.phone || '').trim(),
+        }));
+
+        if (pool.hasStorage()) {
+          onboardingEvent = buildHistoricalOnboardingEvent(vendor.id, payload);
+          await ensureVendorEmailPending(vendor);
+        }
+
+        if (!existingIdentity) {
           const result = await identityQueries.insertVendorAccount({
             email: vendor.email,
             password: tempPassword,
@@ -8269,16 +8319,35 @@ class StoreService {
             organizationName: vendor.name,
             createdBy: 'vendor-ingestion',
             resetExisting: false,
+            ...(onboardingEvent ? { onboardingEvent } : {}),
           });
           if (result && result.created) {
             logger.info(`Vendor identity account created for ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
+            if (onboardingEvent) {
+              if (isMapped) mappedEmailsQueued++;
+              else unmappedEmailsQueued++;
+              logger.info('Historical vendor onboarding email recorded for durable delivery', {
+                vendorId: vendor.id,
+                outboxId: onboardingEvent.id,
+                template: templateType,
+              }, 'STORE_SERVICE');
+              continue;
+            }
           } else if (result && result.reason === 'ALREADY_EXISTS') {
             tempPassword = null;
+            onboardingEvent = null;
             logger.info(`Vendor identity appeared during onboarding for ${vendor.email}; retaining existing credentials`, { vendorId: vendor.id }, 'STORE_SERVICE');
             if (isNew) {
               await this._persistVendorOnboardingStatus(vendor, 'account_exists');
               continue;
             }
+            ({ templateType, payload } = buildMappingEmail(rec, {
+              to: vendor.email,
+              recipientName: vendor.contactPerson || vendor.name,
+              vendorCode: vendor.id,
+              tempPassword: null,
+              contactPhone: String(rec.phone || vendor.phone || '').trim(),
+            }));
           } else {
             throw new Error('Vendor identity creation returned without a persisted account.');
           }
@@ -8299,13 +8368,56 @@ class StoreService {
         continue;
       }
 
-      const { templateType, payload } = buildMappingEmail(rec, {
-        to: vendor.email,
-        recipientName: vendor.contactPerson || vendor.name,
-        vendorCode: vendor.id,
-        tempPassword,
-        contactPhone: String(rec.phone || vendor.phone || '').trim(),
-      });
+      if (pool.hasStorage()) {
+        try {
+          onboardingEvent = onboardingEvent || buildHistoricalOnboardingEvent(vendor.id, payload);
+          await ensureVendorEmailPending(vendor);
+          const queued = await eventOutboxService.enqueueEventOutbox(
+            onboardingEvent.eventType,
+            vendor.id,
+            onboardingEvent.payload
+          );
+          if (!queued) throw new Error('Historical vendor onboarding email was not confirmed in the durable outbox.');
+          if (queued.status === 'completed') {
+            const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'sent');
+            if (!statusWrite.updated) throw new Error(statusWrite.warning || 'Completed vendor email status could not be saved.');
+            if (isMapped) mappedEmailsSent++;
+            else unmappedEmailsSent++;
+            logger.info('Historical vendor onboarding email was already delivered', {
+              vendorId: vendor.id,
+              outboxId: onboardingEvent.id,
+              template: templateType,
+            }, 'STORE_SERVICE');
+          } else if (queued.status === 'pending' || queued.status === 'processing') {
+            if (isMapped) mappedEmailsQueued++;
+            else unmappedEmailsQueued++;
+            logger.info('Historical vendor onboarding email queued for durable delivery', {
+              vendorId: vendor.id,
+              outboxId: onboardingEvent.id,
+              template: templateType,
+              outboxStatus: queued.status,
+            }, 'STORE_SERVICE');
+          } else {
+            throw new Error(`Historical vendor onboarding email returned unexpected outbox state: ${queued.status || 'unknown'}`);
+          }
+        } catch (queueErr) {
+          const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'failed');
+          failedEmails.push({
+            vendorId: vendor.id,
+            vendorName: vendor.name,
+            email: vendor.email,
+            template: templateType,
+            reason: [queueErr.message || 'Could not record email for durable delivery.', statusWrite.warning].filter(Boolean).join(' ').trim(),
+          });
+          logger.error('Could not queue historical vendor onboarding email', {
+            error: queueErr,
+            vendorId: vendor.id,
+            outboxId: onboardingEvent?.id,
+            template: templateType,
+          }, 'STORE_SERVICE');
+        }
+        continue;
+      }
 
       try {
         const delivery = await mailerService.sendVendorIngestionEmail(payload, 'onboarding');
@@ -8345,13 +8457,14 @@ class StoreService {
     }
 
     const totalProcessed = mappedCount + unmappedCount;
-    const overallStatus = failedEmails.length === 0 ? 'COMPLETED' : (mappedEmailsSent + unmappedEmailsSent > 0 ? 'COMPLETED_WITH_FAILURES' : 'FAILED');
+    const deliveredOrQueuedCount = mappedEmailsSent + unmappedEmailsSent + mappedEmailsQueued + unmappedEmailsQueued;
+    const overallStatus = failedEmails.length === 0 ? 'COMPLETED' : (deliveredOrQueuedCount > 0 ? 'COMPLETED_WITH_FAILURES' : 'FAILED');
 
     // Attributed to the requesting buyer's own account when the controller
     // resolved one from the session (same convention as createRFQ).
     this.addAuditLog({
       userEmail: attributedAccount ? attributedAccount.corporateEmail : SYSTEM_ACTOR_EMAIL,
-      action: `Processed ${period.replace('_', ' ')} historical purchase dump: ${importedCount} supplier(s) empanelled (${mappedEmailsSent} Template A sent, ${unmappedEmailsSent} Template B sent, ${failedEmails.length} failed).`,
+      action: `Processed ${period.replace('_', ' ')} historical purchase dump: ${importedCount} supplier(s) empanelled (${mappedEmailsSent} Template A sent, ${mappedEmailsQueued} queued, ${unmappedEmailsSent} Template B sent, ${unmappedEmailsQueued} queued, ${failedEmails.length} failed).`,
     });
 
     return {
@@ -8360,8 +8473,10 @@ class StoreService {
       totalProcessed,
       mappedCount,
       mappedEmailsSent,
+      mappedEmailsQueued,
       unmappedCount,
       unmappedEmailsSent,
+      unmappedEmailsQueued,
       failedEmailCount: failedEmails.length,
       failedEmails,
       skippedCount: skipped.length,
