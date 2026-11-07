@@ -13,9 +13,12 @@
 
 const storeService = require('./storeService');
 const mailerService = require('./mailerService');
+const eventOutboxService = require('./eventOutboxService');
+const pool = require('../db/pool');
 const { logger } = require('./loggerService');
 const {
   DAILY_RFQ_REPORT_CONFIG,
+  EVENT_OUTBOX_TYPES,
   RFQ_MODE_LABELS,
   RFQ_MODES,
 } = require('../config/constants');
@@ -24,7 +27,7 @@ const LOG_CATEGORY = 'DAILY_RFQ_REPORT';
 
 const runtimeState = {
   timer: null,
-  lastSentDateStr: null,
+  lastHandledDateStr: null,
 };
 
 /**
@@ -587,23 +590,55 @@ async function checkAndTriggerScheduledReport(
   targetMinute = DAILY_RFQ_REPORT_CONFIG.DEFAULT_SCHEDULE_MINUTE
 ) {
   const parts = getTzDateParts(currentTime, timezone);
-  const todayStr = parts.dateStr;
 
-  const isScheduledTime = parts.hour === targetHour && parts.minute === targetMinute;
-  if (!isScheduledTime) {
+  const currentMinuteOfDay = parts.hour * 60 + parts.minute;
+  const scheduledMinuteOfDay = targetHour * 60 + targetMinute;
+  const isWithinScheduleWindow = currentMinuteOfDay >= scheduledMinuteOfDay
+    && currentMinuteOfDay < scheduledMinuteOfDay + DAILY_RFQ_REPORT_CONFIG.SCHEDULE_GRACE_MINUTES;
+  if (!isWithinScheduleWindow) {
     return { triggered: false, reason: `Not scheduled time (Current: ${parts.hour}:${parts.minute}, Target: ${targetHour}:${targetMinute})` };
   }
 
-  if (runtimeState.lastSentDateStr === todayStr) {
-    return { triggered: false, reason: `Report already dispatched today (${todayStr})` };
+  return runScheduledDailyRfqReport(currentTime, timezone);
+}
+
+async function runScheduledDailyRfqReport(
+  scheduledTime = new Date(),
+  timezone = DAILY_RFQ_REPORT_CONFIG.DEFAULT_TIMEZONE
+) {
+  const scheduledDate = getTzDateParts(scheduledTime, timezone).dateStr;
+  if (runtimeState.lastHandledDateStr === scheduledDate) {
+    return { triggered: false, reason: `Report already scheduled or dispatched today (${scheduledDate})` };
   }
 
-  const dispatchResult = await sendDailyRfqReport({ timezone });
+  if (pool.hasStorage()) {
+    const reportDate = getYesterdayDateStr(scheduledTime, timezone);
+    const queued = await eventOutboxService.enqueueEventOutbox(
+      EVENT_OUTBOX_TYPES.DAILY_RFQ_REPORT_EMAIL,
+      `scheduled:${scheduledDate}`,
+      { reportDate, timezone, recipients: resolveRecipients() }
+    );
+    if (!queued?.id) {
+      throw new Error('Daily RFQ report was not confirmed in the durable event outbox.');
+    }
+    runtimeState.lastHandledDateStr = scheduledDate;
+    logger.info('Daily RFQ report durably queued for delivery', {
+      scheduledDate,
+      reportDate,
+      outboxId: queued.id,
+    }, LOG_CATEGORY);
+    return {
+      triggered: true,
+      dispatchResult: { success: true, queued: true, reportDate, outboxId: queued.id },
+    };
+  }
+
+  const dispatchResult = await sendDailyRfqReport({ date: getYesterdayDateStr(scheduledTime, timezone), timezone });
   if (dispatchResult.success) {
-    runtimeState.lastSentDateStr = todayStr;
+    runtimeState.lastHandledDateStr = scheduledDate;
   } else {
     logger.warn('Daily RFQ report remains eligible for a later delivery attempt', {
-      scheduledDate: todayStr,
+      scheduledDate,
       reportDate: dispatchResult.reportDate,
     }, LOG_CATEGORY);
   }
@@ -673,7 +708,7 @@ function isSchedulerRunning() {
  */
 function resetRuntimeState() {
   stopDailyReportScheduler();
-  runtimeState.lastSentDateStr = null;
+  runtimeState.lastHandledDateStr = null;
 }
 
 module.exports = {
@@ -688,6 +723,7 @@ module.exports = {
   buildDailyRfqEmailText,
   sendDailyRfqReport,
   checkAndTriggerScheduledReport,
+  runScheduledDailyRfqReport,
   startDailyReportScheduler,
   stopDailyReportScheduler,
   isSchedulerRunning,

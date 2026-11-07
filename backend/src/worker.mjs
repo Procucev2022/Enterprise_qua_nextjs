@@ -112,7 +112,10 @@ async function scheduled(controller, workerEnv, ctx) {
     return;
   }
   if (cron === DAILY_RFQ_REPORT_CRON) {
-    await dailyRfqReportService.sendDailyRfqReport();
+    const scheduledTime = controller?.scheduledTime == null
+      ? new Date()
+      : new Date(controller.scheduledTime);
+    await dailyRfqReportService.runScheduledDailyRfqReport(scheduledTime);
     return;
   }
   if (cron === ZOHO_RECONCILIATION_CRON) {

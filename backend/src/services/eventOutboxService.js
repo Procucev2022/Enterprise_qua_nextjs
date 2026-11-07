@@ -18,6 +18,7 @@ const {
   EVENT_OUTBOX_RETENTION_DAYS,
   EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE,
   EMAIL_REGEX,
+  DAILY_RFQ_REPORT_CONFIG,
 } = require('../config/constants');
 const { logger } = require('./loggerService');
 
@@ -579,6 +580,48 @@ async function dispatchEvent(job) {
         rfqNumber: rfq.rfqNumber,
         quoteId,
         quotesCount: rfq.quotes.length,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
+    case EVENT_OUTBOX_TYPES.DAILY_RFQ_REPORT_EMAIL: {
+      const reportDate = typeof job.raw?.reportDate === 'string' ? job.raw.reportDate : '';
+      const timezone = typeof job.raw?.timezone === 'string' ? job.raw.timezone.trim() : '';
+      const recipients = Array.isArray(job.raw?.recipients) ? job.raw.recipients : [];
+      const parsedReportDate = new Date(`${reportDate}T00:00:00.000Z`);
+      const reportDateValid = /^\d{4}-\d{2}-\d{2}$/.test(reportDate)
+        && Number.isFinite(parsedReportDate.getTime())
+        && parsedReportDate.toISOString().slice(0, 10) === reportDate;
+      let timezoneValid = false;
+      try {
+        if (timezone && timezone.length <= DAILY_RFQ_REPORT_CONFIG.MAX_TIMEZONE_LENGTH) {
+          Intl.DateTimeFormat('en-US', { timeZone: timezone }).format();
+          timezoneValid = true;
+        }
+      } catch {
+        timezoneValid = false;
+      }
+      if (
+        !reportDateValid
+        || !timezoneValid
+        || recipients.length === 0
+        || recipients.some((recipient) => typeof recipient !== 'string' || !EMAIL_REGEX.test(recipient.trim()))
+      ) {
+        const error = new Error('Daily RFQ report retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const dailyRfqReportService = require('./dailyRfqReportService');
+      const result = await dailyRfqReportService.sendDailyRfqReport({ date: reportDate, timezone, recipients });
+      if (!result?.success) {
+        const error = new Error('Daily RFQ report email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('Daily RFQ report accepted by a provider', {
+        reportDate,
+        totalRFQs: result.totalRFQs,
         outboxId: job.id,
       }, 'EVENT_OUTBOX');
       return;

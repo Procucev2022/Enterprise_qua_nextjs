@@ -4,8 +4,9 @@ const eventOutboxQueries = require('../src/db/eventOutboxQueries');
 const enterpriseInquiryQueries = require('../src/db/enterpriseInquiryQueries');
 const paymentDuesQueries = require('../src/db/paymentDuesQueries');
 const eventOutboxService = require('../src/services/eventOutboxService');
+const dailyRfqReportService = require('../src/services/dailyRfqReportService');
 const mailerService = require('../src/services/mailerService');
-const { EVENT_OUTBOX_TYPES } = require('../src/config/constants');
+const { DAILY_RFQ_REPORT_CONFIG, EVENT_OUTBOX_TYPES } = require('../src/config/constants');
 const { logger } = require('../src/services/loggerService');
 
 describe('background event retry outbox', () => {
@@ -735,6 +736,88 @@ describe('background event retry outbox', () => {
         { item_name: 'Line Item', item_spec: 'Standard Specification', qty: 1, uom: 'Nos' },
       ],
     });
+  });
+
+  test('dispatches scheduled daily RFQ reports from a durable outbox event', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const event = {
+      id: 'daily-rfq-report:2026-11-04',
+      event_type: EVENT_OUTBOX_TYPES.DAILY_RFQ_REPORT_EMAIL,
+      raw: {
+        reportDate: '2026-11-03',
+        timezone: 'Asia/Kolkata',
+        recipients: ['reports@example.test'],
+      },
+      attempts: 1,
+      lease_token: 'lease-daily-report',
+    };
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([event]);
+    jest.spyOn(dailyRfqReportService, 'sendDailyRfqReport').mockResolvedValue({
+      success: true,
+      reportDate: event.raw.reportDate,
+      totalRFQs: 4,
+    });
+    const complete = jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(dailyRfqReportService.sendDailyRfqReport).toHaveBeenCalledWith({
+      date: '2026-11-03',
+      timezone: 'Asia/Kolkata',
+      recipients: ['reports@example.test'],
+    });
+    expect(complete).toHaveBeenCalledWith(event.id, event.lease_token);
+  });
+
+  test('retries scheduled daily RFQ reports that providers do not accept', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'daily-rfq-report:retry',
+      event_type: EVENT_OUTBOX_TYPES.DAILY_RFQ_REPORT_EMAIL,
+      raw: {
+        reportDate: '2026-11-03',
+        timezone: 'Asia/Kolkata',
+        recipients: ['reports@example.test'],
+      },
+      attempts: 1,
+      lease_token: 'lease-daily-report-retry',
+    }]);
+    jest.spyOn(dailyRfqReportService, 'sendDailyRfqReport').mockResolvedValue({ success: false });
+    const retry = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ retried: 1 });
+    expect(retry).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'daily-rfq-report:retry',
+      status: 'pending',
+      lastError: 'EMAIL_DELIVERY_NOT_ACCEPTED:Error',
+    }));
+  });
+
+  test.each([
+    ['invalid report date format', { reportDate: '2026-11-3', timezone: 'Asia/Kolkata', recipients: ['reports@example.test'] }],
+    ['invalid calendar date', { reportDate: '2026-02-31', timezone: 'Asia/Kolkata', recipients: ['reports@example.test'] }],
+    ['invalid timezone', { reportDate: '2026-11-03', timezone: 'Invalid/Timezone', recipients: ['reports@example.test'] }],
+    ['oversized timezone', { reportDate: '2026-11-03', timezone: 'x'.repeat(DAILY_RFQ_REPORT_CONFIG.MAX_TIMEZONE_LENGTH + 1), recipients: ['reports@example.test'] }],
+    ['empty recipient list', { reportDate: '2026-11-03', timezone: 'Asia/Kolkata', recipients: [] }],
+    ['invalid recipient', { reportDate: '2026-11-03', timezone: 'Asia/Kolkata', recipients: ['invalid recipient'] }],
+  ])('dead-letters a scheduled daily RFQ report with %s', async (_scenario, raw) => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+      id: 'daily-rfq-report:invalid',
+      event_type: EVENT_OUTBOX_TYPES.DAILY_RFQ_REPORT_EMAIL,
+      raw,
+      attempts: 1,
+      lease_token: 'lease-daily-report-invalid',
+    }]);
+    const send = jest.spyOn(dailyRfqReportService, 'sendDailyRfqReport');
+    const retry = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ dead: 1 });
+    expect(send).not.toHaveBeenCalled();
+    expect(retry).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'daily-rfq-report:invalid',
+      status: 'dead',
+      lastError: 'INVALID_PERSISTED_RECORD:Error',
+    }));
   });
 
   test.each([

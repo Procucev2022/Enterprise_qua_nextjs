@@ -250,6 +250,7 @@ const EVENT_OUTBOX_TYPES = Object.freeze({
   RFQ_GATEWAY_NOTIFICATION_EMAIL: 'rfq_gateway_notification_email',
   RFQ_QUOTE_RECEIVED_EMAIL: 'rfq_quote_received_email',
   RFQ_AUTO_CLOSURE_ACK_EMAIL: 'rfq_auto_closure_ack_email',
+  DAILY_RFQ_REPORT_EMAIL: 'daily_rfq_report_email',
 });
 const EVENT_OUTBOX_MAX_ATTEMPTS = 8;
 const EVENT_OUTBOX_MAX_BATCH_SIZE = 10;
@@ -3133,7 +3134,9 @@ const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
   DEFAULT_RECIPIENTS: Object.freeze(['veerababu.v@procucev.com']),
   DEFAULT_SCHEDULE_HOUR: 6, // 6:00 AM
   DEFAULT_SCHEDULE_MINUTE: 0,
+  SCHEDULE_GRACE_MINUTES: 5,
   DEFAULT_TIMEZONE: 'Asia/Kolkata',
+  MAX_TIMEZONE_LENGTH: 100,
   DEFAULT_ENABLED: true,
   INGESTION_CHANNEL_LABELS: Object.freeze({
     web_portal: 'Web Portal',

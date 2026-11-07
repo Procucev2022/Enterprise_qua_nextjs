@@ -28,7 +28,7 @@ beforeEach(() => {
     dispatchDueEventOutboxJobs: jest.fn().mockResolvedValue([]),
     purgeExpiredEventOutboxRows: jest.fn().mockResolvedValue([]),
   };
-  dailyReport = { sendDailyRfqReport: jest.fn().mockResolvedValue({ sent: true }) };
+  dailyReport = { runScheduledDailyRfqReport: jest.fn().mockResolvedValue({ triggered: true }) };
   store = {
     isHydratedFromDB: false,
     hydrateFromDB: jest.fn().mockResolvedValue(undefined),
@@ -138,8 +138,10 @@ describe('Worker cron jobs', () => {
   test('runs only the daily report for the daily report trigger', async () => {
     store.isHydratedFromDB = true;
     const worker = await loadWorker();
-    await worker.scheduled({ cron: '30 0 * * *' }, {}, {});
-    expect(dailyReport.sendDailyRfqReport).toHaveBeenCalledTimes(1);
+    const scheduledTime = new Date('2026-11-04T00:30:00.000Z');
+    await worker.scheduled({ cron: '30 0 * * *', scheduledTime: scheduledTime.getTime() }, {}, {});
+    expect(dailyReport.runScheduledDailyRfqReport).toHaveBeenCalledWith(scheduledTime);
+    expect(dailyReport.runScheduledDailyRfqReport).toHaveBeenCalledTimes(1);
     expect(emailGateway.pollBothInboxesOnce).not.toHaveBeenCalled();
     expect(reconciliation.reconcileOnce).not.toHaveBeenCalled();
   });
