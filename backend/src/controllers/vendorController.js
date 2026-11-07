@@ -1070,6 +1070,7 @@ async function bulkImportVendors(req, res, next) {
         issues: issuesCount,
         failed: 0,
         onboardingFailed: allResults.filter((r) => r.onboardingEmailStatus === 'failed').length,
+        onboardingSkipped: allResults.filter((r) => r.onboardingEmailStatus === 'skipped').length,
         results: publicResults,
         session: updatedSession || session,
       },

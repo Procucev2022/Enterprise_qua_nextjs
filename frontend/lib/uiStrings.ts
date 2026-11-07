@@ -19,6 +19,11 @@ export const UI_STRINGS = {
     credentialsSentMessage: '{name} was added. Login credentials were sent to {email} with instructions to change the temporary password at first login.',
     registeredAndSelectedMessage: '{name} was added to Procucev Vendors and selected for this RFQ.',
   },
+  vendorBulkImport: {
+    progressSummary: '{processed} of {total} processed — {imported} imported ({missingEmail} missing email), {duplicates} duplicate, {failed} failed, {onboardingFailed} credential email(s) failed, {onboardingSkipped} imported account(s) have no invitation email',
+    onboardingSkippedSummary: '{count} vendor account(s) were imported without an invitation email. Bulk import intentionally does not send login credentials.',
+    historyOnboardingSkipped: '{count} Not Invited',
+  },
   historicalIngestion: {
     deliverySummary: 'Template A: {mappedSent} sent, {mappedQueued} queued; Template B: {unmappedSent} sent, {unmappedQueued} queued; {failed} failed.',
     feedSummary: 'Processed separate Vendor Master & {periodLabel} PO dumps. {deliverySummary}',

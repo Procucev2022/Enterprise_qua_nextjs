@@ -838,8 +838,11 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       });
       const resVendor = { id: 'v-bulk-1', name: 'Bulk 1' };
       jest.spyOn(storeService, 'bulkAddVendors').mockResolvedValue({
-        results: [{ rowNumber: 1, vendor: resVendor, hasIssues: false }],
-        importedCount: 1,
+        results: [
+          { rowNumber: 1, vendor: { ...resVendor, id: 'v-bulk-skipped', onboardingEmailStatus: 'skipped' }, onboardingEmailStatus: 'skipped', hasIssues: false },
+          { rowNumber: 2, vendor: { ...resVendor, id: 'v-bulk-failed', onboardingEmailStatus: 'failed' }, onboardingEmailStatus: 'failed', hasIssues: false },
+        ],
+        importedCount: 2,
         duplicateCount: 0,
         missingEmailCount: 0,
       });
@@ -849,7 +852,10 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       await vendorController.bulkImportVendors(
         {
           user: { role: 'buyer', email: 'buyer@authed.com' },
-          body: { vendors: [{ name: 'Bulk Vendor', email: 'bulk1@vendor.com', majorCategory: 'Tools' }] },
+          body: { vendors: [
+            { name: 'Bulk Vendor', email: 'bulk1@vendor.com', majorCategory: 'Tools' },
+            { name: 'Bulk Vendor Two', email: 'bulk2@vendor.com', majorCategory: 'Tools' },
+          ] },
         },
         res,
         next
@@ -857,7 +863,11 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           success: true,
-          data: expect.objectContaining({ sessionId: expect.any(String) }),
+          data: expect.objectContaining({
+            sessionId: expect.any(String),
+            onboardingFailed: 1,
+            onboardingSkipped: 1,
+          }),
         })
       );
     });

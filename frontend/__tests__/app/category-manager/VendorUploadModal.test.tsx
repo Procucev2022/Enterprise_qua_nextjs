@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within, act } from '@testing-librar
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import { useApp } from '@/lib/store';
 import * as vendorUploadClient from '@/lib/vendorUploadClient';
+import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import type { VendorUploadRow } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({
@@ -277,9 +278,16 @@ describe('VendorUploadModal', () => {
       expect.any(Function)
     );
     await screen.findByText('Importing vendors…');
-    expect(
-      screen.getByText('1 of 2 processed — 1 imported (0 missing email), 0 duplicate, 0 failed, 0 credential email(s) failed')
-    ).toBeInTheDocument();
+    expect(screen.getByText(formatString(UI_STRINGS.vendorBulkImport.progressSummary, {
+      processed: 1,
+      total: 2,
+      imported: 1,
+      missingEmail: 0,
+      duplicates: 0,
+      failed: 0,
+      onboardingFailed: 0,
+      onboardingSkipped: 0,
+    }))).toBeInTheDocument();
 
     resolveImport({
       total: 1,
@@ -294,6 +302,29 @@ describe('VendorUploadModal', () => {
     expect(screen.getByText('Total: 2 · Imported: 1 · Failed: 0 · Duplicates: 0')).toBeInTheDocument();
     expect(mockRefreshFromDB).toHaveBeenCalledTimes(1);
     expect(onImportComplete).toHaveBeenCalledTimes(1);
+  });
+
+  test('reports that imported vendor accounts were not sent invitation emails', async () => {
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { rows: [validRow({}, 2)], blankRowCount: 0 },
+    });
+    (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
+      total: 1,
+      imported: 1,
+      missingEmail: 0,
+      duplicates: 0,
+      failed: 0,
+      onboardingSkipped: 1,
+      results: [{ rowNumber: 2, status: 'imported', onboardingEmailStatus: 'skipped' }],
+    });
+
+    render(<VendorUploadModal isOpen onClose={onClose} />);
+    pickFile(new File(['x'], 'vendors.xlsx'));
+    await screen.findByText('vendors.xlsx');
+    fireEvent.click(screen.getByText('Import 1 Vendor'));
+
+    await screen.findByText(formatString(UI_STRINGS.vendorBulkImport.onboardingSkippedSummary, { count: 1 }));
   });
 
   test('does not refresh the store or call onImportComplete when nothing was actually imported', async () => {
@@ -487,6 +518,27 @@ describe('VendorUploadModal', () => {
     expect(screen.queryByText('Previous Vendor Upload History')).not.toBeInTheDocument();
 
     getItemSpy.mockRestore();
+  });
+
+  test('shows skipped credential invitations in saved upload history', () => {
+    localStorage.setItem('procucev_vendor_upload_history', JSON.stringify([{
+      id: 'history-with-skipped-invite',
+      fileName: 'vendors.xlsx',
+      timestamp: '2026-11-08 10:00',
+      total: 3,
+      imported: 3,
+      duplicates: 1,
+      failed: 1,
+      onboardingSkipped: 2,
+    }]));
+
+    render(<VendorUploadModal isOpen onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
+
+    expect(screen.getByText(formatString(UI_STRINGS.vendorBulkImport.historyOnboardingSkipped, { count: 2 }))).toBeInTheDocument();
+    expect(screen.getByText('1 Duplicates')).toBeInTheDocument();
+    expect(screen.getByText('1 Failed')).toBeInTheDocument();
   });
 
   test('Choose Another File resets state and triggers file input click via setTimeout', async () => {

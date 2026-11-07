@@ -263,6 +263,7 @@ export async function bulkImportVendorRows(
     duplicates: 0,
     failed: 0,
     onboardingFailed: 0,
+    onboardingSkipped: 0,
     results: [],
   };
 
@@ -321,6 +322,7 @@ export async function bulkImportVendorRows(
       aggregate.duplicates += body.data.duplicates;
       aggregate.failed += body.data.failed;
       aggregate.onboardingFailed = (aggregate.onboardingFailed || 0) + (body.data.onboardingFailed || 0);
+      aggregate.onboardingSkipped = (aggregate.onboardingSkipped || 0) + (body.data.onboardingSkipped || 0);
       aggregate.results.push(...body.data.results);
     }
 

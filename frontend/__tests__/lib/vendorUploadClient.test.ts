@@ -370,6 +370,7 @@ describe('vendorUploadClient', () => {
         duplicates: 0,
         failed: 0,
         onboardingFailed: 0,
+        onboardingSkipped: 0,
         results: [{ rowNumber: 1, status: 'imported' }, { rowNumber: 2, status: 'imported' }],
       });
       expect(onProgress).toHaveBeenCalledTimes(1);
@@ -415,6 +416,7 @@ describe('vendorUploadClient', () => {
               missingEmail: 1,
               duplicates: 0,
               failed: 0,
+              onboardingSkipped: 1,
               results: [
                 { rowNumber: 1, status: 'imported', missingEmail: true },
                 { rowNumber: 2, status: 'imported' },
@@ -428,6 +430,7 @@ describe('vendorUploadClient', () => {
 
       expect(result.sessionId).toBe('session-abc');
       expect(result.missingEmail).toBe(1);
+      expect(result.onboardingSkipped).toBe(1);
       const [, options] = (global.fetch as jest.Mock).mock.calls[0];
       const sentBody = JSON.parse(options.body);
       expect(sentBody.sessionId).toBeUndefined();
@@ -474,6 +477,7 @@ describe('vendorUploadClient', () => {
         duplicates: 0,
         failed: 0,
         onboardingFailed: 0,
+        onboardingSkipped: 0,
         results: [],
       });
       expect(global.fetch).not.toHaveBeenCalled();

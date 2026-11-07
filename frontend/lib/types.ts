@@ -1014,7 +1014,7 @@ export interface VendorEntry {
 
   // Database Availability & Onboarding Credentials
   isExistingInDatabase?: boolean;
-  onboardingEmailStatus?: 'sent' | 'pending' | 'delivered' | 'failed' | 'account_exists';
+  onboardingEmailStatus?: 'sent' | 'pending' | 'delivered' | 'failed' | 'account_exists' | 'skipped';
   onboardingEmailDispatchedAt?: string;
   firstLoginCompleted?: boolean;
   reminderCadence?: 'every_3_days';
@@ -1128,6 +1128,7 @@ export interface VendorUploadImportResponse {
   duplicates: number;
   failed: number;
   onboardingFailed?: number;
+  onboardingSkipped?: number;
   results: VendorUploadRowResult[];
 }
 

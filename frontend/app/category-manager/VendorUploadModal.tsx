@@ -19,6 +19,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2, XCircle, History, Clock } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import {
   bulkImportVendorRows,
   downloadVendorUploadTemplate,
@@ -45,6 +46,7 @@ interface UploadHistoryEntry {
   duplicates: number;
   failed: number;
   onboardingFailed?: number;
+  onboardingSkipped?: number;
   records?: Array<{
     vendorCode?: string;
     name: string;
@@ -168,7 +170,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   async function handleImport() {
     if (rows.length === 0) return;
     setStep('importing');
-    setImportProgress({ total: 0, imported: 0, missingEmail: 0, duplicates: 0, failed: 0, onboardingFailed: 0, results: [] });
+    setImportProgress({ total: 0, imported: 0, missingEmail: 0, duplicates: 0, failed: 0, onboardingFailed: 0, onboardingSkipped: 0, results: [] });
     const result = await bulkImportVendorRows(rows, (soFar) => setImportProgress(soFar));
     setImportResult(result);
     setStep('result');
@@ -183,6 +185,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       duplicates: result.duplicates,
       failed: result.failed,
       onboardingFailed: result.onboardingFailed,
+      onboardingSkipped: result.onboardingSkipped,
       records: rows.slice(0, 100).map((r) => ({
         vendorCode: r.vendor.vendorCode,
         name: r.vendor.name,
@@ -305,6 +308,11 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                         {item.failed > 0 && (
                           <span className="px-1.5 py-0.5 rounded bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300">
                             {item.failed} Failed
+                          </span>
+                        )}
+                        {Number(item.onboardingSkipped) > 0 && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300">
+                            {formatString(UI_STRINGS.vendorBulkImport.historyOnboardingSkipped, { count: Number(item.onboardingSkipped) })}
                           </span>
                         )}
                       </div>
@@ -538,9 +546,16 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
               <p className="font-bold">Importing vendors…</p>
               {importProgress && (
                 <p className="text-[11px] text-slate-450 dark:text-gray-500">
-                  {importProgress.total} of {rows.length} processed — {importProgress.imported} imported (
-                  {importProgress.missingEmail} missing email), {importProgress.duplicates} duplicate,{' '}
-                  {importProgress.failed} failed, {importProgress.onboardingFailed || 0} credential email(s) failed
+                  {formatString(UI_STRINGS.vendorBulkImport.progressSummary, {
+                    processed: importProgress.total,
+                    total: rows.length,
+                    imported: importProgress.imported,
+                    missingEmail: importProgress.missingEmail,
+                    duplicates: importProgress.duplicates,
+                    failed: importProgress.failed,
+                    onboardingFailed: importProgress.onboardingFailed || 0,
+                    onboardingSkipped: importProgress.onboardingSkipped || 0,
+                  })}
                 </p>
               )}
             </div>
@@ -596,6 +611,11 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                 {(importResult.onboardingFailed || 0) > 0 && (
                   <p role="alert" className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
                     {importResult.onboardingFailed} vendor account(s) were imported, but login setup or credential email delivery failed. Contact support to resend the invitations.
+                  </p>
+                )}
+                {Number(importResult.onboardingSkipped) > 0 && (
+                  <p role="status" className="mt-2 rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs text-slate-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">
+                    {formatString(UI_STRINGS.vendorBulkImport.onboardingSkippedSummary, { count: Number(importResult.onboardingSkipped) })}
                   </p>
                 )}
               </div>
