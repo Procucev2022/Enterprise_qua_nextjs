@@ -277,9 +277,10 @@ async function withTransaction(fn) {
  * connection now, so a single reachability answer covers login and the
  * dashboards together rather than reporting two independent datastores.
  */
-const HEALTH_CHECK_SQL = `select (select count(*) from "user" where is_active = true) as user_count,
-    (select count(*) from vendors) as vendor_count,
-    (select count(*) from rfqs) as rfq_count`;
+const HEALTH_CHECK_SQL = `SELECT 1 AS ok,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM "user" WHERE is_active = true LIMIT 50)) AS user_count,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM vendors LIMIT 50)) AS vendor_count,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM rfqs LIMIT 50)) AS rfq_count`;
 
 const D1_HEALTH_CHECK_SQL = `SELECT 1 AS ok,
   (SELECT COUNT(*) FROM (SELECT 1 FROM "user" WHERE is_active = true LIMIT 50)) AS user_count,
@@ -400,7 +401,9 @@ async function checkDatabaseHealth() {
     // One round trip rather than three: the health check runs on every admin
     // page load and on boot, and three separate counts meant three billable
     // queries for one answer.
-    const result = await runHealthCheckQuery(() => query(HEALTH_CHECK_SQL));
+    const result = await runHealthCheckQuery(() =>
+      query(HEALTH_CHECK_SQL, [], { d1: true, d1Text: D1_HEALTH_CHECK_SQL })
+    );
     const row = (result.rows && result.rows[0]) || {};
     return {
       isConfigured: true,

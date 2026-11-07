@@ -267,6 +267,7 @@ CREATE INDEX IF NOT EXISTS idx_vendors_name_nocase ON vendors (json_extract(raw,
 CREATE INDEX IF NOT EXISTS idx_vendors_buyer_id ON vendors (json_extract(raw, '$.buyerId'));
 CREATE INDEX IF NOT EXISTS idx_vendors_buyer_account_id ON vendors (json_extract(raw, '$.buyerAccountId'));
 CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category);
+CREATE INDEX IF NOT EXISTS idx_vendors_major_category_nocase ON vendors (major_category COLLATE NOCASE);
 
 CREATE INDEX IF NOT EXISTS idx_vendors_created_at ON vendors (created_at DESC);
 
