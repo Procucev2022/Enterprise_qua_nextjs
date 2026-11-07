@@ -218,12 +218,34 @@ function isRetryableD1Error(err) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+let _d1OverloadUntil = 0;
+const D1_OVERLOAD_COOLDOWN_MS = 15000;
+
+function markD1Overloaded() {
+  _d1OverloadUntil = Date.now() + D1_OVERLOAD_COOLDOWN_MS;
+}
+
+function isD1Overloaded() {
+  return Date.now() < _d1OverloadUntil;
+}
+
+function resetD1OverloadState() {
+  _d1OverloadUntil = 0;
+}
+
 async function queryD1(db, text, params = []) {
+  const isErrorLog = typeof text === 'string' && text.includes('system_error_logs');
+
+  // If D1 is currently experiencing resource overload and this query is an error log write,
+  // drop it immediately without sending subrequests to D1 to avoid amplifying the overload.
+  if (isErrorLog && isD1Overloaded()) {
+    return { rows: [], rowCount: 0 };
+  }
+
   const stmt = db.prepare(toD1Sql(text));
   const boundParams = expandD1Params(text, params);
   const bound = boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
   let attempts = 0;
-  const isErrorLog = typeof text === 'string' && text.includes('system_error_logs');
   const maxAttempts = isErrorLog ? 1 : 3;
   let result;
   while (attempts < maxAttempts) {
@@ -232,6 +254,12 @@ async function queryD1(db, text, params = []) {
       break;
     } catch (err) {
       attempts++;
+      if (isRetryableD1Error(err)) {
+        markD1Overloaded();
+      }
+      if (isErrorLog) {
+        return { rows: [], rowCount: 0 };
+      }
       if (attempts < maxAttempts && isRetryableD1Error(err)) {
         await sleep(250 * attempts + Math.floor(Math.random() * 100));
         continue;
@@ -310,6 +338,9 @@ async function batchD1(db, statements) {
       break;
     } catch (err) {
       attempts++;
+      if (isRetryableD1Error(err)) {
+        markD1Overloaded();
+      }
       if (attempts < maxAttempts && isRetryableD1Error(err)) {
         await sleep(250 * attempts + Math.floor(Math.random() * 100));
         continue;
@@ -342,4 +373,17 @@ function getWaitUntil() {
   }
 }
 
-module.exports = { getD1Binding, getD1HttpClient, resetD1HttpClientCache, toD1Sql, expandD1Params, queryD1, batchD1, getWaitUntil };
+module.exports = {
+  getD1Binding,
+  getD1HttpClient,
+  resetD1HttpClientCache,
+  toD1Sql,
+  expandD1Params,
+  queryD1,
+  batchD1,
+  getWaitUntil,
+  isRetryableD1Error,
+  isD1Overloaded,
+  markD1Overloaded,
+  resetD1OverloadState,
+};

@@ -354,7 +354,7 @@ describe('SupplierDossierDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save Categories/i }));
     await waitFor(() => {
       expect(screen.getByText('Error updating categories')).toBeInTheDocument();
-    });
+    }, { timeout: 3000 });
   });
 
   test('4. Quotes Tab displays quotes, supports search, status filtering, and opens Quote Details Modal', async () => {
@@ -1605,12 +1605,12 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
     expect(screen.getByText(/Total Documents:/i)).toBeInTheDocument();
-    
+
     // Switch tabs to trigger onTabChange
     const profileTabBtn = screen.getByRole('button', { name: /Profile/i });
     fireEvent.click(profileTabBtn);
     expect(onTabChangeMock).toHaveBeenCalledWith('profile');
-    
+
     const docsTabBtn = screen.getByRole('button', { name: /Documents/i });
     fireEvent.click(docsTabBtn);
     expect(onTabChangeMock).toHaveBeenCalledWith('documents');

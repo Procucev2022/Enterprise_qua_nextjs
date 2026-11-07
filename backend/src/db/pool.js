@@ -11,7 +11,8 @@
 // ==============================================================================
 
 const { Pool } = require('pg');
-const { getD1Binding, getD1HttpClient, queryD1 } = require('./d1Bridge');
+const d1Bridge = require('./d1Bridge');
+const { getD1Binding, getD1HttpClient, queryD1 } = d1Bridge;
 const { queryCache } = require('./queryCache');
 const { queryAuditor } = require('./queryAuditor');
 const { logger } = require('../services/loggerService');
@@ -200,7 +201,50 @@ async function query(text, params = [], options = {}) {
     : 'postgres';
   try {
     if (d1) {
-      result = await queryD1(d1, sql, boundParams);
+      if (
+        options.useCache &&
+        cacheKey &&
+        !isWrite &&
+        typeof d1Bridge.isD1Overloaded === 'function' &&
+        d1Bridge.isD1Overloaded()
+      ) {
+        const staleData = queryCache.getStale(cacheKey, boundParams);
+        if (staleData !== null) {
+          logger.warn('Serving stale cached D1 data while the database is overloaded', {
+            queryId,
+            table,
+            provider,
+            cacheKey,
+          }, 'DATABASE_QUERY');
+          queryAuditor.auditQuery(sql, boundParams, 0, true);
+          return { rows: staleData, rowCount: staleData.length, isCacheHit: true, isStaleFallback: true };
+        }
+      }
+      try {
+        result = await queryD1(d1, sql, boundParams);
+      } catch (error) {
+        if (
+          options.useCache &&
+          cacheKey &&
+          !isWrite &&
+          typeof d1Bridge.isRetryableD1Error === 'function' &&
+          d1Bridge.isRetryableD1Error(error)
+        ) {
+          const staleData = queryCache.getStale(cacheKey, boundParams);
+          if (staleData !== null) {
+            logger.warn('Serving stale cached D1 data after a retryable query failure', {
+              queryId,
+              table,
+              provider,
+              error,
+              cacheKey,
+            }, 'DATABASE_QUERY');
+            queryAuditor.auditQuery(sql, boundParams, 0, true);
+            return { rows: staleData, rowCount: staleData.length, isCacheHit: true, isStaleFallback: true };
+          }
+        }
+        throw error;
+      }
     } else {
       if (!poolModule.pool) {
         throw new Error(NOT_CONFIGURED_MESSAGE);
@@ -338,9 +382,10 @@ async function withTransaction(fn) {
  * connection now, so a single reachability answer covers login and the
  * dashboards together rather than reporting two independent datastores.
  */
-const HEALTH_CHECK_SQL = `select (select count(*) from "user" where is_active = true) as user_count,
-    (select count(*) from vendors) as vendor_count,
-    (select count(*) from rfqs) as rfq_count`;
+const HEALTH_CHECK_SQL = `SELECT 1 AS ok,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM "user" WHERE is_active = true LIMIT 50)) AS user_count,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM vendors LIMIT 50)) AS vendor_count,
+  (SELECT COUNT(*) FROM (SELECT 1 FROM rfqs LIMIT 50)) AS rfq_count`;
 
 const D1_HEALTH_CHECK_SQL = `SELECT 1 AS ok,
   (SELECT COUNT(*) FROM (SELECT 1 FROM "user" WHERE is_active = true LIMIT 50)) AS user_count,
@@ -461,7 +506,9 @@ async function checkDatabaseHealth() {
     // One round trip rather than three: the health check runs on every admin
     // page load and on boot, and three separate counts meant three billable
     // queries for one answer.
-    const result = await runHealthCheckQuery(() => query(HEALTH_CHECK_SQL));
+    const result = await runHealthCheckQuery(() =>
+      query(HEALTH_CHECK_SQL, [], { d1: true, d1Text: D1_HEALTH_CHECK_SQL })
+    );
     const row = (result.rows && result.rows[0]) || {};
     return {
       isConfigured: true,

@@ -45,6 +45,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
   const [search, setSearch] = useState<string>('');
   const [sourceType, setSourceType] = useState<string>('all');
   const [clientType, setClientType] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
 
   // Column Reordering & Visibility state
   const [columns, setColumns] = useState<RegistrationColumnConfig[]>(() => {
@@ -183,6 +184,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
       if (search.trim()) params.append('search', search.trim());
       if (sourceType !== 'all') params.append('sourceType', sourceType);
       if (clientType !== 'all') params.append('clientType', clientType);
+      if (statusFilter !== 'all') params.append('status', statusFilter);
       params.append('limit', String(pageSize));
       params.append('offset', String((currentPage - 1) * pageSize));
 
@@ -214,7 +216,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
     } finally {
       setLoading(false);
     }
-  }, [search, sourceType, clientType, currentPage, pageSize, onTotalCountChange, strings.noClientsFound, strings.actionError]);
+  }, [search, sourceType, clientType, statusFilter, currentPage, pageSize, onTotalCountChange, strings.noClientsFound, strings.actionError]);
 
   useEffect(() => {
     fetchRegistrations();
@@ -501,11 +503,11 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
         </div>
       )}
 
-      {/* Unified Horizontal Toolbar: Search Bar + Client View Filter + Source Type Filter + Column Settings + Refresh */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5 sm:p-3 shadow-xs flex flex-row items-center gap-2 sm:gap-2.5 overflow-x-auto no-scrollbar">
-        {/* Fully visible search field with non-overlapping icon */}
-        <div className="relative flex-1 min-w-[200px] max-w-md">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
+      {/* Unified Horizontal Toolbar: Search Bar + Client View Filter + Source Type Filter + Status Filter + Refresh + Column Settings */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-2 shadow-xs flex flex-row items-center gap-1.5 sm:gap-2 w-full min-w-0 max-w-full box-border">
+        {/* Search field: flexible width with non-overlapping icon and clear button */}
+        <div className="relative flex-1 min-w-[140px]">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={search}
@@ -515,7 +517,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
             }}
             placeholder={strings.searchPlaceholder}
             aria-label={strings.searchPlaceholder}
-            className="w-full pl-8 pr-7 py-1.5 h-8.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500"
+            className="w-full pl-8 pr-7 py-1.5 h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500"
           />
           {search && (
             <button
@@ -524,7 +526,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                 setSearch('');
                 setCurrentPage(1);
               }}
-              className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               title="Clear search"
               aria-label="Clear search"
             >
@@ -534,49 +536,56 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
         </div>
 
         {/* Client View Filter Dropdown */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <label htmlFor="client-type-select" className="text-xs font-semibold text-slate-600 dark:text-slate-400 whitespace-nowrap hidden sm:inline">
-            {strings.clientTypeLabel}
-          </label>
-          <select
-            id="client-type-select"
-            value={clientType}
-            onChange={(e) => {
-              setClientType(e.target.value);
-              setCurrentPage(1);
-            }}
-            aria-label={strings.clientTypeLabel}
-            className="h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0"
-          >
-            {REGISTRATION_CLIENT_TYPES.map((ct) => (
-              <option key={ct.id} value={ct.id}>
-                {ct.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        <select
+          id="client-type-select"
+          value={clientType}
+          onChange={(e) => {
+            setClientType(e.target.value);
+            setCurrentPage(1);
+          }}
+          aria-label={strings.clientTypeLabel}
+          className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[145px] sm:w-[160px] truncate"
+        >
+          {REGISTRATION_CLIENT_TYPES.map((ct) => (
+            <option key={ct.id} value={ct.id}>
+              {ct.label}
+            </option>
+          ))}
+        </select>
 
         {/* Source Type Filter Dropdown */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <label htmlFor="source-type-select" className="text-xs font-semibold text-slate-600 dark:text-slate-400 whitespace-nowrap hidden sm:inline">
-            {strings.sourceTypeLabel}
-          </label>
-          <select
-            id="source-type-select"
-            value={sourceType}
-            onChange={(e) => {
-              setSourceType(e.target.value);
-              setCurrentPage(1);
-            }}
-            aria-label={strings.sourceTypeLabel}
-            className="h-8.5 px-2.5 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0"
-          >
-            <option value="all">{strings.allSources}</option>
-            <option value="Web App">{strings.webApp}</option>
-            <option value="WhatsApp">{strings.whatsapp}</option>
-            <option value="Email">{strings.email}</option>
-          </select>
-        </div>
+        <select
+          id="source-type-select"
+          value={sourceType}
+          onChange={(e) => {
+            setSourceType(e.target.value);
+            setCurrentPage(1);
+          }}
+          aria-label={strings.sourceTypeLabel}
+          className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[110px] sm:w-[125px] truncate"
+        >
+          <option value="all">{strings.allSources}</option>
+          <option value="Web App">{strings.webApp}</option>
+          <option value="WhatsApp">{strings.whatsapp}</option>
+          <option value="Email">{strings.email}</option>
+        </select>
+
+        {/* Status Filter Dropdown */}
+        <select
+          id="registration-status-select"
+          value={statusFilter}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setCurrentPage(1);
+          }}
+          aria-label={strings.colStatus}
+          className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[105px] sm:w-[120px] truncate"
+        >
+          <option value="all">{strings.allStatuses}</option>
+          <option value="New">{strings.statusNew}</option>
+          <option value="Accepted">{strings.statusAccepted}</option>
+          <option value="Rejected">{strings.statusRejected}</option>
+        </select>
 
         {/* Refresh Button */}
         <button
@@ -584,7 +593,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
           onClick={() => fetchRegistrations()}
           title={strings.refreshTooltip}
           aria-label={strings.refreshTooltip}
-          className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer ml-auto"
+          className="p-1.5 h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
         </button>
@@ -595,10 +604,11 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
           onClick={() => setShowColumnSettings(true)}
           title={strings.columnSettingsTooltip}
           aria-label={strings.columnSettingsTooltip}
-          className="p-2 h-8.5 w-8.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+          className="p-1.5 h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
         >
           <Settings className="w-3.5 h-3.5" />
-        </button></div>
+        </button>
+      </div>
 
       {/* Column Customization Modal */}
       {showColumnSettings && (
@@ -753,8 +763,9 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                   ? 'bg-[#fff5ee] dark:bg-slate-800/40' // Soft seashell/apricot tint
                   : 'bg-[#f0f7ff] dark:bg-slate-800/70'; // Soft sky blue tint
 
-                const isNew = client.status === 'New' || client.status === 'Pending';
-                const isAccepted = client.status === 'Accepted';
+                const isSeller = client.clientType === 'Seller';
+                const isNew = !isSeller && (client.status === 'New' || client.status === 'Pending');
+                const isAccepted = isSeller || client.status === 'Accepted';
 
                 return (
                   <tr
@@ -814,18 +825,21 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                         );
                       }
                       if (col.key === 'status') {
+                        const isRejected = client.status === 'Rejected';
                         return (
                           <td key={col.key} className="py-2.5 px-3.5 whitespace-nowrap">
                             <span
                               className={`font-semibold ${
-                                isAccepted
+                                isRejected
+                                  ? 'text-rose-600 dark:text-rose-400'
+                                  : isSeller
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : isAccepted
                                   ? 'text-indigo-600 dark:text-indigo-400'
-                                  : isNew
-                                  ? 'text-slate-800 dark:text-slate-200'
-                                  : 'text-rose-600 dark:text-rose-400'
+                                  : 'text-slate-800 dark:text-slate-200'
                               }`}
                             >
-                              {client.status}
+                              {isSeller && !isRejected ? strings.statusAutoApproved : client.status}
                             </span>
                           </td>
                         );
@@ -847,6 +861,15 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                         );
                       }
                       if (col.key === 'actions') {
+                        if (isSeller) {
+                          return (
+                            <td key={col.key} className="py-2.5 px-3.5 text-center whitespace-nowrap">
+                              <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800">
+                                {strings.statusAutoApproved}
+                              </span>
+                            </td>
+                          );
+                        }
                         return (
                           <td key={col.key} className="py-2.5 px-3.5 text-center whitespace-nowrap">
                             {isNew ? (

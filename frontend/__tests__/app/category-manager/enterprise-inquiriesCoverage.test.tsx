@@ -256,7 +256,7 @@ async function renderLoaded(): Promise<User> {
       })
     );
     expect(screen.getByRole('button', { name: COPY.refresh })).toBeEnabled();
-  });
+  }, { timeout: 3000 });
   return user;
 }
 

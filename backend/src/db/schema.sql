@@ -1210,4 +1210,13 @@ CREATE INDEX IF NOT EXISTS idx_vdir_sessions_user ON vendor_directory_sessions (
 CREATE INDEX IF NOT EXISTS idx_vdir_sessions_email ON vendor_directory_sessions (email);
 CREATE INDEX IF NOT EXISTS idx_vdir_sessions_status ON vendor_directory_sessions (status);
 
+-- Access-path indexes added while merging the latest test-v3 database updates.
+CREATE INDEX IF NOT EXISTS idx_vendors_email ON vendors (email);
 
+CREATE INDEX IF NOT EXISTS idx_vendors_source_created ON vendors (source, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_vendors_raw_corporate_email ON vendors (lower(raw->>'corporateEmail'));
+
+CREATE INDEX IF NOT EXISTS idx_rfqs_rfq_number ON rfqs (rfq_number);
+
+CREATE INDEX IF NOT EXISTS idx_buyer_accounts_corporate_email ON buyer_accounts (corporate_email);

@@ -773,7 +773,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
   });
 
-  
+
   test('switches across Action Center sub-navigation tabs (tickets, approvals, scorecard, buyers, sellers, registrations, tasks)', async () => {
     render(<InternalTasksDashboard />);
 
@@ -2952,12 +2952,26 @@ describe('Action Center & Internal Tasks Redesign', () => {
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('toolbar-export-csv-btn')).toBeInTheDocument();
+      expect(screen.getAllByTestId('toolbar-export-csv-btn')).toHaveLength(1);
     });
 
     const exportBtn = screen.getByTestId('toolbar-export-csv-btn');
     expect(exportBtn).toHaveAttribute('download', 'internal_tasks.csv');
     expect(exportBtn.getAttribute('href')).toContain('data:text/csv;charset=utf-8');
+  });
+
+  test('uses the filtered export endpoint when there are no client rows to export', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({ tasks: [], total: 0 });
+    (internalTaskClient.getExportTasksUrl as jest.Mock).mockReturnValue('/api/internal-tasks/export?status=all');
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('toolbar-export-csv-btn')).toHaveAttribute(
+        'href',
+        '/api/internal-tasks/export?status=all'
+      );
+    });
   });
 
 

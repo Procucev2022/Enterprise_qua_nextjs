@@ -1463,6 +1463,21 @@ async function extractLineItems(input = {}) {
           'GEMINI'
         );
         lineItems = tabularItems;
+      } else if (tabularItems.length > 0) {
+        lineItems = lineItems.map((item, idx) => {
+          const tab = tabularItems[idx];
+          if (!tab) return item;
+          return {
+            ...item,
+            targetDate: item.targetDate || tab.targetDate || '',
+            brand: item.brand || tab.brand || '',
+            deliveryLocation: item.deliveryLocation || tab.deliveryLocation || '',
+            deliveryCity: item.deliveryCity || tab.deliveryCity || '',
+            deliveryState: item.deliveryState || tab.deliveryState || '',
+            deliveryPincode: item.deliveryPincode || tab.deliveryPincode || '',
+            category: item.category || tab.category || '',
+          };
+        });
       }
 
       if (lineItems.length === 0) {
@@ -1510,7 +1525,7 @@ async function extractLineItems(input = {}) {
         category,
         deliveryDate: (typeof parsed.deliveryDate === 'string' && parsed.deliveryDate.trim())
           ? parseSpreadsheetDate(parsed.deliveryDate.trim())
-          : (lineItems.find((it) => it && it.targetDate)?.targetDate || null),
+          : (lineItems.find((it) => it && it.targetDate)?.targetDate || (tabularItems.length > 0 ? tabularItems.find((it) => it && it.targetDate)?.targetDate : null) || null),
         deliveryLocation: typeof parsed.deliveryLocation === 'string' ? parsed.deliveryLocation : null,
         deliveryCity: typeof parsed.deliveryCity === 'string' ? parsed.deliveryCity : null,
         deliveryState: typeof parsed.deliveryState === 'string' ? parsed.deliveryState : null,

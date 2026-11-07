@@ -28,6 +28,7 @@ const crypto = require('crypto');
 const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
 const { logger } = require('../services/loggerService');
+const { queryCache } = require('./queryCache');
 
 function hasD1() {
   return Boolean(d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient());
@@ -183,10 +184,17 @@ const USER_SELECT = `
  */
 async function findUserByEmail(email) {
   if (!email) return null;
+  const cleanEmail = String(email).trim().toLowerCase();
   const result = await pool.rows(
     `${USER_SELECT} where lower(u.username) = $1 order by u.is_active desc, u.created_ts desc limit 1`,
-    [String(email).trim().toLowerCase()],
-    { d1: true }
+    [cleanEmail],
+    {
+      d1: true,
+      d1Text: `${USER_SELECT} where u.username = $1 COLLATE NOCASE order by u.is_active desc, u.created_ts desc limit 1`,
+      useCache: true,
+      tag: 'user',
+      ttlMs: 60000,
+    }
   );
   return mapRowToUser(result[0]);
 }
@@ -228,11 +236,18 @@ async function findExistingUsernames(emails = []) {
  */
 async function findUserByEmailAndPhone(email, phone) {
   if (!email || !phone) return null;
+  const cleanEmail = String(email).trim().toLowerCase();
   const normalizedPhone = normalizePhone(phone);
   let result = await pool.rows(
     `${USER_SELECT} where lower(u.username) = $1 and u.phone = $2 order by u.is_active desc, u.created_ts desc limit 1`,
-    [String(email).trim().toLowerCase(), normalizedPhone],
-    { d1: true }
+    [cleanEmail, normalizedPhone],
+    {
+      d1: true,
+      d1Text: `${USER_SELECT} where (u.username = $1 or u.username = $1 COLLATE NOCASE) and u.phone = $2 order by u.is_active desc, u.created_ts desc limit 1`,
+      useCache: true,
+      tag: 'user',
+      ttlMs: 60000,
+    }
   );
 
   // If not found with submitted phone, check if the user is an auto-registered buyer with placeholder phone
@@ -241,8 +256,15 @@ async function findUserByEmailAndPhone(email, phone) {
     if (normalizedPhone === placeholderPhone) {
       result = await pool.rows(
         `${USER_SELECT} where lower(u.username) = $1 and (u.phone = $2 or u.phone = '${IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER}') order by u.is_active desc, u.created_ts desc limit 1`,
-        [String(email).trim().toLowerCase(), placeholderPhone],
-        { d1: true }
+        `${USER_SELECT} where lower(u.username) = $1 and (u.phone = $2 or u.phone = '${IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER}') order by u.is_active desc, u.created_ts desc limit 1`,
+        [cleanEmail, placeholderPhone],
+        {
+          d1: true,
+          d1Text: `${USER_SELECT} where (u.username = $1 or u.username = $1 COLLATE NOCASE) and (u.phone = $2 or u.phone = '${IDENTITY_PHONE_CONFIG.PLACEHOLDER_NATIONAL_NUMBER}') order by u.is_active desc, u.created_ts desc limit 1`,
+          useCache: true,
+          tag: 'user',
+          ttlMs: 60000,
+        }
       );
     }
   }
@@ -511,6 +533,7 @@ async function insertBuyerAccount({
     const organizationInserted = organizationInsertIndex >= 0 && Boolean(results[organizationInsertIndex]?.rows?.[0]);
     const organizationReused = organizationReusedBeforeWrite || !organizationInserted;
 
+    queryCache.invalidate('user');
     return {
       created: true,
       user: {
@@ -632,6 +655,7 @@ async function insertBuyerAccount({
       ]
     );
 
+    queryCache.invalidate('user');
     return {
       created: true,
       user: {
@@ -798,6 +822,7 @@ async function insertStaffAccount({
     const organizationInserted = organizationInsertIndex >= 0 && Boolean(results[organizationInsertIndex]?.rows?.[0]);
     const organizationReused = organizationReusedBeforeWrite || !organizationInserted;
 
+    queryCache.invalidate('user');
     return {
       created: true,
       user: {
@@ -881,6 +906,7 @@ async function insertStaffAccount({
       ]
     );
 
+    queryCache.invalidate('user');
     return {
       created: true,
       user: {
@@ -1032,6 +1058,7 @@ async function insertVendorAccount({
     const organizationInserted = organizationInsertIndex >= 0 && Boolean(results[organizationInsertIndex]?.rows?.[0]);
     const organizationReused = organizationReusedBeforeWrite || !organizationInserted;
 
+    queryCache.invalidate('user');
     return {
       created: true,
       user: {
@@ -1116,6 +1143,7 @@ async function insertVendorAccount({
       ]
     );
 
+    queryCache.invalidate('user');
     return {
       created: true,
       user: {
@@ -1151,6 +1179,7 @@ async function updateUserPassword(email, newPassword) {
         'update "user" set password = $1, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where lower(username) = $2',
     }
   );
+  queryCache.invalidate('user');
   return (result.rowCount || 0) > 0;
 }
 
@@ -1172,6 +1201,7 @@ async function updateUserPasswordByUuid(userUuid, newPassword, actorEmail) {
         'update "user" set password = $1, reset_password = false, last_modified_by = $2, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where uuid = $3',
     }
   );
+  queryCache.invalidate('user');
   return (result.rowCount || 0) > 0;
 }
 
@@ -1195,6 +1225,7 @@ async function updateBuyerOnboardingStatus({
         'update "user" set phone = $1, password = $2, reset_password = 0, verification_status = $3, last_modified_by = $4, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where uuid = $5',
     }
   );
+  queryCache.invalidate('user');
   return (result.rowCount || 0) > 0;
 }
 

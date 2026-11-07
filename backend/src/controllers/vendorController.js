@@ -286,9 +286,26 @@ async function getVendors(req, res, next) {
           pagination: { page: pageNumber, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
         });
       } catch (err) {
-        // Fallback gracefully to in-memory store if DB query fails or D1 is overloaded
+        // Fallback gracefully to in-memory store if DB query fails or D1 is overloaded (never hit DB again)
         console.warn('[VENDOR_CONTROLLER] getVendorsPageFromDB failed, falling back to memory:', err.message);
-        const fallbackVendors = await storeService.getVendors(buyerId, pageSize);
+        const inMemoryVendors = Array.isArray(storeService.vendors) ? storeService.vendors : [];
+        let fallbackVendors = inMemoryVendors;
+        if (buyerId && buyerId !== 'all') {
+          const sId = String(buyerId).toLowerCase();
+          fallbackVendors = inMemoryVendors.filter((v) =>
+            !v.buyerId ||
+            String(v.buyerId).toLowerCase() === sId ||
+            (v.buyerAccountId && String(v.buyerAccountId).toLowerCase() === sId)
+          );
+        }
+        if (search) {
+          const s = String(search).trim().toLowerCase();
+          fallbackVendors = fallbackVendors.filter((v) =>
+            (v.name && v.name.toLowerCase().includes(s)) ||
+            (v.email && v.email.toLowerCase().includes(s)) ||
+            (v.majorCategory && v.majorCategory.toLowerCase().includes(s))
+          );
+        }
         return res.json({
           success: true,
           source: 'in_memory_fallback',

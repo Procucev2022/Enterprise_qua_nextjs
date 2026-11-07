@@ -347,17 +347,23 @@ function clearScheduledChasers(rfqNumber) {
 /**
  * Updates in-memory RFQ follow-up stats upon successful chaser dispatch.
  */
-function _updateLiveFollowUpStats(rfqNumber, channel, vendor) {
+function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null, options = {}) {
   if (!rfqNumber) return;
   try {
     const storeService = require('./storeService');
-    const liveRfq = storeService.getRFQById ? storeService.getRFQById(rfqNumber) : null;
+    const liveRfq = options.preferFallback && fallbackRfq
+      ? fallbackRfq
+      : (storeService.getRFQById ? storeService.getRFQById(rfqNumber) : null) || fallbackRfq;
     if (!liveRfq || !liveRfq.followUpData) return;
     const fup = liveRfq.followUpData;
 
     if (channel === 'whatsapp') {
       if (!fup.whatsappStats) fup.whatsappStats = { total: 0, delivered: 0, read: 0, replied: 0 };
       fup.whatsappStats.delivered = (fup.whatsappStats.delivered || 0) + 1;
+      if (Array.isArray(fup.vendors) && vendor) {
+        const vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.vendorName === vendor.name));
+        if (vRecord) vRecord.whatsapp = { status: 'delivered', lastAttempt: new Date().toISOString() };
+      }
     } else if (channel === 'sms') {
       if (!fup.smsStats) fup.smsStats = { total: 0, delivered: 0, clicked: 0 };
       fup.smsStats.delivered = (fup.smsStats.delivered || 0) + 1;
@@ -374,6 +380,28 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor) {
       if (!fup.emailStats) fup.emailStats = { total: 0, delivered: 0, sent24h: 0, opened: 0 };
       fup.emailStats.sent24h = (fup.emailStats.sent24h || 0) + 1;
       fup.emailStats.delivered = (fup.emailStats.delivered || 0) + 1;
+      if (Array.isArray(fup.vendors) && vendor) {
+        const vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.vendorName === vendor.name));
+        if (vRecord) {
+          vRecord.email = { status: 'delivered', lastAttempt: new Date().toISOString() };
+          vRecord.emailSent = true;
+        }
+      }
+    }
+
+    if (options.updatedRfqNumbers instanceof Set) options.updatedRfqNumbers.add(rfqNumber);
+    if (options.persist !== false) {
+      if (typeof storeService._persistRFQ === 'function') {
+        storeService._persistRFQ(liveRfq);
+      } else if (typeof domainQueries.upsertRFQInDB === 'function') {
+        domainQueries.upsertRFQInDB(liveRfq).catch((error) => {
+          logger.warn('RFQ follow-up status persistence failed after chaser dispatch', {
+            rfqNumber,
+            channel,
+            error,
+          }, 'RFQ_CHASER');
+        });
+      }
     }
   } catch (error) {
     logger.warn('Could not update live RFQ follow-up statistics after chaser dispatch', {
@@ -385,7 +413,7 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor) {
   }
 }
 
-async function _dispatchWhatsApp(rfq, vendor, jobId, attempt = 1) {
+async function _dispatchWhatsApp(rfq, vendor, jobId, attempt = 1, followUpOptions = {}) {
   if (process.env.NODE_ENV === 'test') return { channel: 'whatsapp', skipped: true };
   const phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
   if (!phone) {
@@ -413,7 +441,7 @@ async function _dispatchWhatsApp(rfq, vendor, jobId, attempt = 1) {
       if (result.success) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
       else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error', attempt).catch(_ignoreError);
     }
-    if (result.success) _updateLiveFollowUpStats(rfq.rfqNumber, 'whatsapp', vendor);
+    if (result.success) _updateLiveFollowUpStats(rfq.rfqNumber, 'whatsapp', vendor, rfq, followUpOptions);
     return { channel: 'whatsapp', success: result.success };
   } catch (err) {
     logger.error(`[CHASER] WhatsApp error for ${vendor.name}: ${err.message}`, err, 'RFQ_CHASER');
@@ -425,7 +453,7 @@ async function _dispatchWhatsApp(rfq, vendor, jobId, attempt = 1) {
 /**
  * Fire-and-forget SMS chaser for one vendor.
  */
-async function _dispatchSms(rfq, vendor, jobId, attempt = 1) {
+async function _dispatchSms(rfq, vendor, jobId, attempt = 1, followUpOptions = {}) {
   if (process.env.NODE_ENV === 'test') return { channel: 'sms', skipped: true };
   let phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
   if (!phone && vendor.id) {
@@ -464,7 +492,7 @@ async function _dispatchSms(rfq, vendor, jobId, attempt = 1) {
       if (result.success) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
       else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error', attempt).catch(_ignoreError);
     }
-    if (result.success) _updateLiveFollowUpStats(rfq.rfqNumber, 'sms', vendor);
+    if (result.success) _updateLiveFollowUpStats(rfq.rfqNumber, 'sms', vendor, rfq, followUpOptions);
     return { channel: 'sms', success: result.success };
   } catch (err) {
     logger.error(`[CHASER] SMS error for ${vendor.name}: ${err.message}`, err, 'RFQ_CHASER');
@@ -478,7 +506,7 @@ async function _dispatchSms(rfq, vendor, jobId, attempt = 1) {
  * Uses the same sendRfqInviteEmail used on creation — vendors receive the full
  * RFQ detail email again as a formal reminder, labelled as a follow-up.
  */
-async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attempt = 1) {
+async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attempt = 1, followUpOptions = {}) {
   if (process.env.NODE_ENV === 'test') return { channel: 'email', skipped: true };
   if (!vendor.email) {
     logger.debug(`[CHASER] Reminder email skipped for ${vendor.name} — no email`, {}, 'RFQ_CHASER');
@@ -508,15 +536,7 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attem
       else await domainQueries.markChaserJobFailedInDB(jobId, result.reason || 'email delivery failed', attempt).catch(_ignoreError);
     }
     if (result.sent) {
-      try {
-        const storeService = require('./storeService');
-        const liveRfq = storeService.getRFQById ? storeService.getRFQById(rfq.rfqNumber) : null;
-        if (liveRfq && liveRfq.followUpData) {
-          if (!liveRfq.followUpData.emailStats) liveRfq.followUpData.emailStats = { total: 0, delivered: 0, sent24h: 0, opened: 0 };
-          liveRfq.followUpData.emailStats.sent24h = (liveRfq.followUpData.emailStats.sent24h || 0) + 1;
-          liveRfq.followUpData.emailStats.delivered = (liveRfq.followUpData.emailStats.delivered || 0) + 1;
-        }
-      } catch (_err) {}
+      _updateLiveFollowUpStats(rfq.rfqNumber, 'email', vendor, rfq, followUpOptions);
     }
     return { channel: 'email', sent: result.sent };
   } catch (err) {
@@ -784,6 +804,12 @@ async function dispatchDueChaserJobs(limit = 25) {
     limit
   );
   const rfqCache = new Map();
+  const updatedRfqNumbers = new Set();
+  const followUpOptions = {
+    persist: false,
+    preferFallback: true,
+    updatedRfqNumbers,
+  };
   let sent = 0;
   let failed = 0;
   let skipped = 0;
@@ -807,11 +833,11 @@ async function dispatchDueChaserJobs(limit = 25) {
         contactPerson: job.vendor_contact_person || null,
       };
       const result = job.channel === 'email'
-        ? await _dispatchReminderEmail(rfq, vendor, {}, job.id, job.attempts)
+        ? await _dispatchReminderEmail(rfq, vendor, {}, job.id, job.attempts, followUpOptions)
         : job.channel === 'whatsapp'
-          ? await _dispatchWhatsApp(rfq, vendor, job.id, job.attempts)
+          ? await _dispatchWhatsApp(rfq, vendor, job.id, job.attempts, followUpOptions)
           : job.channel === 'sms'
-            ? await _dispatchSms(rfq, vendor, job.id, job.attempts)
+            ? await _dispatchSms(rfq, vendor, job.id, job.attempts, followUpOptions)
             : job.channel === 'call'
               ? await _dispatchCall(rfq, vendor, job.id)
               : null;
@@ -826,6 +852,19 @@ async function dispatchDueChaserJobs(limit = 25) {
       failed++;
       logger.error(`[CHASER] Scheduled dispatch failed for job ${job.id}: ${err.message}`, err, 'RFQ_CHASER');
       await domainQueries.markChaserJobFailedInDB(job.id, err.message, job.attempts);
+    }
+  }
+
+  for (const rfqNumber of updatedRfqNumbers) {
+    const updatedRfq = rfqCache.get(rfqNumber);
+    if (!updatedRfq) continue;
+    try {
+      await domainQueries.upsertRFQInDB(updatedRfq);
+    } catch (error) {
+      logger.error('Could not persist RFQ follow-up status after scheduled chaser batch', {
+        rfqNumber,
+        error,
+      }, 'RFQ_CHASER');
     }
   }
 

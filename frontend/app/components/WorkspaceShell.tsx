@@ -125,7 +125,7 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
     <div className="flex flex-col lg:flex-row items-stretch min-h-[calc(100vh-4rem)]">
       <RoleNavigation onLogout={handleLogout} />
 
-      <main className="flex-1 min-w-0 overflow-y-auto">
+      <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">
         <div className="max-w-[1600px] mx-auto px-2 sm:px-3 py-2 sm:py-2.5">{children}</div>
       </main>
 

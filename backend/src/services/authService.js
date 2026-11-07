@@ -15,7 +15,8 @@ const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
 const authSessionQueries = require('../db/authSessionQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
-const { getWaitUntil } = require('../db/d1Bridge');
+const d1Bridge = require('../db/d1Bridge');
+const { getWaitUntil } = d1Bridge;
 const vendorPresenceService = require('./vendorPresenceService');
 
 const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
@@ -326,6 +327,10 @@ async function assertSessionActive(token) {
       return { valid: false, error: AUTH_MESSAGES.SESSION_LOGGED_OUT };
     }
   } catch (err) {
+    if (d1Bridge.isRetryableD1Error(err) || d1Bridge.isD1Overloaded()) {
+      logger.warn('D1 overloaded during session revocation check, trusting verified token', { signature: verification.signature }, 'AUTH_SERVICE');
+      return { valid: true, user: verification.user };
+    }
     logger.error('Could not check whether the session token was revoked', err, 'AUTH_SERVICE');
     return { valid: false, error: AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE };
   }

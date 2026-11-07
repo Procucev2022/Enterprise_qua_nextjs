@@ -66,8 +66,12 @@ describe('Scorecard API & Controller', () => {
     jest.spyOn(internalTaskQueries, 'getInternalTasks').mockResolvedValue({
       rows: [
         { id: 't-1', status: 'Completed', assigned_to_user_id: 'exec-1', assigned_to_name: null },
-        { id: 't-2', status: 'Pending', assigned_to_user_id: 'exec-1', assigned_to_name: 'Pavani' },
+        { id: 't-2', status: 'Pending', assigned_to_user_id: 'exec-1', assigned_to_name: 'Pavani', related_entity_type: 'VENDOR', task_category: 'ONBOARDING' },
         { id: 't-3', status: 'Completed', assigned_to_name: 'Navin Chaudhary', assigned_to_user_id: null },
+        { id: 't-4', status: 'Completed', assigned_to_user_id: 'exec-1', title: 'Site Visit to Factory', description: 'Visit vendor plant' },
+        { id: 't-5', status: 'Completed', assigned_to_user_id: 'exec-1', related_entity_type: 'CREDIT', task_category: 'CREDIT' },
+        { id: 't-6', status: 'In Progress', assigned_to_user_id: 'exec-1', task_category: 'BUSINESS_DEVELOPMENT', title: 'Contact Lead for Valves' },
+        { id: 't-7', status: 'Completed', assigned_to_user_id: 'exec-1', task_category: 'SALES', title: 'Deal Closure on Pipes' },
       ],
     });
 
@@ -81,6 +85,8 @@ describe('Scorecard API & Controller', () => {
     const data = await scorecardQueries.getScorecardData({ period: 'this_month' });
     expect(data.teamScores[0].operations.tasksCompleted).toBeGreaterThanOrEqual(1);
     expect(data.teamScores[0].operations.ticketsResolved).toBeGreaterThanOrEqual(1);
+    expect(data.teamScores[0].revenue.duesCollected).toBeGreaterThanOrEqual(0);
+    expect(data.teamScores[0].sales.dealsClosed).toBeGreaterThanOrEqual(0);
   });
 
   test('resolveDateRange helper covers custom dates and financial year branches', () => {

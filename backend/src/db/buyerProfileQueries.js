@@ -232,21 +232,28 @@ async function findProfileByIdentifier({ email, organizationName, organizationId
   // 1. Resolve exact user identity first (userId or email) to prevent multi-user organization bleeding
   if (userId || email) {
     const userConditions = [];
+    const d1UserConditions = [];
     const userParams = [];
     let idx = 1;
     if (userId) {
-      userConditions.push(`u.uuid = $${idx++}`);
+      userConditions.push(`u.uuid = $${idx}`);
+      d1UserConditions.push(`u.uuid = $${idx}`);
       userParams.push(userId);
+      idx++;
     }
     if (email) {
       userConditions.push(`(lower(u.username) = lower($${idx}) or lower(u.email) = lower($${idx}) or lower(o.email) = lower($${idx}))`);
+      // Omit `or o.email` on D1 in this first pass so SQLite can use the index on user table directly
+      d1UserConditions.push(`(u.username = $${idx} COLLATE NOCASE or u.email = $${idx} COLLATE NOCASE)`);
       userParams.push(email.trim());
       idx++;
     }
     const query = `${PROFILE_SELECT} where ${userConditions.join(' or ')} limit 1`;
+    const d1Text = `${PROFILE_SELECT} where ${d1UserConditions.join(' or ')} limit 1`;
     try {
       const rows = await pool.rows(query, userParams, {
         d1: true,
+        d1Text,
         useCache: true,
         tag: 'buyer_accounts',
         ttlMs: 60000,
@@ -265,24 +272,36 @@ async function findProfileByIdentifier({ email, organizationName, organizationId
     }
   }
 
-  // 2. Explicit fallback to organization-level identifiers (organizationId or organizationName)
-  if (organizationId || organizationName) {
+  // 2. Explicit fallback to organization-level identifiers (organizationId or organizationName or org email)
+  if (organizationId || organizationName || email) {
     const orgConditions = [];
+    const d1OrgConditions = [];
     const orgParams = [];
     let idx = 1;
     if (organizationId) {
-      orgConditions.push(`o.uuid = $${idx++}`);
+      orgConditions.push(`o.uuid = $${idx}`);
+      d1OrgConditions.push(`o.uuid = $${idx}`);
       orgParams.push(organizationId);
+      idx++;
     }
     if (organizationName) {
-      orgConditions.push(`lower(o.organization_name) = lower($${idx++})`);
+      orgConditions.push(`lower(o.organization_name) = lower($${idx})`);
+      d1OrgConditions.push(`o.organization_name = $${idx} COLLATE NOCASE`);
       orgParams.push(organizationName.trim());
       idx++;
     }
+    if (email && !organizationId && !organizationName) {
+      orgConditions.push(`lower(o.email) = lower($${idx})`);
+      d1OrgConditions.push(`o.email = $${idx} COLLATE NOCASE`);
+      orgParams.push(email.trim());
+      idx++;
+    }
     const query = `${PROFILE_SELECT} where ${orgConditions.join(' or ')} limit 1`;
+    const d1Text = `${PROFILE_SELECT} where ${d1OrgConditions.join(' or ')} limit 1`;
     try {
       const rows = await pool.rows(query, orgParams, {
         d1: true,
+        d1Text,
         useCache: true,
         tag: 'buyer_accounts',
         ttlMs: 60000,

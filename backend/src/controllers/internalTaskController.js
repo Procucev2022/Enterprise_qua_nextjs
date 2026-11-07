@@ -645,6 +645,29 @@ async function handleRegistrationAction(req, res) {
       return res.status(404).json({ success: false, error: REGISTRATION_MESSAGES.NOT_FOUND });
     }
 
+    const actionText = action === 'accept' ? 'ACCEPTED' : 'REJECTED';
+    storeService.addAuditLog(
+      `Registration ID ${id} was ${actionText} by internal task management.`
+    );
+
+    // If buyer registration is accepted, send credentials email
+    const isBuyer = (client.clientType || 'Buyer').toLowerCase() === 'buyer';
+    if (action === 'accept' && isBuyer && client.userEmail) {
+      try {
+        const mailerService = require('../services/mailerService');
+        await mailerService.sendBuyerCredentialsEmail({
+          to: client.userEmail,
+          recipientName: client.userName,
+          contactPhone: client.phoneNumber,
+          mobileNumber: client.phoneNumber,
+          ...(client.tempPassword ? { tempPassword: client.tempPassword } : {}),
+        });
+        logger.info('Buyer credentials email dispatched successfully upon registration approval', { id, email: client.userEmail }, 'INTERNAL_TASK_CONTROLLER');
+      } catch (mailErr) {
+        logger.warn('Failed to send buyer credentials email upon approval', { id, email: client.userEmail, error: mailErr.message }, 'INTERNAL_TASK_CONTROLLER');
+      }
+    }
+
     const message = action === 'accept'
       ? 'Client registration accepted successfully.'
       : 'Client registration rejected successfully.';

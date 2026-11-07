@@ -2,7 +2,12 @@ const fs = require('fs');
 const path = require('path');
 let stripTypeScriptTypes;
 try {
-  const ts = require(path.join(__dirname, '../frontend/node_modules/typescript'));
+  let ts;
+  try {
+    ts = require(path.join(__dirname, '../backend/node_modules/typescript'));
+  } catch {
+    ts = require(path.join(__dirname, '../frontend/node_modules/typescript'));
+  }
   stripTypeScriptTypes = (source) => {
     const result = ts.transpileModule(source, {
       compilerOptions: {

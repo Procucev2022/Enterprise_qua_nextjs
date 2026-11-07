@@ -59,6 +59,31 @@ const mockClients = [
     status: 'Rejected',
     sourceType: 'Other',
     isApproved: false,
+    clientType: 'Buyer',
+  },
+  {
+    id: 'reg-client-seller-1',
+    userName: 'Kishore Metals',
+    companyName: 'Kishore Metals Ltd',
+    phoneNumber: '+919988776655',
+    userEmail: 'kishore@metals.com',
+    regDate: '2026-06-30T10:30:00.000Z',
+    status: 'Accepted',
+    sourceType: 'Web App',
+    isApproved: true,
+    clientType: 'Seller',
+  },
+  {
+    id: 'reg-client-seller-2',
+    userName: 'Suspended Seller',
+    companyName: 'Suspended Metals',
+    phoneNumber: '+919988776654',
+    userEmail: 'suspended@seller.com',
+    regDate: '2026-06-30T10:30:00.000Z',
+    status: 'Rejected',
+    sourceType: 'Web App',
+    isApproved: false,
+    clientType: 'Seller',
   },
 ];
 
@@ -100,8 +125,8 @@ describe('RegistrationsDashboard', () => {
 
     expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.title)).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText('5 Total')).toBeInTheDocument();
-      expect(onCountChange).toHaveBeenCalledWith(5);
+      expect(screen.getByText(`${mockClients.length} Total`)).toBeInTheDocument();
+      expect(onCountChange).toHaveBeenCalledWith(mockClients.length);
     });
   });
 
@@ -750,5 +775,28 @@ describe('RegistrationsDashboard', () => {
     const sortDateBtn = screen.getByTestId('sort-col-regDate');
     fireEvent.click(sortDateBtn);
     fireEvent.click(sortDateBtn);
+  });
+
+  test('filters registrations by status dropdown and renders auto-approved sellers without action buttons', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Kishore Metals')).toBeInTheDocument();
+    });
+
+    // Auto-approved seller displays auto-approved badge
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.statusAutoApproved).length).toBeGreaterThan(0);
+
+    // Status filter selection
+    const statusSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.colStatus);
+    fireEvent.change(statusSelect, { target: { value: 'New' } });
+    fireEvent.change(statusSelect, { target: { value: 'Accepted' } });
+    fireEvent.change(statusSelect, { target: { value: 'all' } });
+
+    // Client view filter selection
+    const clientSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.clientTypeLabel);
+    fireEvent.change(clientSelect, { target: { value: 'seller' } });
+    fireEvent.change(clientSelect, { target: { value: 'buyer' } });
+    fireEvent.change(clientSelect, { target: { value: 'all' } });
   });
 });

@@ -283,6 +283,32 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
         code: 'PERSISTENCE_UNAVAILABLE',
       });
     });
+
+    test('fails closed when the database is overloaded and no positive memory revocation exists', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      const spy = jest.spyOn(d1Bridge, 'isD1Overloaded').mockReturnValue(true);
+      await expect(real.isTokenRevoked('sig-overload-test')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
+      spy.mockRestore();
+    });
+
+    test('fails closed when pool.rows throws a D1 overload error', async () => {
+      rowsSpy.mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
+      await expect(real.isTokenRevoked('sig-retryable-test')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
+    });
+
+    test('uses a known positive memory revocation during a database overload', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      await real.revokeToken('sig-known-revoked', Date.now() + 60_000);
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'isD1Overloaded').mockReturnValue(true);
+
+      await expect(real.isTokenRevoked('sig-known-revoked')).resolves.toBe(true);
+    });
   });
 
   // ── Sweep ─────────────────────────────────────────────────────────────────

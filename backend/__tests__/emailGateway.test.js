@@ -1112,6 +1112,10 @@ describe('emailGatewayService interval callback', () => {
 describe('emailGatewayService configuration helpers', () => {
   afterEach(() => jest.restoreAllMocks());
 
+  test('normalizes an undefined recipient list to an empty list', () => {
+    expect(emailGatewayService.normalizeRecipientList(undefined)).toEqual([]);
+  });
+
   test('describeConfigurationFault has nothing to report — isConfigured() already covers missing Gmail credentials', () => {
     expect(emailGatewayService.describeConfigurationFault()).toBeNull();
     expect(emailGatewayService.describeConfigurationFault(emailGatewayService.resolveConfig(FULL_ENV))).toBeNull();

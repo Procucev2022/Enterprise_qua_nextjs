@@ -19,7 +19,7 @@ import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInq
 import { getVendorPresence } from '@/lib/vendorPresenceClient';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
 import InviteVendorsModal from '@/app/category-manager/InviteVendorsModal';
-import { getMinorCategories } from '@/lib/categoryTaxonomy';
+import { getMinorCategories, hasMajorCategory } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { downloadBidComparisonExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
 import type {
@@ -96,6 +96,81 @@ const SOURCE_LABELS: Record<RFQSource, string> = {
 /** Line-item columns the buyer can order the table by. */
 type SortKey = 'item' | 'category' | 'quantity' | 'targetDate';
 type SortDirection = 'asc' | 'desc';
+
+/**
+ * Resolves major and minor category for a vendor, ensuring inverted taxonomy
+ * in imported records (e.g. majorCategory="clamps", minorCategories=["Raw Material", "Steels"])
+ * is realigned with standard taxonomy, and matching against RFQ line items.
+ */
+export function resolveVendorCategories(
+  v: any,
+  found: any,
+  isProc: boolean,
+  activeRfq: RFQItem | null | undefined,
+  idx: number,
+  rfqEntities: ExtractedEntity[]
+): { majorCategory: string; minorCategory: string } {
+  let major =
+    (typeof v === 'object' && v?.majorCategory) ||
+    found?.majorCategory ||
+    (typeof v === 'object' && v?.category) ||
+    (found as any)?.category ||
+    (isProc ? activeRfq?.category || null : null) ||
+    'General';
+
+  const ownMinors: string[] = [];
+  if (typeof v === 'object' && typeof v?.minorCategory === 'string' && v.minorCategory.trim()) {
+    ownMinors.push(v.minorCategory.trim());
+  }
+  if (typeof v === 'object' && Array.isArray(v?.minorCategories)) {
+    v.minorCategories.forEach((m: any) => { if (typeof m === 'string' && m.trim()) ownMinors.push(m.trim()); });
+  }
+  if (typeof (found as any)?.minorCategory === 'string' && (found as any).minorCategory.trim()) {
+    ownMinors.push((found as any).minorCategory.trim());
+  }
+  if (Array.isArray(found?.minorCategories)) {
+    found.minorCategories.forEach((m: any) => { if (typeof m === 'string' && m.trim()) ownMinors.push(m.trim()); });
+  }
+
+  // Realignment: if major is not recognized in standard taxonomy, but one of ownMinors IS a recognized major category
+  if (!hasMajorCategory(major)) {
+    const recognizedMajor = ownMinors.find((m) => hasMajorCategory(m));
+    if (recognizedMajor) major = recognizedMajor;
+  }
+
+  const vMajorClean = major.trim().toLowerCase();
+  const matchingLineItems = rfqEntities.filter((e) => {
+    const itemMajor = (e.majorCategory || (e as any).major || '').trim().toLowerCase();
+    return itemMajor && (itemMajor === vMajorClean || vMajorClean.includes(itemMajor) || itemMajor.includes(vMajorClean));
+  });
+
+  const lineItemMinors: string[] = [];
+  matchingLineItems.forEach((e) => {
+    const m = (e.minorCategory || e.category || '').trim();
+    if (m && !lineItemMinors.some((x) => x.toLowerCase() === m.toLowerCase())) {
+      lineItemMinors.push(m);
+    }
+  });
+
+  const trueOwnMinors = ownMinors.filter((m) => m.toLowerCase() !== major.toLowerCase());
+  const taxonomyMinors = major ? getMinorCategories(major) : [];
+
+  let minor = '';
+  if (trueOwnMinors.length > 0) {
+    const matched = trueOwnMinors.find((om) =>
+      rfqEntities.some((e) => (e.minorCategory || e.category || '').trim().toLowerCase() === om.toLowerCase())
+    );
+    minor = matched || trueOwnMinors[0];
+  } else if (lineItemMinors.length > 0) {
+    minor = lineItemMinors[idx % lineItemMinors.length];
+  } else if (taxonomyMinors.length > 0) {
+    minor = taxonomyMinors[idx % taxonomyMinors.length];
+  } else {
+    minor = 'General';
+  }
+
+  return { majorCategory: major, minorCategory: minor };
+}
 
 export interface RFQDetailsProps {
   /** The RFQ to render, or null when the number in the URL matches nothing. */
@@ -1796,16 +1871,25 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           }
         }
 
+        // Collect all RFQ line items and their categories
+        const rfqEntities = [
+          ...((activeRfq?.extractedEntities as ExtractedEntity[]) || []),
+          ...(((activeRfq as any)?.lineItems as ExtractedEntity[]) || []),
+        ];
+
+        const allRfqMinors: string[] = [];
+        rfqEntities.forEach((e) => {
+          const m = (e.minorCategory || e.category || '').trim();
+          if (m && !allRfqMinors.some((x) => x.toLowerCase() === m.toLowerCase())) {
+            allRfqMinors.push(m);
+          }
+        });
+
         const normalizedAssigned = rawAssigned.map((v: any, idx: number) => {
           if (typeof v === 'string') {
             const found = (buyerVendors || []).find((bv) => bv.id === v || bv.name === v || bv.email === v);
             const isProc = checkIsProcucevVendor(v, found?.name || v, found?.email || null, found);
-            const foundMajor = found?.majorCategory || (isProc ? activeRfq?.category || null : null) || 'General';
-            const rawFoundMinor =
-              (found as any)?.minorCategory ||
-              (Array.isArray(found?.minorCategories) && found.minorCategories.length > 0 ? found.minorCategories[0] : null);
-            const taxonomyMinors = foundMajor ? getMinorCategories(foundMajor) : [];
-            const resolvedMinor = rawFoundMinor || (taxonomyMinors.length > 0 ? taxonomyMinors[idx % taxonomyMinors.length] : 'General');
+            const { majorCategory, minorCategory } = resolveVendorCategories(v, found, isProc, activeRfq, idx, rfqEntities);
             return {
               id: v || `vendor-${idx}`,
               name: found?.name || v,
@@ -1813,8 +1897,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               email: found?.email || null,
               phone: found?.phone || null,
               isProcucev: isProc,
-              majorCategory: foundMajor,
-              minorCategory: resolvedMinor,
+              majorCategory,
+              minorCategory,
               location: found?.location || null,
               matchScore: null,
             };
@@ -1832,8 +1916,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               (v.id && q.vendorId && String(q.vendorId) === String(v.id)) ||
               (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
           );
-          const resolvedCategory =
-            v.majorCategory || found?.majorCategory || (v as any).category || (found as any)?.category || (isProc ? activeRfq?.category || null : null) || 'General';
+          const { majorCategory, minorCategory } = resolveVendorCategories(v, found, isProc, activeRfq, idx, rfqEntities);
           const resolvedLocation =
             v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null) || found?.location || found?.city || found?.state || null;
           let resolvedScore: number | null =
@@ -1846,18 +1929,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             resolvedScore = Math.round(Math.min(5, found.rating) * 20);
           }
 
-          const rawMinor =
-            v.minorCategory ||
-            (Array.isArray(v.minorCategories) && v.minorCategories.length > 0 ? v.minorCategories[0] : (typeof v.minorCategories === 'string' ? v.minorCategories : null)) ||
-            (found as any)?.minorCategory ||
-            (Array.isArray(found?.minorCategories) && found.minorCategories.length > 0 ? found.minorCategories[0] : (typeof (found as any)?.minorCategories === 'string' ? (found as any).minorCategories : null)) ||
-            (activeRfq as any)?.minorCategory ||
-            activeRfq?.extractedEntities?.[0]?.minorCategory ||
-            null;
-
-          const taxonomyMinors = resolvedCategory ? getMinorCategories(resolvedCategory) : [];
-          const resolvedMinor = rawMinor || (taxonomyMinors.length > 0 ? taxonomyMinors[idx % taxonomyMinors.length] : 'General');
-
           return {
             id: v.id || `vendor-${idx}`,
             name: v.name || found?.name || v.contactPerson || v.email || 'Enterprise Supplier',
@@ -1865,8 +1936,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             email: v.email || found?.email || null,
             phone: v.phone || found?.phone || null,
             isProcucev: isProc,
-            majorCategory: resolvedCategory,
-            minorCategory: resolvedMinor,
+            majorCategory,
+            minorCategory,
             location: resolvedLocation,
             matchScore: resolvedScore,
           };
@@ -1957,27 +2028,53 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
         // Confidential double-blind card (name + category + location + score, no
         // contact). Used for Procucev vendors in the BUYER view only.
-        const renderConfidentialCard = (v: any) => (
-          <div
-            key={v.id}
-            data-testid="assigned-supplier-card"
-            className="p-3 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/40 space-y-1"
-          >
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
-              <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                🔒 Double-Blind
-              </span>
+        const renderConfidentialCard = (v: any) => {
+          const cleanName = v.name ? v.name.replace(/\s*\([^)]*\)$/, '').trim() : 'Enterprise Supplier';
+          return (
+            <div
+              key={v.id}
+              data-testid="assigned-supplier-card"
+              className="p-3.5 rounded-2xl border border-slate-200/90 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-xs space-y-2.5"
+            >
+              <div className="flex items-center justify-between gap-1.5">
+                <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={v.name}>
+                  {cleanName}
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                  🔒 Double-Blind
+                </span>
+              </div>
+
+              {/* Major & Minor Category Badges */}
+              <div className="p-2.5 rounded-xl bg-slate-50/80 dark:bg-gray-950/50 border border-slate-100 dark:border-gray-800/80 flex items-center justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
+                    MAJOR CATEGORY
+                  </div>
+                  <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 truncate max-w-full">
+                    {v.majorCategory || 'General Industrial'}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 mb-1">
+                    MINOR CATEGORY
+                  </div>
+                  <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60 truncate max-w-full">
+                    {v.minorCategory || 'General'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
+                <span className="sr-only">Category:</span>
+                <p className="truncate">Location: {v.location || 'Procucev Network'}</p>
+                <p className="font-semibold text-emerald-600 dark:text-emerald-400">
+                  {typeof v.matchScore === 'number' ? `${v.matchScore}% match` : 'Match: Verified'}
+                </p>
+              </div>
             </div>
-            <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5">
-              <p className="truncate">Category: {v.majorCategory || 'General Industrial'}</p>
-              <p className="truncate">Location: {v.location || 'Procucev Network'}</p>
-              <p className="font-semibold text-emerald-600 dark:text-emerald-400">
-                {typeof v.matchScore === 'number' ? `${v.matchScore}% match` : 'Match: Verified'}
-              </p>
-            </div>
-          </div>
-        );
+          );
+        };
 
         const emptyState = (
           <div className="p-4 text-center rounded-xl bg-slate-50 dark:bg-gray-950/40 border border-slate-200 dark:border-gray-800 space-y-1">
@@ -2440,10 +2537,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                     </span>
                   </div>
                   <div className="text-[10px] text-slate-400 flex items-center gap-2 truncate">
-                    {(activeRfq.raisedByEmail || activeRfq.sourceEmail) && (
-                      <span className="mono truncate">{activeRfq.raisedByEmail || activeRfq.sourceEmail}</span>
-                    )}
-                    <span>•</span>
                     <span className="mono font-semibold text-slate-500 dark:text-gray-400">RFQ #{activeRfq.rfqNumber}</span>
                   </div>
                 </div>

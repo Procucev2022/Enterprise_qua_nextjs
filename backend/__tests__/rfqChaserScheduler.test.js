@@ -1102,6 +1102,54 @@ describe('recoverChasersOnBoot and dispatch error handling', () => {
     expect(res.skipped).toBe(1); // call skipped in production
   });
 
+  test('dispatchDueChaserJobs persists follow-up updates once per RFQ after a channel batch', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const rfq = {
+        rfqNumber: 'RFQ-BATCH-1',
+        title: 'Batch RFQ',
+        followUpData: {
+          emailStats: { total: 2, delivered: 0, sent24h: 0, opened: 0 },
+          smsStats: { total: 2, delivered: 0, clicked: 0 },
+          vendors: [
+            { vendorId: 'vendor-email', vendorName: 'Email Vendor' },
+            { vendorId: 'vendor-sms', vendorName: 'SMS Vendor' },
+          ],
+        },
+      };
+      const jobs = [
+        {
+          id: 'job-email', rfq_number: rfq.rfqNumber, channel: 'email', attempts: 1,
+          vendor_id: 'vendor-email', vendor_name: 'Email Vendor', vendor_email: 'email@example.com',
+        },
+        {
+          id: 'job-sms', rfq_number: rfq.rfqNumber, channel: 'sms', attempts: 1,
+          vendor_id: 'vendor-sms', vendor_name: 'SMS Vendor', vendor_phone: '9876543210',
+        },
+      ];
+      jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockResolvedValue(jobs);
+      jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue(rfq);
+      jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue(true);
+      const upsertSpy = jest.spyOn(domainQueries, 'upsertRFQInDB').mockResolvedValue(rfq);
+      jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+      jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-batch' });
+
+      const result = await scheduler.dispatchDueChaserJobs(10);
+
+      expect(result).toEqual({ claimed: 2, sent: 2, failed: 0, skipped: 0 });
+      expect(domainQueries.getRFQByNumberFromDB).toHaveBeenCalledTimes(1);
+      expect(upsertSpy).toHaveBeenCalledTimes(1);
+      expect(upsertSpy).toHaveBeenCalledWith(rfq);
+      expect(rfq.followUpData.emailStats.delivered).toBe(1);
+      expect(rfq.followUpData.smsStats.delivered).toBe(1);
+      expect(rfq.followUpData.vendors[0].emailSent).toBe(true);
+      expect(rfq.followUpData.vendors[1].sms.status).toBe('delivered');
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
   test('scheduleVendorChaser handles _persistChaserJob failure gracefully', async () => {
     jest.spyOn(domainQueries, 'insertChaserJobInDB').mockRejectedValue(new Error('insert failed'));
     scheduler.scheduleVendorChaser({ rfqNumber: 'RFQ-ERR', title: 'Test' }, { id: 'v-1', name: 'Vendor 1' });

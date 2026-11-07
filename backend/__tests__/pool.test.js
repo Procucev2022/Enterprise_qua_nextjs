@@ -465,6 +465,70 @@ describe('Database pool (Neon PostgreSQL)', () => {
       });
       expect(dbPool.pool.query).toHaveBeenCalledTimes(3);
     });
+
+    test('serves stale cache when D1 is overloaded or throws retryable overload error on cacheable read', async () => {
+      jest.resetModules();
+      const mockD1 = {
+        id: 'd1-overloaded',
+        prepare: jest.fn().mockReturnValue({
+          bind: jest.fn().mockReturnValue({ all: jest.fn().mockResolvedValue({ results: [] }) }),
+          all: jest.fn().mockResolvedValue({ results: [] }),
+        }),
+      };
+      const d1Bridge = require('../src/db/d1Bridge');
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(mockD1);
+      const queryD1Spy = jest.spyOn(d1Bridge, 'queryD1');
+      const freshPool = require('../src/db/pool');
+      freshPool.queryCache.clear();
+
+      // Seed stale cache
+      freshPool.queryCache.set('SELECT raw FROM vendors WHERE id = $1', ['v1'], [{ id: 'v1', name: 'Cached' }], { ttlMs: 1 });
+      await new Promise((r) => setTimeout(r, 5));
+
+      // Case 1: D1 is currently marked overloaded -> serves stale cache without calling queryD1
+      d1Bridge.markD1Overloaded();
+      const res1 = await freshPool.query('SELECT raw FROM vendors WHERE id = $1', ['v1'], {
+        useCache: true,
+        d1: true,
+      });
+      expect(res1.isStaleFallback).toBe(true);
+      expect(res1.rows).toEqual([{ id: 'v1', name: 'Cached' }]);
+      expect(queryD1Spy).not.toHaveBeenCalled();
+
+      // Case 2: D1 is not initially marked overloaded, but queryD1 throws retryable overload error -> falls back to stale cache
+      d1Bridge.resetD1OverloadState();
+      queryD1Spy.mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      const res2 = await freshPool.query('SELECT raw FROM vendors WHERE id = $1', ['v1'], {
+        useCache: true,
+        d1: true,
+      });
+      expect(res2.isStaleFallback).toBe(true);
+      expect(res2.rows).toEqual([{ id: 'v1', name: 'Cached' }]);
+
+      d1Bridge.getD1Binding.mockRestore();
+      d1Bridge.queryD1.mockRestore();
+      d1Bridge.resetD1OverloadState();
+      freshPool.queryCache.clear();
+      jest.resetModules();
+    });
+
+    test('rethrows overload error when stale data is absent or query is uncached', async () => {
+      jest.resetModules();
+      const mockD1 = { id: 'd1-rethrow' };
+      const d1Bridge = require('../src/db/d1Bridge');
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(mockD1);
+      jest.spyOn(d1Bridge, 'queryD1').mockRejectedValue(new Error('D1 DB is overloaded'));
+      const freshPool = require('../src/db/pool');
+      freshPool.queryCache.clear();
+
+      await expect(
+        freshPool.query('SELECT 1 FROM t', [], { d1: true, useCache: true })
+      ).rejects.toThrow('overloaded');
+
+      d1Bridge.getD1Binding.mockRestore();
+      d1Bridge.queryD1.mockRestore();
+      jest.resetModules();
+    });
   });
 
   describe('rows', () => {
@@ -826,6 +890,31 @@ describe('Database pool (Neon PostgreSQL)', () => {
           errorMessage: 'Database health check timed out after 8000ms',
         });
         jest.useRealTimers();
+      });
+
+      test('returns cached D1 health when within TTL and non-test env', async () => {
+        const prevEnv = process.env.NODE_ENV;
+        process.env.NODE_ENV = 'production';
+        try {
+          jest.resetModules();
+          const queryD1 = jest.fn().mockResolvedValue({ rows: [{ user_count: '11', vendor_count: '84', rfq_count: '28' }] });
+          jest.doMock('../src/db/d1Bridge', () => ({
+            getD1Binding: jest.fn().mockReturnValue({ id: 'fake-d1' }),
+            queryD1,
+          }));
+          const freshPool = require('../src/db/pool');
+
+          const h1 = await freshPool.checkDatabaseHealth();
+          expect(h1.isConnected).toBe(true);
+
+          const h2 = await freshPool.checkDatabaseHealth();
+          expect(h2.isConnected).toBe(true);
+          expect(queryD1).toHaveBeenCalledTimes(1);
+        } finally {
+          process.env.NODE_ENV = prevEnv;
+          jest.dontMock('../src/db/d1Bridge');
+          jest.resetModules();
+        }
       });
     });
   });

@@ -425,16 +425,16 @@ export default function TicketsDashboard() {
       )}
 
       {/* Control Bar: Filters, Search, Export, Create */}
-      <div className="flex flex-nowrap items-center justify-between gap-2.5 p-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs">
-        <div className="flex items-center gap-2 flex-1 min-w-[260px] max-w-xl">
+      <div className="flex flex-nowrap items-center justify-between gap-2.5 p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs w-full min-w-0 max-w-full box-border">
+        <div className="flex items-center gap-2 flex-1 min-w-[200px] max-w-xl">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={15} />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={strings.searchPlaceholder}
-              className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+              className="w-full has-leading-icon has-trailing-icon pr-3 py-1.5 h-8 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
             />
           </div>
 

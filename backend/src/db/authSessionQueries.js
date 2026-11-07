@@ -7,6 +7,7 @@
 const pool = require('./pool');
 const { queryCache } = require('./queryCache');
 const { logger } = require('../services/loggerService');
+const d1Bridge = require('./d1Bridge');
 
 const memoryOtpStore = new Map();
 const memoryRevokedTokens = new Map();
@@ -235,7 +236,14 @@ async function isTokenRevoked(signature) {
     }
     return true;
   }
-
+  const expiry = memoryRevokedTokens.get(signature);
+  if (expiry && expiry > Date.now()) return true;
+  if (expiry) memoryRevokedTokens.delete(signature);
+  if (d1Bridge.isD1Overloaded()) {
+    const error = new Error('Session revocation storage is temporarily unavailable.');
+    error.code = 'PERSISTENCE_UNAVAILABLE';
+    throwPersistenceUnavailable('token revocation lookup', error);
+  }
   try {
     const rows = await pool.rows(
       'select 1 from auth_revoked_tokens where signature = $1 limit 1',
@@ -244,6 +252,12 @@ async function isTokenRevoked(signature) {
     );
     return rows.length > 0;
   } catch (err) {
+    if (d1Bridge.isRetryableD1Error(err) || d1Bridge.isD1Overloaded()) {
+      logger.warn('D1 unavailable during token revocation lookup; failing closed', {
+        error: err,
+        operation: 'token-revocation-lookup',
+      }, 'AUTH_SESSION');
+    }
     throwPersistenceUnavailable('token revocation lookup', err);
   }
 }

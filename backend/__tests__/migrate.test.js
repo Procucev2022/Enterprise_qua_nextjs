@@ -202,11 +202,11 @@ describe('PostgreSQL migration runner', () => {
     const postgresSql = fs.readFileSync(
       path.join(migrationsDir, '0001_active_org_category_uniqueness.pg.sql'),
       'utf8'
-    );
+    ).replace(/\r\n?/g, '\n');
     const d1Sql = fs.readFileSync(
       path.join(migrationsDir, '0003_active_org_category_uniqueness.d1.sql'),
       'utf8'
-    );
+    ).replace(/\r\n?/g, '\n');
 
     [postgresSql, d1Sql].forEach((sql) => {
       expect(sql).toContain('PARTITION BY organization_id, lower(trim(division)), lower(trim(category))');

@@ -15,16 +15,11 @@ import {
   ArrowLeft,
   Mail,
   Building,
-  Building2,
   FileText,
   Info,
-  Phone,
-  User,
   ShieldCheck,
-  CheckCircle2,
   Lock,
   X,
-  Copy,
   IndianRupee,
   Send,
   Download,
@@ -41,41 +36,6 @@ interface QuotationFormProps {
   onBack: () => void;
   onSubmitSuccess?: () => void;
 }
-
-interface BuyerContactInfo {
-  companyName: string;
-  contactPerson: string;
-  email: string;
-  phone: string;
-  source: 'buyer_uploaded' | 'quote_submitted';
-}
-
-const BUYER_CONTACTS_MAP: Record<string, Omit<BuyerContactInfo, 'source'>> = {
-  'RFQ-2026-00421': {
-    companyName: 'Larsen & Toubro Ltd. (L&T)',
-    contactPerson: 'Rajesh Sharma (Lead Procurement)',
-    email: 'client@procucev.com',
-    phone: '+91 98201 44520',
-  },
-  'RFQ-2026-00420': {
-    companyName: 'Reliance Industries Ltd. (RIL)',
-    contactPerson: 'Sunil Mehta (Senior Sourcing Manager)',
-    email: 's.mehta@ril.com',
-    phone: '+91 98112 33490',
-  },
-  'RFQ-2026-00415': {
-    companyName: 'Tata Steel Procurement',
-    contactPerson: 'Anand Verma (Procurement Lead)',
-    email: 'a.verma@tatasteel.com',
-    phone: '+91 98450 11200',
-  },
-  'RFQ-2026-00418': {
-    companyName: 'Larsen & Toubro Ltd. (L&T)',
-    contactPerson: 'Rajesh Sharma (Lead Procurement)',
-    email: 'client@procucev.com',
-    phone: '+91 98201 44520',
-  },
-};
 
 export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: QuotationFormProps) {
   const router = useRouter();
@@ -96,8 +56,6 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     createVendorPaymentLink,
     updateVendorSubscription,
   } = useApp();
-  const [selectedBuyerModal, setSelectedBuyerModal] = useState<(BuyerContactInfo & { rfqNumber: string }) | null>(null);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
   const [opportunitySearch, setOpportunitySearch] = useState('');
   const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | 'open' | 'submitted' | 'closed'>('all');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
@@ -303,13 +261,6 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     });
   }, [vendorOpportunities, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories]);
 
-  const handleCopyText = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(label);
-    showToast('Copied to Clipboard', `${label} copied: ${text}`, 'info');
-    setTimeout(() => setCopiedField(null), 2000);
-  };
-
   // ─── Real quote/bid submission ─────────────────────────────────────────
   const [biddingOn, setBiddingOn] = useState<VendorOpportunity | null>(null);
   const [bidUnitPrice, setBidUnitPrice] = useState('');
@@ -331,7 +282,6 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     totalPrice: number;
     unitPrice: number;
     leadTimeDays: number;
-    buyerRevealed?: BuyerContactInfo | null;
   } | null>(null);
 
   // ─── Inquiry / Clarification modal ──────────────────────────────────────
@@ -943,17 +893,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 const isBuyerProtected48h = isWithin48h || Boolean((opp as any).buyerDetailsHidden) || Boolean((rfqRecord as any)?.buyerDetailsHidden);
                 const canViewBuyerDetails = !isBuyerProtected48h && (isUploadedByBuyer || (isQuoteSubmitted && !isWithin48h));
 
-                const baseBuyerData = {
-                  companyName: (rfqRecord as any)?.buyerCompany || (rfqRecord as any)?.buyerAccountName || opp.buyer || parentCompany,
-                  contactPerson: (rfqRecord as any)?.buyerContactPerson || (rfqRecord as any)?.buyerName || (isUploadedByBuyer ? 'Rajesh Sharma (Lead Procurement)' : 'Strategic Procurement Lead'),
-                  email: (rfqRecord as any)?.buyerEmail || (rfqRecord as any)?.sourceEmail || BUYER_CONTACTS_MAP[opp.rfqNumber]?.email || (isUploadedByBuyer ? 'client@procucev.com' : `procurement@${parentCompany.toLowerCase().replace(/[^a-z]/g, '')}.com`),
-                  phone: (rfqRecord as any)?.buyerContact || (rfqRecord as any)?.buyerPhone || BUYER_CONTACTS_MAP[opp.rfqNumber]?.phone || '+91 98201 44520',
-                };
-
-                const buyerInfo: BuyerContactInfo = {
-                  ...baseBuyerData,
-                  source: isUploadedByBuyer ? 'buyer_uploaded' : 'quote_submitted',
-                };
+                const buyerCompanyName = (rfqRecord as any)?.buyerCompany || (rfqRecord as any)?.buyerAccountName || opp.buyer || parentCompany;
 
                 const modeStr = String(opp.sourcingMode || (rfqRecord as any)?.sourcingMode || '').toLowerCase();
                 const versionBadge = (() => {
@@ -1012,24 +952,13 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       )}
                     </td>
                     
-                    {/* Buyer Company & Details Icon */}
+                    {/* Buyer Company */}
                     <td data-label="Buyer Company" className="py-3">
                       {canViewBuyerDetails ? (
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-semibold text-slate-800 dark:text-gray-200">
-                            {buyerInfo.companyName}
+                            {buyerCompanyName}
                           </span>
-                          <button
-                            onClick={() => setSelectedBuyerModal({ ...buyerInfo, rfqNumber: opp.rfqNumber })}
-                            className="p-1 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/80 transition-all border border-indigo-200/50 dark:border-indigo-800/50 inline-flex items-center gap-0.5"
-                            title={
-                              isUploadedByBuyer 
-                                ? 'Buyer Details (Client Uploaded Vendor)' 
-                                : 'Buyer Details Unlocked (Quote Submitted)'
-                            }
-                          >
-                            <Info size={12} className="text-indigo-600 dark:text-indigo-400" />
-                          </button>
                         </div>
                       ) : isBuyerProtected48h ? (
                         <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
@@ -1328,116 +1257,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         </div>
       )}
 
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* BUYER CONTACT DETAILS MODAL (POPUP) */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {selectedBuyerModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up">
-            <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400">
-                  <Building2 size={20} />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">
-                    Buyer Contact Details
-                  </h3>
-                  <span className="text-[10px] text-slate-400 mono">{selectedBuyerModal.rfqNumber}</span>
-                </div>
-              </div>
-              <button
-                onClick={() => setSelectedBuyerModal(null)}
-                title="Close Buyer Details Modal"
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800"
-              >
-                <X size={16} />
-              </button>
-            </div>
 
-            {/* Access Badge */}
-            <div>
-              {selectedBuyerModal.source === 'buyer_uploaded' ? (
-                <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
-                  <CheckCircle2 size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
-                  <span className="text-[11px] font-semibold">
-                    Direct Client Roster: This buyer explicitly invited and uploaded your vendor profile.
-                  </span>
-                </div>
-              ) : (
-                <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/40 text-indigo-800 dark:text-indigo-300 flex items-center gap-2">
-                  <ShieldCheck size={14} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
-                  <span className="text-[11px] font-semibold">
-                    Verified Reveal: Unlocked following official quotation submission and system ingestion.
-                  </span>
-                </div>
-              )}
-            </div>
-
-            {/* Contact Details Card */}
-            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-850/60 border border-slate-200 dark:border-gray-800 space-y-3">
-              <div>
-                <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Buyer Enterprise</span>
-                <div className="font-extrabold text-slate-900 dark:text-white text-xs mt-0.5 flex items-center justify-between">
-                  <span>{selectedBuyerModal.companyName}</span>
-                  <button
-                    onClick={() => handleCopyText(selectedBuyerModal.companyName, 'Company Name')}
-                    className="text-slate-400 hover:text-indigo-600 text-[10px] flex items-center gap-1 font-normal"
-                    title="Copy Company Name"
-                  >
-                    <Copy size={11} /> {copiedField === 'Company Name' ? 'Copied!' : 'Copy'}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Contact Person</span>
-                <div className="font-bold text-slate-800 dark:text-gray-200 text-xs mt-0.5 flex items-center gap-1.5">
-                  <User size={12} className="text-slate-400" />
-                  <span>{selectedBuyerModal.contactPerson}</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-slate-200/60 dark:border-gray-800">
-                <div>
-                  <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Official Email</span>
-                  <a
-                    href={`mailto:${selectedBuyerModal.email}`}
-                    className="font-mono text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 text-[11px] mt-0.5 truncate"
-                  >
-                    <Mail size={11} className="shrink-0" />
-                    <span>{selectedBuyerModal.email}</span>
-                  </a>
-                </div>
-
-                <div>
-                  <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Direct Mobile / Phone</span>
-                  <a
-                    href={`tel:${selectedBuyerModal.phone}`}
-                    className="font-mono text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 text-[11px] mt-0.5"
-                  >
-                    <Phone size={11} className="shrink-0" />
-                    <span>{selectedBuyerModal.phone}</span>
-                  </a>
-                </div>
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div className="pt-2 flex justify-end">
-              <button
-                onClick={() => {
-                  setSelectedBuyerModal(null);
-                  if (onSubmitSuccess) onSubmitSuccess();
-                }}
-                className="btn btn-primary btn-sm px-4 text-xs font-bold"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* BID / QUOTE SUBMISSION MODAL */}

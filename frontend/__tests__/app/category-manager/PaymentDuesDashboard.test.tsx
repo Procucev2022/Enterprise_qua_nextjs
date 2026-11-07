@@ -781,35 +781,43 @@ describe('PaymentDuesDashboard', () => {
 
     // Email error
     fireEvent.click(screen.getAllByTitle('Send Email')[0]);
+    await waitFor(() => expect(screen.getByText('Send Low-Credit Email Notification')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Send Email'));
     await waitFor(() => {
       expect(screen.getByText('SMTP Timeout')).toBeInTheDocument();
     });
-
-    // Dismiss toast
-    const toastClose = screen.getByText('SMTP Timeout').closest('div')?.querySelector('button');
-    if (toastClose) fireEvent.click(toastClose);
+    fireEvent.click(document.querySelector('button[aria-label="Close"]') as HTMLButtonElement);
+    await waitFor(() => expect(screen.queryByText('Send Low-Credit Email Notification')).not.toBeInTheDocument());
 
     // Message error
     fireEvent.click(screen.getAllByTitle('Send Message')[0]);
+    await waitFor(() => expect(screen.getByText('Send In-App Notification')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Send Notification'));
     await waitFor(() => {
       expect(screen.getByText('Queue Full')).toBeInTheDocument();
     });
+    fireEvent.click(document.querySelector('button[aria-label="Close"]') as HTMLButtonElement);
+    await waitFor(() => expect(screen.queryByText('Send In-App Notification')).not.toBeInTheDocument());
 
     // WhatsApp error
     fireEvent.click(screen.getAllByTitle('WhatsApp Notification')[0]);
+    await waitFor(() => expect(screen.getByText('Send WhatsApp Notification')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Send via WhatsApp'));
     await waitFor(() => {
       expect(screen.getByText('WA Error')).toBeInTheDocument();
     });
+    fireEvent.click(document.querySelector('button[aria-label="Close"]') as HTMLButtonElement);
+    await waitFor(() => expect(screen.queryByText('Send WhatsApp Notification')).not.toBeInTheDocument());
 
     // Ack error
     fireEvent.click(screen.getAllByTitle('Update Acknowledgement')[0]);
+    await waitFor(() => expect(screen.getByText('Update Acknowledgement Status')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Save Status'));
     await waitFor(() => {
       expect(screen.getByText('DB Error')).toBeInTheDocument();
     });
+    fireEvent.click(document.querySelector('button[aria-label="Close"]') as HTMLButtonElement);
+    await waitFor(() => expect(screen.queryByText('Update Acknowledgement Status')).not.toBeInTheDocument());
   });
 
   it('renders empty history audit state when no records exist', async () => {

@@ -1074,7 +1074,27 @@ INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-ac
 INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-pending', 'Pending', 1);
 INSERT OR IGNORE INTO master_status (uuid, status, is_active) VALUES ('status-inactive', 'Inactive', 1);
 
+-- Access-path indexes added while merging the latest test-v3 database updates.
+CREATE INDEX IF NOT EXISTS idx_organization_name_nocase ON organization (organization_name COLLATE NOCASE);
 
+CREATE INDEX IF NOT EXISTS idx_organization_email_nocase ON organization (email COLLATE NOCASE);
 
+CREATE INDEX IF NOT EXISTS idx_user_username_nocase ON "user" (username COLLATE NOCASE);
 
+CREATE INDEX IF NOT EXISTS idx_user_email_nocase ON "user" (email COLLATE NOCASE);
 
+CREATE INDEX IF NOT EXISTS idx_vendors_corp_email_nocase ON vendors (json_extract(raw, '$.corporateEmail') COLLATE NOCASE);
+
+CREATE INDEX IF NOT EXISTS idx_vendors_name_nocase ON vendors (json_extract(raw, '$.name') COLLATE NOCASE);
+
+CREATE INDEX IF NOT EXISTS idx_vendors_buyer_id ON vendors (json_extract(raw, '$.buyerId'));
+
+CREATE INDEX IF NOT EXISTS idx_vendors_buyer_account_id ON vendors (json_extract(raw, '$.buyerAccountId'));
+
+CREATE INDEX IF NOT EXISTS idx_vendors_major_category_nocase ON vendors (major_category COLLATE NOCASE);
+
+CREATE INDEX IF NOT EXISTS idx_vendors_source_created ON vendors (source, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_rfqs_rfq_number ON rfqs (rfq_number);
+
+CREATE INDEX IF NOT EXISTS idx_email_ingestion_log_status_processed ON email_ingestion_log (status, processed_at ASC);
