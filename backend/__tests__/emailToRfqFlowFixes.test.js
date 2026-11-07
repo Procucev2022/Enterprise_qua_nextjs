@@ -738,6 +738,26 @@ describe('acknowledgements that could not be sent are retried later', () => {
       expect(outcome).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
     });
 
+    test('keeps a provider-declined acknowledgement pending and logs the delivery outcome', async () => {
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([row()]);
+      ack.mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(outcome).toEqual({ sent: 0, abandoned: 0, stillPending: 1 });
+      expect(emailGatewayQueries.recordProcessed).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        'Pending RFQ acknowledgement retry failed; event remains pending',
+        expect.objectContaining({
+          messageId: '<m@x>#rfq-0#ack',
+          rfqNumber: 'RFQ-1',
+          fromAddress: SENDER,
+          error: expect.objectContaining({ code: 'EMAIL_DELIVERY_NOT_ACCEPTED', providerReason: 'SMTP not configured' }),
+        }),
+        'EMAIL_GATEWAY'
+      );
+    });
+
     test('drops one older than 48 hours, or with no recipient or readable time', async () => {
       jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
         row({ processed_at: '2026-10-12 10:00:00' }),

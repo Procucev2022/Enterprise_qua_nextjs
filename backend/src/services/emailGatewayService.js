@@ -1452,12 +1452,24 @@ async function sendAutoReply(message, kind, send, { rfqNumber = null, config = {
     return false;
   }
   try {
-    await send();
+    ensureMailDeliveryAccepted(await send(), `${kind} auto-reply`);
     return true;
   } catch (mailErr) {
     logger.error(failureLog || `Failed to send ${kind} auto-reply`, mailErr, 'EMAIL_GATEWAY');
     return false;
   }
+}
+
+/** Some mailer routes report provider refusal as `{ sent: false }` instead of throwing. */
+function ensureMailDeliveryAccepted(delivery, description) {
+  if (delivery === false || (delivery && typeof delivery === 'object' && delivery.sent === false)) {
+    const providerReason = delivery && typeof delivery.reason === 'string' ? delivery.reason : null;
+    const error = new Error(`${description} was not accepted by a mail provider${providerReason ? `: ${providerReason}` : ''}`);
+    error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+    error.providerReason = providerReason;
+    throw error;
+  }
+  return delivery;
 }
 
 // A pending acknowledgement older than this is dropped: by then the buyer has
@@ -1613,7 +1625,7 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
 
     try {
       if (retryTempPassword) {
-        await mailerService.sendBuyerOnboardingWithRfqEmail({
+        ensureMailDeliveryAccepted(await mailerService.sendBuyerOnboardingWithRfqEmail({
           to: row.from_address,
           buyerName: saved.buyerName,
           tempPassword: retryTempPassword,
@@ -1627,9 +1639,9 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
           quoteDeadline: saved.quoteDeadline || saved.deadline,
           suppliersInvited: saved.suppliersInvited,
           items: saved.items,
-        });
+        }), 'Buyer onboarding acknowledgement retry');
       } else {
-        await mailerService.sendRfqAcknowledgementEmail({
+        ensureMailDeliveryAccepted(await mailerService.sendRfqAcknowledgementEmail({
           to: row.from_address,
           buyerName: saved.buyerName,
           rfqNumber: row.rfq_number,
@@ -1641,12 +1653,18 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
           quoteDeadline: saved.quoteDeadline || saved.deadline,
           suppliersInvited: saved.suppliersInvited,
           items: saved.items,
-        });
+        }), 'RFQ acknowledgement retry');
       }
       await record(INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry');
       outcome.sent += 1;
     } catch (err) {
       outcome.stillPending += 1;
+      logger.error('Pending RFQ acknowledgement retry failed; event remains pending', {
+        error: err,
+        messageId: row.message_id,
+        rfqNumber: row.rfq_number,
+        fromAddress: row.from_address,
+      }, 'EMAIL_GATEWAY');
       // Every provider is paused: nothing else in this batch can go out either.
       if (err && err.code === 'MAIL_PROVIDERS_COOLING_DOWN') break;
     }
@@ -2764,14 +2782,14 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
           if (isAutoRegisteredPrimary) {
             try {
-              await mailerService.sendBuyerOnboardingWithRfqEmail(ack);
+              ensureMailDeliveryAccepted(await mailerService.sendBuyerOnboardingWithRfqEmail(ack), 'Buyer onboarding acknowledgement');
             } catch (onboardErr) {
               logger.error('Failed to dispatch buyer onboarding credential email', onboardErr, 'EMAIL_GATEWAY');
               await emailGateway.queueAcknowledgement(ackDedupKey, ack);
             }
           } else {
             try {
-              await mailerService.sendRfqAcknowledgementEmail(ack);
+              ensureMailDeliveryAccepted(await mailerService.sendRfqAcknowledgementEmail(ack), 'RFQ acknowledgement');
             } catch (ackErr) {
               logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
               await emailGateway.queueAcknowledgement(ackDedupKey, ack);

@@ -167,6 +167,8 @@ describe('sendAutoReply', () => {
     expect(send).not.toHaveBeenCalled();
 
     emailGatewayService.shouldSendAutoReply.mockResolvedValue({ allowed: true });
+    send.mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
+    expect(await emailGatewayService.sendAutoReply(message(), AUTO_REPLY_KIND.UNAUTHORIZED_SENDER, send)).toBe(false);
     send.mockRejectedValueOnce(new Error('all providers failed'));
     expect(await emailGatewayService.sendAutoReply(message(), AUTO_REPLY_KIND.UNAUTHORIZED_SENDER, send)).toBe(false);
     expect(await emailGatewayService.sendAutoReply(message(), AUTO_REPLY_KIND.UNAUTHORIZED_SENDER, send, { failureLog: 'x' })).toBe(true);
