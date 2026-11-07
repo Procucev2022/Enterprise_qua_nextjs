@@ -2065,6 +2065,11 @@ const EMAIL_GATEWAY_MESSAGES = {
     'Free trial RFQ credits exhausted ({remaining} left, {needed} needed), so no RFQ was raised. Buyer notified.',
 };
 
+const EMAIL_GATEWAY_DELIVERY_KIND = Object.freeze({
+  BUYER_CREDENTIALS: 'BUYER_CREDENTIALS',
+  RFQ_NOT_CREATED: 'RFQ_NOT_CREATED',
+});
+
 /**
  * Notice sent to a registered buyer whose RFQ email did not become an RFQ.
  * Without it the buyer only ever hears back on success, so a failure looked
@@ -3245,6 +3250,7 @@ module.exports = {
   GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
+  EMAIL_GATEWAY_DELIVERY_KIND,
   EMAIL_GATEWAY_STATE,
   EMAIL_GATEWAY_SMTP_PORTS,
   UNAUTHORIZED_BUYER_NOTIFICATION,

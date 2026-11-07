@@ -42,6 +42,7 @@ const {
   GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
+  EMAIL_GATEWAY_DELIVERY_KIND,
   EMAIL_GATEWAY_STATE,
   EMAIL_INGESTION_STATUS,
   resolveBuyerSourcingMode,
@@ -1508,12 +1509,20 @@ function decryptAcknowledgementPassword(encryptedPassword, messageId) {
 async function queueAcknowledgement(rfqKey, ack) {
   if (!rfqKey) return;
   const detailObj = { buyerName: ack.buyerName, rfqTitle: ack.rfqTitle };
+  if (ack.deliveryKind) detailObj.deliveryKind = ack.deliveryKind;
+  ['reason', 'originalSubject', 'count', 'max', 'contactPhone'].forEach((key) => {
+    if (ack[key] !== undefined && ack[key] !== null) detailObj[key] = ack[key];
+  });
   const messageId = `${rfqKey}#ack`;
+  let status = INGESTION_OUTCOME.ACK_PENDING;
   if (ack.tempPassword) {
     try {
       detailObj.encryptedTempPassword = encryptAcknowledgementPassword(ack.tempPassword, messageId);
     } catch (error) {
       detailObj.credentialDeliveryUnavailable = true;
+      if (ack.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS) {
+        status = INGESTION_OUTCOME.ACK_ABANDONED;
+      }
       logger.error('Buyer onboarding credentials were omitted from the retry ledger', {
         error,
         rfqKey,
@@ -1524,20 +1533,23 @@ async function queueAcknowledgement(rfqKey, ack) {
   if (ack.deliveryDate) detailObj.deliveryDate = ack.deliveryDate;
   const recorded = await emailGatewayQueries.recordProcessed({
     messageId,
-    status: INGESTION_OUTCOME.ACK_PENDING,
+    status,
     detail: JSON.stringify(detailObj),
     fromAddress: ack.to,
-    subject: ack.rfqTitle,
-    rfqNumber: ack.rfqNumber,
+    subject: ack.originalSubject || ack.rfqTitle || ack.subject,
+    rfqNumber: ack.rfqNumber || null,
   });
   if (!recorded) {
-    logger.error('Pending RFQ acknowledgement could not be persisted', {
+    logger.error(ack.deliveryKind ? 'Failed email delivery could not be persisted in the gateway retry ledger' : 'Pending RFQ acknowledgement could not be persisted', {
       messageId,
       credentialIncluded: Boolean(detailObj.encryptedTempPassword),
+      deliveryKind: ack.deliveryKind || null,
+      status,
     }, 'EMAIL_GATEWAY');
   } else if (!pool.hasStorage()) {
-    logger.warn('Pending RFQ acknowledgement is tracked only in local memory without configured storage', {
+    logger.warn('Pending email delivery is tracked only in local memory without configured storage', {
       messageId,
+      deliveryKind: ack.deliveryKind || null,
     }, 'EMAIL_GATEWAY');
   }
 }
@@ -1623,8 +1635,37 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
       }
     }
 
+    if (
+      saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS
+      && !retryTempPassword
+    ) {
+      await record(INGESTION_OUTCOME.ACK_ABANDONED, 'Buyer credential retry has no encrypted credential');
+      outcome.abandoned += 1;
+      logger.error('Buyer credential retry was abandoned because its encrypted password is missing', {
+        messageId: row.message_id,
+        fromAddress: row.from_address,
+      }, 'EMAIL_GATEWAY');
+      continue;
+    }
+
     try {
-      if (retryTempPassword) {
+      if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS) {
+        ensureMailDeliveryAccepted(await mailerService.sendBuyerCredentialsEmail({
+          to: row.from_address,
+          recipientName: saved.buyerName,
+          tempPassword: retryTempPassword,
+          contactPhone: saved.contactPhone || '',
+        }), 'Buyer credentials retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED) {
+        ensureMailDeliveryAccepted(await mailerService.sendRfqNotCreatedEmail({
+          to: row.from_address,
+          buyerName: saved.buyerName,
+          reason: saved.reason,
+          originalSubject: saved.originalSubject || row.subject,
+          count: saved.count,
+          max: saved.max,
+        }), 'RFQ-not-created notice retry');
+      } else if (retryTempPassword) {
         ensureMailDeliveryAccepted(await mailerService.sendBuyerOnboardingWithRfqEmail({
           to: row.from_address,
           buyerName: saved.buyerName,
@@ -1704,36 +1745,97 @@ function buyerDisplayName(buyerAccount, message) {
   );
 }
 
+function emailGatewayNoticeKey(message, deliveryKind) {
+  const fallbackIdentity = [message?.fromAddress, message?.sentAt, message?.subject, message?.bodyText]
+    .map((value) => String(value || ''))
+    .join('\0');
+  const sourceId = message?.messageId || crypto.createHash('sha256').update(fallbackIdentity).digest('hex');
+  return `${sourceId}#notice-${deliveryKind.toLowerCase()}`;
+}
+
+async function queueFailedEmailGatewayDelivery(message, deliveryKind, delivery) {
+  try {
+    await emailGateway.queueAcknowledgement(emailGatewayNoticeKey(message, deliveryKind), {
+      to: message.fromAddress,
+      buyerName: delivery.buyerName,
+      rfqTitle: message.subject,
+      deliveryKind,
+      ...delivery,
+    });
+  } catch (error) {
+    logger.error('Failed email gateway notice could not be added to the retry ledger', {
+      error,
+      messageId: message.messageId || null,
+      deliveryKind,
+      recipient: message.fromAddress || null,
+    }, 'EMAIL_GATEWAY');
+  }
+}
+
 /** Tell a registered buyer their email did not become an RFQ, within the auto-reply guards. */
-function notifyRfqNotCreated(message, reason, { buyerAccount = null, config = {}, count, max, authorisation = null } = {}) {
+async function notifyRfqNotCreated(message, reason, { buyerAccount = null, config = {}, count, max, authorisation = null } = {}) {
   // If the buyer is unverified / pending onboarding and has a temporary password, dispatch their credentials too!
   if (
     authorisation &&
     (authorisation.isAutoRegistered || authorisation.isOnboardingPending) &&
     authorisation.tempPassword
   ) {
-    mailerService.sendBuyerCredentialsEmail({
+    const credentials = {
       to: message.fromAddress,
       recipientName: buyerDisplayName(buyerAccount, message),
       tempPassword: authorisation.tempPassword,
       contactPhone: buyerAccount?.mobileNumber || '',
-    }).catch((err) => {
-      logger.error('Failed to dispatch buyer credentials on failed RFQ creation', err, 'EMAIL_GATEWAY');
-    });
+    };
+    try {
+      ensureMailDeliveryAccepted(await mailerService.sendBuyerCredentialsEmail(credentials), 'Buyer credentials notice');
+    } catch (error) {
+      logger.error('Failed to dispatch buyer credentials on failed RFQ creation', {
+        error,
+        messageId: message.messageId || null,
+        fromAddress: message.fromAddress || null,
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS,
+      }, 'EMAIL_GATEWAY');
+      await queueFailedEmailGatewayDelivery(message, EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS, {
+        buyerName: credentials.recipientName,
+        tempPassword: credentials.tempPassword,
+        contactPhone: credentials.contactPhone,
+      });
+    }
   }
 
   return sendAutoReply(
     message,
     AUTO_REPLY_KIND.RFQ_NOT_CREATED,
-    () =>
-      mailerService.sendRfqNotCreatedEmail({
+    async () => {
+      const notice = {
         to: message.fromAddress,
         buyerName: buyerDisplayName(buyerAccount, message),
         reason,
         originalSubject: message.subject,
         count,
         max,
-      }),
+      };
+      try {
+        const delivery = await mailerService.sendRfqNotCreatedEmail(notice);
+        ensureMailDeliveryAccepted(delivery, 'RFQ-not-created notice');
+        return delivery;
+      } catch (error) {
+        logger.error('RFQ-not-created email provider did not accept the notice', {
+          error,
+          messageId: message.messageId || null,
+          fromAddress: message.fromAddress || null,
+          reason: notice.reason,
+        }, 'EMAIL_GATEWAY');
+        await queueFailedEmailGatewayDelivery(message, EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED, {
+          buyerName: notice.buyerName,
+          reason: notice.reason,
+          originalSubject: notice.originalSubject,
+          count: notice.count,
+          max: notice.max,
+        });
+        throw error;
+      }
+    },
     { config, failureLog: 'Failed to dispatch RFQ-not-created notice to buyer' }
   );
 }

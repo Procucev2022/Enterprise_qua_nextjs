@@ -8,6 +8,7 @@
 //   - documents attached to the email are stored on the RFQ;
 //   - an email retried after some of its RFQs were created does not raise them twice.
 
+const crypto = require('crypto');
 const googleapis = require('googleapis');
 const emailGatewayService = require('../src/services/emailGatewayService');
 const emailGatewayQueries = require('../src/db/emailGatewayQueries');
@@ -23,6 +24,7 @@ const cryptoService = require('../src/services/cryptoService');
 const {
   EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
+  EMAIL_GATEWAY_DELIVERY_KIND,
   RFQ_NOT_CREATED_NOTIFICATION,
 } = require('../src/config/constants');
 const fixtures = require('./fixtures/sampleRequisitionEmail');
@@ -259,6 +261,55 @@ describe('the buyer is told when no RFQ was created', () => {
     notice.mockRejectedValue(new Error('all providers down'));
     const result = await emailGatewayService.processMessage(raw(), config());
     expect(result.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+    const queued = emailGatewayQueries.recordProcessed.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.status === INGESTION_OUTCOME.ACK_PENDING && JSON.parse(entry.detail).deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED);
+    expect(queued).toEqual(expect.objectContaining({ fromAddress: SENDER, subject: expect.any(String) }));
+  });
+
+  test('a provider-declined rejection notice is queued for retry', async () => {
+    mockExtraction({ status: geminiService.EXTRACTION_STATUS.NO_ITEMS_FOUND, lineItems: [] });
+    notice.mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
+
+    const result = await emailGatewayService.processMessage(raw(), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+    const queued = emailGatewayQueries.recordProcessed.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.status === INGESTION_OUTCOME.ACK_PENDING && JSON.parse(entry.detail).deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED);
+    expect(queued).toEqual(expect.objectContaining({ fromAddress: SENDER }));
+    expect(JSON.parse(queued.detail)).toMatchObject({ reason: 'NO_LINE_ITEMS', originalSubject: expect.any(String) });
+    expect(JSON.parse(queued.detail)).not.toHaveProperty('deliveryError');
+    expect(logger.error).toHaveBeenCalledWith(
+      'RFQ-not-created email provider did not accept the notice',
+      expect.objectContaining({
+        error: expect.objectContaining({ code: 'EMAIL_DELIVERY_NOT_ACCEPTED', providerReason: 'SMTP not configured' }),
+        reason: 'NO_LINE_ITEMS',
+      }),
+      'EMAIL_GATEWAY'
+    );
+  });
+
+  test('uses a stable hashed retry key when the inbound email has no Message-ID', async () => {
+    mockExtraction({ status: geminiService.EXTRACTION_STATUS.NO_ITEMS_FOUND, lineItems: [] });
+    notice.mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
+    const sourceWithoutMessageId = raw().toString('utf8').replace(/^Message-ID:.*\r?\n/m, '');
+
+    const result = await emailGatewayService.processMessage(Buffer.from(sourceWithoutMessageId), config());
+
+    expect(result.message.messageId).toBe('');
+    const fallbackIdentity = [
+      result.message.fromAddress,
+      result.message.sentAt,
+      result.message.subject,
+      result.message.bodyText,
+    ].map((value) => String(value || '')).join('\0');
+    const expectedKey = `${crypto.createHash('sha256').update(fallbackIdentity).digest('hex')}#notice-rfq_not_created#ack`;
+    const queued = emailGatewayQueries.recordProcessed.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => entry.status === INGESTION_OUTCOME.ACK_PENDING && JSON.parse(entry.detail).deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED);
+
+    expect(queued.messageId).toBe(expectedKey);
   });
 
   test('our own notice subject is recognised as ours', () => {
@@ -700,6 +751,26 @@ describe('acknowledgements that could not be sent are retried later', () => {
     expect(detail.credentialDeliveryUnavailable).toBe(true);
   });
 
+  test('abandons failed credential delivery instead of persisting credentials without encryption', async () => {
+    delete process.env.AES_ENCRYPTION_KEY;
+    delete process.env.AES_SECRET_KEY;
+    const password = 'CredentialsNeedEncryption';
+
+    await emailGatewayService.queueAcknowledgement('credentials-no-key', {
+      to: SENDER,
+      buyerName: 'Buyer without key',
+      deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS,
+      tempPassword: password,
+    });
+
+    const saved = emailGatewayQueries.recordProcessed.mock.calls[0][0];
+    const detail = JSON.parse(saved.detail);
+    expect(saved.status).toBe(INGESTION_OUTCOME.ACK_ABANDONED);
+    expect(saved.detail).not.toContain(password);
+    expect(detail).not.toHaveProperty('tempPassword');
+    expect(detail.credentialDeliveryUnavailable).toBe(true);
+  });
+
   test('logs when an acknowledgement retry cannot be durably persisted', async () => {
     emailGatewayQueries.recordProcessed.mockResolvedValueOnce(false);
 
@@ -712,6 +783,25 @@ describe('acknowledgements that could not be sent are retried later', () => {
     expect(logger.error).toHaveBeenCalledWith(
       'Pending RFQ acknowledgement could not be persisted',
       expect.objectContaining({ messageId: 'rfq-ledger-failure-77#ack' }),
+      'EMAIL_GATEWAY'
+    );
+  });
+
+  test('logs failed persistence for a typed email notice', async () => {
+    emailGatewayQueries.recordProcessed.mockResolvedValueOnce(false);
+
+    await emailGatewayService.queueAcknowledgement('typed-notice-failure', {
+      to: SENDER,
+      deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED,
+      reason: 'NO_LINE_ITEMS',
+    });
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed email delivery could not be persisted in the gateway retry ledger',
+      expect.objectContaining({
+        messageId: 'typed-notice-failure#ack',
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED,
+      }),
       'EMAIL_GATEWAY'
     );
   });
@@ -754,6 +844,96 @@ describe('acknowledgements that could not be sent are retried later', () => {
           fromAddress: SENDER,
           error: expect.objectContaining({ code: 'EMAIL_DELIVERY_NOT_ACCEPTED', providerReason: 'SMTP not configured' }),
         }),
+        'EMAIL_GATEWAY'
+      );
+    });
+
+    test('retries an encrypted standalone buyer credential notice with its original template', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'email-flow-test-encryption-key';
+      const messageId = 'source-message#notice-buyer_credentials#ack';
+      const password = 'retry-credential-password';
+      const encryptedTempPassword = cryptoService.encrypt(password, {
+        additionalData: `email-gateway-ack:${messageId}`,
+      }).encoded;
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
+        row({
+          message_id: messageId,
+          rfq_number: null,
+          detail: JSON.stringify({
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS,
+            buyerName: 'Credential Buyer',
+            encryptedTempPassword,
+          }),
+        }),
+      ]);
+      const credentials = jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(credentials).toHaveBeenCalledWith({
+        to: SENDER,
+        recipientName: 'Credential Buyer',
+        tempPassword: password,
+        contactPhone: '',
+      });
+      expect(outcome).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
+      expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId, status: INGESTION_OUTCOME.ACK_SENT })
+      );
+    });
+
+    test('retries an RFQ-not-created notice with its persisted rejection reason', async () => {
+      const messageId = 'source-message#notice-rfq_not_created#ack';
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
+        row({
+          message_id: messageId,
+          detail: JSON.stringify({
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED,
+            buyerName: 'Notice Buyer',
+            reason: 'NO_LINE_ITEMS',
+          }),
+        }),
+      ]);
+      const noticeRetry = jest.spyOn(mailerService, 'sendRfqNotCreatedEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(noticeRetry).toHaveBeenCalledWith({
+        to: SENDER,
+        buyerName: 'Notice Buyer',
+        reason: 'NO_LINE_ITEMS',
+        originalSubject: 'Pumps',
+        count: undefined,
+        max: undefined,
+      });
+      expect(outcome).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
+      expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId, status: INGESTION_OUTCOME.ACK_SENT })
+      );
+    });
+
+    test('abandons a standalone credential retry when its encrypted password is missing', async () => {
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValue([
+        row({
+          message_id: 'credential-without-password#ack',
+          detail: JSON.stringify({
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS,
+            buyerName: 'Missing Credential Buyer',
+          }),
+        }),
+      ]);
+      const credentials = jest.spyOn(mailerService, 'sendBuyerCredentialsEmail');
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements({ now: NOW });
+
+      expect(outcome).toEqual({ sent: 0, abandoned: 1, stillPending: 0 });
+      expect(credentials).not.toHaveBeenCalled();
+      expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'credential-without-password#ack', status: INGESTION_OUTCOME.ACK_ABANDONED })
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        'Buyer credential retry was abandoned because its encrypted password is missing',
+        expect.objectContaining({ messageId: 'credential-without-password#ack' }),
         'EMAIL_GATEWAY'
       );
     });

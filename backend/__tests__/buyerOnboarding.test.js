@@ -15,7 +15,7 @@ const rfqAttachmentService = require('../src/services/rfqAttachmentService');
 const cryptoService = require('../src/services/cryptoService');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
-const { EMAIL_GATEWAY_STATE } = require('../src/config/constants');
+const { EMAIL_GATEWAY_STATE, EMAIL_GATEWAY_DELIVERY_KIND } = require('../src/config/constants');
 
 describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation', () => {
   const SENDER = 'newprocurement.buyer@industrial-corp.com';
@@ -1003,6 +1003,35 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       });
 
       expect(outcome.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+    });
+
+    test('persists a declined failed-RFQ credential email with encrypted retry credentials', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'buyer-onboarding-test-encryption-key';
+      const email = 'declined.credential.buyer@industrial-corp.com';
+      jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
+      jest.spyOn(mailerService, 'sendRfqNotCreatedEmail').mockResolvedValue({ sent: true });
+      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+        status: geminiService.EXTRACTION_STATUS.FAILED,
+        model: 'gemini-test',
+        lineItems: [],
+      });
+
+      const outcome = await emailGatewayService.processMessage(makeRawEmail(email, 'Vague text request'), {
+        allowedSenders: [],
+        allowedDomains: [],
+        autoRegisterUnregisteredBuyers: true,
+      });
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+      const queued = emailGatewayQueries.recordProcessed.mock.calls
+        .map(([entry]) => entry)
+        .find((entry) => entry.status === INGESTION_OUTCOME.ACK_PENDING && JSON.parse(entry.detail).deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_CREDENTIALS);
+      expect(queued).toBeDefined();
+      const detail = JSON.parse(queued.detail);
+      expect(queued.detail).not.toContain('tempPassword');
+      expect(cryptoService.decrypt(detail.encryptedTempPassword, {
+        additionalData: `email-gateway-ack:${queued.messageId}`,
+      })).toBe(mailerService.sendBuyerCredentialsEmail.mock.calls[0][0].tempPassword);
     });
 
     test('retryPendingAcknowledgements handles invalid JSON detail and sending failures', async () => {
