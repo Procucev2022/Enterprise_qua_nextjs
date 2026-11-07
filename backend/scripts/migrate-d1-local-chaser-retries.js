@@ -9,6 +9,17 @@ const DATABASE_NAME = 'enterprise-qua-d1';
 const MIGRATION_VERSION = '0015_chaser_retry_attempts';
 const MIGRATION_FILE = path.join(BACKEND_ROOT, 'src', 'db', 'migrations', '0015_chaser_retry_attempts.d1.sql');
 
+function parseWranglerOutput(args, stdout) {
+  if (!args.includes('--json')) return stdout;
+  try {
+    return JSON.parse(stdout);
+  } catch (cause) {
+    const error = new Error('Wrangler returned invalid JSON during the local D1 migration.');
+    error.cause = cause;
+    throw error;
+  }
+}
+
 function runWrangler(args) {
   const result = spawnSync(process.execPath, [WRANGLER_ENTRY, ...args], {
     cwd: BACKEND_ROOT,
@@ -17,13 +28,7 @@ function runWrangler(args) {
   if (result.error || result.status !== 0) {
     throw new Error(`Local D1 migration command failed: ${result.stderr || result.stdout || result.error}`);
   }
-  try {
-    return JSON.parse(result.stdout);
-  } catch (cause) {
-    const error = new Error('Wrangler returned invalid JSON during the local D1 migration.');
-    error.cause = cause;
-    throw error;
-  }
+  return parseWranglerOutput(args, result.stdout);
 }
 
 function readCount(response) {
@@ -68,4 +73,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { ensureLocalChaserRetryMigration, readCount };
+module.exports = { ensureLocalChaserRetryMigration, parseWranglerOutput, readCount };

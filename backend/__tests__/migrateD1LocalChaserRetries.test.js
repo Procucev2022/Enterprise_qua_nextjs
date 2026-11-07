@@ -2,6 +2,7 @@
 
 const {
   ensureLocalChaserRetryMigration,
+  parseWranglerOutput,
   readCount,
 } = require('../scripts/migrate-d1-local-chaser-retries');
 
@@ -45,6 +46,19 @@ describe('Local D1 chaser retry migration', () => {
     expect(readCount(responseWithCount(3))).toBe(3);
     expect(readCount([])).toBe(0);
     expect(readCount([{ results: [{ count: 'invalid' }] }])).toBe(0);
+  });
+
+  test('preserves human-readable output for commands that did not request JSON', () => {
+    const output = 'Executed 1 command successfully.';
+    expect(parseWranglerOutput(['d1', 'execute', '--command', 'INSERT ...'], output)).toBe(output);
+  });
+
+  test('parses JSON responses and rejects malformed output only when JSON was requested', () => {
+    const json = JSON.stringify(responseWithCount(2));
+    expect(parseWranglerOutput(['d1', 'execute', '--json'], json)).toEqual(responseWithCount(2));
+    expect(() => parseWranglerOutput(['d1', 'execute', '--json'], 'not json')).toThrow(
+      'Wrangler returned invalid JSON during the local D1 migration.',
+    );
   });
 
   test('propagates migration command failures so local setup cannot continue silently', () => {
