@@ -50,7 +50,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
     jest.spyOn(mailerService, 'isConfigured').mockReturnValue(true);
     jest.spyOn(mailerService, 'sendBuyerOnboardingWithRfqEmail').mockResolvedValue({ success: true, messageId: 'msg-onboard-101' });
     jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ success: true, messageId: 'msg-remind-101' });
-    jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ success: true, messageId: 'msg-quote-101' });
+    jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true, success: true, messageId: 'msg-quote-101' });
     jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ success: true, messageId: 'msg-cred-101' });
     jest.spyOn(domainQueries, 'getBuyerAccountSnapshotByEmailFromDB').mockImplementation(async (email) => {
       const account = storeService.buyerAccounts.find((entry) => (entry.corporateEmail || '').toLowerCase() === email.toLowerCase());

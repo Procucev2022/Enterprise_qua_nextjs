@@ -6,7 +6,8 @@ const pool = require('../src/db/pool');
 const mailerService = require('../src/services/mailerService');
 const smsService = require('../src/services/smsService');
 const whatsAppService = require('../src/services/whatsAppService');
-const { RFQ_DOWNLOAD_ERRORS } = require('../src/config/constants');
+const { RFQ_DOWNLOAD_ERRORS, RFQ_NOTIFICATION_ERROR_CODES } = require('../src/config/constants');
+const { logger } = require('../src/services/loggerService');
 
 describe('storeService comprehensive branch boost tests', () => {
   beforeEach(() => {
@@ -1435,9 +1436,22 @@ describe('storeService comprehensive branch boost tests', () => {
       storeService.queuePendingQuoteNotification(buyer.corporateEmail, { rfq, quote });
 
       // mailer throws error
-      jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockRejectedValue(new Error('Mailer fatal error'));
+      const error = new Error('Mailer fatal error');
+      jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockRejectedValue(error);
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
       const dispatched = await storeService.dispatchPendingQuoteNotifications(buyer.corporateEmail);
       expect(dispatched.length).toBe(0);
+      expect(storeService._pendingQuoteNotifications.get(buyer.corporateEmail)).toHaveLength(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Failed to dispatch pending quote notification',
+        expect.objectContaining({
+          operation: 'pending-buyer-quote-notification',
+          rfqId: rfq.id,
+          rfqNumber: rfq.rfqNumber,
+          error,
+        }),
+        'STORE_SERVICE'
+      );
 
       // createEvaluation with primitive and extra moduleScores
       const evaluation = storeService.createEvaluation({
@@ -1449,6 +1463,74 @@ describe('storeService comprehensive branch boost tests', () => {
       });
       expect(evaluation.moduleScores.pricing).toBe(85);
       expect(evaluation.moduleScores.customModule.score).toBe(90);
+    });
+
+    test('keeps provider-declined pending quote emails queued until accepted', async () => {
+      const buyer = {
+        id: 'buyer-pending-refusal',
+        corporateEmail: 'pending-refusal@corp.com',
+        organizationName: 'Pending Refusal Corp',
+      };
+      storeService.buyerAccounts = [buyer];
+      const rfq = { id: 'rfq-pend-refusal', rfqNumber: 'RFQ-PEND-REFUSAL', quotes: [] };
+      const quote = { id: 'quote-pend-refusal', vendorId: 'vendor-pend-refusal', vendorName: 'Pending Vendor' };
+      const item = { rfq, quote };
+      storeService.queuePendingQuoteNotification(buyer.corporateEmail, item);
+      const refusal = { sent: false, reason: 'provider_declined' };
+      jest.spyOn(mailerService, 'sendQuoteReceivedEmail')
+        .mockResolvedValueOnce(refusal)
+        .mockResolvedValueOnce({ sent: true, messageId: 'accepted-quote-notice' });
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => {});
+
+      await expect(storeService.dispatchPendingQuoteNotifications(buyer.corporateEmail)).resolves.toEqual([]);
+      expect(storeService._pendingQuoteNotifications.get(buyer.corporateEmail)).toEqual([item]);
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Provider did not accept pending quote notification',
+        expect.objectContaining({
+          operation: 'pending-buyer-quote-notification',
+          rfqId: rfq.id,
+          rfqNumber: rfq.rfqNumber,
+          quoteId: quote.id,
+          vendorId: quote.vendorId,
+          error: expect.objectContaining({
+            code: RFQ_NOTIFICATION_ERROR_CODES.EMAIL_DELIVERY_NOT_ACCEPTED,
+            reason: refusal.reason,
+            deliveryResultPresent: true,
+          }),
+        }),
+        'STORE_SERVICE'
+      );
+
+      await expect(storeService.dispatchPendingQuoteNotifications(buyer.corporateEmail)).resolves.toEqual([item]);
+      expect(storeService._pendingQuoteNotifications.has(buyer.corporateEmail)).toBe(false);
+      expect(infoSpy).toHaveBeenCalledWith(
+        'Pending quote email accepted by provider',
+        expect.objectContaining({ operation: 'pending-buyer-quote-notification', rfqNumber: rfq.rfqNumber }),
+        'STORE_SERVICE'
+      );
+    });
+
+    test('requeues pending quote notices when buyer lookup fails', async () => {
+      const buyerEmail = 'lookup-retry@corp.com';
+      const rfq = { id: 'rfq-pend-lookup', rfqNumber: 'RFQ-PEND-LOOKUP', quotes: [] };
+      const quote = { id: 'quote-pend-lookup' };
+      const error = new Error('Buyer lookup unavailable');
+      storeService.queuePendingQuoteNotification(buyerEmail, { rfq, quote });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockRejectedValue(error);
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await expect(storeService.dispatchPendingQuoteNotifications(buyerEmail)).resolves.toEqual([]);
+      expect(storeService._pendingQuoteNotifications.get(buyerEmail)).toHaveLength(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Failed to load buyer before pending quote notification delivery',
+        expect.objectContaining({
+          operation: 'pending-buyer-quote-recipient-lookup',
+          notificationCount: 1,
+          error,
+        }),
+        'STORE_SERVICE'
+      );
     });
 
     test('processHistoricalPurchaseData preserves DB vendor state when its durable update fails', async () => {

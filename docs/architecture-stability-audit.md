@@ -374,3 +374,10 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 - Store background tasks now distinguish an explicitly unaccepted email result from a resolved promise, when the caller marks the task as email delivery. RFQ-scoped operation IDs, vendor IDs, and a stable refusal code are logged without recipient addresses. The Worker `waitUntil` lifecycle and rejection handling remain in the same wrapper.
 - RFQ invite, quote, closure, comparison, profile reminder, and vendor-rating fallback sends now opt into delivery-result checking. These no-storage fallback paths still lack durable retry across process restarts; configured RFQ paths continue to use the event outbox where available.
+
+## Buyer onboarding quote notification retry
+
+- Pending quote notifications are held in a process-local queue until buyer onboarding/profile completion. Dispatch previously removed that queue before loading the buyer or sending, then treated any resolved mailer result as delivered. A buyer lookup failure, provider refusal, or thrown send could permanently drop the notice while the onboarding flow still completed.
+- Dispatch now counts only `{ sent: true }` as accepted, writes structured operation/RFQ/quote/vendor diagnostics on failure, and requeues failed notices for a later onboarding/profile dispatch. A successful provider acceptance clears the pending item.
+- The queue is still process-local and has no durable outbox, so a process restart can discard pending notices. If the provider accepted a message but the response was lost, retry can also duplicate it. Durable intent should be added before this path is considered restart-safe.
+- Focused onboarding and StoreService regression suites passed 145 tests. Full `npm run check:quality` passed: backend 198 suites / 5,717 tests with 158/158 executable files above all four 90% thresholds; frontend 149 suites / 3,755 tests with 171/171 files above all thresholds. Build, typecheck, lint, schema parity, checker regressions, and schema-file verification passed. Live database migration was skipped by the pipeline.

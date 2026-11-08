@@ -7718,26 +7718,63 @@ class StoreService {
     if (!buyerEmail) return [];
     const normEmail = String(buyerEmail).trim().toLowerCase();
     const list = this._pendingQuoteNotifications ? (this._pendingQuoteNotifications.get(normEmail) || []) : [];
+    if (list.length === 0) return [];
     if (this._pendingQuoteNotifications) {
       this._pendingQuoteNotifications.delete(normEmail);
     }
 
-    const buyer = (await this.getBuyerAccountByEmail(normEmail)) || {
-      corporateEmail: normEmail,
-      organizationName: 'Valued Buyer',
-    };
+    let buyer;
+    try {
+      buyer = (await this.getBuyerAccountByEmail(normEmail)) || {
+        corporateEmail: normEmail,
+        organizationName: 'Valued Buyer',
+      };
+    } catch (error) {
+      list.forEach((item) => this.queuePendingQuoteNotification(normEmail, item));
+      logger.error('Failed to load buyer before pending quote notification delivery', {
+        operation: 'pending-buyer-quote-recipient-lookup',
+        notificationCount: list.length,
+        error,
+      }, 'STORE_SERVICE');
+      return [];
+    }
 
     const dispatched = [];
     for (const item of list) {
+      const metadata = {
+        operation: 'pending-buyer-quote-notification',
+        rfqId: item.rfq.id,
+        rfqNumber: item.rfq.rfqNumber,
+        quoteId: item.quote.id,
+        vendorId: item.quote.vendorId,
+      };
       try {
-        await mailerService.sendQuoteReceivedEmail(normEmail, {
+        const delivery = await mailerService.sendQuoteReceivedEmail(normEmail, {
           rfq: item.rfq,
           quote: item.quote,
           recipientName: buyer.organizationName,
         });
-        dispatched.push(item);
-      } catch (err) {
-        logger.error(`Failed to dispatch pending quote notification to ${normEmail}`, err, 'STORE_SERVICE');
+        if (delivery?.sent === true) {
+          dispatched.push(item);
+          logger.info('Pending quote email accepted by provider', metadata, 'STORE_SERVICE');
+          continue;
+        }
+
+        this.queuePendingQuoteNotification(normEmail, item);
+        logger.error('Provider did not accept pending quote notification', {
+          ...metadata,
+          error: {
+            code: RFQ_NOTIFICATION_ERROR_CODES.EMAIL_DELIVERY_NOT_ACCEPTED,
+            reason: delivery?.reason,
+            deliveryResultPresent: delivery !== undefined && delivery !== null,
+          },
+        }, 'STORE_SERVICE');
+      } catch (error) {
+        this.queuePendingQuoteNotification(normEmail, item);
+        logger.error('Failed to dispatch pending quote notification', {
+          ...metadata,
+          error,
+        }, 'STORE_SERVICE');
       }
     }
     return dispatched;
