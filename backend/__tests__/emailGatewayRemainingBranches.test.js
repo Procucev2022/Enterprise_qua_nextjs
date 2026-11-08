@@ -7,7 +7,7 @@ const storeService = require('../src/services/storeService');
 const geminiService = require('../src/services/geminiService');
 const rfqAttachmentService = require('../src/services/rfqAttachmentService');
 const cryptoService = require('../src/services/cryptoService');
-const { EMAIL_GATEWAY_CONFIG, EMAIL_GATEWAY_DELIVERY_KIND } = require('../src/config/constants');
+const { EMAIL_GATEWAY_CONFIG, EMAIL_GATEWAY_DELIVERY_KIND, EMAIL_GATEWAY_MESSAGES } = require('../src/config/constants');
 const { INGESTION_OUTCOME } = emailGatewayQueries;
 
 describe('emailGatewayService remaining branch coverage', () => {
@@ -516,6 +516,155 @@ describe('emailGatewayService remaining branch coverage', () => {
         messageId: 'notice-vendor-quote-ack',
         status: INGESTION_OUTCOME.ACK_SENT,
       }));
+    });
+
+    test('reconstructs a vendor issue acknowledgement from its persisted inquiry and message IDs', async () => {
+      const inquiryMessage = {
+        id: 'msg-vendor-issue-retry-1',
+        senderRole: 'vendor',
+        senderEmail: 'sales@vendor.in',
+        message: 'Please confirm the drawing revision before we submit our quote.',
+      };
+      const inquiry = {
+        id: 'inquiry-vendor-issue-retry-1',
+        vendorName: 'Apex Valves',
+        vendorEmail: 'sales@vendor.in',
+        messages: [inquiryMessage],
+      };
+      const rfq = {
+        id: 'rfq-vendor-issue-retry-1',
+        rfqNumber: 'RFQ-VENDOR-ISSUE-RETRY-01',
+        title: 'Industrial valves',
+        inquiries: [inquiry],
+      };
+      const row = {
+        message_id: 'notice-vendor-inquiry-retry-1',
+        rfq_id: rfq.id,
+        from_address: 'sales@vendor.in',
+        rfq_number: rfq.rfqNumber,
+        subject: rfq.title,
+        processed_at: new Date().toISOString(),
+        detail: JSON.stringify({
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
+          inquiryId: inquiry.id,
+          inquiryMessageId: inquiryMessage.id,
+        }),
+      };
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
+      jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@example.com');
+      const deliverySpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail').mockResolvedValueOnce({ sent: true });
+      const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+
+      const result = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(result).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
+      expect(deliverySpy).toHaveBeenCalledWith('sales@vendor.in', expect.objectContaining({
+        rfq,
+        rfqNumber: rfq.rfqNumber,
+        rfqTitle: rfq.title,
+        vendorName: inquiry.vendorName,
+        issueMessage: inquiryMessage.message,
+        reason: EMAIL_GATEWAY_MESSAGES.VENDOR_ISSUE_REPLY_REASON,
+        cc: 'buyer@example.com',
+      }));
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: row.message_id,
+        status: INGESTION_OUTCOME.ACK_SENT,
+      }));
+    });
+
+    test('keeps vendor inquiry retries pending when the persisted message is missing', async () => {
+      const rfq = {
+        id: 'rfq-vendor-issue-missing-message',
+        rfqNumber: 'RFQ-VENDOR-ISSUE-MISSING-MESSAGE',
+        inquiries: [{ id: 'inquiry-vendor-issue-missing-message', vendorEmail: 'sales@vendor.in', messages: [] }],
+      };
+      const row = {
+        message_id: 'notice-vendor-inquiry-missing-message',
+        rfq_id: rfq.id,
+        from_address: 'sales@vendor.in',
+        rfq_number: rfq.rfqNumber,
+        subject: 'Industrial valves',
+        processed_at: new Date().toISOString(),
+        detail: JSON.stringify({
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
+          inquiryId: 'inquiry-vendor-issue-missing-message',
+          inquiryMessageId: 'missing-message-id',
+        }),
+      };
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
+      const deliverySpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail');
+
+      const result = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(result).toEqual({ sent: 0, abandoned: 0, stillPending: 1 });
+      expect(deliverySpy).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      {
+        name: 'the RFQ reference is missing',
+        rfqId: null,
+        fromAddress: 'sales@vendor.in',
+        rfq: null,
+        detail: { inquiryId: 'inquiry-1', inquiryMessageId: 'message-1' },
+      },
+      {
+        name: 'the RFQ has no inquiry list',
+        rfqId: 'rfq-without-inquiries',
+        fromAddress: 'sales@vendor.in',
+        rfq: { id: 'rfq-without-inquiries', inquiries: null },
+        detail: { inquiryId: 'inquiry-1', inquiryMessageId: 'message-1' },
+      },
+      {
+        name: 'the persisted inquiry has a blank ID and no message list',
+        rfqId: 'rfq-with-inquiry-without-messages',
+        fromAddress: 'sales@vendor.in',
+        rfq: {
+          id: 'rfq-with-inquiry-without-messages',
+          inquiries: [{ id: '', vendorEmail: 'sales@vendor.in' }],
+        },
+        detail: {},
+      },
+      {
+        name: 'the persisted message has a blank ID and its message reference is missing',
+        rfqId: 'rfq-with-blank-message-id',
+        fromAddress: 'sales@vendor.in',
+        rfq: {
+          id: 'rfq-with-blank-message-id',
+          inquiries: [{
+            id: 'inquiry-with-blank-message-id',
+            vendorEmail: 'sales@vendor.in',
+            messages: [{ id: '', message: 'Question about the specification.' }],
+          }],
+        },
+        detail: { inquiryId: 'inquiry-with-blank-message-id' },
+      },
+    ])('keeps vendor inquiry retries pending when $name', async ({ rfqId, fromAddress, rfq, detail }) => {
+      const row = {
+        message_id: 'notice-vendor-inquiry-invalid-reference',
+        rfq_id: rfqId,
+        from_address: fromAddress,
+        rfq_number: 'RFQ-VENDOR-INQUIRY-INVALID',
+        subject: 'Industrial valves',
+        processed_at: new Date().toISOString(),
+        detail: JSON.stringify({
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
+          ...detail,
+        }),
+      };
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      if (rfq) {
+        jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
+      }
+      const deliverySpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail');
+
+      const result = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(result).toEqual({ sent: 0, abandoned: 0, stillPending: 1 });
+      expect(deliverySpy).not.toHaveBeenCalled();
     });
 
     test.each([

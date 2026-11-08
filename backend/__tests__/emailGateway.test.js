@@ -3620,6 +3620,47 @@ describe('emailGatewayService.processVendorQuoteMessage branch coverage', () => 
     expect(storeService.getAuditLogs()).toHaveLength(auditCountAfterFirstProcessing);
   });
 
+  test('queues a refused vendor inquiry acknowledgement using persisted references', async () => {
+    const rfq = simpleRfq({ id: 'rfq-vendor-inquiry-retry', rfqNumber: 'RFQ-VENDOR-INQUIRY-RETRY' });
+    storeService.rfqs = [rfq];
+    const vendor = { id: 'vendor-inquiry-retry', name: 'Issue Vendor', email: 'issue-retry@suppliers.com', freeQuotationCredits: 5, quotedRfqIds: [] };
+    storeService.vendors = [vendor];
+    const message = {
+      messageId: '<vendor-inquiry-retry@suppliers.com>',
+      fromAddress: vendor.email,
+      subject: 'Re: RFQ-VENDOR-INQUIRY-RETRY',
+      bodyText: 'I have a clarification query: please confirm the drawing revision.',
+    };
+    const inquiry = { id: 'inquiry-retry-1', vendorEmail: vendor.email, messages: [] };
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 0 });
+    jest.spyOn(storeService, 'addInquiryToRFQ').mockResolvedValue({
+      inquiry,
+      inquiryMessageId: 'message-retry-1',
+    });
+    const delivery = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail')
+      .mockResolvedValue({ sent: false, reason: 'SMTP refused' });
+    const queueRetry = jest.spyOn(emailGatewayService, 'queueAcknowledgement').mockResolvedValue(true);
+
+    const result = await emailGatewayService.processVendorQuoteMessage(message, rfq, vendor);
+
+    expect(result.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
+    expect(delivery).toHaveBeenCalledTimes(1);
+    expect(queueRetry).toHaveBeenCalledWith(
+      expect.stringContaining('#notice-vendor_inquiry_ack'),
+      expect.objectContaining({
+        to: vendor.email,
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+        inquiryId: inquiry.id,
+        inquiryMessageId: 'message-retry-1',
+      })
+    );
+    expect(queueRetry.mock.calls[0][1]).not.toHaveProperty('issueMessage');
+    expect(queueRetry.mock.calls[0][1]).not.toHaveProperty('message');
+  });
+
   test('does not acknowledge an issue email when its inquiry cannot be persisted', async () => {
     const rfq = simpleRfq({ id: 'rfq-direct-issue-write-failure', rfqNumber: 'RFQ-DIRECT-ISSUE-WRITE-FAILURE' });
     storeService.rfqs = [rfq];

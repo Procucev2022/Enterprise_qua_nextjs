@@ -2073,6 +2073,8 @@ const EMAIL_GATEWAY_MESSAGES = {
   QUOTE_VALIDATION_FAILED_DETAIL: 'Vendor quotation for RFQ {rfqNumber} from {vendorName} failed validation: {reason}.',
   QUOTE_ACK_SUBJECT: 'Quotation Received – RFQ {rfqNumber}',
   QUOTE_FAILURE_SUBJECT: 'Action Required – Quotation Could Not Be Processed for RFQ {rfqNumber}',
+  VENDOR_ISSUE_REPLY_REASON:
+    'Quotation creation has failed and no bid was generated because your email contains an issue or clarification query regarding the RFQ.',
   INVALID_RFQ_REFERENCED: 'The referenced RFQ {rfqNumber} was not found in the system.',
   VENDOR_NOT_FOUND_FOR_QUOTE: 'No vendor profile found for sender {address}.',
   VENDOR_GATEWAY_REQUIRES_RFQ: 'Vendor email gateway only processes quotation replies for existing RFQs.',
@@ -2095,6 +2097,7 @@ const EMAIL_GATEWAY_DELIVERY_KIND = Object.freeze({
   BUYER_UNAUTHORIZED_SENDER: 'BUYER_UNAUTHORIZED_SENDER',
   VENDOR_UNAUTHORIZED_SENDER: 'VENDOR_UNAUTHORIZED_SENDER',
   VENDOR_QUOTE_ACK: 'VENDOR_QUOTE_ACK',
+  VENDOR_INQUIRY_ACK: 'VENDOR_INQUIRY_ACK',
   BUYER_QUOTE_RECEIVED: 'BUYER_QUOTE_RECEIVED',
   BUYER_PROFILE_COMPLETION_REMINDER: 'BUYER_PROFILE_COMPLETION_REMINDER',
 });

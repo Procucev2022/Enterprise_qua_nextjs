@@ -51,6 +51,7 @@ const {
   VENDOR_QUOTE_SUPPORT_CC,
   RFQ_MODES,
   RFQ_MODE_MAP,
+  EMAIL_REGEX,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -1529,6 +1530,8 @@ async function queueAcknowledgement(rfqKey, ack) {
     'cc',
     'gatewayAddress',
     'quoteId',
+    'inquiryId',
+    'inquiryMessageId',
     'buyerEmail',
     'recipientName',
     'quotesCount',
@@ -1752,6 +1755,34 @@ async function retryPendingAcknowledgements({
           quote,
           buyerEmail: saved.buyerEmail || null,
         }), 'Vendor quote acknowledgement retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK) {
+        const rfq = row.rfq_id ? await domainQueries.getRFQByIdFromDB(row.rfq_id) : null;
+        const inquiry = Array.isArray(rfq?.inquiries)
+          ? rfq.inquiries.find((candidate) => String(candidate.id || '') === String(saved.inquiryId || ''))
+          : null;
+        const inquiryMessage = Array.isArray(inquiry?.messages)
+          ? inquiry.messages.find((candidate) => String(candidate.id || '') === String(saved.inquiryMessageId || ''))
+          : null;
+        const recipientEmail = String(row.from_address || '').trim();
+        if (
+          !rfq || !inquiry || !inquiryMessage || !saved.inquiryId || !saved.inquiryMessageId
+          || !EMAIL_REGEX.test(recipientEmail)
+          || recipientEmail.toLowerCase() !== String(inquiry.vendorEmail || '').trim().toLowerCase()
+          || !String(inquiryMessage.message || '').trim()
+        ) {
+          const error = new Error('Vendor inquiry acknowledgement retry references incomplete persisted data.');
+          error.code = 'INVALID_PERSISTED_RECORD';
+          throw error;
+        }
+        ensureMailDeliveryAccepted(await mailerService.sendVendorIssueAcknowledgementEmail(recipientEmail, {
+          rfq,
+          rfqNumber: rfq.rfqNumber,
+          rfqTitle: rfq.title,
+          vendorName: inquiry.vendorName || 'Vendor Partner',
+          issueMessage: inquiryMessage.message.slice(0, 500),
+          reason: EMAIL_GATEWAY_MESSAGES.VENDOR_ISSUE_REPLY_REASON,
+          cc: storeService.resolveBuyerEmailForRFQ(rfq) || undefined,
+        }), 'Vendor inquiry acknowledgement retry');
       } else if (
         saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED
         || saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER
@@ -2327,10 +2358,24 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           rfqTitle: targetRfq.title,
           vendorName: vendorRecord.name,
           issueMessage: emailText.slice(0, 500),
-          reason: 'Quotation creation has failed and no bid was generated because your email contains an issue or clarification query regarding the RFQ.',
+          reason: EMAIL_GATEWAY_MESSAGES.VENDOR_ISSUE_REPLY_REASON,
           cc: failureCc,
         }),
-      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor issue acknowledgment email' }
+      {
+        rfqNumber: targetRfq.rfqNumber,
+        failureLog: 'Failed to send vendor issue acknowledgment email',
+        retryDelivery: pool.hasStorage() && inquiryResult?.inquiry?.id && inquiryResult?.inquiryMessageId
+          ? {
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
+            payload: {
+              rfqId: targetRfq.id,
+              rfqNumber: targetRfq.rfqNumber,
+              inquiryId: inquiryResult.inquiry.id,
+              inquiryMessageId: inquiryResult.inquiryMessageId,
+            },
+          }
+          : null,
+      }
     );
 
     return {
@@ -3597,6 +3642,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
           ],
         }
         : {
@@ -3606,6 +3652,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
           ],
         };
       acknowledgements = await emailGateway.retryPendingAcknowledgements(retryOptions).catch((ackErr) => {

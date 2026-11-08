@@ -1112,6 +1112,7 @@ describe('acknowledgements that could not be sent are retried later', () => {
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
         ],
       });
       expect(result.acknowledgements).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
@@ -1127,6 +1128,7 @@ describe('acknowledgements that could not be sent are retried later', () => {
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
         ],
       });
     });
@@ -1159,6 +1161,7 @@ describe('emailGatewayQueries.listByStatus', () => {
     [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT, '%#notice-vendor\\_portal\\_redirect#ack'],
     [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER, '%#notice-vendor\\_unauthorized\\_sender#ack'],
     [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK, '%#notice-vendor\\_quote\\_ack#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK, '%#notice-vendor\\_inquiry\\_ack#ack'],
     [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED, '%#notice-buyer\\_quote\\_received#ack'],
     [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER, '%#notice-buyer\\_profile\\_completion\\_reminder#ack'],
   ])('can query the allowlisted %s notice suffix for its owning poll lane', async (deliveryKind, messageIdPattern) => {

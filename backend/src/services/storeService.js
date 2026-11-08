@@ -5268,7 +5268,7 @@ class StoreService {
           ];
 
       if (prevMsgs.some((message) => message.id === chatMsg.id)) {
-        return { updatedRfq: rfq, inquiry: target, duplicate: true };
+        return { updatedRfq: rfq, inquiry: target, inquiryMessageId: chatMsg.id, duplicate: true };
       }
 
       updatedInquiry = {
@@ -5342,6 +5342,7 @@ class StoreService {
     return {
       updatedRfq: updated,
       inquiry: updatedInquiry,
+      inquiryMessageId: chatMsg.id,
       ...(shouldQueueAcknowledgement
         ? {
             acknowledgementOutboxEvent: outboxResult.event || null,

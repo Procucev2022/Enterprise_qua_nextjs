@@ -69,6 +69,7 @@ describe('durable RFQ clarification threads', () => {
     releaseUpdate();
     const result = await inquiryPromise;
     expect(result.inquiry.messages).toHaveLength(1);
+    expect(result.inquiryMessageId).toBe(result.inquiry.messages[0].id);
     expect(storeService.rfqs[0].inquiries).toHaveLength(1);
     expect(storeService.aiFeed).toHaveLength(1);
     expect(storeService.auditLogs).toHaveLength(1);
@@ -114,6 +115,7 @@ describe('durable RFQ clarification threads', () => {
       id: expect.stringMatching(/^retry:rfq_vendor_inquiry_ack_email:/),
       status: 'pending',
     });
+    expect(result.inquiryMessageId).toBe(result.inquiry.messages[0].id);
     expect(regularWrite).not.toHaveBeenCalled();
     expect(storeService.rfqs[0].inquiries).toHaveLength(1);
   });
