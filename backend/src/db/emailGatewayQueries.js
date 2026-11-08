@@ -165,6 +165,8 @@ async function listByStatus(status, limit = 5, { deliveryKinds = null, excludeDe
     EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
     EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
     EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+    EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED,
+    EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER,
   ]);
   const scopedDeliveryKinds = Array.isArray(deliveryKinds)
     ? [...new Set(deliveryKinds.filter((kind) => allowedDeliveryKinds.has(kind)))]

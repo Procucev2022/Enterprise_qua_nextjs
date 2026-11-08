@@ -1530,6 +1530,8 @@ async function queueAcknowledgement(rfqKey, ack) {
     'gatewayAddress',
     'quoteId',
     'buyerEmail',
+    'recipientName',
+    'quotesCount',
   ].forEach((key) => {
     if (ack[key] !== undefined && ack[key] !== null) detailObj[key] = ack[key];
   });
@@ -1750,6 +1752,36 @@ async function retryPendingAcknowledgements({
           quote,
           buyerEmail: saved.buyerEmail || null,
         }), 'Vendor quote acknowledgement retry');
+      } else if (
+        saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED
+        || saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER
+      ) {
+        const rfq = row.rfq_id ? await domainQueries.getRFQByIdFromDB(row.rfq_id) : null;
+        const quote = Array.isArray(rfq?.quotes)
+          ? rfq.quotes.find((candidate) => String(candidate.id || '') === String(saved.quoteId || ''))
+          : null;
+        if (!rfq || !quote || !saved.quoteId) {
+          const error = new Error('Buyer quote notification retry references a missing persisted RFQ or quote.');
+          error.code = 'INVALID_PERSISTED_RECORD';
+          throw error;
+        }
+        const recipientName = saved.recipientName || saved.buyerName || rfq.buyerAccountName || 'Buyer';
+        if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER) {
+          ensureMailDeliveryAccepted(await mailerService.sendBuyerProfileCompletionReminderEmail({
+            to: row.from_address,
+            recipientName,
+            rfqNumber: rfq.rfqNumber,
+            rfqTitle: rfq.title,
+            quotesCount: Number(saved.quotesCount) || 1,
+          }), 'Buyer profile completion reminder retry');
+          storeService.markQuoteAckSent(rfq);
+        } else {
+          ensureMailDeliveryAccepted(await mailerService.sendQuoteReceivedEmail(row.from_address, {
+            rfq,
+            quote,
+            recipientName,
+          }), 'Buyer quote notification retry');
+        }
       } else if (retryTempPassword) {
         ensureMailDeliveryAccepted(await mailerService.sendBuyerOnboardingWithRfqEmail({
           to: row.from_address,
@@ -1845,6 +1877,8 @@ async function queueFailedEmailGatewayDelivery(message, deliveryKind, delivery) 
       buyerName: delivery.buyerName,
       rfqTitle: message.subject,
       deliveryKind,
+      rfqId: delivery.rfqId,
+      rfqNumber: delivery.rfqNumber,
       ...delivery,
     });
   } catch (error) {
@@ -2555,6 +2589,15 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
             ensureMailDeliveryAccepted(delivery, 'Buyer profile completion reminder');
           } catch (error) {
             storeService._unmarkQuoteAckSent(targetRfq);
+            if (pool.hasStorage() && (quoteSubmission?.quoteId || quote.id)) {
+              await queueFailedEmailGatewayDelivery(message, EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER, {
+                rfqId: targetRfq.id,
+                rfqNumber: targetRfq.rfqNumber,
+                quoteId: quoteSubmission?.quoteId || quote.id,
+                recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+                quotesCount: 1,
+              });
+            }
             throw error;
           }
           storeService.addAuditLog({
@@ -2571,12 +2614,24 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
             storageConfigured: pool.hasStorage(),
           }, 'EMAIL_GATEWAY');
         } else {
-          const delivery = await mailerService.sendQuoteReceivedEmail(buyerEmail, {
-            rfq: committedRFQ,
-            quote,
-            recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
-          });
-          ensureMailDeliveryAccepted(delivery, 'Buyer quote notification');
+          try {
+            const delivery = await mailerService.sendQuoteReceivedEmail(buyerEmail, {
+              rfq: committedRFQ,
+              quote,
+              recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+            });
+            ensureMailDeliveryAccepted(delivery, 'Buyer quote notification');
+          } catch (error) {
+            if (pool.hasStorage() && (quoteSubmission?.quoteId || quote.id)) {
+              await queueFailedEmailGatewayDelivery(message, EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED, {
+                rfqId: targetRfq.id,
+                rfqNumber: targetRfq.rfqNumber,
+                quoteId: quoteSubmission?.quoteId || quote.id,
+                recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+              });
+            }
+            throw error;
+          }
         }
       }
     } catch (mailErr) {

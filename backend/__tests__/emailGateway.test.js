@@ -2451,22 +2451,24 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     });
 
     test.each([
-      ['provider refusal', { sent: false, reason: 'SMTP refused' }],
-      ['provider exception', new Error('SMTP unavailable')],
-    ])('allows a later profile reminder attempt after a direct delivery %s', async (_description, delivery) => {
+      { description: 'provider refusal', delivery: { sent: false, reason: 'SMTP refused' }, storageConfigured: true, quoteId: 'quote-profile-reminder-failure' },
+      { description: 'provider exception', delivery: new Error('SMTP unavailable'), storageConfigured: true, quoteId: 'quote-profile-reminder-failure' },
+      { description: 'no-storage refusal', delivery: { sent: false, reason: 'SMTP refused' }, storageConfigured: false, quoteId: 'quote-profile-reminder-failure', recipientName: 'Buyer' },
+      { description: 'missing quote reference', delivery: { sent: false, reason: 'SMTP refused' }, storageConfigured: true, quoteId: undefined },
+    ])('clears the profile reminder marker after $description', async ({ description, delivery, storageConfigured, quoteId, recipientName = 'Buyer Organization' }) => {
       const emailRecord = {
-        messageId: `<quote-profile-reminder-failure-${String(_description).replaceAll(' ', '-')}@apex.com>`,
+        messageId: `<quote-profile-reminder-failure-${String(description).replaceAll(' ', '-')}@apex.com>`,
         subject: 'Re: [RFQ-2026-00421] Bid',
         fromAddress: VENDOR_EMAIL,
         bodyText: 'Unit Price: 10000',
       };
-      jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(dbPool, 'hasStorage').mockReturnValue(storageConfigured);
       jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 10000, totalPrice: 40000 });
       jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@test.com');
       jest.spyOn(storeService, 'checkVendorQuotationEligibility').mockReturnValue({ eligible: true });
       jest.spyOn(storeService, 'submitVendorQuoteDurably').mockResolvedValue({
         rfq: { ...sampleRfq, status: 'In Evaluation' },
-        quoteId: 'quote-profile-reminder-failure',
+        quoteId,
         buyerQuoteNotificationQueued: false,
         buyerProfileReminderQueued: false,
         vendorQuoteAcknowledgementQueued: false,
@@ -2475,7 +2477,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
         id: 'buyer-pending-profile-reminder',
         corporateEmail: 'buyer@test.com',
-        organizationName: 'Buyer Organization',
+        ...(recipientName !== 'Buyer' ? { organizationName: recipientName } : {}),
         status: 'PENDING_ONBOARDING',
         onboardingRequired: true,
       });
@@ -2483,6 +2485,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       jest.spyOn(storeService, 'hasQuoteAckBeenSent').mockReturnValue(false);
       jest.spyOn(storeService, 'markQuoteAckSent').mockImplementation(() => {});
       const clearReminderMarker = jest.spyOn(storeService, '_unmarkQuoteAckSent').mockImplementation(() => {});
+      const retryQueue = jest.spyOn(emailGatewayService, 'queueAcknowledgement').mockResolvedValue(true);
       jest.spyOn(storeService, 'queuePendingQuoteNotification').mockImplementation(() => {});
       jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
       jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
@@ -2495,9 +2498,75 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
       expect(reminderEmail).toHaveBeenCalledTimes(1);
       expect(clearReminderMarker).toHaveBeenCalledWith(sampleRfq);
+      if (storageConfigured && quoteId) {
+        expect(retryQueue).toHaveBeenCalledWith(
+          expect.stringContaining('#notice-buyer_profile_completion_reminder'),
+          expect.objectContaining({
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER,
+            rfqId: sampleRfq.id,
+            rfqNumber: sampleRfq.rfqNumber,
+            quoteId,
+            recipientName,
+          })
+        );
+      } else {
+        expect(retryQueue).not.toHaveBeenCalled();
+      }
       expect(storeService.addAuditLog).not.toHaveBeenCalledWith(expect.objectContaining({
         action: expect.stringContaining('Sent quotation acknowledgment and profile update reminder'),
       }));
+    });
+
+    test.each([
+      { description: 'provider refusal', storageConfigured: true, quoteId: 'quote-buyer-mail-refusal' },
+      { description: 'no-storage refusal', storageConfigured: false, quoteId: 'quote-buyer-mail-refusal' },
+      { description: 'missing quote reference', storageConfigured: true, quoteId: undefined },
+    ])('handles direct buyer quote email $description', async ({ description, storageConfigured, quoteId }) => {
+      const emailRecord = {
+        messageId: `<quote-buyer-mail-${String(description).replaceAll(' ', '-')}@apex.com>`,
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Unit Price: 10000',
+      };
+      jest.spyOn(dbPool, 'hasStorage').mockReturnValue(storageConfigured);
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 10000, totalPrice: 40000 });
+      jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@test.com');
+      jest.spyOn(storeService, 'checkVendorQuotationEligibility').mockReturnValue({ eligible: true });
+      jest.spyOn(storeService, 'submitVendorQuoteDurably').mockResolvedValue({
+        rfq: { ...sampleRfq, status: 'In Evaluation' },
+        quoteId,
+        buyerQuoteNotificationQueued: false,
+        buyerProfileReminderQueued: false,
+        vendorQuoteAcknowledgementQueued: false,
+        autoClosureEmailQueued: false,
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'buyer-quote-recipient',
+        organizationName: 'Buyer Organization',
+      });
+      jest.spyOn(storeService, 'isBuyerProfileUpdateRequired').mockReturnValue(false);
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+      jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: false, reason: 'SMTP refused' });
+      const retryQueue = jest.spyOn(emailGatewayService, 'queueAcknowledgement').mockResolvedValue(true);
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(emailRecord, sampleRfq, sampleVendor);
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      if (storageConfigured && quoteId) {
+        expect(retryQueue).toHaveBeenCalledWith(
+          expect.stringContaining('#notice-buyer_quote_received'),
+          expect.objectContaining({
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED,
+            rfqId: sampleRfq.id,
+            rfqNumber: sampleRfq.rfqNumber,
+            quoteId,
+            recipientName: 'Buyer Organization',
+          })
+        );
+      } else {
+        expect(retryQueue).not.toHaveBeenCalled();
+      }
     });
 
     test('processMessage falls back to extractionInput.documentText when message.bodyText is missing', async () => {

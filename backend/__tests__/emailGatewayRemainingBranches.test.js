@@ -518,6 +518,102 @@ describe('emailGatewayService remaining branch coverage', () => {
       }));
     });
 
+    test.each([
+      {
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED,
+        detail: { recipientName: 'Buyer Organization', quotesCount: 2 },
+        buyerAccountName: 'Buyer Organization',
+        expectedRecipientName: 'Buyer Organization',
+        expectedQuotesCount: 2,
+      },
+      {
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER,
+        detail: { recipientName: 'Buyer Organization', quotesCount: 2 },
+        buyerAccountName: 'Buyer Organization',
+        expectedRecipientName: 'Buyer Organization',
+        expectedQuotesCount: 2,
+      },
+      {
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER,
+        detail: {},
+        expectedRecipientName: 'Buyer',
+        expectedQuotesCount: 1,
+      },
+    ])('reconstructs persisted buyer quote delivery $deliveryKind from its RFQ and quote IDs', async ({
+      deliveryKind,
+      detail,
+      buyerAccountName,
+      expectedRecipientName,
+      expectedQuotesCount,
+    }) => {
+      const quote = { id: 'buyer-retry-quote-1', vendorId: 'vendor-1', vendorName: 'Apex Valves', unitPrice: 120 };
+      const rfq = {
+        id: 'buyer-retry-rfq-1',
+        rfqNumber: 'RFQ-BUYER-RETRY-01',
+        title: 'Industrial valves',
+        ...(buyerAccountName ? { buyerAccountName } : {}),
+        quotes: [quote],
+      };
+      const row = {
+        message_id: `notice-${deliveryKind.toLowerCase()}`,
+        rfq_id: rfq.id,
+        from_address: 'buyer@example.com',
+        rfq_number: rfq.rfqNumber,
+        subject: rfq.title,
+        processed_at: new Date().toISOString(),
+        detail: JSON.stringify({ deliveryKind, quoteId: quote.id, ...detail }),
+      };
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
+      const quoteDelivery = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
+      const reminderDelivery = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
+      const markReminder = jest.spyOn(storeService, 'markQuoteAckSent').mockImplementation(() => {});
+      const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+
+      const result = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(result.sent).toBe(1);
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({ messageId: row.message_id, status: INGESTION_OUTCOME.ACK_SENT }));
+      if (deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER) {
+        expect(reminderDelivery).toHaveBeenCalledWith({
+          to: row.from_address,
+          recipientName: expectedRecipientName,
+          rfqNumber: rfq.rfqNumber,
+          rfqTitle: rfq.title,
+          quotesCount: expectedQuotesCount,
+        });
+        expect(markReminder).toHaveBeenCalledWith(rfq);
+        expect(quoteDelivery).not.toHaveBeenCalled();
+      } else {
+        expect(quoteDelivery).toHaveBeenCalledWith(row.from_address, { rfq, quote, recipientName: expectedRecipientName });
+        expect(reminderDelivery).not.toHaveBeenCalled();
+        expect(markReminder).not.toHaveBeenCalled();
+      }
+    });
+
+    test('keeps buyer quote retries pending when the persisted RFQ is unavailable', async () => {
+      const row = {
+        message_id: 'notice-buyer-quote-missing-rfq',
+        from_address: 'buyer@example.com',
+        rfq_number: 'RFQ-MISSING-BUYER-RETRY',
+        subject: 'Buyer quote notice',
+        processed_at: new Date().toISOString(),
+        detail: JSON.stringify({
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED,
+          quoteId: 'quote-missing-rfq',
+        }),
+      };
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      const loadRfq = jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB');
+      const sendQuote = jest.spyOn(mailerService, 'sendQuoteReceivedEmail');
+
+      const result = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(result).toEqual({ sent: 0, abandoned: 0, stillPending: 1 });
+      expect(loadRfq).not.toHaveBeenCalled();
+      expect(sendQuote).not.toHaveBeenCalled();
+    });
+
     test('keeps malformed quote acknowledgement rows pending without attempting delivery', async () => {
       const listSpy = jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([
         {

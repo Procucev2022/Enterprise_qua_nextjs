@@ -708,6 +708,36 @@ describe('acknowledgements that could not be sent are retried later', () => {
     expect(emailGatewayQueries.recordProcessed).not.toHaveBeenCalled();
   });
 
+  test('persists buyer quote retry references without duplicating quote data', async () => {
+    const delivery = {
+      rfqId: 'rfq-buyer-retry-77',
+      rfqNumber: 'RFQ-BUYER-RETRY-77',
+      quoteId: 'quote-buyer-retry-77',
+      recipientName: 'Retry Buyer',
+      quotesCount: 2,
+    };
+
+    await emailGatewayService.queueAcknowledgement('message#notice-buyer_quote_received', {
+      to: 'buyer@example.test',
+      deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED,
+      ...delivery,
+    });
+
+    expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: 'message#notice-buyer_quote_received#ack',
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      fromAddress: 'buyer@example.test',
+      rfqId: delivery.rfqId,
+      rfqNumber: delivery.rfqNumber,
+      detail: JSON.stringify({
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED,
+        quoteId: delivery.quoteId,
+        recipientName: delivery.recipientName,
+        quotesCount: delivery.quotesCount,
+      }),
+    }));
+  });
+
   test('encrypts onboarding credentials before persisting a pending acknowledgement', async () => {
     process.env.AES_ENCRYPTION_KEY = 'email-flow-test-encryption-key';
     delete process.env.AES_SECRET_KEY;
@@ -1129,7 +1159,9 @@ describe('emailGatewayQueries.listByStatus', () => {
     [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT, '%#notice-vendor\\_portal\\_redirect#ack'],
     [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER, '%#notice-vendor\\_unauthorized\\_sender#ack'],
     [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK, '%#notice-vendor\\_quote\\_ack#ack'],
-  ])('can query the allowlisted %s notice suffix without reading buyer acknowledgement work', async (deliveryKind, messageIdPattern) => {
+    [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED, '%#notice-buyer\\_quote\\_received#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_PROFILE_COMPLETION_REMINDER, '%#notice-buyer\\_profile\\_completion\\_reminder#ack'],
+  ])('can query the allowlisted %s notice suffix for its owning poll lane', async (deliveryKind, messageIdPattern) => {
     jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
     const rows = jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([{ message_id: 'notice#ack' }]);
 
