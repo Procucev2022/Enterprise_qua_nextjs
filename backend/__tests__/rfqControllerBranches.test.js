@@ -1078,7 +1078,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
         inquiry: { id: 'inq-1', message: 'Question' },
         updatedRfq: rfq,
       });
-      const mailSpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail').mockResolvedValue(true);
+      const mailSpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail').mockResolvedValue({ sent: true });
       const resOk = mockRes();
       await rfqController.addInquiry(
         {
@@ -1101,6 +1101,52 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       storeService.getRFQByIdAsync.mockRestore();
       storeService.addInquiryToRFQ.mockRestore();
       mailSpy.mockRestore();
+    });
+
+    test('addInquiry tracks Worker email delivery and logs provider refusal', async () => {
+      const rfq = { id: 'rfq-inq-refused', rfqNumber: 'RFQ-INQ-REFUSED', title: 'Pumps RFQ' };
+      jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue(rfq);
+      jest.spyOn(storeService, 'addInquiryToRFQ').mockReturnValue({
+        inquiry: { id: 'inq-refused', message: 'Question' },
+        updatedRfq: rfq,
+      });
+      jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail')
+        .mockResolvedValue({ sent: false, reason: 'provider_declined' });
+
+      const previousWaitUntil = globalThis.__CF_WAIT_UNTIL__;
+      const backgroundTasks = [];
+      globalThis.__CF_WAIT_UNTIL__ = (task) => backgroundTasks.push(task);
+      const loggerErrorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const response = mockRes();
+      try {
+        await rfqController.addInquiry(
+          {
+            params: { id: rfq.id },
+            body: { message: 'Question', vendorEmail: 'vendor@example.com' },
+            user: { role: 'vendor', id: 'vendor-inq', email: 'vendor@example.com' },
+          },
+          response,
+          jest.fn()
+        );
+        await Promise.all(backgroundTasks);
+      } finally {
+        if (previousWaitUntil === undefined) delete globalThis.__CF_WAIT_UNTIL__;
+        else globalThis.__CF_WAIT_UNTIL__ = previousWaitUntil;
+      }
+
+      expect(response.statusCode).toBe(201);
+      expect(backgroundTasks).toHaveLength(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'Failed to send vendor inquiry acknowledgment email',
+        expect.objectContaining({
+          rfqNumber: rfq.rfqNumber,
+          error: expect.objectContaining({
+            code: 'EMAIL_DELIVERY_NOT_ACCEPTED',
+            deliveryResultPresent: true,
+          }),
+        }),
+        'RFQ_CONTROLLER'
+      );
     });
 
     test('replyInquiry validations, success, and error handling', async () => {

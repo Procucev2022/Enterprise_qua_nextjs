@@ -364,3 +364,8 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 - The unconfigured-storage RFQ creation fallback previously logged thrown provider errors but treated a resolved `{ sent: false }` or empty delivery result as success. The shared background wrapper now emits a structured error with RFQ number, a stable delivery error code, and a safe result-presence flag for explicit refusals, while preserving the successfully persisted RFQ response.
 - Focused RFQ controller regression coverage verifies the refusal path. This fallback remains process-local and has no durable retry ledger; configured database paths use the existing RFQ email outbox. Production D1 verification remains deferred until credentials are available.
+
+## Vendor inquiry acknowledgement lifecycle
+
+- Vendor inquiry acknowledgements now use the RFQ background delivery wrapper, so Cloudflare Workers retain the promise with `waitUntil` and explicit provider refusals or thrown sends receive structured RFQ-scoped logs. The persisted inquiry response remains successful when the separate notification is unavailable.
+- The notification is still a direct provider send without a durable outbox or retry identity. Add durable delivery intent to the inquiry write before treating this path as restart-safe.

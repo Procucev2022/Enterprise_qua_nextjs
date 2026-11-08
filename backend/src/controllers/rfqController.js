@@ -2082,16 +2082,18 @@ async function addInquiry(req, res, next) {
     const recipientVendorEmail = vendorEmail || (req.user && req.user.email);
     const buyerEmail = storeService.resolveBuyerEmailForRFQ(rfq);
     if (recipientVendorEmail) {
-      mailerService
-        .sendVendorIssueAcknowledgementEmail(recipientVendorEmail, {
+      trackBackgroundRfqEmail(
+        () => mailerService.sendVendorIssueAcknowledgementEmail(recipientVendorEmail, {
           rfq,
           rfqNumber: rfq.rfqNumber,
           rfqTitle: rfq.title,
           vendorName: vendorName || (req.user && req.user.name) || 'Vendor Partner',
           issueMessage: message.trim(),
           cc: buyerEmail || undefined,
-        })
-        .catch((err) => logger.error('Failed to send vendor inquiry acknowledgment email', err, 'RFQ_CONTROLLER'));
+        }),
+        'Failed to send vendor inquiry acknowledgment email',
+        rfq.rfqNumber
+      );
     }
 
     res.status(201).json({ success: true, data: result.inquiry, rfq: result.updatedRfq });
