@@ -2217,6 +2217,45 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       expect(buyerEmailSpy).not.toHaveBeenCalled();
     });
 
+    test('does not directly send a vendor quote acknowledgement owned by the durable outbox', async () => {
+      const emailRecord = {
+        messageId: '<quote-vendor-ack-outbox@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Unit Price: 10000',
+      };
+      const committedRfq = { ...sampleRfq, status: 'In Evaluation' };
+      jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 10000, totalPrice: 40000 });
+      jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@test.com');
+      jest.spyOn(storeService, 'checkVendorQuotationEligibility').mockReturnValue({ eligible: true });
+      const submit = jest.spyOn(storeService, 'submitVendorQuoteDurably').mockResolvedValue({
+        rfq: committedRfq,
+        vendorQuoteAcknowledgementQueued: true,
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'buyer-vendor-ack-test',
+        organizationName: 'Buyer Organization',
+      });
+      jest.spyOn(storeService, 'isBuyerProfileUpdateRequired').mockReturnValue(false);
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      const vendorAcknowledgement = jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(emailRecord, sampleRfq, sampleVendor);
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(submit).toHaveBeenCalledWith(sampleRfq.id, expect.objectContaining({ sourceMessageId: emailRecord.messageId }), expect.objectContaining({
+        includeDeliveryState: true,
+        vendorQuoteAcknowledgement: expect.objectContaining({
+          idempotencyKey: expect.stringContaining(emailRecord.messageId),
+          recipientEmail: VENDOR_EMAIL,
+          recipientName: sampleVendor.name,
+          buyerEmail: 'buyer@test.com',
+        }),
+      }));
+      expect(vendorAcknowledgement).not.toHaveBeenCalled();
+    });
+
     test('does not directly resend a buyer email owned by the auto-closure outbox', async () => {
       const emailRecord = {
         messageId: '<quote-buyer-autoclose@apex.com>',

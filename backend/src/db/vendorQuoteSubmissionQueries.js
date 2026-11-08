@@ -141,6 +141,14 @@ function makeD1VendorQuoteSubmissionStatements(options) {
     error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
     throw error;
   }
+  if (options.vendorQuoteAcknowledgementEventId && (
+    typeof options.quoteId !== 'string' || !options.quoteId
+    || typeof options.vendorQuoteAcknowledgementRecipient !== 'string' || !options.vendorQuoteAcknowledgementRecipient
+  )) {
+    const error = new Error('A vendor quote acknowledgement requires a quote ID and persisted recipient.');
+    error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
+    throw error;
+  }
   if (options.autoClosureEmailEventId && (
     typeof options.quoteId !== 'string' || !options.quoteId
     || typeof options.autoClosureRecipientEmail !== 'string' || !options.autoClosureRecipientEmail
@@ -283,6 +291,28 @@ function makeD1VendorQuoteSubmissionStatements(options) {
         options.quoteId,
         options.autoClosureRecipientEmail,
         options.autoClosureRecipientName || null,
+      ],
+    }] : []).concat(options.vendorQuoteAcknowledgementEventId ? [{
+      text: `INSERT OR IGNORE INTO event_outbox
+        (id, event_type, raw, status, available_at, created_at, updated_at)
+        SELECT $1, $2, json_object('rfqId', $3, 'quoteId', $4, 'recipientEmail', $5, 'recipientName', $6, 'buyerEmail', $7), 'pending',
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        FROM rfqs r
+        WHERE r.id = $3 AND EXISTS (
+          SELECT 1 FROM json_each(CASE
+            WHEN json_type(r.raw, '$.quotes') = 'array' THEN json_extract(r.raw, '$.quotes')
+            ELSE '[]'
+          END) AS submitted_quote
+          WHERE CAST(json_extract(submitted_quote.value, '$.id') AS TEXT) = CAST($4 AS TEXT)
+        )`,
+      params: [
+        options.vendorQuoteAcknowledgementEventId,
+        EVENT_OUTBOX_TYPES.RFQ_VENDOR_QUOTE_ACK_EMAIL,
+        options.rfqId,
+        options.quoteId,
+        options.vendorQuoteAcknowledgementRecipient,
+        options.vendorQuoteAcknowledgementRecipientName || null,
+        options.vendorQuoteAcknowledgementBuyerEmail || null,
       ],
     }] : []).concat(options.buyerProfileReminderEventId ? [{
       text: `INSERT OR IGNORE INTO event_outbox
@@ -435,6 +465,30 @@ async function submitVendorQuoteOnPostgres(options) {
             quoteId: options.quoteId,
             recipientEmail: options.buyerProfileReminderRecipient,
             recipientName: options.buyerProfileReminderRecipientName || null,
+          }),
+        ]
+      );
+    }
+    if (options.vendorQuoteAcknowledgementEventId) {
+      if (typeof options.quoteId !== 'string' || !options.quoteId
+        || typeof options.vendorQuoteAcknowledgementRecipient !== 'string' || !options.vendorQuoteAcknowledgementRecipient) {
+        const error = new Error('A vendor quote acknowledgement requires a quote ID and persisted recipient.');
+        error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
+        throw error;
+      }
+      await client.query(
+        `INSERT INTO event_outbox (id, event_type, raw, status, available_at, created_at, updated_at)
+         VALUES ($1, $2, $3::jsonb, 'pending', now(), now(), now())
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          options.vendorQuoteAcknowledgementEventId,
+          EVENT_OUTBOX_TYPES.RFQ_VENDOR_QUOTE_ACK_EMAIL,
+          JSON.stringify({
+            rfqId: options.rfqId,
+            quoteId: options.quoteId,
+            recipientEmail: options.vendorQuoteAcknowledgementRecipient,
+            recipientName: options.vendorQuoteAcknowledgementRecipientName || null,
+            buyerEmail: options.vendorQuoteAcknowledgementBuyerEmail || null,
           }),
         ]
       );

@@ -4769,17 +4769,20 @@ class StoreService {
     return persisted;
   }
 
-  async submitVendorQuoteDurably(rfqId, quote, { includeDeliveryState = false } = {}) {
+  async submitVendorQuoteDurably(rfqId, quote, {
+    includeDeliveryState = false,
+    vendorQuoteAcknowledgement = null,
+  } = {}) {
     if (!pool.hasStorage()) {
       const updated = this.addQuoteToRFQ(rfqId, quote);
       if (!updated) {
         return includeDeliveryState
-          ? { rfq: null, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+          ? { rfq: null, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, vendorQuoteAcknowledgementQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
           : null;
       }
       if (quote && quote.vendorId) this.consumeVendorQuotationCredit(quote.vendorId, rfqId);
       return includeDeliveryState
-        ? { rfq: updated, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+        ? { rfq: updated, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, vendorQuoteAcknowledgementQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
         : updated;
     }
 
@@ -4807,7 +4810,7 @@ class StoreService {
 
       if (!rfq) {
         return includeDeliveryState
-          ? { rfq: null, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+          ? { rfq: null, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, vendorQuoteAcknowledgementQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
           : null;
       }
       if (!vendor) {
@@ -4857,6 +4860,12 @@ class StoreService {
           rfq.id
         )
         : null;
+      const vendorQuoteAcknowledgementEventId = vendorQuoteAcknowledgement?.recipientEmail
+        ? eventOutboxService.buildEventOutboxId(
+          EVENT_OUTBOX_TYPES.RFQ_VENDOR_QUOTE_ACK_EMAIL,
+          `${rfq.id}:${vendorQuoteAcknowledgement.idempotencyKey || durableQuoteId}`
+        )
+        : null;
       const autoClosureEmailEventId = autoClosedByQuote && buyerEmailPlan
         ? eventOutboxService.buildEventOutboxId(
           EVENT_OUTBOX_TYPES.RFQ_AUTO_CLOSURE_ACK_EMAIL,
@@ -4888,6 +4897,12 @@ class StoreService {
             buyerProfileReminderEventId,
             buyerProfileReminderRecipient: buyerEmailPlan.buyerEmail,
             buyerProfileReminderRecipientName: buyerEmailPlan.buyer?.organizationName || null,
+          } : {}),
+          ...(vendorQuoteAcknowledgementEventId ? {
+            vendorQuoteAcknowledgementEventId,
+            vendorQuoteAcknowledgementRecipient: vendorQuoteAcknowledgement.recipientEmail,
+            vendorQuoteAcknowledgementRecipientName: vendorQuoteAcknowledgement.recipientName || quote.vendorName || null,
+            vendorQuoteAcknowledgementBuyerEmail: vendorQuoteAcknowledgement.buyerEmail || null,
           } : {}),
           autoClosureEmailEventId,
           ...(autoClosureEmailEventId ? {
@@ -4941,6 +4956,19 @@ class StoreService {
       this._lastRfqSyncTime = 0;
       this._notifyRFQUpdate(savedRFQ, rfq.status, { status: savedRFQ.status });
       const autoClosed = savedRFQ.status === 'Closed' && rfq.status !== 'Closed';
+      if (vendorQuoteAcknowledgementEventId) {
+        this._background(
+          eventOutboxService.dispatchDueEventOutboxJobs(1, [vendorQuoteAcknowledgementEventId]),
+          'Failed to dispatch durable vendor quote acknowledgement',
+          {
+            operation: 'vendor-quote-acknowledgement',
+            rfqId: rfq.id,
+            rfqNumber: rfq.rfqNumber,
+            vendorId: vendor.id,
+            quoteId: durableQuoteId,
+          }
+        );
+      }
       if (quoteNotificationEventId || buyerProfileReminderEventId || autoClosureEmailEventId) {
         this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed, {
           ...((quoteNotificationEventId || buyerProfileReminderEventId || autoClosureEmailEventId)
@@ -4979,6 +5007,7 @@ class StoreService {
           rfq: savedRFQ,
           buyerQuoteNotificationQueued: Boolean(quoteNotificationEventId),
           buyerProfileReminderQueued: Boolean(buyerProfileReminderEventId),
+          vendorQuoteAcknowledgementQueued: Boolean(vendorQuoteAcknowledgementEventId),
           autoClosureEmailQueued: Boolean(autoClosureEmailEventId),
           autoClosedByQuote: autoClosed,
         }

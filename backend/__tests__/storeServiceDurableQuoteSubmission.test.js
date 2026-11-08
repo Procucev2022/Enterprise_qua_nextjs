@@ -184,6 +184,7 @@ describe('durable quote submission and credit synchronization', () => {
       rfq: savedRFQ,
       buyerQuoteNotificationQueued: true,
       buyerProfileReminderQueued: false,
+      vendorQuoteAcknowledgementQueued: false,
       autoClosureEmailQueued: false,
       autoClosedByQuote: false,
     });
@@ -204,6 +205,53 @@ describe('durable quote submission and credit synchronization', () => {
       false,
       { skipQuoteEmail: true }
     );
+  });
+
+  test('persists and immediately dispatches the vendor quote acknowledgement intent', async () => {
+    const currentRFQ = rfq();
+    const currentVendor = vendor();
+    const savedRFQ = { ...currentRFQ, status: 'In Evaluation', quotes: [{ id: 'quote-vendor-ack', vendorId: VENDOR_ID }] };
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(currentRFQ);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(currentVendor);
+    jest.spyOn(storeService, '_buildBuyerQuoteEmailPlan').mockReturnValue(null);
+    const submit = jest.spyOn(domainQueries, 'submitVendorQuoteInDB').mockResolvedValue({
+      rfq: savedRFQ,
+      vendor: currentVendor,
+      creditCharged: 0,
+    });
+    const dispatch = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ claimed: 1, completed: 1 });
+    jest.spyOn(storeService, '_notifyRFQUpdate').mockImplementation(() => {});
+    jest.spyOn(storeService, '_dispatchQuoteSubmissionSideEffects').mockImplementation(() => {});
+    const intent = {
+      idempotencyKey: 'inbound-message-1#notice-vendor_quote_ack',
+      recipientEmail: 'vendor@example.test',
+      recipientName: 'Atomic Vendor',
+      buyerEmail: 'buyer@example.test',
+    };
+    const eventId = eventOutboxService.buildEventOutboxId(
+      'rfq_vendor_quote_ack_email',
+      `${RFQ_ID}:${intent.idempotencyKey}`
+    );
+
+    const submission = await storeService.submitVendorQuoteDurably(
+      RFQ_ID,
+      { id: 'quote-vendor-ack', vendorId: VENDOR_ID, unitPrice: 300 },
+      { includeDeliveryState: true, vendorQuoteAcknowledgement: intent }
+    );
+
+    expect(submission).toMatchObject({
+      rfq: savedRFQ,
+      vendorQuoteAcknowledgementQueued: true,
+      buyerQuoteNotificationQueued: false,
+    });
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      vendorQuoteAcknowledgementEventId: eventId,
+      vendorQuoteAcknowledgementRecipient: 'vendor@example.test',
+      vendorQuoteAcknowledgementRecipientName: 'Atomic Vendor',
+      vendorQuoteAcknowledgementBuyerEmail: 'buyer@example.test',
+    }));
+    expect(dispatch).toHaveBeenCalledWith(1, [eventId]);
   });
 
   test('persists a deferred quote email until the buyer completes profile onboarding', async () => {
@@ -367,6 +415,7 @@ describe('durable quote submission and credit synchronization', () => {
       rfq: savedRFQ,
       buyerQuoteNotificationQueued: false,
       buyerProfileReminderQueued: false,
+      vendorQuoteAcknowledgementQueued: false,
       autoClosureEmailQueued: true,
       autoClosedByQuote: true,
     });

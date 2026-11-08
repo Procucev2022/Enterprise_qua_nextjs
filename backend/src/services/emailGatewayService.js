@@ -2305,7 +2305,22 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     quotationValidity: extraction.quotationValidity || null,
   };
 
-  const quoteSubmission = await storeService.submitVendorQuoteDurably(targetRfq.id, quote, { includeDeliveryState: true });
+  const quoteAckDecision = await emailGateway.shouldSendAutoReply(
+    message,
+    AUTO_REPLY_KIND.QUOTE_ACK,
+    { rfqNumber: targetRfq.rfqNumber }
+  );
+  const quoteSubmission = await storeService.submitVendorQuoteDurably(targetRfq.id, quote, {
+    includeDeliveryState: true,
+    ...(quoteAckDecision.allowed ? {
+      vendorQuoteAcknowledgement: {
+        idempotencyKey: emailGatewayNoticeKey(message, 'VENDOR_QUOTE_ACK'),
+        recipientEmail: message.fromAddress,
+        recipientName: vendorRecord.name,
+        buyerEmail,
+      },
+    } : {}),
+  });
   const updatedRFQ = quoteSubmission?.rfq;
   if (!updatedRFQ && pool.hasStorage()) {
     const submissionError = new Error(`RFQ ${targetRfq.rfqNumber} could not be found in storage while saving its quote.`);
@@ -2333,20 +2348,29 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     }
   );
 
-  await sendAutoReply(
-    message,
-    AUTO_REPLY_KIND.QUOTE_ACK,
-    () =>
-      mailerService.sendQuoteAcknowledgementEmail(message.fromAddress, {
-        rfqNumber: targetRfq.rfqNumber,
-        rfqTitle: targetRfq.title,
-        vendorName: vendorRecord.name,
-        quote,
-        buyerEmail,
-        cc: undefined,
-      }),
-    { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote acknowledgement email' }
-  );
+  if (quoteSubmission?.vendorQuoteAcknowledgementQueued === true) {
+    logger.info('Vendor quote acknowledgement is queued in the durable event outbox', {
+      rfqId: targetRfq.id,
+      rfqNumber: targetRfq.rfqNumber,
+      vendorId: vendorRecord.id,
+      quoteId: quote.id || null,
+    }, 'EMAIL_GATEWAY');
+  } else {
+    await sendAutoReply(
+      message,
+      AUTO_REPLY_KIND.QUOTE_ACK,
+      () =>
+        mailerService.sendQuoteAcknowledgementEmail(message.fromAddress, {
+          rfqNumber: targetRfq.rfqNumber,
+          rfqTitle: targetRfq.title,
+          vendorName: vendorRecord.name,
+          quote,
+          buyerEmail,
+          cc: undefined,
+        }),
+      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote acknowledgement email' }
+    );
+  }
 
   if (buyerEmail) {
     try {

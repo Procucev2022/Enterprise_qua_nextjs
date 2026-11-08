@@ -775,6 +775,56 @@ async function dispatchEvent(job) {
       }, 'EVENT_OUTBOX');
       return;
     }
+    case EVENT_OUTBOX_TYPES.RFQ_VENDOR_QUOTE_ACK_EMAIL: {
+      const rfqId = job.raw?.rfqId;
+      const quoteId = job.raw?.quoteId;
+      const recipientEmail = typeof job.raw?.recipientEmail === 'string' ? job.raw.recipientEmail.trim() : '';
+      const recipientName = typeof job.raw?.recipientName === 'string' && job.raw.recipientName.trim()
+        ? job.raw.recipientName.trim()
+        : null;
+      const buyerEmail = typeof job.raw?.buyerEmail === 'string' ? job.raw.buyerEmail.trim() : '';
+      if (
+        typeof rfqId !== 'string' || !rfqId
+        || typeof quoteId !== 'string' || !quoteId
+        || !EMAIL_REGEX.test(recipientEmail)
+        || (buyerEmail && !EMAIL_REGEX.test(buyerEmail))
+      ) {
+        const error = new Error('Vendor quote acknowledgement retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+      const quote = Array.isArray(rfq?.quotes)
+        ? rfq.quotes.find((candidate) => String(candidate.id || '') === quoteId)
+        : null;
+      if (!rfq || !quote) {
+        const error = new Error('Vendor quote acknowledgement references a missing persisted RFQ or quote.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const delivery = await mailerService.sendQuoteAcknowledgementEmail(recipientEmail, {
+        rfqNumber: rfq.rfqNumber,
+        rfqTitle: rfq.title,
+        vendorName: recipientName || quote.vendorName || 'Vendor',
+        quote,
+        buyerEmail: buyerEmail || null,
+      });
+      if (!delivery?.sent) {
+        const error = new Error('Vendor quote acknowledgement provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('Vendor quote acknowledgement accepted by a provider', {
+        rfqId,
+        rfqNumber: rfq.rfqNumber,
+        vendorId: quote.vendorId,
+        quoteId,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
     case EVENT_OUTBOX_TYPES.BUYER_PROFILE_COMPLETION_REMINDER_EMAIL: {
       const rfqId = job.raw?.rfqId;
       const quoteId = job.raw?.quoteId;
