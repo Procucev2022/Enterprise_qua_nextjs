@@ -727,6 +727,7 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       const sessionRow = { id: 's-1', status: 'IN_PROGRESS' };
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [sessionRow] }) };
       await expect(domainQueries.getBulkImportSessionFromDB('s-1')).resolves.toEqual(sessionRow);
+      expect(pool.pool.query.mock.calls[0][0]).toContain('created_by_email');
       expect(pool.pool.query.mock.calls[0][1]).toEqual(['s-1']);
     });
 

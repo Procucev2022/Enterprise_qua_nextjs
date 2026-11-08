@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const vendorDossierExtensions = require('./vendorDossierExtensions');
 
 const storeService = require('../services/storeService');
@@ -83,6 +84,20 @@ function assertBulkImportRole(req, res) {
   if (user.role === 'category_manager' || user.role === 'admin' || user.role === 'buyer') return true;
   res.status(403).json({ success: false, error: 'Only a category manager, buyer, or admin may bulk-import vendors.' });
   return false;
+}
+
+function hasBulkImportSessionAccess(user, session) {
+  if (user?.role === 'admin') return true;
+  const actorEmail = String(user?.email || '').trim().toLowerCase();
+  const ownerEmail = String(session?.created_by_email || '').trim().toLowerCase();
+  return Boolean(actorEmail && ownerEmail && actorEmail === ownerEmail);
+}
+
+function publicBulkImportSession(session) {
+  if (!session) return session;
+  const safeSession = { ...session };
+  delete safeSession.created_by_email;
+  return safeSession;
 }
 
 // Fields a vendor may edit about their own profile via self-service PUT.
@@ -961,6 +976,14 @@ async function bulkImportVendors(req, res, next) {
   try {
     if (!assertBulkImportRole(req, res)) return;
 
+    const sessionValidation = validatePayload(VALIDATION_SCHEMAS.vendorBulkImportRequest, req.body || {});
+    if (!sessionValidation.isValid) {
+      return res.status(400).json({ success: false, error: Object.values(sessionValidation.errors)[0] });
+    }
+    if (req.user.role !== 'admin' && !String(req.user.email || '').trim()) {
+      return res.status(401).json({ success: false, error: 'A verified account email is required to track this import session.' });
+    }
+
     // A buyer's bulk upload is their own private roster (same
     // buyerId/addedByBuyerCompany/source attribution as the single-add path
     // in createVendor), never the shared Procucev network a category
@@ -998,13 +1021,16 @@ async function bulkImportVendors(req, res, next) {
     // ever knew about itself. `sessionId` ties every chunk of one upload run
     // together; absent on the first chunk, it is created here and returned
     // for the client to reuse on every subsequent chunk.
-    let sessionId = typeof req.body.sessionId === 'string' ? req.body.sessionId : null;
+    let sessionId = sessionValidation.sanitizedData.sessionId || null;
     let session = null;
     if (sessionId) {
       session = await domainQueries.getBulkImportSessionFromDB(sessionId);
+      if (!session || !hasBulkImportSessionAccess(req.user, session)) {
+        return res.status(404).json({ success: false, error: 'Import session not found.' });
+      }
     }
     if (!session) {
-      sessionId = `bulk-import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      sessionId = crypto.randomUUID();
       const totalRowsDeclared = Number(req.body.totalRowsDeclared) || rows.length;
       session = await domainQueries.createBulkImportSessionInDB(sessionId, req.user?.email || null, totalRowsDeclared);
     }
@@ -1072,7 +1098,7 @@ async function bulkImportVendors(req, res, next) {
         onboardingFailed: allResults.filter((r) => r.onboardingEmailStatus === 'failed').length,
         onboardingSkipped: allResults.filter((r) => r.onboardingEmailStatus === 'skipped').length,
         results: publicResults,
-        session: updatedSession || session,
+        session: publicBulkImportSession(updatedSession || session),
       },
     });
   } catch (err) {
@@ -1144,11 +1170,15 @@ async function getVendorRfqCredits(req, res, next) {
 async function getBulkImportSessionStatus(req, res, next) {
   try {
     if (!assertBulkImportRole(req, res)) return;
+    const sessionValidation = validatePayload(VALIDATION_SCHEMAS.vendorBulkImportSessionParams, req.params || {});
+    if (!sessionValidation.isValid) {
+      return res.status(400).json({ success: false, error: Object.values(sessionValidation.errors)[0] });
+    }
     const session = await domainQueries.getBulkImportSessionFromDB(req.params.sessionId);
-    if (!session) {
+    if (!session || !hasBulkImportSessionAccess(req.user, session)) {
       return res.status(404).json({ success: false, error: 'Import session not found.' });
     }
-    res.json({ success: true, data: session });
+    res.json({ success: true, data: publicBulkImportSession(session) });
   } catch (err) {
     logger.error('Error fetching bulk-import session status', err, 'VENDOR_CONTROLLER');
     next(err);

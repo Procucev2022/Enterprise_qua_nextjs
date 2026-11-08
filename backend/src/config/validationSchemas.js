@@ -7,6 +7,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 const PHONE_REGEX = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const BULK_IMPORT_SESSION_ID_REGEX = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|bulk-import-\d+-[a-z0-9]{1,12})$/i;
 const BOT_EMAIL_RECIPIENT_LIMIT = 50;
 const BOT_EMAIL_ATTACHMENT_LIMIT = 10;
 const BOT_EMAIL_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
@@ -555,6 +556,28 @@ const VALIDATION_SCHEMAS = {
     state: { type: 'string', required: false, maxLength: 100 },
     majorCategory: { type: 'string', required: false, maxLength: 150 },
     products: { type: 'string', required: false, maxLength: 500 },
+  },
+
+  vendorBulkImportRequest: {
+    sessionId: {
+      type: 'string',
+      required: false,
+      minLength: 1,
+      maxLength: 64,
+      pattern: BULK_IMPORT_SESSION_ID_REGEX,
+      message: 'Import session ID must be a valid session identifier.',
+    },
+  },
+
+  vendorBulkImportSessionParams: {
+    sessionId: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 64,
+      pattern: BULK_IMPORT_SESSION_ID_REGEX,
+      message: 'Import session ID must be a valid session identifier.',
+    },
   },
 
   submitQuote: {

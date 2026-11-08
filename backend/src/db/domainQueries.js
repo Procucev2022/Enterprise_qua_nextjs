@@ -1146,7 +1146,7 @@ async function createBulkImportSessionInDB(id, createdByEmail, totalRowsDeclared
 async function getBulkImportSessionFromDB(id) {
   if (!pool.hasStorage()) return null;
   const result = await pool.query(
-    `SELECT id, status, total_rows_declared, processed_count, imported_count,
+    `SELECT id, created_by_email, status, total_rows_declared, processed_count, imported_count,
             missing_email_count, duplicate_count, invalid_count
      FROM bulk_vendor_import_sessions WHERE id = $1`,
     [id],

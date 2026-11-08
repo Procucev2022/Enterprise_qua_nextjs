@@ -129,7 +129,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       const res = mockRes();
       const next = jest.fn();
       await vendorController.getBulkImportSessionStatus(
-        { params: { sessionId: 'sess-1' }, user: { role: 'vendor' } },
+        { params: { sessionId: '00000000-0000-4000-8000-000000000001' }, user: { role: 'vendor' } },
         res,
         next
       );
@@ -142,7 +142,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue(null);
 
       await vendorController.getBulkImportSessionStatus(
-        { params: { sessionId: 'sess-missing' }, user: { role: 'admin' } },
+        { params: { sessionId: '00000000-0000-4000-8000-000000000002' }, user: { role: 'admin' } },
         res,
         next
       );
@@ -152,15 +152,23 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
     test('returns session data when found in DB', async () => {
       const res = mockRes();
       const next = jest.fn();
-      const session = { id: 'sess-1', status: 'COMPLETED', totalRows: 50 };
+      const session = {
+        id: '00000000-0000-4000-8000-000000000003',
+        created_by_email: 'cm@procucev.com',
+        status: 'COMPLETED',
+        totalRows: 50,
+      };
       jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue(session);
 
       await vendorController.getBulkImportSessionStatus(
-        { params: { sessionId: 'sess-1' }, user: { role: 'category_manager' } },
+        { params: { sessionId: session.id }, user: { role: 'category_manager', email: 'CM@procucev.com' } },
         res,
         next
       );
-      expect(res.json).toHaveBeenCalledWith({ success: true, data: session });
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: { id: session.id, status: 'COMPLETED', totalRows: 50 },
+      });
     });
 
     test('forwards DB errors to next(err)', async () => {
@@ -169,7 +177,7 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockRejectedValue(new Error('DB connection drop'));
 
       await vendorController.getBulkImportSessionStatus(
-        { params: { sessionId: 'sess-err' }, user: { role: 'admin' } },
+        { params: { sessionId: '00000000-0000-4000-8000-000000000004' }, user: { role: 'admin' } },
         res,
         next
       );
@@ -997,7 +1005,8 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       expect(resCat404.status).toHaveBeenCalledWith(404);
 
       // bulkImportVendors with existing sessionId
-      jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue({ id: 'sess-existing' });
+      const existingSessionId = '00000000-0000-4000-8000-000000000005';
+      jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue({ id: existingSessionId });
       jest.spyOn(domainQueries, 'incrementBulkImportSessionInDB').mockResolvedValue(true);
       jest.spyOn(storeService, 'bulkAddVendors').mockResolvedValue({
         results: [{ rowNumber: 1, vendor: { id: 'v1' }, hasIssues: false }],
@@ -1009,13 +1018,13 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       await vendorController.bulkImportVendors(
         {
           user: { role: 'admin' },
-          body: { sessionId: 'sess-existing', vendors: [{ name: 'V', email: 'v@v.com', majorCategory: 'Tools' }] },
+          body: { sessionId: existingSessionId, vendors: [{ name: 'V', email: 'v@v.com', majorCategory: 'Tools' }] },
         },
         resSess,
         next
       );
       expect(resSess.json).toHaveBeenCalledWith(
-        expect.objectContaining({ success: true, data: expect.objectContaining({ sessionId: 'sess-existing' }) })
+        expect.objectContaining({ success: true, data: expect.objectContaining({ sessionId: existingSessionId }) })
       );
     });
   });
