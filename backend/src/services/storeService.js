@@ -18,6 +18,8 @@ const {
   RFQ_AUTO_CLOSE_REASON,
   RFQ_STATE_WRITE_RETRIES,
   PERSISTED_RECORD_WRITE_RETRIES,
+  RFQ_NOTIFICATION_MESSAGES,
+  RFQ_NOTIFICATION_ERROR_CODES,
   EVENT_OUTBOX_TYPES,
   EMAIL_REGEX,
   MAJOR_CATEGORY_ALIASES,
@@ -298,11 +300,29 @@ class StoreService {
    * Node/Render, where the process just keeps running regardless.
    */
   _background(promise, errorMessage, metadata = {}) {
-    const tracked = Promise.resolve(promise).catch((error) => logger.error(
-      errorMessage,
-      Object.keys(metadata).length > 0 ? { ...metadata, error } : error,
-      'STORE_SERVICE'
-    ));
+    const tracked = Promise.resolve(promise)
+      .then((delivery) => {
+        if (metadata.deliveryChannel === 'email') {
+          if (delivery?.sent === true) {
+            logger.info('Background email accepted by provider', metadata, 'STORE_SERVICE');
+          } else {
+            logger.error(errorMessage, {
+              ...metadata,
+              error: {
+                code: RFQ_NOTIFICATION_ERROR_CODES.EMAIL_DELIVERY_NOT_ACCEPTED,
+                message: RFQ_NOTIFICATION_MESSAGES.BACKGROUND_EMAIL_PROVIDER_NOT_ACCEPTED,
+                deliveryResultPresent: Boolean(delivery),
+              },
+            }, 'STORE_SERVICE');
+          }
+        }
+        return delivery;
+      })
+      .catch((error) => logger.error(
+        errorMessage,
+        Object.keys(metadata).length > 0 ? { ...metadata, error } : error,
+        'STORE_SERVICE'
+      ));
     const waitUntil = getWaitUntil();
     if (waitUntil) {
       try {
@@ -3141,17 +3161,15 @@ class StoreService {
         deliveryScore,
       });
 
-      mailerService.sendVendorIngestionEmail(emailPayload, 'rating-revision')
-        .then((delivery) => {
-          if (delivery.sent) {
-            logger.info(`Rating revision email sent to ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
-          } else {
-            logger.warn(`Failed to send rating revision email to ${vendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
-          }
-        })
-        .catch((err) => {
-          logger.error(`Error sending rating revision email to ${vendor.email}`, err, 'STORE_SERVICE');
-        });
+      this._background(
+        mailerService.sendVendorIngestionEmail(emailPayload, 'rating-revision'),
+        'Failed to send rating revision email',
+        {
+          deliveryChannel: 'email',
+          operation: 'vendor-rating-revision-email',
+          vendorId: vendor.id,
+        }
+      );
     }
   }
 
@@ -4967,7 +4985,13 @@ class StoreService {
           quotesCount: quotes.length,
           recipientName: buyer.organizationName,
         }),
-        'Failed to email auto-closure acknowledgement to buyer'
+        'Failed to email auto-closure acknowledgement to buyer',
+        {
+          deliveryChannel: 'email',
+          operation: 'rfq-auto-closure-acknowledgement',
+          rfqId: rfq.id,
+          rfqNumber: rfq.rfqNumber,
+        }
       );
     }
 
@@ -6405,7 +6429,14 @@ class StoreService {
             vendor,
             isBuyerUploaded,
           }),
-          'Failed to email RFQ invite to DB-augmented vendor'
+          'Failed to email RFQ invite to DB-augmented vendor',
+          {
+            deliveryChannel: 'email',
+            operation: 'rfq-db-augmented-vendor-invite',
+            rfqId: updated.id,
+            rfqNumber: updated.rfqNumber,
+            vendorId: vendor.id,
+          }
         );
       }
     }
@@ -6581,7 +6612,14 @@ class StoreService {
               vendor,
               isBuyerUploaded,
             }),
-            'Failed to email RFQ invite to DB auto-assigned vendor'
+            'Failed to email RFQ invite to DB auto-assigned vendor',
+            {
+              deliveryChannel: 'email',
+              operation: 'rfq-db-auto-assigned-vendor-invite',
+              rfqId: updated.id,
+              rfqNumber: updated.rfqNumber,
+              vendorId: vendor.id,
+            }
           );
         }
       }
@@ -6913,7 +6951,14 @@ class StoreService {
             isBuyerUploaded: resolvedIsBuyerUploaded,
             buyerEmail,
           }),
-          'Failed to email RFQ invite to vendor'
+          'Failed to email RFQ invite to vendor',
+          {
+            deliveryChannel: 'email',
+            operation: 'rfq-manual-vendor-invite',
+            rfqId: updatedRFQ.id,
+            rfqNumber: updatedRFQ.rfqNumber,
+            vendorId: vendor.id,
+          }
         );
       }
     }
@@ -7143,13 +7188,20 @@ class StoreService {
     // Dispatches final comparison email to the buyer
     const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
     if (buyerEmail) {
-      mailerService
-        .sendRfqFinalComparisonEmail(buyerEmail, {
+      this._background(
+        mailerService.sendRfqFinalComparisonEmail(buyerEmail, {
           rfq,
           quotes: rfq.quotes || [],
           recipientName: rfq.buyerAccountName || rfq.buyerName,
-        })
-        .catch((err) => logger.error(`Failed to send RFQ final comparison email for ${rfq.rfqNumber}`, err, 'STORE_SERVICE'));
+        }),
+        'Failed to send RFQ final comparison email',
+        {
+          deliveryChannel: 'email',
+          operation: 'rfq-final-comparison-email',
+          rfqId: rfq.id,
+          rfqNumber: rfq.rfqNumber,
+        }
+      );
     }
 
     return notification;
@@ -7172,13 +7224,20 @@ class StoreService {
       // Dispatches final comparison & closure result email to the buyer
       const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
       if (buyerEmail) {
-        mailerService
-          .sendRfqFinalComparisonEmail(buyerEmail, {
+        this._background(
+          mailerService.sendRfqFinalComparisonEmail(buyerEmail, {
             rfq,
             quotes: rfq.quotes || [],
             recipientName: rfq.buyerAccountName || rfq.buyerName,
-          })
-          .catch((err) => logger.error(`Failed to send RFQ final closure comparison email for ${rfq.rfqNumber}`, err, 'STORE_SERVICE'));
+          }),
+          'Failed to send RFQ final closure comparison email',
+          {
+            deliveryChannel: 'email',
+            operation: 'rfq-final-closure-comparison-email',
+            rfqId: rfq.id,
+            rfqNumber: rfq.rfqNumber,
+          }
+        );
       }
 
       // Dispatches SMS acknowledgment regarding quotation comparison to the buyer within 10 minutes
@@ -7334,6 +7393,7 @@ class StoreService {
           }),
           'Failed to email RFQ invite to matched vendor',
           {
+            deliveryChannel: 'email',
             operation: 'rfq-matched-vendor-invite',
             rfqId: rfq.id,
             rfqNumber: rfq.rfqNumber,
@@ -7360,6 +7420,7 @@ class StoreService {
           }),
           'Failed to email RFQ invite to assigned vendor',
           {
+            deliveryChannel: 'email',
             operation: 'rfq-assigned-vendor-invite',
             rfqId: rfq.id,
             rfqNumber: rfq.rfqNumber,
@@ -7448,7 +7509,14 @@ class StoreService {
             quote,
             recipientName: buyer.organizationName,
           }),
-          'Failed to dispatch delayed 48-hour quote email to buyer'
+          'Failed to dispatch delayed 48-hour quote email to buyer',
+          {
+            deliveryChannel: 'email',
+            operation: 'rfq-delayed-quote-notification',
+            rfqId: currentRfq.id,
+            rfqNumber: currentRfq.rfqNumber,
+            quoteId: quote.id,
+          }
         );
       } catch (err) {
         logger.error(`Error in delayed quote email dispatch for ${rfq.rfqNumber}`, err, 'STORE_SERVICE');
@@ -7581,11 +7649,17 @@ class StoreService {
             rfqTitle: rfq.title,
             quotesCount: 1,
           }),
-          'Failed to email profile completion reminder to buyer'
+          'Failed to email profile completion reminder to buyer',
+          {
+            deliveryChannel: 'email',
+            operation: 'buyer-profile-completion-reminder',
+            rfqId: rfq.id,
+            rfqNumber: rfq.rfqNumber,
+          }
         );
         this.addAuditLog({
           userEmail: buyer.corporateEmail,
-          action: `Notification outcome: Sent quotation acknowledgment and profile update reminder to ${buyer.corporateEmail} for RFQ ${rfq.rfqNumber}`,
+          action: `Notification outcome: Started quotation acknowledgment and profile update reminder delivery to ${buyer.corporateEmail} for RFQ ${rfq.rfqNumber}`,
         });
       }
       return true;
@@ -7593,7 +7667,14 @@ class StoreService {
 
     this._background(
       mailerService.sendQuoteReceivedEmail(buyer.corporateEmail, { rfq, quote, recipientName: buyer.organizationName }),
-      'Failed to email quote to buyer'
+      'Failed to email quote to buyer',
+      {
+        deliveryChannel: 'email',
+        operation: 'rfq-quote-received-email',
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+        quoteId: quote.id,
+      }
     );
     return true;
   }

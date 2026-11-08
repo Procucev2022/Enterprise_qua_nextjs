@@ -369,3 +369,8 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 - Vendor inquiry acknowledgements now use the RFQ background delivery wrapper, so Cloudflare Workers retain the promise with `waitUntil` and explicit provider refusals or thrown sends receive structured RFQ-scoped logs. The persisted inquiry response remains successful when the separate notification is unavailable.
 - The notification is still a direct provider send without a durable outbox or retry identity. Add durable delivery intent to the inquiry write before treating this path as restart-safe.
+
+## Store background email refusal diagnostics
+
+- Store background tasks now distinguish an explicitly unaccepted email result from a resolved promise, when the caller marks the task as email delivery. RFQ-scoped operation IDs, vendor IDs, and a stable refusal code are logged without recipient addresses. The Worker `waitUntil` lifecycle and rejection handling remain in the same wrapper.
+- RFQ invite, quote, closure, comparison, profile reminder, and vendor-rating fallback sends now opt into delivery-result checking. These no-storage fallback paths still lack durable retry across process restarts; configured RFQ paths continue to use the event outbox where available.
