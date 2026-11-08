@@ -5,7 +5,10 @@ const emailIngestionService = require('../src/services/emailIngestionService');
 const mailerService = require('../src/services/mailerService');
 const storeService = require('../src/services/storeService');
 const dbPool = require('../src/db/pool');
-const { EMAIL_GATEWAY_MESSAGES } = require('../src/config/constants');
+const {
+  EMAIL_GATEWAY_DELIVERY_KIND,
+  EMAIL_GATEWAY_MESSAGES,
+} = require('../src/config/constants');
 const fixtures = require('./fixtures/sampleRequisitionEmail');
 
 // ==============================================================================
@@ -167,12 +170,55 @@ describe('sendAutoReply', () => {
     expect(send).not.toHaveBeenCalled();
 
     emailGatewayService.shouldSendAutoReply.mockResolvedValue({ allowed: true });
+    send.mockResolvedValueOnce({ sent: false });
+    expect(await emailGatewayService.sendAutoReply(message(), AUTO_REPLY_KIND.UNAUTHORIZED_SENDER, send)).toBe(false);
+
     send.mockResolvedValueOnce({ sent: false, reason: 'SMTP not configured' });
     expect(await emailGatewayService.sendAutoReply(message(), AUTO_REPLY_KIND.UNAUTHORIZED_SENDER, send)).toBe(false);
     send.mockRejectedValueOnce(new Error('all providers failed'));
     expect(await emailGatewayService.sendAutoReply(message(), AUTO_REPLY_KIND.UNAUTHORIZED_SENDER, send)).toBe(false);
     expect(await emailGatewayService.sendAutoReply(message(), AUTO_REPLY_KIND.UNAUTHORIZED_SENDER, send, { failureLog: 'x' })).toBe(true);
     expect(await emailGatewayService.sendAutoReply(undefined, AUTO_REPLY_KIND.RFQ_ACK, send)).toBe(true);
+  });
+
+  test('persists configured vendor notice retries after explicit provider refusal', async () => {
+    const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+    jest.spyOn(emailGatewayService, 'shouldSendAutoReply').mockResolvedValue({ allowed: true });
+    const outboundMessage = message({
+      messageId: '<quote-failure-1@vendor.in>',
+      fromAddress: 'sales@vendor.in',
+      subject: 'Re: RFQ-RETRY-1',
+    });
+    const deliveryKind = EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE;
+    const send = jest.fn().mockResolvedValue({ sent: false, reason: 'SMTP unavailable' });
+
+    const sent = await emailGatewayService.sendAutoReply(
+      outboundMessage,
+      AUTO_REPLY_KIND.QUOTE_FAILURE,
+      send,
+      {
+        rfqNumber: 'RFQ-RETRY-1',
+        retryDelivery: {
+          deliveryKind,
+          payload: {
+            rfqNumber: 'RFQ-RETRY-1',
+            rfqTitle: 'Industrial valves',
+            vendorName: 'Apex Valves',
+            reason: 'Unit price is required.',
+            missingFields: ['Unit Price'],
+          },
+        },
+      }
+    );
+
+    expect(sent).toBe(false);
+    expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: '<quote-failure-1@vendor.in>#notice-vendor_quote_failure#ack',
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      fromAddress: 'sales@vendor.in',
+      rfqNumber: 'RFQ-RETRY-1',
+      detail: expect.stringContaining('VENDOR_QUOTE_FAILURE'),
+    }));
   });
 });
 

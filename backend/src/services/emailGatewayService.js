@@ -1442,7 +1442,12 @@ async function shouldSendAutoReply(message, kind, { rfqNumber = null, config = {
  * Send one automatic reply if the guards allow it; never throws. Returns true
  * when the reply was handed to the mailer.
  */
-async function sendAutoReply(message, kind, send, { rfqNumber = null, config = {}, failureLog } = {}) {
+async function sendAutoReply(message, kind, send, {
+  rfqNumber = null,
+  config = {},
+  failureLog,
+  retryDelivery = null,
+} = {}) {
   const decision = await emailGateway.shouldSendAutoReply(message, kind, { rfqNumber, config });
   if (!decision.allowed) {
     logger.info(
@@ -1457,6 +1462,9 @@ async function sendAutoReply(message, kind, send, { rfqNumber = null, config = {
     return true;
   } catch (mailErr) {
     logger.error(failureLog || `Failed to send ${kind} auto-reply`, mailErr, 'EMAIL_GATEWAY');
+    if (retryDelivery && retryDelivery.deliveryKind && retryDelivery.payload) {
+      await queueFailedEmailGatewayDelivery(message, retryDelivery.deliveryKind, retryDelivery.payload);
+    }
     return false;
   }
 }
@@ -1510,7 +1518,16 @@ async function queueAcknowledgement(rfqKey, ack) {
   if (!rfqKey) return;
   const detailObj = { buyerName: ack.buyerName, rfqTitle: ack.rfqTitle };
   if (ack.deliveryKind) detailObj.deliveryKind = ack.deliveryKind;
-  ['reason', 'originalSubject', 'count', 'max', 'contactPhone'].forEach((key) => {
+  [
+    'reason',
+    'originalSubject',
+    'count',
+    'max',
+    'contactPhone',
+    'vendorName',
+    'missingFields',
+    'cc',
+  ].forEach((key) => {
     if (ack[key] !== undefined && ack[key] !== null) detailObj[key] = ack[key];
   });
   const messageId = `${rfqKey}#ack`;
@@ -1564,9 +1581,17 @@ function ledgerTime(value) {
  * Retry acknowledgements that could not be sent earlier. Bounded per poll and
  * never throws: an acknowledgement must not hold up reading new mail.
  */
-async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now = Date.now() } = {}) {
+async function retryPendingAcknowledgements({
+  limit = ACK_RETRIES_PER_POLL,
+  now = Date.now(),
+  deliveryKinds = null,
+  excludeDeliveryKinds = null,
+} = {}) {
   const outcome = { sent: 0, abandoned: 0, stillPending: 0 };
-  const rows = await emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING, limit);
+  const rows = await emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING, limit, {
+    deliveryKinds,
+    excludeDeliveryKinds,
+  });
   for (const row of rows) {
     const record = (status, detail) =>
       emailGatewayQueries.recordProcessed({
@@ -1665,6 +1690,23 @@ async function retryPendingAcknowledgements({ limit = ACK_RETRIES_PER_POLL, now 
           count: saved.count,
           max: saved.max,
         }), 'RFQ-not-created notice retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED) {
+        ensureMailDeliveryAccepted(await mailerService.sendVendorCreditsExhaustedEmail(row.from_address, {
+          rfqNumber: row.rfq_number,
+          rfqTitle: saved.rfqTitle || row.subject,
+          vendorName: saved.vendorName,
+          upgradeUrl: typeof mailerService.vendorUpgradeUrl === 'function' ? mailerService.vendorUpgradeUrl() : undefined,
+          cc: saved.cc,
+        }), 'Vendor credits exhausted notice retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE) {
+        ensureMailDeliveryAccepted(await mailerService.sendQuoteFailureEmail(row.from_address, {
+          rfqNumber: row.rfq_number,
+          rfqTitle: saved.rfqTitle || row.subject,
+          vendorName: saved.vendorName,
+          reason: saved.reason,
+          missingFields: Array.isArray(saved.missingFields) ? saved.missingFields : [],
+          cc: saved.cc,
+        }), 'Vendor quote failure notice retry');
       } else if (retryTempPassword) {
         ensureMailDeliveryAccepted(await mailerService.sendBuyerOnboardingWithRfqEmail({
           to: row.from_address,
@@ -2062,7 +2104,19 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           upgradeUrl: typeof mailerService.vendorUpgradeUrl === 'function' ? mailerService.vendorUpgradeUrl() : undefined,
           cc: failureCc,
         }),
-      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor credits exhausted email' }
+      {
+        rfqNumber: targetRfq.rfqNumber,
+        failureLog: 'Failed to send vendor credits exhausted email',
+        retryDelivery: {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+          payload: {
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            vendorName: vendorRecord.name,
+            cc: failureCc,
+          },
+        },
+      }
     );
 
     return {
@@ -2117,7 +2171,21 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           missingFields: ['Quotation Details / AI Extraction'],
           cc: failureCc,
         }),
-      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote failure email' }
+      {
+        rfqNumber: targetRfq.rfqNumber,
+        failureLog: 'Failed to send vendor quote failure email',
+        retryDelivery: {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+          payload: {
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            vendorName: vendorRecord.name,
+            reason: 'Quotation parsing failed due to AI extraction errors. Please ensure all quotation parameters are clearly stated.',
+            missingFields: ['Quotation Details / AI Extraction'],
+            cc: failureCc,
+          },
+        },
+      }
     );
 
     return {
@@ -2268,7 +2336,21 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           missingFields: ['Unit Price (₹)'],
           cc: failureCc,
         }),
-      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote failure email' }
+      {
+        rfqNumber: targetRfq.rfqNumber,
+        failureLog: 'Failed to send vendor quote failure email',
+        retryDelivery: {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+          payload: {
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            vendorName: vendorRecord.name,
+            reason: 'Unit Price (₹) is mandatory and must be greater than 0.',
+            missingFields: ['Unit Price (₹)'],
+            cc: failureCc,
+          },
+        },
+      }
     );
 
     return {
@@ -3343,11 +3425,24 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
       ? 'Email ingestion ledger unavailable; unread mail left for the next poll'
       : (state.lastError || null);
 
-    // Acknowledgements are buyer mail, so only the buyer inbox poll retries
-    // them; skipped when the ledger is down or the poll is already out of time.
+    // Buyer acknowledgement work stays on the buyer poll. Vendor notices use
+    // the same ledger, but the vendor poll claims only its own retry kinds.
     let acknowledgements = null;
-    if (!config.isVendorMailbox && !ledgerUnavailable && !outOfTime) {
-      acknowledgements = await emailGateway.retryPendingAcknowledgements().catch((ackErr) => {
+    if (!ledgerUnavailable && !outOfTime) {
+      const retryOptions = config.isVendorMailbox
+        ? {
+          deliveryKinds: [
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+          ],
+        }
+        : {
+          excludeDeliveryKinds: [
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+          ],
+        };
+      acknowledgements = await emailGateway.retryPendingAcknowledgements(retryOptions).catch((ackErr) => {
         logger.error('Retrying pending RFQ acknowledgements failed', ackErr, 'EMAIL_GATEWAY');
         return null;
       });

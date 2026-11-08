@@ -6,6 +6,7 @@ const storeService = require('../src/services/storeService');
 const geminiService = require('../src/services/geminiService');
 const rfqAttachmentService = require('../src/services/rfqAttachmentService');
 const cryptoService = require('../src/services/cryptoService');
+const { EMAIL_GATEWAY_DELIVERY_KIND } = require('../src/config/constants');
 const { INGESTION_OUTCOME } = emailGatewayQueries;
 
 describe('emailGatewayService remaining branch coverage', () => {
@@ -383,6 +384,59 @@ describe('emailGatewayService remaining branch coverage', () => {
       expect(mailerService.sendBuyerOnboardingWithRfqEmail).toHaveBeenCalledWith(
         expect.objectContaining({ tempPassword: 'initial-password-123' })
       );
+    });
+
+    test.each([
+      {
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+        method: 'sendQuoteFailureEmail',
+        detail: {
+          vendorName: 'Apex Valves',
+          reason: 'Unit price is required.',
+          missingFields: ['Unit Price'],
+          cc: 'buyer@example.com',
+        },
+      },
+      {
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+        method: 'sendVendorCreditsExhaustedEmail',
+        detail: {
+          vendorName: 'Apex Valves',
+          cc: 'buyer@example.com',
+        },
+      },
+    ])('retries $deliveryKind notices from the durable email ledger', async ({ deliveryKind, method, detail }) => {
+      const messageId = `notice-${deliveryKind}`;
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([
+        {
+          message_id: messageId,
+          from_address: 'sales@vendor.in',
+          rfq_number: 'RFQ-RETRY-01',
+          subject: 'Industrial valves',
+          processed_at: new Date().toISOString(),
+          detail: JSON.stringify({
+            deliveryKind,
+            rfqTitle: 'Industrial valves',
+            ...detail,
+          }),
+        },
+      ]);
+      const deliverySpy = jest.spyOn(mailerService, method).mockResolvedValueOnce({ sent: true });
+      const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+
+      const result = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(result.sent).toBe(1);
+      expect(deliverySpy).toHaveBeenCalledWith('sales@vendor.in', expect.objectContaining({
+        rfqNumber: 'RFQ-RETRY-01',
+        rfqTitle: 'Industrial valves',
+        vendorName: 'Apex Valves',
+        cc: 'buyer@example.com',
+      }));
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+        messageId,
+        status: INGESTION_OUTCOME.ACK_SENT,
+      }));
     });
   });
 

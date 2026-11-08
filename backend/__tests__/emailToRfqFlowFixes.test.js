@@ -1075,14 +1075,24 @@ describe('acknowledgements that could not be sent are retried later', () => {
         .spyOn(emailGatewayService, 'retryPendingAcknowledgements')
         .mockResolvedValue({ sent: 1, abandoned: 0, stillPending: 0 });
       const result = await emailGatewayService.pollViaGmailApi(config());
-      expect(retry).toHaveBeenCalledTimes(1);
+      expect(retry).toHaveBeenCalledWith({
+        excludeDeliveryKinds: [
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+        ],
+      });
       expect(result.acknowledgements).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
     });
 
-    test('not on the vendor inbox', async () => {
+    test('vendor inbox retries only vendor email-gateway notice kinds', async () => {
       const retry = jest.spyOn(emailGatewayService, 'retryPendingAcknowledgements');
       await emailGatewayService.pollViaGmailApi({ ...config(), isVendorMailbox: true });
-      expect(retry).not.toHaveBeenCalled();
+      expect(retry).toHaveBeenCalledWith({
+        deliveryKinds: [
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+        ],
+      });
     });
 
     test('a retry failure never breaks the poll', async () => {
@@ -1106,5 +1116,46 @@ describe('emailGatewayQueries.listByStatus', () => {
     await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 500)).resolves.toEqual([{ message_id: 'a' }]);
     expect(rows).toHaveBeenCalledWith(expect.stringContaining('order by processed_at asc'), ['ACK_PENDING', 50], { d1: true });
     await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 0)).resolves.toEqual([]);
+  });
+
+  test('can query an allowlisted notice suffix without reading buyer acknowledgement work', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rows = jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([{ message_id: 'notice#ack' }]);
+
+    await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 5, {
+      deliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE],
+    })).resolves.toEqual([{ message_id: 'notice#ack' }]);
+
+    expect(rows).toHaveBeenCalledWith(
+      expect.stringContaining("message_id LIKE $3 ESCAPE '\\'"),
+      ['ACK_PENDING', 5, '%#notice-vendor\\_quote\\_failure#ack'],
+      { d1: true }
+    );
+  });
+
+  test('fails closed when a scoped query has no allowed delivery kinds', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rows = jest.spyOn(dbPool, 'rows');
+
+    await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 5, {
+      deliveryKinds: ['UNKNOWN_NOTICE'],
+    })).resolves.toEqual([]);
+
+    expect(rows).not.toHaveBeenCalled();
+  });
+
+  test('can exclude vendor notices from buyer acknowledgement retries', async () => {
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+    const rows = jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([]);
+
+    await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 5, {
+      excludeDeliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE],
+    })).resolves.toEqual([]);
+
+    expect(rows).toHaveBeenCalledWith(
+      expect.stringContaining("message_id NOT LIKE $3 ESCAPE '\\'"),
+      ['ACK_PENDING', 5, '%#notice-vendor\\_quote\\_failure#ack'],
+      { d1: true }
+    );
   });
 });

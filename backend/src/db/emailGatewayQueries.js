@@ -12,6 +12,7 @@
 
 const pool = require('./pool');
 const { logger } = require('../services/loggerService');
+const { EMAIL_GATEWAY_DELIVERY_KIND } = require('../config/constants');
 
 const memoryProcessedMessageIds = new Set();
 
@@ -152,19 +153,46 @@ async function findProcessed(messageId) {
 
 /**
  * Oldest-first ledger rows in one status, for work the poller retries (pending
- * acknowledgements). Empty on a ledger error: a retry can always wait a poll.
+ * acknowledgements). Optional allowlisted kinds scope vendor retries so they do
+ * not scan or starve behind unrelated buyer acknowledgement rows.
  */
-async function listByStatus(status, limit = 5) {
+async function listByStatus(status, limit = 5, { deliveryKinds = null, excludeDeliveryKinds = null } = {}) {
   if (!status || !pool.hasStorage()) return [];
   const capped = Math.min(Math.max(Number(limit) || 5, 1), 50);
+  const allowedDeliveryKinds = new Set([
+    EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
+    EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+  ]);
+  const scopedDeliveryKinds = Array.isArray(deliveryKinds)
+    ? [...new Set(deliveryKinds.filter((kind) => allowedDeliveryKinds.has(kind)))]
+    : [];
+  if (deliveryKinds !== null && deliveryKinds !== undefined && scopedDeliveryKinds.length === 0) return [];
+  const scopedExcludedKinds = Array.isArray(excludeDeliveryKinds)
+    ? [...new Set(excludeDeliveryKinds.filter((kind) => allowedDeliveryKinds.has(kind)))]
+    : [];
+  const messageIdPatterns = [];
+  const deliveryKindClauses = [];
+  if (scopedDeliveryKinds.length > 0) {
+    const includeFilters = scopedDeliveryKinds.map((kind) => {
+      messageIdPatterns.push(`%#notice-${kind.toLowerCase().replace(/[\\%_]/g, '\\$&')}#ack`);
+      return `message_id LIKE $${messageIdPatterns.length + 2} ESCAPE '\\'`;
+    });
+    deliveryKindClauses.push(`(${includeFilters.join(' or ')})`);
+  }
+  scopedExcludedKinds.forEach((kind) => {
+    messageIdPatterns.push(`%#notice-${kind.toLowerCase().replace(/[\\%_]/g, '\\$&')}#ack`);
+    deliveryKindClauses.push(`message_id NOT LIKE $${messageIdPatterns.length + 2} ESCAPE '\\'`);
+  });
+  const deliveryKindClause = deliveryKindClauses.length > 0 ? `and ${deliveryKindClauses.join(' and ')}` : '';
   try {
     return await pool.rows(
       `select message_id, rfq_id, rfq_number, from_address, subject, status, detail, processed_at
          from email_ingestion_log
         where status = $1
+          ${deliveryKindClause}
         order by processed_at asc
         limit $2`,
-      [String(status), capped],
+      [String(status), capped, ...messageIdPatterns],
       { d1: true }
     );
   } catch (err) {
