@@ -1527,6 +1527,7 @@ async function queueAcknowledgement(rfqKey, ack) {
     'vendorName',
     'missingFields',
     'cc',
+    'gatewayAddress',
   ].forEach((key) => {
     if (ack[key] !== undefined && ack[key] !== null) detailObj[key] = ack[key];
   });
@@ -1688,6 +1689,14 @@ async function retryPendingAcknowledgements({
           tempPassword: retryTempPassword,
           contactPhone: saved.contactPhone || '',
         }), 'Buyer credentials retry');
+      } else if (
+        saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER
+        || saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER
+      ) {
+        ensureMailDeliveryAccepted(await mailerService.sendUnauthorizedBuyerNotificationEmail(row.from_address, {
+          subject: saved.originalSubject || row.subject,
+          gatewayAddress: saved.gatewayAddress || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+        }), 'Unauthorized sender notice retry');
       } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.RFQ_NOT_CREATED) {
         ensureMailDeliveryAccepted(await mailerService.sendRfqNotCreatedEmail({
           to: row.from_address,
@@ -2666,7 +2675,17 @@ async function processMessage(rawSource, config = resolveConfig()) {
             subject: message.subject,
             gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
           }),
-        { config, failureLog: 'Failed to dispatch registration notification to unregistered buyer emailing vendor inbox' }
+        {
+          config,
+          failureLog: 'Failed to dispatch registration notification to unregistered buyer emailing vendor inbox',
+          retryDelivery: {
+            deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
+            payload: {
+              originalSubject: message.subject,
+              gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+            },
+          },
+        }
       );
       return {
         status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED,
@@ -2699,7 +2718,17 @@ async function processMessage(rawSource, config = resolveConfig()) {
           subject: message.subject,
           gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
         }),
-      { config, failureLog: 'Failed to dispatch registration notification to unauthorized sender' }
+      {
+        config,
+        failureLog: 'Failed to dispatch registration notification to unauthorized sender',
+        retryDelivery: {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER,
+          payload: {
+            originalSubject: message.subject,
+            gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+          },
+        },
+      }
     );
     return { status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED, detail: reason, message };
   }
@@ -3462,6 +3491,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
           ],
         }
         : {
@@ -3469,6 +3499,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
           ],
         };
       acknowledgements = await emailGateway.retryPendingAcknowledgements(retryOptions).catch((ackErr) => {

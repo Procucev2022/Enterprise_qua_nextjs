@@ -220,6 +220,37 @@ describe('sendAutoReply', () => {
       detail: expect.stringContaining('VENDOR_QUOTE_FAILURE'),
     }));
   });
+
+  test.each([
+    [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER, '<buyer-unauthorized-1@outside.org>', 'buyer-intake@procucev.com'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER, '<vendor-unauthorized-1@outside.org>', 'vendor-intake@procucev.com'],
+  ])('persists %s registration notice retries after provider refusal', async (deliveryKind, messageId, gatewayAddress) => {
+    const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+    jest.spyOn(emailGatewayService, 'shouldSendAutoReply').mockResolvedValue({ allowed: true });
+    const outboundMessage = message({ messageId, subject: 'Request for industrial valves' });
+    const send = jest.fn().mockResolvedValue({ sent: false, reason: 'SMTP unavailable' });
+
+    const sent = await emailGatewayService.sendAutoReply(
+      outboundMessage,
+      AUTO_REPLY_KIND.UNAUTHORIZED_SENDER,
+      send,
+      {
+        config: { user: gatewayAddress },
+        retryDelivery: {
+          deliveryKind,
+          payload: { originalSubject: outboundMessage.subject, gatewayAddress },
+        },
+      }
+    );
+
+    expect(sent).toBe(false);
+    expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: `${messageId}#notice-${deliveryKind.toLowerCase()}#ack`,
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      fromAddress: outboundMessage.fromAddress,
+      detail: expect.stringContaining(gatewayAddress),
+    }));
+  });
 });
 
 describe('processMessage never answers automated mail', () => {

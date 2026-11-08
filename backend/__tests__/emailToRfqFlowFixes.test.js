@@ -1080,6 +1080,7 @@ describe('acknowledgements that could not be sent are retried later', () => {
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
         ],
       });
       expect(result.acknowledgements).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
@@ -1093,6 +1094,7 @@ describe('acknowledgements that could not be sent are retried later', () => {
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
         ],
       });
     });
@@ -1123,6 +1125,7 @@ describe('emailGatewayQueries.listByStatus', () => {
   test.each([
     [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE, '%#notice-vendor\\_quote\\_failure#ack'],
     [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT, '%#notice-vendor\\_portal\\_redirect#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER, '%#notice-vendor\\_unauthorized\\_sender#ack'],
   ])('can query the allowlisted %s notice suffix without reading buyer acknowledgement work', async (deliveryKind, messageIdPattern) => {
     jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
     const rows = jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([{ message_id: 'notice#ack' }]);

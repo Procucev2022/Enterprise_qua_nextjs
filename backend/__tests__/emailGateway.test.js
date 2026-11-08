@@ -1619,7 +1619,11 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
 
   test('TEST 11: Unregistered buyer -> registration notification sent, no Gemini call, no RFQ created', async () => {
     const createRfqSpy = jest.spyOn(storeService, 'createRFQ');
-    const mailerSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail');
+    const mailerSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockResolvedValueOnce({
+      sent: false,
+      reason: 'SMTP unavailable',
+    });
+    const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
     const geminiSpy = jest.spyOn(geminiService, 'extractLineItems');
 
     const unregEml = fixtures.PLAIN_REQUISITION_EML.split(SENDER).join('stranger.buyer@outside.org');
@@ -1627,8 +1631,77 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
 
     expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
     expect(mailerSpy).toHaveBeenCalledWith('stranger.buyer@outside.org', expect.anything());
+    expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      detail: expect.stringContaining(EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER),
+    }));
     expect(geminiSpy).not.toHaveBeenCalled();
     expect(createRfqSpy).not.toHaveBeenCalled();
+  });
+
+  test('unregistered buyer notification uses the default gateway address when config has no user', async () => {
+    const mailerSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockResolvedValueOnce({ sent: false });
+    const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+    const unregEml = fixtures.PLAIN_REQUISITION_EML.split(SENDER).join('stranger.default@outside.org');
+    const buyerConfig = {
+      ...emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_AUTO_REGISTER: 'false' }),
+      user: '',
+    };
+
+    const result = await emailGatewayService.processMessage(Buffer.from(unregEml, 'utf8'), buyerConfig);
+
+    expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
+    expect(mailerSpy).toHaveBeenCalledWith('stranger.default@outside.org', expect.objectContaining({
+      gatewayAddress: EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+    }));
+    expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      detail: expect.stringContaining(EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS),
+    }));
+  });
+
+  test('unregistered sender on vendor inbox queues its registration notice in the vendor retry lane', async () => {
+    const mailerSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockResolvedValueOnce({ sent: false });
+    const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+    const unregEml = fixtures.PLAIN_REQUISITION_EML.split(SENDER).join('stranger.vendor@outside.org');
+    const vendorConfig = {
+      ...emailGatewayService.resolveConfig(FULL_ENV),
+      user: 'vendor-intake@procucev.com',
+      isVendorMailbox: true,
+    };
+
+    const result = await emailGatewayService.processMessage(Buffer.from(unregEml, 'utf8'), vendorConfig);
+
+    expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
+    expect(mailerSpy).toHaveBeenCalledWith('stranger.vendor@outside.org', expect.objectContaining({
+      gatewayAddress: 'vendor-intake@procucev.com',
+    }));
+    expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      detail: expect.stringContaining(EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER),
+    }));
+  });
+
+  test('vendor inbox registration notice uses the default gateway address when config has no user', async () => {
+    const mailerSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockResolvedValueOnce({ sent: false });
+    const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+    const unregEml = fixtures.PLAIN_REQUISITION_EML.split(SENDER).join('stranger.vendor-default@outside.org');
+    const vendorConfig = {
+      ...emailGatewayService.resolveConfig({ ...FULL_ENV, EMAIL_GATEWAY_AUTO_REGISTER: 'false' }),
+      user: '',
+      isVendorMailbox: true,
+    };
+
+    const result = await emailGatewayService.processMessage(Buffer.from(unregEml, 'utf8'), vendorConfig);
+
+    expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
+    expect(mailerSpy).toHaveBeenCalledWith('stranger.vendor-default@outside.org', expect.objectContaining({
+      gatewayAddress: EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+    }));
+    expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      detail: expect.stringContaining(EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS),
+    }));
   });
 
   test('TEST 12: Same email processed twice -> duplicate rejected, no second RFQ created', async () => {

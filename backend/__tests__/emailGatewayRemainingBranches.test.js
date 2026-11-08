@@ -6,7 +6,7 @@ const storeService = require('../src/services/storeService');
 const geminiService = require('../src/services/geminiService');
 const rfqAttachmentService = require('../src/services/rfqAttachmentService');
 const cryptoService = require('../src/services/cryptoService');
-const { EMAIL_GATEWAY_DELIVERY_KIND } = require('../src/config/constants');
+const { EMAIL_GATEWAY_CONFIG, EMAIL_GATEWAY_DELIVERY_KIND } = require('../src/config/constants');
 const { INGESTION_OUTCOME } = emailGatewayQueries;
 
 describe('emailGatewayService remaining branch coverage', () => {
@@ -414,6 +414,22 @@ describe('emailGatewayService remaining branch coverage', () => {
           cc: 'buyer@example.com',
         },
       },
+      {
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER,
+        method: 'sendUnauthorizedBuyerNotificationEmail',
+        detail: {
+          originalSubject: 'Industrial valves',
+          gatewayAddress: 'buyer-intake@example.com',
+        },
+      },
+      {
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
+        method: 'sendUnauthorizedBuyerNotificationEmail',
+        detail: {
+          originalSubject: 'Industrial valves',
+          gatewayAddress: 'vendor-intake@example.com',
+        },
+      },
     ])('retries $deliveryKind notices from the durable email ledger', async ({ deliveryKind, method, detail }) => {
       const messageId = `notice-${deliveryKind}`;
       jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([
@@ -436,24 +452,54 @@ describe('emailGatewayService remaining branch coverage', () => {
       const result = await emailGatewayService.retryPendingAcknowledgements();
 
       expect(result.sent).toBe(1);
-      const expectedDeliveryContext = deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT
+      const expectedDeliveryContext = [
+        EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER,
+        EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
+      ].includes(deliveryKind)
         ? {
-          rfq: { rfqNumber: 'RFQ-RETRY-01', title: 'Industrial valves' },
-          vendorName: 'Apex Valves',
-          itemCount: 11,
-          cc: 'buyer@example.com',
+          subject: 'Industrial valves',
+          gatewayAddress: detail.gatewayAddress,
         }
-        : {
-          rfqNumber: 'RFQ-RETRY-01',
-          rfqTitle: 'Industrial valves',
-          vendorName: 'Apex Valves',
-          cc: 'buyer@example.com',
-        };
+        : deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT
+          ? {
+            rfq: { rfqNumber: 'RFQ-RETRY-01', title: 'Industrial valves' },
+            vendorName: 'Apex Valves',
+            itemCount: 11,
+            cc: 'buyer@example.com',
+          }
+          : {
+            rfqNumber: 'RFQ-RETRY-01',
+            rfqTitle: 'Industrial valves',
+            vendorName: 'Apex Valves',
+            cc: 'buyer@example.com',
+          };
       expect(deliverySpy).toHaveBeenCalledWith('sales@vendor.in', expect.objectContaining(expectedDeliveryContext));
       expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
         messageId,
         status: INGESTION_OUTCOME.ACK_SENT,
       }));
+    });
+
+    test('retries legacy unauthorized-sender rows with the subject and gateway defaults', async () => {
+      const row = {
+        message_id: 'legacy-unauthorized-notice',
+        from_address: 'stranger@outside.org',
+        rfq_number: null,
+        subject: 'Legacy request for pumps',
+        processed_at: new Date().toISOString(),
+        detail: JSON.stringify({ deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.BUYER_UNAUTHORIZED_SENDER }),
+      };
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([row]);
+      const deliverySpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockResolvedValueOnce({ sent: true });
+      jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+
+      const result = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(result.sent).toBe(1);
+      expect(deliverySpy).toHaveBeenCalledWith(row.from_address, {
+        subject: row.subject,
+        gatewayAddress: EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+      });
     });
   });
 
