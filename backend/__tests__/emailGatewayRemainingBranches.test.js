@@ -1,6 +1,7 @@
 const emailGatewayService = require('../src/services/emailGatewayService');
 const emailGatewayQueries = require('../src/db/emailGatewayQueries');
 const identityQueries = require('../src/db/identityQueries');
+const pool = require('../src/db/pool');
 const mailerService = require('../src/services/mailerService');
 const storeService = require('../src/services/storeService');
 const geminiService = require('../src/services/geminiService');
@@ -601,6 +602,7 @@ describe('emailGatewayService remaining branch coverage', () => {
         bodyText: 'Quotation amount: INR 500,000 for 50 valves',
       };
 
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('unverified-buyer@corp.com');
       jest.spyOn(storeService, 'checkVendorQuotationEligibility').mockReturnValue({ eligible: true });
       jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValueOnce({
@@ -617,6 +619,14 @@ describe('emailGatewayService remaining branch coverage', () => {
       jest.spyOn(storeService, 'isBuyerProfileUpdateRequired').mockReturnValueOnce(true);
       jest.spyOn(storeService, 'hasQuoteAckBeenSent').mockReturnValueOnce(false);
       jest.spyOn(storeService, 'markQuoteAckSent').mockImplementation(() => {});
+      jest.spyOn(storeService, 'submitVendorQuoteDurably').mockResolvedValue({
+        rfq: { ...targetRfq, status: 'Active' },
+        quoteId: 'quote-profile-reminder-test',
+        buyerQuoteNotificationQueued: false,
+        buyerProfileReminderQueued: false,
+        vendorQuoteAcknowledgementQueued: false,
+        autoClosureEmailQueued: false,
+      });
       jest.spyOn(storeService, 'queuePendingQuoteNotification').mockImplementation(() => {});
       jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValueOnce({ messageId: 'm-remind' });
       jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});

@@ -2536,20 +2536,27 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           'EMAIL_GATEWAY'
         );
         storeService.queuePendingQuoteNotification(buyerEmail, { rfq: updatedRFQ || targetRfq, quote });
-        if (quoteSubmission?.buyerProfileReminderQueued === true) {
-          logger.info('Buyer profile completion reminder is queued in the durable event outbox', {
+        if (quoteSubmission?.buyerProfileReminderQueued === true || quoteSubmission?.autoClosureEmailQueued === true) {
+          logger.info('Buyer profile or auto-closure notice is owned by quote submission delivery', {
             rfqNumber: targetRfq.rfqNumber,
             quoteId: quote.id || null,
+            storageConfigured: pool.hasStorage(),
           }, 'EMAIL_GATEWAY');
         } else if (!storeService.hasQuoteAckBeenSent(targetRfq)) {
           storeService.markQuoteAckSent(targetRfq);
-          await mailerService.sendBuyerProfileCompletionReminderEmail({
-            to: buyerEmail,
-            recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
-            rfqNumber: targetRfq.rfqNumber,
-            rfqTitle: targetRfq.title,
-            quotesCount: 1,
-          });
+          try {
+            const delivery = await mailerService.sendBuyerProfileCompletionReminderEmail({
+              to: buyerEmail,
+              recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
+              rfqNumber: targetRfq.rfqNumber,
+              rfqTitle: targetRfq.title,
+              quotesCount: 1,
+            });
+            ensureMailDeliveryAccepted(delivery, 'Buyer profile completion reminder');
+          } catch (error) {
+            storeService._unmarkQuoteAckSent(targetRfq);
+            throw error;
+          }
           storeService.addAuditLog({
             userEmail: buyerEmail,
             action: `Notification outcome: Sent quotation acknowledgment and profile update reminder to ${buyerEmail} for RFQ ${targetRfq.rfqNumber}`,
@@ -2558,20 +2565,28 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
       } else {
         const committedRFQ = updatedRFQ || targetRfq;
         if (quoteSubmission?.buyerQuoteNotificationQueued === true || quoteSubmission?.autoClosureEmailQueued === true) {
-          logger.info('Buyer quote email is queued in the durable event outbox', {
+          logger.info('Buyer quote email is owned by quote submission delivery', {
             rfqNumber: targetRfq.rfqNumber,
             quoteId: quote.id || null,
+            storageConfigured: pool.hasStorage(),
           }, 'EMAIL_GATEWAY');
         } else {
-          await mailerService.sendQuoteReceivedEmail(buyerEmail, {
+          const delivery = await mailerService.sendQuoteReceivedEmail(buyerEmail, {
             rfq: committedRFQ,
             quote,
             recipientName: targetRfq.buyerAccountName || (buyerAcc && buyerAcc.organizationName) || 'Buyer',
           });
+          ensureMailDeliveryAccepted(delivery, 'Buyer quote notification');
         }
       }
     } catch (mailErr) {
-      logger.error('Failed to send buyer quote received email', mailErr, 'EMAIL_GATEWAY');
+      logger.error('Failed to dispatch buyer quote notification', {
+        error: mailErr,
+        rfqId: targetRfq.id,
+        rfqNumber: targetRfq.rfqNumber,
+        quoteId: quote.id || quoteSubmission?.quoteId || null,
+        recipient: buyerEmail || null,
+      }, 'EMAIL_GATEWAY');
     }
   }
 

@@ -97,6 +97,64 @@ describe('durable quote submission and credit synchronization', () => {
     expect(inMemory).toHaveBeenCalledWith(RFQ_ID, {});
   });
 
+  test.each([
+    {
+      description: 'regular buyer quote notifications',
+      updatedStatus: 'In Evaluation',
+      requiresProfileCompletion: false,
+      buyerQuoteNotificationQueued: true,
+      buyerProfileReminderQueued: false,
+      autoClosureEmailQueued: false,
+      autoClosedByQuote: false,
+    },
+    {
+      description: 'buyer profile reminders',
+      updatedStatus: 'In Evaluation',
+      requiresProfileCompletion: true,
+      buyerQuoteNotificationQueued: false,
+      buyerProfileReminderQueued: true,
+      autoClosureEmailQueued: false,
+      autoClosedByQuote: false,
+    },
+    {
+      description: 'auto-closure notifications',
+      updatedStatus: 'Closed',
+      requiresProfileCompletion: false,
+      buyerQuoteNotificationQueued: false,
+      buyerProfileReminderQueued: false,
+      autoClosureEmailQueued: true,
+      autoClosedByQuote: true,
+    },
+  ])('reports local ownership of $description to gateway callers', async ({
+    updatedStatus,
+    requiresProfileCompletion,
+    buyerQuoteNotificationQueued,
+    buyerProfileReminderQueued,
+    autoClosureEmailQueued,
+    autoClosedByQuote,
+  }) => {
+    const currentRfq = rfq({ buyerEmail: 'buyer@example.test' });
+    const updatedRfq = { ...currentRfq, status: updatedStatus };
+    storeService.rfqs.push(currentRfq);
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+    jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue(updatedRfq);
+    jest.spyOn(storeService, '_buildBuyerQuoteEmailPlan').mockReturnValue({
+      buyer: { corporateEmail: 'buyer@example.test' },
+      buyerEmail: 'buyer@example.test',
+      requiresProfileCompletion,
+    });
+
+    await expect(storeService.submitVendorQuoteDurably(RFQ_ID, { id: 'local-quote-1' }, { includeDeliveryState: true })).resolves.toEqual({
+      rfq: updatedRfq,
+      quoteId: 'local-quote-1',
+      buyerQuoteNotificationQueued,
+      buyerProfileReminderQueued,
+      vendorQuoteAcknowledgementQueued: false,
+      autoClosureEmailQueued,
+      autoClosedByQuote,
+    });
+  });
+
   test('uses local credit mode without storage', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
     const local = jest.spyOn(storeService, 'consumeVendorQuotationCredit').mockReturnValue({ id: VENDOR_ID });

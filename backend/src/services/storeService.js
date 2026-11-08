@@ -4775,6 +4775,7 @@ class StoreService {
   } = {}) {
     const durableQuoteId = quote.id || crypto.randomUUID();
     if (!pool.hasStorage()) {
+      const existingRfq = this.getRFQById(rfqId);
       const updated = this.addQuoteToRFQ(rfqId, { ...quote, id: durableQuoteId });
       if (!updated) {
         return includeDeliveryState
@@ -4782,8 +4783,18 @@ class StoreService {
           : null;
       }
       if (quote && quote.vendorId) this.consumeVendorQuotationCredit(quote.vendorId, rfqId);
+      const autoClosedByQuote = updated.status === 'Closed' && existingRfq?.status !== 'Closed';
+      const buyerEmailPlan = this._buildBuyerQuoteEmailPlan(updated);
       return includeDeliveryState
-        ? { rfq: updated, quoteId: durableQuoteId, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, vendorQuoteAcknowledgementQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+        ? {
+          rfq: updated,
+          quoteId: durableQuoteId,
+          buyerQuoteNotificationQueued: Boolean(buyerEmailPlan && !buyerEmailPlan.requiresProfileCompletion && !autoClosedByQuote),
+          buyerProfileReminderQueued: Boolean(buyerEmailPlan?.requiresProfileCompletion && !autoClosedByQuote),
+          vendorQuoteAcknowledgementQueued: false,
+          autoClosureEmailQueued: autoClosedByQuote,
+          autoClosedByQuote,
+        }
         : updated;
     }
 
