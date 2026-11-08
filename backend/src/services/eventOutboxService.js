@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
+const identityQueries = require('../db/identityQueries');
 const enterpriseInquiryQueries = require('../db/enterpriseInquiryQueries');
 const eventOutboxQueries = require('../db/eventOutboxQueries');
 const { dispatchWhatsAppCredentialEmail } = require('./whatsAppCredentialOutboxService');
@@ -313,6 +314,74 @@ async function dispatchEvent(job) {
         throw error;
       }
       logger.info('Vendor onboarding email accepted and status persisted', {
+        vendorId,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
+    case EVENT_OUTBOX_TYPES.VENDOR_BULK_IMPORT_INVITATION_EMAIL: {
+      const { vendorId } = job.raw || {};
+      if (typeof vendorId !== 'string' || !vendorId) {
+        const error = new Error('Bulk-import invitation retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const vendor = await domainQueries.getVendorByIdFromDB(vendorId, { fresh: true });
+      if (!vendor) {
+        const error = new Error('Bulk-import invitation retry references a missing vendor.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      if (vendor.onboardingEmailStatus === 'invitation_sent') return;
+      if (!['skipped', 'invitation_pending', 'invitation_failed'].includes(vendor.onboardingEmailStatus)) {
+        const error = new Error('Bulk-import invitation retry references a vendor that is no longer eligible for delivery.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const recipient = String(vendor.email || '').trim();
+      if (!EMAIL_REGEX.test(recipient)) {
+        const error = new Error('Bulk-import invitation has no valid persisted recipient.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const identity = await identityQueries.findUserByEmail(recipient);
+      if (!identity) {
+        const error = new Error('Bulk-import invitation references a vendor without a sign-in identity.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const emailPayload = mailerService.buildVendorBulkImportInvitationEmail({
+        to: recipient,
+        recipientName: vendor.contactPerson || vendor.name,
+        buyerOrganizationName: vendor.addedByBuyerCompany || 'Procucev Enterprise',
+        vendorCode: vendor.vendorCode || vendor.id,
+      });
+      let delivery;
+      try {
+        delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'bulk-import-invitation');
+      } catch {
+        const error = new Error('Bulk-import invitation email provider request failed.');
+        error.code = 'VENDOR_BULK_IMPORT_INVITATION_FAILED';
+        throw error;
+      }
+      if (!delivery?.sent) {
+        const error = new Error('Bulk-import invitation email provider did not accept the message.');
+        error.code = 'VENDOR_BULK_IMPORT_INVITATION_FAILED';
+        throw error;
+      }
+
+      const saved = await require('./storeService').updateVendorDurably(vendorId, {
+        onboardingEmailStatus: 'invitation_sent',
+      });
+      if (!saved) {
+        const error = new Error('Bulk-import invitation was accepted but its status was not persisted.');
+        error.code = 'VENDOR_BULK_IMPORT_STATUS_NOT_SAVED';
+        throw error;
+      }
+      logger.info('Bulk-import invitation accepted and status persisted', {
         vendorId,
         outboxId: job.id,
       }, 'EVENT_OUTBOX');
@@ -959,6 +1028,28 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, e
           logger.error('Could not mark dead-lettered communication as failed', {
             error: communicationError,
             communicationId: job.raw.communicationId,
+            outboxId: job.id,
+          }, 'EVENT_OUTBOX');
+        }
+      }
+      if (isDead && job.event_type === EVENT_OUTBOX_TYPES.VENDOR_BULK_IMPORT_INVITATION_EMAIL) {
+        try {
+          const vendorId = typeof job.raw?.vendorId === 'string' ? job.raw.vendorId : null;
+          if (vendorId) {
+            const failedVendor = await require('./storeService').updateVendorDurably(vendorId, {
+              onboardingEmailStatus: 'invitation_failed',
+            });
+            if (!failedVendor) {
+              logger.warn('Dead-lettered bulk-import invitation has no matching vendor row', {
+                vendorId,
+                outboxId: job.id,
+              }, 'EVENT_OUTBOX');
+            }
+          }
+        } catch (statusError) {
+          logger.error('Could not mark dead-lettered bulk-import invitation as failed', {
+            error: statusError,
+            vendorId: job.raw?.vendorId,
             outboxId: job.id,
           }, 'EVENT_OUTBOX');
         }

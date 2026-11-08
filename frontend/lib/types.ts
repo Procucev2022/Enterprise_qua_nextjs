@@ -1014,7 +1014,16 @@ export interface VendorEntry {
 
   // Database Availability & Onboarding Credentials
   isExistingInDatabase?: boolean;
-  onboardingEmailStatus?: 'sent' | 'pending' | 'delivered' | 'failed' | 'account_exists' | 'skipped';
+  onboardingEmailStatus?:
+    | 'sent'
+    | 'pending'
+    | 'delivered'
+    | 'failed'
+    | 'account_exists'
+    | 'skipped'
+    | 'invitation_pending'
+    | 'invitation_sent'
+    | 'invitation_failed';
   onboardingEmailDispatchedAt?: string;
   firstLoginCompleted?: boolean;
   reminderCadence?: 'every_3_days';
@@ -1109,12 +1118,33 @@ export interface VendorUploadRow {
 export interface VendorUploadRowResult {
   rowNumber: number;
   status: 'imported' | 'duplicate' | 'failed';
+  vendorId?: string;
   email?: string;
   errors?: string[];
   reason?: string;
   missingEmail?: boolean;
   onboardingEmailStatus?: VendorEntry['onboardingEmailStatus'];
   onboardingError?: string;
+}
+
+export interface VendorBulkInvitationResult {
+  vendorId: string;
+  status:
+    | 'sent'
+    | 'queued'
+    | 'already_sent'
+    | 'not_found'
+    | 'not_eligible'
+    | 'missing_email'
+    | 'identity_missing'
+    | 'failed';
+}
+
+export interface VendorBulkInvitationResponse {
+  sentCount: number;
+  queuedCount: number;
+  failedCount: number;
+  results: VendorBulkInvitationResult[];
 }
 
 /** Aggregate response from one bulk-import chunk request. */

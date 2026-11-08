@@ -26,6 +26,7 @@ import {
   isAllowedVendorUploadFile,
   MAX_VENDOR_UPLOAD_FILE_BYTES,
   parseVendorUploadFile,
+  sendBulkVendorInvitations,
 } from '@/lib/vendorUploadClient';
 import type { VendorUploadImportResponse, VendorUploadRow } from '@/lib/types';
 
@@ -79,6 +80,9 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   const [previewFilter, setPreviewFilter] = useState<'all' | 'valid' | 'invalid'>('all');
   const [importProgress, setImportProgress] = useState<VendorUploadImportResponse | null>(null);
   const [importResult, setImportResult] = useState<VendorUploadImportResponse | null>(null);
+  const [isSendingInvitations, setIsSendingInvitations] = useState(false);
+  const [invitationSummary, setInvitationSummary] = useState<string | null>(null);
+  const [invitationProgress, setInvitationProgress] = useState({ completed: 0, total: 0 });
 
   useEffect(() => {
     try {
@@ -114,6 +118,9 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
     setPreviewFilter('all');
     setImportProgress(null);
     setImportResult(null);
+    setIsSendingInvitations(false);
+    setInvitationSummary(null);
+    setInvitationProgress({ completed: 0, total: 0 });
   }
 
   function handleClose() {
@@ -206,6 +213,57 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
     if (result.imported > 0) {
       await refreshFromDB();
       onImportComplete?.();
+    }
+  }
+
+  async function handleSendInvitations(importResult: VendorUploadImportResponse) {
+    const vendorIds = importResult.results
+      .filter((result) => (
+        result.status === 'imported'
+        && ['skipped', 'invitation_failed'].includes(result.onboardingEmailStatus || '')
+        && result.vendorId
+      ))
+      .map((result) => result.vendorId as string);
+    setIsSendingInvitations(true);
+    setInvitationSummary(null);
+    setInvitationProgress({ completed: 0, total: vendorIds.length });
+    try {
+      const result = await sendBulkVendorInvitations(vendorIds, (completed, total) => {
+        setInvitationProgress({ completed, total });
+      });
+      const statusByVendorId = new Map(result.results.map((item) => [item.vendorId, item.status]));
+      setImportResult((current) => current && ({
+        ...current,
+        results: current.results.map((row) => {
+          if (!row.vendorId || !statusByVendorId.has(row.vendorId)) return row;
+          const status = statusByVendorId.get(row.vendorId);
+          return {
+            ...row,
+            onboardingEmailStatus: status === 'sent' || status === 'already_sent'
+              ? 'invitation_sent'
+              : status === 'queued'
+                ? 'invitation_pending'
+                : 'invitation_failed',
+          };
+        }),
+      }));
+      setInvitationSummary(formatString(UI_STRINGS.vendorBulkImport.invitationSummary, {
+        sent: result.sentCount,
+        queued: result.queuedCount,
+        failed: result.failedCount,
+      }));
+      if (result.failedCount > 0) {
+        showToast(
+          UI_STRINGS.vendorBulkImport.invitationIssueTitle,
+          UI_STRINGS.vendorBulkImport.invitationRequestError,
+          'warning'
+        );
+      }
+    } catch {
+      setInvitationSummary(UI_STRINGS.vendorBulkImport.invitationRequestError);
+    } finally {
+      setIsSendingInvitations(false);
+      setInvitationProgress({ completed: 0, total: 0 });
     }
   }
 
@@ -562,6 +620,13 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
           )}
 
           {step === 'result' && importResult && (() => {
+            const invitationVendorIds = importResult.results
+              .filter((result) => (
+                result.status === 'imported'
+                && ['skipped', 'invitation_failed'].includes(result.onboardingEmailStatus || '')
+                && Boolean(result.vendorId)
+              ))
+              .map((result) => result.vendorId as string);
             // Status is derived from the real import outcome so the headline can
             // never claim success when nothing was imported (e.g. every record
             // was a duplicate). "Completed" means every row imported; "Partially
@@ -618,6 +683,29 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                     {formatString(UI_STRINGS.vendorBulkImport.onboardingSkippedSummary, { count: Number(importResult.onboardingSkipped) })}
                   </p>
                 )}
+              {(invitationVendorIds.length > 0 || invitationSummary) && (
+                <div className="mt-2 space-y-2">
+                  {invitationVendorIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleSendInvitations(importResult)}
+                      disabled={isSendingInvitations}
+                      className="btn btn-secondary btn-sm font-bold"
+                    >
+                      {isSendingInvitations
+                        ? formatString(UI_STRINGS.vendorBulkImport.sendingInvitations, invitationProgress)
+                        : formatString(UI_STRINGS.vendorBulkImport.sendInvitationsButton, {
+                          count: invitationVendorIds.length,
+                        })}
+                    </button>
+                  )}
+                  {invitationSummary && (
+                    <p role="status" className="text-xs text-slate-600 dark:text-gray-300">
+                      {invitationSummary}
+                    </p>
+                  )}
+                </div>
+              )}
               </div>
 
               {(importResult.failed > 0 || importResult.duplicates > 0) && (

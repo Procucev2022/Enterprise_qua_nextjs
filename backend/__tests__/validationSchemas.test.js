@@ -41,6 +41,16 @@ describe('Backend Validation Schemas Unit Tests', () => {
     }).isValid).toBe(false);
   });
 
+  test('validates unique bounded bulk-import invitation IDs', () => {
+    const schema = VALIDATION_SCHEMAS.vendorBulkImportInvitations;
+    expect(validatePayload(schema, { vendorIds: [' v-bulk-1 ', 'vendor:2'] }).isValid).toBe(true);
+    expect(validatePayload(schema, { vendorIds: [] }).errors.vendorIds).toMatch(/at least one/);
+    expect(validatePayload(schema, { vendorIds: ['v-1', 'V-1'] }).errors.vendorIds).toMatch(/unique/);
+    expect(validatePayload(schema, { vendorIds: ['../secret'] }).errors.vendorIds).toMatch(/identifier/);
+    expect(validatePayload(schema, { vendorIds: Array.from({ length: 16 }, (_item, index) => `v-${index}`) }).errors.vendorIds)
+      .toMatch(/no more than 15/);
+  });
+
   test('validates bot bridge email recipients, bounded attachments, and generic validator fallbacks', () => {
     expect(validatePayload(VALIDATION_SCHEMAS.botBridgeEmail, {
       to: [' buyer@example.com ', 'copy@example.com'],

@@ -35,6 +35,11 @@ export const UI_STRINGS = {
     progressSummary: '{processed} of {total} processed — {imported} imported ({missingEmail} missing email), {duplicates} duplicate, {failed} failed, {onboardingFailed} credential email(s) failed, {onboardingSkipped} imported account(s) have no invitation email',
     onboardingSkippedSummary: '{count} vendor account(s) were imported without an invitation email. Bulk import intentionally does not send login credentials.',
     historyOnboardingSkipped: '{count} Not Invited',
+    sendInvitationsButton: 'Send Invitations ({count})',
+    sendingInvitations: 'Sending invitations… {completed} of {total}',
+    invitationSummary: '{sent} accepted or already sent, {queued} queued for delivery, {failed} need review.',
+    invitationIssueTitle: 'Invitation delivery needs review',
+    invitationRequestError: 'Some invitations could not be queued. Review the results and retry.',
   },
   historicalIngestion: {
     deliverySummary: 'Template A: {mappedSent} sent, {mappedQueued} queued; Template B: {unmappedSent} sent, {unmappedQueued} queued; {failed} failed.',

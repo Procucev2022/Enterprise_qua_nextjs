@@ -2083,6 +2083,31 @@ function buildVendorOnboardingEmail({ to, recipientName, buyerOrganizationName, 
   };
 }
 
+/** Credential-free invitation for a vendor identity created during bulk import. */
+function buildVendorBulkImportInvitationEmail({ to, recipientName, buyerOrganizationName, vendorCode }) {
+  const buyer = escapeHtml(buyerOrganizationName || 'Procucev Enterprise');
+  const signInUrl = escapeHtml(vendorSignInUrl());
+  const safeName = recipientName ? escapeHtml(recipientName) : '';
+  const safeVendorCode = vendorCode ? escapeHtml(vendorCode) : '';
+  const inner = `
+    <p>${safeName ? `Dear <strong>${safeName}</strong>,` : 'Hello,'}</p>
+    <p><strong>${buyer}</strong> has added your organisation to its vendor network on Procucev Enterprise.</p>
+    <p>Your vendor account is ready. Sign in with the registered email address and mobile number, then request a one-time verification code. No password is included in this email.</p>
+    ${safeVendorCode ? `<p><strong>Vendor code:</strong> ${safeVendorCode}</p>` : ''}
+    <p style="margin: 24px 0;">
+      <a href="${signInUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Sign in with OTP</a>
+    </p>
+    <p style="font-size: 13px; color: #64748b;">Never share your verification code with anyone. If you did not expect this invitation, contact support@procucev.ai.</p>
+  `;
+
+  return {
+    from: fromAddress(),
+    to,
+    subject: 'Your Procucev vendor account is ready',
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Vendor sign-in invitation', inner),
+  };
+}
+
 /**
  * Login credentials for a buyer whose account was created outside the web sign-up
  * (the WhatsApp agent bot). The supplier counterpart is buildVendorOnboardingEmail;
@@ -2648,6 +2673,7 @@ module.exports = {
   buildVendorCategoryMappingEmail,
   buildVendorSelfMappingEmail,
   buildVendorOnboardingEmail,
+  buildVendorBulkImportInvitationEmail,
   buildBuyerCredentialsEmail,
   sendBuyerCredentialsEmail,
   buildBuyerOnboardingWithRfqEmail,

@@ -8,6 +8,7 @@ const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i
 const PHONE_REGEX = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const BULK_IMPORT_SESSION_ID_REGEX = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|bulk-import-\d+-[a-z0-9]{1,12})$/i;
+const VENDOR_BULK_INVITATION_MAX_IDS = 15;
 const BOT_EMAIL_RECIPIENT_LIMIT = 50;
 const BOT_EMAIL_ATTACHMENT_LIMIT = 10;
 const BOT_EMAIL_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
@@ -577,6 +578,29 @@ const VALIDATION_SCHEMAS = {
       maxLength: 64,
       pattern: BULK_IMPORT_SESSION_ID_REGEX,
       message: 'Import session ID must be a valid session identifier.',
+    },
+  },
+
+  vendorBulkImportInvitations: {
+    vendorIds: {
+      type: 'array',
+      required: true,
+      custom: (value) => {
+        if (!Array.isArray(value) || value.length === 0) {
+          return 'Select at least one imported vendor to invite.';
+        }
+        if (value.length > VENDOR_BULK_INVITATION_MAX_IDS) {
+          return `Invite no more than ${VENDOR_BULK_INVITATION_MAX_IDS} vendors in one request.`;
+        }
+        const normalizedIds = value.map((id) => (typeof id === 'string' ? id.trim() : ''));
+        if (normalizedIds.some((id) => !/^[a-z\d._:@-]{1,128}$/i.test(id))) {
+          return 'Every vendor ID must be a valid identifier.';
+        }
+        if (new Set(normalizedIds.map((id) => id.toLowerCase())).size !== normalizedIds.length) {
+          return 'Vendor IDs must be unique.';
+        }
+        return null;
+      },
     },
   },
 
@@ -1496,4 +1520,5 @@ module.exports = {
   DISPATCH_TEMPLATES,
   VALIDATION_SCHEMAS,
   validatePayload,
+  VENDOR_BULK_INVITATION_MAX_IDS,
 };

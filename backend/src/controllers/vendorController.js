@@ -4,13 +4,19 @@ const vendorDossierExtensions = require('./vendorDossierExtensions');
 const storeService = require('../services/storeService');
 const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
+const identityQueries = require('../db/identityQueries');
+const eventOutboxService = require('../services/eventOutboxService');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
 const zohoPaymentService = require('../services/zohoPaymentService');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
-const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
+const {
+  EMAIL_REGEX,
+  VALIDATION_SCHEMAS,
+  validatePayload,
+} = require('../config/validationSchemas');
 const {
   ZOHO_CONFIG,
   computeZohoPlanAmount,
@@ -20,6 +26,7 @@ const {
   DEFAULT_VENDOR_DIRECTORY_PASSKEY,
   VENDOR_FREE_CREDITS_LIMIT,
   PERSISTENCE_MESSAGES,
+  EVENT_OUTBOX_TYPES,
 } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
@@ -1073,7 +1080,11 @@ async function bulkImportVendors(req, res, next) {
     const allResults = importResults.sort((a, b) => a.rowNumber - b.rowNumber);
     const publicResults = allResults.map((result) => {
       if (!result.vendor) return result;
-      return { ...result, vendor: withoutTemporaryPassword(result.vendor) };
+      return {
+        ...result,
+        vendorId: result.vendor.id,
+        vendor: withoutTemporaryPassword(result.vendor),
+      };
     });
     const issuesCount = allResults.filter((r) => r.hasIssues).length;
 
@@ -1104,6 +1115,125 @@ async function bulkImportVendors(req, res, next) {
   } catch (err) {
     logger.error('Error bulk-importing vendors', err, 'VENDOR_CONTROLLER');
     next(err);
+  }
+}
+
+async function sendBulkImportInvitations(req, res, next) {
+  try {
+    if (!assertBulkImportRole(req, res)) return;
+    const { isValid, errors, sanitizedData } = validatePayload(
+      VALIDATION_SCHEMAS.vendorBulkImportInvitations,
+      req.body || {}
+    );
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: Object.values(errors)[0] });
+    }
+    if (!pool.hasStorage()) {
+      return res.status(503).json({
+        success: false,
+        retryable: true,
+        error: 'Vendor invitations need configured database storage. Try again when the database is available.',
+      });
+    }
+
+    const vendorIds = sanitizedData.vendorIds.map((id) => String(id).trim());
+    const results = [];
+
+    for (const vendorId of vendorIds) {
+      try {
+        // Use a fresh database read: the isolate cache can be stale after a
+        // separate import request or a change by another worker.
+        const vendor = await domainQueries.getVendorByIdFromDB(vendorId, { fresh: true });
+        if (!vendor || (req.user.role === 'buyer' && !(await checkVendorOwnership(req.user, vendor)))) {
+          results.push({ vendorId, status: 'not_found' });
+          continue;
+        }
+        if (req.user.role === 'category_manager' && (vendor.buyerId || vendor.buyerAccountId)) {
+          results.push({ vendorId, status: 'not_found' });
+          continue;
+        }
+        if (vendor.onboardingEmailStatus === 'invitation_sent') {
+          results.push({ vendorId, status: 'already_sent' });
+          continue;
+        }
+        if (!['skipped', 'invitation_pending', 'invitation_failed'].includes(vendor.onboardingEmailStatus)) {
+          results.push({ vendorId, status: 'not_eligible' });
+          continue;
+        }
+
+        const email = String(vendor.email || '').trim();
+        if (!EMAIL_REGEX.test(email)) {
+          results.push({ vendorId, status: 'missing_email' });
+          continue;
+        }
+        const identity = await identityQueries.findUserByEmail(email);
+        if (!identity) {
+          results.push({ vendorId, status: 'identity_missing' });
+          continue;
+        }
+
+        const event = await eventOutboxService.enqueueEventOutbox(
+          EVENT_OUTBOX_TYPES.VENDOR_BULK_IMPORT_INVITATION_EMAIL,
+          vendor.id,
+          { vendorId: vendor.id }
+        );
+        if (event.status === 'completed') {
+          results.push({ vendorId, status: 'already_sent' });
+          continue;
+        }
+
+        results.push({ vendorId, status: 'queued' });
+        try {
+          const saved = await storeService.updateVendorDurably(vendor.id, {
+            onboardingEmailStatus: 'invitation_pending',
+          });
+          if (!saved) {
+            logger.warn('Bulk-import invitation is durable but pending status has no persisted vendor row', {
+              vendorId: vendor.id,
+              outboxId: event.id,
+            }, 'VENDOR_CONTROLLER');
+          }
+        } catch (statusError) {
+          logger.error('Bulk-import invitation was queued but pending status could not be persisted', {
+            error: statusError,
+            vendorId: vendor.id,
+            outboxId: event.id,
+          }, 'VENDOR_CONTROLLER');
+        }
+      } catch (error) {
+        logger.error('Could not queue a bulk-import vendor invitation', {
+          error,
+          vendorId,
+          actorRole: req.user.role,
+        }, 'VENDOR_CONTROLLER');
+        results.push({ vendorId, status: 'failed' });
+      }
+    }
+
+    const data = {
+      sentCount: results.filter((item) => item.status === 'sent' || item.status === 'already_sent').length,
+      queuedCount: results.filter((item) => item.status === 'queued').length,
+      failedCount: results.filter((item) => ['failed', 'missing_email', 'identity_missing', 'not_eligible', 'not_found'].includes(item.status)).length,
+      results,
+    };
+    logger.info('Bulk-import vendor invitation request completed', {
+      requested: vendorIds.length,
+      sentCount: data.sentCount,
+      queuedCount: data.queuedCount,
+      failedCount: data.failedCount,
+      actorRole: req.user.role,
+    }, 'VENDOR_CONTROLLER');
+    return res.json({ success: true, data });
+  } catch (err) {
+    logger.error('Error sending bulk-import vendor invitations', err, 'VENDOR_CONTROLLER');
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE') {
+      return res.status(503).json({
+        success: false,
+        retryable: true,
+        error: 'Vendor invitations could not be saved for delivery. Try again when database storage is available.',
+      });
+    }
+    return next(err);
   }
 }
 
@@ -1428,6 +1558,7 @@ module.exports = {
   getPaymentLinks,
   downloadInvoice,
   bulkImportVendors,
+  sendBulkImportInvitations,
   getBulkImportSessionStatus,
   getVendorsPresence,
   recordVendorHeartbeat,

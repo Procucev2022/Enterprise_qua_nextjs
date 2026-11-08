@@ -1065,6 +1065,24 @@ describe('mailerService', () => {
       expect(emailFallback.html).toContain('Set during first login');
     });
 
+    test('bulk-import invitation uses OTP sign-in and escapes vendor data without credentials', () => {
+      const email = mailerService.buildVendorBulkImportInvitationEmail({
+        to: 'new-vendor@test.com',
+        recipientName: '<script>alert(1)</script>',
+        buyerOrganizationName: 'Buyer & Co',
+        vendorCode: 'V-<1>',
+      });
+
+      expect(email.to).toBe('new-vendor@test.com');
+      expect(email.subject).toContain('account is ready');
+      expect(email.html).toContain('Sign in with OTP');
+      expect(email.html).toContain('No password is included');
+      expect(email.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+      expect(email.html).toContain('Buyer &amp; Co');
+      expect(email.html).not.toContain('<script>');
+      expect(email.html).not.toContain('Temporary Password');
+    });
+
     test('buildRatingRevisionEmail renders rating update summary', () => {
       const email = mailerService.buildRatingRevisionEmail({
         to: 'rating@test.com',

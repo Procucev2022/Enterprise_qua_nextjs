@@ -7,6 +7,7 @@ const { authenticate, requireRole, requireVendorDirectorySession } = require('..
 router.get('/', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorController.getVendors);
 router.post('/', authenticate, vendorController.createVendor);
 router.post('/bulk-import', authenticate, vendorController.bulkImportVendors);
+router.post('/bulk-import/invitations', authenticate, vendorController.sendBulkImportInvitations);
 router.post('/bulk-delete', authenticate, vendorController.bulkDeleteVendors);
 router.get('/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/presence', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorController.getVendorsPresence);

@@ -244,6 +244,7 @@ const EVENT_OUTBOX_TYPES = Object.freeze({
   ENTERPRISE_INQUIRY_EMAIL: 'enterprise_inquiry_email',
   VENDOR_RATING_REVISION_EMAIL: 'vendor_rating_revision_email',
   VENDOR_ONBOARDING_EMAIL: 'vendor_onboarding_email',
+  VENDOR_BULK_IMPORT_INVITATION_EMAIL: 'vendor_bulk_import_invitation_email',
   HISTORICAL_VENDOR_ONBOARDING_EMAIL: 'historical_vendor_onboarding_email',
   WHATSAPP_CREDENTIALS_EMAIL: 'whatsapp_credentials_email',
   PAYMENT_DUES_EMAIL: 'payment_dues_email',
