@@ -1,5 +1,6 @@
 const pool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
+const rfqInquiryQueries = require('../src/db/rfqInquiryQueries');
 const storeService = require('../src/services/storeService');
 const { logger } = require('../src/services/loggerService');
 
@@ -72,6 +73,99 @@ describe('durable RFQ clarification threads', () => {
     expect(storeService.aiFeed).toHaveLength(1);
     expect(storeService.auditLogs).toHaveLength(1);
     expect(notifySpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('commits the acknowledgement outbox intent with the inquiry on the durable path', async () => {
+    const rfq = makeRFQ();
+    storeService.rfqs = [rfq];
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(rfq);
+    jest.spyOn(domainQueries, 'getRFQSnapshotByIdFromDB').mockResolvedValue({
+      id: rfq.id,
+      rfq,
+      raw: JSON.stringify(rfq),
+    });
+    const atomicWrite = jest.spyOn(rfqInquiryQueries, 'updateRFQAndEnqueueInquiryEmailInDB').mockImplementation(
+      async (_snapshot, candidate, event) => ({
+        rfq: candidate,
+        outboxEvent: { id: event.id, status: 'pending' },
+      })
+    );
+    const regularWrite = jest.spyOn(domainQueries, 'updateRFQIfUnchangedInDB');
+
+    const result = await storeService.addInquiryToRFQ(rfq.id, {
+      message: 'Please confirm the drawing revision.',
+      vendorId: 'vendor-1',
+      vendorName: 'Vendor One',
+      vendorEmail: 'vendor@example.com',
+      messageId: '<vendor-inquiry-outbox@example.com>',
+      queueAcknowledgement: true,
+    });
+
+    expect(atomicWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ id: rfq.id }),
+      expect.objectContaining({ inquiries: expect.any(Array) }),
+      expect.objectContaining({
+        eventType: 'rfq_vendor_inquiry_ack_email',
+        payload: expect.objectContaining({ rfqId: rfq.id, inquiryId: result.inquiry.id }),
+      })
+    );
+    expect(result.acknowledgementOutboxEvent).toEqual({
+      id: expect.stringMatching(/^retry:rfq_vendor_inquiry_ack_email:/),
+      status: 'pending',
+    });
+    expect(regularWrite).not.toHaveBeenCalled();
+    expect(storeService.rfqs[0].inquiries).toHaveLength(1);
+  });
+
+  test('keeps inquiry submission available without storage and reports the non-durable acknowledgement fallback', async () => {
+    const rfq = makeRFQ();
+    storeService.rfqs = [rfq];
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+
+    const result = await storeService.addInquiryToRFQ(rfq.id, {
+      message: 'Please confirm the drawing revision.',
+      vendorName: 'Vendor One',
+      vendorEmail: 'vendor@example.com',
+      queueAcknowledgement: true,
+    });
+
+    expect(result.acknowledgementOutboxEvent).toBeNull();
+    expect(result.acknowledgementAtomicUnsupported).toBe(true);
+    expect(storeService.rfqs[0].inquiries).toHaveLength(1);
+  });
+
+  test('uses the regular RFQ CAS writer when the configured D1 HTTP adapter cannot batch atomically', async () => {
+    const rfq = makeRFQ();
+    storeService.rfqs = [rfq];
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getRFQSnapshotByIdFromDB').mockResolvedValue({
+      id: rfq.id,
+      rfq,
+      raw: JSON.stringify(rfq),
+    });
+    jest.spyOn(rfqInquiryQueries, 'updateRFQAndEnqueueInquiryEmailInDB').mockResolvedValue({ atomicUnsupported: true });
+    const regularWrite = jest.spyOn(domainQueries, 'updateRFQIfUnchangedInDB').mockImplementation(
+      async (_snapshot, candidate) => candidate
+    );
+    const result = {};
+
+    const updated = await storeService.updateRFQDurably(
+      rfq.id,
+      { title: 'Updated title' },
+      {
+        outboxEvent: {
+          id: 'retry:rfq_vendor_inquiry_ack_email:test',
+          eventType: 'rfq_vendor_inquiry_ack_email',
+          payload: { rfqId: rfq.id, inquiryId: 'inquiry-1', messageId: 'message-1' },
+        },
+        outboxResult: result,
+      }
+    );
+
+    expect(updated.title).toBe('Updated title');
+    expect(result.atomicUnsupported).toBe(true);
+    expect(regularWrite).toHaveBeenCalledTimes(1);
   });
 
   test('leaves a buyer reply unapplied and logs a retryable failure when RFQ persistence fails', async () => {

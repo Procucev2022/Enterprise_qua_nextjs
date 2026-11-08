@@ -751,6 +751,55 @@ async function dispatchEvent(job) {
       }, 'EVENT_OUTBOX');
       return;
     }
+    case EVENT_OUTBOX_TYPES.RFQ_VENDOR_INQUIRY_ACK_EMAIL: {
+      const { rfqId, inquiryId, messageId } = job.raw || {};
+      if (
+        typeof rfqId !== 'string' || !rfqId
+        || typeof inquiryId !== 'string' || !inquiryId
+        || typeof messageId !== 'string' || !messageId
+      ) {
+        const error = new Error('RFQ vendor inquiry acknowledgement payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const snapshot = await domainQueries.getRFQSnapshotByIdFromDB(rfqId);
+      const rfq = snapshot?.rfq;
+      const inquiry = Array.isArray(rfq?.inquiries)
+        ? rfq.inquiries.find((entry) => entry.id === inquiryId)
+        : null;
+      const message = Array.isArray(inquiry?.messages)
+        ? inquiry.messages.find((entry) => entry.id === messageId)
+        : null;
+      const recipientEmail = typeof inquiry?.vendorEmail === 'string' ? inquiry.vendorEmail.trim() : '';
+      const vendorName = typeof inquiry?.vendorName === 'string' ? inquiry.vendorName.trim() : '';
+      if (!rfq || !inquiry || !message || !EMAIL_REGEX.test(recipientEmail) || !vendorName || !message.message) {
+        const error = new Error('RFQ vendor inquiry acknowledgement references incomplete persisted data.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const buyerEmail = require('./storeService').resolveBuyerEmailForRFQ(rfq);
+      const result = await mailerService.sendVendorIssueAcknowledgementEmail(recipientEmail, {
+        rfq,
+        rfqNumber: rfq.rfqNumber,
+        rfqTitle: rfq.title,
+        vendorName,
+        issueMessage: message.message,
+        cc: buyerEmail || undefined,
+      });
+      if (!result?.sent) {
+        const error = new Error('RFQ vendor inquiry email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('Vendor inquiry acknowledgement accepted by provider', {
+        rfqId,
+        rfqNumber: rfq.rfqNumber,
+        inquiryId,
+        messageId,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
     case EVENT_OUTBOX_TYPES.DAILY_RFQ_REPORT_EMAIL: {
       const reportDate = typeof job.raw?.reportDate === 'string' ? job.raw.reportDate : '';
       const timezone = typeof job.raw?.timezone === 'string' ? job.raw.timezone.trim() : '';

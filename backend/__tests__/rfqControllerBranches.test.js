@@ -1211,6 +1211,75 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       );
     });
 
+    test('addInquiry dispatches a durable acknowledgement without sending a second direct email', async () => {
+      const rfq = { id: 'rfq-inq-durable', rfqNumber: 'RFQ-INQ-DURABLE', title: 'Pumps RFQ' };
+      jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue(rfq);
+      const addInquirySpy = jest.spyOn(storeService, 'addInquiryToRFQ').mockReturnValue({
+        inquiry: { id: 'inq-durable', message: 'Question' },
+        updatedRfq: rfq,
+        acknowledgementOutboxEvent: { id: 'rfq-inquiry-outbox', status: 'pending' },
+      });
+      const dispatchSpy = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({
+        completedIds: ['rfq-inquiry-outbox'],
+      });
+      const directMailSpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail').mockResolvedValue({ sent: true });
+      const previousWaitUntil = globalThis.__CF_WAIT_UNTIL__;
+      const backgroundTasks = [];
+      globalThis.__CF_WAIT_UNTIL__ = (task) => backgroundTasks.push(task);
+      const response = mockRes();
+      try {
+        await rfqController.addInquiry(
+          {
+            params: { id: rfq.id },
+            body: { message: 'Question', vendorEmail: 'vendor@example.com' },
+            user: { role: 'vendor', id: 'vendor-inq', email: 'vendor@example.com' },
+          },
+          response,
+          jest.fn()
+        );
+        await Promise.all(backgroundTasks);
+      } finally {
+        if (previousWaitUntil === undefined) delete globalThis.__CF_WAIT_UNTIL__;
+        else globalThis.__CF_WAIT_UNTIL__ = previousWaitUntil;
+      }
+
+      expect(addInquirySpy).toHaveBeenCalledWith(rfq.id, expect.objectContaining({
+        queueAcknowledgement: true,
+      }));
+      expect(response.statusCode).toBe(201);
+      expect(response.data.acknowledgementStatus).toBe('queued');
+      expect(dispatchSpy).toHaveBeenCalledWith(1, ['rfq-inquiry-outbox']);
+      expect(directMailSpy).not.toHaveBeenCalled();
+    });
+
+    test('does not resend the acknowledgement when the inquiry message is a duplicate', async () => {
+      const rfq = { id: 'rfq-inq-duplicate', rfqNumber: 'RFQ-INQ-DUPLICATE', title: 'Pumps RFQ' };
+      jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue(rfq);
+      jest.spyOn(storeService, 'addInquiryToRFQ').mockReturnValue({
+        inquiry: { id: 'inq-duplicate', message: 'Question' },
+        updatedRfq: rfq,
+        duplicate: true,
+      });
+      const dispatchSpy = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs');
+      const directMailSpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail');
+      const response = mockRes();
+
+      await rfqController.addInquiry(
+        {
+          params: { id: rfq.id },
+          body: { message: 'Question', vendorEmail: 'vendor@example.com' },
+          user: { role: 'vendor', id: 'vendor-inq', email: 'vendor@example.com' },
+        },
+        response,
+        jest.fn()
+      );
+
+      expect(response.statusCode).toBe(201);
+      expect(response.data.acknowledgementStatus).toBe('already_recorded');
+      expect(dispatchSpy).not.toHaveBeenCalled();
+      expect(directMailSpy).not.toHaveBeenCalled();
+    });
+
     test('replyInquiry validations, success, and error handling', async () => {
       const next = jest.fn();
 

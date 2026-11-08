@@ -370,8 +370,10 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 ## Vendor inquiry acknowledgement lifecycle
 
-- Vendor inquiry acknowledgements now use the RFQ background delivery wrapper, so Cloudflare Workers retain the promise with `waitUntil` and explicit provider refusals or thrown sends receive structured RFQ-scoped logs. The persisted inquiry response remains successful when the separate notification is unavailable.
-- The notification is still a direct provider send without a durable outbox or retry identity. Add durable delivery intent to the inquiry write before treating this path as restart-safe.
+- Controller-submitted vendor inquiries now save their acknowledgement event in the existing `event_outbox` in the same PostgreSQL transaction or Workers D1 atomic batch as the RFQ compare-and-swap. The event uses the persisted inquiry and message IDs, so a persistence failure rolls back both writes and a duplicate inbound message does not enqueue another acknowledgement.
+- The shared dispatcher reloads the persisted RFQ and message, validates recipient data, requires explicit provider acceptance, retries transient failures, dead-letters malformed records, and logs event metadata without copying the inquiry text into the outbox payload. Immediate dispatch is registered with Worker `waitUntil`; scheduled dispatch recovers work after process restarts. No migration is needed.
+- The D1 HTTP adapter cannot guarantee multi-statement atomicity, so that adapter retains the prior RFQ write plus direct-send fallback. No-storage delivery is also process-local. Provider acceptance followed by a lost completion write remains at-least-once and can duplicate an email. Production D1 delivery remains unverified until credentials are available.
+- The focused regression run passed 51 tests across four suites. Full `npm run check:quality` passed: backend 204 suites / 5,792 tests with 161/161 executable files over all 90% thresholds (98.03% statements, 92.42% branches, 98.77% functions, 98.77% lines); frontend 149 suites / 3,756 tests with 171/171 executable files over all thresholds (97.94% statements, 92.97% branches, 97.84% functions, 98.71% lines). Production build, typecheck, lint, 58-table schema parity, six schema-checker tests, and schema-file verification passed. Live database migration was skipped by the gate; production D1 remains unverified.
 
 ## Store background email refusal diagnostics
 

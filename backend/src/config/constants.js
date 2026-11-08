@@ -253,6 +253,7 @@ const EVENT_OUTBOX_TYPES = Object.freeze({
   RFQ_GATEWAY_NOTIFICATION_EMAIL: 'rfq_gateway_notification_email',
   RFQ_QUOTE_RECEIVED_EMAIL: 'rfq_quote_received_email',
   RFQ_AUTO_CLOSURE_ACK_EMAIL: 'rfq_auto_closure_ack_email',
+  RFQ_VENDOR_INQUIRY_ACK_EMAIL: 'rfq_vendor_inquiry_ack_email',
   DAILY_RFQ_REPORT_EMAIL: 'daily_rfq_report_email',
   REGISTRATION_DECISION_EMAIL: 'registration_decision_email',
   VENDOR_CATEGORY_UPDATE_EMAIL: 'vendor_category_update_email',

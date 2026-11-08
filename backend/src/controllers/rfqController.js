@@ -2147,6 +2147,7 @@ async function addInquiry(req, res, next) {
       vendorName: vendorName || (req.user && req.user.name) || 'Vendor Partner',
       vendorEmail: vendorEmail || (req.user && req.user.email) || null,
       vendorId: req.user && req.user.role === 'vendor' ? req.user.id : undefined,
+      queueAcknowledgement: true,
     });
 
     if (!result) {
@@ -2156,7 +2157,25 @@ async function addInquiry(req, res, next) {
     // Dispatch acknowledgment email to vendor with buyer in CC
     const recipientVendorEmail = vendorEmail || (req.user && req.user.email);
     const buyerEmail = storeService.resolveBuyerEmailForRFQ(rfq);
-    if (recipientVendorEmail) {
+    let acknowledgementStatus;
+    if (recipientVendorEmail && result.duplicate) {
+      acknowledgementStatus = 'already_recorded';
+    } else if (recipientVendorEmail && result.acknowledgementOutboxEvent?.id) {
+      acknowledgementStatus = result.acknowledgementOutboxEvent.status === 'completed' ? 'sent' : 'queued';
+      if (acknowledgementStatus === 'queued') {
+        trackBackgroundRfqEmail(
+          async () => {
+            const dispatch = await eventOutboxService.dispatchDueEventOutboxJobs(
+              1,
+              [result.acknowledgementOutboxEvent.id]
+            );
+            return { sent: dispatch.completedIds?.includes(result.acknowledgementOutboxEvent.id) === true };
+          },
+          'Failed to dispatch durable vendor inquiry acknowledgment email',
+          rfq.rfqNumber
+        );
+      }
+    } else if (recipientVendorEmail) {
       trackBackgroundRfqEmail(
         () => mailerService.sendVendorIssueAcknowledgementEmail(recipientVendorEmail, {
           rfq,
@@ -2171,7 +2190,12 @@ async function addInquiry(req, res, next) {
       );
     }
 
-    res.status(201).json({ success: true, data: result.inquiry, rfq: result.updatedRfq });
+    res.status(201).json({
+      success: true,
+      data: result.inquiry,
+      rfq: result.updatedRfq,
+      ...(acknowledgementStatus ? { acknowledgementStatus } : {}),
+    });
   } catch (err) {
     logger.error(`Error adding inquiry for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);

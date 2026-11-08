@@ -30,6 +30,7 @@ const {
 const crypto = require('crypto');
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
+const rfqInquiryQueries = require('../db/rfqInquiryQueries');
 const auditLogQueries = require('../db/auditLogQueries');
 const paymentActivationQueries = require('../db/paymentActivationQueries');
 const identityQueries = require('../db/identityQueries');
@@ -4280,7 +4281,7 @@ class StoreService {
     return updated;
   }
 
-  async updateRFQDurably(id, updates) {
+  async updateRFQDurably(id, updates, options = {}) {
     const idx = this.rfqs.findIndex((rfq) => rfq.id === id || rfq.rfqNumber === id);
     const resolveUpdates = typeof updates === 'function' ? updates : () => updates;
     if (!pool.hasStorage()) {
@@ -4293,6 +4294,7 @@ class StoreService {
       const publicUpdated = normalizeRFQForRead(updated);
       this.rfqs[idx] = publicUpdated;
       this._notifyRFQUpdate(publicUpdated, previous.status, resolvedUpdates);
+      if (options.outboxResult) options.outboxResult.atomicUnsupported = true;
       return publicUpdated;
     }
 
@@ -4310,8 +4312,30 @@ class StoreService {
         const previousQuotes = Array.isArray(previous.quotes) ? previous.quotes : [];
         const quotes = Array.isArray(appliedUpdates.quotes) ? evaluateQuotes(appliedUpdates.quotes) : previousQuotes;
         const candidate = { ...previous, ...appliedUpdates, id: previous.id, quotes, quotesCount: quotes.length };
-        // eslint-disable-next-line no-await-in-loop
-        updated = await domainQueries.updateRFQIfUnchangedInDB(snapshot, candidate);
+        if (options.outboxEvent) {
+          // eslint-disable-next-line no-await-in-loop
+          const atomicResult = await rfqInquiryQueries.updateRFQAndEnqueueInquiryEmailInDB(
+            snapshot,
+            candidate,
+            options.outboxEvent
+          );
+          if (atomicResult?.atomicUnsupported) {
+            if (options.outboxResult) options.outboxResult.atomicUnsupported = true;
+            // The D1 HTTP adapter cannot guarantee a multi-statement transaction.
+            // Keep the RFQ write available there and let the controller use its
+            // existing direct-send fallback for the separate acknowledgement.
+            // eslint-disable-next-line no-await-in-loop
+            updated = await domainQueries.updateRFQIfUnchangedInDB(snapshot, candidate);
+          } else if (atomicResult) {
+            updated = atomicResult.rfq;
+            if (options.outboxResult) options.outboxResult.event = atomicResult.outboxEvent;
+          } else {
+            updated = null;
+          }
+        } else {
+          // eslint-disable-next-line no-await-in-loop
+          updated = await domainQueries.updateRFQIfUnchangedInDB(snapshot, candidate);
+        }
         if (updated) break;
         // Another isolate changed the row after the snapshot read. Reload and
         // reapply this patch so disjoint updates are not lost.
@@ -5217,7 +5241,27 @@ class StoreService {
       inquiries = [...existingInquiries, updatedInquiry];
     }
 
-    const updated = await this.updateRFQDurably(rfq.id, { inquiries });
+    const shouldQueueAcknowledgement = inquiry.queueAcknowledgement === true && Boolean(vendorEmail);
+    const outboxResult = {};
+    const outboxEvent = shouldQueueAcknowledgement
+      ? {
+          id: eventOutboxService.buildEventOutboxId(
+            EVENT_OUTBOX_TYPES.RFQ_VENDOR_INQUIRY_ACK_EMAIL,
+            `${rfq.id}:${chatMsg.id}`
+          ),
+          eventType: EVENT_OUTBOX_TYPES.RFQ_VENDOR_INQUIRY_ACK_EMAIL,
+          payload: {
+            rfqId: rfq.id,
+            inquiryId: updatedInquiry.id,
+            messageId: chatMsg.id,
+          },
+        }
+      : null;
+    const updated = await this.updateRFQDurably(
+      rfq.id,
+      { inquiries },
+      outboxEvent ? { outboxEvent, outboxResult } : {}
+    );
     if (!updated) return null;
 
     this.addFeedItem({
@@ -5240,7 +5284,16 @@ class StoreService {
       this.notifyBuyerOfInquiry(rfq, updatedInquiry);
     }
 
-    return { updatedRfq: updated, inquiry: updatedInquiry };
+    return {
+      updatedRfq: updated,
+      inquiry: updatedInquiry,
+      ...(shouldQueueAcknowledgement
+        ? {
+            acknowledgementOutboxEvent: outboxResult.event || null,
+            acknowledgementAtomicUnsupported: outboxResult.atomicUnsupported === true,
+          }
+        : {}),
+    };
   }
 
   async replyToRFQInquiry(rfqId, inquiryId, replyData) {
