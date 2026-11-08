@@ -222,8 +222,10 @@ describe('rfqController Comprehensive Branch Coverage', () => {
         companyName: 'Acme Buyers',
         corporateEmail: 'corp@acme.com',
       });
-      const mailSpy = jest.spyOn(mailerService, 'sendVendorCategoryMismatchEmail').mockResolvedValue(true);
+      const mailSpy = jest.spyOn(mailerService, 'sendVendorCategoryMismatchEmail').mockResolvedValue({ sent: true });
       const auditSpy = jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      const warnSpy = jest.spyOn(logger, 'warn');
+      const errorSpy = jest.spyOn(logger, 'error');
 
       const resSuccess = mockRes();
       await rfqController.requestVendorCategoryUpdate(
@@ -259,12 +261,36 @@ describe('rfqController Comprehensive Branch Coverage', () => {
 
       // Catch error
       mailSpy.mockRejectedValue(new Error('mail err'));
+      const rejectedResponse = mockRes();
       await rfqController.requestVendorCategoryUpdate(
         { body: { vendorEmail: 'req@vendor.com' } },
-        mockRes(),
+        rejectedResponse,
         next
       );
-      expect(next).toHaveBeenCalledWith(expect.any(Error));
+      expect(next).not.toHaveBeenCalled();
+      expect(rejectedResponse.statusCode).toBe(503);
+      expect(rejectedResponse.data).toEqual(expect.objectContaining({ success: false, retryable: true }));
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('provider request failed'),
+        expect.objectContaining({ vendorId: 'v-req-1', operation: 'request-vendor-category-update' }),
+        'RFQ_CONTROLLER'
+      );
+
+      const refusedResponse = mockRes();
+      mailSpy.mockResolvedValue({ sent: false, reason: 'provider_declined' });
+      await rfqController.requestVendorCategoryUpdate(
+        { body: { vendorEmail: 'req@vendor.com', rfqNumber: 'RFQ-REFUSED' } },
+        refusedResponse,
+        next
+      );
+      expect(refusedResponse.statusCode).toBe(503);
+      expect(refusedResponse.data).toEqual(expect.objectContaining({ success: false, retryable: true }));
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('was not accepted by a provider'),
+        expect.objectContaining({ rfqNumber: 'RFQ-REFUSED', vendorId: 'v-req-1' }),
+        'RFQ_CONTROLLER'
+      );
+      expect(auditSpy).toHaveBeenCalledTimes(2);
 
       storeService.getVendorById.mockRestore();
       storeService.getBuyerAccountByEmail.mockRestore();
@@ -1888,7 +1914,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
 
       // Line 562: requestVendorCategoryUpdate with storeService.recordAuditEntry
       storeService.recordAuditEntry = jest.fn();
-      jest.spyOn(mailerService, 'sendVendorCategoryMismatchEmail').mockResolvedValue(undefined);
+      jest.spyOn(mailerService, 'sendVendorCategoryMismatchEmail').mockResolvedValue({ sent: true });
       const resAuditEntry = mockRes();
       await rfqController.requestVendorCategoryUpdate(
         {

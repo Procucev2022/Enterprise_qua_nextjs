@@ -31,6 +31,7 @@ const {
   MAX_INVITE_VENDORS_PER_REQUEST,
   EVENT_OUTBOX_TYPES,
   VENDOR_FREE_CREDITS_LIMIT,
+  RFQ_NOTIFICATION_MESSAGES,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
@@ -610,15 +611,45 @@ async function requestVendorCategoryUpdate(req, res, next) {
     const targetVendorName = vendor ? (vendor.name || vendor.contactPerson) : (vendorName || 'Supplier');
     const targetCurrentCategory = vendor ? (vendor.majorCategory || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : '')) : 'Not specified';
 
-    await mailerService.sendVendorCategoryMismatchEmail(targetEmail, {
+    const deliveryContext = {
+      vendorId: vendor ? vendor.id : vendorId || null,
       rfqNumber: rfqNumber || 'NEW-RFQ',
-      rfqTitle: rfqTitle || 'Procurement Requisition',
-      rfqCategory: rfqCategory || 'Required Procurement Category',
-      vendorName: targetVendorName,
-      vendorCurrentCategory: targetCurrentCategory,
-      buyerAccountName: buyerName,
-      buyerEmail,
-    });
+      operation: 'request-vendor-category-update',
+      recipientPresent: true,
+    };
+    let delivery;
+    try {
+      delivery = await mailerService.sendVendorCategoryMismatchEmail(targetEmail, {
+        rfqNumber: rfqNumber || 'NEW-RFQ',
+        rfqTitle: rfqTitle || 'Procurement Requisition',
+        rfqCategory: rfqCategory || 'Required Procurement Category',
+        vendorName: targetVendorName,
+        vendorCurrentCategory: targetCurrentCategory,
+        buyerAccountName: buyerName,
+        buyerEmail,
+      });
+    } catch (deliveryError) {
+      logger.error('Vendor category update email provider request failed', {
+        error: deliveryError,
+        ...deliveryContext,
+      }, 'RFQ_CONTROLLER');
+      return res.status(503).json({
+        success: false,
+        error: RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED,
+        retryable: true,
+      });
+    }
+    if (!delivery?.sent) {
+      logger.warn('Vendor category update email was not accepted by a provider', {
+        ...deliveryContext,
+        deliveryResultPresent: Boolean(delivery),
+      }, 'RFQ_CONTROLLER');
+      return res.status(503).json({
+        success: false,
+        error: RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED,
+        retryable: true,
+      });
+    }
 
     if (typeof storeService.recordAuditEntry === 'function') {
       storeService.recordAuditEntry({

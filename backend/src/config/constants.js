@@ -2113,6 +2113,11 @@ const RFQ_CREATION_ERRORS = Object.freeze({
   FREE_CREDITS_EXHAUSTED: 'Your 5 free trial RFQ credits for V1/V2/V3 have been fully used. Upgrade to a paid plan to raise more V1/V2/V3 RFQs, or continue using V0 Free Starter for Procucev Network RFQs.',
 });
 
+const RFQ_NOTIFICATION_MESSAGES = Object.freeze({
+  VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED:
+    'The vendor category update email was not confirmed as sent. Retry shortly; the provider may have accepted the message before the response was lost.',
+});
+
 /** Notification email content for vendor credit exhaustion */
 const VENDOR_CREDITS_EXHAUSTED_NOTIFICATION = {
   SUBJECT: `Action Required – ${VENDOR_FREE_CREDITS_LIMIT} Free Quotation Credits Exhausted for RFQ #{rfqNumber}`,
@@ -3259,6 +3264,7 @@ module.exports = {
   VENDOR_FREE_CREDITS_LIMIT,
   RFQ_DOWNLOAD_ERRORS,
   RFQ_CREATION_ERRORS,
+  RFQ_NOTIFICATION_MESSAGES,
   VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
   ZOHO_CONFIG,
   ZOHO_WEBHOOK_RECEIPT_POLICY,
