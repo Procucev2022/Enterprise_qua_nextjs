@@ -4774,12 +4774,12 @@ class StoreService {
       const updated = this.addQuoteToRFQ(rfqId, quote);
       if (!updated) {
         return includeDeliveryState
-          ? { rfq: null, buyerQuoteNotificationQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+          ? { rfq: null, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
           : null;
       }
       if (quote && quote.vendorId) this.consumeVendorQuotationCredit(quote.vendorId, rfqId);
       return includeDeliveryState
-        ? { rfq: updated, buyerQuoteNotificationQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+        ? { rfq: updated, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
         : updated;
     }
 
@@ -4807,7 +4807,7 @@ class StoreService {
 
       if (!rfq) {
         return includeDeliveryState
-          ? { rfq: null, buyerQuoteNotificationQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+          ? { rfq: null, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
           : null;
       }
       if (!vendor) {
@@ -4851,6 +4851,12 @@ class StoreService {
           `${rfq.id}:${durableQuoteId}`
         )
         : null;
+      const buyerProfileReminderEventId = buyerEmailPlan?.requiresProfileCompletion
+        ? eventOutboxService.buildEventOutboxId(
+          EVENT_OUTBOX_TYPES.BUYER_PROFILE_COMPLETION_REMINDER_EMAIL,
+          rfq.id
+        )
+        : null;
       const autoClosureEmailEventId = autoClosedByQuote && buyerEmailPlan
         ? eventOutboxService.buildEventOutboxId(
           EVENT_OUTBOX_TYPES.RFQ_AUTO_CLOSURE_ACK_EMAIL,
@@ -4877,6 +4883,11 @@ class StoreService {
             quoteNotificationRecipient: buyerEmailPlan.buyerEmail,
             quoteNotificationRecipientName: buyerEmailPlan.buyer?.organizationName || null,
             quoteNotificationPendingOnboarding: buyerEmailPlan.requiresProfileCompletion,
+          } : {}),
+          ...(buyerProfileReminderEventId ? {
+            buyerProfileReminderEventId,
+            buyerProfileReminderRecipient: buyerEmailPlan.buyerEmail,
+            buyerProfileReminderRecipientName: buyerEmailPlan.buyer?.organizationName || null,
           } : {}),
           autoClosureEmailEventId,
           ...(autoClosureEmailEventId ? {
@@ -4930,9 +4941,11 @@ class StoreService {
       this._lastRfqSyncTime = 0;
       this._notifyRFQUpdate(savedRFQ, rfq.status, { status: savedRFQ.status });
       const autoClosed = savedRFQ.status === 'Closed' && rfq.status !== 'Closed';
-      if (quoteNotificationEventId || autoClosureEmailEventId) {
+      if (quoteNotificationEventId || buyerProfileReminderEventId || autoClosureEmailEventId) {
         this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed, {
-          ...(quoteNotificationEventId ? { skipQuoteEmail: true } : {}),
+          ...((quoteNotificationEventId || buyerProfileReminderEventId || autoClosureEmailEventId)
+            ? { skipQuoteEmail: true }
+            : {}),
           ...(autoClosureEmailEventId ? { skipAutoClosureEmail: true } : {}),
           ...(autoClosureComparisonIntent ? { comparisonJob: autoClosureComparisonIntent } : {}),
         });
@@ -4965,6 +4978,7 @@ class StoreService {
         ? {
           rfq: savedRFQ,
           buyerQuoteNotificationQueued: Boolean(quoteNotificationEventId),
+          buyerProfileReminderQueued: Boolean(buyerProfileReminderEventId),
           autoClosureEmailQueued: Boolean(autoClosureEmailEventId),
           autoClosedByQuote: autoClosed,
         }

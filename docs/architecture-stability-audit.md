@@ -399,3 +399,16 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - Invitation events contain only the vendor ID and use the existing `event_outbox`; no migration or credential-bearing payload is needed. The worker sends a credential-free OTP sign-in email, verifies the identity again before delivery, retries provider refusal, and records `invitation_pending`, `invitation_sent`, or `invitation_failed` state. Duplicate requests share a stable per-vendor outbox key.
 - Delivery is left to the scheduled dispatcher instead of running inline across a full 15-vendor batch. This keeps the request's database work bounded under Cloudflare Worker subrequest limits; the UI clearly reports invitations as queued until provider acceptance is recorded. Outbox delivery remains at-least-once if provider acceptance succeeds but saving the sent status fails.
 - Local regression coverage covers input bounds, owner scoping, missing identities, duplicate delivery, malformed state, provider refusal, retry state, and the import-result action. Production D1 delivery remains unverified until the intended account is connected.
+
+## Verification — buyer profile reminder durability
+
+- Focused regression coverage passed 260 tests across the quote transaction, event outbox, and email-gateway suites.
+- An in-memory SQLite smoke execution of the generated D1 quote batch passed, persisting the quote, credit ledger, deferred quote notice, and durable profile reminder together.
+- Full `npm run check:quality` passed. Backend: 207 suites / 5,828 tests, with 161/161 executable files meeting all four 90% thresholds (97.97% statements, 92.39% branches, 98.78% functions, 98.70% lines). Frontend: 149 suites / 3,763 tests, with 171/171 executable files meeting all thresholds (97.94% statements, 92.98% branches, 97.83% functions, 98.70% lines).
+- Production build, master coverage verification, TypeScript typecheck, lint, PostgreSQL/D1 schema parity, six schema-checker regression tests, and schema-file verification passed. Live database migration was skipped by the gate. Production D1 dispatch and metrics remain unverified until the intended account is connected.
+
+## Buyer profile completion reminder durability
+
+- Vendor quote submission now inserts the buyer profile-completion reminder into the existing event outbox in the same PostgreSQL transaction or D1 atomic batch as the quote and credit ledger. The idempotency key is scoped to the RFQ, preserving the existing one-reminder-per-RFQ behavior across isolates and retries. No schema migration is required.
+- The dispatcher reloads the persisted RFQ and quote, then reads the current buyer profile before sending. It suppresses stale reminders when the buyer has completed onboarding or the buyer account has been removed; provider refusal remains retryable. The email gateway recognizes outbox ownership for both profile reminders and auto-closure acknowledgements, preventing duplicate direct sends.
+- No-storage local/test operation retains its in-memory/direct delivery path. Configured-storage delivery is restart-recoverable and remains at-least-once if a provider accepts the email but the outbox completion update is lost. Production D1 delivery remains unverified until the intended account is connected.

@@ -133,6 +133,14 @@ function makeD1VendorQuoteSubmissionStatements(options) {
   const quoteNotificationStatus = options.quoteNotificationPendingOnboarding
     ? EVENT_OUTBOX_DEFERRED_STATUS.BUYER_ONBOARDING
     : 'pending';
+  if (options.buyerProfileReminderEventId && (
+    typeof options.quoteId !== 'string' || !options.quoteId
+    || typeof options.buyerProfileReminderRecipient !== 'string' || !options.buyerProfileReminderRecipient
+  )) {
+    const error = new Error('A buyer profile reminder requires a quote ID and persisted recipient.');
+    error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
+    throw error;
+  }
   if (options.autoClosureEmailEventId && (
     typeof options.quoteId !== 'string' || !options.quoteId
     || typeof options.autoClosureRecipientEmail !== 'string' || !options.autoClosureRecipientEmail
@@ -276,6 +284,27 @@ function makeD1VendorQuoteSubmissionStatements(options) {
         options.autoClosureRecipientEmail,
         options.autoClosureRecipientName || null,
       ],
+    }] : []).concat(options.buyerProfileReminderEventId ? [{
+      text: `INSERT OR IGNORE INTO event_outbox
+        (id, event_type, raw, status, available_at, created_at, updated_at)
+        SELECT $1, $2, json_object('rfqId', $3, 'quoteId', $4, 'recipientEmail', $5, 'recipientName', $6), 'pending',
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        FROM rfqs r
+        WHERE r.id = $3 AND EXISTS (
+          SELECT 1 FROM json_each(CASE
+            WHEN json_type(r.raw, '$.quotes') = 'array' THEN json_extract(r.raw, '$.quotes')
+            ELSE '[]'
+          END) AS submitted_quote
+          WHERE CAST(json_extract(submitted_quote.value, '$.id') AS TEXT) = CAST($4 AS TEXT)
+        )`,
+      params: [
+        options.buyerProfileReminderEventId,
+        EVENT_OUTBOX_TYPES.BUYER_PROFILE_COMPLETION_REMINDER_EMAIL,
+        options.rfqId,
+        options.quoteId,
+        options.buyerProfileReminderRecipient,
+        options.buyerProfileReminderRecipientName || null,
+      ],
     }] : []).concat(options.autoClosureComparisonJobId ? [{
       text: `INSERT OR IGNORE INTO rfq_comparison_queue
         (id, rfq_id, rfq_number, status, fire_at)
@@ -384,6 +413,29 @@ async function submitVendorQuoteOnPostgres(options) {
             recipientName: options.quoteNotificationRecipientName || null,
           }),
           quoteNotificationStatus,
+        ]
+      );
+    }
+    if (options.buyerProfileReminderEventId) {
+      if (typeof options.quoteId !== 'string' || !options.quoteId
+        || typeof options.buyerProfileReminderRecipient !== 'string' || !options.buyerProfileReminderRecipient) {
+        const error = new Error('A buyer profile reminder requires a quote ID and persisted recipient.');
+        error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
+        throw error;
+      }
+      await client.query(
+        `INSERT INTO event_outbox (id, event_type, raw, status, available_at, created_at, updated_at)
+         VALUES ($1, $2, $3::jsonb, 'pending', now(), now(), now())
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          options.buyerProfileReminderEventId,
+          EVENT_OUTBOX_TYPES.BUYER_PROFILE_COMPLETION_REMINDER_EMAIL,
+          JSON.stringify({
+            rfqId: options.rfqId,
+            quoteId: options.quoteId,
+            recipientEmail: options.buyerProfileReminderRecipient,
+            recipientName: options.buyerProfileReminderRecipientName || null,
+          }),
         ]
       );
     }

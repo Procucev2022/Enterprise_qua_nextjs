@@ -2360,7 +2360,12 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           'EMAIL_GATEWAY'
         );
         storeService.queuePendingQuoteNotification(buyerEmail, { rfq: updatedRFQ || targetRfq, quote });
-        if (!storeService.hasQuoteAckBeenSent(targetRfq)) {
+        if (quoteSubmission?.buyerProfileReminderQueued === true) {
+          logger.info('Buyer profile completion reminder is queued in the durable event outbox', {
+            rfqNumber: targetRfq.rfqNumber,
+            quoteId: quote.id || null,
+          }, 'EMAIL_GATEWAY');
+        } else if (!storeService.hasQuoteAckBeenSent(targetRfq)) {
           storeService.markQuoteAckSent(targetRfq);
           await mailerService.sendBuyerProfileCompletionReminderEmail({
             to: buyerEmail,
@@ -2376,7 +2381,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
         }
       } else {
         const committedRFQ = updatedRFQ || targetRfq;
-        if (quoteSubmission?.buyerQuoteNotificationQueued === true) {
+        if (quoteSubmission?.buyerQuoteNotificationQueued === true || quoteSubmission?.autoClosureEmailQueued === true) {
           logger.info('Buyer quote email is queued in the durable event outbox', {
             rfqNumber: targetRfq.rfqNumber,
             quoteId: quote.id || null,

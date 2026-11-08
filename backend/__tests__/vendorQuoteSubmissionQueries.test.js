@@ -107,6 +107,34 @@ describe('atomic vendor quote submission queries', () => {
     expect(built.statements[6].text).toContain('json_object');
   });
 
+  test('adds one buyer profile reminder to the same D1 batch as the first quote', () => {
+    const built = queries.makeD1VendorQuoteSubmissionStatements(baseOptions({
+      quoteId: 'quote-profile-reminder-1',
+      buyerProfileReminderEventId: 'outbox-profile-reminder-rfq-1',
+      buyerProfileReminderRecipient: 'buyer@example.test',
+      buyerProfileReminderRecipientName: 'Buyer Organization',
+    }));
+    const event = built.statements[6];
+
+    expect(event.text).toContain('INSERT OR IGNORE INTO event_outbox');
+    expect(event.text).toContain("'$.quotes'");
+    expect(event.params).toEqual([
+      'outbox-profile-reminder-rfq-1',
+      'buyer_profile_completion_reminder_email',
+      RFQ_ID,
+      'quote-profile-reminder-1',
+      'buyer@example.test',
+      'Buyer Organization',
+    ]);
+  });
+
+  test('rejects a buyer profile reminder without a quote and recipient', () => {
+    expect(() => queries.makeD1VendorQuoteSubmissionStatements(baseOptions({
+      buyerProfileReminderEventId: 'outbox-profile-reminder-invalid',
+      buyerProfileReminderRecipient: 'buyer@example.test',
+    }))).toThrow(expect.objectContaining({ code: 'INVALID_VENDOR_QUOTE_SUBMISSION' }));
+  });
+
   test('rejects an incomplete durable quote notification intent', () => {
     expect(() => queries.makeD1VendorQuoteSubmissionStatements(baseOptions({
       quoteNotificationEventId: 'outbox-quote-invalid',
@@ -272,6 +300,43 @@ describe('atomic vendor quote submission queries', () => {
         recipientName: 'Buyer Org',
       }),
       'pending',
+    ]);
+  });
+
+  test('queues a buyer profile reminder in the same PostgreSQL quote transaction', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+    const savedVendor = vendor({ freeQuotationCredits: 1, freeRfqDownloadCredits: 1 });
+    const savedRFQ = rfq({ status: 'In Evaluation', quotes: [{ id: 'quote-profile-reminder-pg', vendorId: VENDOR_ID }] });
+    const client = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [{ raw: vendor() }] })
+      .mockResolvedValueOnce({ rows: [{ raw: rfq() }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ raw: savedVendor }] })
+      .mockResolvedValueOnce({ rows: [{ raw: savedRFQ }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'tx-profile-reminder', amount: -1 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'outbox-profile-reminder-rfq-1' }] }) };
+    jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback(client));
+
+    await queries.submitVendorQuoteInDB(baseOptions({
+      quoteId: 'quote-profile-reminder-pg',
+      buyerProfileReminderEventId: 'outbox-profile-reminder-rfq-1',
+      buyerProfileReminderRecipient: 'buyer@example.test',
+      buyerProfileReminderRecipientName: 'Buyer Organization',
+    }));
+
+    expect(client.query).toHaveBeenCalledTimes(7);
+    expect(client.query.mock.calls[6][0]).toContain('INSERT INTO event_outbox');
+    expect(client.query.mock.calls[6][1]).toEqual([
+      'outbox-profile-reminder-rfq-1',
+      'buyer_profile_completion_reminder_email',
+      JSON.stringify({
+        rfqId: RFQ_ID,
+        quoteId: 'quote-profile-reminder-pg',
+        recipientEmail: 'buyer@example.test',
+        recipientName: 'Buyer Organization',
+      }),
     ]);
   });
 

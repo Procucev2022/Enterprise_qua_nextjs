@@ -183,6 +183,7 @@ describe('durable quote submission and credit synchronization', () => {
     expect(submission).toEqual({
       rfq: savedRFQ,
       buyerQuoteNotificationQueued: true,
+      buyerProfileReminderQueued: false,
       autoClosureEmailQueued: false,
       autoClosedByQuote: false,
     });
@@ -235,6 +236,9 @@ describe('durable quote submission and credit synchronization', () => {
       quoteNotificationEventId: expect.stringContaining('rfq_quote_received_email'),
       quoteNotificationRecipient: 'pending@example.test',
       quoteNotificationPendingOnboarding: true,
+      buyerProfileReminderEventId: expect.stringContaining('buyer_profile_completion_reminder_email'),
+      buyerProfileReminderRecipient: 'pending@example.test',
+      buyerProfileReminderRecipientName: null,
     }));
     expect(sideEffects).toHaveBeenCalledWith(
       currentRFQ,
@@ -362,6 +366,7 @@ describe('durable quote submission and credit synchronization', () => {
     expect(submission).toEqual({
       rfq: savedRFQ,
       buyerQuoteNotificationQueued: false,
+      buyerProfileReminderQueued: false,
       autoClosureEmailQueued: true,
       autoClosedByQuote: true,
     });
@@ -378,7 +383,61 @@ describe('durable quote submission and credit synchronization', () => {
       savedRFQ,
       expect.objectContaining({ id: 'quote-auto-close-1' }),
       true,
-      { skipAutoClosureEmail: true, comparisonJob: comparisonIntent }
+      { skipQuoteEmail: true, skipAutoClosureEmail: true, comparisonJob: comparisonIntent }
+    );
+  });
+
+  test('queues a profile reminder with auto-closure delivery without starting a direct reminder', async () => {
+    const currentRFQ = rfq({
+      buyerAccountId: 'buyer-pending-auto-close',
+      buyerEmail: 'pending@example.test',
+    });
+    const closedRFQ = {
+      ...currentRFQ,
+      status: 'Closed',
+      quotes: [{ id: 'quote-pending-auto-close', vendorId: VENDOR_ID, unitPrice: 300 }],
+    };
+    const currentVendor = vendor();
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(currentRFQ);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(currentVendor);
+    jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue(closedRFQ);
+    jest.spyOn(storeService, '_buildBuyerQuoteEmailPlan').mockReturnValue({
+      buyer: { organizationName: 'Pending Buyer' },
+      buyerEmail: 'pending@example.test',
+      requiresProfileCompletion: true,
+    });
+    jest.spyOn(rfqChaserScheduler, 'buildBuyerComparisonJobIntent').mockReturnValue({
+      id: 'comparison-pending-auto-close',
+      rfqId: RFQ_ID,
+      rfqNumber: currentRFQ.rfqNumber,
+      fireAt: '2026-11-08T10:05:00.000Z',
+    });
+    const submit = jest.spyOn(domainQueries, 'submitVendorQuoteInDB').mockResolvedValue({
+      rfq: closedRFQ,
+      vendor: currentVendor,
+      creditCharged: 0,
+    });
+    jest.spyOn(storeService, '_notifyRFQUpdate').mockImplementation(() => {});
+    const sideEffects = jest.spyOn(storeService, '_dispatchQuoteSubmissionSideEffects').mockImplementation(() => {});
+
+    await storeService.submitVendorQuoteDurably(RFQ_ID, {
+      id: 'quote-pending-auto-close',
+      vendorId: VENDOR_ID,
+      unitPrice: 300,
+    });
+
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      buyerProfileReminderEventId: expect.stringContaining('buyer_profile_completion_reminder_email'),
+      buyerProfileReminderRecipient: 'pending@example.test',
+      autoClosureEmailEventId: expect.stringContaining('rfq_auto_closure_ack_email'),
+    }));
+    expect(sideEffects).toHaveBeenCalledWith(
+      currentRFQ,
+      closedRFQ,
+      expect.objectContaining({ id: 'quote-pending-auto-close' }),
+      true,
+      expect.objectContaining({ skipAutoClosureEmail: true })
     );
   });
 

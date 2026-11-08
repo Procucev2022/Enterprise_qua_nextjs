@@ -775,6 +775,76 @@ async function dispatchEvent(job) {
       }, 'EVENT_OUTBOX');
       return;
     }
+    case EVENT_OUTBOX_TYPES.BUYER_PROFILE_COMPLETION_REMINDER_EMAIL: {
+      const rfqId = job.raw?.rfqId;
+      const quoteId = job.raw?.quoteId;
+      const recipientEmail = typeof job.raw?.recipientEmail === 'string' ? job.raw.recipientEmail.trim() : '';
+      const recipientName = typeof job.raw?.recipientName === 'string' && job.raw.recipientName.trim()
+        ? job.raw.recipientName.trim()
+        : null;
+      if (
+        typeof rfqId !== 'string' || !rfqId
+        || typeof quoteId !== 'string' || !quoteId
+        || !EMAIL_REGEX.test(recipientEmail)
+      ) {
+        const error = new Error('Buyer profile reminder retry payload is invalid.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+      const quoteExists = Array.isArray(rfq?.quotes)
+        && rfq.quotes.some((candidate) => String(candidate.id || '') === quoteId);
+      if (!rfq || !quoteExists) {
+        const error = new Error('Buyer profile reminder references a missing persisted RFQ or quote.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const buyer = await domainQueries.getBuyerAccountByEmailFromDB(recipientEmail, { fresh: true });
+      if (!buyer) {
+        logger.info('Buyer profile reminder suppressed because its account no longer exists', {
+          rfqId,
+          quoteId,
+          outboxId: job.id,
+        }, 'EVENT_OUTBOX');
+        return;
+      }
+      const storeService = require('./storeService');
+      if (!storeService.isBuyerProfileUpdateRequired(buyer, rfq)) {
+        logger.info('Buyer profile reminder suppressed because onboarding is complete', {
+          rfqId,
+          quoteId,
+          outboxId: job.id,
+        }, 'EVENT_OUTBOX');
+        return;
+      }
+
+      const persistedRecipient = String(buyer.corporateEmail || '').trim();
+      if (!EMAIL_REGEX.test(persistedRecipient)) {
+        const error = new Error('Buyer profile reminder has no valid persisted recipient.');
+        error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+      const delivery = await mailerService.sendBuyerProfileCompletionReminderEmail({
+        to: persistedRecipient,
+        recipientName: buyer.organizationName || recipientName || 'Buyer',
+        rfqNumber: rfq.rfqNumber,
+        rfqTitle: rfq.title,
+        quotesCount: rfq.quotes.length,
+      });
+      if (!delivery?.sent) {
+        const error = new Error('Buyer profile reminder email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('Buyer profile reminder accepted by a provider', {
+        rfqId,
+        quoteId,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
     case EVENT_OUTBOX_TYPES.RFQ_AUTO_CLOSURE_ACK_EMAIL: {
       const rfqId = job.raw?.rfqId;
       const quoteId = job.raw?.quoteId;
