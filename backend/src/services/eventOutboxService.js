@@ -6,6 +6,7 @@ const domainQueries = require('../db/domainQueries');
 const enterpriseInquiryQueries = require('../db/enterpriseInquiryQueries');
 const eventOutboxQueries = require('../db/eventOutboxQueries');
 const { dispatchWhatsAppCredentialEmail } = require('./whatsAppCredentialOutboxService');
+const registrationDecisionNotificationService = require('./registrationDecisionNotificationService');
 const mailerService = require('./mailerService');
 const cryptoService = require('./cryptoService');
 const {
@@ -787,6 +788,21 @@ async function dispatchEvent(job) {
       logger.info('Daily RFQ report accepted by a provider', {
         reportDate,
         totalRFQs: result.totalRFQs,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
+    case EVENT_OUTBOX_TYPES.REGISTRATION_DECISION_EMAIL: {
+      const delivery = await registrationDecisionNotificationService.sendRegistrationDecisionNotification(job.raw);
+      if (!delivery?.sent) {
+        const error = new Error('Registration decision email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('Registration decision email accepted by a provider', {
+        registrationId: job.raw.registrationId,
+        accountType: job.raw.accountType,
+        decision: job.raw.decision,
         outboxId: job.id,
       }, 'EVENT_OUTBOX');
       return;

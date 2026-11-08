@@ -254,6 +254,7 @@ const EVENT_OUTBOX_TYPES = Object.freeze({
   RFQ_QUOTE_RECEIVED_EMAIL: 'rfq_quote_received_email',
   RFQ_AUTO_CLOSURE_ACK_EMAIL: 'rfq_auto_closure_ack_email',
   DAILY_RFQ_REPORT_EMAIL: 'daily_rfq_report_email',
+  REGISTRATION_DECISION_EMAIL: 'registration_decision_email',
 });
 
 const EVENT_OUTBOX_DEFERRED_STATUS = Object.freeze({
@@ -521,6 +522,17 @@ const REGISTRATION_MESSAGES = Object.freeze({
   ALREADY_PROCESSED: 'This registration has already been processed. Refresh the list before taking another action.',
   NOT_FOUND: 'Registration record not found.',
   ACTION_INVALID: 'Choose accept or reject for this registration.',
+});
+
+const REGISTRATION_DECISION_EMAIL_COPY = Object.freeze({
+  SUBJECT: '{accountType} account registration {decisionStatus}',
+  GREETING: 'Hello {recipientName},',
+  APPROVED: 'Your {accountType} account registration has been approved. Sign in using the password you created during registration.',
+  REJECTED: 'Your {accountType} account registration could not be approved. Contact support if you need clarification.',
+  SIGN_IN: 'Sign in: {signInUrl}',
+  SIGN_IN_LINK_LABEL: 'Sign in',
+  RECOVERY: 'If you cannot sign in, use the account recovery options on the sign-in page.',
+  SUPPORT: 'For assistance, contact {supportEmail}.',
 });
 
 // ==============================================================================
@@ -3243,6 +3255,7 @@ module.exports = {
   PERSISTENCE_MESSAGES,
   APPROVAL_MESSAGES,
   REGISTRATION_MESSAGES,
+  REGISTRATION_DECISION_EMAIL_COPY,
   IDENTITY_ROLE_MAP,
   IDENTITY_MASTER_DATA,
   IDENTITY_PHONE_CONFIG,

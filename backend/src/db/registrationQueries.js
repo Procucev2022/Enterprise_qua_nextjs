@@ -10,10 +10,16 @@ const pool = require('./pool');
 const { logger } = require('../services/loggerService');
 const crypto = require('crypto');
 const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
-const { IDENTITY_ROLE_MAP } = require('../config/constants');
+const {
+  EVENT_OUTBOX_TYPES,
+  IDENTITY_ROLE_MAP,
+} = require('../config/constants');
 
 const REGISTRATION_ROLE_NAMES = Object.freeze(
   Object.keys(IDENTITY_ROLE_MAP).filter((roleName) => ['buyer', 'vendor'].includes(IDENTITY_ROLE_MAP[roleName]))
+);
+const REGISTRATION_VENDOR_ROLE_NAMES = Object.freeze(
+  Object.keys(IDENTITY_ROLE_MAP).filter((roleName) => IDENTITY_ROLE_MAP[roleName] === 'vendor')
 );
 
 const INITIAL_CLIENTS = [
@@ -818,10 +824,14 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
   if (pool.hasStorage()) {
     try {
       const eventId = crypto.randomUUID();
+      const notificationOutboxId = `registration-decision-email:${eventId}`;
       const d1 = getD1Binding() || getD1HttpClient();
       let updatedRow;
 
       if (d1) {
+        const vendorRolePlaceholders = REGISTRATION_VENDOR_ROLE_NAMES
+          .map((_, index) => `$${6 + index}`)
+          .join(', ');
         const statements = [
           {
             text: `UPDATE "user"
@@ -846,6 +856,35 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
             params: [eventId, id, newStatus, actorId, actorName, actorEmail, normalizedRemarks],
           },
           {
+            text: `INSERT INTO event_outbox (id, event_type, raw)
+              VALUES ($1, $2, CASE
+                WHEN EXISTS (SELECT 1 FROM client_registration_events WHERE id = $5) THEN (
+                  SELECT json_object(
+                    'registrationId', u.uuid,
+                    'recipientEmail', COALESCE(u.email, u.username),
+                    'recipientName', COALESCE(u.full_name, u.first_name, u.username, 'Enterprise User'),
+                    'accountType', CASE
+                      WHEN LOWER(REPLACE(r.role_name, ' ', '')) IN (${vendorRolePlaceholders}) THEN 'Vendor'
+                      ELSE 'Buyer'
+                    END,
+                    'decision', $3
+                  )
+                  FROM "user" u INNER JOIN role r ON r.uuid = u.role_uuid
+                  WHERE u.uuid = $4
+                )
+                ELSE NULL
+              END)
+              RETURNING id`,
+            params: [
+              notificationOutboxId,
+              EVENT_OUTBOX_TYPES.REGISTRATION_DECISION_EMAIL,
+              newStatus.toLowerCase(),
+              id,
+              eventId,
+              ...REGISTRATION_VENDOR_ROLE_NAMES,
+            ],
+          },
+          {
             text: `UPDATE buyer_accounts SET status = $1, updated_at = CURRENT_TIMESTAMP
               WHERE EXISTS (SELECT 1 FROM client_registration_events WHERE id = $2)
                 AND (id = $3 OR LOWER(corporate_email) =
@@ -865,7 +904,10 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
         if (updatedRow && !results[1]?.rows?.[0]) {
           throw new Error('Registration status changed without a durable event record.');
         }
-        const roleRow = results[3]?.rows?.[0];
+        if (updatedRow && !results[2]?.rows?.[0]) {
+          throw new Error('Registration status changed without a durable decision notification.');
+        }
+        const roleRow = results[4]?.rows?.[0];
         if (updatedRow && roleRow) updatedRow.roleName = roleRow.roleName;
       } else {
         updatedRow = await pool.withTransaction(async (client) => {
@@ -903,6 +945,25 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
               VALUES ($1, $2, $3, $4, 'New', $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)`,
             [eventId, saved.id, saved.userEmail, newStatus, actorId, actorName, actorEmail, normalizedRemarks]
           );
+          const accountType = normalizeClientType(current.roleName, current.companyName, current.userEmail) === 'Seller'
+            ? 'Vendor'
+            : 'Buyer';
+          const notificationPayload = {
+            registrationId: saved.id,
+            recipientEmail: saved.userEmail,
+            recipientName: saved.userName || 'Enterprise User',
+            accountType,
+            decision: newStatus.toLowerCase(),
+          };
+          const notificationResult = await client.query(
+            `INSERT INTO event_outbox (id, event_type, raw)
+              VALUES ($1, $2, $3)
+              RETURNING id`,
+            [notificationOutboxId, EVENT_OUTBOX_TYPES.REGISTRATION_DECISION_EMAIL, JSON.stringify(notificationPayload)]
+          );
+          if (!notificationResult.rows[0]) {
+            throw new Error('Registration status changed without a durable decision notification.');
+          }
           return { ...saved, companyName: current.companyName, roleName: current.roleName };
         });
       }
@@ -920,6 +981,13 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
         actorId,
         eventId,
       });
+      logger.info('Registration decision notification was persisted with the registration event', {
+        registrationId: id,
+        eventId,
+        outboxId: notificationOutboxId,
+        accountType: updated.clientType === 'Seller' ? 'Vendor' : 'Buyer',
+        decision: newStatus.toLowerCase(),
+      }, 'REGISTRATION_QUERIES');
       return { ...updated, remarks: normalizedRemarks };
     } catch (err) {
       if (err?.code === 'REGISTRATION_ALREADY_PROCESSED') throw err;
@@ -934,6 +1002,11 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
   client.isApproved = isApproved;
   client.verificationStatus = verificationStatus;
   if (normalizedRemarks) client.remarks = normalizedRemarks;
+  logger.warn('Registration decision used in-memory storage; no durable email notification was queued', {
+    registrationId: id,
+    accountType: client.clientType === 'Seller' ? 'Vendor' : 'Buyer',
+    decision: newStatus.toLowerCase(),
+  }, 'REGISTRATION_QUERIES');
   syncBuyerAccountCache(id, client.userEmail, newStatus, isApproved, verificationStatus);
   logger.audit(`Client registration ${newStatus.toLowerCase()}`, actorEmail || 'system@procucev.ai', {
     registrationId: id,

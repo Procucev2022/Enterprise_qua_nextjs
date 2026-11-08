@@ -221,6 +221,30 @@ describe('registrationQueries', () => {
     });
   });
 
+  test('fails closed when a PostgreSQL registration decision cannot persist its notification', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const currentRow = {
+      id: 'db-user-notification-failure',
+      userName: 'Buyer Name',
+      companyName: 'Buyer Company',
+      userEmail: 'buyer@example.com',
+      roleName: 'clientinitiator',
+      isApproved: false,
+      verificationStatus: 'PENDING',
+    };
+    const querySpy = jest.fn(async (sql) => {
+      if (/^\s*SELECT/i.test(sql)) return { rows: [currentRow] };
+      if (/UPDATE "user"/i.test(sql)) return { rows: [{ ...currentRow, isApproved: true, verificationStatus: 'VERIFIED' }] };
+      if (/INSERT INTO event_outbox/i.test(sql)) return { rows: [] };
+      return { rows: [] };
+    });
+    jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback({ query: querySpy }));
+
+    await expect(registrationQueries.updateClientRegistrationStatus('db-user-notification-failure', 'accept'))
+      .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE', status: 503 });
+    expect(querySpy).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO event_outbox'), expect.any(Array));
+  });
+
   test('updateClientRegistrationStatus updates storeService buyer accounts when present', async () => {
     const storeService = require('../src/services/storeService');
     const originalBuyers = storeService.buyerAccounts;
@@ -348,6 +372,7 @@ describe('registrationQueries', () => {
     const querySpy = jest.fn(async (sql) => {
       if (/^\s*SELECT/i.test(sql)) return { rows: [currentRow] };
       if (/UPDATE "user"/i.test(sql)) return { rows: [savedRow] };
+      if (/INSERT INTO event_outbox/i.test(sql)) return { rows: [{ id: 'registration-decision-email:event-1' }] };
       return { rows: [] };
     });
     jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback({ query: querySpy }));
@@ -357,13 +382,22 @@ describe('registrationQueries', () => {
     );
     expect(client.status).toBe('Rejected');
     expect(client.clientType).toBe('Seller');
-    expect(querySpy).toHaveBeenCalledTimes(4);
+    expect(querySpy).toHaveBeenCalledTimes(5);
     expect(querySpy.mock.calls[0][0]).toContain('FOR UPDATE OF u');
     expect(querySpy.mock.calls[1][0]).toContain('UPDATE "user"');
     expect(querySpy.mock.calls[1][1]).toEqual(expect.arrayContaining(['REJECTED', 'reg-client-101']));
     expect(querySpy.mock.calls[2][0]).toContain('UPDATE buyer_accounts');
     expect(querySpy.mock.calls[3][0]).toContain('INSERT INTO client_registration_events');
     expect(querySpy.mock.calls[3][1]).toEqual(expect.arrayContaining(['admin-1', 'admin@example.com', 'Duplicate account']));
+    expect(querySpy.mock.calls[4][0]).toContain('INSERT INTO event_outbox');
+    expect(querySpy.mock.calls[4][1][1]).toBe('registration_decision_email');
+    expect(JSON.parse(querySpy.mock.calls[4][1][2])).toEqual(expect.objectContaining({
+      registrationId: 'reg-client-101',
+      recipientEmail: 'veerababuv2002@gmail.com',
+      accountType: 'Vendor',
+      decision: 'rejected',
+    }));
+    expect(querySpy.mock.calls[4][1][2]).not.toContain('temporary-password');
   });
 
   test('returns null for missing database registrations and conflicts for an already processed row', async () => {
@@ -427,6 +461,7 @@ describe('registrationQueries', () => {
           meta: { changes: 1 },
         },
         { results: [{ id: 'registration-event-1' }], meta: { changes: 1 } },
+        { results: [{ id: 'registration-decision-email:event-1' }], meta: { changes: 1 } },
         { results: [], meta: { changes: 0 } },
         { results: [{ roleName: 'vendor' }], meta: { changes: 0 } },
       ]),
@@ -443,12 +478,15 @@ describe('registrationQueries', () => {
       expect(result.status).toBe('Accepted');
       expect(result.clientType).toBe('Seller');
       expect(d1Binding.batch).toHaveBeenCalledTimes(1);
-      expect(preparedStatements).toHaveLength(4);
+      expect(preparedStatements).toHaveLength(5);
       expect(preparedStatements[0].sql).toContain('UPDATE "user"');
       expect(preparedStatements[1].sql).toContain('INSERT INTO client_registration_events');
       expect(preparedStatements[1].sql).toContain('changes() = 1');
-      expect(preparedStatements[2].sql).toContain('UPDATE buyer_accounts');
-      expect(preparedStatements[3].sql).toContain('SELECT r.role_name AS "roleName"');
+      expect(preparedStatements[2].sql).toContain('INSERT INTO event_outbox');
+      expect(preparedStatements[2].params[1]).toBe('registration_decision_email');
+      expect(preparedStatements[2].sql).toContain("'accountType'");
+      expect(preparedStatements[3].sql).toContain('UPDATE buyer_accounts');
+      expect(preparedStatements[4].sql).toContain('SELECT r.role_name AS "roleName"');
       expect(preparedStatements[1].params).toEqual(expect.arrayContaining([
         'Accepted', 'manager-1', 'Management Authority', null, 'Reviewed',
       ]));
@@ -474,6 +512,31 @@ describe('registrationQueries', () => {
 
     try {
       await expect(registrationQueries.updateClientRegistrationStatus('d1-user-2', 'accept'))
+        .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE', status: 503 });
+    } finally {
+      if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+      else globalThis.__CF_ENV__ = previousEnv;
+    }
+  });
+
+  test('fails closed if a D1 registration decision has no durable notification row', async () => {
+    const previousEnv = globalThis.__CF_ENV__;
+    globalThis.__CF_ENV__ = {
+      DB: {
+        prepare: (sql) => ({ bind: (...params) => ({ sql, params }) }),
+        batch: jest.fn().mockResolvedValue([
+          { results: [{ id: 'd1-user-3', userEmail: 'buyer3@example.com', isApproved: true, verificationStatus: 'VERIFIED' }], meta: { changes: 1 } },
+          { results: [{ id: 'registration-event-3' }], meta: { changes: 1 } },
+          { results: [], meta: { changes: 0 } },
+          { results: [], meta: { changes: 0 } },
+          { results: [{ roleName: 'buyer' }], meta: { changes: 0 } },
+        ]),
+      },
+    };
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+    try {
+      await expect(registrationQueries.updateClientRegistrationStatus('d1-user-3', 'accept'))
         .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE', status: 503 });
     } finally {
       if (previousEnv === undefined) delete globalThis.__CF_ENV__;
