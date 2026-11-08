@@ -2116,6 +2116,11 @@ const RFQ_CREATION_ERRORS = Object.freeze({
 const RFQ_NOTIFICATION_MESSAGES = Object.freeze({
   VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED:
     'The vendor category update email was not confirmed as sent. Retry shortly; the provider may have accepted the message before the response was lost.',
+  BACKGROUND_EMAIL_PROVIDER_NOT_ACCEPTED: 'The email provider did not confirm acceptance.',
+});
+
+const RFQ_NOTIFICATION_ERROR_CODES = Object.freeze({
+  EMAIL_DELIVERY_NOT_ACCEPTED: 'EMAIL_DELIVERY_NOT_ACCEPTED',
 });
 
 /** Notification email content for vendor credit exhaustion */
@@ -3265,6 +3270,7 @@ module.exports = {
   RFQ_DOWNLOAD_ERRORS,
   RFQ_CREATION_ERRORS,
   RFQ_NOTIFICATION_MESSAGES,
+  RFQ_NOTIFICATION_ERROR_CODES,
   VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
   ZOHO_CONFIG,
   ZOHO_WEBHOOK_RECEIPT_POLICY,

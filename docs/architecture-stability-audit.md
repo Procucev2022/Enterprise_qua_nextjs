@@ -359,3 +359,8 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 - The buyer-triggered vendor category-update endpoint previously returned success and wrote the audit event whenever the mailer promise resolved, including `{ sent: false }` or an empty result. It now requires explicit provider acceptance before recording the audit event or returning success. Provider refusal and thrown sends return a retryable 503 and emit structured logs with vendor/RFQ context and no recipient address.
 - Focused RFQ-controller regressions passed 69 tests across the controller and branch-boost suites. This manually triggered path still has no durable outbox or idempotency key; a provider acceptance followed by a lost response may result in a duplicate if the buyer retries.
+
+## RFQ background email provider refusal logging
+
+- The unconfigured-storage RFQ creation fallback previously logged thrown provider errors but treated a resolved `{ sent: false }` or empty delivery result as success. The shared background wrapper now emits a structured error with RFQ number, a stable delivery error code, and a safe result-presence flag for explicit refusals, while preserving the successfully persisted RFQ response.
+- Focused RFQ controller regression coverage verifies the refusal path. This fallback remains process-local and has no durable retry ledger; configured database paths use the existing RFQ email outbox. Production D1 verification remains deferred until credentials are available.

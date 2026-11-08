@@ -32,6 +32,7 @@ const {
   EVENT_OUTBOX_TYPES,
   VENDOR_FREE_CREDITS_LIMIT,
   RFQ_NOTIFICATION_MESSAGES,
+  RFQ_NOTIFICATION_ERROR_CODES,
 } = require('../config/constants');
 
 // A newly created RFQ is awaiting vendor quotations.
@@ -40,6 +41,19 @@ const RFQ_DEFAULT_STATUS = 'Quotes Pending';
 function trackBackgroundRfqEmail(sendEmail, failureMessage, rfqNumber) {
   const tracked = Promise.resolve()
     .then(sendEmail)
+    .then((delivery) => {
+      if (!delivery?.sent) {
+        logger.error(failureMessage, {
+          rfqNumber,
+          error: {
+            code: RFQ_NOTIFICATION_ERROR_CODES.EMAIL_DELIVERY_NOT_ACCEPTED,
+            message: RFQ_NOTIFICATION_MESSAGES.BACKGROUND_EMAIL_PROVIDER_NOT_ACCEPTED,
+            deliveryResultPresent: Boolean(delivery),
+          },
+        }, 'RFQ_CONTROLLER');
+      }
+      return delivery;
+    })
     .catch((error) => {
       logger.error(failureMessage, { rfqNumber, error }, 'RFQ_CONTROLLER');
     });

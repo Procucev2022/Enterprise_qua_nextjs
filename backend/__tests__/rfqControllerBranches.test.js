@@ -1496,6 +1496,44 @@ describe('rfqController Comprehensive Branch Coverage', () => {
         'RFQ_CONTROLLER'
       );
 
+      mailerService.sendRfqAcknowledgementEmail.mockResolvedValue({ sent: false, reason: 'provider_declined' });
+      const refusalTasks = [];
+      globalThis.__CF_WAIT_UNTIL__ = (task) => refusalTasks.push(task);
+      const resMailRefused = mockRes();
+      try {
+        await rfqController.createRFQ(
+          {
+            body: {
+              title: 'Test',
+              category: 'Pumps & Motors',
+              sourcingMode: 'mode_0',
+              targetDeliveryDate: '2099-01-01',
+              deliveryLocation: 'Mumbai',
+              deliveryPincode: '400001',
+            },
+            user: { role: 'buyer', email: 'b@mailrefused.com' },
+          },
+          resMailRefused,
+          next
+        );
+        await Promise.all(refusalTasks);
+      } finally {
+        if (previousWaitUntil === undefined) delete globalThis.__CF_WAIT_UNTIL__;
+        else globalThis.__CF_WAIT_UNTIL__ = previousWaitUntil;
+      }
+      expect(resMailRefused.statusCode).toBe(201);
+      expect(loggerErrorSpy).toHaveBeenLastCalledWith(
+        'Failed to deliver RFQ creation acknowledgement email',
+        expect.objectContaining({
+          rfqNumber: successfulRFQ.rfqNumber,
+          error: expect.objectContaining({
+            code: 'EMAIL_DELIVERY_NOT_ACCEPTED',
+            deliveryResultPresent: true,
+          }),
+        }),
+        'RFQ_CONTROLLER'
+      );
+
       // A persistence failure is forwarded; the controller no longer performs a separate best-effort refund.
       createDurably.mockRejectedValueOnce(new Error('DB creation crash'));
       const refundSpy = jest.spyOn(storeService, 'refundFreeRFQ').mockReturnValue(true);
