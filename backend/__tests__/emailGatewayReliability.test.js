@@ -86,6 +86,46 @@ describe('automated sender and own-notice detection', () => {
     expect(emailGatewayService.extractHeaderMessageId('Message-ID: <no-body@b.com>')).toBe('<no-body@b.com>');
     expect(emailGatewayService.extractHeaderMessageId(undefined)).toBe('');
   });
+
+  test('persists vendor quote acknowledgement retries after provider refusal', async () => {
+    const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+    jest.spyOn(emailGatewayService, 'shouldSendAutoReply').mockResolvedValue({ allowed: true });
+    const outboundMessage = message({
+      messageId: '<vendor-quote-ack-1@vendor.in>',
+      fromAddress: 'sales@vendor.in',
+      subject: 'Re: RFQ-ACK-1',
+    });
+    const send = jest.fn().mockResolvedValue({ sent: false, reason: 'SMTP unavailable' });
+
+    const sent = await emailGatewayService.sendAutoReply(
+      outboundMessage,
+      AUTO_REPLY_KIND.QUOTE_ACK,
+      send,
+      {
+        rfqNumber: 'RFQ-ACK-1',
+        retryDelivery: {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+          payload: {
+            rfqId: 'rfq-ack-1',
+            rfqNumber: 'RFQ-ACK-1',
+            quoteId: 'quote-ack-1',
+            vendorName: 'Apex Valves',
+            buyerEmail: 'buyer@example.com',
+          },
+        },
+      }
+    );
+
+    expect(sent).toBe(false);
+    expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: '<vendor-quote-ack-1@vendor.in>#notice-vendor_quote_ack#ack',
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      rfqId: 'rfq-ack-1',
+      rfqNumber: 'RFQ-ACK-1',
+      fromAddress: 'sales@vendor.in',
+      detail: expect.stringContaining('quote-ack-1'),
+    }));
+  });
 });
 
 describe('shouldSendAutoReply', () => {

@@ -2330,6 +2330,49 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       expect(vendorAcknowledgement).not.toHaveBeenCalled();
     });
 
+    test('queues a direct vendor quote acknowledgement for retry when its provider refuses', async () => {
+      const emailRecord = {
+        messageId: '<quote-vendor-ack-retry@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Unit Price: 10000',
+      };
+      const committedRfq = { ...sampleRfq, status: 'In Evaluation' };
+      jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 10000, totalPrice: 40000 });
+      jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@test.com');
+      jest.spyOn(storeService, 'checkVendorQuotationEligibility').mockReturnValue({ eligible: true });
+      jest.spyOn(storeService, 'submitVendorQuoteDurably').mockResolvedValue({
+        rfq: committedRfq,
+        quoteId: 'quote-vendor-ack-retry',
+        vendorQuoteAcknowledgementQueued: false,
+        buyerQuoteNotificationQueued: true,
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'buyer-vendor-ack-retry',
+        organizationName: 'Buyer Organization',
+      });
+      jest.spyOn(storeService, 'isBuyerProfileUpdateRequired').mockReturnValue(false);
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: false, reason: 'SMTP unavailable' });
+      const queueRetry = jest.spyOn(emailGatewayService, 'queueAcknowledgement').mockResolvedValue(true);
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(emailRecord, sampleRfq, sampleVendor);
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(queueRetry).toHaveBeenCalledWith(
+        expect.stringContaining('notice-vendor_quote_ack'),
+        expect.objectContaining({
+          to: VENDOR_EMAIL,
+          rfqId: sampleRfq.id,
+          rfqNumber: sampleRfq.rfqNumber,
+          quoteId: 'quote-vendor-ack-retry',
+          buyerEmail: 'buyer@test.com',
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+        })
+      );
+    });
+
     test('does not directly resend a buyer email owned by the auto-closure outbox', async () => {
       const emailRecord = {
         messageId: '<quote-buyer-autoclose@apex.com>',

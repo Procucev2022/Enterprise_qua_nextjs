@@ -480,6 +480,85 @@ describe('emailGatewayService remaining branch coverage', () => {
       }));
     });
 
+    test('reconstructs a vendor quote acknowledgement from its persisted RFQ and quote IDs', async () => {
+      const quote = { id: 'quote-ack-1', vendorId: 'vendor-1', vendorName: 'Apex Valves', unitPrice: 120 };
+      const rfq = { id: 'rfq-ack-1', rfqNumber: 'RFQ-ACK-01', title: 'Industrial valves', quotes: [quote] };
+      jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([{
+        message_id: 'notice-vendor-quote-ack',
+        rfq_id: rfq.id,
+        from_address: 'sales@vendor.in',
+        rfq_number: rfq.rfqNumber,
+        subject: rfq.title,
+        processed_at: new Date().toISOString(),
+        detail: JSON.stringify({
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+          quoteId: quote.id,
+          vendorName: quote.vendorName,
+          buyerEmail: 'buyer@example.com',
+        }),
+      }]);
+      jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
+      const deliverySpy = jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValueOnce({ sent: true });
+      const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+
+      const result = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(result.sent).toBe(1);
+      expect(deliverySpy).toHaveBeenCalledWith('sales@vendor.in', expect.objectContaining({
+        rfqNumber: rfq.rfqNumber,
+        rfqTitle: rfq.title,
+        vendorName: quote.vendorName,
+        quote,
+        buyerEmail: 'buyer@example.com',
+      }));
+      expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: 'notice-vendor-quote-ack',
+        status: INGESTION_OUTCOME.ACK_SENT,
+      }));
+    });
+
+    test('keeps malformed quote acknowledgement rows pending without attempting delivery', async () => {
+      const listSpy = jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([
+        {
+          message_id: 'notice-missing-rfq-id',
+          from_address: 'sales@vendor.in',
+          rfq_number: 'RFQ-MISSING-ID',
+          subject: 'Industrial valves',
+          processed_at: new Date().toISOString(),
+          detail: JSON.stringify({ deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK, quoteId: 'quote-1' }),
+        },
+        {
+          message_id: 'notice-missing-quotes',
+          rfq_id: 'rfq-missing-quotes',
+          from_address: 'sales@vendor.in',
+          rfq_number: 'RFQ-MISSING-QUOTES',
+          subject: 'Industrial valves',
+          processed_at: new Date().toISOString(),
+          detail: JSON.stringify({ deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK, quoteId: 'quote-1' }),
+        },
+        {
+          message_id: 'notice-missing-quote-id',
+          rfq_id: 'rfq-missing-quote-id',
+          from_address: 'sales@vendor.in',
+          rfq_number: 'RFQ-MISSING-QUOTE-ID',
+          subject: 'Industrial valves',
+          processed_at: new Date().toISOString(),
+          detail: JSON.stringify({ deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK }),
+        },
+      ]);
+      const lookup = jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB')
+        .mockResolvedValueOnce({ id: 'rfq-missing-quotes' })
+        .mockResolvedValueOnce({ id: 'rfq-missing-quote-id', quotes: [{ vendorName: 'Legacy Vendor' }] });
+      const deliverySpy = jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail');
+
+      const result = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(result).toEqual({ sent: 0, abandoned: 0, stillPending: 3 });
+      expect(listSpy).toHaveBeenCalled();
+      expect(lookup).toHaveBeenCalledTimes(2);
+      expect(deliverySpy).not.toHaveBeenCalled();
+    });
+
     test('retries legacy unauthorized-sender rows with the subject and gateway defaults', async () => {
       const row = {
         message_id: 'legacy-unauthorized-notice',

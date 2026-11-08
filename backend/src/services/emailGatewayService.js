@@ -1528,6 +1528,8 @@ async function queueAcknowledgement(rfqKey, ack) {
     'missingFields',
     'cc',
     'gatewayAddress',
+    'quoteId',
+    'buyerEmail',
   ].forEach((key) => {
     if (ack[key] !== undefined && ack[key] !== null) detailObj[key] = ack[key];
   });
@@ -1562,6 +1564,7 @@ async function queueAcknowledgement(rfqKey, ack) {
     detail: JSON.stringify(detailObj),
     fromAddress: ack.to,
     subject: ack.originalSubject || ack.rfqTitle || ack.subject,
+    rfqId: ack.rfqId || null,
     rfqNumber: ack.rfqNumber || null,
   });
   if (!recorded) {
@@ -1730,6 +1733,23 @@ async function retryPendingAcknowledgements({
           itemCount: Number(saved.itemCount) || 0,
           cc: saved.cc,
         }), 'Vendor portal redirect notice retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK) {
+        const rfq = row.rfq_id ? await domainQueries.getRFQByIdFromDB(row.rfq_id) : null;
+        const quote = Array.isArray(rfq?.quotes)
+          ? rfq.quotes.find((candidate) => String(candidate.id || '') === String(saved.quoteId || ''))
+          : null;
+        if (!rfq || !quote || !saved.quoteId) {
+          const error = new Error('Vendor quote acknowledgement retry references a missing persisted RFQ or quote.');
+          error.code = 'INVALID_PERSISTED_RECORD';
+          throw error;
+        }
+        ensureMailDeliveryAccepted(await mailerService.sendQuoteAcknowledgementEmail(row.from_address, {
+          rfqNumber: rfq.rfqNumber,
+          rfqTitle: rfq.title,
+          vendorName: saved.vendorName || quote.vendorName || 'Vendor',
+          quote,
+          buyerEmail: saved.buyerEmail || null,
+        }), 'Vendor quote acknowledgement retry');
       } else if (retryTempPassword) {
         ensureMailDeliveryAccepted(await mailerService.sendBuyerOnboardingWithRfqEmail({
           to: row.from_address,
@@ -2486,7 +2506,21 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           buyerEmail,
           cc: undefined,
         }),
-      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send vendor quote acknowledgement email' }
+      {
+        rfqNumber: targetRfq.rfqNumber,
+        failureLog: 'Failed to send vendor quote acknowledgement email',
+        retryDelivery: pool.hasStorage() && quoteSubmission?.quoteId ? {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
+          payload: {
+            rfqId: targetRfq.id,
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            vendorName: vendorRecord.name,
+            quoteId: quoteSubmission.quoteId,
+            buyerEmail,
+          },
+        } : null,
+      }
     );
   }
 
@@ -3492,6 +3526,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
           ],
         }
         : {
@@ -3500,6 +3535,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
           ],
         };
       acknowledgements = await emailGateway.retryPendingAcknowledgements(retryOptions).catch((ackErr) => {

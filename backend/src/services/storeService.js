@@ -4773,20 +4773,20 @@ class StoreService {
     includeDeliveryState = false,
     vendorQuoteAcknowledgement = null,
   } = {}) {
+    const durableQuoteId = quote.id || crypto.randomUUID();
     if (!pool.hasStorage()) {
-      const updated = this.addQuoteToRFQ(rfqId, quote);
+      const updated = this.addQuoteToRFQ(rfqId, { ...quote, id: durableQuoteId });
       if (!updated) {
         return includeDeliveryState
-          ? { rfq: null, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, vendorQuoteAcknowledgementQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+          ? { rfq: null, quoteId: durableQuoteId, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, vendorQuoteAcknowledgementQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
           : null;
       }
       if (quote && quote.vendorId) this.consumeVendorQuotationCredit(quote.vendorId, rfqId);
       return includeDeliveryState
-        ? { rfq: updated, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, vendorQuoteAcknowledgementQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
+        ? { rfq: updated, quoteId: durableQuoteId, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, vendorQuoteAcknowledgementQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
         : updated;
     }
 
-    const durableQuoteId = quote.id || crypto.randomUUID();
     for (let attempt = 0; attempt < RFQ_QUOTE_WRITE_RETRIES; attempt += 1) {
       let rfq;
       let vendor;
@@ -5005,6 +5005,7 @@ class StoreService {
       return includeDeliveryState
         ? {
           rfq: savedRFQ,
+          quoteId: durableQuoteId,
           buyerQuoteNotificationQueued: Boolean(quoteNotificationEventId),
           buyerProfileReminderQueued: Boolean(buyerProfileReminderEventId),
           vendorQuoteAcknowledgementQueued: Boolean(vendorQuoteAcknowledgementEventId),

@@ -182,6 +182,7 @@ describe('durable quote submission and credit synchronization', () => {
 
     expect(submission).toEqual({
       rfq: savedRFQ,
+      quoteId: expect.any(String),
       buyerQuoteNotificationQueued: true,
       buyerProfileReminderQueued: false,
       vendorQuoteAcknowledgementQueued: false,
@@ -413,6 +414,7 @@ describe('durable quote submission and credit synchronization', () => {
 
     expect(submission).toEqual({
       rfq: savedRFQ,
+      quoteId: 'quote-auto-close-1',
       buyerQuoteNotificationQueued: false,
       buyerProfileReminderQueued: false,
       vendorQuoteAcknowledgementQueued: false,
@@ -621,7 +623,10 @@ describe('durable quote submission and credit synchronization', () => {
     const addQuote = jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({ id: RFQ_ID });
     await expect(storeService.submitVendorQuoteDurably(RFQ_ID, { vendorId: VENDOR_ID })).resolves.toEqual({ id: RFQ_ID });
     expect(credit).toHaveBeenCalledWith(VENDOR_ID, RFQ_ID);
-    expect(addQuote).toHaveBeenCalledWith(RFQ_ID, { vendorId: VENDOR_ID });
+    expect(addQuote).toHaveBeenCalledWith(RFQ_ID, expect.objectContaining({
+      id: expect.any(String),
+      vendorId: VENDOR_ID,
+    }));
   });
 
   test('does not consume a credit when the in-memory RFQ is missing', async () => {
