@@ -650,22 +650,44 @@ async function handleRegistrationAction(req, res) {
       `Registration ID ${id} was ${actionText} by internal task management.`
     );
 
-    // If buyer registration is accepted, send credentials email
-    const isBuyer = (client.clientType || 'Buyer').toLowerCase() === 'buyer';
-    if (action === 'accept' && isBuyer && client.userEmail) {
+    // Web registrations keep their chosen password; only send the credentials
+    // template when this decision explicitly carries a temporary password.
+    const isBuyer = String(client.clientType || '').toLowerCase() === 'buyer';
+    const tempPassword = typeof client.tempPassword === 'string' ? client.tempPassword.trim() : '';
+    if (action === 'accept' && isBuyer && client.userEmail && tempPassword) {
       try {
         const mailerService = require('../services/mailerService');
-        await mailerService.sendBuyerCredentialsEmail({
+        const delivery = await mailerService.sendBuyerCredentialsEmail({
           to: client.userEmail,
           recipientName: client.userName,
           contactPhone: client.phoneNumber,
           mobileNumber: client.phoneNumber,
-          ...(client.tempPassword ? { tempPassword: client.tempPassword } : {}),
+          tempPassword,
         });
-        logger.info('Buyer credentials email dispatched successfully upon registration approval', { id, email: client.userEmail }, 'INTERNAL_TASK_CONTROLLER');
+        if (delivery?.sent) {
+          logger.info('Buyer credentials email was accepted by a provider after registration approval', {
+            registrationId: id,
+            recipientPresent: true,
+          }, 'INTERNAL_TASK_CONTROLLER');
+        } else {
+          logger.warn('Buyer credentials email was not accepted by a provider after registration approval', {
+            registrationId: id,
+            recipientPresent: true,
+            deliveryResultPresent: Boolean(delivery),
+          }, 'INTERNAL_TASK_CONTROLLER');
+        }
       } catch (mailErr) {
-        logger.warn('Failed to send buyer credentials email upon approval', { id, email: client.userEmail, error: mailErr.message }, 'INTERNAL_TASK_CONTROLLER');
+        logger.error('Buyer credentials email provider request failed after registration approval', {
+          error: mailErr,
+          registrationId: id,
+          recipientPresent: true,
+        }, 'INTERNAL_TASK_CONTROLLER');
       }
+    } else if (action === 'accept' && isBuyer && client.userEmail && !tempPassword) {
+      logger.info('Buyer credentials email was not sent because approval did not include a temporary password', {
+        registrationId: id,
+        recipientPresent: true,
+      }, 'INTERNAL_TASK_CONTROLLER');
     }
 
     const message = action === 'accept'

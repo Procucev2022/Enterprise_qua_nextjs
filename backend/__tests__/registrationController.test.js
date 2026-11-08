@@ -238,7 +238,7 @@ describe('internalTaskController - Registrations', () => {
       expect(res.status).toHaveBeenCalledWith(400);
     });
 
-    test('dispatches credentials email when buyer registration is accepted', async () => {
+    test('does not send a blank credential template when an approved buyer has no temporary password', async () => {
       req.params = { id: 'reg-buyer-101' };
       req.body = { action: 'accept' };
 
@@ -258,10 +258,91 @@ describe('internalTaskController - Registrations', () => {
       await internalTaskController.handleRegistrationAction(req, res);
 
       expect(res.status).toHaveBeenCalledWith(200);
+      expect(mailSpy).not.toHaveBeenCalled();
+    });
+
+    test('does not send buyer credentials to an accepted vendor account', async () => {
+      req.params = { id: 'reg-vendor-101' };
+      req.body = { action: 'accept' };
+      jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockResolvedValue({
+        id: 'reg-vendor-101',
+        userName: 'Vendor User',
+        userEmail: 'vendor@example.com',
+        clientType: 'Seller',
+        tempPassword: 'temporary-password',
+        status: 'Accepted',
+        isApproved: true,
+      });
+      const mailerService = require('../src/services/mailerService');
+      const mailSpy = jest.spyOn(mailerService, 'sendBuyerCredentialsEmail');
+
+      await internalTaskController.handleRegistrationAction(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(mailSpy).not.toHaveBeenCalled();
+    });
+
+    test('records provider acceptance for buyer credentials when a temporary password is present', async () => {
+      req.params = { id: 'reg-buyer-accepted-mail' };
+      req.body = { action: 'accept' };
+      jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockResolvedValue({
+        id: 'reg-buyer-accepted-mail',
+        userName: 'Buyer User',
+        userEmail: 'buyer@example.com',
+        clientType: 'Buyer',
+        tempPassword: 'temporary-password',
+        status: 'Accepted',
+        isApproved: true,
+      });
+      const mailerService = require('../src/services/mailerService');
+      jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ sent: true });
+      const { logger } = require('../src/services/loggerService');
+      const infoSpy = jest.spyOn(logger, 'info');
+
+      await internalTaskController.handleRegistrationAction(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.stringContaining('was accepted by a provider'),
+        expect.objectContaining({ registrationId: 'reg-buyer-accepted-mail', recipientPresent: true }),
+        'INTERNAL_TASK_CONTROLLER'
+      );
+    });
+
+    test('sends buyer credentials only with an explicit temporary password and logs provider refusal', async () => {
+      req.params = { id: 'reg-buyer-103' };
+      req.body = { action: 'accept' };
+      jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockResolvedValue({
+        id: 'reg-buyer-103',
+        userName: 'Priya Verma',
+        userEmail: 'priya@acme.com',
+        phoneNumber: '+919876543210',
+        clientType: 'Buyer',
+        tempPassword: 'one-time-password',
+        status: 'Accepted',
+        isApproved: true,
+      });
+      const mailerService = require('../src/services/mailerService');
+      const mailSpy = jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({
+        sent: false,
+        reason: 'provider_declined',
+      });
+      const { logger } = require('../src/services/loggerService');
+      const warnSpy = jest.spyOn(logger, 'warn');
+
+      await internalTaskController.handleRegistrationAction(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
       expect(mailSpy).toHaveBeenCalledWith(expect.objectContaining({
         to: 'priya@acme.com',
         recipientName: 'Priya Verma',
+        tempPassword: 'one-time-password',
       }));
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('was not accepted by a provider'),
+        expect.objectContaining({ registrationId: 'reg-buyer-103', recipientPresent: true }),
+        'INTERNAL_TASK_CONTROLLER'
+      );
     });
 
     test('handles mailer error gracefully when credentials email dispatch fails', async () => {
@@ -274,6 +355,7 @@ describe('internalTaskController - Registrations', () => {
         userEmail: 'amit@acme.com',
         phoneNumber: '+919876543211',
         clientType: 'Buyer',
+        tempPassword: 'one-time-password',
         status: 'Accepted',
         isApproved: true,
       };

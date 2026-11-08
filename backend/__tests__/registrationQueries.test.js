@@ -337,6 +337,7 @@ describe('registrationQueries', () => {
       userName: 'verababu',
       companyName: 'Verababu eneterprises',
       userEmail: 'veerababuv2002@gmail.com',
+      roleName: 'vendor',
       regDate: '2026-06-30T10:30:00.000Z',
       isApproved: false,
       verificationStatus: 'PENDING',
@@ -355,6 +356,7 @@ describe('registrationQueries', () => {
       'reg-client-101', 'reject', 'Duplicate account', { sub: 'admin-1', email: 'admin@example.com' }
     );
     expect(client.status).toBe('Rejected');
+    expect(client.clientType).toBe('Seller');
     expect(querySpy).toHaveBeenCalledTimes(4);
     expect(querySpy.mock.calls[0][0]).toContain('FOR UPDATE OF u');
     expect(querySpy.mock.calls[1][0]).toContain('UPDATE "user"');
@@ -426,6 +428,7 @@ describe('registrationQueries', () => {
         },
         { results: [{ id: 'registration-event-1' }], meta: { changes: 1 } },
         { results: [], meta: { changes: 0 } },
+        { results: [{ roleName: 'vendor' }], meta: { changes: 0 } },
       ]),
     };
     const previousEnv = globalThis.__CF_ENV__;
@@ -438,12 +441,14 @@ describe('registrationQueries', () => {
       );
 
       expect(result.status).toBe('Accepted');
+      expect(result.clientType).toBe('Seller');
       expect(d1Binding.batch).toHaveBeenCalledTimes(1);
-      expect(preparedStatements).toHaveLength(3);
+      expect(preparedStatements).toHaveLength(4);
       expect(preparedStatements[0].sql).toContain('UPDATE "user"');
       expect(preparedStatements[1].sql).toContain('INSERT INTO client_registration_events');
       expect(preparedStatements[1].sql).toContain('changes() = 1');
       expect(preparedStatements[2].sql).toContain('UPDATE buyer_accounts');
+      expect(preparedStatements[3].sql).toContain('SELECT r.role_name AS "roleName"');
       expect(preparedStatements[1].params).toEqual(expect.arrayContaining([
         'Accepted', 'manager-1', 'Management Authority', null, 'Reviewed',
       ]));

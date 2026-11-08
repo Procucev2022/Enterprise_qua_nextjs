@@ -852,12 +852,21 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
                   (SELECT LOWER(email) FROM "user" WHERE uuid = $3))`,
             params: [isAccept ? 'ACTIVE_VERIFIED' : 'REJECTED', eventId, id],
           },
+          {
+            text: `SELECT r.role_name AS "roleName"
+              FROM "user" u INNER JOIN role r ON r.uuid = u.role_uuid
+              WHERE u.uuid = $1
+                AND EXISTS (SELECT 1 FROM client_registration_events WHERE id = $2)`,
+            params: [id, eventId],
+          },
         ];
         const results = await batchD1(d1, statements);
         updatedRow = results[0]?.rows?.[0] || null;
         if (updatedRow && !results[1]?.rows?.[0]) {
           throw new Error('Registration status changed without a durable event record.');
         }
+        const roleRow = results[3]?.rows?.[0];
+        if (updatedRow && roleRow) updatedRow.roleName = roleRow.roleName;
       } else {
         updatedRow = await pool.withTransaction(async (client) => {
           const rolePredicate = buildRegistrationRolePredicate(2);
@@ -894,7 +903,7 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
               VALUES ($1, $2, $3, $4, 'New', $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)`,
             [eventId, saved.id, saved.userEmail, newStatus, actorId, actorName, actorEmail, normalizedRemarks]
           );
-          return { ...saved, companyName: current.companyName };
+          return { ...saved, companyName: current.companyName, roleName: current.roleName };
         });
       }
 
