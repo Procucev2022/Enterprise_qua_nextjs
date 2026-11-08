@@ -3077,6 +3077,7 @@ describe('Store Service & Business Operations', () => {
     beforeEach(() => {
       inviteSpy = jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: false, reason: 'test environment' });
       quoteSpy = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: false, reason: 'test environment' });
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(false);
     });
 
     afterEach(() => {
@@ -3197,6 +3198,83 @@ describe('Store Service & Business Operations', () => {
       const buyer = storeService.addBuyerAccount({ organizationName: 'Reject Email Buyer', corporateEmail: 'reb@ex.com' });
       expect(storeService.emailQuoteToBuyer({ buyerAccountId: buyer.id, rfqNumber: 'RFQ-Y', title: 'T', source: 'email' }, { unitPrice: 1 })).toBe(true);
       await new Promise((r) => setImmediate(r));
+      expect(storeService._pendingQuoteNotifications.get('reb@ex.com')).toHaveLength(1);
+    });
+
+    test('retries a refused local quote email on a later notification attempt', async () => {
+      const buyer = storeService.addBuyerAccount({
+        id: 'buyer-local-quote-retry',
+        organizationName: 'Local Retry Buyer',
+        corporateEmail: 'local-retry@example.test',
+        status: 'ACTIVE_VERIFIED',
+      });
+      const rfq = { id: 'rfq-local-quote-retry', rfqNumber: 'RFQ-LOCAL-QUOTE-RETRY', buyerAccountId: buyer.id };
+      const quote = { id: 'quote-local-quote-retry', vendorId: 'vendor-local-quote-retry' };
+      quoteSpy.mockReset()
+        .mockResolvedValueOnce({ sent: false, reason: 'provider_declined' })
+        .mockResolvedValueOnce({ sent: true });
+
+      expect(storeService.emailQuoteToBuyer(rfq, quote)).toBe(true);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(storeService._pendingQuoteNotifications.get(buyer.corporateEmail)).toEqual([{ rfq, quote }]);
+
+      expect(storeService.emailQuoteToBuyer(rfq, quote)).toBe(true);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(quoteSpy).toHaveBeenCalledTimes(2);
+      expect(storeService._pendingQuoteNotifications.has(buyer.corporateEmail)).toBe(false);
+    });
+
+    test('does not send the same local quote notification twice while delivery is in flight', async () => {
+      const buyer = storeService.addBuyerAccount({
+        id: 'buyer-local-quote-inflight',
+        organizationName: 'Local Inflight Buyer',
+        corporateEmail: 'local-inflight@example.test',
+        status: 'ACTIVE_VERIFIED',
+      });
+      const rfq = { id: 'rfq-local-quote-inflight', rfqNumber: 'RFQ-LOCAL-QUOTE-INFLIGHT', buyerAccountId: buyer.id };
+      const quote = { id: 'quote-local-quote-inflight', vendorId: 'vendor-local-quote-inflight' };
+      let resolveDelivery;
+      quoteSpy.mockReset().mockReturnValue(new Promise((resolve) => {
+        resolveDelivery = resolve;
+      }));
+
+      expect(storeService.emailQuoteToBuyer(rfq, quote)).toBe(true);
+      expect(storeService.emailQuoteToBuyer(rfq, quote)).toBe(true);
+      expect(quoteSpy).toHaveBeenCalledTimes(1);
+
+      resolveDelivery({ sent: true });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(storeService._pendingQuoteNotifications.has(buyer.corporateEmail)).toBe(false);
+    });
+
+    test('clears the local profile reminder acknowledgement after refusal or exception', async () => {
+      const buyer = storeService.addBuyerAccount({
+        id: 'buyer-local-reminder-retry',
+        organizationName: 'Local Reminder Buyer',
+        corporateEmail: 'local-reminder@example.test',
+        status: 'PENDING_ONBOARDING',
+        onboardingRequired: true,
+        profileVerified: false,
+      });
+      const rfq = { id: 'rfq-local-reminder-retry', rfqNumber: 'RFQ-LOCAL-REMINDER-RETRY', buyerAccountId: buyer.id };
+      const quote = { id: 'quote-local-reminder-retry', vendorId: 'vendor-local-reminder-retry' };
+      const reminderSpy = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail')
+        .mockResolvedValueOnce({ sent: false, reason: 'provider_declined' })
+        .mockRejectedValueOnce(new Error('smtp unavailable'))
+        .mockResolvedValueOnce({ sent: true });
+
+      expect(storeService.emailQuoteToBuyer(rfq, quote)).toBe(true);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(storeService.hasQuoteAckBeenSent(rfq)).toBe(false);
+
+      expect(storeService.emailQuoteToBuyer(rfq, quote)).toBe(true);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(storeService.hasQuoteAckBeenSent(rfq)).toBe(false);
+
+      expect(storeService.emailQuoteToBuyer(rfq, quote)).toBe(true);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(reminderSpy).toHaveBeenCalledTimes(3);
+      expect(storeService.hasQuoteAckBeenSent(rfq)).toBe(true);
     });
 
     test('emailQuoteToBuyer resolves buyer by corporateEmail when buyerAccountId is null', () => {
@@ -4151,7 +4229,7 @@ describe('demo RFQ seeding', () => {
       scheduleSpy.mockRestore();
     });
 
-    test('emailQuoteToBuyer dispatches quotation email directly to registered buyer without queueing', () => {
+    test('emailQuoteToBuyer queues local delivery while dispatching a registered buyer quote', () => {
       const quoteSpy = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
       const remindSpy = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
       const queueSpy = jest.spyOn(storeService, 'queuePendingQuoteNotification');
@@ -4177,7 +4255,7 @@ describe('demo RFQ seeding', () => {
       const outcome = storeService.emailQuoteToBuyer(rfq, quote);
 
       expect(outcome).toBe(true);
-      expect(queueSpy).not.toHaveBeenCalled();
+      expect(queueSpy).toHaveBeenCalledWith(registeredBuyer.corporateEmail, { rfq, quote });
       expect(remindSpy).not.toHaveBeenCalled();
       expect(quoteSpy).toHaveBeenCalledWith(
         'tatasteel.buyer@tata.com',
@@ -4193,7 +4271,7 @@ describe('demo RFQ seeding', () => {
       queueSpy.mockRestore();
     });
 
-    test('emailQuoteToBuyer dispatches quotation email directly to existing buyer with status ACTIVE without requiring profile completion', () => {
+    test('emailQuoteToBuyer queues local delivery for an existing active buyer without a profile reminder', () => {
       const quoteSpy = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
       const remindSpy = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
       const queueSpy = jest.spyOn(storeService, 'queuePendingQuoteNotification');
@@ -4216,7 +4294,7 @@ describe('demo RFQ seeding', () => {
       const outcome = storeService.emailQuoteToBuyer(rfq, quote);
 
       expect(outcome).toBe(true);
-      expect(queueSpy).not.toHaveBeenCalled();
+      expect(queueSpy).toHaveBeenCalledWith(existingBuyer.corporateEmail, { rfq, quote });
       expect(remindSpy).not.toHaveBeenCalled();
       expect(quoteSpy).toHaveBeenCalledWith(
         'existing.buyer@industry.com',
@@ -4232,7 +4310,7 @@ describe('demo RFQ seeding', () => {
       queueSpy.mockRestore();
     });
 
-    test('emailQuoteToBuyer dispatches quotation email directly to auto-created buyer after they updated their profile', () => {
+    test('emailQuoteToBuyer queues local delivery for an auto-created buyer after profile completion', () => {
       const quoteSpy = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: true });
       const remindSpy = jest.spyOn(mailerService, 'sendBuyerProfileCompletionReminderEmail').mockResolvedValue({ sent: true });
       const queueSpy = jest.spyOn(storeService, 'queuePendingQuoteNotification');
@@ -4260,7 +4338,7 @@ describe('demo RFQ seeding', () => {
       const outcome = storeService.emailQuoteToBuyer(rfq, quote);
 
       expect(outcome).toBe(true);
-      expect(queueSpy).not.toHaveBeenCalled();
+      expect(queueSpy).toHaveBeenCalledWith(autoBuyer.corporateEmail, { rfq, quote });
       expect(remindSpy).not.toHaveBeenCalled();
       expect(quoteSpy).toHaveBeenCalledWith(
         'auto.buyer.updated@test.com',

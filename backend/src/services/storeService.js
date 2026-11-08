@@ -7728,6 +7728,12 @@ class StoreService {
     if (rfq.rfqNumber) this._rfqQuoteAckSent.add(String(rfq.rfqNumber));
   }
 
+  _unmarkQuoteAckSent(rfq) {
+    if (!rfq || !this._rfqQuoteAckSent) return;
+    if (rfq.id) this._rfqQuoteAckSent.delete(String(rfq.id));
+    if (rfq.rfqNumber) this._rfqQuoteAckSent.delete(String(rfq.rfqNumber));
+  }
+
   /**
    * Email a submitted quote to the RFQ's owning buyer. Fired from addQuoteToRFQ.
    *
@@ -7756,14 +7762,21 @@ class StoreService {
 
       if (!this.hasQuoteAckBeenSent(rfq)) {
         this.markQuoteAckSent(rfq);
+        const reminderDelivery = Promise.resolve(mailerService.sendBuyerProfileCompletionReminderEmail({
+          to: buyer.corporateEmail,
+          recipientName: buyer.organizationName,
+          rfqNumber: rfq.rfqNumber,
+          rfqTitle: rfq.title,
+          quotesCount: 1,
+        })).then((delivery) => {
+          if (delivery?.sent !== true) this._unmarkQuoteAckSent(rfq);
+          return delivery;
+        }).catch((error) => {
+          this._unmarkQuoteAckSent(rfq);
+          throw error;
+        });
         this._background(
-          mailerService.sendBuyerProfileCompletionReminderEmail({
-            to: buyer.corporateEmail,
-            recipientName: buyer.organizationName,
-            rfqNumber: rfq.rfqNumber,
-            rfqTitle: rfq.title,
-            quotesCount: 1,
-          }),
+          reminderDelivery,
           'Failed to email profile completion reminder to buyer',
           {
             deliveryChannel: 'email',
@@ -7777,6 +7790,21 @@ class StoreService {
           action: `Notification outcome: Started quotation acknowledgment and profile update reminder delivery to ${buyer.corporateEmail} for RFQ ${rfq.rfqNumber}`,
         });
       }
+      return true;
+    }
+
+    if (!pool.hasStorage()) {
+      this.queuePendingQuoteNotification(buyer.corporateEmail, { rfq, quote });
+      this._background(
+        this.dispatchPendingQuoteNotifications(buyer.corporateEmail, buyer),
+        'Failed to dispatch local buyer quote notifications',
+        {
+          operation: 'rfq-quote-received-email-local-retry',
+          rfqId: rfq.id,
+          rfqNumber: rfq.rfqNumber,
+          quoteId: quote.id,
+        }
+      );
       return true;
     }
 
@@ -7845,7 +7873,7 @@ class StoreService {
     return completed;
   }
 
-  async dispatchPendingQuoteNotifications(buyerEmail) {
+  async dispatchPendingQuoteNotifications(buyerEmail, buyerOverride = null) {
     if (!buyerEmail) return [];
     const normEmail = String(buyerEmail).trim().toLowerCase();
     if (pool.hasStorage()) {
@@ -7853,28 +7881,31 @@ class StoreService {
     }
     const list = this._pendingQuoteNotifications ? (this._pendingQuoteNotifications.get(normEmail) || []) : [];
     if (list.length === 0) return [];
-    if (this._pendingQuoteNotifications) {
-      this._pendingQuoteNotifications.delete(normEmail);
-    }
 
-    let buyer;
-    try {
-      buyer = (await this.getBuyerAccountByEmail(normEmail)) || {
-        corporateEmail: normEmail,
-        organizationName: 'Valued Buyer',
-      };
-    } catch (error) {
-      list.forEach((item) => this.queuePendingQuoteNotification(normEmail, item));
-      logger.error('Failed to load buyer before pending quote notification delivery', {
-        operation: 'pending-buyer-quote-recipient-lookup',
-        notificationCount: list.length,
-        error,
-      }, 'STORE_SERVICE');
-      return [];
+    let buyer = buyerOverride;
+    if (!buyer) {
+      try {
+        buyer = (await this.getBuyerAccountByEmail(normEmail)) || {
+          corporateEmail: normEmail,
+          organizationName: 'Valued Buyer',
+        };
+      } catch (error) {
+        list.forEach((item) => this.queuePendingQuoteNotification(normEmail, item));
+        logger.error('Failed to load buyer before pending quote notification delivery', {
+          operation: 'pending-buyer-quote-recipient-lookup',
+          notificationCount: list.length,
+          error,
+        }, 'STORE_SERVICE');
+        return [];
+      }
     }
 
     const dispatched = [];
+    this._pendingQuoteNotificationDispatching = this._pendingQuoteNotificationDispatching || new Set();
     for (const item of list) {
+      const notificationKey = `${normEmail}:${item.rfq.id || item.rfq.rfqNumber}:${item.quote.id || item.quote.vendorId || item.quote.vendorName}`;
+      if (this._pendingQuoteNotificationDispatching.has(notificationKey)) continue;
+      this._pendingQuoteNotificationDispatching.add(notificationKey);
       const metadata = {
         operation: 'pending-buyer-quote-notification',
         rfqId: item.rfq.id,
@@ -7890,11 +7921,18 @@ class StoreService {
         });
         if (delivery?.sent === true) {
           dispatched.push(item);
+          if (this._pendingQuoteNotifications) {
+            const current = this._pendingQuoteNotifications.get(normEmail) || [];
+            const remaining = current.filter((pending) => (
+              `${normEmail}:${pending.rfq.id || pending.rfq.rfqNumber}:${pending.quote.id || pending.quote.vendorId || pending.quote.vendorName}` !== notificationKey
+            ));
+            if (remaining.length > 0) this._pendingQuoteNotifications.set(normEmail, remaining);
+            else this._pendingQuoteNotifications.delete(normEmail);
+          }
           logger.info('Pending quote email accepted by provider', metadata, 'STORE_SERVICE');
           continue;
         }
 
-        this.queuePendingQuoteNotification(normEmail, item);
         logger.error('Provider did not accept pending quote notification', {
           ...metadata,
           error: {
@@ -7904,11 +7942,12 @@ class StoreService {
           },
         }, 'STORE_SERVICE');
       } catch (error) {
-        this.queuePendingQuoteNotification(normEmail, item);
         logger.error('Failed to dispatch pending quote notification', {
           ...metadata,
           error,
         }, 'STORE_SERVICE');
+      } finally {
+        this._pendingQuoteNotificationDispatching.delete(notificationKey);
       }
     }
     return dispatched;
