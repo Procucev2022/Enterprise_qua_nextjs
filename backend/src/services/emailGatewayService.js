@@ -1530,6 +1530,13 @@ async function queueAcknowledgement(rfqKey, ack) {
   ].forEach((key) => {
     if (ack[key] !== undefined && ack[key] !== null) detailObj[key] = ack[key];
   });
+  if (
+    ack.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT
+    && ack.itemCount !== undefined
+    && ack.itemCount !== null
+  ) {
+    detailObj.itemCount = ack.itemCount;
+  }
   const messageId = `${rfqKey}#ack`;
   let status = INGESTION_OUTCOME.ACK_PENDING;
   if (ack.tempPassword) {
@@ -1707,6 +1714,13 @@ async function retryPendingAcknowledgements({
           missingFields: Array.isArray(saved.missingFields) ? saved.missingFields : [],
           cc: saved.cc,
         }), 'Vendor quote failure notice retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT) {
+        ensureMailDeliveryAccepted(await mailerService.sendComplexRfqPortalRedirectEmail(row.from_address, {
+          rfq: { rfqNumber: row.rfq_number, title: saved.rfqTitle || row.subject },
+          vendorName: saved.vendorName,
+          itemCount: Number(saved.itemCount) || 0,
+          cc: saved.cc,
+        }), 'Vendor portal redirect notice retry');
       } else if (retryTempPassword) {
         ensureMailDeliveryAccepted(await mailerService.sendBuyerOnboardingWithRfqEmail({
           to: row.from_address,
@@ -2283,7 +2297,20 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           itemCount,
           cc: failureCc,
         }),
-      { rfqNumber: targetRfq.rfqNumber, failureLog: 'Failed to send complex RFQ portal redirect email' }
+      {
+        rfqNumber: targetRfq.rfqNumber,
+        failureLog: 'Failed to send complex RFQ portal redirect email',
+        retryDelivery: {
+          deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+          payload: {
+            rfqNumber: targetRfq.rfqNumber,
+            rfqTitle: targetRfq.title,
+            vendorName: vendorRecord.name,
+            itemCount,
+            cc: failureCc,
+          },
+        },
+      }
     );
 
     return {
@@ -3434,12 +3461,14 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
           deliveryKinds: [
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
           ],
         }
         : {
           excludeDeliveryKinds: [
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
           ],
         };
       acknowledgements = await emailGateway.retryPendingAcknowledgements(retryOptions).catch((ackErr) => {

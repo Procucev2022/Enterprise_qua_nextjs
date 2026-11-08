@@ -405,6 +405,15 @@ describe('emailGatewayService remaining branch coverage', () => {
           cc: 'buyer@example.com',
         },
       },
+      {
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+        method: 'sendComplexRfqPortalRedirectEmail',
+        detail: {
+          vendorName: 'Apex Valves',
+          itemCount: 11,
+          cc: 'buyer@example.com',
+        },
+      },
     ])('retries $deliveryKind notices from the durable email ledger', async ({ deliveryKind, method, detail }) => {
       const messageId = `notice-${deliveryKind}`;
       jest.spyOn(emailGatewayQueries, 'listByStatus').mockResolvedValueOnce([
@@ -427,12 +436,20 @@ describe('emailGatewayService remaining branch coverage', () => {
       const result = await emailGatewayService.retryPendingAcknowledgements();
 
       expect(result.sent).toBe(1);
-      expect(deliverySpy).toHaveBeenCalledWith('sales@vendor.in', expect.objectContaining({
-        rfqNumber: 'RFQ-RETRY-01',
-        rfqTitle: 'Industrial valves',
-        vendorName: 'Apex Valves',
-        cc: 'buyer@example.com',
-      }));
+      const expectedDeliveryContext = deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT
+        ? {
+          rfq: { rfqNumber: 'RFQ-RETRY-01', title: 'Industrial valves' },
+          vendorName: 'Apex Valves',
+          itemCount: 11,
+          cc: 'buyer@example.com',
+        }
+        : {
+          rfqNumber: 'RFQ-RETRY-01',
+          rfqTitle: 'Industrial valves',
+          vendorName: 'Apex Valves',
+          cc: 'buyer@example.com',
+        };
+      expect(deliverySpy).toHaveBeenCalledWith('sales@vendor.in', expect.objectContaining(expectedDeliveryContext));
       expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
         messageId,
         status: INGESTION_OUTCOME.ACK_SENT,

@@ -1079,6 +1079,7 @@ describe('acknowledgements that could not be sent are retried later', () => {
         excludeDeliveryKinds: [
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
         ],
       });
       expect(result.acknowledgements).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
@@ -1091,6 +1092,7 @@ describe('acknowledgements that could not be sent are retried later', () => {
         deliveryKinds: [
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
         ],
       });
     });
@@ -1118,17 +1120,20 @@ describe('emailGatewayQueries.listByStatus', () => {
     await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 0)).resolves.toEqual([]);
   });
 
-  test('can query an allowlisted notice suffix without reading buyer acknowledgement work', async () => {
+  test.each([
+    [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE, '%#notice-vendor\\_quote\\_failure#ack'],
+    [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT, '%#notice-vendor\\_portal\\_redirect#ack'],
+  ])('can query the allowlisted %s notice suffix without reading buyer acknowledgement work', async (deliveryKind, messageIdPattern) => {
     jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
     const rows = jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([{ message_id: 'notice#ack' }]);
 
     await expect(emailGatewayQueries.listByStatus('ACK_PENDING', 5, {
-      deliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE],
+      deliveryKinds: [deliveryKind],
     })).resolves.toEqual([{ message_id: 'notice#ack' }]);
 
     expect(rows).toHaveBeenCalledWith(
       expect.stringContaining("message_id LIKE $3 ESCAPE '\\'"),
-      ['ACK_PENDING', 5, '%#notice-vendor\\_quote\\_failure#ack'],
+      ['ACK_PENDING', 5, messageIdPattern],
       { d1: true }
     );
   });

@@ -14,6 +14,7 @@ const {
   EMAIL_GATEWAY_CONFIG,
   VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
+  EMAIL_GATEWAY_DELIVERY_KIND,
   EMAIL_INGESTION_STATUS,
   resolveBuyerSourcingMode,
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
@@ -3208,6 +3209,7 @@ describe('emailGatewayService.processVendorQuoteMessage complex-RFQ portal redir
 
   test('still returns PORTAL_SUBMISSION_REQUIRED when the portal redirect email throws (catch branch)', async () => {
     const rfq = complexRfq();
+    const recordProcessedSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
     jest
       .spyOn(mailerService, 'sendComplexRfqPortalRedirectEmail')
       .mockRejectedValue(new Error('smtp down'));
@@ -3221,6 +3223,11 @@ describe('emailGatewayService.processVendorQuoteMessage complex-RFQ portal redir
       expect.any(Error),
       'EMAIL_GATEWAY'
     );
+    expect(recordProcessedSpy).toHaveBeenCalledWith(expect.objectContaining({
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      rfqNumber: rfq.rfqNumber,
+      detail: expect.stringContaining(EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT),
+    }));
   });
 });
 
