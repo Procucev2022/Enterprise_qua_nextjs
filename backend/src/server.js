@@ -92,7 +92,7 @@ async function bootstrapServer(port = PORT) {
   await rfqChaserScheduler.recoverRFQComparisonJobsOnBoot().catch((err) => {
     logger.warn('Failed to recover RFQ comparison notifications on boot', { error: err.message }, 'SERVER');
   });
-  await eventOutboxService.dispatchDueEventOutboxJobs().catch((error) => {
+  await eventOutboxService.dispatchScheduledEventOutboxJobs().catch((error) => {
     logger.error('Failed to dispatch queued background events during startup', { error }, 'SERVER');
   });
 
@@ -127,7 +127,7 @@ async function bootstrapServer(port = PORT) {
     rfqChaserScheduler.dispatchDueChaserJobs().catch((error) => {
       logger.error('Scheduled chaser dispatch failed', { error }, 'SERVER');
     });
-    eventOutboxService.dispatchDueEventOutboxJobs().catch((error) => {
+    eventOutboxService.dispatchScheduledEventOutboxJobs().catch((error) => {
       logger.error('Scheduled event-outbox dispatch failed', { error }, 'SERVER');
     });
   }, EVENT_OUTBOX_POLL_INTERVAL_MS);

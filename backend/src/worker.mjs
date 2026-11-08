@@ -104,7 +104,7 @@ async function scheduled(controller, workerEnv, ctx) {
       emailGatewayService.pollBothInboxesOnce(),
       rfqChaserScheduler.dispatchDueChaserJobs(),
       rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
-      eventOutboxService.dispatchDueEventOutboxJobs(),
+      eventOutboxService.dispatchScheduledEventOutboxJobs(),
       storeService.closeExpiredRFQsDurably(),
     ]);
     const rejected = results.find((r) => r.status === 'rejected');
@@ -134,7 +134,7 @@ async function scheduled(controller, workerEnv, ctx) {
     zohoReconciliationService.reconcileOnce(),
     rfqChaserScheduler.dispatchDueChaserJobs(),
     rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
-    eventOutboxService.dispatchDueEventOutboxJobs(),
+    eventOutboxService.dispatchScheduledEventOutboxJobs(),
     eventOutboxService.purgeExpiredEventOutboxRows(),
     storeService.closeExpiredRFQsDurably(),
   ]);

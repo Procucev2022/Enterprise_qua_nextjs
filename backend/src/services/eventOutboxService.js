@@ -799,7 +799,27 @@ async function dispatchEvent(job) {
   }
 }
 
-async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE) {
+async function dispatchScheduledEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE) {
+  if (!pool.hasStorage()) return { claimed: 0, completed: 0, retried: 0, dead: 0 };
+  try {
+    const readyOnboardingEvents = await eventOutboxQueries.releaseReadyOnboardingQuoteNotificationsInDB();
+    if (readyOnboardingEvents.length > 0) {
+      logger.info('Released onboarding quote notifications whose buyers are complete', {
+        operation: 'release-ready-onboarding-quote-notifications',
+        released: readyOnboardingEvents.length,
+      }, 'EVENT_OUTBOX');
+    }
+  } catch (error) {
+    logger.error('Could not release completed-buyer quote notifications from deferred state', {
+      operation: 'release-ready-onboarding-quote-notifications',
+      error,
+    }, 'EVENT_OUTBOX');
+  }
+
+  return dispatchDueEventOutboxJobs(limit);
+}
+
+async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, eventIds = null) {
   if (!pool.hasStorage()) return { claimed: 0, completed: 0, retried: 0, dead: 0 };
 
   const now = new Date();
@@ -810,11 +830,13 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE) {
     leaseUntil: new Date(now.getTime() + EVENT_OUTBOX_LEASE_MS).toISOString(),
     leaseToken,
     limit: Math.min(Math.max(Number(limit) || 1, 1), EVENT_OUTBOX_MAX_BATCH_SIZE),
+    ids: eventIds,
   });
 
   let completed = 0;
   let retried = 0;
   let dead = 0;
+  const completedIds = [];
   for (const job of jobs) {
     try {
       if (job.parseError) throw job.parseError;
@@ -828,6 +850,7 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE) {
         continue;
       }
       completed += 1;
+      completedIds.push(job.id);
     } catch (error) {
       const permanentFailure = error?.code === 'INVALID_EVENT_OUTBOX_TYPE' || error?.code === 'INVALID_PERSISTED_RECORD';
       const isDead = permanentFailure || job.attempts >= EVENT_OUTBOX_MAX_ATTEMPTS;
@@ -924,7 +947,7 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE) {
       dead,
     }, 'EVENT_OUTBOX');
   }
-  return { claimed: jobs.length, completed, retried, dead };
+  return { claimed: jobs.length, completed, retried, dead, completedIds };
 }
 
 async function purgeExpiredEventOutboxRows() {
@@ -942,6 +965,7 @@ module.exports = {
   buildEventOutboxId,
   enqueueEventOutbox,
   persistWithOutboxFallback,
+  dispatchScheduledEventOutboxJobs,
   dispatchDueEventOutboxJobs,
   purgeExpiredEventOutboxRows,
   getSafeErrorLabel,

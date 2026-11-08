@@ -3,7 +3,11 @@ const pool = require('./pool');
 const d1Bridge = require('./d1Bridge');
 const { queryCache } = require('./queryCache');
 const { logger } = require('../services/loggerService');
-const { VENDOR_FREE_CREDITS_LIMIT, EVENT_OUTBOX_TYPES } = require('../config/constants');
+const {
+  VENDOR_FREE_CREDITS_LIMIT,
+  EVENT_OUTBOX_TYPES,
+  EVENT_OUTBOX_DEFERRED_STATUS,
+} = require('../config/constants');
 const {
   quoteCreditState,
   parseVendorRaw,
@@ -126,6 +130,9 @@ function makeD1VendorQuoteSubmissionStatements(options) {
     error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
     throw error;
   }
+  const quoteNotificationStatus = options.quoteNotificationPendingOnboarding
+    ? EVENT_OUTBOX_DEFERRED_STATUS.BUYER_ONBOARDING
+    : 'pending';
   if (options.autoClosureEmailEventId && (
     typeof options.quoteId !== 'string' || !options.quoteId
     || typeof options.autoClosureRecipientEmail !== 'string' || !options.autoClosureRecipientEmail
@@ -229,7 +236,7 @@ function makeD1VendorQuoteSubmissionStatements(options) {
     ].concat(options.quoteNotificationEventId ? [{
       text: `INSERT OR IGNORE INTO event_outbox
         (id, event_type, raw, status, available_at, created_at, updated_at)
-        SELECT $1, $2, json_object('rfqId', $3, 'quoteId', $4, 'recipientEmail', $5, 'recipientName', $6), 'pending',
+        SELECT $1, $2, json_object('rfqId', $3, 'quoteId', $4, 'recipientEmail', $5, 'recipientName', $6), $7,
           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         FROM rfqs r
         WHERE r.id = $3 AND EXISTS (
@@ -246,6 +253,7 @@ function makeD1VendorQuoteSubmissionStatements(options) {
         options.quoteId,
         options.quoteNotificationRecipient,
         options.quoteNotificationRecipientName || null,
+        quoteNotificationStatus,
       ],
     }] : []).concat(options.autoClosureEmailEventId ? [{
       text: `INSERT OR IGNORE INTO event_outbox
@@ -359,9 +367,12 @@ async function submitVendorQuoteOnPostgres(options) {
         error.code = 'INVALID_VENDOR_QUOTE_SUBMISSION';
         throw error;
       }
+      const quoteNotificationStatus = options.quoteNotificationPendingOnboarding
+        ? EVENT_OUTBOX_DEFERRED_STATUS.BUYER_ONBOARDING
+        : 'pending';
       await client.query(
         `INSERT INTO event_outbox (id, event_type, raw, status, available_at, created_at, updated_at)
-         VALUES ($1, $2, $3::jsonb, 'pending', now(), now(), now())
+         VALUES ($1, $2, $3::jsonb, $4, now(), now(), now())
          ON CONFLICT (id) DO NOTHING`,
         [
           options.quoteNotificationEventId,
@@ -372,6 +383,7 @@ async function submitVendorQuoteOnPostgres(options) {
             recipientEmail: options.quoteNotificationRecipient,
             recipientName: options.quoteNotificationRecipientName || null,
           }),
+          quoteNotificationStatus,
         ]
       );
     }

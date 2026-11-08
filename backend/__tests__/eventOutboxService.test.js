@@ -374,16 +374,48 @@ describe('background event retry outbox', () => {
     });
   });
 
+  test('scheduled dispatch releases ready buyer quote notifications before claiming events', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const release = jest.spyOn(eventOutboxQueries, 'releaseReadyOnboardingQuoteNotificationsInDB')
+      .mockResolvedValue([{ id: 'ready-quote-1' }]);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([]);
+
+    await expect(eventOutboxService.dispatchScheduledEventOutboxJobs()).resolves.toMatchObject({
+      claimed: 0,
+      completed: 0,
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  test('scheduled dispatch continues to due events when onboarding release scan fails', async () => {
+    const failure = new Error('quote event release unavailable');
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'releaseReadyOnboardingQuoteNotificationsInDB').mockRejectedValue(failure);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([]);
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+    await expect(eventOutboxService.dispatchScheduledEventOutboxJobs()).resolves.toMatchObject({ claimed: 0 });
+    expect(errorSpy).toHaveBeenCalledWith(
+      'Could not release completed-buyer quote notifications from deferred state',
+      expect.objectContaining({ error: failure }),
+      'EVENT_OUTBOX'
+    );
+  });
+
   test('dispatches a single notification retry', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
+    const claim = jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([{
       id: 'retry-notification', event_type: EVENT_OUTBOX_TYPES.NOTIFICATION,
       raw: { id: 'notification-1' }, attempts: 1, lease_token: 'lease-2',
     }]);
     jest.spyOn(domainQueries, 'insertNotificationInDB').mockResolvedValue({ id: 'notification-1' });
     jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
 
-    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1, ['retry-notification'])).resolves.toMatchObject({
+      completed: 1,
+      completedIds: ['retry-notification'],
+    });
+    expect(claim).toHaveBeenCalledWith(expect.objectContaining({ ids: ['retry-notification'] }));
     expect(domainQueries.insertNotificationInDB).toHaveBeenCalledWith({ id: 'notification-1' });
   });
 

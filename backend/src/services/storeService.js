@@ -51,6 +51,7 @@ const rfqChaserScheduler = require('./rfqChaserScheduler');
 const rfqIngestionService = require('./rfqIngestionService');
 const purchaseOrderService = require('./purchaseOrderService');
 const eventOutboxService = require('./eventOutboxService');
+const eventOutboxQueries = require('../db/eventOutboxQueries');
 const cryptoService = require('./cryptoService');
 const { logger } = require('./loggerService');
 
@@ -4820,7 +4821,7 @@ class StoreService {
 
       const autoClosedByQuote = updatedRFQ.status === 'Closed' && rfq.status !== 'Closed';
       const buyerEmailPlan = this._buildBuyerQuoteEmailPlan(rfq);
-      const quoteNotificationEventId = !autoClosedByQuote && buyerEmailPlan && !buyerEmailPlan.requiresProfileCompletion
+      const quoteNotificationEventId = !autoClosedByQuote && buyerEmailPlan
         ? eventOutboxService.buildEventOutboxId(
           EVENT_OUTBOX_TYPES.RFQ_QUOTE_RECEIVED_EMAIL,
           `${rfq.id}:${durableQuoteId}`
@@ -4850,12 +4851,13 @@ class StoreService {
           quoteNotificationEventId,
           ...(quoteNotificationEventId ? {
             quoteNotificationRecipient: buyerEmailPlan.buyerEmail,
-            quoteNotificationRecipientName: buyerEmailPlan.buyer.organizationName,
+            quoteNotificationRecipientName: buyerEmailPlan.buyer?.organizationName || null,
+            quoteNotificationPendingOnboarding: buyerEmailPlan.requiresProfileCompletion,
           } : {}),
           autoClosureEmailEventId,
           ...(autoClosureEmailEventId ? {
             autoClosureRecipientEmail: buyerEmailPlan.buyerEmail,
-            autoClosureRecipientName: buyerEmailPlan.buyer.organizationName,
+            autoClosureRecipientName: buyerEmailPlan.buyer?.organizationName || null,
           } : {}),
           ...(autoClosureComparisonIntent ? {
             autoClosureComparisonJobId: autoClosureComparisonIntent.id,
@@ -4912,6 +4914,22 @@ class StoreService {
         });
       } else {
         this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed);
+      }
+      if (quoteNotificationEventId && buyerEmailPlan.requiresProfileCompletion) {
+        try {
+          const persistedBuyer = await domainQueries.getBuyerAccountByEmailFromDB(buyerEmailPlan.buyerEmail, { fresh: true });
+          if (persistedBuyer && !this.isBuyerProfileUpdateRequired(persistedBuyer, rfq)) {
+            await this._releasePersistedPendingQuoteNotifications(buyerEmailPlan.buyerEmail);
+          }
+        } catch (error) {
+          logger.warn('Could not recheck buyer onboarding after quote commit; deferred quote email remains queued', {
+            operation: 'recheck-buyer-quote-onboarding',
+            rfqId: rfq.id,
+            rfqNumber: rfq.rfqNumber,
+            buyerEmail: buyerEmailPlan.buyerEmail,
+            error,
+          }, 'STORE_SERVICE');
+        }
       }
       logger.info('Vendor quote submission committed with credit accounting', {
         rfqId: rfq.id,
@@ -7714,9 +7732,28 @@ class StoreService {
     }
   }
 
+  async _releasePersistedPendingQuoteNotifications(buyerEmail) {
+    const events = await eventOutboxQueries.releasePendingBuyerQuoteNotificationsInDB(buyerEmail);
+    if (events.length === 0) return [];
+
+    const eventIds = events.map((event) => event.id);
+    const dispatch = await eventOutboxService.dispatchDueEventOutboxJobs(eventIds.length, eventIds);
+    const completedIds = new Set(Array.isArray(dispatch.completedIds) ? dispatch.completedIds : []);
+    const completed = events.filter((event) => completedIds.has(event.id));
+    logger.info('Released durable buyer quote notifications after onboarding', {
+      operation: 'release-buyer-quote-notifications',
+      notificationCount: events.length,
+      deliveredCount: completed.length,
+    }, 'STORE_SERVICE');
+    return completed;
+  }
+
   async dispatchPendingQuoteNotifications(buyerEmail) {
     if (!buyerEmail) return [];
     const normEmail = String(buyerEmail).trim().toLowerCase();
+    if (pool.hasStorage()) {
+      return this._releasePersistedPendingQuoteNotifications(normEmail);
+    }
     const list = this._pendingQuoteNotifications ? (this._pendingQuoteNotifications.get(normEmail) || []) : [];
     if (list.length === 0) return [];
     if (this._pendingQuoteNotifications) {

@@ -95,7 +95,7 @@ describe('Server & Health Endpoints', () => {
     jest.spyOn(rfqChaserScheduler, 'recoverChasersOnBoot').mockRejectedValue(chaserRecoveryError);
     jest.spyOn(rfqChaserScheduler, 'dispatchDueChaserJobs').mockRejectedValue(chaserDispatchError);
     jest.spyOn(rfqChaserScheduler, 'recoverRFQComparisonJobsOnBoot').mockRejectedValue(comparisonRecoveryError);
-    jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockRejectedValue(error);
+    jest.spyOn(eventOutboxService, 'dispatchScheduledEventOutboxJobs').mockRejectedValue(error);
     const loggerErrorSpy = jest.spyOn(logger, 'error');
     const loggerWarnSpy = jest.spyOn(logger, 'warn');
 
@@ -141,7 +141,7 @@ describe('Server & Health Endpoints', () => {
     jest.spyOn(rfqChaserScheduler, 'recoverRFQComparisonJobsOnBoot').mockResolvedValue(undefined);
     const comparisonDispatch = jest.spyOn(rfqChaserScheduler, 'dispatchDueRFQComparisonJobs')
       .mockResolvedValue({ claimed: 0, sent: 0, failed: 0 });
-    jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({ claimed: 0, completed: 0 });
+    jest.spyOn(eventOutboxService, 'dispatchScheduledEventOutboxJobs').mockResolvedValue({ claimed: 0, completed: 0 });
 
     let server;
     try {
@@ -256,6 +256,7 @@ describe('Server & Health Endpoints', () => {
     }));
     jest.doMock('../src/services/eventOutboxService', () => ({
       dispatchDueEventOutboxJobs: dispatchOutbox,
+      dispatchScheduledEventOutboxJobs: dispatchOutbox,
     }));
     jest.doMock('../src/services/emailGatewayService', () => ({
       startPolling: jest.fn().mockReturnValue({ started: false, reason: 'disabled in test' }),

@@ -91,7 +91,20 @@ describe('atomic vendor quote submission queries', () => {
       'quote-atomic-1',
       'buyer@example.test',
       'Buyer Org',
+      'pending',
     ]);
+  });
+
+  test('marks quote notification events as onboarding-deferred in the D1 transaction', () => {
+    const built = queries.makeD1VendorQuoteSubmissionStatements(baseOptions({
+      quoteId: 'quote-onboarding-1',
+      quoteNotificationEventId: 'outbox-quote-onboarding-1',
+      quoteNotificationRecipient: 'buyer@example.test',
+      quoteNotificationPendingOnboarding: true,
+    }));
+
+    expect(built.statements[6].params.at(-1)).toBe('onboarding');
+    expect(built.statements[6].text).toContain('json_object');
   });
 
   test('rejects an incomplete durable quote notification intent', () => {
@@ -258,7 +271,35 @@ describe('atomic vendor quote submission queries', () => {
         recipientEmail: 'buyer@example.test',
         recipientName: 'Buyer Org',
       }),
+      'pending',
     ]);
+  });
+
+  test('stores onboarding-deferred quote event state with the PostgreSQL quote transaction', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+    const savedVendor = vendor({ freeQuotationCredits: 1, freeRfqDownloadCredits: 1 });
+    const savedRFQ = rfq({ status: 'In Evaluation', quotes: [{ id: 'quote-pg-onboarding-1', vendorId: VENDOR_ID }] });
+    const client = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [{ raw: vendor() }] })
+      .mockResolvedValueOnce({ rows: [{ raw: rfq() }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ raw: savedVendor }] })
+      .mockResolvedValueOnce({ rows: [{ raw: savedRFQ }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'tx-onboarding-quote', amount: -1 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'outbox-quote-pg-onboarding-1' }] }) };
+    jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback(client));
+
+    await queries.submitVendorQuoteInDB(baseOptions({
+      quoteId: 'quote-pg-onboarding-1',
+      quoteNotificationEventId: 'outbox-quote-pg-onboarding-1',
+      quoteNotificationRecipient: 'buyer@example.test',
+      quoteNotificationPendingOnboarding: true,
+    }));
+
+    expect(client.query.mock.calls[6][0]).toContain('VALUES ($1, $2, $3::jsonb, $4, now()');
+    expect(client.query.mock.calls[6][1][3]).toBe('onboarding');
   });
 
   test('queues an auto-closure acknowledgement in the same PostgreSQL transaction', async () => {

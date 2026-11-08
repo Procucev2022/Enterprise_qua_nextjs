@@ -11,6 +11,8 @@ describe('event-outbox database operations', () => {
 
     await expect(eventOutboxQueries.enqueueEventOutboxInDB({ id: 'e-1', eventType: 'ai_feed', payload: {} })).resolves.toBeNull();
     await expect(eventOutboxQueries.claimDueEventOutboxInDB({})).resolves.toEqual([]);
+    await expect(eventOutboxQueries.releasePendingBuyerQuoteNotificationsInDB('buyer@example.test')).resolves.toEqual([]);
+    await expect(eventOutboxQueries.releaseReadyOnboardingQuoteNotificationsInDB()).resolves.toEqual([]);
     await expect(eventOutboxQueries.markEventOutboxCompleteInDB('e-1', 'lease')).resolves.toBe(false);
     await expect(eventOutboxQueries.rescheduleEventOutboxInDB({ id: 'e-1' })).resolves.toBe(false);
     await expect(eventOutboxQueries.purgeEventOutboxInDB('2026-01-01', '2026-01-01')).resolves.toBe(0);
@@ -50,6 +52,17 @@ describe('event-outbox database operations', () => {
     expect(querySpy.mock.calls[1][0]).toContain('SELECT id, status FROM event_outbox');
   });
 
+  test('returns null when an idempotent enqueue retry has no persisted event', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(pool, 'query')
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await expect(eventOutboxQueries.enqueueEventOutboxInDB({
+      id: 'retry:notification:missing', eventType: 'notification', payload: { id: 'n-missing' },
+    })).resolves.toBeNull();
+  });
+
   test('claims due events with a lease and parses D1 JSON payloads', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     const job = {
@@ -74,8 +87,74 @@ describe('event-outbox database operations', () => {
     expect(querySpy.mock.calls[0][0]).toContain('FOR UPDATE SKIP LOCKED');
     expect(querySpy.mock.calls[0][2].d1Text).toContain('UPDATE event_outbox');
     expect(querySpy.mock.calls[0][1]).toEqual([
-      params.now, params.staleBefore, params.limit, params.leaseToken, params.leaseUntil,
+      params.now, params.staleBefore, params.limit, params.leaseToken, params.leaseUntil, null,
     ]);
+    expect(querySpy.mock.calls[0][2].d1Params).toEqual([
+      params.now, params.staleBefore, params.limit, params.leaseToken, params.leaseUntil, null,
+    ]);
+  });
+
+  test('claims only selected quote events when onboarding releases a target set', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+    const params = {
+      now: '2026-11-05T00:00:00.000Z',
+      staleBefore: '2026-11-04T23:55:00.000Z',
+      leaseUntil: '2026-11-05T00:05:00.000Z',
+      leaseToken: 'lease-targeted',
+      limit: 2,
+      ids: ['quote-event-1', 'quote-event-2'],
+    };
+
+    await expect(eventOutboxQueries.claimDueEventOutboxInDB(params)).resolves.toEqual([]);
+    expect(querySpy.mock.calls[0][0]).toContain('id = ANY($6::varchar[])');
+    expect(querySpy.mock.calls[0][1]).toEqual([
+      params.now, params.staleBefore, params.limit, params.leaseToken, params.leaseUntil, params.ids,
+    ]);
+    expect(querySpy.mock.calls[0][2].d1Params.at(-1)).toBe(JSON.stringify(params.ids));
+    await expect(eventOutboxQueries.claimDueEventOutboxInDB({ ...params, ids: [] })).resolves.toEqual([]);
+    expect(querySpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('releases onboarding-deferred quote notices by indexed buyer recipient', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ id: 'quote-event-1' }] });
+
+    await expect(eventOutboxQueries.releasePendingBuyerQuoteNotificationsInDB('Buyer@Example.Test'))
+      .resolves.toEqual([{ id: 'quote-event-1' }]);
+    expect(querySpy.mock.calls[0][0]).toContain("status = $1 AND event_type = $2 AND lower(raw->>'recipientEmail') = lower($3)");
+    expect(querySpy.mock.calls[0][1]).toEqual(['onboarding', 'rfq_quote_received_email', 'Buyer@Example.Test']);
+    expect(querySpy.mock.calls[0][2].d1Text).toContain("lower(json_extract(raw, '$.recipientEmail')) = lower($3)");
+  });
+
+  test.each([
+    [{ binding: null, http: null }, 'raw->>'],
+    [{ binding: {}, http: null }, 'json_extract(b.raw'],
+    [{ binding: null, http: {} }, 'json_extract(b.raw'],
+  ])('periodically releases a bounded batch for completed buyers (%s)', async ({ binding, http }, expectedExpression) => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
+    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(http);
+    const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ id: 'quote-ready-1' }] });
+
+    await expect(eventOutboxQueries.releaseReadyOnboardingQuoteNotificationsInDB(100))
+      .resolves.toEqual([{ id: 'quote-ready-1' }]);
+    expect(querySpy.mock.calls[0][0]).toContain("e.status = $1 AND e.event_type = $2");
+    expect(querySpy.mock.calls[0][0]).toContain(expectedExpression);
+    expect(querySpy.mock.calls[0][1]).toEqual(['onboarding', 'rfq_quote_received_email', 10]);
+    expect(querySpy.mock.calls[0][2].d1Text).toContain("lower(json_extract(e.raw, '$.recipientEmail'))");
+    expect(querySpy.mock.calls[0][2].d1Text).toContain("json_extract(b.raw, '$.onboardingRequired')");
+  });
+
+  test('uses the default batch size and clamps a zero limit to one', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+
+    await expect(eventOutboxQueries.releaseReadyOnboardingQuoteNotificationsInDB()).resolves.toEqual([]);
+    await expect(eventOutboxQueries.releaseReadyOnboardingQuoteNotificationsInDB(0)).resolves.toEqual([]);
+
+    expect(querySpy.mock.calls[0][1]).toEqual(['onboarding', 'rfq_quote_received_email', 10]);
+    expect(querySpy.mock.calls[1][1]).toEqual(['onboarding', 'rfq_quote_received_email', 1]);
   });
 
   test('returns malformed payloads as claimed parse failures so workers can dead-letter them', async () => {
@@ -117,11 +196,15 @@ describe('event-outbox database operations', () => {
 
   test('purges retained completed and dead-letter rows', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-    const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [], rowCount: 3 });
+    const querySpy = jest.spyOn(pool, 'query')
+      .mockResolvedValueOnce({ rows: [], rowCount: 3 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
     await expect(eventOutboxQueries.purgeEventOutboxInDB('cutoff-a', 'cutoff-b')).resolves.toBe(3);
+    await expect(eventOutboxQueries.purgeEventOutboxInDB('cutoff-a', 'cutoff-b')).resolves.toBe(0);
     expect(querySpy.mock.calls[0][0]).toContain("status = 'dead'");
-    expect(querySpy.mock.calls[0][1]).toEqual(['cutoff-a', 'cutoff-b']);
+    expect(querySpy.mock.calls[0][0]).toContain("created_at < $2");
+    expect(querySpy.mock.calls[0][1]).toEqual(['cutoff-a', 'cutoff-b', 'onboarding']);
   });
 
   test.each([

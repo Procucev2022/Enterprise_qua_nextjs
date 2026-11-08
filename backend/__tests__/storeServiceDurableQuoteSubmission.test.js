@@ -1,5 +1,7 @@
 const storeService = require('../src/services/storeService');
 const domainQueries = require('../src/db/domainQueries');
+const eventOutboxQueries = require('../src/db/eventOutboxQueries');
+const eventOutboxService = require('../src/services/eventOutboxService');
 const pool = require('../src/db/pool');
 const mailerService = require('../src/services/mailerService');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
@@ -203,7 +205,7 @@ describe('durable quote submission and credit synchronization', () => {
     );
   });
 
-  test('keeps the profile completion path local when the buyer is pending verification', async () => {
+  test('persists a deferred quote email until the buyer completes profile onboarding', async () => {
     const currentRFQ = rfq({ buyerAccountId: 'buyer-pending-quote', buyerEmail: 'pending@example.test' });
     const currentVendor = vendor({ subscriptionPlan: 'connect' });
     const savedRFQ = { ...currentRFQ, status: 'In Evaluation', quotes: [{ vendorId: VENDOR_ID, unitPrice: 300 }] };
@@ -213,6 +215,11 @@ describe('durable quote submission and credit synchronization', () => {
     jest.spyOn(storeService, '_buildBuyerQuoteEmailPlan').mockReturnValue({
       buyerEmail: 'pending@example.test',
       requiresProfileCompletion: true,
+    });
+    jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB').mockResolvedValue({
+      corporateEmail: 'pending@example.test',
+      onboardingRequired: true,
+      status: 'PENDING_ONBOARDING',
     });
     const submit = jest.spyOn(domainQueries, 'submitVendorQuoteInDB').mockResolvedValue({
       rfq: savedRFQ,
@@ -224,13 +231,89 @@ describe('durable quote submission and credit synchronization', () => {
 
     await storeService.submitVendorQuoteDurably(RFQ_ID, { vendorId: VENDOR_ID, unitPrice: 300 });
 
-    expect(submit).toHaveBeenCalledWith(expect.not.objectContaining({ quoteNotificationEventId: expect.anything() }));
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      quoteNotificationEventId: expect.stringContaining('rfq_quote_received_email'),
+      quoteNotificationRecipient: 'pending@example.test',
+      quoteNotificationPendingOnboarding: true,
+    }));
     expect(sideEffects).toHaveBeenCalledWith(
       currentRFQ,
       savedRFQ,
       expect.objectContaining({ vendorId: VENDOR_ID }),
-      false
+      false,
+      { skipQuoteEmail: true }
     );
+  });
+
+  test('releases a deferred quote immediately if the persisted buyer completed during quote commit', async () => {
+    const currentRFQ = rfq({ buyerAccountId: 'buyer-race', buyerEmail: 'pending@example.test' });
+    const currentVendor = vendor({ subscriptionPlan: 'connect' });
+    const savedRFQ = { ...currentRFQ, status: 'In Evaluation', quotes: [{ vendorId: VENDOR_ID, unitPrice: 300 }] };
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(currentRFQ);
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(currentVendor);
+    jest.spyOn(storeService, '_buildBuyerQuoteEmailPlan').mockReturnValue({
+      buyerEmail: 'pending@example.test',
+      requiresProfileCompletion: true,
+    });
+    jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB').mockResolvedValue({
+      corporateEmail: 'pending@example.test',
+      onboardingRequired: false,
+      phone: '9876543210',
+    });
+    const release = jest.spyOn(eventOutboxQueries, 'releasePendingBuyerQuoteNotificationsInDB')
+      .mockResolvedValue([{ id: 'racing-quote-event' }]);
+    const dispatch = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({
+      completedIds: ['racing-quote-event'],
+    });
+    jest.spyOn(domainQueries, 'submitVendorQuoteInDB').mockResolvedValue({
+      rfq: savedRFQ,
+      vendor: currentVendor,
+      creditCharged: 0,
+    });
+    jest.spyOn(storeService, '_notifyRFQUpdate').mockImplementation(() => {});
+    jest.spyOn(storeService, '_dispatchQuoteSubmissionSideEffects').mockImplementation(() => {});
+
+    await storeService.submitVendorQuoteDurably(RFQ_ID, { vendorId: VENDOR_ID, unitPrice: 300 });
+
+    expect(release).toHaveBeenCalledWith('pending@example.test');
+    expect(dispatch).toHaveBeenCalledWith(1, ['racing-quote-event']);
+  });
+
+  test('releases and dispatches persisted quote notifications for the completed buyer only', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'releasePendingBuyerQuoteNotificationsInDB')
+      .mockResolvedValue([{ id: 'pending-quote-event-1' }]);
+    const dispatch = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({
+      completedIds: ['pending-quote-event-1'],
+    });
+
+    await expect(storeService.dispatchPendingQuoteNotifications(' PENDING@EXAMPLE.TEST ')).resolves.toEqual([
+      { id: 'pending-quote-event-1' },
+    ]);
+    expect(eventOutboxQueries.releasePendingBuyerQuoteNotificationsInDB).toHaveBeenCalledWith('pending@example.test');
+    expect(dispatch).toHaveBeenCalledWith(1, ['pending-quote-event-1']);
+  });
+
+  test('does not claim unrelated events when a buyer has no deferred quote notifications', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'releasePendingBuyerQuoteNotificationsInDB').mockResolvedValue([]);
+    const dispatch = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs');
+
+    await expect(storeService.dispatchPendingQuoteNotifications('buyer@example.test')).resolves.toEqual([]);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  test('leaves released quote notifications retryable when the targeted dispatch does not complete them', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(eventOutboxQueries, 'releasePendingBuyerQuoteNotificationsInDB')
+      .mockResolvedValue([{ id: 'pending-quote-event-retry' }]);
+    jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({
+      claimed: 1,
+      retried: 1,
+    });
+
+    await expect(storeService.dispatchPendingQuoteNotifications('buyer@example.test')).resolves.toEqual([]);
   });
 
   test('persists an auto-closure acknowledgement with the closing quote transaction', async () => {

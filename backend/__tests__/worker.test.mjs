@@ -26,6 +26,7 @@ beforeEach(() => {
   };
   eventOutbox = {
     dispatchDueEventOutboxJobs: jest.fn().mockResolvedValue([]),
+    dispatchScheduledEventOutboxJobs: jest.fn().mockResolvedValue([]),
     purgeExpiredEventOutboxRows: jest.fn().mockResolvedValue([]),
   };
   dailyReport = { runScheduledDailyRfqReport: jest.fn().mockResolvedValue({ triggered: true }) };
