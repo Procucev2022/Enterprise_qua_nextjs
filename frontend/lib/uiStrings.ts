@@ -19,6 +19,18 @@ export const UI_STRINGS = {
     credentialsSentMessage: '{name} was added. Login credentials were sent to {email} with instructions to change the temporary password at first login.',
     registeredAndSelectedMessage: '{name} was added to Procucev Vendors and selected for this RFQ.',
   },
+  vendorCategoryUpdate: {
+    queuedTitle: 'Update Request Queued',
+    queuedMessage: 'The category update request for {vendorName} ({vendorEmail}) is saved and will retry automatically if delivery is delayed.',
+    sentTitle: 'Update Request Accepted',
+    sentMessage: 'The email provider accepted a category update request for {vendorName} ({vendorEmail}).',
+    completedButton: 'Update Request Saved ✓',
+    sendingButton: 'Saving Request...',
+    failureTitle: 'Email Delivery Issue',
+    failureMessage: 'The category update request could not be saved or delivered. Retry the request.',
+    unexpectedFailureTitle: 'Unable to request category update',
+    unexpectedFailureMessage: 'The request could not be completed. Check your connection and try again.',
+  },
   vendorBulkImport: {
     progressSummary: '{processed} of {total} processed — {imported} imported ({missingEmail} missing email), {duplicates} duplicate, {failed} failed, {onboardingFailed} credential email(s) failed, {onboardingSkipped} imported account(s) have no invitation email',
     onboardingSkippedSummary: '{count} vendor account(s) were imported without an invitation email. Bulk import intentionally does not send login credentials.',

@@ -255,6 +255,7 @@ const EVENT_OUTBOX_TYPES = Object.freeze({
   RFQ_AUTO_CLOSURE_ACK_EMAIL: 'rfq_auto_closure_ack_email',
   DAILY_RFQ_REPORT_EMAIL: 'daily_rfq_report_email',
   REGISTRATION_DECISION_EMAIL: 'registration_decision_email',
+  VENDOR_CATEGORY_UPDATE_EMAIL: 'vendor_category_update_email',
 });
 
 const EVENT_OUTBOX_DEFERRED_STATUS = Object.freeze({
@@ -2130,6 +2131,10 @@ const RFQ_CREATION_ERRORS = Object.freeze({
 });
 
 const RFQ_NOTIFICATION_MESSAGES = Object.freeze({
+  VENDOR_CATEGORY_UPDATE_EMAIL_QUEUED:
+    'The vendor category update request is saved and queued. Delivery will retry automatically if the email provider is unavailable.',
+  VENDOR_CATEGORY_UPDATE_EMAIL_SENT:
+    'The email provider accepted the vendor category update request.',
   VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED:
     'The vendor category update email was not confirmed as sent. Retry shortly; the provider may have accepted the message before the response was lost.',
   BACKGROUND_EMAIL_PROVIDER_NOT_ACCEPTED: 'The email provider did not confirm acceptance.',

@@ -1396,8 +1396,11 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
           })
         );
         expect(mockShowToast).toHaveBeenCalledWith(
-          'Category Update Email Sent',
-          expect.stringContaining('mismatch@vendor.com'),
+          UI_STRINGS.vendorCategoryUpdate.sentTitle,
+          formatString(UI_STRINGS.vendorCategoryUpdate.sentMessage, {
+            vendorName: 'Mismatch Vendor',
+            vendorEmail: 'mismatch@vendor.com',
+          }),
           'success'
         );
       });
@@ -1406,11 +1409,12 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockResolvedValueOnce({
         success: false,
         error: 'SMTP quota exceeded',
+        idempotencyKey: '9a1e9b1a-18d7-4ab3-8ea0-4a00418df17f',
       });
       fireEvent.click(emailBtn);
       await waitFor(() => {
         expect(mockShowToast).toHaveBeenCalledWith(
-          'Email Delivery Issue',
+          UI_STRINGS.vendorCategoryUpdate.failureTitle,
           'SMTP quota exceeded',
           'warning'
         );
@@ -1423,11 +1427,14 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       fireEvent.click(emailBtn);
       await waitFor(() => {
         expect(mockShowToast).toHaveBeenCalledWith(
-          'Error',
+          UI_STRINGS.vendorCategoryUpdate.unexpectedFailureTitle,
           'Network timeout',
           'warning'
         );
       });
+      expect(rfqClient.requestVendorCategoryUpdateEmail).toHaveBeenLastCalledWith(expect.objectContaining({
+        idempotencyKey: '9a1e9b1a-18d7-4ab3-8ea0-4a00418df17f',
+      }));
     });
 
     it('covers pincode validation branch edge cases: dummy, invalid format, and server rejection', async () => {
@@ -1867,23 +1874,37 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       const emailBtns = screen.getAllByRole('button', { name: /Send Email to Update Category/i });
       fireEvent.click(emailBtns[0]);
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Email Delivery Issue', 'Failed to dispatch email.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(
+          UI_STRINGS.vendorCategoryUpdate.failureTitle,
+          UI_STRINGS.vendorCategoryUpdate.failureMessage,
+          'warning'
+        );
       });
 
       // Trigger email for vNoContact with empty error thrown
       (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockRejectedValueOnce({});
       fireEvent.click(emailBtns[1]);
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Error', 'Failed to send update email.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(
+          UI_STRINGS.vendorCategoryUpdate.unexpectedFailureTitle,
+          UI_STRINGS.vendorCategoryUpdate.unexpectedFailureMessage,
+          'warning'
+        );
       });
 
-      // Trigger email with success to show "Update Email Sent ✓" badge
+      // Trigger email with success to show the saved request state.
       (rfqClient.requestVendorCategoryUpdateEmail as jest.Mock).mockResolvedValueOnce({
         success: true,
+        deliveryStatus: 'queued',
       });
       fireEvent.click(emailBtns[0]);
       await waitFor(() => {
-        expect(screen.getByText(/Update Email Sent ✓/i)).toBeInTheDocument();
+        expect(screen.getByText(UI_STRINGS.vendorCategoryUpdate.completedButton)).toBeInTheDocument();
+        expect(mockShowToast).toHaveBeenCalledWith(
+          UI_STRINGS.vendorCategoryUpdate.queuedTitle,
+          expect.stringContaining('saved and will retry automatically'),
+          'success'
+        );
       });
     });
 

@@ -268,6 +268,21 @@ const VALIDATION_SCHEMAS = {
       message: 'Idempotency-Key must be a UUID.',
     },
   },
+  requestVendorCategoryUpdate: {
+    idempotencyKey: {
+      type: 'string', required: false, maxLength: 36, pattern: UUID_REGEX,
+      message: 'Idempotency key must be a UUID.',
+    },
+    vendorId: { type: 'string', required: false, minLength: 1, maxLength: 128 },
+    vendorEmail: {
+      type: 'string', required: false, maxLength: 320, pattern: EMAIL_REGEX,
+      message: 'Enter a valid vendor email address.',
+    },
+    vendorName: { type: 'string', required: false, maxLength: 512 },
+    rfqCategory: { type: 'string', required: false, maxLength: 1000 },
+    rfqTitle: { type: 'string', required: false, maxLength: 200 },
+    rfqNumber: { type: 'string', required: false, maxLength: 120 },
+  },
   accountDocumentUpload: {
     documentName: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'Document name is required.' },
     category: { type: 'string', required: true, minLength: 1, maxLength: 64, message: 'Valid document category is required.' },

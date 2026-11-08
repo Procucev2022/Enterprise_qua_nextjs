@@ -9,6 +9,9 @@ const rfqIngestionService = require('../src/services/rfqIngestionService');
 const rfqSummaryService = require('../src/services/rfqSummaryService');
 const geminiService = require('../src/services/geminiService');
 const { logger } = require('../src/services/loggerService');
+const pool = require('../src/db/pool');
+const eventOutboxService = require('../src/services/eventOutboxService');
+const { EVENT_OUTBOX_TYPES } = require('../src/config/constants');
 
 function mockRes() {
   const res = {
@@ -210,6 +213,11 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       await rfqController.requestVendorCategoryUpdate({ body: {} }, resNoEmail, next);
       expect(resNoEmail.statusCode).toBe(400);
 
+      const invalidEmailResponse = mockRes();
+      await rfqController.requestVendorCategoryUpdate({ body: { vendorEmail: 'not-an-email' } }, invalidEmailResponse, next);
+      expect(invalidEmailResponse.statusCode).toBe(400);
+      expect(invalidEmailResponse.data.details.vendorEmail).toMatch(/valid vendor email/);
+
       // Vendor lookup via getVendorById, with buyer account lookup
       const vendor = {
         id: 'v-req-1',
@@ -260,6 +268,7 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(resEmailFallback.statusCode).toBe(200);
 
       // Catch error
+      storeService.getVendorById.mockReturnValue(vendor);
       mailSpy.mockRejectedValue(new Error('mail err'));
       const rejectedResponse = mockRes();
       await rfqController.requestVendorCategoryUpdate(
@@ -296,6 +305,59 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       storeService.getBuyerAccountByEmail.mockRestore();
       mailSpy.mockRestore();
       auditSpy.mockRestore();
+    });
+
+    test('persists category update intent and reports queued delivery when the provider has not accepted it yet', async () => {
+      const vendor = { id: 'v-queued', email: 'queued@vendor.com', name: 'Queued Vendor', majorCategory: 'Pumps' };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(vendor);
+      const enqueue = jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue({
+        id: 'category-update-event',
+        status: 'pending',
+      });
+      const dispatch = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValue({
+        completedIds: [],
+      });
+      const mailSpy = jest.spyOn(mailerService, 'sendVendorCategoryMismatchEmail');
+      const res = mockRes();
+      const idempotencyKey = '9a1e9b1a-18d7-4ab3-8ea0-4a00418df17f';
+
+      await rfqController.requestVendorCategoryUpdate({
+        body: { vendorId: vendor.id, idempotencyKey, rfqNumber: 'RFQ-QUEUED', rfqCategory: 'Pumps' },
+      }, res, jest.fn());
+
+      expect(res.statusCode).toBe(202);
+      expect(res.data).toMatchObject({ success: true, deliveryStatus: 'queued', outboxId: 'category-update-event' });
+      expect(enqueue).toHaveBeenCalledWith(
+        EVENT_OUTBOX_TYPES.VENDOR_CATEGORY_UPDATE_EMAIL,
+        idempotencyKey,
+        expect.objectContaining({ recipientEmail: vendor.email, vendorId: vendor.id })
+      );
+      expect(dispatch).toHaveBeenCalledWith(1, ['category-update-event']);
+      expect(mailSpy).not.toHaveBeenCalled();
+    });
+
+    test('does not resend an idempotent request that already completed', async () => {
+      const vendor = { id: 'v-complete', email: 'sent@vendor.com', name: 'Sent Vendor', majorCategory: 'Pumps' };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(vendor);
+      jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue({
+        id: 'category-update-completed',
+        status: 'completed',
+      });
+      const dispatch = jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs');
+      const res = mockRes();
+
+      await rfqController.requestVendorCategoryUpdate({
+        body: {
+          vendorId: vendor.id,
+          idempotencyKey: 'a24d35b5-7276-4652-8b6a-121aa3ab222f',
+        },
+      }, res, jest.fn());
+
+      expect(res.statusCode).toBe(200);
+      expect(res.data).toMatchObject({ success: true, deliveryStatus: 'sent' });
+      expect(dispatch).not.toHaveBeenCalled();
     });
   });
 

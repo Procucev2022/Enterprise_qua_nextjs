@@ -1,4 +1,5 @@
 const storeService = require('../services/storeService');
+const crypto = require('crypto');
 const { generateStandardRFQEmail } = require('../services/emailService');
 // Called through the module namespace (like storeService below) so the ingestion
 // pipeline stays substitutable in tests rather than being bound at import time.
@@ -13,6 +14,8 @@ const pool = require('../db/pool');
 const emailGatewayService = require('../services/emailGatewayService');
 const emailIngestionService = require('../services/emailIngestionService');
 const mailerService = require('../services/mailerService');
+const eventOutboxService = require('../services/eventOutboxService');
+const vendorCategoryUpdateNotificationService = require('../services/vendorCategoryUpdateNotificationService');
 const extractionStagingService = require('../services/extractionStagingService');
 const {
   VALIDATION_SCHEMAS,
@@ -608,12 +611,29 @@ async function validateVendorCategories(req, res, next) {
  */
 async function requestVendorCategoryUpdate(req, res, next) {
   try {
-    const { vendorId, vendorEmail, vendorName, rfqCategory, rfqTitle, rfqNumber } = req.body || {};
-    let vendor = vendorId ? storeService.getVendorById(vendorId, 'all') : null;
-    if (!vendor && vendorEmail) {
-      vendor = typeof storeService.getVendorByEmail === 'function' ? storeService.getVendorByEmail(vendorEmail) : null;
+    const validation = validatePayload(VALIDATION_SCHEMAS.requestVendorCategoryUpdate, req.body || {});
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Category update request contains invalid fields.',
+        details: validation.errors,
+      });
     }
-    const targetEmail = vendor ? vendor.email : vendorEmail;
+    const { vendorId, vendorEmail, vendorName, rfqCategory, rfqTitle, rfqNumber } = validation.sanitizedData;
+    if (!vendorId && !vendorEmail) {
+      return res.status(400).json({
+        success: false,
+        error: 'Provide a vendor ID or a valid vendor email address.',
+      });
+    }
+    const idempotencyKey = validation.sanitizedData.idempotencyKey || crypto.randomUUID();
+    let vendor = vendorId
+      ? await storeService.getVendorByIdWithDBFallback(vendorId, 'all', { fresh: true })
+      : null;
+    if (!vendor && vendorEmail) {
+      vendor = await storeService.getVendorByIdWithDBFallback(vendorEmail, 'all', { fresh: true });
+    }
+    const targetEmail = String(vendor ? vendor.email : vendorEmail || '').trim();
     if (!targetEmail) {
       return res.status(400).json({ success: false, error: 'Target vendor email or valid vendorId is required.' });
     }
@@ -622,8 +642,10 @@ async function requestVendorCategoryUpdate(req, res, next) {
     const buyerName = buyerAccount ? (buyerAccount.companyName || buyerAccount.name) : (req.user ? req.user.name : 'Buyer');
     const buyerEmail = buyerAccount ? buyerAccount.corporateEmail : (req.user ? req.user.email : null);
 
-    const targetVendorName = vendor ? (vendor.name || vendor.contactPerson) : (vendorName || 'Supplier');
-    const targetCurrentCategory = vendor ? (vendor.majorCategory || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : '')) : 'Not specified';
+    const targetVendorName = (vendor && (vendor.name || vendor.contactPerson)) || vendorName || 'Supplier';
+    const targetCurrentCategory = (vendor && (vendor.majorCategory
+      || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : '')))
+      || 'Not specified';
 
     const deliveryContext = {
       vendorId: vendor ? vendor.id : vendorId || null,
@@ -631,38 +653,86 @@ async function requestVendorCategoryUpdate(req, res, next) {
       operation: 'request-vendor-category-update',
       recipientPresent: true,
     };
-    let delivery;
-    try {
-      delivery = await mailerService.sendVendorCategoryMismatchEmail(targetEmail, {
-        rfqNumber: rfqNumber || 'NEW-RFQ',
-        rfqTitle: rfqTitle || 'Procurement Requisition',
-        rfqCategory: rfqCategory || 'Required Procurement Category',
-        vendorName: targetVendorName,
-        vendorCurrentCategory: targetCurrentCategory,
-        buyerAccountName: buyerName,
-        buyerEmail,
-      });
-    } catch (deliveryError) {
-      logger.error('Vendor category update email provider request failed', {
-        error: deliveryError,
-        ...deliveryContext,
-      }, 'RFQ_CONTROLLER');
-      return res.status(503).json({
-        success: false,
-        error: RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED,
-        retryable: true,
-      });
-    }
-    if (!delivery?.sent) {
-      logger.warn('Vendor category update email was not accepted by a provider', {
-        ...deliveryContext,
-        deliveryResultPresent: Boolean(delivery),
-      }, 'RFQ_CONTROLLER');
-      return res.status(503).json({
-        success: false,
-        error: RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED,
-        retryable: true,
-      });
+    const notificationPayload = {
+      recipientEmail: targetEmail,
+      rfqNumber: rfqNumber || 'NEW-RFQ',
+      rfqTitle: rfqTitle || 'Procurement Requisition',
+      rfqCategory: rfqCategory || 'Required Procurement Category',
+      vendorName: targetVendorName,
+      vendorCurrentCategory: targetCurrentCategory,
+      buyerAccountName: buyerName || 'Buyer',
+      buyerEmail,
+      vendorId: vendor ? vendor.id : vendorId || null,
+    };
+    let deliveryStatus = 'sent';
+    let outboxId = null;
+    if (pool.hasStorage()) {
+      let queuedEvent;
+      try {
+        queuedEvent = await eventOutboxService.enqueueEventOutbox(
+          EVENT_OUTBOX_TYPES.VENDOR_CATEGORY_UPDATE_EMAIL,
+          idempotencyKey,
+          notificationPayload
+        );
+        if (!queuedEvent?.id || typeof queuedEvent.status !== 'string') {
+          throw new Error('The vendor category update event was not confirmed as persisted.');
+        }
+        outboxId = queuedEvent.id;
+      } catch (enqueueError) {
+        logger.error('Vendor category update email intent could not be persisted', {
+          error: enqueueError,
+          eventType: EVENT_OUTBOX_TYPES.VENDOR_CATEGORY_UPDATE_EMAIL,
+          idempotencyKey,
+          ...deliveryContext,
+        }, 'RFQ_CONTROLLER');
+        return res.status(503).json({
+          success: false,
+          error: RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED,
+          retryable: true,
+        });
+      }
+
+      if (queuedEvent.status === 'completed') {
+        deliveryStatus = 'sent';
+      } else {
+        deliveryStatus = 'queued';
+        try {
+          const dispatch = await eventOutboxService.dispatchDueEventOutboxJobs(1, [queuedEvent.id]);
+          if (dispatch.completedIds?.includes(queuedEvent.id)) deliveryStatus = 'sent';
+        } catch (dispatchError) {
+          logger.error('Immediate vendor category update dispatch failed; durable retry remains scheduled', {
+            error: dispatchError,
+            eventType: EVENT_OUTBOX_TYPES.VENDOR_CATEGORY_UPDATE_EMAIL,
+            outboxId: queuedEvent.id,
+            ...deliveryContext,
+          }, 'RFQ_CONTROLLER');
+        }
+      }
+    } else {
+      try {
+        const delivery = await vendorCategoryUpdateNotificationService.sendVendorCategoryUpdateNotification(notificationPayload);
+        if (!delivery?.sent) {
+          logger.warn('Vendor category update email was not accepted by a provider', {
+            ...deliveryContext,
+            deliveryResultPresent: Boolean(delivery),
+          }, 'RFQ_CONTROLLER');
+          return res.status(503).json({
+            success: false,
+            error: RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED,
+            retryable: true,
+          });
+        }
+      } catch (deliveryError) {
+        logger.error('Vendor category update email provider request failed', {
+          error: deliveryError,
+          ...deliveryContext,
+        }, 'RFQ_CONTROLLER');
+        return res.status(503).json({
+          success: false,
+          error: RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED,
+          retryable: true,
+        });
+      }
     }
 
     if (typeof storeService.recordAuditEntry === 'function') {
@@ -675,6 +745,7 @@ async function requestVendorCategoryUpdate(req, res, next) {
           vendorId: vendor ? vendor.id : vendorId,
           rfqCategory,
           vendorCurrentCategory: targetCurrentCategory,
+          deliveryStatus,
         },
       });
     } else if (typeof storeService.addAuditLog === 'function') {
@@ -685,9 +756,13 @@ async function requestVendorCategoryUpdate(req, res, next) {
       });
     }
 
-    return res.json({
+    return res.status(deliveryStatus === 'queued' ? 202 : 200).json({
       success: true,
-      message: `Category update email sent to ${targetVendorName} (${targetEmail}).`,
+      deliveryStatus,
+      ...(outboxId ? { outboxId } : {}),
+      message: deliveryStatus === 'queued'
+        ? RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_QUEUED
+        : RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_SENT,
     });
   } catch (err) {
     logger.error('Failed to request vendor category update', err, 'RFQ_CONTROLLER');

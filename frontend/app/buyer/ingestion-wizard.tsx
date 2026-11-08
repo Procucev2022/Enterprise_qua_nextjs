@@ -416,7 +416,8 @@ export default function IngestionWizard({
   const [vendorFormGstin, setVendorFormGstin] = useState('');
   const [isSubmittingVendor, setIsSubmittingVendor] = useState(false);
   const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
-  const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
+  const [completedCategoryEmailVendors, setCompletedCategoryEmailVendors] = useState<string[]>([]);
+  const categoryUpdateIdempotencyKeys = useRef<Record<string, string>>({});
   const [vendorCategoryFilterTab, setVendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('matched');
   const [mode2VendorSearch, setMode2VendorSearch] = useState('');
   const [mode2VendorCategoryFilterTab, setMode2VendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('matched');
@@ -432,19 +433,30 @@ export default function IngestionWizard({
         vendorName: vendor.name || vendor.contactPerson,
         rfqCategory: rfqCategorySignals.join(', ') || form.lineItems?.[0]?.majorCategory || 'Requested Category',
         rfqTitle: form.title || 'Procurement Requisition',
+        idempotencyKey: categoryUpdateIdempotencyKeys.current[vendorKey],
       });
       if (res.success) {
-        setSentCategoryEmailVendors((prev) => [...prev, vendorKey]);
+        delete categoryUpdateIdempotencyKeys.current[vendorKey];
+        setCompletedCategoryEmailVendors((prev) => [...prev, vendorKey]);
+        const isQueued = res.deliveryStatus === 'queued';
         showToast(
-          'Category Update Email Sent',
-          `An email has been sent to ${vendor.name || vendor.contactPerson || 'Vendor'} (${vendor.email}) requesting them to update their category to match this RFQ.`,
+          isQueued ? UI_STRINGS.vendorCategoryUpdate.queuedTitle : UI_STRINGS.vendorCategoryUpdate.sentTitle,
+          formatString(
+            isQueued ? UI_STRINGS.vendorCategoryUpdate.queuedMessage : UI_STRINGS.vendorCategoryUpdate.sentMessage,
+            { vendorName: vendor.name || vendor.contactPerson || 'Vendor', vendorEmail: vendor.email || '' }
+          ),
           'success'
         );
       } else {
-        showToast('Email Delivery Issue', res.error || 'Failed to dispatch email.', 'warning');
+        if (res.idempotencyKey) categoryUpdateIdempotencyKeys.current[vendorKey] = res.idempotencyKey;
+        showToast(UI_STRINGS.vendorCategoryUpdate.failureTitle, res.error || UI_STRINGS.vendorCategoryUpdate.failureMessage, 'warning');
       }
     } catch (err: any) {
-      showToast('Error', err?.message || 'Failed to send update email.', 'warning');
+      showToast(
+        UI_STRINGS.vendorCategoryUpdate.unexpectedFailureTitle,
+        err?.message || UI_STRINGS.vendorCategoryUpdate.unexpectedFailureMessage,
+        'warning'
+      );
     } finally {
       setSendingCategoryEmailVendors((prev) => prev.filter((id) => id !== vendorKey));
     }
@@ -2266,12 +2278,12 @@ export default function IngestionWizard({
                                 {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                   <>
                                     <Loader2 size={11} className="animate-spin" />
-                                    <span>Sending Email...</span>
+                                    <span>{UI_STRINGS.vendorCategoryUpdate.sendingButton}</span>
                                   </>
-                                ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                ) : completedCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                   <>
                                     <CheckCircle2 size={11} />
-                                    <span>Update Email Sent ✓</span>
+                                    <span>{UI_STRINGS.vendorCategoryUpdate.completedButton}</span>
                                   </>
                                 ) : (
                                   <>
@@ -2656,12 +2668,12 @@ export default function IngestionWizard({
                                     {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                       <>
                                         <Loader2 size={11} className="animate-spin" />
-                                        <span>Sending Email...</span>
+                                        <span>{UI_STRINGS.vendorCategoryUpdate.sendingButton}</span>
                                       </>
-                                    ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                    ) : completedCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
                                       <>
                                         <CheckCircle2 size={11} />
-                                        <span>Update Email Sent ✓</span>
+                                        <span>{UI_STRINGS.vendorCategoryUpdate.completedButton}</span>
                                       </>
                                     ) : (
                                       <>

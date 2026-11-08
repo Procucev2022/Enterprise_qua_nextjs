@@ -1093,7 +1093,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
 
     fireEvent.click(sendEmailBtn);
 
-    await waitFor(() => expect(screen.getByText(/Update Email Sent ✓/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(UI_STRINGS.vendorCategoryUpdate.completedButton)).toBeInTheDocument());
   });
 
   it('Mode 2 (default) also assigns the buyer\'s private roster — a category match alone no longer grants vendor visibility, so it must actually be invited', async () => {
@@ -2362,7 +2362,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     mockEmail.mockResolvedValueOnce({ success: true, message: 'Email sent.' });
     const sendEmailBtn = screen.getByTitle('Send email requesting vendor to update their category');
     fireEvent.click(sendEmailBtn);
-    await waitFor(() => expect(screen.getByText(/Update Email Sent/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(UI_STRINGS.vendorCategoryUpdate.completedButton)).toBeInTheDocument());
 
     // Send Category Update Email - error delivery
     mockEmail.mockResolvedValueOnce({ success: false, error: 'SMTP timeout' });

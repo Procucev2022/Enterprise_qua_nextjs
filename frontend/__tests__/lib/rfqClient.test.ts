@@ -1960,7 +1960,7 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
 
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ success: true, message: 'Email sent successfully.' }),
+      json: async () => ({ success: true, deliveryStatus: 'queued', message: 'Email queued successfully.' }),
     });
 
     const res = await requestVendorCategoryUpdateEmail({
@@ -1971,7 +1971,8 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
       rfqTitle: 'Pumps Requisition',
     });
 
-    expect(res).toEqual({ success: true, message: 'Email sent successfully.' });
+    expect(res).toMatchObject({ success: true, deliveryStatus: 'queued', message: 'Email queued successfully.' });
+    expect(res.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i);
     expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/request-vendor-category-update', expect.objectContaining({
       method: 'POST',
       headers: expect.objectContaining({
@@ -1979,6 +1980,24 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
         'Content-Type': 'application/json',
       }),
     }));
+    const requestOptions = (global.fetch as jest.Mock).mock.calls[0][1];
+    expect(JSON.parse(requestOptions.body)).toMatchObject({
+      idempotencyKey: res.idempotencyKey,
+      vendorId: 'v-123',
+    });
+  });
+
+  test('reuses a caller idempotency key and preserves provider acceptance', async () => {
+    const idempotencyKey = 'a24d35b5-7276-4652-8b6a-121aa3ab222f';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, deliveryStatus: 'sent', message: 'Accepted.' }),
+    });
+
+    await expect(requestVendorCategoryUpdateEmail({ vendorEmail: 'vendor@example.test', idempotencyKey }))
+      .resolves.toMatchObject({ success: true, deliveryStatus: 'sent', idempotencyKey });
+    const requestOptions = (global.fetch as jest.Mock).mock.calls[0][1];
+    expect(JSON.parse(requestOptions.body).idempotencyKey).toBe(idempotencyKey);
   });
 
   test('handles server failure response cleanly', async () => {
@@ -1988,14 +2007,16 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
     });
 
     const res = await requestVendorCategoryUpdateEmail({});
-    expect(res).toEqual({ success: false, error: 'Target vendor email or valid vendorId is required.' });
+    expect(res).toMatchObject({ success: false, error: 'Target vendor email or valid vendorId is required.' });
+    expect(res.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
   test('handles network throw gracefully', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
 
     const res = await requestVendorCategoryUpdateEmail({ vendorEmail: 'v@abc.com' });
-    expect(res).toEqual({ success: false, error: 'Network offline' });
+    expect(res).toMatchObject({ success: false, error: 'Network offline' });
+    expect(res.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
   describe('extendRFQ', () => {

@@ -7,6 +7,7 @@ const enterpriseInquiryQueries = require('../db/enterpriseInquiryQueries');
 const eventOutboxQueries = require('../db/eventOutboxQueries');
 const { dispatchWhatsAppCredentialEmail } = require('./whatsAppCredentialOutboxService');
 const registrationDecisionNotificationService = require('./registrationDecisionNotificationService');
+const vendorCategoryUpdateNotificationService = require('./vendorCategoryUpdateNotificationService');
 const mailerService = require('./mailerService');
 const cryptoService = require('./cryptoService');
 const {
@@ -803,6 +804,20 @@ async function dispatchEvent(job) {
         registrationId: job.raw.registrationId,
         accountType: job.raw.accountType,
         decision: job.raw.decision,
+        outboxId: job.id,
+      }, 'EVENT_OUTBOX');
+      return;
+    }
+    case EVENT_OUTBOX_TYPES.VENDOR_CATEGORY_UPDATE_EMAIL: {
+      const delivery = await vendorCategoryUpdateNotificationService.sendVendorCategoryUpdateNotification(job.raw);
+      if (!delivery?.sent) {
+        const error = new Error('Vendor category update email provider did not accept the message.');
+        error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
+        throw error;
+      }
+      logger.info('Vendor category update email accepted by a provider', {
+        vendorId: typeof job.raw.vendorId === 'string' ? job.raw.vendorId : null,
+        rfqNumber: job.raw.rfqNumber,
         outboxId: job.id,
       }, 'EVENT_OUTBOX');
       return;

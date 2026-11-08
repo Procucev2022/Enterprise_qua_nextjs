@@ -10,6 +10,20 @@ const {
 } = require('../src/config/validationSchemas');
 
 describe('Backend Validation Schemas Unit Tests', () => {
+  test('validates category update recipient data and optional idempotency keys', () => {
+    const schema = VALIDATION_SCHEMAS.requestVendorCategoryUpdate;
+    expect(validatePayload(schema, { vendorEmail: 'vendor@example.test' }).isValid).toBe(true);
+    expect(validatePayload(schema, {
+      vendorEmail: 'vendor@example.test',
+      idempotencyKey: '9a1e9b1a-18d7-4ab3-8ea0-4a00418df17f',
+    }).isValid).toBe(true);
+    expect(validatePayload(schema, { vendorEmail: 'invalid' }).errors.vendorEmail).toMatch(/valid vendor email/);
+    expect(validatePayload(schema, {
+      vendorEmail: 'vendor@example.test',
+      idempotencyKey: 'not-a-uuid',
+    }).errors.idempotencyKey).toMatch(/UUID/);
+  });
+
   test('validates AI feed creation content and allowed channel details', () => {
     expect(validatePayload('createAIFeedItem', {
       title: 'Vendor reminder',

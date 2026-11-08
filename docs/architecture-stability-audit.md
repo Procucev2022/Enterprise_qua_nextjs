@@ -359,8 +359,9 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 ## Vendor category-update email acceptance
 
-- The buyer-triggered vendor category-update endpoint previously returned success and wrote the audit event whenever the mailer promise resolved, including `{ sent: false }` or an empty result. It now requires explicit provider acceptance before recording the audit event or returning success. Provider refusal and thrown sends return a retryable 503 and emit structured logs with vendor/RFQ context and no recipient address.
-- Focused RFQ-controller regressions passed 69 tests across the controller and branch-boost suites. This manually triggered path still has no durable outbox or idempotency key; a provider acceptance followed by a lost response may result in a duplicate if the buyer retries.
+- The buyer-triggered category update now validates its request at the controller boundary and carries a UUID idempotency key from the frontend. With configured PostgreSQL or D1 storage, the request is inserted into the shared event outbox before delivery, then attempted immediately; provider refusal and exceptions are retried by the existing worker. The API distinguishes a provider-accepted message from a durably queued request, and the buyer screens use separate copy for each outcome.
+- Existing completed outbox entries are returned for duplicate keys without resending. When database storage is unavailable, the endpoint retains the direct-send fallback and only reports success after explicit provider acceptance; that fallback is still process-local and cannot recover delivery after a restart.
+- No migration is needed because the shared outbox already accepts this event type. Focused controller, payload validation, outbox dispatcher, mailer payload, and frontend interaction tests passed. Delivery remains at-least-once if the provider accepts a message but the outbox completion write is lost; production D1 delivery remains unverified until credentials are available.
 
 ## RFQ background email provider refusal logging
 

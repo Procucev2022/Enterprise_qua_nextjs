@@ -947,6 +947,7 @@ export async function replyToRFQInquiry(
 }
 
 export interface RequestVendorCategoryUpdatePayload {
+  idempotencyKey?: string;
   vendorId?: string;
   vendorEmail?: string;
   vendorName?: string;
@@ -960,26 +961,51 @@ export interface RequestVendorCategoryUpdatePayload {
  */
 export async function requestVendorCategoryUpdateEmail(
   payload: RequestVendorCategoryUpdatePayload
-): Promise<{ success: boolean; message?: string; error?: string }> {
+): Promise<{
+  success: boolean;
+  deliveryStatus?: 'sent' | 'queued';
+  idempotencyKey?: string;
+  message?: string;
+  error?: string;
+}> {
   const token = authClient.getToken();
+  let idempotencyKey = payload.idempotencyKey || '';
 
   try {
+    if (!idempotencyKey) idempotencyKey = globalThis.crypto.randomUUID();
+    const requestPayload = { ...payload, idempotencyKey };
     const res = await fetch('/api/rfqs/request-vendor-category-update', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(requestPayload),
     });
 
     const body = await res.json();
     if (!res.ok || !body.success) {
-      return { success: false, error: body.error || 'Failed to dispatch category update email.' };
+      return {
+        success: false,
+        idempotencyKey,
+        error: body.error || 'Failed to dispatch category update email.',
+      };
     }
-    return { success: true, message: body.message };
+    const deliveryStatus = body.deliveryStatus === 'sent' || body.deliveryStatus === 'queued'
+      ? body.deliveryStatus
+      : undefined;
+    return {
+      success: true,
+      ...(deliveryStatus ? { deliveryStatus } : {}),
+      idempotencyKey,
+      message: body.message,
+    };
   } catch (err: any) {
-    return { success: false, error: err?.message || 'Network error requesting category update.' };
+    return {
+      success: false,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      error: err?.message || 'Network error requesting category update.',
+    };
   }
 }
 
