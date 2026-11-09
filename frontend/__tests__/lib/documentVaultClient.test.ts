@@ -6,17 +6,23 @@ import {
   deleteDocument,
 } from '@/lib/documentVaultClient';
 import { authClient } from '@/lib/authClient';
+import { logger } from '@/lib/logger';
 
 describe('Document Vault Client', () => {
   const originalFetch = global.fetch;
+  const originalRemoteSyncEnabled = logger.isRemoteSyncEnabled;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    logger.isRemoteSyncEnabled = false;
+    jest.spyOn(logger, 'error');
     jest.spyOn(authClient, 'getToken').mockReturnValue('mock-jwt-token');
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    logger.isRemoteSyncEnabled = originalRemoteSyncEnabled;
+    jest.restoreAllMocks();
   });
 
   describe('fetchDocuments', () => {
@@ -105,6 +111,24 @@ describe('Document Vault Client', () => {
       } as unknown as Response);
 
       await expect(fetchDocuments()).rejects.toThrow('Database query failed');
+      expect(logger.error).toHaveBeenCalledWith(
+        'Document vault fetch documents failed',
+        expect.objectContaining({ status: 500, errorMessage: 'Database query failed' }),
+        'DOCUMENT_VAULT_CLIENT'
+      );
+    });
+
+    test('logs transport exceptions before rethrowing them', async () => {
+      const networkError = new Error('Document service offline');
+      global.fetch = jest.fn().mockRejectedValueOnce(networkError);
+
+      await expect(fetchDocuments()).rejects.toBe(networkError);
+
+      expect(logger.error).toHaveBeenCalledWith(
+        'Document vault fetch documents failed',
+        expect.objectContaining({ method: 'GET', errorName: 'Error', errorMessage: networkError.message }),
+        'DOCUMENT_VAULT_CLIENT'
+      );
     });
 
     test('throws fallback error when error response json parsing fails', async () => {
@@ -215,6 +239,11 @@ describe('Document Vault Client', () => {
 
       expect(res.success).toBe(false);
       expect(res.error).toBe('Document name is required');
+      expect(logger.error).toHaveBeenCalledWith(
+        'Document vault create document failed',
+        expect.objectContaining({ status: 400, errorMessage: 'Document name is required' }),
+        'DOCUMENT_VAULT_CLIENT'
+      );
     });
   });
 

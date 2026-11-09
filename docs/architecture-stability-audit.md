@@ -529,3 +529,8 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 ## Approval dashboard failure diagnostics
 
 - Approval summary and list fetches previously collapsed HTTP and network outages into zero counts or an empty list, which the dashboard could present as valid empty data. Their fallbacks remain compatible, but now emit centralized error records; decision endpoints log server rejections by status and transport failures with safe error metadata.
+
+## Document vault client failure diagnostics
+
+- Document vault requests previously returned user-visible error text or threw on transport failure without a centralized log record. HTTP rejections now record the operation and status; network and response parsing exceptions record safe error name/message metadata before preserving the existing caller-facing behavior.
+- Regression tests verify HTTP and transport logging while retaining the current thrown-error and result-object contracts.
