@@ -521,3 +521,7 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 - Quote attachment download, RFQ inquiry/reply, vendor category update, vendor RFQ credits, and RFQ unlock transport failures now use the centralized frontend logger with operation and error metadata. Logs omit RFQ/vendor identifiers and request payloads.
 - Non-`Error` rejections retain the existing user-facing fallback text and now log a safe `UnknownError` diagnostic. Regression tests assert the centralized log entries.
+
+## Internal-task client failure diagnostics
+
+- Credit approval/rejection, activity submission, and reminder-check transport exceptions previously returned failures without logging and used an unsafe `Error` cast that could itself throw for non-Error rejection values. They now record operation and safe error metadata centrally, and resolve unknown failures with actionable existing fallback messages.
