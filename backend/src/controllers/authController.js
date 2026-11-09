@@ -20,6 +20,28 @@ function respondIfAuthStorageUnavailable(res, err) {
   return true;
 }
 
+async function recordSuccessfulLogin(user, ipAddress, authenticationMethod) {
+  try {
+    await loginLogsQueries.recordLoginLog({
+      userId: user.id,
+      userName: user.name,
+      email: user.email,
+      phoneNumber: user.mobile,
+      companyName: user.orgName || user.companyName || 'Enterprise Partner',
+      userType: user.role === 'vendor' ? 'vendor' : 'buyer',
+      ipAddress,
+    });
+  } catch (error) {
+    logger.error('Login succeeded but login history could not be persisted', {
+      error,
+      operation: 'record-successful-login',
+      authenticationMethod,
+      userIdPresent: Boolean(user.id),
+      userRole: user.role || 'unknown',
+    }, 'AUTH_CONTROLLER');
+  }
+}
+
 async function login(req, res, next) {
   try {
     const { email, password, code, mobile } = req.body || {};
@@ -33,17 +55,7 @@ async function login(req, res, next) {
     if (code) {
       const result = await authService.verifyOtp(email, code, ipAddress, mobile);
       if (result && result.success && result.user) {
-        try {
-          await loginLogsQueries.recordLoginLog({
-            userId: result.user.id,
-            userName: result.user.name,
-            email: result.user.email,
-            phoneNumber: result.user.mobile,
-            companyName: result.user.orgName || result.user.companyName || 'Enterprise Partner',
-            userType: result.user.role === 'vendor' ? 'vendor' : 'buyer',
-            ipAddress,
-          });
-        } catch (_) {}
+        await recordSuccessfulLogin(result.user, ipAddress, 'otp');
       }
       return res.json(result);
     }
@@ -51,17 +63,7 @@ async function login(req, res, next) {
     if (password) {
       const result = await authService.authenticateWithPassword(email, password, ipAddress, mobile);
       if (result && result.success && result.user) {
-        try {
-          await loginLogsQueries.recordLoginLog({
-            userId: result.user.id,
-            userName: result.user.name,
-            email: result.user.email,
-            phoneNumber: result.user.mobile,
-            companyName: result.user.orgName || result.user.companyName || 'Enterprise Partner',
-            userType: result.user.role === 'vendor' ? 'vendor' : 'buyer',
-            ipAddress,
-          });
-        } catch (_) {}
+        await recordSuccessfulLogin(result.user, ipAddress, 'password');
       }
       return res.json(result);
     }

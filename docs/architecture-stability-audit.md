@@ -479,3 +479,8 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - Configured-storage vendor reads in bootstrap previously swallowed database exceptions and returned partial in-memory or empty vendor arrays. That bypassed the controller's existing logged D1-overload fallback and made a degraded response look like a successful complete read.
 - Bootstrap vendor page, buyer-owned vendor, and session-vendor reads now log the failed operation with only buyer-scope and session-email presence flags, then propagate the original error. The controller can apply its bounded D1-overload fallback; other storage failures reach the standard API error handler.
 - The focused `storeServiceBranchBoost` suite passed 102 tests, including the new regression proving that the configured-storage failure is logged and propagated. The required full workspace quality gate runs in the pre-commit hook. Production D1 behavior remains unverified until the intended account is available.
+
+## Login history failure visibility
+
+- Successful OTP and password authentication previously swallowed login-history persistence failures. The successful login remains non-blocking, but both methods now write a structured error with authentication method, role, and identifier-presence metadata, without copying user contact details into the log payload.
+- The focused auth controller and route suites passed 126 tests, including the regression that confirms a failed history write is logged while authentication still succeeds. The required full workspace quality gate runs in the pre-commit hook.

@@ -1,6 +1,7 @@
 const authController = require('../src/controllers/authController');
 const authService = require('../src/services/authService');
 const loginLogsQueries = require('../src/db/loginLogsQueries');
+const { logger } = require('../src/services/loggerService');
 
 function createResponse() {
   return {
@@ -49,5 +50,38 @@ describe('authController login audit branches', () => {
 
     expect(failureResponse.json).toHaveBeenCalledWith(failureResult);
     expect(recordLoginLog).toHaveBeenCalledTimes(1);
+  });
+
+  test('logs login-history persistence failures without failing successful authentication', async () => {
+    const loginResult = {
+      success: true,
+      user: {
+        id: 'buyer-1',
+        name: 'Buyer One',
+        email: 'buyer@example.test',
+        mobile: '9876543210',
+        role: 'buyer',
+      },
+    };
+    const persistenceError = new Error('login history unavailable');
+    jest.spyOn(authService, 'verifyOtp').mockResolvedValue(loginResult);
+    jest.spyOn(loginLogsQueries, 'recordLoginLog').mockRejectedValue(persistenceError);
+    const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+    const response = createResponse();
+
+    await authController.login({ body: { email: loginResult.user.email, code: '123456' } }, response);
+
+    expect(response.json).toHaveBeenCalledWith(loginResult);
+    expect(errorLogSpy).toHaveBeenCalledWith(
+      'Login succeeded but login history could not be persisted',
+      expect.objectContaining({
+        error: persistenceError,
+        operation: 'record-successful-login',
+        authenticationMethod: 'otp',
+        userIdPresent: true,
+        userRole: 'buyer',
+      }),
+      'AUTH_CONTROLLER'
+    );
   });
 });
