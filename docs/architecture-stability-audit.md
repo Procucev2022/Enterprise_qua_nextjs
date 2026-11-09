@@ -511,3 +511,8 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - Configured-storage sends now save a `Pending` communication first. PostgreSQL and D1 triggers atomically add one `communication_delivery` event, including for combined email/SMS sends. The existing dispatcher records each channel's acceptance before moving to the next; a later retry skips accepted channels and retries only incomplete ones. Local unconfigured operation retains its explicit direct-send path.
 - API and UI responses distinguish durable queued delivery from provider-confirmed delivery. Local mock setup now applies migration `0026_action_center_delivery_outbox`; a Wrangler D1 smoke insert confirmed a pending `BOTH` record creates its matching outbox event, and both temporary rows were removed.
 - Focused regression suites passed 303 backend tests and 42 frontend tests. The channel-delivery guarantee remains at-least-once if a provider accepts a message but its acceptance metadata cannot be durably saved. Production migration and D1 execution remain unverified until the intended account is connected.
+
+## Buyer dossier client failure diagnostics
+
+- Six buyer-account API helpers returned network and response-parsing failures to the dossier UI without adding an entry to the centralized frontend log buffer. They now log the operation, error class, message, and stack when available, while omitting buyer IDs and request payloads.
+- Non-`Error` transport rejections use a safe fallback message instead of depending on optional `.message` access. Regression tests cover all six operations and this fallback.

@@ -61,6 +61,18 @@ async function readEnvelope(res: Response): Promise<ApiEnvelope | null> {
   }
 }
 
+function getRequestErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function logBuyerAccountRequestFailure(operation: string, error: unknown): void {
+  logger.error(operation, {
+    errorName: error instanceof Error ? error.name : 'UnknownError',
+    errorMessage: getRequestErrorMessage(error, 'Unknown request failure'),
+    ...(error instanceof Error ? { error } : {}),
+  }, 'BUYER_PROFILE');
+}
+
 /**
  * Turn a non-success response into a failure the screen can explain.
  *
@@ -338,8 +350,9 @@ export async function fetchBuyerCreditHistory(buyerId: string): Promise<{
     });
     const body = await res.json();
     return body;
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Failed to fetch credit history' };
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer credit history request failed', err);
+    return { success: false, error: getRequestErrorMessage(err, 'Failed to fetch credit history') };
   }
 }
 
@@ -361,8 +374,9 @@ export async function addBuyerCredit(
     });
     const body = await res.json();
     return body;
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Failed to allocate credit' };
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer credit allocation request failed', err);
+    return { success: false, error: getRequestErrorMessage(err, 'Failed to allocate credit') };
   }
 }
 
@@ -383,8 +397,9 @@ export async function updateBuyerCategories(
     });
     const body = await res.json();
     return body;
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Failed to update categories' };
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer category update request failed', err);
+    return { success: false, error: getRequestErrorMessage(err, 'Failed to update categories') };
   }
 }
 
@@ -403,8 +418,9 @@ export async function fetchBuyerCommunications(
     });
     const body = await res.json();
     return body;
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Failed to fetch communications' };
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer communications request failed', err);
+    return { success: false, error: getRequestErrorMessage(err, 'Failed to fetch communications') };
   }
 }
 
@@ -426,8 +442,9 @@ export async function recordBuyerCommunication(
     });
     const body = await res.json();
     return body;
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Failed to record communication' };
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer communication record request failed', err);
+    return { success: false, error: getRequestErrorMessage(err, 'Failed to record communication') };
   }
 }
 
@@ -443,8 +460,9 @@ export async function fetchBuyerPaymentHistory(buyerId: string): Promise<{
     });
     const body = await res.json();
     return body;
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Failed to fetch payment history' };
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer payment history request failed', err);
+    return { success: false, error: getRequestErrorMessage(err, 'Failed to fetch payment history') };
   }
 }
 
