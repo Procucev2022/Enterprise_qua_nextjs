@@ -48,6 +48,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     vendorSubscription,
     currentUserSession,
     refreshFromDB,
+    refreshRFQs,
     adoptCreatedRFQ,
     vendorFreeCreditsRemaining,
     vendorUnlockedRfqIds,
@@ -158,27 +159,38 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // Helper to map RFQs to Parent Companies
   const getParentCompany = (buyerName: string) => buyerName;
 
+  // Helper to determine if a quote was submitted by this vendor
+  const isMyQuote = (q: any) => {
+    if (!q) return false;
+    const qEmail = (q.vendorEmail || '').toLowerCase().trim();
+    const sessionEmail = (currentUserSession?.email || '').toLowerCase().trim();
+    if (qEmail && sessionEmail && qEmail === sessionEmail) return true;
+
+    const qVendorId = String(q.vendorId || '').trim().toLowerCase();
+    if (myVendorId && qVendorId && qVendorId === myVendorId.toLowerCase()) return true;
+    if (myVendorRecord?.id && qVendorId && qVendorId === String(myVendorRecord.id).toLowerCase()) return true;
+
+    const qName = (q.vendorName || '').toLowerCase().trim();
+    if (qName) {
+      if (myVendorName && qName === myVendorName.toLowerCase().trim()) return true;
+      if (myVendorRecord?.name && qName === myVendorRecord.name.toLowerCase().trim()) return true;
+      if (currentUserSession?.name && qName === currentUserSession.name.toLowerCase().trim()) return true;
+      const sessionOrgName = (currentUserSession as any)?.organizationName || currentUserSession?.orgName;
+      if (sessionOrgName && qName === String(sessionOrgName).toLowerCase().trim()) return true;
+    }
+    return false;
+  };
+
   // This vendor's real submitted quotes, read back from the actual RFQ
   // records (rfq.quotes[]) instead of a hardcoded 2-row placeholder list.
   const submittedQuotes = rfqs
-    .filter((rfq) =>
-      (rfq.quotes || []).some(
-        (q: any) =>
-          (myVendorId && q.vendorId === myVendorId) ||
-          (currentUserSession?.email && q.vendorEmail && q.vendorEmail.toLowerCase() === currentUserSession.email.toLowerCase()) ||
-          (myVendorName && q.vendorName && q.vendorName.toLowerCase().trim() === myVendorName.toLowerCase().trim())
-      )
-    )
+    .filter((rfq) => (rfq.quotes || []).some(isMyQuote))
     .map((rfq) => {
-      const myQuote: any = (rfq.quotes || []).find(
-        (q: any) =>
-          (myVendorId && q.vendorId === myVendorId) ||
-          (currentUserSession?.email && q.vendorEmail && q.vendorEmail.toLowerCase() === currentUserSession.email.toLowerCase()) ||
-          (myVendorName && q.vendorName && q.vendorName.toLowerCase().trim() === myVendorName.toLowerCase().trim())
-      );
+      const myQuote: any = (rfq.quotes || []).find(isMyQuote);
       return {
         rfqNumber: rfq.rfqNumber,
         title: rfq.title,
+        submittedAt: myQuote?.submittedAt || myQuote?.createdAt || null,
         submittedDate: myQuote?.submittedAt ? new Date(myQuote.submittedAt).toLocaleString() : '-',
         status: rfq.status === 'PO Generated' ? 'PO Generated' : 'Quote Submitted',
         submissionMethod: 'Portal Submission',
@@ -186,18 +198,35 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       };
     });
 
-  // Was a hardcoded list of 4 specific RFQ numbers standing in for "this
   // Direct-vs-marketplace reflects the real relationship:
-  // When a buyer uploads or adds a vendor, the vendor is buyer-mapped and has unlimited quotations for that buyer's RFQs.
+  // When a buyer uploads or adds a vendor, the vendor is buyer-mapped and has unlimited quotations for that buyer's direct RFQs (V1).
+  // Network and marketplace sourcing modes (V0, V2, V3) require free credits or subscription plan.
   const isOwnBuyerRfq = (rfqNumber: string) => {
     const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
-    if (!rfq) return false;
-    if (myAddedByBuyerCompany && rfq.buyer === myAddedByBuyerCompany) return true;
-    if (myBuyerId && (rfq as any).buyerAccountId === myBuyerId) return true;
+    const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
+    if (!rfq && !rfqRecord) return false;
+    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase();
+    if (
+      mode === 'mode_0' ||
+      mode === 'v0' ||
+      mode === 'version_0' ||
+      mode === 'mode_3' ||
+      mode === 'v3' ||
+      mode === 'version_3' ||
+      mode === 'mode_2' ||
+      mode === 'v2' ||
+      mode === 'version_2'
+    ) {
+      return false;
+    }
+    const buyerName = rfq?.buyer || rfqRecord?.buyerAccountName || (rfqRecord as any)?.buyerCompany;
+    const buyerAccountId = (rfq as any)?.buyerAccountId || rfqRecord?.buyerAccountId;
+    if (myAddedByBuyerCompany && buyerName === myAddedByBuyerCompany) return true;
+    if (myBuyerId && buyerAccountId === myBuyerId) return true;
     if (myVendorRecord) {
-      if (myVendorRecord.addedByBuyerCompany && rfq.buyer === myVendorRecord.addedByBuyerCompany) return true;
-      if (myVendorRecord.buyerId && (rfq as any).buyerAccountId === myVendorRecord.buyerId) return true;
-      if (myVendorRecord.buyerAccountId && (rfq as any).buyerAccountId === myVendorRecord.buyerAccountId) return true;
+      if (myVendorRecord.addedByBuyerCompany && buyerName === myVendorRecord.addedByBuyerCompany) return true;
+      if (myVendorRecord.buyerId && buyerAccountId === myVendorRecord.buyerId) return true;
+      if (myVendorRecord.buyerAccountId && buyerAccountId === myVendorRecord.buyerAccountId) return true;
     }
     return false;
   };
@@ -556,6 +585,16 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         return;
       }
 
+      if (data.freeCreditsRemaining !== undefined) {
+        setFreeCreditsRemaining(Number(data.freeCreditsRemaining));
+      } else if (effectiveFreeCredits > 0 && !isOwnBuyerRfq(biddingOn.rfqNumber)) {
+        setFreeCreditsRemaining((prev) => Math.max(0, (prev ?? effectiveFreeCredits) - 1));
+      }
+
+      if (data.data && typeof adoptCreatedRFQ === 'function') {
+        adoptCreatedRFQ(data.data);
+      }
+
       addAuditLog(
         `${myVendorName || currentUserSession?.name || 'Vendor'} submitted a quotation for ${biddingOn.rfqNumber} (Unit Price: ${unitPrice})`,
         biddingOn.rfqNumber,
@@ -566,6 +605,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       setBiddingOn(null);
       setBidDocuments([]);
       setUploadedBidDocuments([]);
+      if (typeof refreshVendorCredits === 'function') await refreshVendorCredits();
+      if (typeof refreshRFQs === 'function') await refreshRFQs();
       await refreshFromDB();
       if (onSubmitSuccess) onSubmitSuccess();
     } catch (err: any) {

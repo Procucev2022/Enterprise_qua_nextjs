@@ -1036,7 +1036,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   id: `msg-${Date.now()}`,
                   senderRole: 'buyer' as const,
                   senderName,
-                  senderEmail,
+                  // senderEmail intentionally omitted: buyer email must not be
+                  // exposed to vendor-side views via the inquiry message thread.
                   message: textToSend,
                   timestamp: new Date().toISOString(),
                 };
@@ -1062,7 +1063,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             id: `msg-${Date.now()}`,
             senderRole: 'buyer' as const,
             senderName,
-            senderEmail,
+            // senderEmail intentionally omitted: buyer email must not be
+            // exposed to vendor-side views via the inquiry message thread.
             message: textToSend,
             timestamp,
           };
