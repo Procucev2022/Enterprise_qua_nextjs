@@ -534,3 +534,9 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 - Document vault requests previously returned user-visible error text or threw on transport failure without a centralized log record. HTTP rejections now record the operation and status; network and response parsing exceptions record safe error name/message metadata before preserving the existing caller-facing behavior.
 - Regression tests verify HTTP and transport logging while retaining the current thrown-error and result-object contracts.
+
+## Payment dues client failure diagnostics
+
+- Payment dues summary and history failures previously became zeroed KPIs or empty history without centralized diagnostics. Account-list and notification operations also returned fallback errors without recording HTTP or transport failures.
+- All payment dues reads, acknowledgements, and notification channels now log operation, status/error class, and parsing/transport failures while preserving their existing UI fallbacks. Error records omit account identifiers, contact information, and message payloads.
+- Regression coverage exercises HTTP and transport failures across the summary, account list, notification channels, acknowledgement, and history paths, and checks that private request fields are not copied into the log metadata.
