@@ -784,6 +784,27 @@ describe('storeService comprehensive branch boost tests', () => {
       storeService.isHydratedFromDB = false;
     });
 
+    test('logs and propagates configured-storage vendor read failures for controller fallback', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      storeService.isHydratedFromDB = false;
+      const databaseError = new Error('D1 DB is overloaded');
+      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValue(databaseError);
+      const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await expect(storeService.getBootstrapData()).rejects.toBe(databaseError);
+
+      expect(errorLogSpy).toHaveBeenCalledWith(
+        'Configured vendor read failed while building bootstrap data',
+        expect.objectContaining({
+          error: databaseError,
+          operation: 'public-vendor-page',
+          buyerScopePresent: false,
+          sessionEmailPresent: false,
+        }),
+        'STORE_SERVICE'
+      );
+    });
+
     test('getBootstrapData in-memory with array scopedBuyerId and session catalogue filter', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
 

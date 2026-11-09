@@ -9420,6 +9420,19 @@ class StoreService {
     const MAX_BOOTSTRAP_VENDORS = 500;
     let vendors;
     let vendorsTotal;
+    const readBootstrapVendors = async (operation, read) => {
+      try {
+        return await read();
+      } catch (error) {
+        logger.error('Configured vendor read failed while building bootstrap data', {
+          error,
+          operation,
+          buyerScopePresent: Boolean(scopedBuyerId),
+          sessionEmailPresent: Boolean(sessionEmail),
+        }, 'STORE_SERVICE');
+        throw error;
+      }
+    };
 
     // The common case (no buyer scoping — anonymous, vendor, CM, or admin
     // bootstrap) is answered straight from Postgres with LIMIT, the same way
@@ -9436,54 +9449,51 @@ class StoreService {
         vendors = this.vendors.slice(0, MAX_BOOTSTRAP_VENDORS);
         vendorsTotal = this.vendorsTotal || vendors.length;
       } else {
-        try {
-          const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true, skipCount: true });
-          vendors = page.rows;
-          vendorsTotal = page.total || (Array.isArray(this.vendors) ? this.vendors.length : 0);
-        } catch (err) {
-          vendors = Array.isArray(this.vendors) ? this.vendors.slice(0, MAX_BOOTSTRAP_VENDORS) : [];
-          vendorsTotal = vendors.length;
-        }
+        const page = await readBootstrapVendors(
+          'public-vendor-page',
+          () => domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true, skipCount: true })
+        );
+        vendors = page.rows;
+        vendorsTotal = page.total || (Array.isArray(this.vendors) ? this.vendors.length : 0);
       }
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();
         if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
-          try {
-            const own = await domainQueries.getVendorByEmailFromDB(email);
-            if (own) vendors = [own, ...vendors];
-          } catch {}
+          const own = await readBootstrapVendors(
+            'session-vendor-by-email',
+            () => domainQueries.getVendorByEmailFromDB(email)
+          );
+          if (own) vendors = [own, ...vendors];
         }
       }
     } else if (scopedBuyerId && pool.hasStorage()) {
-      let ownVendors = [];
-      try {
-        ownVendors = sessionEmail
-          ? await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS, sessionEmail)
-          : await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
-      } catch {
-        ownVendors = [];
-      }
+      const ownVendors = await readBootstrapVendors(
+        'buyer-owned-vendor-page',
+        () => sessionEmail
+          ? domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS, sessionEmail)
+          : domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS)
+      );
       const remaining = Math.max(0, MAX_BOOTSTRAP_VENDORS - ownVendors.length);
       let publicRows = [];
       let publicTotal = 0;
       if (remaining > 0) {
-        try {
-          const publicPage = await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true, skipCount: true });
-          publicRows = publicPage.rows || [];
-          publicTotal = publicPage.total || 0;
-        } catch {
-          publicRows = [];
-        }
+        const publicPage = await readBootstrapVendors(
+          'public-vendor-page-for-buyer',
+          () => domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true, skipCount: true })
+        );
+        publicRows = publicPage.rows || [];
+        publicTotal = publicPage.total || 0;
       }
       vendors = [...ownVendors, ...publicRows];
       vendorsTotal = ownVendors.length + publicTotal;
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();
         if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
-          try {
-            const own = await domainQueries.getVendorByEmailFromDB(email);
-            if (own) vendors = [own, ...vendors];
-          } catch {}
+          const own = await readBootstrapVendors(
+            'session-vendor-by-email',
+            () => domainQueries.getVendorByEmailFromDB(email)
+          );
+          if (own) vendors = [own, ...vendors];
         }
       }
     } else {
