@@ -603,8 +603,6 @@ async function createApproval(data, actor = {}) {
     raw,
   };
 
-  memoryApprovals.unshift(item);
-
   if (pool.hasStorage()) {
     try {
       const sql = `
@@ -633,11 +631,12 @@ async function createApproval(data, actor = {}) {
         ],
         { d1: true, d1Text: sql }
       );
-    } catch {
-      // non-fatal if table not created
+    } catch (error) {
+      throw persistenceUnavailable(error, 'create-approval');
     }
   }
 
+  memoryApprovals.unshift(item);
   return item;
 }
 

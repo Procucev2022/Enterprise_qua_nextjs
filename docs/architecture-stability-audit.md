@@ -494,3 +494,8 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 - Buyer RFQ attachment aggregation and seller evaluation/quotation aggregation previously hid exceptions and returned an incomplete document list without a diagnostic. Both fallbacks now preserve the partial response while logging the error, aggregation operation, account type, and presence of account scope; raw account identifiers are omitted.
 - The focused account and credit workflow suite passed 50 tests, including buyer and seller aggregation failure regressions. The required full workspace quality gate runs in the pre-commit hook.
+
+## Approval persistence failure handling
+
+- `createApproval` previously inserted into the process-local approval list before attempting the configured database write, then swallowed the write failure and returned success. It now writes to storage first, logs and propagates a retryable persistence error on failure, and only updates the process-local list after success (or when storage is intentionally unconfigured).
+- The internal credit task and its approval record are still separate database writes. A failure between them can leave a pending task without an Approval-module row; an atomic, idempotent task-and-approval workflow remains follow-up work.

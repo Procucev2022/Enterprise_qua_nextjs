@@ -4,6 +4,7 @@ const approvalQueries = require('../src/db/approvalQueries');
 const pool = require('../src/db/pool');
 const { authHeader } = require('./testHelpers');
 const { resetD1HttpClientCache } = require('../src/db/d1Bridge');
+const { logger } = require('../src/services/loggerService');
 
 const initialMemoryApprovals = JSON.parse(JSON.stringify(approvalQueries.memoryApprovals));
 
@@ -470,12 +471,22 @@ describe('Approvals API & Controller', () => {
     }, { name: 'Maker', role: 'Executive' });
     expect(createdItem.id).toBeDefined();
 
-    // createApproval with SQL error (non-fatal)
-    querySpy.mockRejectedValueOnce(new Error('Insert table missing'));
-    const safeCreated = await approvalQueries.createApproval({
+    // A configured database error must not return a phantom in-memory approval.
+    const insertError = new Error('Insert table missing');
+    const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+    querySpy.mockRejectedValueOnce(insertError);
+    await expect(approvalQueries.createApproval({
       applicant_name: 'Safe',
+    })).rejects.toMatchObject({
+      code: 'PERSISTENCE_UNAVAILABLE',
+      cause: insertError,
     });
-    expect(safeCreated.id).toBeDefined();
+    expect(approvalQueries.memoryApprovals.some((approval) => approval.applicant_name === 'Safe')).toBe(false);
+    expect(errorLogSpy).toHaveBeenCalledWith(
+      'Management approval persistence operation failed',
+      expect.objectContaining({ error: insertError, operation: 'create-approval' }),
+      'APPROVAL_PERSISTENCE'
+    );
 
     // 3. processApprovalAction with database record and internal task linkage
     jest.spyOn(internalTaskQueries, 'approveCreditTask').mockResolvedValue({ success: true });
@@ -702,13 +713,13 @@ describe('Approvals API & Controller', () => {
     expect(dbMinimal.rows[0].status).toBe('Pending');
 
     // Credit addition without internal task id and with null history
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
     const creditNoTask = await approvalQueries.createApproval({
       module: 'Buyer Credit Addition',
       internal_task_id: null,
       history: null,
     });
     creditNoTask.history = null;
-    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
     const approvedNoTask = await approvalQueries.processApprovalAction(creditNoTask.id, {
       action: 'APPROVE',
     });
