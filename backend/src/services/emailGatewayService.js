@@ -3974,7 +3974,10 @@ const emailGateway = {
   EMAIL_GATEWAY_MAX_ATTEMPTS,
   POLL_WORK_BUDGET_MS,
   EMAIL_GATEWAY_LEDGER_UNAVAILABLE,
-  resetAutoReplyMemory: () => recentAutoReplies.clear(),
+  resetAutoReplyMemory: () => {
+    recentAutoReplies.clear();
+    emailGatewayQueries.clearMemoryPendingAcknowledgements();
+  },
   pollOnce,
   pollViaGmailApi,
   pollVendorOnce,

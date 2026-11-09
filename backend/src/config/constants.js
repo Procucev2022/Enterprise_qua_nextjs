@@ -1653,6 +1653,8 @@ const EMAIL_GATEWAY_CONFIG = {
   MIN_POLL_MS: 30000,
   // Cap per pass so a backlog cannot spend unbounded time and quota in one run.
   DEFAULT_MAX_PER_POLL: 10,
+  // Keep no-storage delivery retries useful without letting local fallback state grow without bound.
+  MAX_MEMORY_PENDING_ACKNOWLEDGEMENTS: 100,
   // Inbound requisitions circulate to category-matched vendors upon creation, transitioning to Quotes Pending.
   INGESTED_STATUS: 'Quotes Pending',
   // Default sourcing mode for email-ingested RFQs: Version 2 (Hybrid Sourcing).

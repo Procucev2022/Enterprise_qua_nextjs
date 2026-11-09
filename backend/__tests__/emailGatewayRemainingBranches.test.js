@@ -574,6 +574,53 @@ describe('emailGatewayService remaining branch coverage', () => {
       }));
     });
 
+    test('retries a vendor inquiry acknowledgement from process-local storage', async () => {
+      const inquiryMessage = {
+        id: 'local-message-1',
+        message: 'Please confirm the drawing revision.',
+      };
+      const inquiry = {
+        id: 'local-inquiry-1',
+        vendorName: 'Local Supplier',
+        vendorEmail: 'sales@local-vendor.in',
+        messages: [inquiryMessage],
+      };
+      const rfq = {
+        id: 'local-rfq-1',
+        rfqNumber: 'RFQ-LOCAL-RETRY-1',
+        title: 'Local retry RFQ',
+        inquiries: [inquiry],
+      };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      jest.spyOn(require('../src/db/domainQueries'), 'getRFQByIdFromDB').mockResolvedValueOnce(rfq);
+      jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@example.com');
+      const deliverySpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail').mockResolvedValueOnce({ sent: true });
+      const messageKey = 'local-inbound#notice-vendor_inquiry_ack';
+
+      await emailGatewayService.queueAcknowledgement(messageKey, {
+        to: inquiry.vendorEmail,
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+        inquiryId: inquiry.id,
+        inquiryMessageId: inquiryMessage.id,
+      });
+      const result = await emailGatewayService.retryPendingAcknowledgements({
+        deliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK],
+      });
+
+      expect(result).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
+      expect(deliverySpy).toHaveBeenCalledWith(inquiry.vendorEmail, expect.objectContaining({
+        rfq,
+        issueMessage: inquiryMessage.message,
+        reason: EMAIL_GATEWAY_MESSAGES.VENDOR_ISSUE_REPLY_REASON,
+        cc: 'buyer@example.com',
+      }));
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING, 5, {
+        deliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK],
+      })).resolves.toEqual([]);
+    });
+
     test('keeps vendor inquiry retries pending when the persisted message is missing', async () => {
       const rfq = {
         id: 'rfq-vendor-issue-missing-message',

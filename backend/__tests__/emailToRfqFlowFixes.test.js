@@ -1179,6 +1179,86 @@ describe('emailGatewayQueries.listByStatus', () => {
     );
   });
 
+  test('keeps bounded no-storage retries in memory and applies poll-lane filters', async () => {
+    const originalLimit = EMAIL_GATEWAY_CONFIG.MAX_MEMORY_PENDING_ACKNOWLEDGEMENTS;
+    EMAIL_GATEWAY_CONFIG.MAX_MEMORY_PENDING_ACKNOWLEDGEMENTS = 2;
+    jest.spyOn(dbPool, 'hasStorage').mockReturnValue(false);
+    const logSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+    emailGatewayQueries.recordProcessed.mockRestore();
+    const vendorMessageId = 'memory-vendor-message#notice-vendor_inquiry_ack#ack';
+    const buyerMessageId = 'memory-buyer-message#ack';
+
+    try {
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: vendorMessageId,
+        status: INGESTION_OUTCOME.ACK_PENDING,
+        detail: JSON.stringify({ deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK }),
+        fromAddress: 'sales@vendor.in',
+      })).resolves.toBe(true);
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: buyerMessageId,
+        status: INGESTION_OUTCOME.ACK_PENDING,
+        detail: JSON.stringify({ buyerName: 'Buyer' }),
+        fromAddress: 'buyer@example.com',
+      })).resolves.toBe(true);
+
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ message_id: vendorMessageId }),
+          expect.objectContaining({ message_id: buyerMessageId }),
+        ])
+      );
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING, 5, {
+        deliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK],
+      })).resolves.toEqual([expect.objectContaining({ message_id: vendorMessageId })]);
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING, 5, {
+        excludeDeliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK],
+      })).resolves.toEqual([expect.objectContaining({ message_id: buyerMessageId })]);
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING, 5, {
+        deliveryKinds: [EMAIL_GATEWAY_DELIVERY_KIND.BUYER_QUOTE_RECEIVED],
+      })).resolves.toEqual([]);
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_SENT)).resolves.toEqual([]);
+
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: vendorMessageId,
+        status: INGESTION_OUTCOME.ACK_PENDING,
+        detail: JSON.stringify({ deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK }),
+        fromAddress: 'sales@vendor.in',
+      })).resolves.toBe(true);
+
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: 'memory-third-message#ack',
+        status: INGESTION_OUTCOME.ACK_PENDING,
+        fromAddress: 'third@example.com',
+      })).resolves.toBe(false);
+      expect(logSpy).toHaveBeenCalledWith(
+        'In-memory email acknowledgement retry queue reached its capacity',
+        expect.objectContaining({ pendingLimit: 2 }),
+        'EMAIL_GATEWAY'
+      );
+
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: vendorMessageId,
+        status: INGESTION_OUTCOME.ACK_SENT,
+      })).resolves.toBe(true);
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING)).resolves.toEqual([
+        expect.objectContaining({ message_id: buyerMessageId }),
+      ]);
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: buyerMessageId,
+        status: INGESTION_OUTCOME.ACK_ABANDONED,
+      })).resolves.toBe(true);
+      await expect(emailGatewayQueries.listByStatus(INGESTION_OUTCOME.ACK_PENDING)).resolves.toEqual([]);
+      await expect(emailGatewayQueries.recordProcessed({
+        messageId: 'memory-completed-message',
+        status: INGESTION_OUTCOME.INGESTED,
+      })).resolves.toBe(true);
+    } finally {
+      EMAIL_GATEWAY_CONFIG.MAX_MEMORY_PENDING_ACKNOWLEDGEMENTS = originalLimit;
+      emailGatewayQueries.clearMemoryPendingAcknowledgements();
+    }
+  });
+
   test('fails closed when a scoped query has no allowed delivery kinds', async () => {
     jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
     const rows = jest.spyOn(dbPool, 'rows');

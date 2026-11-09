@@ -12,9 +12,10 @@
 
 const pool = require('./pool');
 const { logger } = require('../services/loggerService');
-const { EMAIL_GATEWAY_DELIVERY_KIND } = require('../config/constants');
+const { EMAIL_GATEWAY_CONFIG, EMAIL_GATEWAY_DELIVERY_KIND } = require('../config/constants');
 
 const memoryProcessedMessageIds = new Set();
+const memoryPendingAcknowledgements = new Map();
 
 /** Outcomes recorded against a considered message. */
 const INGESTION_OUTCOME = {
@@ -157,7 +158,7 @@ async function findProcessed(messageId) {
  * not scan or starve behind unrelated buyer acknowledgement rows.
  */
 async function listByStatus(status, limit = 5, { deliveryKinds = null, excludeDeliveryKinds = null } = {}) {
-  if (!status || !pool.hasStorage()) return [];
+  if (!status) return [];
   const capped = Math.min(Math.max(Number(limit) || 5, 1), 50);
   const allowedDeliveryKinds = new Set([
     EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
@@ -176,6 +177,18 @@ async function listByStatus(status, limit = 5, { deliveryKinds = null, excludeDe
   const scopedExcludedKinds = Array.isArray(excludeDeliveryKinds)
     ? [...new Set(excludeDeliveryKinds.filter((kind) => allowedDeliveryKinds.has(kind)))]
     : [];
+  if (!pool.hasStorage()) {
+    return [...memoryPendingAcknowledgements.values()]
+      .filter((row) => row.status === String(status))
+      .filter((row) => scopedDeliveryKinds.length === 0 || scopedDeliveryKinds.some((kind) =>
+        row.message_id.includes(`#notice-${kind.toLowerCase()}#ack`)
+      ))
+      .filter((row) => scopedExcludedKinds.every((kind) =>
+        !row.message_id.includes(`#notice-${kind.toLowerCase()}#ack`)
+      ))
+      .sort((left, right) => new Date(left.processed_at).getTime() - new Date(right.processed_at).getTime())
+      .slice(0, capped);
+  }
   const messageIdPatterns = [];
   const deliveryKindClauses = [];
   if (scopedDeliveryKinds.length > 0) {
@@ -235,6 +248,32 @@ async function recordProcessed({
   if (!messageId) return false;
   const key = String(messageId);
   if (!pool.hasStorage()) {
+    if (status === INGESTION_OUTCOME.ACK_PENDING) {
+      const pendingLimit = Math.max(Number(EMAIL_GATEWAY_CONFIG.MAX_MEMORY_PENDING_ACKNOWLEDGEMENTS) || 1, 1);
+      if (!memoryPendingAcknowledgements.has(key) && memoryPendingAcknowledgements.size >= pendingLimit) {
+        logger.error('In-memory email acknowledgement retry queue reached its capacity', {
+          messageId: key,
+          pendingCount: memoryPendingAcknowledgements.size,
+          pendingLimit,
+        }, 'EMAIL_GATEWAY');
+        return false;
+      }
+      memoryPendingAcknowledgements.set(key, {
+        message_id: key,
+        rfq_id: rfqId || null,
+        rfq_number: rfqNumber || null,
+        from_address: fromAddress ? String(fromAddress).slice(0, 320) : null,
+        subject: subject ? String(subject).slice(0, 2000) : null,
+        status: String(status),
+        detail: detail ? String(detail).slice(0, 2000) : null,
+        processed_at: new Date().toISOString(),
+      });
+    } else if (
+      status === INGESTION_OUTCOME.ACK_SENT
+      || status === INGESTION_OUTCOME.ACK_ABANDONED
+    ) {
+      memoryPendingAcknowledgements.delete(key);
+    }
     memoryProcessedMessageIds.add(key);
     return true;
   }
@@ -272,6 +311,10 @@ async function recordProcessed({
     logger.error('Email ingestion outcome could not be recorded', err, 'EMAIL_GATEWAY');
     return false;
   }
+}
+
+function clearMemoryPendingAcknowledgements() {
+  memoryPendingAcknowledgements.clear();
 }
 
 /**
@@ -336,6 +379,7 @@ module.exports = {
   countFailedAttempts,
   findProcessed,
   listByStatus,
+  clearMemoryPendingAcknowledgements,
   toLedgerTimestamp,
   listRecent,
   countsByStatus,
