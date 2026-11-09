@@ -269,7 +269,7 @@ interface AppContextType {
    * the response away and left the browser and the database disagreeing about
    * the same RFQ.
    */
-  adoptCreatedRFQ: (rfq: RFQItem) => void;
+  adoptCreatedRFQ: (rfq: RFQItem, remainingCredits?: number | null) => void;
   /**
    * Apply an edit to one RFQ and adopt the stored result.
    *
@@ -2566,10 +2566,61 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
    * Adopt a server-created RFQ, replacing any existing entry with the same RFQ
    * number so a refresh cannot leave two copies of one record.
    */
-  const adoptCreatedRFQ = (rfq: RFQItem) => {
-    setRfqs((prev) => [rfq, ...prev.filter((r) => r.rfqNumber !== rfq.rfqNumber)]);
+  const adoptCreatedRFQ = (rfq: RFQItem, remainingCredits?: number | null) => {
+    setRfqs((prev) => {
+      const exists = prev.some((r) => r.rfqNumber === rfq.rfqNumber || (rfq.id && r.id === rfq.id));
+      if (exists) {
+        return prev.map((r) => (r.rfqNumber === rfq.rfqNumber || (rfq.id && r.id === rfq.id) ? rfq : r));
+      }
+      return [rfq, ...prev];
+    });
+    setVendorOpportunities((prev) => {
+      const opp = buildOpportunityFromRFQ(rfq);
+      const exists = prev.some((o) => o.rfqNumber === rfq.rfqNumber);
+      if (exists) {
+        return prev.map((o) => (o.rfqNumber === rfq.rfqNumber ? opp : o));
+      }
+      return [opp, ...prev];
+    });
+
+    const mode = String(rfq.sourcingMode || '').toLowerCase();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    const serverRemaining = typeof remainingCredits === 'number'
+      ? remainingCredits
+      : (typeof (rfq as any)?.remainingFreeRFQs === 'number' ? (rfq as any).remainingFreeRFQs : null);
+
+    if (serverRemaining !== null && typeof serverRemaining === 'number') {
+      setRemainingFreeRFQs(serverRemaining);
+      setActiveBuyerAccount((prev) => {
+        if (!prev) return prev;
+        const updated = {
+          ...prev,
+          remainingFreeRFQs: serverRemaining,
+          freeRFQsUsed: Math.max(0, 5 - serverRemaining),
+        };
+        setSessionCache('activeBuyerAccount', updated);
+        return updated;
+      });
+    } else if (!isV0 && (!activeSubscription || activeSubscription === 'free_trial')) {
+      setRemainingFreeRFQs((prev) => {
+        const next = Math.max(0, prev - 1);
+        setActiveBuyerAccount((prevAcc) => {
+          if (!prevAcc) return prevAcc;
+          const updated = {
+            ...prevAcc,
+            remainingFreeRFQs: next,
+            freeRFQsUsed: Math.max(0, 5 - next),
+          };
+          setSessionCache('activeBuyerAccount', updated);
+          return updated;
+        });
+        return next;
+      });
+    }
+
     addAuditLog(`Created ${rfq.rfqNumber} (${rfq.title})`, rfq.rfqNumber);
     void refreshAIFeed();
+    void refreshActiveBuyerAccount();
   };
 
   /**
@@ -2793,6 +2844,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       `${newRFQ.rfqNumber} dispatched to ${matchedVendors.length} suitable vendors.`,
       'success'
     );
+
+    if (typeof saved.remainingFreeRFQs === 'number') {
+      const remainingNum = saved.remainingFreeRFQs;
+      setRemainingFreeRFQs(remainingNum);
+      setActiveBuyerAccount((prev) =>
+        prev
+          ? {
+              ...prev,
+              remainingFreeRFQs: remainingNum,
+              freeRFQsUsed: Math.max(0, 5 - remainingNum),
+            }
+          : prev
+      );
+    }
+    void refreshActiveBuyerAccount();
 
     return newRFQ;
   };

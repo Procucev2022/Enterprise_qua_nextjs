@@ -141,7 +141,9 @@ describe('Vendor Free-Credit and Subscription Validation Flow', () => {
       // Resubmission to rfq-test-1
       storeService.consumeVendorQuotationCredit(testVendor.id, 'rfq-test-1');
       expect(testVendor.freeQuotationCredits).toBe(4);
-      expect(testVendor.quotedRfqIds).toHaveLength(1);
+      // Both canonical id ('rfq-test-1') AND rfqNumber ('RFQ-2026-00001') are
+      // stored for robust idempotency lookups, so length is 2 per unique RFQ.
+      expect(testVendor.quotedRfqIds).toHaveLength(2);
     });
   });
 
@@ -195,7 +197,8 @@ Remarks: Standard delivery included
       // Verify all 5 credits used
       const finalVendor = storeService.getVendorById(testVendor.id);
       expect(finalVendor.freeQuotationCredits).toBe(0);
-      expect(finalVendor.quotedRfqIds).toHaveLength(5);
+      // 5 RFQs × 2 identifiers each (canonical id + rfqNumber) = 10 entries.
+      expect(finalVendor.quotedRfqIds).toHaveLength(10);
     });
 
     test('Step 2 & 3: 6th RFQ quotation email without subscription is rejected with CREDITS_EXHAUSTED, dispatches upgrade notice, and creates NO bid', async () => {
