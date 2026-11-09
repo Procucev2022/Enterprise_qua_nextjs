@@ -910,10 +910,12 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       storeService.isHydratedFromDB = false;
     });
 
-    test('getVendors falls back to in_memory_fallback when getVendorsPageFromDB throws with buyerId and search', async () => {
+    test('getVendors fails closed and logs when the persisted vendor page query throws', async () => {
       const next = jest.fn();
       const res = mockRes();
       const pool = require('../src/db/pool');
+      const { logger } = require('../src/services/loggerService');
+      const logError = jest.spyOn(logger, 'error').mockImplementation(() => {});
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       storeService.vendors = [
         { id: 'v-b1', name: 'Alpha Fasteners', email: 'alpha@fast.com', majorCategory: 'Industrial', buyerId: 'b-99' },
@@ -922,18 +924,27 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockRejectedValue(new Error('D1 DB is overloaded'));
 
       await vendorController.getVendors(
-        { query: { page: '1', pageSize: '10', buyerId: 'b-99', search: 'alpha' } },
+        { query: { page: '1', pageSize: '10', buyerId: 'buyer@example.com', search: 'alpha' } },
         res,
         next
       );
 
+      expect(res.status).toHaveBeenCalledWith(503);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          success: true,
-          source: 'in_memory_fallback',
-          data: [expect.objectContaining({ id: 'v-b1' })],
+          success: false,
+          code: 'PERSISTENCE_UNAVAILABLE',
+          retryable: true,
         })
       );
+      expect(res.json).not.toHaveBeenCalledWith(expect.objectContaining({ source: 'in_memory_fallback' }));
+      expect(logError).toHaveBeenCalledWith(
+        'Persisted vendor directory page query failed',
+        expect.objectContaining({ operation: 'vendor-directory-page-read', hasBuyerScope: true }),
+        'VENDOR_CONTROLLER'
+      );
+      expect(logError.mock.calls[0][1]).not.toHaveProperty('buyerId');
+      expect(next).not.toHaveBeenCalled();
     });
 
     test('recordVendorHeartbeat rejects vendor sessions without an email identity', async () => {

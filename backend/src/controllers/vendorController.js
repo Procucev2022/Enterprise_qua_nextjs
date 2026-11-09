@@ -264,7 +264,12 @@ async function getVendors(req, res, next) {
     } else if (req.query && req.query.buyerId) {
       buyerId = req.query.buyerId;
     }
-    logger.info('Fetching vendors with scoping', { buyerId, role: user && user.role }, 'VENDOR_CONTROLLER');
+    // buyerId may be an email fallback when identity linkage has not completed;
+    // log scope presence without copying a contact identifier into diagnostics.
+    logger.info('Fetching vendors with scoping', {
+      hasBuyerScope: Boolean(buyerId && buyerId !== 'all'),
+      role: user && user.role,
+    }, 'VENDOR_CONTROLLER');
 
     // Pagination is opt-in (passing `page`) so existing callers that expect
     // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
@@ -308,31 +313,23 @@ async function getVendors(req, res, next) {
           pagination: { page: pageNumber, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
         });
       } catch (err) {
-        // Fallback gracefully to in-memory store if DB query fails or D1 is overloaded (never hit DB again)
-        console.warn('[VENDOR_CONTROLLER] getVendorsPageFromDB failed, falling back to memory:', err.message);
-        const inMemoryVendors = Array.isArray(storeService.vendors) ? storeService.vendors : [];
-        let fallbackVendors = inMemoryVendors;
-        if (buyerId && buyerId !== 'all') {
-          const sId = String(buyerId).toLowerCase();
-          fallbackVendors = inMemoryVendors.filter((v) =>
-            !v.buyerId ||
-            String(v.buyerId).toLowerCase() === sId ||
-            (v.buyerAccountId && String(v.buyerAccountId).toLowerCase() === sId)
-          );
-        }
-        if (search) {
-          const s = String(search).trim().toLowerCase();
-          fallbackVendors = fallbackVendors.filter((v) =>
-            (v.name && v.name.toLowerCase().includes(s)) ||
-            (v.email && v.email.toLowerCase().includes(s)) ||
-            (v.majorCategory && v.majorCategory.toLowerCase().includes(s))
-          );
-        }
-        return res.json({
-          success: true,
-          source: 'in_memory_fallback',
-          data: fallbackVendors.slice(0, pageSize).map(withoutTemporaryPassword),
-          pagination: { page: pageNumber, pageSize, total: fallbackVendors.length, totalPages: Math.max(1, Math.ceil(fallbackVendors.length / pageSize)) },
+        logger.error('Persisted vendor directory page query failed', {
+          error: err,
+          operation: 'vendor-directory-page-read',
+          hasBuyerScope: Boolean(buyerId && buyerId !== 'all'),
+          hasSearch: Boolean(search),
+          hasEmailFilter: Boolean(email),
+          hasCategoryFilter: Boolean(category),
+          hasStateFilter: Boolean(state),
+          hasCityFilter: Boolean(city),
+          page: pageNumber,
+          pageSize,
+        }, 'VENDOR_CONTROLLER');
+        return res.status(503).json({
+          success: false,
+          error: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
+          code: 'PERSISTENCE_UNAVAILABLE',
+          retryable: true,
         });
       }
     }
