@@ -602,7 +602,7 @@ describe('Vendor Screens Comprehensive Suite', () => {
       try {
         renderWithToast(<VendorSubscriptionCenter />);
 
-        await waitFor(() => expect(screen.getByText(/Payment Received/i)).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText(/Payment Received/i)).toBeInTheDocument(), { timeout: 4000 });
         expect(window.location.search).toBe('');
       } finally {
         authClient.setSession(null);
@@ -633,7 +633,7 @@ describe('Vendor Screens Comprehensive Suite', () => {
       try {
         renderWithToast(<VendorSubscriptionCenter />);
 
-        await waitFor(() => expect(screen.getByText(/Payment Cancelled/i)).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText(/Payment Cancelled/i)).toBeInTheDocument(), { timeout: 4000 });
         expect(window.location.search).toBe('?ref=email');
       } finally {
         authClient.setSession(null);

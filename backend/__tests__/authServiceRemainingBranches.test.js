@@ -560,4 +560,28 @@ describe('authService remaining branch tests', () => {
       expect(verified.user.scope).toBe('vendor_directory');
     });
   });
+
+  describe('assertSessionActive D1 overload resilience', () => {
+    test('returns valid when authSessionQueries.isTokenRevoked throws retryable D1 overload error', async () => {
+      const user = { id: 'u-123', email: 'buyer@procucev.com', role: 'buyer' };
+      const token = authService.generateSessionToken(user);
+      jest.spyOn(authSessionQueries, 'isTokenRevoked').mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
+
+      const result = await authService.assertSessionActive(token);
+      expect(result.valid).toBe(true);
+      expect(result.user.email).toBe('buyer@procucev.com');
+    });
+
+    test('returns valid when d1Bridge.isD1Overloaded is true during session verification error', async () => {
+      const d1Bridge = require('../src/db/d1Bridge');
+      const user = { id: 'u-123', email: 'buyer@procucev.com', role: 'buyer' };
+      const token = authService.generateSessionToken(user);
+      jest.spyOn(d1Bridge, 'isD1Overloaded').mockReturnValue(true);
+      jest.spyOn(authSessionQueries, 'isTokenRevoked').mockRejectedValue(new Error('Transient error'));
+
+      const result = await authService.assertSessionActive(token);
+      expect(result.valid).toBe(true);
+      expect(result.user.email).toBe('buyer@procucev.com');
+    });
+  });
 });

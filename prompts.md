@@ -1,6 +1,6 @@
-# User Prompt History
+# User Prompt History Maintenance
 
-This file records all user-provided prompts submitted to the AI assistant in chronological order. Only raw user prompts are saved here (AI-generated conversations and assistant responses are excluded).
+This file maintains the chronological history of all user-provided prompts.
 
 ---
 
@@ -84,7 +84,7 @@ suggest branch name
 
 ---
 
-### Prompt 6
+### Prompt 4
 
 **Timestamp**: 2026-08-30T04:07:52Z
 
@@ -101,7 +101,7 @@ suggest branch name
 
 ---
 
-### Prompt 7
+### Prompt 5
 
 **Timestamp**: 2026-08-30T04:18:07Z
 
@@ -115,7 +115,7 @@ suggest branch name
 
 ---
 
-### Prompt 8
+### Prompt 6
 
 **Timestamp**: 2026-08-30T04:26:06Z
 
@@ -135,7 +135,7 @@ suggest branch name
 
 ---
 
-### Prompt 9
+### Prompt 7
 
 **Timestamp**: 2026-08-30T04:29:55Z
 
@@ -149,7 +149,7 @@ suggest branch name
 
 ---
 
-### Prompt 10
+### Prompt 8
 
 **Timestamp**: 2026-08-30T04:34:28Z
 
@@ -163,7 +163,7 @@ suggest branch name
 
 ---
 
-### Prompt 11
+### Prompt 9
 
 **Timestamp**: 2026-08-30T04:38:53Z
 
@@ -188,7 +188,7 @@ suggest branch name
 
 ---
 
-### Prompt 12
+### Prompt 10
 
 **Timestamp**: 2026-08-30T04:42:36Z
 
@@ -202,7 +202,7 @@ suggest branch name
 
 ---
 
-### Prompt 13
+### Prompt 11
 
 **Timestamp**: 2026-08-30T04:48:58Z
 
@@ -216,7 +216,7 @@ suggest branch name
 
 ---
 
-### Prompt 14
+### Prompt 12
 
 **Timestamp**: 2026-08-30T04:52:48Z
 
@@ -230,7 +230,7 @@ suggest branch name
 
 ---
 
-### Prompt 15
+### Prompt 13
 
 **Timestamp**: 2026-08-30T04:57:17Z
 
@@ -244,7 +244,7 @@ suggest branch name
 
 ---
 
-### Prompt 16
+### Prompt 14
 
 **Timestamp**: 2026-08-30T05:22:05Z
 
@@ -254,6 +254,34 @@ AES Encryption: Incorporate AES encryption algorithms to guarantee the protectio
 
 text
 suggest branch name
+```
+
+---
+
+### Prompt 15
+
+**Timestamp**: 2026-08-30T08:29:02Z
+
+```text
+User Prompt History: Add configuration in assistant instructions to maintain a file in workspace ΓÇ£prompts.mdΓÇ¥ for saving user provided prompts. Save only user provided prompts in a file named prompts.md. Not AI generated conversations.
+
+
+Logs Storage: Implement a structured and centralized logging system for persistence, searchability, and automatic purging to manage storage and compliance. In case the code is running locally, store all logs in the file system for future reference and debugging.
+
+
+Detailed Logs: Add the configuration in assistant instructions to add detailed logs in the application.  Also, apply this configuration across the application.
+```
+
+---
+
+### Prompt 16
+
+**Timestamp**: 2026-08-30T08:41:42Z
+
+```text
+Database Optimization & GraphQL Integration: Configure assistant instructions to audit database queries for efficiency and integrate GraphQL to streamline data fetching across the application.
+
+Additionally, implement optimizations to minimize database compute hours, reduce resource usage, and enhance overall infrastructure efficiency.
 ```
 
 ---
@@ -5057,11 +5085,7 @@ merge is not done because of Ai review please fix this
 text
 suggest branch name
 ```
-
-
----
-
-### Prompt 23
+### Prompt 22
 
 **Timestamp**: 2026-11-02T10:18:45+05:30
 
@@ -5680,14 +5704,13 @@ Merging is blocked
 A conversation must be resolved before this pull request can be merged.
 ```
 
-text
-suggest branch name
+
 ```
 
 
 ---
 
-### Prompt 24
+### Prompt 23
 
 **Timestamp**: 2026-11-02T11:11:48+05:30
 
@@ -5695,14 +5718,12 @@ suggest branch name
 merge this into that pr  and solve Ai issue and merge that in main branch
 ```
 
-text
-suggest branch name
 ```
 
 
 ---
 
-### Prompt 25
+### Prompt 24
 
 **Timestamp**: 2026-11-02T12:20:08+05:30
 
@@ -5877,8 +5898,6 @@ When clicking a task, open a detailed view showing:
 **Expected Result:** Internal Tasks should function as a centralized employee task-management and approval system, where every internal activity can be created, assigned, tracked, approved when required, and marked completed with a complete history.
 ```
 
-text
-suggest branch name
 ```
 
 ---
@@ -5891,28 +5910,21 @@ suggest branch name
 Please do a detailed analysis, what all features are pending or missing, & then continue adding the remaining missing features & functionalities & tell apart from these what else is pending
 ```
 
-text
-suggest branch name
 ```
 
 ---
 
-### Prompt 28
+### Prompt 26
 
 **Timestamp**: 2026-11-02T10:48:45Z
 
 ```text
 Create the branch from main and raise the pr
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 29
+### Prompt 27
 
 **Timestamp**: 2026-11-02T11:47:00Z
 
@@ -6012,37 +6024,27 @@ suggest branch name
 
 ---
 
-### Prompt 30
+### Prompt 28
 
 **Timestamp**: 2026-11-02T12:24:22Z
 
 ```text
 continue
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 31
+### Prompt 29
 
 **Timestamp**: 2026-11-02T13:11:45Z
 
 ```text
 continue
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 32
+### Prompt 30
 
 **Timestamp**: 2026-11-02T13:23:23Z
 
@@ -6056,29 +6058,20 @@ Also to display the attachments, i want to create a new page named document vaul
 Did you understand? Please tell me. Donot make any code changes yet.
 ```
 
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 32
+### Prompt 31
 
 **Timestamp**: 2026-11-02T13:58:10Z
 
 ```text
 continue
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 34
+### Prompt 32
 
 **Timestamp**: 2026-11-02T14:55:09Z
 
@@ -6088,15 +6081,10 @@ remove B3 ;B4 S4 S5 remove
 
 Ask questions for cllarification?
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 35
+### Prompt 33
 
 **Timestamp**: 2026-11-02T15:17:05Z
 
@@ -6105,63 +6093,20 @@ suggest branch name
 2. Auto-select suggested documents from the vault with the option to remove or add more
 3. Both: select from Document Vault dropdown OR upload a one-off document directly in the email modal
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 36
+### Prompt 34
 
 **Timestamp**: 2026-11-02T15:31:12Z
 
 ```text
 Ask questions do u really understand or need any clarification?
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 37
-
-**Timestamp**: 2026-11-02T15:39:09Z
-
-```text
-continue  Also create email drafts for all call outcomes too
-```
-
-text
-suggest branch name
-```
-
-
----
-
-### Prompt 34
-
-**Timestamp**: 2026-11-02T14:55:09Z
-
-```text
-remove B3 ;B4 S4 S5 remove
- I need email drafts to send to customers and not to category manager or myself or my staff
-
-Ask questions for cllarification?
-```
-
-text
-suggest branch name
-```
-
-
----
-
-### Prompt 37
+### Prompt 35
 
 **Timestamp**: 2026-11-02T15:39:09Z
 
@@ -6175,52 +6120,37 @@ suggest branch name
 
 ---
 
-### Prompt 38
+### Prompt 36
 
 **Timestamp**: 2026-11-03T02:00:15Z
 
 ```text
 create the pr and solve all the ai review and gemiini pr review and merge the pr
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 39
+### Prompt 37
 
 **Timestamp**: 2026-11-03T05:28:11Z
 
 ```text
 Remove the Template A and Template B sections from Step 5 after the buyer vendor data upload is completed. Keep the remaining setup summary and completion functionality unchanged.  
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 40
+### Prompt 38
 
 **Timestamp**: 2026-11-03T05:41:22Z
 
 ```text
 create the new branch and raise the pr
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 41
+### Prompt 39
 
 **Timestamp**: 2026-11-03T05:56:09Z
 
@@ -6326,15 +6256,10 @@ Required
 [Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/41585703938/job/125751728218?pr=400)
 Failing after 8s
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 42
+### Prompt 40
 
 **Timestamp**: 2026-11-03T07:15:00Z
 
@@ -6413,37 +6338,27 @@ suggest branch name
 
 ---
 
-### Prompt 43
+### Prompt 41
 
 **Timestamp**: 2026-11-03T11:29:45Z
 
 ```text
 create a branch and raise the pr to test-v3 upcoming pr also raise to test-v3  only not for main
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 44
+### Prompt 42
 
 **Timestamp**: 2026-11-03T12:03:39Z
 
 ```text
 All are fails only check and fix the all the issue and AI review also
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 45
+### Prompt 43
 
 **Timestamp**: 2026-11-03T22:20:00+05:30
 
@@ -6451,13 +6366,11 @@ suggest branch name
 Tell me about create rfq via email for registration buyer and unregisteration buyer?
 ```
 
-text
-suggest branch name
 ```
 
 ---
 
-### Prompt 46
+### Prompt 44
 
 **Timestamp**: 2026-11-03T22:23:43+05:30
 
@@ -6465,13 +6378,11 @@ suggest branch name
 continue
 ```
 
-text
-suggest branch name
 ```
 
 ---
 
-### Prompt 47
+### Prompt 45
 
 **Timestamp**: 2026-11-03T22:33:03+05:30
 
@@ -6537,37 +6448,27 @@ suggest branch name
 
 ---
 
-### Prompt 48
+### Prompt 46
 
 **Timestamp**: 2026-11-04T07:16:38+05:30
 
 ```text
 continue
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 49
+### Prompt 47
 
 **Timestamp**: 2026-11-04T08:06:53+05:30
 
 ```text
 create a new branch and raise pr to test-v3
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 50
+### Prompt 48
 
 **Timestamp**: 2026-11-04T08:40:48+05:30
 
@@ -6685,15 +6586,10 @@ You can also merge this with the command line.
 
 gemini is fail check and pass that
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 51
+### Prompt 49
 
 **Timestamp**: 2026-11-04T10:58:24+05:30
 
@@ -6828,22 +6724,17 @@ suggest branch name
 
 ---
 
-### Prompt 52
+### Prompt 50
 
 **Timestamp**: 2026-11-04T13:07:18+05:30
 
 ```text
 create new branch and raise the pr to test-v3 and pass all the gemini stage and AI review also
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 53
+### Prompt 51
 
 **Timestamp**: 2026-11-04T14:36:05+05:30
 
@@ -6866,7 +6757,7 @@ suggest branch name
 
 ---
 
-### Prompt 54
+### Prompt 52
 
 **Timestamp**: 2026-11-04T15:10:16+05:30
 
@@ -6880,7 +6771,7 @@ suggest branch name
 
 ---
 
-### Prompt 55
+### Prompt 53
 
 **Timestamp**: 2026-11-04T15:11:53+05:30
 
@@ -6894,22 +6785,17 @@ suggest branch name
 
 ---
 
-### Prompt 56
+### Prompt 54
 
 **Timestamp**: 2026-11-04T15:33:34+05:30
 
 ```text
 continue
 ```
-
-text
-suggest branch name
 ```
-
-
 ---
 
-### Prompt 57
+### Prompt 55
 
 **Timestamp**: 2026-11-04T16:33:11+05:30
 
@@ -7227,14 +7113,9 @@ Test the following scenarios:
 Deliver a production-ready Procurement Approval Management Dashboard adhering to all requirements.
 ```
 
-text
-suggest branch name
-```
-
-
 ---
 
-### Prompt 58
+### Prompt 56
 
 **Timestamp**: 2026-11-04T19:35:48+05:30
 
@@ -7517,26 +7398,41 @@ Summary of all failing tests
                       stroke-width="2"
          ...
 
-      at toBeEnabled (__tests__/app/vendor/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/__tests__/app/vendor/vendor-profileCoverage.test.tsx:240:44)
-      at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/config.js:47:12)
-      at checkCallback (node_modules/@testing-library/dom/dist/wait-for.js:124:77)
-      at checkRealTimersCallback (node_modules/@testing-library/dom/dist/wait-for.js:118:16)   
-      at Timeout.task [as _onTimeout] (node_modules/jsdom/lib/jsdom/browser/Window.js:579:19)  
+### 6. Preserve Existing Functionality
+- Keep all summary counts dynamic from the database.
+- Preserve clickable summary cards and their filtered-record popups.
+- Preserve task creation, task filters, reminders, SMS/email actions, approvals, and CSV export.
+- Do not break Buyer Directory, Seller Directory, Registrations, or Payment Dues.
+- Reuse existing components and functionality wherever possible.
 
+### Acceptance Criteria
+- No large Action Center heading or subtitle.
+- All six summary cards fit in one row without horizontal overflow at the target desktop resolution.
+- Search input is fully visible and usable.
+- All toolbar controls are properly aligned.
+- No clipped buttons, overlapping elements, or unnecessary horizontal scrollbars.
+- All existing functionality continues to work.
 
-Test Suites: 1 failed, 142 passed, 143 total
-Tests:       1 failed, 3670 passed, 3671 total
-Snapshots:   0 total
-Time:        428.989 s, estimated 757 s
-Ran all test suites.
-Test results written to: coverage\test-results.json
-Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+**Important:** Test the actual rendered page after implementation at the same desktop resolution as the attached screenshot. Do not mark this task as completed until the visual issues are verified as fixed.
 
-✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
+-  like that buyer credit i want for quotes in seller Asitis as buyer name change to quote for seller and must be lin to approval section and internal task
+```
 
-❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
-PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
-**Timestamp**: 2026-11-05T12:30:31+05:30
+---
+
+### Prompt 57
+
+**Timestamp**: 2026-11-05T08:12:33+05:30
+
+```text
+In approval page the heading same as button remove the small 5 heading  All requests , pending approvals  ,approved etc and the line alligment is not good for All projects all request type amd all it is movinng the horizontal row not moving like buyer directory please fix both changed
+```
+
+---
+
+### Prompt 58
+
+**Timestamp**: 2026-11-05T09:08:21+05:30
 
 ```text
 continue
@@ -7548,40 +7444,27 @@ suggest branch name
 
 ---
 
-### Prompt 64
+### Prompt 59
 
-**Timestamp**: 2026-11-05T11:05:44Z
-
-```text
-ASS  __tests__/controllersCatchBranches.test.js (53.731 s)
- FAIL  __tests__/internalTasks.test.js (181.518 s)
-  ● Internal Tasks API & Controller › handles 500 error catch branches gracefully
-
-    thrown: "Exceeded timeout of 20000 ms for a test.
-    Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
-
-      307 |   });
-      308 |
-    > 309 |   test('handles 500 error catch branches gracefully', async () => {
-          |   ^
-      310 |     jest.spyOn(internalTaskQueries, 'getInternalTasks').mockRejectedValue(new Error('DB failure'));
-      311 |     const res = await request(app).get('/api/internal-tasks');
-      312 |     expect(res.status).toBe(500);
-
-      at test (__tests__/internalTasks.test.js:309:3)
-      at Object.describe (__tests__/internalTasks.test.js:6:1)
-**Timestamp**: 2026-11-05T12:45:12+05:30
+**Timestamp**: 2026-11-05T10:53:44+05:30
 
 ```text
-Raise the pr and check all the coverages can pass annd gemini pr check and AI reviews and merge in test-v3
+Tell me one thing is it suitable to Add the login in logs in Category manager in Action center All the buyer /vendor who login and what time logout that vendor name email , company name , phone number and seller or buyer filter date wise is it okay?
 ```
 
-text
-suggest branch name
+---
+
+### Prompt 60
+
+**Timestamp**: 2026-11-05T11:02:11+05:30
+
+```text
+Add this After the Document valut that category manager also monitors admin only there is no security related issue please make sure all the data is correct and reall time dashboards for tracking the logs
+```
 ```
 ---
 
-### Prompt 65
+### Prompt 61
 
 **Timestamp**: 2026-11-05T13:00:13+05:30
 
@@ -7595,7 +7478,7 @@ suggest branch name
 
 ---
 
-### Prompt 66
+### Prompt 62
 
 **Timestamp**: 2026-11-05T15:00:00+05:30
 
@@ -7942,7 +7825,189 @@ suggest branch name
 
 ---
 
-### Prompt 67
+### Prompt 63
+
+**Timestamp**: 2026-11-05T15:40:07+05:30
+
+```text
+Lines        : 98.78% ( 17628/17844 )
+
+Summary of all failing tests
+ FAIL  __tests__/app/vendor/vendor-profileCoverage.test.tsx (48.839 s)
+  ● VendorProfilePage extended coverage (mocked store) › loading the vendor profile › profile request sends the session token as a bearer credential
+
+    expect(element).toBeEnabled()
+
+    Received element is not enabled:
+      <button class="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed" disabled="" />
+
+    Ignored nodes: comments, script, style
+    <html>
+      <head />
+      <body>
+        <div>
+          <div
+            class="space-y-6 animate-fade-in pb-4"
+          >
+            <div
+              class="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center"
+            >
+              <div
+                class="space-y-1"
+              >
+                <span
+                  class="badge badge-emerald font-mono uppercase"
+                >
+                  connect
+                   Tier Supplier
+                </span>
+                <p
+                  class="max-w-3xl text-xs leading-relaxed text-slate-500 dark:text-gray-400"  
+                >
+                  Manage company registration, PAN/GSTIN compliance, and define your manufacturing / supply categories for direct buyer RFQs.
+                </p>
+              </div>
+              <div
+                class="flex items-center gap-2.5"
+              >
+                <a
+                  class="btn btn-secondary btn-md font-bold flex items-center gap-1.5 shadow-xs"
+                  href="#account-security"
+                >
+                  <svg
+                    class="lucide lucide-key-round text-emerald-600 dark:text-emerald-400"
+                    fill="none"
+                    height="16"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                    width="16"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"
+                    />
+                    <circle
+                      cx="16.5"
+                      cy="7.5"
+                      fill="currentColor"
+                      r=".5"
+                    />
+                  </svg>
+                  <span>
+                    Update Password
+                  </span>
+                </a>
+                <button
+                  class="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled=""
+                >
+                  <svg
+                    class="lucide lucide-save"
+                    fill="none"
+                    height="16"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                    width="16"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
+                    />
+                    <path
+                      d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"
+                    />
+                    <path
+                      d="M7 3v4a1 1 0 0 0 1 1h7"
+                    />
+                  </svg>
+
+                  Save Supplier Profile
+                </button>
+              </div>
+            </div>
+            <p
+              class="text-xs text-slate-500 dark:text-gray-400 -mt-2"
+            >
+              Loading your supplier profile…
+            </p>
+            <form
+              class="space-y-6"
+            >
+              <div
+                class="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4"
+              >
+                <div
+                  class="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3"
+                >
+                  <h2
+                    class="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2"
+                  >
+                    <svg
+                      class="lucide lucide-shield-check text-emerald-600 dark:text-emerald-400"
+                      fill="none"
+                      height="18"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      viewBox="0 0 24 24"
+                      width="18"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+                      />
+                      <path
+                        d="m9 12 2 2 4-4"
+                      />
+                    </svg>
+                     Section 1: Supplier Tax & Business Details
+                  </h2>
+                  <span
+                    class="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1"
+                  >
+                    <svg
+                      class="lucide lucide-circle-check"
+                      fill="none"
+                      height="12"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+         ...
+
+      at toBeEnabled (__tests__/app/vendor/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/__tests__/app/vendor/vendor-profileCoverage.test.tsx:240:44)
+      at runWithExpensiveErrorDiagnosticsDisabled (node_modules/@testing-library/dom/dist/config.js:47:12)
+      at checkCallback (node_modules/@testing-library/dom/dist/wait-for.js:124:77)
+      at checkRealTimersCallback (node_modules/@testing-library/dom/dist/wait-for.js:118:16)   
+      at Timeout.task [as _onTimeout] (node_modules/jsdom/lib/jsdom/browser/Window.js:579:19)  
+
+
+Test Suites: 1 failed, 142 passed, 143 total
+Tests:       1 failed, 3670 passed, 3671 total
+Snapshots:   0 total
+Time:        428.989 s, estimated 757 s
+Ran all test suites.
+Test results written to: coverage\test-results.json
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+
+✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
+
+❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
+**Timestamp**: 2026-11-05T12:30:31+05:30
+
+```
+
+---
+
+### Prompt 64
 
 **Timestamp**: 2026-11-05T16:15:00+05:30
 
@@ -7956,7 +8021,35 @@ suggest branch name
 
 ---
 
-### Prompt 68
+### Prompt 65
+
+**Timestamp**: 2026-11-05T11:05:44Z
+
+```text
+ASS  __tests__/controllersCatchBranches.test.js (53.731 s)
+ FAIL  __tests__/internalTasks.test.js (181.518 s)
+  ● Internal Tasks API & Controller › handles 500 error catch branches gracefully
+
+    thrown: "Exceeded timeout of 20000 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
+
+      307 |   });
+      308 |
+    > 309 |   test('handles 500 error catch branches gracefully', async () => {
+          |   ^
+      310 |     jest.spyOn(internalTaskQueries, 'getInternalTasks').mockRejectedValue(new Error('DB failure'));
+      311 |     const res = await request(app).get('/api/internal-tasks');
+      312 |     expect(res.status).toBe(500);
+
+      at test (__tests__/internalTasks.test.js:309:3)
+      at Object.describe (__tests__/internalTasks.test.js:6:1)
+**Timestamp**: 2026-11-05T12:45:12+05:30
+
+```
+
+---
+
+### Prompt 66
 
 **Timestamp**: 2026-11-05T16:36:19+05:30
 
@@ -7970,7 +8063,7 @@ suggest branch name
 
 ---
 
-### Prompt 69
+### Prompt 67
 
 **Timestamp**: 2026-11-05T17:22:52+05:30
 
@@ -7984,7 +8077,7 @@ suggest branch name
 
 ---
 
-### Prompt 70
+### Prompt 68
 
 **Timestamp**: 2026-11-05T18:00:00+05:30
 
@@ -7998,7 +8091,7 @@ suggest branch name
 
 ---
 
-### Prompt 71
+### Prompt 69
 
 **Timestamp**: 2026-11-05T20:30:00+05:30
 
@@ -8012,7 +8105,7 @@ suggest branch name
 
 ---
 
-### Prompt 72
+### Prompt 70
 
 **Timestamp**: 2026-11-05T21:00:00+05:30
 
@@ -8026,7 +8119,7 @@ suggest branch name
 
 ---
 
-### Prompt 73
+### Prompt 71
 
 **Timestamp**: 2026-11-06T08:50:00+05:30
 
@@ -8040,7 +8133,7 @@ suggest branch name
 
 ---
 
-### Prompt 74
+### Prompt 72
 
 **Timestamp**: 2026-11-06T09:30:00+05:30
 
@@ -8054,7 +8147,7 @@ suggest branch name
 
 ---
 
-### Prompt 75
+### Prompt 73
 
 **Timestamp**: 2026-11-06T09:57:52+05:30
 
@@ -8070,7 +8163,7 @@ suggest branch name
 
 ---
 
-### Prompt 76
+### Prompt 74
 
 **Timestamp**: 2026-11-06T10:15:00+05:30
 
@@ -8084,22 +8177,72 @@ suggest branch name
 
 ---
 
-### Prompt 77
+### Prompt 75
 
 **Timestamp**: 2026-11-06T10:27:16+05:30
 
 ```text
 Please solve only D1 resource overload issue.
 ```
-
-text
-suggest branch name
 ```
+---
 
+### Prompt 76
+
+**Timestamp**: 2026-11-06T10:45:00+05:30
+
+```text
+run locally
+```
 
 ---
 
-### Prompt 72
+### Prompt 77
+
+**Timestamp**: 2026-11-06T11:00:00+05:30
+
+```text
+please fix the toolbar of document valut
+and please remove the mock and dammi data from registration page
+```
+
+---
+
+### Prompt 78
+
+**Timestamp**: 2026-11-06T11:29:50+05:30
+
+```text
+Please fix the PR comments & PR checks: 
+
+https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/425
+```
+
+---
+
+### Prompt 79
+
+**Timestamp**: 2026-11-06T11:35:00+05:30
+
+```text
+remove the dummy data from login page and
+please fix the registrataion search toolbar it si merged the section data 
+seller auto approve only buyer registration ask the permission then approve the credentials is go to buyer
+```
+
+---
+
+### Prompt 80
+
+**Timestamp**: 2026-11-06T11:41:09+05:30
+
+```text
+raise the pr and coverage all the test cases and gemini pr check and AI review
+```
+
+---
+
+### Prompt 81
 
 **Timestamp**: 2026-11-06T12:23:56+05:30
 
@@ -8108,15 +8251,44 @@ Buyer Profile Details are visible in the Vendor Portal.
 
 The Buyer Contact Details popup displays the buyer's company name, contact person, official email, and mobile number to the vendor.
 ```
-
-text
-suggest branch name
 ```
+---
 
+### Prompt 82
+
+**Timestamp**: 2026-11-06T12:38:58+05:30
+
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-06T07_04_17.963Z.csv] 
+
+Still too many errors D1 related errors, can you please check
+```
 
 ---
 
-### Prompt 73
+### Prompt 83
+
+**Timestamp**: 2026-11-06T13:35:49+05:30
+
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-06T07_04_17.963Z.csv] 
+
+Still some errors, please check & fix
+```
+
+---
+
+### Prompt 84
+
+**Timestamp**: 2026-11-06T14:23:38+05:30
+
+```text
+Please check the image as well & identify the DB high utilization issue. we can see which commands are consuming too much DB usage.
+```
+
+---
+
+### Prompt 85
 
 **Timestamp**: 2026-11-06T15:18:38+05:30
 
@@ -8124,14 +8296,19 @@ suggest branch name
 suggest branch name
 ```
 
-text
-suggest branch name
-```
+---
 
+### Prompt 86
+
+**Timestamp**: 2026-11-06T15:24:35+05:30
+
+```text
+Still too high D1 usage at certain places, can you please check once again
+```
 
 ---
 
-### Prompt 74
+### Prompt 87
 
 **Timestamp**: 2026-11-06T16:08:29+05:30
 
@@ -8142,209 +8319,58 @@ Summary of all failing tests
 
     Unable to find an element with the text: DB Error. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
 
-    Ignored nodes: comments, script, style
-    <body>
-      <div>
-        <div
-          class="w-full space-y-4 animate-in fade-in duration-200"
-        >
-          <div
-            class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-2.5 w-full"
-          >
-            <button
-              class="bg-white dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
-              type="button"
-            >
-              <div
-                class="flex items-center justify-between gap-1 w-full"
-              >
-                <span
-                  class="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap"
-                >
-                  Low-Credit Accounts
-                </span>
-                <div
-                  class="p-1 rounded bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400 shrink-0"
-                >
-                  <svg
-                    class="lucide lucide-credit-card w-3 h-3"
-                    fill="none"
-                    height="24"
-                    stroke="currentColor"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    viewBox="0 0 24 24"
-                    width="24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <rect
-                      height="14"
-                      rx="2"
-                      width="20"
-                      x="2"
-                      y="5"
-                    />
-                    <line
-                      x1="2"
-                      x2="22"
-                      y1="10"
-                      y2="10"
-                    />
-                  </svg>
-                </div>
-              </div>
-              <div
-                class="mt-1 flex items-baseline justify-between gap-1 w-full"
-              >
-                <span
-                  class="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-none"
-                >
-                  3
-                </span>
-                <span
-                  class="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap"
-                >
-                  ≤ 2 credits
-                </span>
-              </div>
-            </button>
-            <button
-              class="bg-white dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-sky-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
-              type="button"
-            >
-              <div
-                class="flex items-center justify-between gap-1 w-full"
-              >
-                <span
-                  class="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap"
-                >
-                  Buyers
-                </span>
-                <div
-                  class="p-1 rounded bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400 shrink-0"
-                >
-                  <svg
-                    class="lucide lucide-building2 w-3 h-3"
-                    fill="none"
-                    height="24"
-                    stroke="currentColor"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    viewBox="0 0 24 24"
-                    width="24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"
-                    />
-                    <path
-                      d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"
-                    />
-                    <path
-                      d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"
-                    />
-                    <path
-                      d="M10 6h4"
-                    />
-                    <path
-                      d="M10 10h4"
-                    />
-                    <path
-                      d="M10 14h4"
-                    />
-                    <path
-                      d="M10 18h4"
-                    />
-                  </svg>
-                </div>
-              </div>
-              <div
-                class="mt-1 flex items-baseline justify-between gap-1 w-full"
-              >
-                <span
-                  class="text-base sm:text-lg font-bold text-sky-700 dark:text-sky-300 leading-none"
-                >
-                  1
-                </span>
-                <span
-                  class="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap"
-                >
-                  Top-up needed
-                </span>
-              </div>
-            </button>
-            <button
-              class="bg-white dark:bg-slate-900 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-800 shadow-xs hover:border-purple-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full"
-              type="button"
-            >
-              <div
-                class="flex items-center justify-between gap-1 w-full"
-              >
-                <span
-                  class="text-[10px] sm:text-[11px] font-semibold tex...
-
-      at waitForWrapper (node_modules/@testing-library/dom/dist/wait-for.js:163:27)
-      at Object.<anonymous> (__tests__/app/category-manager/PaymentDuesDashboard.test.tsx:796:18)
-
-
 Test Suites: 1 failed, 146 passed, 147 total
 Tests:       1 failed, 3723 passed, 3724 total
 Snapshots:   0 total
 Time:        421.652 s
-Ran all test suites.
-Test results written to: coverage\test-results.json
-Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
-
-✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
-
-❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
-PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
-```
-
-text
-suggest branch name
-```
----
-
-### Prompt 78
-
-**Timestamp**: 2026-11-06T10:45:00+05:30
-
-```text
-run locally
-```
-
-text
-suggest branch name
 ```
 
 ---
 
-### Prompt 79
+### Prompt 88
 
-**Timestamp**: 2026-11-06T11:00:00+05:30
+**Timestamp**: 2026-11-06T16:15:51+05:30
 
 ```text
-please fix the toolbar of document valut
-and please remove the mock and dammi data from registration page
-```
+[navinprocucev-09](https://github.com/navinprocucev-09) and others added 5 commits [5 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430#commits-pushed-f65a902)
+[fix(ui): dynamically resolve vendor minor category from matching RFQ …](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/f65a9025ed73108e67b428f19e606737d98270a9)
+[f65a902](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/f65a9025ed73108e67b428f19e606737d98270a9)
+[D1 Overloading fix (](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)[#425](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/425)[)](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)
+[dbb0c59](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)
+[fix(store): persist batch outreach channel delivery and vendor status…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/969f21786cb229cf7da4c880583cbb6516dd8782)
+[969f217](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/969f21786cb229cf7da4c880583cbb6516dd8782)
+[feat: fix Action Center toolbars, live login logs, and buyer/seller r…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/33c57bd36db0a471ad9403a44906264c8bb2bdbc)
+[33c57bd](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/33c57bd36db0a471ad9403a44906264c8bb2bdbc)
+[fix(buyer): display multi-channel delivery counts and follow-up metri…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/84bbfc59208735c88fde2e60a63c8ae7344ea05f)
+[84bbfc5](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/84bbfc59208735c88fde2e60a63c8ae7344ea05f)
+This branch was successfully deployed
+1 active deployment
+Merge info
+Checks awaiting conflict resolution
+1 successful check
+successful checks
+[Deploy to Cloudflare (Test) / Deploy to Cloudflare Test Environment (push)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/42200942451/job/127835776614?pr=430)
+Successful in 1m
+This branch has conflicts that must be resolved
+Use the command line to resolve conflicts before continuing.
+backend/__tests__/queryCache.test.js
+backend/src/db/domainQueries.js
+backend/src/db/schema.d1.sql
+backend/src/db/schema.sql
+backend/src/services/storeService.js
+prompts.md
 
-text
-suggest branch name
+this pr is merge in dev but failing inproduction
 ```
 
 ---
 
-### Prompt 80
+### Prompt 89
 
-**Timestamp**: 2026-11-06T11:35:00+05:30
+**Timestamp**: 2026-11-06T16:39:26+05:30
 
 ```text
-remove the dummy data from login page and
-please fix the registrataion search toolbar it si merged the section data 
-seller auto approve only buyer registration ask the permission then approve the credentials is go to buyer
+Still too much DB utilization, please check once again. 
 ```
 
 text
@@ -8353,12 +8379,41 @@ suggest branch name
 
 ---
 
-### Prompt 81
+### Prompt 90
 
-**Timestamp**: 2026-11-06T11:41:09+05:30
+**Timestamp**: 2026-11-06T17:03:35+05:30
 
 ```text
-raise the pr and coverage all the test cases and gemini pr check and AI review
+continue fast fix that i deploy in production
+```
+
+text
+suggest branch name
+```
+
+---
+
+### Prompt 91
+
+**Timestamp**: 2026-11-06T17:19:28+05:30
+
+```text
+/browser Resolve PR checks & files conflict issues. 
+https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/433
+```
+
+text
+suggest branch name
+```
+
+---
+
+### Prompt 92
+
+**Timestamp**: 2026-11-07T07:11:13+05:30
+
+```text
+PR checks not passing, please check & fix: https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/433
 ```
 
 ---
