@@ -26,6 +26,21 @@ describe('Approvals API & Controller', () => {
     resetD1HttpClientCache();
   });
 
+  test('approval builder supplies defaults when called without input or actor', () => {
+    const prepared = approvalQueries.prepareApprovalCreate();
+
+    expect(prepared.item).toMatchObject({
+      module: 'Buyer Credit Addition',
+      request_type: 'Buyer Credit Addition',
+      maker_name: 'Category Manager',
+      maker_role: 'Category Manager',
+      status: 'Pending',
+      internal_task_id: null,
+    });
+    expect(prepared.statement.text).toContain('INSERT INTO approvals');
+    expect(prepared.statement.params[0]).toBe(prepared.item.id);
+  });
+
   test('GET /api/approvals/summary returns approval summary metrics', async () => {
     const res = await request(app).get('/api/approvals/summary').set(authHeader('category_manager'));
     expect(res.status).toBe(200);

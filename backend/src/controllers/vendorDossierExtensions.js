@@ -647,7 +647,6 @@ async function requestCreditApproval(req, res, next) {
 
     const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
     const internalTaskQueries = require('../db/internalTaskQueries');
-    const approvalQueries = require('../db/approvalQueries');
 
     const validation = validatePayload(VALIDATION_SCHEMAS.buyerCreditApprovalRequest, req.body);
     if (!validation.isValid) {
@@ -663,7 +662,7 @@ async function requestCreditApproval(req, res, next) {
     const vendorLabel = vendor.name || vendor.id;
     const taskReason = reason || `Requested quote credit top-up for ${vendorLabel}`;
 
-    const task = await internalTaskQueries.createInternalTask(
+    const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
         taskCategory: 'CREDIT_MANAGEMENT',
         taskType: 'Add Credits',
@@ -689,11 +688,7 @@ async function requestCreditApproval(req, res, next) {
         name: initiatorName,
         email: req.user?.email || 'cm@procucev.com',
         role: 'category_manager',
-      }
-    );
-
-    // Link to Approvals section
-    await approvalQueries.createApproval(
+      },
       {
         module: 'Seller Credit Addition',
         request_type: 'Seller Credit Addition',
@@ -709,7 +704,6 @@ async function requestCreditApproval(req, res, next) {
         assigned_approver: approverName,
         status: 'Pending',
         details: taskReason,
-        internal_task_id: task.id,
         seller_id: vendor.id,
         history: [
           {
@@ -720,12 +714,6 @@ async function requestCreditApproval(req, res, next) {
             remarks: reason || `Submitted quote credit addition for approval (${approverName}).`,
           },
         ],
-      },
-      {
-        fullName: initiatorName,
-        name: initiatorName,
-        email: req.user?.email || 'cm@procucev.com',
-        role: 'category_manager',
       }
     );
 

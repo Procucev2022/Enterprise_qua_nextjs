@@ -554,7 +554,7 @@ async function getInternalTaskById(id) {
 /**
  * Create a new internal task.
  */
-async function createInternalTask(data = {}, actor = {}) {
+async function createInternalTask(data = {}, actor = {}, options = {}) {
   const id = `tsk_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
   const taskNumber = `TASK-${Date.now().toString().slice(-5)}`;
   const title = (data.title || '').trim();
@@ -610,40 +610,50 @@ async function createInternalTask(data = {}, actor = {}) {
   };
   const raw = JSON.stringify(rawObj);
 
+  const task = {
+    id,
+    task_number: taskNumber,
+    task_category: taskCategory,
+    task_type: taskType,
+    title,
+    description,
+    task_type_id: taskTypeId,
+    priority,
+    status,
+    assigned_to_user_id: assignedToUserId,
+    assigned_to_name: assignedToName,
+    assigned_team: assignedTeam,
+    created_by_user_id: createdByUserId,
+    created_by_name: createdByName,
+    due_date: dueDate,
+    due_time: dueTime,
+    related_entity_type: relatedEntityType,
+    related_entity_id: relatedEntityId,
+    related_entity_label: relatedEntityLabel,
+    notes,
+    attachments: data.attachments || [],
+    approval_status: approvalStatus,
+    demo_date: demoDate,
+    demo_time: demoTime,
+    demo_status: demoStatus,
+    credit_account_type: creditAccountType,
+    credit_account_id: creditAccountId,
+    credit_account_name: creditAccountName,
+    credit_quantity: creditQuantity,
+    credit_reason: creditReason,
+    raw: rawObj,
+  };
+
   if (!pool.hasStorage()) {
-    return {
-      id,
-      task_number: taskNumber,
-      task_category: taskCategory,
-      task_type: taskType,
-      title,
-      description,
-      task_type_id: taskTypeId,
-      priority,
-      status,
-      assigned_to_user_id: assignedToUserId,
-      assigned_to_name: assignedToName,
-      assigned_team: assignedTeam,
-      created_by_user_id: createdByUserId,
-      created_by_name: createdByName,
-      due_date: dueDate,
-      due_time: dueTime,
-      related_entity_type: relatedEntityType,
-      related_entity_id: relatedEntityId,
-      related_entity_label: relatedEntityLabel,
-      notes,
-      attachments: data.attachments || [],
-      approval_status: approvalStatus,
-      demo_date: demoDate,
-      demo_time: demoTime,
-      demo_status: demoStatus,
-      credit_account_type: creditAccountType,
-      credit_account_id: creditAccountId,
-      credit_account_name: creditAccountName,
-      credit_quantity: creditQuantity,
-      credit_reason: creditReason,
-      raw: rawObj,
-    };
+    if (options.approvalData) {
+      const approvalQueries = require('./approvalQueries');
+      await approvalQueries.createApproval({
+        ...options.approvalData,
+        internal_task_id: id,
+        raw: { ...(options.approvalData.raw || {}), internal_task_id: id },
+      }, actor);
+    }
+    return task;
   }
 
   const insertSql = `
@@ -668,43 +678,39 @@ async function createInternalTask(data = {}, actor = {}) {
     )
   `;
 
-  await pool.query(
-    insertSql,
-    [
-      id,
-      taskNumber,
-      taskCategory,
-      taskType,
-      taskTypeId,
-      title,
-      description,
-      priority,
-      status,
-      assignedToUserId,
-      assignedToName,
-      assignedTeam,
-      createdByUserId,
-      createdByName,
-      dueDate,
-      dueTime,
-      relatedEntityType,
-      relatedEntityId,
-      relatedEntityLabel,
-      notes,
-      attachments,
-      approvalStatus,
-      demoDate,
-      demoTime,
-      demoStatus,
-      creditAccountType,
-      creditAccountId,
-      creditAccountName,
-      creditQuantity,
-      creditReason,
-      raw,
-    ],
-    { d1: true, d1Text: insertSql }
-  );
+  const insertParams = [
+    id,
+    taskNumber,
+    taskCategory,
+    taskType,
+    taskTypeId,
+    title,
+    description,
+    priority,
+    status,
+    assignedToUserId,
+    assignedToName,
+    assignedTeam,
+    createdByUserId,
+    createdByName,
+    dueDate,
+    dueTime,
+    relatedEntityType,
+    relatedEntityId,
+    relatedEntityLabel,
+    notes,
+    attachments,
+    approvalStatus,
+    demoDate,
+    demoTime,
+    demoStatus,
+    creditAccountType,
+    creditAccountId,
+    creditAccountName,
+    creditQuantity,
+    creditReason,
+    raw,
+  ];
 
   // Log activity
   const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
@@ -713,12 +719,92 @@ async function createInternalTask(data = {}, actor = {}) {
       id, task_id, action_type, actor_id, actor_name, comment
     ) VALUES ($1, $2, $3, $4, $5, $6)
   `;
-  await pool.query(actSql, [actId, id, 'CREATED', createdByUserId, createdByName, 'Task created.'], {
-    d1: true,
-    d1Text: actSql,
-  });
+  const activityParams = [actId, id, 'CREATED', createdByUserId, createdByName, 'Task created.'];
+
+  if (options.approvalData) {
+    const approvalQueries = require('./approvalQueries');
+    const approval = approvalQueries.prepareApprovalCreate({
+      ...options.approvalData,
+      internal_task_id: id,
+      raw: { ...(options.approvalData.raw || {}), internal_task_id: id },
+    }, actor);
+    const statements = [
+      { text: insertSql, params: insertParams },
+      { text: actSql, params: activityParams },
+      approval.statement,
+    ];
+
+    let provider = 'unknown';
+    try {
+      const d1Binding = getD1Binding();
+      const d1HttpClient = getD1HttpClient();
+      provider = d1Binding ? 'cloudflare-d1' : (d1HttpClient ? 'cloudflare-d1-http' : 'postgresql');
+      if (d1Binding) {
+        const results = await batchD1(d1Binding, statements);
+        if (results.length !== statements.length || results.some((result) => result?.rowCount === 0)) {
+          throw new Error('Credit approval request batch did not persist every task and approval row.');
+        }
+      } else if (d1HttpClient) {
+        await batchD1(d1HttpClient, statements);
+      } else {
+        await pool.withTransaction(async (client) => {
+          for (const statement of statements) {
+            const result = await client.query(statement.text, statement.params);
+            if (result?.rowCount === 0) {
+              throw new Error('Credit approval request transaction did not persist every task and approval row.');
+            }
+          }
+        });
+      }
+    } catch (error) {
+      const unavailable = new Error('Credit approval request persistence is temporarily unavailable.');
+      unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+      unavailable.cause = error;
+      logger.error('Atomic credit approval request persistence failed', {
+        error,
+        operation: 'create-credit-approval-request',
+        taskId: id,
+        approvalId: approval.item.id,
+        provider,
+      }, 'INTERNAL_TASK_APPROVAL_REQUEST');
+      throw unavailable;
+    }
+
+    approvalQueries.rememberApproval(approval.item);
+    try {
+      pool.queryCache.invalidate('internal_tasks');
+      pool.queryCache.invalidate('internal_task_activities');
+      pool.queryCache.invalidate('approvals');
+    } catch (error) {
+      logger.warn('Credit approval request committed but query-cache invalidation failed', {
+        error,
+        operation: 'invalidate-credit-approval-request-cache',
+        taskId: id,
+        approvalId: approval.item.id,
+        cacheTags: ['internal_tasks', 'internal_task_activities', 'approvals'],
+      }, 'INTERNAL_TASK_APPROVAL_REQUEST');
+    }
+
+    task.activities = [{
+      id: actId,
+      task_id: id,
+      action_type: 'CREATED',
+      actor_id: createdByUserId,
+      actor_name: createdByName,
+      comment: 'Task created.',
+      metadata: {},
+    }];
+    return task;
+  }
+
+  await pool.query(insertSql, insertParams, { d1: true, d1Text: insertSql });
+  await pool.query(actSql, activityParams, { d1: true, d1Text: actSql });
 
   return getInternalTaskById(id);
+}
+
+async function createInternalTaskWithApproval(taskData, actor = {}, approvalData = {}) {
+  return createInternalTask(taskData, actor, { approvalData });
 }
 
 /**
@@ -1711,6 +1797,7 @@ module.exports = {
   getInternalTaskSummary,
   getInternalTaskById,
   createInternalTask,
+  createInternalTaskWithApproval,
   updateInternalTask,
   deleteInternalTask,
   searchRelatedEntities,

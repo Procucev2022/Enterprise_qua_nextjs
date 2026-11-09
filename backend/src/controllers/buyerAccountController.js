@@ -772,7 +772,7 @@ async function requestCreditApproval(req, res, next) {
 
     const { amount, reason, approverName, initiatorName } = validation.sanitizedData;
 
-    const task = await internalTaskQueries.createInternalTask(
+    const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
         taskCategory: 'CREDIT_MANAGEMENT',
         taskType: 'Add Credits',
@@ -798,14 +798,7 @@ async function requestCreditApproval(req, res, next) {
         name: initiatorName,
         email: req.user?.email || 'cm@procucev.com',
         role: 'category_manager',
-      }
-    );
-
-    logger.info(`Credit approval request created: ${task.task_number} (${amount} credits for ${buyer.organizationName}) assigned to ${approverName}`, { buyerId: id, amount, approverName }, 'BUYER_ACCOUNT_CONTROLLER');
-
-    // Link to Approvals section
-    const approvalQueries = require('../db/approvalQueries');
-    await approvalQueries.createApproval(
+      },
       {
         module: 'Buyer Credit Addition',
         request_type: 'Buyer Credit Addition',
@@ -821,7 +814,6 @@ async function requestCreditApproval(req, res, next) {
         assigned_approver: approverName,
         status: 'Pending',
         details: reason || `Requested credit top-up for ${buyer.organizationName}`,
-        internal_task_id: task.id,
         buyer_id: buyer.id,
         history: [
           {
@@ -833,7 +825,6 @@ async function requestCreditApproval(req, res, next) {
           },
         ],
         raw: {
-          internal_task_id: task.id,
           buyer_id: buyer.id,
           amount,
           quantity: amount,
@@ -841,9 +832,10 @@ async function requestCreditApproval(req, res, next) {
           assigned_approver: approverName,
           request_type: 'Buyer Credit Addition',
         },
-      },
-      req.user || { name: initiatorName, role: 'category_manager' }
+      }
     );
+
+    logger.info(`Credit approval request created: ${task.task_number} (${amount} credits for ${buyer.organizationName}) assigned to ${approverName}`, { buyerId: id, amount, approverName }, 'BUYER_ACCOUNT_CONTROLLER');
 
     return res.status(201).json({
       success: true,

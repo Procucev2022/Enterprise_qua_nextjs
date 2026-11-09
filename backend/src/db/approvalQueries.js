@@ -525,10 +525,7 @@ function hydrateApprovalRow(row) {
   };
 }
 
-/**
- * Create a new approval record in the database and in-memory store.
- */
-async function createApproval(data, actor = {}) {
+function prepareApprovalCreate(data = {}, actor = {}) {
   const now = new Date().toISOString();
   const id = data.id || `appr_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
   const request_number = data.request_number || `REQ-CR-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -603,41 +600,55 @@ async function createApproval(data, actor = {}) {
     raw,
   };
 
+  const sql = `
+    INSERT INTO approvals (
+      id, request_number, module, project, applicant_name, applicant_email,
+      value_impact, maker_name, maker_role, status, details, raw, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+  `;
+  const params = [
+    id,
+    request_number,
+    module,
+    project,
+    applicant_name,
+    applicant_email,
+    value_impact,
+    maker_name,
+    maker_role,
+    status,
+    details,
+    JSON.stringify(raw),
+    now,
+    now,
+  ];
+
+  return { item, statement: { text: sql, params } };
+}
+
+function rememberApproval(item) {
+  memoryApprovals.unshift(item);
+  return item;
+}
+
+/**
+ * Create a new approval record in the database and in-memory store.
+ */
+async function createApproval(data, actor = {}) {
+  const prepared = prepareApprovalCreate(data, actor);
   if (pool.hasStorage()) {
     try {
-      const sql = `
-        INSERT INTO approvals (
-          id, request_number, module, project, applicant_name, applicant_email,
-          value_impact, maker_name, maker_role, status, details, raw, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-      `;
       await pool.query(
-        sql,
-        [
-          id,
-          request_number,
-          module,
-          project,
-          applicant_name,
-          applicant_email,
-          value_impact,
-          maker_name,
-          maker_role,
-          status,
-          details,
-          JSON.stringify(raw),
-          now,
-          now,
-        ],
-        { d1: true, d1Text: sql }
+        prepared.statement.text,
+        prepared.statement.params,
+        { d1: true, d1Text: prepared.statement.text }
       );
     } catch (error) {
       throw persistenceUnavailable(error, 'create-approval');
     }
   }
 
-  memoryApprovals.unshift(item);
-  return item;
+  return rememberApproval(prepared.item);
 }
 
 /**
@@ -859,6 +870,8 @@ module.exports = {
   getApprovalSummary,
   getApprovals,
   createApproval,
+  prepareApprovalCreate,
+  rememberApproval,
   processApprovalAction,
   hydrateApprovalRow,
   memoryApprovals,
