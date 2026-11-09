@@ -692,6 +692,7 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
           notificationStatus: 'Notification Sent',
           deliveryStatus: 'Delivered',
           acknowledgementStatus: 'Acknowledgement Pending',
+          metadataPatch: { deliveryChannels: { email: { success: true } } },
         });
 
         expect(updated).toEqual(expect.objectContaining({
@@ -699,6 +700,7 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
           notificationStatus: 'Notification Sent',
           deliveryStatus: 'Delivered',
           acknowledgementStatus: 'Acknowledgement Pending',
+          metadata: { deliveryChannels: { email: { success: true } } },
         }));
         await expect(paymentDuesQueries.updateCommunicationDeliveryStatus({
           communicationId: 'unknown-communication',
@@ -737,12 +739,14 @@ describe('Payment Dues – Low Credit Monitoring & Communication', () => {
           notificationStatus: 'Notification Sent',
           deliveryStatus: 'Delivered',
           acknowledgementStatus: 'Acknowledgement Pending',
+          metadataPatch: { deliveryChannels: { email: { success: true } } },
         });
         expect(updated).toEqual(expect.objectContaining({ id: row.id, deliveryStatus: 'Delivered' }));
         expect(querySpy.mock.calls[0][2]).toEqual(expect.objectContaining({
           d1: true,
-          d1Text: expect.stringContaining('UPDATE payment_dues_communications'),
+          d1Text: expect.stringContaining('json_patch(COALESCE(metadata'),
         }));
+        expect(querySpy.mock.calls[0][1][5]).toBe(JSON.stringify({ deliveryChannels: { email: { success: true } } }));
         await expect(paymentDuesQueries.updateCommunicationDeliveryStatus({
           communicationId: row.id,
           notificationStatus: 'Failed',

@@ -1066,6 +1066,7 @@ describe('background event retry outbox', () => {
       mobile: communication.recipient,
       recipientName: 'Supplier One',
       message: communication.message,
+      linkUrl: '',
       entityType: 'supplier_dossier',
     });
   });
@@ -1350,6 +1351,86 @@ describe('background event retry outbox', () => {
 
     await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ retried: 1 });
     expect(rescheduleSpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending' }));
+  });
+
+  test('retries only the undelivered channel for a durable BOTH communication', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const event = {
+      id: 'communication-delivery:action-center-both',
+      event_type: EVENT_OUTBOX_TYPES.COMMUNICATION_DELIVERY,
+      raw: { communicationId: 'action-center-both' },
+      attempts: 1,
+      lease_token: 'lease-action-center-first',
+    };
+    const claimSpy = jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB')
+      .mockResolvedValueOnce([event])
+      .mockResolvedValueOnce([{ ...event, attempts: 2, lease_token: 'lease-action-center-second' }]);
+    const communication = {
+      id: 'action-center-both',
+      accountId: 'ticket-1',
+      accountType: 'ticket',
+      channel: 'BOTH',
+      recipient: 'buyer@example.test',
+      subject: 'Action needed',
+      message: 'Please review the ticket.',
+      deliveryStatus: 'Pending',
+      metadata: {
+        deliveryTemplate: 'action_center',
+        deliveryRecipientEmail: 'buyer@example.test',
+        deliveryRecipientPhone: '9123456780',
+        deliveryRecipientName: 'Buyer One',
+        deliveryEntityType: 'ticket',
+        deliverySenderName: 'Category Manager',
+        deliveryLinkUrl: 'https://example.test/ticket/1',
+      },
+    };
+    const getSpy = jest.spyOn(paymentDuesQueries, 'getCommunicationById')
+      .mockResolvedValueOnce(communication)
+      .mockResolvedValueOnce({
+        ...communication,
+        metadata: {
+          ...communication.metadata,
+          deliveryChannels: {
+            email: { success: true, messageId: 'email-accepted' },
+            sms: { success: false, error: 'gateway unavailable' },
+          },
+        },
+      });
+    const emailSpy = jest.spyOn(mailerService, 'deliver').mockResolvedValue({ sent: true, messageId: 'email-accepted' });
+    const smsService = require('../src/services/smsService');
+    const smsSpy = jest.spyOn(smsService, 'sendActionCenterSms')
+      .mockResolvedValueOnce({ success: false, error: 'gateway unavailable' })
+      .mockResolvedValueOnce({ success: true, messageId: 'sms-accepted' });
+    const updateSpy = jest.spyOn(paymentDuesQueries, 'updateCommunicationDeliveryStatus').mockResolvedValue(communication);
+    const retrySpy = jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+    const completeSpy = jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ retried: 1 });
+    expect(emailSpy).toHaveBeenCalledTimes(1);
+    expect(emailSpy).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'buyer@example.test',
+      html: expect.stringContaining('TICKET ALERT'),
+    }), 'COMMUNICATION_DELIVERY');
+    expect(smsSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    expect(retrySpy).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending' }));
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(emailSpy).toHaveBeenCalledTimes(1);
+    expect(smsSpy).toHaveBeenCalledTimes(2);
+    expect(updateSpy).toHaveBeenCalledTimes(4);
+    expect(updateSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+      communicationId: 'action-center-both',
+      deliveryStatus: 'Delivered',
+      metadataPatch: expect.objectContaining({
+        deliveryChannels: expect.objectContaining({
+          email: expect.objectContaining({ success: true }),
+          sms: expect.objectContaining({ success: true }),
+        }),
+      }),
+    }));
+    expect(completeSpy).toHaveBeenCalledTimes(1);
+    expect(claimSpy).toHaveBeenCalledTimes(2);
   });
 
   test('reschedules generic communication when provider accepted but status persistence failed', async () => {

@@ -159,6 +159,19 @@ describe('PostgreSQL migration runner', () => {
     expect(sql).toContain('ON CONFLICT (id) DO NOTHING');
   });
 
+  test('extends the durable communication trigger to Action Center BOTH rows', () => {
+    const migrationPath = path.resolve(
+      __dirname,
+      '../src/db/migrations/0026_action_center_delivery_outbox.pg.sql'
+    );
+    const sql = fs.readFileSync(migrationPath, 'utf8');
+
+    expect(sql).toContain("lower(NEW.channel) NOT IN ('email', 'sms', 'both')");
+    expect(sql).toContain("jsonb_build_object('communicationId', NEW.id)");
+    expect(sql).toContain("lower(channel) IN ('email', 'sms', 'both')");
+    expect(sql).toContain('ON CONFLICT (id) DO NOTHING');
+  });
+
   test('keeps PostgreSQL columns present in D1 and records intentional D1-only extensions', () => {
     const dbDir = path.resolve(__dirname, '../src/db');
     const readColumns = (fileName) => {
@@ -343,6 +356,7 @@ describe('PostgreSQL migration runner', () => {
         '0023_dossier_schema_alignment',
         '0024_buyer_quote_onboarding_outbox',
         '0025_vendor_owner_lookup_indexes',
+        '0026_action_center_delivery_outbox',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

@@ -4,6 +4,7 @@
  */
 
 const { logger } = require('./loggerService');
+const pool = require('../db/pool');
 const mailerService = require('./mailerService');
 const smsService = require('./smsService');
 const paymentDuesQueries = require('../db/paymentDuesQueries');
@@ -140,9 +141,98 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
   const channelUpper = (channel || 'EMAIL').toUpperCase();
   const shouldSendEmail = (channelUpper === 'EMAIL' || channelUpper === 'BOTH') && Boolean(recipientEmail);
   const shouldSendSms = (channelUpper === 'SMS' || channelUpper === 'BOTH') && Boolean(recipientPhone);
+  const primaryRecipient = channelUpper === 'SMS'
+    ? (recipientPhone || recipientName || recipientEmail)
+    : (recipientEmail || recipientPhone || recipientName);
+  let persistedRecord = null;
+  let deliveryQueued = false;
+
+  if (pool.hasStorage() && (shouldSendEmail || shouldSendSms)) {
+    const deliveryMetadata = {
+      ...(metadata || {}),
+      entityType,
+      entityId,
+      recipientName,
+      recipientEmail,
+      recipientPhone,
+      deliveryEmailSubject: `[Procucev Alert] ${subject}`,
+      deliveryReplyTo: senderEmail,
+      deliveryRecipientEmail: recipientEmail || undefined,
+      deliveryRecipientPhone: recipientPhone || undefined,
+      deliveryRecipientName: recipientName,
+      deliveryEntityType: entityType,
+      deliveryLinkUrl: linkUrl,
+      deliverySenderName: senderName,
+      deliveryTemplate: shouldSendEmail ? 'action_center' : undefined,
+      deliveryChannels: {},
+      linkUrl,
+    };
+
+    persistedRecord = await paymentDuesQueries.recordCommunication({
+      accountId: entityId,
+      accountType: entityType,
+      channel: channelUpper,
+      recipient: primaryRecipient,
+      subject,
+      message,
+      notificationStatus: 'Notification Pending',
+      deliveryStatus: 'Pending',
+      acknowledgementStatus: 'Acknowledgement Pending',
+      communicatedBy: senderName,
+      notes: notes || '',
+      metadata: deliveryMetadata,
+    });
+    if (!persistedRecord?.id) {
+      const error = new Error('Action Center delivery could not be persisted before provider dispatch.');
+      error.code = 'PERSISTENCE_UNAVAILABLE';
+      throw error;
+    }
+
+    try {
+      const eventOutboxService = require('./eventOutboxService');
+      const dispatch = await eventOutboxService.dispatchDueEventOutboxJobs(1, [
+        `communication-delivery:${persistedRecord.id}`,
+      ]);
+      if (!dispatch.claimed) {
+        logger.warn('Action Center delivery remains queued for the scheduled dispatcher', {
+          communicationId: persistedRecord.id,
+          channel: channelUpper,
+          outboxClaimed: dispatch.claimed,
+        }, 'ACTION_CENTER_COMM');
+      }
+    } catch (error) {
+      logger.error('Action Center immediate outbox dispatch failed; scheduled retry remains enabled', {
+        error,
+        communicationId: persistedRecord.id,
+        channel: channelUpper,
+      }, 'ACTION_CENTER_COMM');
+    }
+
+    persistedRecord = await paymentDuesQueries.getCommunicationById(persistedRecord.id) || persistedRecord;
+    const channelResults = persistedRecord.metadata?.deliveryChannels || {};
+    deliveryQueued = persistedRecord.deliveryStatus === 'Pending';
+    if (shouldSendEmail) {
+      results.email = {
+        success: channelResults.email?.success === true,
+        queued: deliveryQueued && channelResults.email?.success !== true,
+        messageId: channelResults.email?.messageId || null,
+        recipient: recipientEmail,
+        error: channelResults.email?.error || (deliveryQueued && !channelResults.email?.success ? 'Delivery is queued for retry.' : undefined),
+      };
+    }
+    if (shouldSendSms) {
+      results.sms = {
+        success: channelResults.sms?.success === true,
+        queued: deliveryQueued && channelResults.sms?.success !== true,
+        messageId: channelResults.sms?.messageId || null,
+        recipient: recipientPhone,
+        error: channelResults.sms?.error || (deliveryQueued && !channelResults.sms?.success ? 'Delivery is queued for retry.' : undefined),
+      };
+    }
+  }
 
   // 1. Dispatch Email if requested
-  if (shouldSendEmail) {
+  if (!persistedRecord && shouldSendEmail) {
     try {
       const htmlBody = renderActionCenterEmailHtml({
         recipientName,
@@ -158,7 +248,7 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
         subject: `[Procucev Alert] ${subject}`,
         html: htmlBody,
         text: `${subject}\n\nDear ${recipientName},\n\n${message}\n\nAction Link: ${linkUrl || 'https://equa.procucev.com'}\n\nSent by: ${senderName}`,
-        replyTo: senderEmail || undefined,
+        replyTo: senderEmail,
       };
 
       if (typeof mailerService.deliver === 'function') {
@@ -195,7 +285,7 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
   }
 
   // 2. Dispatch SMS if requested
-  if (shouldSendSms) {
+  if (!persistedRecord && shouldSendSms) {
     try {
       const smsRes = await smsService.sendActionCenterSms({
         mobile: recipientPhone,
@@ -248,14 +338,12 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
     overallSuccess = true;
   }
 
-  const deliveryStatus = overallSuccess ? 'Sent' : partialSuccess ? 'Partial' : 'Failed';
+  const deliveryStatus = deliveryQueued
+    ? 'Pending'
+    : overallSuccess ? 'Sent' : partialSuccess ? 'Partial' : 'Failed';
 
   // 4. Persist communication record
-  const primaryRecipient =
-    channelUpper === 'SMS'
-      ? (recipientPhone || recipientName || recipientEmail)
-      : (recipientEmail || recipientPhone || recipientName);
-  const record = await paymentDuesQueries.recordCommunication({
+  const record = persistedRecord || await paymentDuesQueries.recordCommunication({
     accountId: entityId,
     accountType: entityType,
     channel: channelUpper,
@@ -287,7 +375,7 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
   let completedTask = null;
   try {
     const channelLabel = channelUpper === 'BOTH' ? 'Email & SMS' : channelUpper;
-    completedTask = await internalTaskQueries.createInternalTask(
+    completedTask = deliveryQueued ? null : await internalTaskQueries.createInternalTask(
       {
         title: `[${channelLabel} Dispatched] ${subject || recipientName}`,
         description: `Notification dispatched to ${primaryRecipient}.\nMessage: ${message}`,
@@ -354,7 +442,8 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
   }
 
   return {
-    success: overallSuccess,
+    success: overallSuccess || deliveryQueued,
+    queued: deliveryQueued,
     partialSuccess,
     communication: record,
     emailResult: results.email,

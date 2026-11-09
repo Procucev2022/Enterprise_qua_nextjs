@@ -543,35 +543,98 @@ async function dispatchEvent(job) {
       const metadata = communication.metadata && typeof communication.metadata === 'object'
         ? communication.metadata
         : {};
-      if (channel === 'email') {
-        const delivery = await mailerService.deliver({
-          to: communication.recipient,
-          subject: metadata.deliveryEmailSubject || communication.subject,
-          text: communication.message || communication.notes || '',
-          ...(typeof metadata.deliveryReplyTo === 'string' ? { replyTo: metadata.deliveryReplyTo } : {}),
-        }, 'COMMUNICATION_DELIVERY');
-        if (!delivery?.sent) {
-          const error = new Error('Communication email provider did not accept the message.');
-          error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
-          throw error;
-        }
-      } else if (channel === 'sms') {
-        const smsService = require('./smsService');
-        const accountType = String(communication.accountType || '').toLowerCase();
-        const delivery = await smsService.sendActionCenterSms({
-          mobile: communication.recipient,
-          recipientName: metadata.deliveryRecipientName || (accountType === 'vendor' ? 'Supplier' : 'Buyer'),
-          message: communication.message || communication.subject || 'Important account update',
-          entityType: metadata.deliveryEntityType || `${accountType || 'account'}_dossier`,
-        });
-        if (!delivery?.success) {
-          const error = new Error('Communication SMS provider did not accept the message.');
-          error.code = 'SMS_DELIVERY_NOT_ACCEPTED';
-          throw error;
-        }
-      } else {
+      const requestedChannels = channel === 'both' ? ['email', 'sms'] : [channel];
+      if (requestedChannels.some((value) => value !== 'email' && value !== 'sms')) {
         const error = new Error('Communication delivery retry references an unsupported channel.');
         error.code = 'INVALID_PERSISTED_RECORD';
+        throw error;
+      }
+
+      const channelResults = metadata.deliveryChannels && typeof metadata.deliveryChannels === 'object'
+        ? { ...metadata.deliveryChannels }
+        : {};
+      const accountType = String(communication.accountType || '').toLowerCase();
+      for (const requestedChannel of requestedChannels) {
+        if (channelResults[requestedChannel]?.success === true) continue;
+
+        let delivery;
+        let deliveryError;
+        try {
+          if (requestedChannel === 'email') {
+            const recipientEmail = metadata.deliveryRecipientEmail || communication.recipient;
+            const emailPayload = {
+              to: recipientEmail,
+              subject: metadata.deliveryEmailSubject || communication.subject,
+              text: communication.message || communication.notes || '',
+              ...(typeof metadata.deliveryReplyTo === 'string' ? { replyTo: metadata.deliveryReplyTo } : {}),
+            };
+            if (metadata.deliveryTemplate === 'action_center') {
+              const actionCenterService = require('./actionCenterNotificationService');
+              emailPayload.html = actionCenterService.renderActionCenterEmailHtml({
+                recipientName: metadata.deliveryRecipientName,
+                subject: communication.subject,
+                message: communication.message,
+                linkUrl: metadata.deliveryLinkUrl,
+                entityType: metadata.deliveryEntityType,
+                senderName: metadata.deliverySenderName,
+              });
+            }
+            delivery = await mailerService.deliver(emailPayload, 'COMMUNICATION_DELIVERY');
+            if (!delivery?.sent) {
+              deliveryError = Object.assign(new Error('Communication email provider did not accept the message.'), {
+                code: 'EMAIL_DELIVERY_NOT_ACCEPTED',
+              });
+            }
+          } else {
+            const smsService = require('./smsService');
+            const recipientPhone = metadata.deliveryRecipientPhone || communication.recipient;
+            delivery = await smsService.sendActionCenterSms({
+              mobile: recipientPhone,
+              recipientName: metadata.deliveryRecipientName || (accountType === 'vendor' ? 'Supplier' : 'Buyer'),
+              message: communication.message || communication.subject || 'Important account update',
+              linkUrl: metadata.deliveryLinkUrl || '',
+              entityType: metadata.deliveryEntityType || `${accountType || 'account'}_dossier`,
+            });
+            if (!delivery?.success) {
+              deliveryError = Object.assign(new Error('Communication SMS provider did not accept the message.'), {
+                code: 'SMS_DELIVERY_NOT_ACCEPTED',
+              });
+            }
+          }
+        } catch (error) {
+          deliveryError = error;
+        }
+
+        channelResults[requestedChannel] = deliveryError
+          ? {
+              success: false,
+              error: String(deliveryError.message || deliveryError).slice(0, 240),
+              attemptedAt: new Date().toISOString(),
+            }
+          : {
+              success: true,
+              messageId: delivery?.messageId || null,
+              acceptedAt: new Date().toISOString(),
+            };
+
+        const channelSaved = await paymentDuesQueries.updateCommunicationDeliveryStatus({
+          communicationId,
+          notificationStatus: 'Notification Pending',
+          deliveryStatus: 'Pending',
+          acknowledgementStatus: 'Acknowledgement Pending',
+          metadataPatch: { deliveryChannels: channelResults },
+        });
+        if (!channelSaved) {
+          const error = new Error('Communication channel result could not be saved after provider delivery.');
+          error.code = 'COMMUNICATION_STATUS_NOT_SAVED';
+          throw error;
+        }
+        if (deliveryError) throw deliveryError;
+      }
+
+      if (!requestedChannels.every((value) => channelResults[value]?.success === true)) {
+        const error = new Error('One or more communication channels remain pending.');
+        error.code = 'COMMUNICATION_CHANNELS_PENDING';
         throw error;
       }
 
@@ -580,6 +643,7 @@ async function dispatchEvent(job) {
         notificationStatus: 'Notification Sent',
         deliveryStatus: 'Delivered',
         acknowledgementStatus: 'Acknowledgement Pending',
+        metadataPatch: { deliveryChannels: channelResults },
       });
       if (!updated) {
         const error = new Error('Communication was accepted but its delivery status was not persisted.');

@@ -140,7 +140,7 @@ async function dispatchCommunication(req, res) {
     );
 
     logger.audit(
-      `[ACTION_CENTER_COMM] Dispatched ${channel} communication for ${validation.sanitizedData.entityType} ${validation.sanitizedData.entityId} by ${actor.email}`,
+      `[ACTION_CENTER_COMM] ${result.queued ? 'Queued' : 'Dispatched'} ${channel} communication for ${validation.sanitizedData.entityType} ${validation.sanitizedData.entityId} by ${actor.email}`,
       actor.email,
       {
         actor: actor.email,
@@ -148,12 +148,16 @@ async function dispatchCommunication(req, res) {
         recipientEmail,
         recipientPhone,
         success: result.success,
+        queued: Boolean(result.queued),
       }
     );
 
     return res.status(200).json({
       success: result.success,
-      message: result.followupError
+      queued: Boolean(result.queued),
+      message: result.queued
+        ? 'Communication was saved and queued for delivery.'
+        : result.followupError
         ? 'Communication dispatched, but scheduling follow-up task failed.'
         : result.success
         ? 'Communication dispatched and recorded successfully.'

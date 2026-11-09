@@ -556,6 +556,7 @@ async function updateCommunicationDeliveryStatus({
   notificationStatus,
   deliveryStatus,
   acknowledgementStatus,
+  metadataPatch,
 }) {
   if (!communicationId) return null;
 
@@ -566,7 +567,20 @@ async function updateCommunicationDeliveryStatus({
       SET notification_status = $2,
           delivery_status = $3,
           acknowledgement_status = $4,
-          updated_at = $5
+          updated_at = $5,
+          metadata = CASE WHEN $6::jsonb IS NULL THEN metadata
+            ELSE COALESCE(metadata, '{}'::jsonb) || $6::jsonb END
+      WHERE id = $1
+      RETURNING *
+    `;
+    const d1Sql = `
+      UPDATE payment_dues_communications
+      SET notification_status = $2,
+          delivery_status = $3,
+          acknowledgement_status = $4,
+          updated_at = $5,
+          metadata = CASE WHEN $6 IS NULL THEN metadata
+            ELSE json_patch(COALESCE(metadata, '{}'), $6) END
       WHERE id = $1
       RETURNING *
     `;
@@ -577,7 +591,8 @@ async function updateCommunicationDeliveryStatus({
         deliveryStatus,
         acknowledgementStatus,
         now,
-      ], { d1: true, d1Text: sql });
+        metadataPatch === undefined ? null : JSON.stringify(metadataPatch),
+      ], { d1: true, d1Text: d1Sql });
       const row = result?.rows?.[0];
       if (!row) return null;
       return mapCommunicationRow(row);
@@ -592,6 +607,9 @@ async function updateCommunicationDeliveryStatus({
     communication.notificationStatus = notificationStatus;
     communication.deliveryStatus = deliveryStatus;
     communication.acknowledgementStatus = acknowledgementStatus;
+    if (metadataPatch && typeof metadataPatch === 'object') {
+      communication.metadata = { ...(communication.metadata || {}), ...metadataPatch };
+    }
     communication.updatedAt = now;
     return communication;
   }

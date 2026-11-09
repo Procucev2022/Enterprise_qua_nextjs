@@ -2542,11 +2542,12 @@ export interface ActionCenterCommunicationRecord {
 
 export interface ActionCenterCommunicationResult {
   success: boolean;
+  queued?: boolean;
   message?: string;
   error?: string;
   communication?: ActionCenterCommunicationRecord;
-  emailResult?: { success: boolean; recipient?: string; error?: string };
-  smsResult?: { success: boolean; messageId?: string; recipient?: string; throttled?: boolean; error?: string };
+  emailResult?: { success: boolean; queued?: boolean; recipient?: string; error?: string };
+  smsResult?: { success: boolean; queued?: boolean; messageId?: string; recipient?: string; throttled?: boolean; error?: string };
   completedTask?: { id: string; [key: string]: unknown } | null;
   followupTask?: { id: string; [key: string]: unknown } | null;
   followupError?: string | null;

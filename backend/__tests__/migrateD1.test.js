@@ -213,6 +213,21 @@ describe('D1 migration SQL handling', () => {
     expect(statements[0]).toContain("json_object('communicationId', NEW.id)");
   });
 
+  test('extends the durable communication trigger to Action Center BOTH rows in D1', () => {
+    const migrationPath = path.resolve(
+      __dirname,
+      '../src/db/migrations/0026_action_center_delivery_outbox.d1.sql'
+    );
+    const statements = splitStatements(fs.readFileSync(migrationPath, 'utf8'));
+
+    expect(statements).toHaveLength(3);
+    expect(statements[0]).toMatch(/DROP TRIGGER IF EXISTS payment_dues_communications_queue_delivery_outbox/i);
+    expect(statements[1]).toMatch(/CREATE TRIGGER payment_dues_communications_queue_delivery_outbox/i);
+    expect(statements[1]).toContain("lower(NEW.channel) IN ('email', 'sms', 'both')");
+    expect(statements[2]).toContain("lower(channel) IN ('email', 'sms', 'both')");
+    expect(statements[2]).toContain('INSERT OR IGNORE INTO event_outbox');
+  });
+
   test('atomically queues explicitly requested buyer RFQ acknowledgements in D1', () => {
     const migrationPath = path.resolve(
       __dirname,
