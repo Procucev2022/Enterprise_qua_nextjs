@@ -657,7 +657,7 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    const { amount, reason, approverName, initiatorName } = validation.sanitizedData;
+    const { amount, reason, approverName, initiatorName, idempotencyKey } = validation.sanitizedData;
 
     const vendorLabel = vendor.name || vendor.id;
     const taskReason = reason || `Requested quote credit top-up for ${vendorLabel}`;
@@ -691,6 +691,7 @@ async function requestCreditApproval(req, res, next) {
       },
       {
         module: 'Seller Credit Addition',
+        idempotencyKey,
         request_type: 'Seller Credit Addition',
         project: vendorLabel,
         applicant_name: vendorLabel,

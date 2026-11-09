@@ -24,6 +24,23 @@ describe('Backend Validation Schemas Unit Tests', () => {
     }).errors.idempotencyKey).toMatch(/UUID/);
   });
 
+  test('validates optional credit approval request idempotency UUIDs', () => {
+    const request = {
+      amount: 5,
+      approverName: 'Srinu Sir',
+      initiatorName: 'Govardhan',
+    };
+    expect(validatePayload(VALIDATION_SCHEMAS.buyerCreditApprovalRequest, request).isValid).toBe(true);
+    expect(validatePayload(VALIDATION_SCHEMAS.buyerCreditApprovalRequest, {
+      ...request,
+      idempotencyKey: '00000000-0000-4000-8000-000000000001',
+    }).isValid).toBe(true);
+    expect(validatePayload(VALIDATION_SCHEMAS.buyerCreditApprovalRequest, {
+      ...request,
+      idempotencyKey: 'not-a-uuid',
+    }).errors.idempotencyKey).toMatch(/UUID/);
+  });
+
   test('validates AI feed creation content and allowed channel details', () => {
     expect(validatePayload('createAIFeedItem', {
       title: 'Vendor reminder',

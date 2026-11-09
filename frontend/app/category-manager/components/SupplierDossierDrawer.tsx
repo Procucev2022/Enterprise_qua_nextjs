@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   X,
   Truck,
@@ -72,7 +72,11 @@ import {
   recordSupplierCommunication,
   fetchSupplierPaymentHistory,
 } from '@/lib/supplierProfileClient';
-import { addSellerQuoteCredits, requestSellerQuoteCreditApproval } from '@/lib/accountDocumentsClient';
+import {
+  addSellerQuoteCredits,
+  createCreditApprovalIdempotencyKey,
+  requestSellerQuoteCreditApproval,
+} from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
 
 export interface SupplierDossierSeller {
@@ -303,6 +307,8 @@ export default function SupplierDossierDrawer({
   const [creditSortOrder, setCreditSortOrder] = useState<'asc' | 'desc'>('desc');
   const [creditPage, setCreditPage] = useState<number>(1);
   const creditPageSize = 10;
+  const creditApprovalRequestKey = useRef<string>('');
+  const creditApprovalRequestFingerprint = useRef<string>('');
 
   const handleAddQuoteCreditsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -312,14 +318,29 @@ export default function SupplierDossierDrawer({
       return;
     }
     setIsSubmittingQuoteCredits(true);
+    const requestFingerprint = JSON.stringify([
+      seller.id,
+      seller.name,
+      amount,
+      quoteCreditsReason,
+      quoteCreditApprover,
+      quoteCreditInitiator,
+    ]);
+    if (creditApprovalRequestFingerprint.current !== requestFingerprint || !creditApprovalRequestKey.current) {
+      creditApprovalRequestFingerprint.current = requestFingerprint;
+      creditApprovalRequestKey.current = createCreditApprovalIdempotencyKey();
+    }
     try {
       const res = await requestSellerQuoteCreditApproval(seller.id, {
         amount,
         reason: quoteCreditsReason || 'Authorized quote credit top-up',
         approverName: quoteCreditApprover,
         initiatorName: quoteCreditInitiator,
+        idempotencyKey: creditApprovalRequestKey.current,
       });
       if (res.success) {
+        creditApprovalRequestKey.current = '';
+        creditApprovalRequestFingerprint.current = '';
         showToast(
           res.message ||
             formatString(

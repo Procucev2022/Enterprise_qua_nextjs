@@ -41,6 +41,43 @@ describe('Approvals API & Controller', () => {
     expect(prepared.statement.params[0]).toBe(prepared.item.id);
   });
 
+  test('looks up an approval by id in memory or configured storage and reports lookup failures', async () => {
+    expect(await approvalQueries.getApprovalById('')).toBeNull();
+
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+    expect(await approvalQueries.getApprovalById('appr-cred-101')).toMatchObject({ id: 'appr-cred-101' });
+    expect(await approvalQueries.getApprovalById('missing-approval')).toBeNull();
+
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(pool, 'query')
+      .mockResolvedValueOnce({ rows: [{
+        id: 'approval-db-lookup',
+        request_number: 'REQ-LOOKUP-1',
+        module: 'Seller Credit Addition',
+        raw: JSON.stringify({ seller_id: 'seller-lookup', internal_task_id: 'task-lookup' }),
+      }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockRejectedValueOnce(new Error('approval lookup offline'));
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+    try {
+      await expect(approvalQueries.getApprovalById('approval-db-lookup')).resolves.toMatchObject({
+        id: 'approval-db-lookup',
+        seller_id: 'seller-lookup',
+        internal_task_id: 'task-lookup',
+      });
+      await expect(approvalQueries.getApprovalById('missing-db-approval')).resolves.toBeNull();
+      await expect(approvalQueries.getApprovalById('failed-db-approval')).rejects.toMatchObject({
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Management approval persistence operation failed'), expect.objectContaining({
+        operation: 'get-approval-by-id',
+      }), 'APPROVAL_PERSISTENCE');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test('GET /api/approvals/summary returns approval summary metrics', async () => {
     const res = await request(app).get('/api/approvals/summary').set(authHeader('category_manager'));
     expect(res.status).toBe(200);

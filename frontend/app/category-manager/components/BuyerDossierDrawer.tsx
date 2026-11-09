@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   X,
   Building2,
@@ -69,7 +69,7 @@ import {
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
 } from '@/lib/buyerProfileClient';
-import { requestBuyerCreditApproval } from '@/lib/accountDocumentsClient';
+import { createCreditApprovalIdempotencyKey, requestBuyerCreditApproval } from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
 
 interface BuyerDossierDrawerProps {
@@ -331,6 +331,8 @@ export default function BuyerDossierDrawer({
   const [addCreditAmount, setAddCreditAmount] = useState<number>(5);
   const [addCreditReason, setAddCreditReason] = useState<string>('');
   const [isSubmittingCredit, setIsSubmittingCredit] = useState<boolean>(false);
+  const creditApprovalRequestKey = useRef<string>('');
+  const creditApprovalRequestFingerprint = useRef<string>('');
 
   const loadCreditHistory = useCallback(async () => {
     setLoadingCredit(true);
@@ -358,14 +360,29 @@ export default function BuyerDossierDrawer({
     e.preventDefault();
     if (addCreditAmount <= 0) return;
     setIsSubmittingCredit(true);
+    const requestFingerprint = JSON.stringify([
+      buyer.id,
+      buyer.organizationName,
+      addCreditAmount,
+      addCreditReason,
+      creditApprover,
+      creditInitiator,
+    ]);
+    if (creditApprovalRequestFingerprint.current !== requestFingerprint || !creditApprovalRequestKey.current) {
+      creditApprovalRequestFingerprint.current = requestFingerprint;
+      creditApprovalRequestKey.current = createCreditApprovalIdempotencyKey();
+    }
     try {
       const res = await requestBuyerCreditApproval(buyer.id, {
         amount: addCreditAmount,
         reason: addCreditReason || 'Enterprise sourcing credit allocation request',
         approverName: creditApprover,
         initiatorName: creditInitiator,
+        idempotencyKey: creditApprovalRequestKey.current,
       });
       if (res.success) {
+        creditApprovalRequestKey.current = '';
+        creditApprovalRequestFingerprint.current = '';
         showToast(
           res.message ||
             formatString(strings.creditApproval?.toastSuccess || strings.creditApproval?.successToast || 'Credit request submitted for approval to {approverName}. Status: Pending Approval.', {

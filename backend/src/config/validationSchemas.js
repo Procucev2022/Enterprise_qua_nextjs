@@ -308,6 +308,10 @@ const VALIDATION_SCHEMAS = {
   },
 
   buyerCreditApprovalRequest: {
+    idempotencyKey: {
+      type: 'string', required: false, maxLength: 36, pattern: UUID_REGEX,
+      message: 'Idempotency key must be a UUID.',
+    },
     amount: {
       type: 'number',
       required: true,

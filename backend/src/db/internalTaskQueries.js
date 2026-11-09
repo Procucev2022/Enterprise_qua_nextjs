@@ -10,6 +10,59 @@ const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
 const { logger } = require('../services/loggerService');
 const { VENDOR_FREE_CREDITS_LIMIT } = require('../config/constants');
 
+function createCreditRequestFingerprint(data, actor, approvalData) {
+  const fingerprintInput = {
+    task: {
+      title: data.title || '',
+      description: data.description || '',
+      creditAccountType: data.creditAccountType || data.credit_account_type || '',
+      creditAccountId: data.creditAccountId || data.credit_account_id || '',
+      creditQuantity: data.creditQuantity || data.credit_quantity || 0,
+      creditReason: data.creditReason || data.credit_reason || '',
+    },
+    actor: {
+      id: actor.uuid || actor.id || '',
+      email: actor.email || '',
+      name: actor.fullName || actor.name || '',
+      role: actor.role || '',
+    },
+    approval: {
+      module: approvalData.module || '',
+      project: approvalData.project || '',
+      applicantName: approvalData.applicant_name || '',
+      applicantEmail: approvalData.applicant_email || '',
+      valueImpact: approvalData.value_impact || '',
+      amount: approvalData.amount || 0,
+      quantity: approvalData.quantity || 0,
+      buyerId: approvalData.buyer_id || '',
+      sellerId: approvalData.seller_id || '',
+      assignedApprover: approvalData.assigned_approver || '',
+      details: approvalData.details || '',
+    },
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(fingerprintInput)).digest('hex');
+}
+
+function createIdempotentRecordId(prefix, idempotencyKey) {
+  const hash = crypto.createHash('sha256').update(String(idempotencyKey).toLowerCase()).digest('hex');
+  const hashLength = prefix === 'appr' ? 59 : 60;
+  return `${prefix}_${hash.slice(0, hashLength)}`;
+}
+
+function isUniqueConstraintViolation(error) {
+  const details = [error?.code, error?.cause?.code, error?.message, error?.cause?.message]
+    .filter(Boolean)
+    .join(' ');
+  return /23505|unique constraint failed|duplicate key value violates unique constraint/i.test(details);
+}
+
+function createIdempotencyConflict() {
+  const error = new Error('This idempotency key was already used for a different credit approval request.');
+  error.code = 'IDEMPOTENCY_CONFLICT';
+  error.statusCode = 409;
+  return error;
+}
+
 function parseJsonSafe(val, fallback = null) {
   if (val === null || val === undefined) return fallback;
   if (typeof val === 'object') return val;
@@ -555,8 +608,16 @@ async function getInternalTaskById(id) {
  * Create a new internal task.
  */
 async function createInternalTask(data = {}, actor = {}, options = {}) {
-  const id = `tsk_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
-  const taskNumber = `TASK-${Date.now().toString().slice(-5)}`;
+  const idempotencyKey = options.approvalData ? (options.idempotencyKey || options.approvalData.idempotencyKey || '') : '';
+  const idempotencyFingerprint = idempotencyKey
+    ? createCreditRequestFingerprint(data, actor, options.approvalData)
+    : '';
+  const id = idempotencyKey
+    ? createIdempotentRecordId('tsk', idempotencyKey)
+    : `tsk_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
+  const taskNumber = idempotencyKey
+    ? `TASK-${crypto.createHash('sha256').update(String(idempotencyKey).toLowerCase()).digest('hex').slice(0, 16).toUpperCase()}`
+    : `TASK-${Date.now().toString().slice(-5)}`;
   const title = (data.title || '').trim();
   const description = (data.description || '').trim();
   const taskCategory = data.taskCategory || data.task_category || 'INTERNAL_OPERATIONS';
@@ -607,6 +668,7 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
     creditAccountName,
     creditQuantity,
     creditReason,
+    ...(idempotencyFingerprint ? { idempotency_fingerprint: idempotencyFingerprint } : {}),
   };
   const raw = JSON.stringify(rawObj);
 
@@ -647,10 +709,23 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
   if (!pool.hasStorage()) {
     if (options.approvalData) {
       const approvalQueries = require('./approvalQueries');
+      const approvalId = idempotencyKey ? createIdempotentRecordId('appr', idempotencyKey) : undefined;
+      const existingApproval = approvalId
+        ? approvalQueries.memoryApprovals.find((item) => item.id === approvalId)
+        : null;
+      if (existingApproval) {
+        if (existingApproval.raw?.idempotency_fingerprint === idempotencyFingerprint) return task;
+        throw createIdempotencyConflict();
+      }
       await approvalQueries.createApproval({
         ...options.approvalData,
+        ...(approvalId ? { id: approvalId } : {}),
         internal_task_id: id,
-        raw: { ...(options.approvalData.raw || {}), internal_task_id: id },
+        raw: {
+          ...(options.approvalData.raw || {}),
+          internal_task_id: id,
+          ...(idempotencyFingerprint ? { idempotency_fingerprint: idempotencyFingerprint } : {}),
+        },
       }, actor);
     }
     return task;
@@ -725,8 +800,13 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
     const approvalQueries = require('./approvalQueries');
     const approval = approvalQueries.prepareApprovalCreate({
       ...options.approvalData,
+      ...(idempotencyKey ? { id: createIdempotentRecordId('appr', idempotencyKey) } : {}),
       internal_task_id: id,
-      raw: { ...(options.approvalData.raw || {}), internal_task_id: id },
+      raw: {
+        ...(options.approvalData.raw || {}),
+        internal_task_id: id,
+        ...(idempotencyFingerprint ? { idempotency_fingerprint: idempotencyFingerprint } : {}),
+      },
     }, actor);
     const statements = [
       { text: insertSql, params: insertParams },
@@ -757,6 +837,35 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
         });
       }
     } catch (error) {
+      if (idempotencyFingerprint && isUniqueConstraintViolation(error)) {
+        try {
+          const existingTask = await getInternalTaskById(id);
+          const existingApproval = await approvalQueries.getApprovalById(approval.item.id);
+          const taskFingerprint = existingTask?.raw?.idempotency_fingerprint;
+          const approvalFingerprint = existingApproval?.raw?.idempotency_fingerprint;
+          if (existingTask && existingApproval && taskFingerprint === idempotencyFingerprint
+            && approvalFingerprint === idempotencyFingerprint
+            && existingApproval.internal_task_id === existingTask.id) {
+            logger.info('Duplicate credit approval request resolved to its persisted task', {
+              operation: 'resolve-credit-approval-idempotency-replay',
+              taskId: existingTask.id,
+              approvalId: existingApproval.id,
+              provider,
+            }, 'INTERNAL_TASK_APPROVAL_REQUEST');
+            return existingTask;
+          }
+          if (existingTask && existingApproval) throw createIdempotencyConflict();
+        } catch (replayError) {
+          if (replayError.code === 'IDEMPOTENCY_CONFLICT') throw replayError;
+          logger.error('Credit approval idempotency replay lookup failed', {
+            error: replayError,
+            operation: 'resolve-credit-approval-idempotency-replay',
+            taskId: id,
+            approvalId: approval.item.id,
+            provider,
+          }, 'INTERNAL_TASK_APPROVAL_REQUEST');
+        }
+      }
       const unavailable = new Error('Credit approval request persistence is temporarily unavailable.');
       unavailable.code = 'PERSISTENCE_UNAVAILABLE';
       unavailable.cause = error;
@@ -804,7 +913,10 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
 }
 
 async function createInternalTaskWithApproval(taskData, actor = {}, approvalData = {}) {
-  return createInternalTask(taskData, actor, { approvalData });
+  return createInternalTask(taskData, actor, {
+    approvalData,
+    idempotencyKey: approvalData.idempotencyKey,
+  });
 }
 
 /**

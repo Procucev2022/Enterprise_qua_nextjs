@@ -6,6 +6,7 @@ import * as buyerProfileClient from '@/lib/buyerProfileClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import * as accountDocsClient from '@/lib/accountDocumentsClient';
 jest.mock('@/lib/accountDocumentsClient', () => ({
+  createCreditApprovalIdempotencyKey: jest.fn(() => '00000000-0000-4000-8000-000000000001'),
   requestBuyerCreditApproval: jest.fn().mockResolvedValue({ success: true, message: 'Request submitted' }),
   fetchAccountDocuments: jest.fn().mockResolvedValue([]),
   uploadAccountDocument: jest.fn().mockResolvedValue({ success: true }),
@@ -338,6 +339,7 @@ describe('BuyerDossierDrawer', () => {
           reason: 'Enterprise sourcing credit allocation request',
           approverName: expect.any(String),
           initiatorName: expect.any(String),
+          idempotencyKey: expect.any(String),
         })
       );
     });
@@ -364,6 +366,7 @@ describe('BuyerDossierDrawer', () => {
     await waitFor(() => {
       expect(screen.getByText('Failed to submit credit approval request.')).toBeInTheDocument();
     });
+    const firstRequestKey = (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mock.calls[0][1].idempotencyKey;
 
     // Test exception branch (line 225)
     (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
@@ -372,6 +375,7 @@ describe('BuyerDossierDrawer', () => {
     await waitFor(() => {
       expect(screen.getByText('Failed to submit credit approval request.')).toBeInTheDocument();
     });
+    expect((accountDocsClient.requestBuyerCreditApproval as jest.Mock).mock.calls[1][1].idempotencyKey).toBe(firstRequestKey);
   });
 
   test('4. Profile tab renders categories, allows editing, adding custom category, toggling, backdrop click, Escape, and saving', async () => {

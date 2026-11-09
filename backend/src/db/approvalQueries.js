@@ -517,12 +517,26 @@ function hydrateApprovalRow(row) {
     approver_remarks: row.approver_remarks || null,
     internal_task_id: raw.internal_task_id || null,
     buyer_id: raw.buyer_id || null,
+    seller_id: raw.seller_id || null,
     history: Array.isArray(raw.history) ? raw.history : [],
     attachments: Array.isArray(raw.attachments) ? raw.attachments : [],
     created_at: row.created_at ? new Date(row.created_at).toISOString() : now,
     updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : now,
     raw,
   };
+}
+
+async function getApprovalById(id) {
+  if (!id) return null;
+  if (!pool.hasStorage()) return memoryApprovals.find((approval) => approval.id === id) || null;
+
+  const sql = 'SELECT * FROM approvals WHERE id = $1 LIMIT 1';
+  try {
+    const result = await pool.query(sql, [id], { d1: true, d1Text: sql });
+    return hydrateApprovalRow(result?.rows?.[0] || null);
+  } catch (error) {
+    throw persistenceUnavailable(error, 'get-approval-by-id');
+  }
 }
 
 function prepareApprovalCreate(data = {}, actor = {}) {
@@ -869,6 +883,7 @@ async function processApprovalAction(id, { action, remarks = '' }, actor = {}) {
 module.exports = {
   getApprovalSummary,
   getApprovals,
+  getApprovalById,
   createApproval,
   prepareApprovalCreate,
   rememberApproval,

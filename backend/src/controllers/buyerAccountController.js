@@ -770,7 +770,7 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    const { amount, reason, approverName, initiatorName } = validation.sanitizedData;
+    const { amount, reason, approverName, initiatorName, idempotencyKey } = validation.sanitizedData;
 
     const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
@@ -801,6 +801,7 @@ async function requestCreditApproval(req, res, next) {
       },
       {
         module: 'Buyer Credit Addition',
+        idempotencyKey,
         request_type: 'Buyer Credit Addition',
         project: buyer.organizationName,
         applicant_name: buyer.organizationName,
