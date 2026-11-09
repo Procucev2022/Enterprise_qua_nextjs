@@ -227,7 +227,7 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         await domainQueries.getVendorsPageFromDB({ limit: 500, offset: 0, publicOnly: true });
 
         const [countSql] = query.mock.calls[0];
-        expect(countSql).toContain("(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL");
+        expect(countSql).toContain("lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL");
       });
 
       test('combines search and publicOnly with AND', async () => {
@@ -253,7 +253,7 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, scopedBuyerId: 'ba-42' });
 
         const [countSql, countParams] = query.mock.calls[0];
-        expect(countSql).toContain("(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL");
+        expect(countSql).toContain("(lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL)");
         expect(countSql).toContain("lower(raw->>'buyerId') = lower($1)");
         expect(countSql).toContain("lower(raw->>'buyerAccountId') = lower($1)");
         expect(countSql).toContain("lower(raw->>'buyerEmail') = lower($1)");
@@ -262,6 +262,25 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         const [dataSql, dataParams] = query.mock.calls[1];
         expect(dataSql).toContain('ORDER BY created_at DESC LIMIT $2 OFFSET $3');
         expect(dataParams).toEqual(['ba-42', 10, 0]);
+      });
+
+      test('keeps D1 buyer page predicates aligned with normalized owner indexes', async () => {
+        jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+        const query = jest.spyOn(pool, 'query')
+          .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+          .mockResolvedValueOnce({ rows: [] });
+
+        await domainQueries.getVendorsPageFromDB({
+          limit: 10,
+          offset: 0,
+          search: 'buyer-owner-index-plan-test',
+          scopedBuyerId: 'ba-42',
+        });
+
+        const d1Text = query.mock.calls[0][2].d1Text;
+        expect(d1Text).toContain("lower(json_extract(raw,'$.buyerId')) = lower($2)");
+        expect(d1Text).toContain("lower(json_extract(raw,'$.buyerAccountId')) = lower($2)");
+        expect(d1Text).toContain("lower(json_extract(raw,'$.buyerEmail')) = lower($2)");
       });
 
       test('combines search and scopedBuyerId with AND, using separate placeholders', async () => {
@@ -444,7 +463,7 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         expect(sql).toContain('major_category');
         expect(sql).toContain("raw->'minorCategories'");
         // Public-only clause present.
-        expect(sql).toContain("(raw->>'buyerId') IS NULL");
+        expect(sql).toContain("lower(raw->>'buyerId') IS NULL");
         // De-duplicated, lower-cased, wildcard-wrapped params — one per distinct signal.
         expect(params).toEqual([
           '%raw material%',
@@ -1953,6 +1972,19 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       await expect(domainQueries.getVendorsByBuyerFromDB(null, 50, null)).resolves.toEqual([]);
     });
 
+    test('keeps D1 buyer hydration predicates aligned with normalized owner indexes', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const query = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ raw: { id: 'v-indexed' } }] });
+
+      await expect(domainQueries.getVendorsByBuyerFromDB('buyer-owner-index-plan-test', 25))
+        .resolves.toEqual([{ id: 'v-indexed' }]);
+
+      const d1Text = query.mock.calls[0][2].d1Text;
+      expect(d1Text).toContain("lower(json_extract(raw,'$.buyerId'))");
+      expect(d1Text).toContain("lower(json_extract(raw,'$.buyerAccountId'))");
+      expect(d1Text).toContain("lower(json_extract(raw,'$.buyerEmail'))");
+    });
+
     test('logs buyer-account candidate lookup failures and continues with the email scope', async () => {
       const { logger } = require('../src/services/loggerService');
       const vendor = { id: 'v-email-scope', buyerEmail: 'buyer@company.com' };
@@ -2546,7 +2578,7 @@ describe('D1 vendor search index readiness', () => {
     const d1Queries = query.mock.calls.map(([, , options]) => options?.d1Text).filter(Boolean);
     expect(d1Queries).toHaveLength(2);
     expect(d1Queries.every((sql) => sql.includes('vendors_search_fts'))).toBe(true);
-    expect(d1Queries[0]).toContain("json_extract(raw,'$.buyerId') IS NULL");
+    expect(d1Queries[0]).toContain("lower(json_extract(raw,'$.buyerId')) IS NULL");
     expect(d1Queries[0]).toContain('lower(json_extract(raw,\'$.name\')) LIKE lower($1)');
   });
 
@@ -2558,7 +2590,7 @@ describe('D1 vendor search index readiness', () => {
     const d1Query = query.mock.calls.map(([, , options]) => options?.d1Text).find(Boolean);
     expect(d1Query).toContain('vendors_search_fts');
     expect(d1Query).toContain("lower(json_extract(raw,'$.vendorSelectedCategories')) LIKE $1");
-    expect(d1Query).toContain("json_extract(raw,'$.buyerId') IS NULL");
+    expect(d1Query).toContain("lower(json_extract(raw,'$.buyerId')) IS NULL");
   });
 
   test('uses the trigram candidate for row-returning public category matching', async () => {

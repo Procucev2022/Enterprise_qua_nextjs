@@ -79,9 +79,18 @@ test('critical access path comparison accepts a composite leftmost prefix and re
     ['user_lower_phone', { table: 'user', columns: ['lower(username)', 'phone'] }],
     ['org_category_user', { table: 'org_division_category', columns: ['user_id', 'is_active', 'division', 'category'] }],
     ['org_category_org', { table: 'org_division_category', columns: ['organization_id', 'is_active', 'division', 'category'] }],
+    ['vendor_buyer_id', { table: 'vendors', columns: ["lower(raw->>'buyerid')"] }],
+    ['vendor_buyer_account', { table: 'vendors', columns: ["lower(raw->>'buyeraccountid')"] }],
+    ['vendor_buyer_email', { table: 'vendors', columns: ["lower(raw->>'buyeremail')"] }],
   ]);
   const d1Indexes = new Map([
-    ...postgresIndexes,
+    ['org_name_type', { table: 'organization', columns: ['organization_name', 'org_type_uuid'] }],
+    ['user_lower_phone', { table: 'user', columns: ['lower(username)', 'phone'] }],
+    ['org_category_user', { table: 'org_division_category', columns: ['user_id', 'is_active', 'division', 'category'] }],
+    ['org_category_org', { table: 'org_division_category', columns: ['organization_id', 'is_active', 'division', 'category'] }],
+    ['vendor_buyer_id', { table: 'vendors', columns: ["lower(json_extract(raw,'$.buyerid'))"] }],
+    ['vendor_buyer_account', { table: 'vendors', columns: ["lower(json_extract(raw,'$.buyeraccountid'))"] }],
+    ['vendor_buyer_email', { table: 'vendors', columns: ["lower(json_extract(raw,'$.buyeremail'))"] }],
   ]);
 
   assert.deepEqual(compareRequiredAccessPaths(postgresIndexes, d1Indexes), { postgres: [], d1: [] });

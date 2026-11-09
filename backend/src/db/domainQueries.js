@@ -380,11 +380,11 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a
     // specific buyer (buyerId/buyerAccountId set inside `raw`) is only meant
     // to be visible to that buyer, never in an anonymous/public listing.
-    conditions.push(`(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`);
+    conditions.push(`lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`);
     d1Conditions.push(`(
       (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
-      AND json_extract(raw,'$.buyerId') IS NULL
-      AND json_extract(raw,'$.buyerAccountId') IS NULL
+      AND lower(json_extract(raw,'$.buyerId')) IS NULL
+      AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL
     )`);
   }
   if (scopedBuyerId) {
@@ -395,19 +395,19 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     // request fell through to storeService.getVendors(buyerId), which
     // re-fetches and re-serializes every one of 600k+ rows on every single
     // call regardless of scope, since almost all vendors are public and thus
-    // visible to every buyer anyway. Backed by idx_vendors_buyer_id/
-    // idx_vendors_buyer_account_id (schema.sql) so the OR still uses indexes
-    // instead of a sequential scan.
+    // visible to every buyer anyway. Exact lower-case owner expressions are
+    // indexed by migration 0025, including the legacy buyerEmail alias, so
+    // the owner OR branches can use indexes instead of scanning vendor JSON.
     params.push(scopedBuyerId);
     const p = params.length;
     conditions.push(`(
-      ((raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL)
+      (lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL)
       OR lower(raw->>'buyerId') = lower($${p})
       OR lower(raw->>'buyerAccountId') = lower($${p})
       OR lower(raw->>'buyerEmail') = lower($${p})
     )`);
     d1Conditions.push(`(
-      (json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL)
+      (lower(json_extract(raw,'$.buyerId')) IS NULL AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL)
       OR lower(json_extract(raw,'$.buyerId')) = lower($${p})
       OR lower(json_extract(raw,'$.buyerAccountId')) = lower($${p})
       OR lower(json_extract(raw,'$.buyerEmail')) = lower($${p})
@@ -586,10 +586,10 @@ async function countPublicVendorsMatchingCategories(signals) {
   }
 
   // Public-only: a vendor tagged to a specific buyer is never in the network pool.
-  const publicPg = `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`;
+  const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
   const publicD1 = `(source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
-    AND json_extract(raw,'$.buyerId') IS NULL
-    AND json_extract(raw,'$.buyerAccountId') IS NULL`;
+    AND lower(json_extract(raw,'$.buyerId')) IS NULL
+    AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL`;
 
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
   const whereD1 = `WHERE (${d1OrGroups.join(' OR ')}) AND ${publicD1}`;
@@ -678,10 +678,10 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
     }
   }
 
-  const publicPg = `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`;
+  const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
   const publicD1 = `(source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
-    AND json_extract(raw,'$.buyerId') IS NULL
-    AND json_extract(raw,'$.buyerAccountId') IS NULL`;
+    AND lower(json_extract(raw,'$.buyerId')) IS NULL
+    AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL`;
 
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
   const whereD1 = `WHERE (${d1OrGroups.join(' OR ')}) AND ${publicD1}`;
@@ -797,8 +797,9 @@ async function getVendorByEmailFromDB(email, { fresh = false } = {}) {
 
 /**
  * A buyer's own uploaded/added vendors only (never the public network) —
- * bounded, so it never reads more than `limit` rows regardless of table
- * size. Used by storeService.getBootstrapData's buyer-scoped branch, which
+ * bounded, so it never returns more than `limit` rows regardless of table
+ * size. Matching owner-expression indexes keep its filter from scanning the
+ * full vendor table. Used by storeService.getBootstrapData's buyer-scoped branch, which
  * used to call storeService.getVendors() (a full unbounded re-sync of the
  * exhausted (6.7M rows read in 24h against a 20k-row table: confirmed live
  * via `wrangler d1 info`). A buyer's own vendor count is realistically
@@ -2731,10 +2732,10 @@ async function getPublicVendorsPageFromDB({
   const params = [];
   // Rule: public listing NEVER exposes private buyer rosters.
   const pgConditions = [
-    `(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`,
+    `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`,
   ];
   const d1Conditions = [
-    `json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL`,
+    `lower(json_extract(raw,'$.buyerId')) IS NULL AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL`,
   ];
 
   if (search) {

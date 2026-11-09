@@ -32,12 +32,18 @@ const REQUIRED_ACCESS_PATHS = Object.freeze({
     { table: 'user', columns: ['lower(username)', 'phone'], query: 'case-insensitive sign-in narrowed by phone' },
     { table: 'org_division_category', columns: ['user_id', 'is_active', 'division', 'category'], query: 'buyer category reads and ordering by user' },
     { table: 'org_division_category', columns: ['organization_id', 'is_active', 'division', 'category'], query: 'buyer category fallback reads and ordering by organization' },
+    { table: 'vendors', columns: ['lower(raw->>\'buyerId\')'], query: 'case-insensitive buyer vendor ownership lookup by buyer ID' },
+    { table: 'vendors', columns: ['lower(raw->>\'buyerAccountId\')'], query: 'case-insensitive buyer vendor ownership lookup by account ID' },
+    { table: 'vendors', columns: ['lower(raw->>\'buyerEmail\')'], query: 'case-insensitive buyer vendor ownership lookup by email' },
   ],
   d1: [
     { table: 'organization', columns: ['organization_name', 'org_type_uuid'], query: 'identity registration organization reuse' },
     { table: 'user', columns: ['lower(username)', 'phone'], query: 'case-insensitive sign-in narrowed by phone' },
     { table: 'org_division_category', columns: ['user_id', 'is_active', 'division', 'category'], query: 'buyer category reads and ordering by user' },
     { table: 'org_division_category', columns: ['organization_id', 'is_active', 'division', 'category'], query: 'buyer category fallback reads and ordering by organization' },
+    { table: 'vendors', columns: ['lower(json_extract(raw, \'$.buyerId\'))'], query: 'case-insensitive buyer vendor ownership lookup by buyer ID' },
+    { table: 'vendors', columns: ['lower(json_extract(raw, \'$.buyerAccountId\'))'], query: 'case-insensitive buyer vendor ownership lookup by account ID' },
+    { table: 'vendors', columns: ['lower(json_extract(raw, \'$.buyerEmail\'))'], query: 'case-insensitive buyer vendor ownership lookup by email' },
   ],
 });
 
