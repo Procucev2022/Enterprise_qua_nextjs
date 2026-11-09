@@ -3,6 +3,8 @@ const app = require('../src/app');
 const storeService = require('../src/services/storeService');
 const authService = require('../src/services/authService');
 const pool = require('../src/db/pool');
+const { queryCache } = require('../src/db/queryCache');
+const { logger } = require('../src/services/loggerService');
 const accountDocumentQueries = require('../src/db/accountDocumentQueries');
 const accountDocumentController = require('../src/controllers/accountDocumentController');
 
@@ -391,11 +393,13 @@ describe('Account Documents & Credit Workflows API', () => {
         const failingClient = {
           query: jest.fn().mockImplementation((sql) => {
             if (sql.includes('UPDATE vendors')) throw new Error('Postgres write failure');
+            if (sql === 'ROLLBACK') throw new Error('Postgres rollback failure');
             return { rowCount: 1 };
           }),
           release: jest.fn(),
         };
         pool.pool = { connect: jest.fn().mockResolvedValue(failingClient) };
+        const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
 
         const res3 = await request(app)
           .post(`/api/vendors/${createdV3.id}/add-quote-credits`)
@@ -405,6 +409,14 @@ describe('Account Documents & Credit Workflows API', () => {
         expect(res3.body.success).toBe(false);
         expect(failingClient.query).toHaveBeenCalledWith('ROLLBACK');
         expect(failingClient.release).toHaveBeenCalled();
+        expect(errorLogSpy).toHaveBeenCalledWith(
+          'Vendor quote-credit transaction rollback failed',
+          expect.objectContaining({
+            operation: 'rollback-vendor-quote-credit-transaction',
+            vendorId: createdV3.id,
+          }),
+          'VENDOR_CONTROLLER'
+        );
 
         // Test with client without release function
         pool.pool = null;
@@ -420,6 +432,50 @@ describe('Account Documents & Credit Workflows API', () => {
         pool.hasStorage = origHasStorage;
         pool.query = origQuery;
         storeService.isHydratedFromDB = origHydrated;
+      }
+    });
+
+    it('logs cache invalidation failure after the quote-credit transaction commits', async () => {
+      const { addQuoteCredits } = require('../src/controllers/vendorDossierExtensions');
+      const originalPoolInstance = pool.pool;
+      const originalHydratedState = storeService.isHydratedFromDB;
+      const cacheError = new Error('query cache is unavailable');
+      const client = {
+        query: jest.fn().mockResolvedValue({ rowCount: 1 }),
+        release: jest.fn(),
+      };
+      const warningLogSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(queryCache, 'invalidate').mockImplementation(() => {
+        throw cacheError;
+      });
+      jest.spyOn(storeService, 'updateVendor').mockReturnValue(mockVendor);
+      pool.pool = { connect: jest.fn().mockResolvedValue(client) };
+      storeService.isHydratedFromDB = true;
+
+      try {
+        const response = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+        await addQuoteCredits({
+          user: { role: 'admin' },
+          params: { id: mockVendor.id },
+          body: { amount: 1 },
+        }, response, jest.fn());
+
+        expect(client.query).toHaveBeenCalledWith('COMMIT');
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+        expect(warningLogSpy).toHaveBeenCalledWith(
+          'Vendor quote-credit write committed but local query-cache invalidation failed',
+          expect.objectContaining({
+            error: cacheError,
+            operation: 'invalidate-vendor-quote-credit-cache',
+            vendorId: mockVendor.id,
+            cacheTags: ['vendor_credits', 'vendors'],
+          }),
+          'VENDOR_CONTROLLER'
+        );
+      } finally {
+        pool.pool = originalPoolInstance;
+        storeService.isHydratedFromDB = originalHydratedState;
       }
     });
 

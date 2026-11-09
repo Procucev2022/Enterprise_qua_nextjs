@@ -569,7 +569,14 @@ async function addQuoteCredits(req, res, next) {
         if (inTx && typeof client.query === 'function') {
           try {
             await client.query('ROLLBACK');
-          } catch (_) {}
+          } catch (rollbackError) {
+            logger.error('Vendor quote-credit transaction rollback failed', {
+              error: rollbackError,
+              operation: 'rollback-vendor-quote-credit-transaction',
+              vendorId: vendor.id,
+              transactionId: tx.id,
+            }, 'VENDOR_CONTROLLER');
+          }
         }
         logger.error('Failed to update vendor credits atomically in PostgreSQL transaction', dbErr, 'VENDOR_CONTROLLER');
         return res.status(500).json({
@@ -589,7 +596,14 @@ async function addQuoteCredits(req, res, next) {
         queryCache.invalidate('vendor_credits');
         queryCache.invalidate('vendors');
       }
-    } catch (_) {}
+    } catch (cacheError) {
+      logger.warn('Vendor quote-credit write committed but local query-cache invalidation failed', {
+        error: cacheError,
+        operation: 'invalidate-vendor-quote-credit-cache',
+        vendorId: vendor.id,
+        cacheTags: ['vendor_credits', 'vendors'],
+      }, 'VENDOR_CONTROLLER');
+    }
 
     // Update in-memory vendor balance only after database transaction succeeds
     storeService.updateVendor(vendor.id, {

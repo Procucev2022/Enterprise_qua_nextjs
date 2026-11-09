@@ -484,3 +484,8 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 - Successful OTP and password authentication previously swallowed login-history persistence failures. The successful login remains non-blocking, but both methods now write a structured error with authentication method, role, and identifier-presence metadata, without copying user contact details into the log payload.
 - The focused auth controller and route suites passed 126 tests, including the regression that confirms a failed history write is logged while authentication still succeeds. The required full workspace quality gate runs in the pre-commit hook.
+
+## Vendor credit cache and rollback diagnostics
+
+- Manual vendor quote-credit allocation previously swallowed PostgreSQL rollback errors and query-cache invalidation failures. A failed rollback is now logged with transaction/vendor context alongside the original write failure. A post-commit cache invalidation failure is logged as a warning while the successful database allocation still returns success, avoiding a false failure that could trigger a duplicate retry.
+- The focused account and credit workflow suite passed 49 tests, including rollback-failure and post-commit invalidation-failure regressions. The required full workspace quality gate runs in the pre-commit hook.
