@@ -525,3 +525,7 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 ## Internal-task client failure diagnostics
 
 - Credit approval/rejection, activity submission, and reminder-check transport exceptions previously returned failures without logging and used an unsafe `Error` cast that could itself throw for non-Error rejection values. They now record operation and safe error metadata centrally, and resolve unknown failures with actionable existing fallback messages.
+
+## Approval dashboard failure diagnostics
+
+- Approval summary and list fetches previously collapsed HTTP and network outages into zero counts or an empty list, which the dashboard could present as valid empty data. Their fallbacks remain compatible, but now emit centralized error records; decision endpoints log server rejections by status and transport failures with safe error metadata.

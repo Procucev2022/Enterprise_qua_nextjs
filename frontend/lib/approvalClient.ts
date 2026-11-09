@@ -1,5 +1,24 @@
 import { authClient } from './authClient';
+import { logger } from './logger';
 import type { ApprovalRequest, ApprovalSummary } from './types';
+
+function logApprovalTransportFailure(operation: string, error: unknown): void {
+  logger.error(`${operation} request failed`, {
+    errorName: error instanceof Error ? error.name : 'UnknownError',
+    errorMessage: error instanceof Error && error.message ? error.message : 'Network error',
+    ...(error instanceof Error ? { error } : {}),
+  }, 'APPROVAL_CLIENT');
+}
+
+function logApprovalResponseFailure(operation: string, status: number): void {
+  const metadata = Number.isFinite(status) ? { status } : {};
+  const message = `${operation} request rejected`;
+  if (status >= 500) {
+    logger.error(message, metadata, 'APPROVAL_CLIENT');
+  } else {
+    logger.warn(message, metadata, 'APPROVAL_CLIENT');
+  }
+}
 
 function authHeaders(): Record<string, string> {
   const token = authClient.getToken();
@@ -18,7 +37,8 @@ export async function fetchApprovalSummary(): Promise<ApprovalSummary> {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     return json.summary || { pending: 0, approved: 0, rejected: 0, total: 0 };
-  } catch {
+  } catch (error: unknown) {
+    logApprovalTransportFailure('Approval summary', error);
     return { pending: 0, approved: 0, rejected: 0, total: 0 };
   }
 }
@@ -53,7 +73,8 @@ export async function fetchApprovals(filters: {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     return { data: json.data || [], total: json.total || 0 };
-  } catch {
+  } catch (error: unknown) {
+    logApprovalTransportFailure('Approval list', error);
     return { data: [], total: 0 };
   }
 }
@@ -74,11 +95,13 @@ export async function processApprovalAction(
     });
     const json = await res.json();
     if (!res.ok) {
+      logApprovalResponseFailure('Approval decision', res.status);
       return { success: false, error: json.error || 'Failed to process approval.' };
     }
     return { success: true, data: json.data };
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Network error';
+    logApprovalTransportFailure('Approval decision', err);
+    const msg = err instanceof Error && err.message ? err.message : 'Network error';
     return { success: false, error: msg };
   }
 }
