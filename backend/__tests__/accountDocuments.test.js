@@ -1460,6 +1460,68 @@ describe('Account Documents & Credit Workflows API', () => {
       });
       expect(specificCat.every(d => d.category.toLowerCase() === 'rfq')).toBe(true);
     });
+
+    it('logs buyer and seller workflow aggregation failures while preserving the partial result', async () => {
+      const originalHasStorage = pool.hasStorage;
+      const originalRfqs = storeService.rfqs;
+      const originalEvaluations = storeService.evaluations;
+      const buyerError = new Error('RFQ workflow source unavailable');
+      const sellerError = new Error('Seller workflow source unavailable');
+      const errorLogSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      try {
+        pool.hasStorage = () => false;
+        storeService.rfqs = new Proxy([], {
+          get(target, property, receiver) {
+            if (property === 'filter') throw buyerError;
+            return Reflect.get(target, property, receiver);
+          },
+        });
+
+        const buyerDocuments = await accountDocumentQueries.listAccountDocuments({
+          accountType: 'buyer',
+          accountId: 'buyer-workflow-error',
+        });
+        expect(buyerDocuments).toEqual([]);
+        expect(errorLogSpy).toHaveBeenCalledWith(
+          'Buyer RFQ workflow documents could not be aggregated for the account dossier',
+          expect.objectContaining({
+            error: buyerError,
+            operation: 'aggregate-buyer-rfq-documents',
+            accountType: 'buyer',
+            accountIdPresent: true,
+          }),
+          'ACCOUNT_DOCUMENT_QUERIES'
+        );
+
+        storeService.evaluations = new Proxy([], {
+          get(target, property, receiver) {
+            if (property === 'find') throw sellerError;
+            return Reflect.get(target, property, receiver);
+          },
+        });
+        const sellerDocuments = await accountDocumentQueries.listAccountDocuments({
+          accountType: 'seller',
+          accountId: 'seller-workflow-error',
+        });
+
+        expect(sellerDocuments).toEqual([]);
+        expect(errorLogSpy).toHaveBeenCalledWith(
+          'Seller evaluation and quotation workflow documents could not be aggregated for the account dossier',
+          expect.objectContaining({
+            error: sellerError,
+            operation: 'aggregate-seller-workflow-documents',
+            accountType: 'seller',
+            accountIdPresent: true,
+          }),
+          'ACCOUNT_DOCUMENT_QUERIES'
+        );
+      } finally {
+        pool.hasStorage = originalHasStorage;
+        storeService.rfqs = originalRfqs;
+        storeService.evaluations = originalEvaluations;
+      }
+    });
   });
 
   describe('accountDocumentController edge cases & error handler branches', () => {

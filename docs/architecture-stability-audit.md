@@ -489,3 +489,8 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 - Manual vendor quote-credit allocation previously swallowed PostgreSQL rollback errors and query-cache invalidation failures. A failed rollback is now logged with transaction/vendor context alongside the original write failure. A post-commit cache invalidation failure is logged as a warning while the successful database allocation still returns success, avoiding a false failure that could trigger a duplicate retry.
 - The focused account and credit workflow suite passed 49 tests, including rollback-failure and post-commit invalidation-failure regressions. The required full workspace quality gate runs in the pre-commit hook.
+
+## Account dossier workflow aggregation diagnostics
+
+- Buyer RFQ attachment aggregation and seller evaluation/quotation aggregation previously hid exceptions and returned an incomplete document list without a diagnostic. Both fallbacks now preserve the partial response while logging the error, aggregation operation, account type, and presence of account scope; raw account identifiers are omitted.
+- The focused account and credit workflow suite passed 50 tests, including buyer and seller aggregation failure regressions. The required full workspace quality gate runs in the pre-commit hook.
