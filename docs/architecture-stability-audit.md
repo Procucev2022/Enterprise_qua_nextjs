@@ -516,3 +516,8 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 
 - Six buyer-account API helpers returned network and response-parsing failures to the dossier UI without adding an entry to the centralized frontend log buffer. They now log the operation, error class, message, and stack when available, while omitting buyer IDs and request payloads.
 - Non-`Error` transport rejections use a safe fallback message instead of depending on optional `.message` access. Regression tests cover all six operations and this fallback.
+
+## RFQ client transport diagnostics
+
+- Quote attachment download, RFQ inquiry/reply, vendor category update, vendor RFQ credits, and RFQ unlock transport failures now use the centralized frontend logger with operation and error metadata. Logs omit RFQ/vendor identifiers and request payloads.
+- Non-`Error` rejections retain the existing user-facing fallback text and now log a safe `UnknownError` diagnostic. Regression tests assert the centralized log entries.

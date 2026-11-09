@@ -1,4 +1,5 @@
 import { authClient } from './authClient';
+import { logger } from './logger';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type {
   ExtractedEntity,
@@ -23,6 +24,18 @@ import type {
   VendorPageMeta,
 } from './types';
 
+function getRfqTransportErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function logRfqTransportFailure(operation: string, error: unknown): void {
+  logger.error(operation, {
+    errorName: error instanceof Error ? error.name : 'UnknownError',
+    errorMessage: getRfqTransportErrorMessage(error, 'Unknown request failure'),
+    ...(error instanceof Error ? { error } : {}),
+  }, 'RFQ_CLIENT');
+}
+
 export async function downloadQuoteAttachment(
   rfqIdOrNumber: string,
   attachment: RFQQuoteAttachment
@@ -38,7 +51,8 @@ export async function downloadQuoteAttachment(
       return { success: false, error: body.error || 'The bid document could not be downloaded.' };
     }
     return { success: true, url: URL.createObjectURL(await response.blob()) };
-  } catch {
+  } catch (error: unknown) {
+    logRfqTransportFailure('Quote attachment download request failed', error);
     return { success: false, error: UI_STRINGS.auth.networkUnreachable };
   }
 }
@@ -911,8 +925,9 @@ export async function submitRFQInquiry(
       return { success: false, error: body.error || 'Failed to submit inquiry.' };
     }
     return { success: true, data: body.data, rfq: body.rfq };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Network error submitting inquiry.' };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ inquiry submission request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error submitting inquiry.') };
   }
 }
 
@@ -941,8 +956,9 @@ export async function replyToRFQInquiry(
       return { success: false, error: body.error || 'Failed to submit reply.' };
     }
     return { success: true, data: body.data, rfq: body.rfq };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Network error submitting reply.' };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ inquiry reply request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error submitting reply.') };
   }
 }
 
@@ -1000,11 +1016,12 @@ export async function requestVendorCategoryUpdateEmail(
       idempotencyKey,
       message: body.message,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    logRfqTransportFailure('Vendor category update request failed', err);
     return {
       success: false,
       ...(idempotencyKey ? { idempotencyKey } : {}),
-      error: err?.message || 'Network error requesting category update.',
+      error: getRfqTransportErrorMessage(err, 'Network error requesting category update.'),
     };
   }
 }
@@ -1041,8 +1058,9 @@ export async function fetchVendorRfqCredits(vendorId?: string): Promise<{
       return { success: false, error: body.error || 'Failed to fetch vendor RFQ credits.' };
     }
     return { success: true, data: body.data };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Network error fetching RFQ credits.' };
+  } catch (err: unknown) {
+    logRfqTransportFailure('Vendor RFQ credit request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error fetching RFQ credits.') };
   }
 }
 
@@ -1083,7 +1101,8 @@ export async function downloadAndUnlockRFQ(rfqIdOrNumber: string): Promise<{
       alreadyUnlocked: body.alreadyUnlocked,
       freeCreditsRemaining: body.freeCreditsRemaining,
     };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Network error downloading RFQ.' };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ unlock request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error downloading RFQ.') };
   }
 }
