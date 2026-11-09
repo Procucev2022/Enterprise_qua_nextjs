@@ -1301,8 +1301,10 @@ class StoreService {
   }
 
   /**
-   * getVendorById, but falls back to a direct D1/Postgres lookup (by id, then
-   * by email) when the in-memory `this.vendors` subset doesn't have the row.
+   * getVendorById, but resolves the persisted record from D1/Postgres when
+   * storage is configured (by id, then by email). The isolate-local vendor
+   * list is only a bootstrap subset and cannot establish current ownership or
+   * profile state across Workers. Indexed DB query caching bounds repeat reads.
    *
    * this.vendors is a capped, bootstrap-time subset (600k+ real vendors can't
    * all live in memory — see getVendorsPageFromDB), so a vendor that exists
@@ -1315,7 +1317,6 @@ class StoreService {
   async getVendorByIdWithDBFallback(id, scopedBuyerId = null, { fresh = false } = {}) {
     const inMemory = this.getVendorById(id, scopedBuyerId);
     if (!pool.hasStorage()) return inMemory;
-    if (inMemory && !fresh) return inMemory;
 
     const normalizedId = String(id || '').trim();
     const isEmail = normalizedId.includes('@');
@@ -1328,14 +1329,14 @@ class StoreService {
     let vendor = isEmail ? await lookupByEmail() : await lookupById();
     if (!vendor && !isEmail) vendor = await lookupByEmail();
     if (!vendor) {
-      if (fresh) {
-        const normalizedEmail = isEmail ? normalizedId.toLowerCase() : '';
-        this.vendors = this.vendors.filter((cached) => {
-          const sameId = cached.id === normalizedId;
-          const sameEmail = normalizedEmail && String(cached.email || '').trim().toLowerCase() === normalizedEmail;
-          return !sameId && !sameEmail;
-        });
-      }
+      const normalizedEmail = isEmail
+        ? normalizedId.toLowerCase()
+        : String(inMemory?.email || '').trim().toLowerCase();
+      this.vendors = this.vendors.filter((cached) => {
+        const sameId = cached.id === normalizedId;
+        const sameEmail = normalizedEmail && String(cached.email || '').trim().toLowerCase() === normalizedEmail;
+        return !sameId && !sameEmail;
+      });
       return undefined;
     }
 
@@ -2302,33 +2303,15 @@ class StoreService {
    * Re-downloading an already-unlocked RFQ does NOT deduct another credit.
    */
   async unlockRFQForVendor(vendorIdOrEmail, rfqIdOrNumber, options = {}) {
-    let vendor = await this.getVendorByIdWithDBFallback(vendorIdOrEmail, 'all');
-    if (!vendor) {
-      return {
-        success: false,
-        error: RFQ_DOWNLOAD_ERRORS.VENDOR_NOT_FOUND,
-        notFound: true,
-      };
-    }
-
+    const hadCachedVendor = this.getVendorById(vendorIdOrEmail, 'all');
+    let vendor;
     if (pool.hasStorage()) {
       try {
-        const persistedVendor = await domainQueries.getVendorByIdFromDB(vendor.id, { fresh: true });
-        if (!persistedVendor) {
-          return {
-            success: false,
-            error: RFQ_DOWNLOAD_ERRORS.VENDOR_STORAGE_MISSING,
-            notFound: true,
-          };
-        }
-        vendor = persistedVendor;
-        const cachedIndex = this.vendors.findIndex((candidate) => candidate.id === vendor.id);
-        if (cachedIndex >= 0) this.vendors[cachedIndex] = vendor;
-        else this.vendors.unshift(vendor);
+        vendor = await this.getVendorByIdWithDBFallback(vendorIdOrEmail, 'all', { fresh: true });
       } catch (error) {
         logger.error('Vendor profile refresh failed before RFQ unlock; refusing to use stale credit state', {
           error,
-          vendorId: vendor.id,
+          vendorLookupByEmail: String(vendorIdOrEmail || '').includes('@'),
           rfqId: rfqIdOrNumber,
           operation: 'unlock-rfq-vendor-refresh',
         }, 'STORE_SERVICE');
@@ -2338,6 +2321,18 @@ class StoreService {
         unavailable.cause = error;
         throw unavailable;
       }
+    } else {
+      vendor = await this.getVendorByIdWithDBFallback(vendorIdOrEmail, 'all');
+    }
+
+    if (!vendor) {
+      return {
+        success: false,
+        error: hadCachedVendor && pool.hasStorage()
+          ? RFQ_DOWNLOAD_ERRORS.VENDOR_STORAGE_MISSING
+          : RFQ_DOWNLOAD_ERRORS.VENDOR_NOT_FOUND,
+        notFound: true,
+      };
     }
 
     const rfq = (await this.getRFQByIdAsync(rfqIdOrNumber)) || this.getRFQById(rfqIdOrNumber);

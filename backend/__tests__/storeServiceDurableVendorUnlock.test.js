@@ -199,6 +199,7 @@ describe('store service durable vendor RFQ unlock', () => {
 
   test('fails closed when the persisted vendor disappears or cannot be refreshed', async () => {
     domainQueries.getVendorByIdFromDB.mockResolvedValue(null);
+    jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
     await expect(storeService.unlockRFQForVendor(persistedVendor.id, rfq.id)).resolves.toMatchObject({
       success: false,
       notFound: true,

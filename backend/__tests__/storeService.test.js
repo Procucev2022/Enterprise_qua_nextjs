@@ -2998,8 +2998,9 @@ describe('Store Service & Business Operations', () => {
       jest.restoreAllMocks();
     });
 
-    test('returns the in-memory vendor without touching D1 when it is already cached', async () => {
+    test('uses the in-memory vendor when storage is not configured', async () => {
       const domainQueries = require('../src/db/domainQueries');
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(false);
       const spy = jest.spyOn(domainQueries, 'getVendorByIdFromDB');
       const vendor = storeService.addVendor({ name: 'Cached Vendor', email: 'cached@ex.com', majorCategory: 'Cache-Cat' });
 
@@ -3007,6 +3008,61 @@ describe('Store Service & Business Operations', () => {
 
       expect(result).toMatchObject({ id: vendor.id, name: 'Cached Vendor' });
       expect(spy).not.toHaveBeenCalled();
+    });
+
+    test('refreshes a cached vendor from storage before applying buyer ownership scope', async () => {
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      const staleVendor = {
+        id: 'cached-owner-vendor',
+        name: 'Old Vendor Name',
+        email: 'vendor@example.com',
+        buyerAccountId: 'buyer-old',
+      };
+      const persistedVendor = {
+        ...staleVendor,
+        name: 'Current Vendor Name',
+        buyerAccountId: 'buyer-current',
+      };
+      storeService.vendors = [staleVendor];
+      const idSpy = jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(persistedVendor);
+
+      const result = await storeService.getVendorByIdWithDBFallback('cached-owner-vendor', 'buyer-old');
+
+      expect(idSpy).toHaveBeenCalledWith('cached-owner-vendor');
+      expect(result).toBeUndefined();
+      expect(storeService.vendors).toContainEqual(persistedVendor);
+    });
+
+    test('does not hide a configured database read failure behind a cached vendor', async () => {
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      storeService.vendors = [{
+        id: 'cached-outage-vendor',
+        name: 'Cached Vendor',
+        email: 'cached-outage@example.com',
+      }];
+      const idSpy = jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockRejectedValue(new Error('D1 DB is overloaded'));
+
+      await expect(storeService.getVendorByIdWithDBFallback('cached-outage-vendor', 'all'))
+        .rejects.toThrow('D1 DB is overloaded');
+
+      expect(idSpy).toHaveBeenCalledWith('cached-outage-vendor');
+      expect(storeService.vendors[0].name).toBe('Cached Vendor');
+    });
+
+    test('removes a cached vendor after storage confirms that both lookups miss', async () => {
+      jest.spyOn(domainPool, 'hasStorage').mockReturnValue(true);
+      storeService.vendors = [{
+        id: 'deleted-vendor',
+        name: 'Deleted Vendor',
+        email: 'deleted@example.com',
+      }];
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(null);
+      jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
+
+      const result = await storeService.getVendorByIdWithDBFallback('deleted-vendor', 'all');
+
+      expect(result).toBeUndefined();
+      expect(storeService.getVendorById('deleted-vendor', 'all')).toBeUndefined();
     });
 
     // this.vendors is a capped, bootstrap-time subset — a real, persisted

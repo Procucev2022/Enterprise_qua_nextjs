@@ -2038,19 +2038,25 @@ describe('storeService comprehensive branch boost tests', () => {
       expect(storeService.buyerAccounts[0].remainingFreeRFQs).toBe(1);
     });
 
-    test('getVendorByIdWithDBFallback checks memory, then DB, then returns undefined', async () => {
+    test('getVendorByIdWithDBFallback refreshes configured reads and returns undefined when storage misses', async () => {
       const inMem = { id: 'v-mem-1', name: 'In Memory' };
       storeService.vendors = [inMem];
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
-      const res1 = await storeService.getVendorByIdWithDBFallback('v-mem-1');
-      expect(res1).toBe(inMem);
-
+      const refreshedVendor = { id: 'v-mem-1', name: 'Current Persisted Vendor' };
       const dbVendor = { id: 'v-db-1', name: 'From DB' };
-      const spy = jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(dbVendor);
+      const spy = jest.spyOn(domainQueries, 'getVendorByIdFromDB')
+        .mockResolvedValueOnce(refreshedVendor)
+        .mockResolvedValueOnce(dbVendor)
+        .mockResolvedValue(null);
+
+      const res1 = await storeService.getVendorByIdWithDBFallback('v-mem-1');
+      expect(spy).toHaveBeenCalledWith('v-mem-1');
+      expect(res1).toEqual(refreshedVendor);
+      expect(storeService.vendors).toContainEqual(refreshedVendor);
+
       const res2 = await storeService.getVendorByIdWithDBFallback('v-db-1');
       expect(res2).toEqual(dbVendor);
 
-      spy.mockResolvedValue(null);
       const spyEmail = jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
       const res3 = await storeService.getVendorByIdWithDBFallback('v-db-none');
       expect(res3).toBeUndefined();
