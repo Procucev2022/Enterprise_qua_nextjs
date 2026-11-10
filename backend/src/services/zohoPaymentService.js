@@ -39,15 +39,63 @@ const { logger } = require('./loggerService');
 async function fetchWithRetry(url, init, attempt = 1) {
   const MAX_ATTEMPTS = 3;
   const RETRY_DELAY_MS = 400;
+  const timeoutMs = Number(ZOHO_CONFIG.HTTP_REQUEST_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
   try {
-    return await fetch(url, init);
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    if (!timeout) return response;
+
+    // Keep the deadline alive through body consumption, not only until the
+    // response headers arrive. Every Zoho caller reads the JSON body next.
+    return {
+      ok: response.ok,
+      status: response.status,
+      json: async (...args) => {
+        try {
+          return await response.json(...args);
+        } catch (err) {
+          if (controller.signal.aborted) {
+            const timeoutError = Object.assign(new Error(`Zoho request timed out after ${timeoutMs}ms.`), {
+              code: 'ZOHO_REQUEST_TIMEOUT',
+              cause: err,
+            });
+            logger.error('Zoho HTTP request exceeded its configured timeout', { timeoutMs, attempt }, 'ZOHO_PAYMENT_SERVICE');
+            throw timeoutError;
+          }
+          throw err;
+        } finally {
+          clearTimeout(timeout);
+        }
+      },
+    };
   } catch (err) {
+    if (timeout) clearTimeout(timeout);
+    if (controller.signal.aborted) {
+      const timeoutError = Object.assign(new Error(`Zoho request timed out after ${timeoutMs}ms.`), {
+        code: 'ZOHO_REQUEST_TIMEOUT',
+        cause: err,
+      });
+      logger.error('Zoho HTTP request exceeded its configured timeout', { timeoutMs, attempt }, 'ZOHO_PAYMENT_SERVICE');
+      throw timeoutError;
+    }
     if (!(err instanceof TypeError) || !/fetch failed/i.test(err.message || '') || attempt >= MAX_ATTEMPTS) {
       throw err;
     }
     logger.warn(`Zoho fetch failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying with a fresh connection`, { url }, 'ZOHO_PAYMENT_SERVICE');
     await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
     return fetchWithRetry(url, init, attempt + 1);
+  }
+}
+
+async function readJsonResponse(response) {
+  try {
+    return await response.json();
+  } catch (error) {
+    if (error?.code === 'ZOHO_REQUEST_TIMEOUT') throw error;
+    return {};
   }
 }
 
@@ -87,7 +135,7 @@ async function getValidAccessToken() {
     body: body.toString(),
   });
 
-  const data = await res.json().catch(() => ({}));
+  const data = await readJsonResponse(res);
   if (!res.ok || !data.access_token) {
     throw new Error(`Zoho OAuth token refresh failed (${res.status}): ${data.error || 'unknown error'}`);
   }
@@ -132,7 +180,7 @@ async function createPaymentLink({ planId, planLabel, amountInr, email, phone, r
     headers: { 'Content-Type': 'application/json', ...authHeader },
     body: JSON.stringify(requestBody),
   });
-  const data = await res.json().catch(() => ({}));
+  const data = await readJsonResponse(res);
   if (!res.ok || !data.payment_links) {
     throw new Error(`Zoho payment-link creation failed (${res.status}): ${data.message || 'unknown error'}`);
   }
@@ -150,7 +198,7 @@ async function getPaymentLinkStatus(zohoPaymentLinkId) {
   const authHeader = await zohoAuthHeader();
   const url = `${ZOHO_CONFIG.PAYMENTS_BASE_URL}/paymentlinks/${encodeURIComponent(zohoPaymentLinkId)}?account_id=${encodeURIComponent(ZOHO_CONFIG.ACCOUNT_ID)}`;
   const res = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json', ...authHeader } });
-  const data = await res.json().catch(() => ({}));
+  const data = await readJsonResponse(res);
   if (!res.ok || !data.payment_links) {
     const error = new Error(`Zoho payment-link status fetch failed (${res.status}): ${data.message || 'unknown error'}`);
     error.status = res.status;

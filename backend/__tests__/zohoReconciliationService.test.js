@@ -1,19 +1,28 @@
 jest.mock('../src/services/storeService');
 jest.mock('../src/services/zohoPaymentService');
 jest.mock('../src/db/zohoWebhookQueries');
+jest.mock('../src/db/zohoReconciliationQueries');
 
 const storeService = require('../src/services/storeService');
 const zohoPaymentService = require('../src/services/zohoPaymentService');
 const zohoWebhookQueries = require('../src/db/zohoWebhookQueries');
+const zohoReconciliationQueries = require('../src/db/zohoReconciliationQueries');
 const zohoReconciliationService = require('../src/services/zohoReconciliationService');
 const { ZOHO_CONFIG } = require('../src/config/constants');
 
 describe('zohoReconciliationService', () => {
+  const originalMaxConcurrency = ZOHO_CONFIG.RECONCILIATION_MAX_CONCURRENCY;
+
   beforeEach(() => {
     jest.clearAllMocks();
     storeService.activatePaymentLinkDurably.mockResolvedValue({ activated: true });
     storeService.updatePaymentLinkRecordDurably.mockImplementation(async (id, updates) => ({ id, ...updates }));
     zohoWebhookQueries.purgeExpiredWebhookEvents.mockResolvedValue(0);
+    zohoReconciliationQueries.claimPaymentLinkReconciliation.mockResolvedValue({
+      claimed: true,
+      leaseExpiresAt: '2026-11-11T00:03:00.000Z',
+    });
+    zohoReconciliationQueries.purgeExpiredPaymentLinkReconciliationClaims.mockResolvedValue(0);
     zohoReconciliationService.stopPolling();
     jest.useFakeTimers();
   });
@@ -21,6 +30,7 @@ describe('zohoReconciliationService', () => {
   afterEach(() => {
     zohoReconciliationService.stopPolling();
     jest.restoreAllMocks();
+    ZOHO_CONFIG.RECONCILIATION_MAX_CONCURRENCY = originalMaxConcurrency;
     jest.useRealTimers();
   });
 
@@ -32,6 +42,42 @@ describe('zohoReconciliationService', () => {
       await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 0 });
 
       expect(zohoWebhookQueries.purgeExpiredWebhookEvents).toHaveBeenCalledTimes(1);
+    });
+
+    test('records the number of expired reconciliation leases removed', async () => {
+      const logger = require('../src/services/loggerService').logger;
+      const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => {});
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([]);
+      zohoReconciliationQueries.purgeExpiredPaymentLinkReconciliationClaims.mockResolvedValue(2);
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 0 });
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        'Expired Zoho payment-link reconciliation leases purged',
+        { purgedClaims: 2 },
+        'ZOHO_RECONCILIATION'
+      );
+    });
+
+    test('coalesces and throttles expired-claim cleanup for on-demand requests', async () => {
+      let resolveCleanup;
+      zohoReconciliationQueries.purgeExpiredPaymentLinkReconciliationClaims.mockReturnValueOnce(new Promise((resolve) => {
+        resolveCleanup = resolve;
+      }));
+
+      const first = zohoReconciliationService.reconcilePendingLinks([]);
+      const second = zohoReconciliationService.reconcilePendingLinks([]);
+      await Promise.resolve();
+      expect(zohoReconciliationQueries.purgeExpiredPaymentLinkReconciliationClaims).toHaveBeenCalledTimes(1);
+
+      resolveCleanup(0);
+      await expect(Promise.all([first, second])).resolves.toEqual([0, 0]);
+      await expect(zohoReconciliationService.reconcilePendingLinks([])).resolves.toBe(0);
+      expect(zohoReconciliationQueries.purgeExpiredPaymentLinkReconciliationClaims).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(ZOHO_CONFIG.RECONCILIATION_LEASE_MS);
+      await expect(zohoReconciliationService.reconcilePendingLinks([])).resolves.toBe(0);
+      expect(zohoReconciliationQueries.purgeExpiredPaymentLinkReconciliationClaims).toHaveBeenCalledTimes(2);
     });
 
     test('logs receipt cleanup failures and continues payment reconciliation', async () => {
@@ -48,6 +94,71 @@ describe('zohoReconciliationService', () => {
         { error: cleanupError },
         'ZOHO_RECONCILIATION'
       );
+    });
+
+    test('skips a payment link leased by a different isolate when no reason is returned', async () => {
+      const logger = require('../src/services/loggerService').logger;
+      const debugSpy = jest.spyOn(logger, 'debug').mockImplementation(() => {});
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([
+        { id: 'pl-leased', zohoPaymentLinkId: 'zoho-leased', status: 'active' },
+      ]);
+      zohoReconciliationQueries.claimPaymentLinkReconciliation.mockResolvedValue({ claimed: false });
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 1 });
+
+      expect(zohoPaymentService.getPaymentLinkStatus).not.toHaveBeenCalled();
+      expect(debugSpy).toHaveBeenCalledWith(
+        'Skipped Zoho reconciliation because another isolate holds the payment-link lease',
+        { linkId: 'pl-leased', reason: 'CLAIM_NOT_GRANTED' },
+        'ZOHO_RECONCILIATION'
+      );
+    });
+
+    test('fails closed when the durable payment-link lease cannot be acquired', async () => {
+      const logger = require('../src/services/loggerService').logger;
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([
+        { id: 'pl-lease-unavailable', zohoPaymentLinkId: 'zoho-lease-unavailable', status: 'active' },
+      ]);
+      zohoReconciliationQueries.claimPaymentLinkReconciliation.mockRejectedValueOnce(new Error('D1 unavailable'));
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 1 });
+
+      expect(zohoPaymentService.getPaymentLinkStatus).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Zoho reconciliation failed for payment link pl-lease-unavailable',
+        expect.any(Error),
+        'ZOHO_RECONCILIATION'
+      );
+    });
+
+    test('keeps a failed payment-link lease until its short expiry to avoid an immediate provider retry storm', async () => {
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([
+        { id: 'pl-retry', zohoPaymentLinkId: 'zoho-retry', status: 'active' },
+      ]);
+      zohoPaymentService.getPaymentLinkStatus.mockRejectedValueOnce(new Error('Zoho unavailable'));
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 1 });
+
+      expect(zohoReconciliationQueries.claimPaymentLinkReconciliation).toHaveBeenCalledWith('pl-retry');
+    });
+
+    test('logs expired claim cleanup failures without blocking payment reconciliation', async () => {
+      const logger = require('../src/services/loggerService').logger;
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([
+        { id: 'pl-cleanup-failure', zohoPaymentLinkId: 'zoho-cleanup-failure', status: 'active' },
+      ]);
+      zohoReconciliationQueries.purgeExpiredPaymentLinkReconciliationClaims.mockRejectedValueOnce(new Error('database unavailable'));
+
+      await expect(zohoReconciliationService.reconcileOnce()).resolves.toEqual({ checked: 1 });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Expired Zoho payment-link reconciliation lease cleanup failed',
+        { error: expect.any(Error) },
+        'ZOHO_RECONCILIATION'
+      );
+      expect(zohoPaymentService.getPaymentLinkStatus).toHaveBeenCalledWith('zoho-cleanup-failure');
     });
 
     test('reuses an active scheduled reconciliation pass instead of repeating its database scan', async () => {
@@ -263,16 +374,45 @@ describe('zohoReconciliationService', () => {
       expect(zohoPaymentService.getPaymentLinkStatus).toHaveBeenCalledTimes(links.length);
     });
 
+    test('uses one worker when the configured concurrency value is invalid', async () => {
+      ZOHO_CONFIG.RECONCILIATION_MAX_CONCURRENCY = 'invalid';
+      zohoPaymentService.getPaymentLinkStatus.mockResolvedValue({ status: 'paid', rawResponse: {} });
+      const links = [
+        { id: 'pl-invalid-concurrency-1', zohoPaymentLinkId: 'zoho-invalid-1', status: 'active' },
+        { id: 'pl-invalid-concurrency-2', zohoPaymentLinkId: 'zoho-invalid-2', status: 'active' },
+      ];
+
+      await expect(zohoReconciliationService.reconcilePendingLinks(links)).resolves.toBe(links.length);
+
+      expect(zohoPaymentService.getPaymentLinkStatus).toHaveBeenCalledTimes(links.length);
+    });
+
+    test('retains the process-local path for legacy payment links with non-string ids', async () => {
+      zohoPaymentService.getPaymentLinkStatus.mockResolvedValueOnce({ status: 'active', rawResponse: {} });
+
+      await expect(zohoReconciliationService.reconcilePendingLinks([
+        { id: 123, zohoPaymentLinkId: 'zoho-numeric-id', status: 'active' },
+      ])).resolves.toBe(1);
+
+      expect(zohoReconciliationQueries.claimPaymentLinkReconciliation).not.toHaveBeenCalled();
+      expect(zohoPaymentService.getPaymentLinkStatus).toHaveBeenCalledWith('zoho-numeric-id');
+    });
+
     test('coalesces overlapping reconciliation requests for the same payment link', async () => {
       let resolveStatus;
-      zohoPaymentService.getPaymentLinkStatus.mockReturnValue(new Promise((resolve) => {
+      let resolveStatusStarted;
+      const statusStarted = new Promise((resolve) => {
+        resolveStatusStarted = resolve;
+      });
+      zohoPaymentService.getPaymentLinkStatus.mockImplementation(() => new Promise((resolve) => {
         resolveStatus = resolve;
+        resolveStatusStarted();
       }));
       const link = { id: 'pl-overlap', zohoPaymentLinkId: 'zoho-overlap', status: 'active' };
 
       const first = zohoReconciliationService.reconcilePendingLinks([link]);
       const second = zohoReconciliationService.reconcilePendingLinks([link]);
-      await Promise.resolve();
+      await statusStarted;
       expect(zohoPaymentService.getPaymentLinkStatus).toHaveBeenCalledTimes(1);
 
       resolveStatus({ status: 'paid', rawResponse: {} });
@@ -308,8 +448,7 @@ describe('zohoReconciliationService', () => {
       const second = zohoReconciliationService.startPolling(config);
       expect(second).toEqual({ started: false, reason: expect.any(String) });
 
-      jest.advanceTimersByTime(1000);
-      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(1000);
       expect(storeService.getPaymentLinksByStatusIn).toHaveBeenCalled();
     });
 

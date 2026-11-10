@@ -16,11 +16,18 @@
 
 const storeService = require('../services/storeService');
 const zohoWebhookQueries = require('../db/zohoWebhookQueries');
+const zohoReconciliationQueries = require('../db/zohoReconciliationQueries');
 const zohoPaymentService = require('./zohoPaymentService');
 const { ZOHO_CONFIG } = require('../config/constants');
 const { logger } = require('./loggerService');
 
-const runtime = { timer: null, reconcilePromise: null, inFlightLinks: new Map() };
+const runtime = {
+  timer: null,
+  reconcilePromise: null,
+  inFlightLinks: new Map(),
+  leaseCleanupAt: null,
+  leaseCleanupPromise: null,
+};
 
 // 'CREATED'/'pending' are this app's own placeholder status
 // (createPaymentLinkRecord's `status || 'CREATED'` fallback); 'active' is
@@ -107,12 +114,58 @@ function reconcileLinkOnce(link) {
 
   let operation;
   operation = Promise.resolve()
-    .then(() => reconcileLink(link))
+    .then(async () => {
+      const claim = await zohoReconciliationQueries.claimPaymentLinkReconciliation(linkId);
+      if (!claim?.claimed) {
+        logger.debug('Skipped Zoho reconciliation because another isolate holds the payment-link lease', {
+          linkId,
+          reason: claim?.reason || 'CLAIM_NOT_GRANTED',
+        }, 'ZOHO_RECONCILIATION');
+        return { skipped: true, reason: claim?.reason || 'CLAIM_NOT_GRANTED' };
+      }
+
+      // Keep the lease until expiry even after success. This avoids a second
+      // D1 write per link; the bounded lease also throttles repeated provider
+      // checks during failures and is reclaimed automatically after a crash.
+      return reconcileLink(link);
+    })
     .finally(() => {
       if (runtime.inFlightLinks.get(linkId) === operation) runtime.inFlightLinks.delete(linkId);
     });
   runtime.inFlightLinks.set(linkId, operation);
   return operation;
+}
+
+async function cleanupExpiredReconciliationClaims() {
+  if (runtime.leaseCleanupPromise) return runtime.leaseCleanupPromise;
+
+  const nowMs = Date.now();
+  const configuredIntervalMs = Number(ZOHO_CONFIG.RECONCILIATION_LEASE_MS);
+  const cleanupIntervalMs = Number.isFinite(configuredIntervalMs) && configuredIntervalMs > 0
+    ? configuredIntervalMs
+    : 0;
+  if (runtime.leaseCleanupAt !== null && nowMs - runtime.leaseCleanupAt < cleanupIntervalMs) return 0;
+
+  runtime.leaseCleanupAt = nowMs;
+  let operation;
+  operation = (async () => {
+    try {
+      const purgedClaims = await zohoReconciliationQueries.purgeExpiredPaymentLinkReconciliationClaims();
+      if (purgedClaims > 0) {
+        logger.info('Expired Zoho payment-link reconciliation leases purged', { purgedClaims }, 'ZOHO_RECONCILIATION');
+      }
+      return purgedClaims;
+    } catch (error) {
+      logger.error('Expired Zoho payment-link reconciliation lease cleanup failed', { error }, 'ZOHO_RECONCILIATION');
+      return 0;
+    }
+  })();
+  runtime.leaseCleanupPromise = operation;
+  try {
+    return await operation;
+  } finally {
+    if (runtime.leaseCleanupPromise === operation) runtime.leaseCleanupPromise = null;
+  }
 }
 
 async function runReconciliationPass() {
@@ -124,6 +177,8 @@ async function runReconciliationPass() {
   } catch (error) {
     logger.error('Expired Zoho webhook receipt cleanup failed', { error }, 'ZOHO_RECONCILIATION');
   }
+
+  await cleanupExpiredReconciliationClaims();
 
   const pending = await storeService.getPaymentLinksByStatusIn(RECONCILABLE_STATUSES);
   for (const link of pending) {
@@ -159,6 +214,7 @@ async function reconcileOnce() {
  * `storeService`, so callers just re-read from storeService afterward.
  */
 async function reconcilePendingLinks(links) {
+  await cleanupExpiredReconciliationClaims();
   const pending = links.filter((l) => RECONCILABLE_STATUSES.includes(l.status));
   let nextIndex = 0;
   const configuredConcurrency = Number(ZOHO_CONFIG.RECONCILIATION_MAX_CONCURRENCY);
@@ -199,6 +255,7 @@ function startPolling(config = ZOHO_CONFIG) {
 
 /** Stop the interval. Safe to call when it was never started. */
 function stopPolling() {
+  runtime.leaseCleanupAt = null;
   if (!runtime.timer) return false;
   clearInterval(runtime.timer);
   runtime.timer = null;
