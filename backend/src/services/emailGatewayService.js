@@ -3373,7 +3373,9 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
           }),
         POLL_CALL_TIMEOUT_MS,
         operationLabel
-      ).catch(() => {});
+      ).catch((modifyError) => {
+        logger.warn(`${operationLabel} did not complete for message ${id}`, modifyError, 'EMAIL_GATEWAY');
+      });
     };
 
     const markRead = (id, label) =>

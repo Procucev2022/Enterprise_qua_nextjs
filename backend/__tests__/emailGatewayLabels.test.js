@@ -583,5 +583,33 @@ describe('Gmail Label-Handling Workflow (Processed & Error Labels)', () => {
       const result = await emailGatewayService.pollViaGmailApi(enabledConfig());
       expect(result.outcomes[0].status).toBe(INGESTION_OUTCOME.INGESTED);
     });
+
+    test('logs Gmail label-update timeouts while preserving successful ingestion', async () => {
+      const api = mockGmailApi({ messages: [{ id: 'timeout_modify' }] });
+      api.users.messages.modify.mockImplementation(() => new Promise(() => {}));
+      jest.spyOn(google, 'gmail').mockReturnValue(api);
+      jest.spyOn(emailGatewayService, 'processMessage').mockResolvedValue({
+        status: INGESTION_OUTCOME.INGESTED,
+        detail: 'Created',
+        rfq: { id: 'rfq-timeout' },
+      });
+      jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      jest.useFakeTimers();
+      try {
+        const pollPromise = emailGatewayService.pollViaGmailApi(enabledConfig());
+        await jest.advanceTimersByTimeAsync(20 * 1000 + 1);
+        const result = await pollPromise;
+
+        expect(result.outcomes[0].status).toBe(INGESTION_OUTCOME.INGESTED);
+        expect(logger.warn).toHaveBeenCalledWith(
+          'Gmail move to Processed (post-process) did not complete for message timeout_modify',
+          expect.objectContaining({ message: 'Gmail move to Processed (post-process) timed out after 20000ms' }),
+          'EMAIL_GATEWAY'
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 });
