@@ -282,11 +282,6 @@ describe('app/buyer/command-center.tsx', () => {
       />
     );
 
-    // Calls filter
-    fireEvent.click(screen.getByText('Calls'));
-    expect(screen.getByText(/Call Connected with Rajesh/i)).toBeInTheDocument();
-    expect(screen.queryByText(/WhatsApp Quotation Prompt/i)).not.toBeInTheDocument();
-
     // WA filter
     fireEvent.click(screen.getByText('WA'));
     expect(screen.getByText(/WhatsApp Quotation Prompt/i)).toBeInTheDocument();
@@ -579,8 +574,7 @@ describe('app/buyer/command-center.tsx', () => {
       />
     );
 
-    // feedChannelFilter branches: call / whatsapp / sms / email / system / all.
-    fireEvent.click(screen.getByRole('button', { name: /^Calls$/i }));
+    // feedChannelFilter branches: whatsapp / sms / email / system / all.
     fireEvent.click(screen.getByRole('button', { name: /^WA$/i }));
     fireEvent.click(screen.getByRole('button', { name: /^SMS$/i }));
     fireEvent.click(screen.getByRole('button', { name: /Email \(24h\)/i }));

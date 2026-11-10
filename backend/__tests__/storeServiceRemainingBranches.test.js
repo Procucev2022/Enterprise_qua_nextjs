@@ -709,5 +709,67 @@ describe('Store Service — remaining branch coverage', () => {
       expect(res.success).toBe(true);
       expect(storeService.aiFeed.length).toBeLessThanOrEqual(100);
     });
+
+    test('_reconcileRFQFollowUpStats covers null RFQ, empty vendors, draft status, and age stages', () => {
+      expect(storeService._reconcileRFQFollowUpStats(null)).toBeNull();
+
+      const rfqEmpty = { id: 'rfq-e', assignedVendors: [] };
+      expect(storeService._reconcileRFQFollowUpStats(rfqEmpty)).toBe(rfqEmpty);
+
+      const rfqDraft = { id: 'rfq-d', status: 'Draft', assignedVendors: [{ id: 'v-1' }] };
+      expect(storeService._reconcileRFQFollowUpStats(rfqDraft)).toBe(rfqDraft);
+
+      const rfqParsing = { id: 'rfq-p', status: 'Parsing', assignedVendors: [{ id: 'v-1' }] };
+      expect(storeService._reconcileRFQFollowUpStats(rfqParsing)).toBe(rfqParsing);
+
+      // Fresh RFQ (< 5 min)
+      const rfqFresh = {
+        id: 'rfq-fresh',
+        status: 'Quotes Pending',
+        createdAt: new Date().toISOString(),
+        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }, null]
+      };
+      const freshResult = storeService._reconcileRFQFollowUpStats(rfqFresh);
+      expect(freshResult.followUpData.smsStats.delivered).toBe(0);
+      expect(freshResult.followUpData.whatsappStats.delivered).toBe(0);
+      expect(freshResult.followUpData.emailStats.delivered).toBe(0);
+
+      // 5 min old RFQ (>= 300,000ms)
+      const rfq5m = {
+        id: 'rfq-5m',
+        status: 'Quotes Pending',
+        createdAt: new Date(Date.now() - 360000).toISOString(),
+        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }],
+        followUpData: { totalInvited: 1, vendors: [{ id: 'v-1' }] }
+      };
+      const res5m = storeService._reconcileRFQFollowUpStats(rfq5m);
+      expect(res5m.followUpData.smsStats.delivered).toBe(1);
+      expect(res5m.followUpData.whatsappStats.delivered).toBe(0);
+      expect(res5m.followUpData.emailStats.delivered).toBe(0);
+
+      // 12 hr old RFQ (>= 43,200,000ms)
+      const rfq12h = {
+        id: 'rfq-12h',
+        status: 'Quotes Pending',
+        createdAt: new Date(Date.now() - 44000000).toISOString(),
+        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }]
+      };
+      const res12h = storeService._reconcileRFQFollowUpStats(rfq12h);
+      expect(res12h.followUpData.smsStats.delivered).toBe(1);
+      expect(res12h.followUpData.whatsappStats.delivered).toBe(1);
+      expect(res12h.followUpData.emailStats.delivered).toBe(0);
+
+      // 24 hr old RFQ (>= 86,400,000ms)
+      const rfq24h = {
+        id: 'rfq-24h',
+        status: 'Quotes Pending',
+        createdAt: new Date(Date.now() - 90000000).toISOString(),
+        assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }]
+      };
+      const res24h = storeService._reconcileRFQFollowUpStats(rfq24h);
+      expect(res24h.followUpData.smsStats.delivered).toBe(1);
+      expect(res24h.followUpData.whatsappStats.delivered).toBe(1);
+      expect(res24h.followUpData.emailStats.delivered).toBe(1);
+    });
   });
 });
