@@ -85,13 +85,15 @@ export async function fetchApprovals(filters: {
 export async function processApprovalAction(
   id: string,
   action: 'APPROVE' | 'REJECT',
-  remarks = ''
+  remarks = '',
+  password = '',
+  approverName = ''
 ): Promise<{ success: boolean; data?: ApprovalRequest; error?: string }> {
   try {
     const res = await fetch(`/api/approvals/${encodeURIComponent(id)}/action`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ action, remarks }),
+      body: JSON.stringify({ action, remarks, password, approverName }),
     });
     const json = await res.json();
     if (!res.ok) {

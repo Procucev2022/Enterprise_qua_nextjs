@@ -127,7 +127,7 @@ describe('approvalClient', () => {
         json: async () => ({ data: mockUpdated }),
       });
 
-      const res = await processApprovalAction('appr-1', 'APPROVE', 'Within budget threshold');
+      const res = await processApprovalAction('appr-1', 'APPROVE', 'Within budget threshold', 'Procucev@2026', 'Srinu Sir');
 
       expect(res).toEqual({ success: true, data: mockUpdated });
       expect(global.fetch).toHaveBeenCalledWith(
@@ -137,6 +137,8 @@ describe('approvalClient', () => {
           body: JSON.stringify({
             action: 'APPROVE',
             remarks: 'Within budget threshold',
+            password: 'Procucev@2026',
+            approverName: 'Srinu Sir',
           }),
         })
       );

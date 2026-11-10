@@ -4940,3 +4940,84 @@ continue
 ```text
 please fix this issue it running almost 5 hr please completed  very fast
 ```
+
+
+---
+
+### Prompt 105
+
+**Timestamp**: 2026-11-10T15:20:49+05:30
+
+```text
+Supplier 360° Dossier – Required Updates
+
+Add Active RFQs Section: Add a new Active RFQs tab immediately after Documents. Display only currently active RFQs matching the supplier’s registered categories. Exclude closed, expired, and cancelled RFQs. Show relevant RFQ details and allow users to open each RFQ.
+
+Fix Quote & Credit Utilization: The supplier currently shows 2 quotes but 5 credits. Verify the actual quote submissions, available credits, and credit transaction history from the database. Display accurate credit usage and utilization. Do not use hardcoded or dummy values.
+
+Remove Dummy Data: Remove all mock/test data from the development environment and ensure every displayed field is populated using genuine database records and existing APIs.
+
+Global Popup Behaviour: Across all Category Manager sections, close any open modal, popup, or drawer when the user clicks outside it. Also support closing with the Escape key. Ensure clicks inside the popup do not close it.
+
+Important: Reuse existing APIs, database models, and business logic. Fix the root causes, verify all functionality end-to-end, and do not break existing features.
+```
+
+---
+
+### Prompt 106
+
+**Timestamp**: 2026-11-10T16:12:54+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 107
+
+**Timestamp**: 2026-11-10T17:59:52+05:30
+
+```text
+All the files changes are not showing in source contol please continue and fix this issue as soon as possible very fast it is running from since 4 hr
+```
+
+---
+
+### Prompt 108
+
+**Timestamp**: 2026-11-10T18:05:12+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 109
+
+**Timestamp**: 2026-11-10T18:10:45+05:30
+
+```text
+continue and fix this approval issue in very  fast manner it is running from 4 hr
+```
+
+---
+
+### Prompt 110
+
+**Timestamp**: 2026-11-10T18:14:50+05:30
+
+```text
+use sudheer.kangala @procucev.com , srinivas.mukku@procucev.com
+```
+
+---
+
+### Prompt 111
+
+**Timestamp**: 2026-11-10T19:03:49+05:30
+
+```text
+please check the pr and pass the all coverages and AI review and gemini pr check and merge in Test-v3
+```

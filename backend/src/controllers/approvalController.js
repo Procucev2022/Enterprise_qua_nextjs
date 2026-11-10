@@ -25,6 +25,12 @@ function sendApprovalError(res, error, fallbackMessage) {
       retryable: false,
     });
   }
+  if (error?.code === 'APPROVER_PASSWORD_INVALID') {
+    return res.status(401).json({ success: false, error: APPROVAL_MESSAGES.PASSWORD_INVALID, retryable: false });
+  }
+  if (error?.code === 'APPROVER_PASSWORD_NOT_CONFIGURED') {
+    return res.status(503).json({ success: false, error: APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE, retryable: false });
+  }
   return res.status(500).json({ success: false, error: fallbackMessage });
 }
 

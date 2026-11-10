@@ -10,6 +10,7 @@ const pool = require('./pool');
 const crypto = require('crypto');
 const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
 const { logger } = require('../services/loggerService');
+const { APPROVAL_MESSAGES, isApproverPasswordConfigured, verifyApproverPassword } = require('../config/constants');
 
 const memoryApprovals = [
   {
@@ -669,7 +670,20 @@ async function createApproval(data, actor = {}) {
  * Process approval or rejection action.
  * For Buyer Credit Additions, updates buyer credit balance and synchronizes corresponding internal task.
  */
-async function processApprovalAction(id, { action, remarks = '' }, actor = {}) {
+async function processApprovalAction(id, { action, remarks = '', password = '', approverName = '' }, actor = {}) {
+  if (!isApproverPasswordConfigured(approverName)) {
+    const configurationError = new Error(APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE);
+    configurationError.code = 'APPROVER_PASSWORD_NOT_CONFIGURED';
+    configurationError.statusCode = 503;
+    throw configurationError;
+  }
+  if (!verifyApproverPassword(approverName, password)) {
+    const passwordError = new Error(APPROVAL_MESSAGES.PASSWORD_INVALID);
+    passwordError.code = 'APPROVER_PASSWORD_INVALID';
+    passwordError.statusCode = 401;
+    throw passwordError;
+  }
+
   const normalizedAction = String(action || '').toUpperCase().includes('APPROV') ? 'Approved' : 'Rejected';
   const now = new Date().toISOString();
   const eventId = crypto.randomUUID();

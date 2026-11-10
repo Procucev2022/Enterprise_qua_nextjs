@@ -1119,6 +1119,8 @@ const VALIDATION_SCHEMAS = {
   approvalAction: {
     action: { type: 'string', required: true, enum: ['APPROVE', 'REJECT', 'Approve', 'Reject', 'approved', 'rejected'], message: 'Action must be APPROVE or REJECT.' },
     remarks: { type: 'string', required: false, maxLength: 1000 },
+    password: { type: 'string', required: true, minLength: 1, message: 'Approver password confirmation is required.' },
+    approverName: { type: 'string', required: true, minLength: 2, maxLength: 100, message: 'Select the approver whose password you are confirming.' },
   },
 
   registrationList: {

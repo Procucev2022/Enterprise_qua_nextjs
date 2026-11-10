@@ -1,8 +1,14 @@
+const path = require('path');
+const crypto = require('crypto');
 const { logger } = require('../services/loggerService');
 
 // ==============================================================================
 // PROCUCEV ENTERPRISE (QUA AI 2.0) - CONSTANTS, TAXONOMIES & SYSTEM DEFAULTS
 // ==============================================================================
+
+const INQUIRIES_PERSISTENCE_FILE = typeof __dirname !== 'undefined'
+  ? path.join(__dirname, '../../data/enterprise_inquiries.json')
+  : './data/enterprise_inquiries.json';
 
 /**
  * Centralized RFQ Modes Enum / Constants
@@ -520,6 +526,8 @@ const PERSISTENCE_MESSAGES = Object.freeze({
 const APPROVAL_MESSAGES = Object.freeze({
   DATABASE_UNAVAILABLE: PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE,
   ALREADY_DECIDED: 'This approval was already decided. Refresh the list before taking another action.',
+  PASSWORD_INVALID: 'The approver password is invalid. Check the selected approver and try again.',
+  PASSWORD_CONFIGURATION_UNAVAILABLE: 'Approver password verification is not configured. Contact an administrator.',
 });
 
 const REGISTRATION_MESSAGES = Object.freeze({
@@ -3205,7 +3213,55 @@ const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
   }),
 });
 
+const APPROVER_CONFIG = Object.freeze([
+  {
+    id: 'srinu_sir',
+    name: 'Srinu Sir',
+    title: 'Director / Management Authority',
+    email: process.env.SRINU_APPROVER_EMAIL || 'srinivas.mukku@procucev.com',
+  },
+  {
+    id: 'sudheer_sir',
+    name: 'Sudheer Sir',
+    title: 'Management Authority',
+    email: process.env.SUDHEER_APPROVER_EMAIL || 'sudheer.kangala@procucev.com',
+  },
+]);
+
+function resolveApproverPasswordEnvironmentVariable(approverName) {
+  const normalizedName = String(approverName || '').trim().toLowerCase();
+  if (!normalizedName) return null;
+  if (normalizedName.includes('srinu') || normalizedName.includes('srinivas') || normalizedName.includes('mukku')) {
+    return 'SRINU_APPROVER_PASSWORD';
+  }
+  if (normalizedName.includes('sudheer') || normalizedName.includes('kangala')) {
+    return 'SUDHEER_APPROVER_PASSWORD';
+  }
+  return null;
+}
+
+function isApproverPasswordConfigured(approverName) {
+  const environmentVariable = resolveApproverPasswordEnvironmentVariable(approverName);
+  return Boolean(environmentVariable && (process.env[environmentVariable] || process.env.APPROVER_PASSWORD));
+}
+
+function verifyApproverPassword(approverName, submittedPassword) {
+  if (typeof submittedPassword !== 'string' || submittedPassword.length === 0) return false;
+  const environmentVariable = resolveApproverPasswordEnvironmentVariable(approverName);
+  if (!environmentVariable) return false;
+  const expectedPassword = process.env[environmentVariable] || process.env.APPROVER_PASSWORD;
+  if (!expectedPassword) return false;
+
+  const expectedHash = crypto.createHash('sha256').update(expectedPassword, 'utf8').digest();
+  const submittedHash = crypto.createHash('sha256').update(submittedPassword, 'utf8').digest();
+  return crypto.timingSafeEqual(expectedHash, submittedHash);
+}
+
 module.exports = {
+  APPROVER_CONFIG,
+  isApproverPasswordConfigured,
+  verifyApproverPassword,
+  INQUIRIES_PERSISTENCE_FILE,
   DAILY_RFQ_REPORT_CONFIG,
   ACCOUNT_DOCUMENT_CATEGORIES,
   ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES,

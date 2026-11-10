@@ -347,6 +347,7 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
 
   approvalActionForm: {
     action: { required: true, message: 'Action is required.' },
+    password: { required: true, minLength: 1, message: 'Approver password is required.' },
   },
 
   registrationActionForm: {

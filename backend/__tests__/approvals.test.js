@@ -7,10 +7,18 @@ const { resetD1HttpClientCache } = require('../src/db/d1Bridge');
 const { logger } = require('../src/services/loggerService');
 
 const initialMemoryApprovals = JSON.parse(JSON.stringify(approvalQueries.memoryApprovals));
+const TEST_APPROVER_PASSWORD = 'test-only-approver-secret';
+const originalApproverPassword = process.env.APPROVER_PASSWORD;
+const withApprovalCredentials = (payload = {}) => ({
+  password: TEST_APPROVER_PASSWORD,
+  approverName: 'Srinu Sir',
+  ...payload,
+});
 
 describe('Approvals API & Controller', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
+    process.env.APPROVER_PASSWORD = TEST_APPROVER_PASSWORD;
     approvalQueries.memoryApprovals.splice(
       0,
       approvalQueries.memoryApprovals.length,
@@ -23,6 +31,8 @@ describe('Approvals API & Controller', () => {
     delete process.env.CLOUDFLARE_ACCOUNT_ID;
     delete process.env.CLOUDFLARE_D1_DATABASE_ID;
     delete process.env.CLOUDFLARE_API_TOKEN;
+    if (originalApproverPassword === undefined) delete process.env.APPROVER_PASSWORD;
+    else process.env.APPROVER_PASSWORD = originalApproverPassword;
     resetD1HttpClientCache();
   });
 
@@ -107,7 +117,7 @@ describe('Approvals API & Controller', () => {
     const notFoundRes = await request(app)
       .post('/api/approvals/appr-missing-999/action')
       .set(authHeader('admin'))
-      .send({ action: 'APPROVE' });
+      .send(withApprovalCredentials({ action: 'APPROVE' }));
     expect(notFoundRes.status).toBe(404);
 
     // Success approval
@@ -115,7 +125,7 @@ describe('Approvals API & Controller', () => {
       .post('/api/approvals/appr-cred-101/action')
       .set(authHeader('admin'))
       .set('x-user-name', 'Sudheer Kangala')
-      .send({ action: 'APPROVE', remarks: 'Granted 100 extra free credits for RFQs.' });
+      .send(withApprovalCredentials({ action: 'APPROVE', remarks: 'Granted 100 extra free credits for RFQs.', approverName: 'Srinu Sir' }));
     expect(okRes.status).toBe(200);
     expect(okRes.body.success).toBe(true);
     expect(okRes.body.data.status).toBe('Approved');
@@ -125,7 +135,7 @@ describe('Approvals API & Controller', () => {
       .post('/api/approvals/appr-acct-102/action')
       .set(authHeader('category_manager'))
       .set('x-user-name', 'Sudheer Kangala')
-      .send({ action: 'REJECT', remarks: 'Invalid business documentation.' });
+      .send(withApprovalCredentials({ action: 'REJECT', remarks: 'Invalid business documentation.' }));
     expect(rejectRes.status).toBe(200);
     expect(rejectRes.body.data.status).toBe('Rejected');
   });
@@ -143,7 +153,7 @@ describe('Approvals API & Controller', () => {
     const actErr = await request(app)
       .post('/api/approvals/appr-cred-101/action')
       .set(authHeader('admin'))
-      .send({ action: 'APPROVE' });
+      .send(withApprovalCredentials({ action: 'APPROVE' }));
     expect(actErr.status).toBe(500);
   });
 
@@ -168,7 +178,7 @@ describe('Approvals API & Controller', () => {
     const auditSpy = jest.spyOn(require('../src/services/loggerService').logger, 'audit');
     const updated = await approvalQueries.processApprovalAction(
       'appr-trial-104',
-      { action: 'APPROVE', remarks: 'Extended 30 days' },
+      withApprovalCredentials({ action: 'APPROVE', remarks: 'Extended 30 days' }),
       { uuid: 'operator-1', name: 'Admin', email: 'admin@procucev.com' }
     );
     expect(updated).toMatchObject({
@@ -184,7 +194,7 @@ describe('Approvals API & Controller', () => {
       'REQ-TRL-6320'
     );
     await expect(approvalQueries.processApprovalAction(
-      'appr-trial-104', { action: 'REJECT' }, {}
+      'appr-trial-104', withApprovalCredentials({ action: 'REJECT' }), {}
     )).rejects.toMatchObject({ code: 'APPROVAL_ALREADY_DECIDED' });
   });
 
@@ -236,7 +246,7 @@ describe('Approvals API & Controller', () => {
       .mockImplementation((callback) => callback({ query: clientQuery }));
 
     await expect(approvalQueries.processApprovalAction(
-      'REQ-DB-1', { action: 'APPROVE', remarks: 'Approved' },
+      'REQ-DB-1', withApprovalCredentials({ action: 'APPROVE', remarks: 'Approved' }),
       { uuid: 'admin-1', name: 'Admin', email: 'admin@example.com' }
     )).resolves.toEqual(saved);
     expect(transactionSpy).toHaveBeenCalledTimes(1);
@@ -251,11 +261,11 @@ describe('Approvals API & Controller', () => {
     jest.spyOn(pool, 'withTransaction').mockImplementation((callback) => callback({
       query: jest.fn().mockResolvedValueOnce({ rows: [] }),
     }));
-    await expect(approvalQueries.processApprovalAction('missing', { action: 'REJECT' })).resolves.toBeNull();
+    await expect(approvalQueries.processApprovalAction('missing', withApprovalCredentials({ action: 'REJECT' }))).resolves.toBeNull();
 
     const clientQuery = jest.fn().mockResolvedValueOnce({ rows: [{ id: 'db-1', status: 'Approved' }] });
     pool.withTransaction.mockImplementation((callback) => callback({ query: clientQuery }));
-    await expect(approvalQueries.processApprovalAction('db-1', { action: 'REJECT' }))
+    await expect(approvalQueries.processApprovalAction('db-1', withApprovalCredentials({ action: 'REJECT' })))
       .rejects.toMatchObject({ code: 'APPROVAL_ALREADY_DECIDED' });
     expect(clientQuery).toHaveBeenCalledTimes(1);
   });
@@ -280,7 +290,7 @@ describe('Approvals API & Controller', () => {
     globalThis.__CF_ENV__ = { DB: db };
 
     await expect(approvalQueries.processApprovalAction(
-      'REQ-D1-1', { action: 'REJECT', remarks: 'Declined' }, { name: 'Manager' }
+      'REQ-D1-1', withApprovalCredentials({ action: 'REJECT', remarks: 'Declined' }), { name: 'Manager' }
     )).resolves.toEqual(saved);
     expect(db.batch).toHaveBeenCalledTimes(1);
     expect(prepared).toHaveLength(2);
@@ -299,13 +309,13 @@ describe('Approvals API & Controller', () => {
     const readSpy = jest.spyOn(pool, 'query')
       .mockResolvedValue({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ id: 'd1-1', status: 'Approved' }] });
-    await expect(approvalQueries.processApprovalAction('d1-1', { action: 'REJECT' }))
+    await expect(approvalQueries.processApprovalAction('d1-1', withApprovalCredentials({ action: 'REJECT' })))
       .rejects.toMatchObject({ code: 'APPROVAL_ALREADY_DECIDED' });
     readSpy.mockResolvedValueOnce({ rows: [] });
-    await expect(approvalQueries.processApprovalAction('missing', { action: 'REJECT' })).resolves.toBeNull();
+    await expect(approvalQueries.processApprovalAction('missing', withApprovalCredentials({ action: 'REJECT' }))).resolves.toBeNull();
 
     db.batch.mockRejectedValueOnce(new Error('D1 offline'));
-    await expect(approvalQueries.processApprovalAction('d1-1', { action: 'REJECT' }))
+    await expect(approvalQueries.processApprovalAction('d1-1', withApprovalCredentials({ action: 'REJECT' })))
       .rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
   });
 
@@ -320,10 +330,32 @@ describe('Approvals API & Controller', () => {
     const conflict = await request(app)
       .post('/api/approvals/appr-cred-101/action')
       .set(authHeader('admin'))
-      .send({ action: 'APPROVE' });
+      .send(withApprovalCredentials({ action: 'APPROVE' }));
     expect(conflict.status).toBe(409);
     expect(conflict.body.retryable).toBe(false);
     actionSpy.mockRestore();
+  });
+
+  test('approval actions require a configured secret and reject invalid approver credentials', async () => {
+    const constants = require('../src/config/constants');
+    expect(constants.isApproverPasswordConfigured('Srinu Sir')).toBe(true);
+    expect(constants.verifyApproverPassword('Srinu Sir', TEST_APPROVER_PASSWORD)).toBe(true);
+    expect(constants.verifyApproverPassword('Srinu Sir', 'incorrect')).toBe(false);
+    expect(constants.verifyApproverPassword('Unknown Approver', TEST_APPROVER_PASSWORD)).toBe(false);
+
+    const badPassword = await request(app)
+      .post('/api/approvals/appr-cred-101/action')
+      .set(authHeader('admin'))
+      .send(withApprovalCredentials({ action: 'APPROVE', password: 'incorrect' }));
+    expect(badPassword.status).toBe(401);
+
+    delete process.env.APPROVER_PASSWORD;
+    const unconfigured = await request(app)
+      .post('/api/approvals/appr-cred-101/action')
+      .set(authHeader('admin'))
+      .send(withApprovalCredentials({ action: 'APPROVE' }));
+    expect(unconfigured.status).toBe(503);
+    process.env.APPROVER_PASSWORD = TEST_APPROVER_PASSWORD;
   });
 
   test('approvalController directly tests extractActor branches and query variations', async () => {
@@ -340,7 +372,7 @@ describe('Approvals API & Controller', () => {
     await approvalController.processAction(
       {
         params: { id: 'appr-cred-101' },
-        body: { action: 'APPROVE', remarks: 'Good' },
+        body: withApprovalCredentials({ action: 'APPROVE', remarks: 'Good' }),
         user: { uuid: 'u-123', fullName: 'Director John', email: 'john@x.com', role: 'superadmin' },
       },
       resMock
@@ -352,7 +384,7 @@ describe('Approvals API & Controller', () => {
     await approvalController.processAction(
       {
         params: { id: 'appr-cred-101' },
-        body: { action: 'REJECT' },
+        body: withApprovalCredentials({ action: 'REJECT' }),
         user: { id: 'u-456', name: 'Manager Mary' },
       },
       resMock
@@ -364,7 +396,7 @@ describe('Approvals API & Controller', () => {
     await approvalController.processAction(
       {
         params: { id: 'appr-cred-101' },
-        body: { action: 'APPROVE' },
+        body: withApprovalCredentials({ action: 'APPROVE' }),
         user: { email: 'ops@x.com' },
       },
       resMock
@@ -376,7 +408,7 @@ describe('Approvals API & Controller', () => {
     await approvalController.processAction(
       {
         params: { id: 'appr-cred-101' },
-        body: { action: 'APPROVE' },
+        body: withApprovalCredentials({ action: 'APPROVE' }),
         user: {},
       },
       resMock
@@ -388,7 +420,7 @@ describe('Approvals API & Controller', () => {
     await approvalController.processAction(
       {
         params: { id: 'appr-cred-101' },
-        body: { action: 'APPROVE' },
+        body: withApprovalCredentials({ action: 'APPROVE' }),
         headers: { 'x-user-name': 'Manual Reviewer', 'x-user-email': 'manual@example.com' },
       },
       resMock
@@ -397,7 +429,7 @@ describe('Approvals API & Controller', () => {
 
     resetCreditApproval();
     await approvalController.processAction(
-      { params: { id: 'appr-cred-101' }, body: { action: 'APPROVE' }, headers: {} },
+      { params: { id: 'appr-cred-101' }, body: withApprovalCredentials({ action: 'APPROVE' }), headers: {} },
       resMock
     );
     expect(jsonResult.success).toBe(true);
@@ -434,11 +466,11 @@ describe('Approvals API & Controller', () => {
 
     // 7. processApprovalAction variations
     resetCreditApproval();
-    await approvalQueries.processApprovalAction('appr-cred-101', { action: '' });
+    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: '' }));
     resetCreditApproval();
-    await approvalQueries.processApprovalAction('appr-cred-101', { action: 'APPROVE' }, { email: 'only@x.com' });
+    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: 'APPROVE' }), { email: 'only@x.com' });
     resetCreditApproval();
-    await approvalQueries.processApprovalAction('appr-cred-101', { action: 'APPROVE' }, {});
+    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: 'APPROVE' }), {});
 
     // 8. test limit and offset numeric branches in controller
     await approvalController.getApprovals({ query: { limit: '10', offset: '5' } }, resMock);
@@ -558,6 +590,8 @@ describe('Approvals API & Controller', () => {
     const approvedDb = await approvalQueries.processApprovalAction('appr-db-1', {
       action: 'APPROVE',
       remarks: 'Approved in DB',
+      password: TEST_APPROVER_PASSWORD,
+      approverName: 'Srinu Sir',
     }, { name: 'Director' });
     expect(approvedDb.status).toBe('Approved');
     expect(internalTaskQueries.approveCreditTask).toHaveBeenCalledWith(
@@ -574,6 +608,8 @@ describe('Approvals API & Controller', () => {
     const rejectedDb = await approvalQueries.processApprovalAction('appr-db-1', {
       action: 'REJECT',
       remarks: 'Rejected in DB',
+      password: TEST_APPROVER_PASSWORD,
+      approverName: 'Srinu Sir',
     }, { name: 'Director' });
     expect(rejectedDb.status).toBe('Rejected');
     expect(internalTaskQueries.rejectCreditTask).toHaveBeenCalledWith(
@@ -590,21 +626,23 @@ describe('Approvals API & Controller', () => {
       .mockResolvedValueOnce({ rows: [approvedRow] });
     const safeSync = await approvalQueries.processApprovalAction('appr-db-1', {
       action: 'APPROVE',
+      password: TEST_APPROVER_PASSWORD,
+      approverName: 'Srinu Sir',
     }, { name: 'Director' });
     expect(safeSync.status).toBe('Approved');
 
     // A durable miss must not act on a stale in-memory approval.
     transactionSpy.mockImplementationOnce(transactionFor());
     querySpy.mockResolvedValueOnce({ rows: [] });
-    await expect(approvalQueries.processApprovalAction('appr-cred-101', {
+    await expect(approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({
       action: 'APPROVE',
-    })).resolves.toBeNull();
+    }))).resolves.toBeNull();
     jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
-    await approvalQueries.processApprovalAction('appr-cred-101', { action: '' });
+    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: '' }));
     approvalQueries.memoryApprovals.find((item) => item.id === 'appr-cred-101').status = 'Pending';
-    await approvalQueries.processApprovalAction('appr-cred-101', { action: 'APPROVE' }, { email: 'only@x.com' });
+    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: 'APPROVE' }), { email: 'only@x.com' });
     approvalQueries.memoryApprovals.find((item) => item.id === 'appr-cred-101').status = 'Pending';
-    await approvalQueries.processApprovalAction('appr-cred-101', { action: 'APPROVE' }, {});
+    await approvalQueries.processApprovalAction('appr-cred-101', withApprovalCredentials({ action: 'APPROVE' }), {});
   });
 
   test('approvalQueries exhaustive branch coverage for memory filtering, hydration, and actions', async () => {
@@ -679,7 +717,7 @@ describe('Approvals API & Controller', () => {
     expect(allFiltersRes.rows.length).toBeGreaterThanOrEqual(1);
 
     jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
-    const notFoundAction = await approvalQueries.processApprovalAction('totally-missing-id', { action: 'APPROVE' });
+    const notFoundAction = await approvalQueries.processApprovalAction('totally-missing-id', withApprovalCredentials({ action: 'APPROVE' }));
     expect(notFoundAction).toBeNull();
 
     const nonCredit = await approvalQueries.createApproval({
@@ -692,6 +730,8 @@ describe('Approvals API & Controller', () => {
     const processedNonCredit = await approvalQueries.processApprovalAction(nonCredit.id, {
       action: 'APPROVE',
       remarks: 'Standard hardware signoff',
+      password: TEST_APPROVER_PASSWORD,
+      approverName: 'Srinu Sir',
     });
     expect(processedNonCredit.status).toBe('Approved');
 
@@ -700,6 +740,8 @@ describe('Approvals API & Controller', () => {
     await expect(approvalQueries.processApprovalAction(nonCredit.id, {
       action: 'REJECT',
       remarks: 'Rejected hardware signoff',
+      password: TEST_APPROVER_PASSWORD,
+      approverName: 'Srinu Sir',
     })).rejects.toMatchObject({ code: 'PERSISTENCE_UNAVAILABLE' });
 
     // Database getSummary branch coverage
@@ -774,6 +816,8 @@ describe('Approvals API & Controller', () => {
     creditNoTask.history = null;
     const approvedNoTask = await approvalQueries.processApprovalAction(creditNoTask.id, {
       action: 'APPROVE',
+      password: TEST_APPROVER_PASSWORD,
+      approverName: 'Srinu Sir',
     });
     expect(approvedNoTask.status).toBe('Approved');
     expect(approvedNoTask.history.length).toBe(1);
