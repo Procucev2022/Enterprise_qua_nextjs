@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { SOURCING_MODES } from '@/lib/constants';
@@ -23,6 +23,14 @@ jest.mock('@/lib/rfqClient', () => ({
   fetchAllVendors: jest.fn(),
   requestVendorCategoryUpdateEmail: jest.fn(() => Promise.resolve({ success: true })),
 }));
+
+jest.mock('@/lib/validationSchemas', () => {
+  const actual = jest.requireActual('@/lib/validationSchemas');
+  return {
+    ...actual,
+    validatePincode: jest.fn(actual.validatePincode),
+  };
+});
 
 // The modal reads buyerVendors from useApp() inside a try/catch, since it can
 // render outside an AppProvider in some contexts. Defaults to throwing (the
@@ -62,6 +70,7 @@ jest.mock('@/lib/documentExtraction', () => ({
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const rfqClient = require('@/lib/rfqClient');
+const validationSchemas = require('@/lib/validationSchemas');
 
 const MODAL = UI_STRINGS.manualRfqModal;
 const MANUAL = UI_STRINGS.manualRfq;
@@ -185,6 +194,10 @@ import { setCategoryTaxonomy } from '@/lib/categoryTaxonomy';
 
 beforeEach(() => {
   jest.clearAllMocks();
+  validationSchemas.validatePincode.mockReset();
+  validationSchemas.validatePincode.mockImplementation(
+    jest.requireActual('@/lib/validationSchemas').validatePincode
+  );
   setCategoryTaxonomy(categoriesData);
   (useApp as jest.Mock).mockReturnValue({
     buyerVendors: [
@@ -1908,46 +1921,55 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
     });
 
-    it('covers debounced pincode API validation with valid and invalid server responses', async () => {
-      renderModal();
-      const pinInput = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder);
+    it('covers debounced pincode state for valid, invalid, and failed requests', async () => {
+      const validatePincode = validationSchemas.validatePincode;
+      jest.useFakeTimers();
+      try {
+        renderModal();
+        const pinInput = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder);
 
-      // 1. Debounced valid 6-digit pin
-      global.fetch = jest.fn().mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{
-          Status: 'Success',
-          PostOffice: [{ Name: 'Indiranagar', District: 'Bengaluru', State: 'Karnataka' }],
-        }],
-      } as Response);
-      fireEvent.change(pinInput, { target: { value: '560038' } });
-      await waitFor(() => {
+        // 1. Debounced valid 6-digit pin
+        validatePincode.mockResolvedValueOnce({
+          isValid: true,
+          postOffices: [{ Name: 'Indiranagar', District: 'Bengaluru', State: 'Karnataka' }],
+        });
+        fireEvent.change(pinInput, { target: { value: '560038' } });
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(350);
+        });
         expect(screen.getByText('Valid')).toBeInTheDocument();
-      });
 
-      // 2. Debounced invalid 6-digit pin with custom message
-      global.fetch = jest.fn().mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{ Status: 'Error', Message: 'No record found' }],
-      } as Response);
-      fireEvent.change(pinInput, { target: { value: '999991' } });
-      await waitFor(() => {
+        // 2. Debounced invalid 6-digit pin with custom message
+        validatePincode.mockResolvedValueOnce({ isValid: false });
+        fireEvent.change(pinInput, { target: { value: '999991' } });
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(350);
+        });
         expect(screen.getByText('Invalid')).toBeInTheDocument();
-      });
 
-      // 3. Debounced 6-digit pin with fetch rejection (network fallback)
-      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network offline'));
-      fireEvent.change(pinInput, { target: { value: '999992' } });
-      await new Promise((r) => setTimeout(r, 400));
+        // 3. Debounced 6-digit pin with fetch rejection (network fallback)
+        validatePincode.mockRejectedValueOnce(new Error('Network offline'));
+        fireEvent.change(pinInput, { target: { value: '999992' } });
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(350);
+        });
 
-      // 4. Blur on non-6-digit pin (skips validation)
-      fireEvent.change(pinInput, { target: { value: '12' } });
-      fireEvent.blur(pinInput);
+        // 4. Blur on non-6-digit pin (skips validation)
+        fireEvent.change(pinInput, { target: { value: '12' } });
+        fireEvent.blur(pinInput);
 
-      // 5. Blur on 6-digit pin with rejection
-      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Postal timeout'));
-      fireEvent.change(pinInput, { target: { value: '560002' } });
-      fireEvent.blur(pinInput);
+        // 5. Blur on 6-digit pin with rejection
+        validatePincode.mockRejectedValueOnce(new Error('Postal timeout'));
+        fireEvent.change(pinInput, { target: { value: '560002' } });
+        await act(async () => {
+          fireEvent.blur(pinInput);
+          await Promise.resolve();
+        });
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+        validatePincode.mockReset();
+      }
     });
 
     it('covers handleAutoCategorizeAll with mixed classified, unclassified, and invalid taxonomy items', async () => {

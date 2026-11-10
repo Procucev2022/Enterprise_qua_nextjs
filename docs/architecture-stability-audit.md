@@ -540,3 +540,9 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - Payment dues summary and history failures previously became zeroed KPIs or empty history without centralized diagnostics. Account-list and notification operations also returned fallback errors without recording HTTP or transport failures.
 - All payment dues reads, acknowledgements, and notification channels now log operation, status/error class, and parsing/transport failures while preserving their existing UI fallbacks. Error records omit account identifiers, contact information, and message payloads.
 - Regression coverage exercises HTTP and transport failures across the summary, account list, notification channels, acknowledgement, and history paths, and checks that private request fields are not copied into the log metadata.
+
+## Subscription payment client failure diagnostics
+
+- Payment-link creation, post-checkout status lookups, and subscription pricing retrieval previously converted network, HTTP, malformed-response, and incomplete-data failures into UI result values without central diagnostics.
+- These paths now log operation, account type, status, and failure kind while retaining the existing fallback contracts. Logs omit account IDs, payment-link IDs/URLs, plan values, and server response text.
+- Regression tests cover vendor and buyer payment-link requests, status polling, pricing failures, and metadata privacy.
