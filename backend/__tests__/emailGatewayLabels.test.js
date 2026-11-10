@@ -12,6 +12,7 @@ const { google } = require('googleapis');
 const emailGatewayService = require('../src/services/emailGatewayService');
 const emailGatewayQueries = require('../src/db/emailGatewayQueries');
 const mailerService = require('../src/services/mailerService');
+const { logger } = require('../src/services/loggerService');
 const {
   EMAIL_GATEWAY_CONFIG,
   GMAIL_GATEWAY_LABELS,
@@ -288,6 +289,32 @@ describe('Gmail Label-Handling Workflow (Processed & Error Labels)', () => {
         id: 'dup_no_labels',
         requestBody: { removeLabelIds: ['UNREAD'] },
       });
+    });
+
+    test('logs mark-read failures for duplicate messages while preserving the dedupe result', async () => {
+      const api = mockGmailApi({ messages: [{ id: 'dup_mark_read_failure' }] });
+      api.users.labels.list.mockRejectedValue(new Error('Labels API unavailable'));
+      api.users.labels.create.mockRejectedValue(new Error('Labels API unavailable'));
+      const markReadError = new Error('Gmail modify unavailable');
+      api.users.messages.modify.mockRejectedValue(markReadError);
+      jest.spyOn(google, 'gmail').mockReturnValue(api);
+      jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(true);
+      jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      const result = await emailGatewayService.pollViaGmailApi(enabledConfig());
+
+      expect(result.outcomes[0]).toEqual(
+        expect.objectContaining({
+          uid: 'dup_mark_read_failure',
+          status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED,
+          labelApplied: null,
+        })
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Gmail mark-read failed for message dup_mark_read_failure',
+        markReadError,
+        'EMAIL_GATEWAY'
+      );
     });
   });
 

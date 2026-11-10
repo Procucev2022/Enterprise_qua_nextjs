@@ -3378,10 +3378,12 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
 
     const markRead = (id, label) =>
       withTimeout(
-        gmail.users.messages.modify({ userId: 'me', id, requestBody: { removeLabelIds: ['UNREAD'] } }).catch(() => {}),
+        gmail.users.messages.modify({ userId: 'me', id, requestBody: { removeLabelIds: ['UNREAD'] } }),
         POLL_CALL_TIMEOUT_MS,
         label
-      ).catch(() => {});
+      ).catch((markReadError) => {
+        logger.warn(`${label} failed for message ${id}`, markReadError, 'EMAIL_GATEWAY');
+      });
 
     let pageToken;
     let pages = 0;
