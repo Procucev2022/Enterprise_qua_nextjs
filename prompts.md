@@ -8564,3 +8564,241 @@ continue
 ```text
 All done?
 ```
+
+
+---
+
+### Prompt 95
+
+**Timestamp**: 2026-11-10T14:28:55+05:30
+
+```text
+Summary
+Restores real production analytics data in the Category Manager side by fixing the disconnects between dev in-memory caching and production serverless Cloudflare Workers isolates.
+Key Changes
+Backend D1 Fallback Hydration:
+Added syncBuyerAccountsFromDB() in \ackend/src/services/storeService.js\ to hydrate buyer accounts on demand from D1 when cold-started isolates have empty in-memory state.
+Added automatic D1 fallback hydrations for \uyerAccounts, \evaluations, and \uditLogs\ in \getBootstrapData().
+Updated \ackend/src/controllers/buyerAccountController.js\ \getBuyerAccounts\ to be async and invoke \syncBuyerAccountsFromDB()\ when in-memory cache is empty.
+Frontend Category Manager Global Scope:
+In \ rontend/lib/store.tsx, updatedefreshRFQs()\ to call \ etchAllRFQs({ limit: 500 })\ for \category_manager\ and \dmin\ roles, eliminating single-buyer scoping in CM views.
+Sourcing Mode & Turnaround Calculation:
+In \ rontend/app/category-manager/spend-dashboard.tsx, addedormalizeModeToken()\ to properly match alphanumeric tokens (\MODE_1, \mode_1, \mode_2, \mode_3, \mode_0).
+Added \calculateTurnaround()\ to derive true SLA durations from \quotes.submittedAt - createdAt.
+Category Naming Normalization:
+In \ rontend/app/category-manager/category-summary-dashboard.tsx, implemented \doesCategoryMatch()\ to normalize en-dashes (\–), em-dashes (\—), hyphens, casing, and whitespace.
+Buyer Console Aggregation:
+In \ rontend/app/category-manager/buyer-console.tsx, expanded buyer matching acrossaisedByEmail, \uyerEmail, \uyerAccountId, and \uyerAccountName, and supported quote pricing spend calculation.
+Testing & Coverage Compliance:
+All modified files exceed 90% per-file unit test coverage across Statements, Branches, Functions, and Lines.
+TypeScript static typecheck (\ sc --noEmit) and ESLint verified with 0 errors.
+Production build verified with 100% static prerender across all 52 routes.
+[veerababuprocucev](https://github.com/veerababuprocucev) added 2 commits [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438#commits-pushed-c497fb5)
+[fix(cm-analytics): restore real production data via D1 fallback hydra…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/commits/c497fb504938482f369059a40c25c5278e1509ac)
+[c497fb5](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/commits/c497fb504938482f369059a40c25c5278e1509ac)
+[test(cm-analytics): boost buyerAccountController branch coverage to >91%](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/commits/bc5966d499e7b7e8a3fb026bd0967489fec6496b)
+[bc5966d](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/commits/bc5966d499e7b7e8a3fb026bd0967489fec6496b)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438#event-35656748598)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438#pullrequestreview-5838379316)
+[Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
+Contributor
+Copilot was unable to review this pull request because the user who requested the review has insufficient remaining quota. Try requesting a review at a lower effort level.
+[Procucev2022](https://github.com/Procucev2022) reviewed [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438#pullrequestreview-5838405299)
+[Procucev2022](https://github.com/Procucev2022)left a comment
+Owner
+🤖 AI Code Review
+Risk level: medium | Findings: 1
+The PR restores production analytics data via D1 fallback hydration, expands RFQ fetching for Category Managers, and improves matching/normalization routines. One high-severity issue was found regarding removed cache guards which could lead to redundant API requests.
+What changed
+Added backend D1 fallback hydration for buyer accounts, evaluations, and audit logs.
+Updated refreshRFQs to leverage fetchAllRFQs for category_manager and admin roles.
+Added client-side token normalization, turnaround calculations, and category matching.
+Expanded buyer matching logic and spend aggregations in the Buyer Console.
+Removed cache-checking guards from ensureVendors and ensureVendorEvaluations in store.tsx.
+[frontend/lib/store.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/files/bc5966d499e7b7e8a3fb026bd0967489fec6496b#diff-a8f9b59b64409f3af1eef978b547402e6411d5db5baac0ffbdc7a1d409c8451b)
+@@ -905,16 +910,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
+};
+const ensureVendors = async (force = false) => {
+[Procucev2022](https://github.com/Procucev2022)[1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438#discussion_r4522353919)
+Owner
+🟡 MEDIUM · performance — Removed cache check forces unnecessary bootstrap reloads
+Removing loadedEntitiesRef.current.vendors and evaluations checks means ensureVendors and ensureVendorEvaluations will now unconditionally trigger full bootstrap data reloads on every invocation, bypassing the intended caching mechanism and causing excessive network calls.
+Reply...
+[github-actions](https://github.com/apps/github-actions) Botcommented[1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438#issuecomment-6762125422)
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: FAILED
+312 / 313 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+4714
+4714
+0
+0
+frontend
+3737
+3737
+0
+0
+Workspace
+8451
+8451
+0
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.79%
+92.33%
+99.09%
+99.39%
+141 / 142
+frontend
+98.00%
+93.04%
+97.94%
+98.81%
+171 / 171
+Workspace
+98.39%
+92.66%
+98.34%
+99.10%
+312 / 313
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+FAILED
+Backend per-file coverage
+FAILED
+Frontend unit tests
+PASSED
+Frontend per-file coverage
+PASSED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+Coverage failures
+backend: src/services/storeService.js: branches 89.89% < 90%.
+[Merge branch 'test-v3' into fix/cm-analytics-real-production-data](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/commits/4d1b219d5a6ef3bce5723bf998ebc44d4090871d)
+[4d1b219](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/commits/4d1b219d5a6ef3bce5723bf998ebc44d4090871d)
+[Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [now](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438#event-35662079383)
+This branch has not been deployed
+No deployments
+Merge info
+Some checks haven't completed yet
+4 in progress checks
+in progress checks
+Loading
+[Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/42786768745/job/129729846139?pr=438)
+Started now — This check has started...
+Loading
+[Request Copilot Review / request-copilot-review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/42786769226/job/129729852182?pr=438)
+Started now — This check has started...
+Required
+Loading
+[Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/42786769002/job/129729850658?pr=438)
+Started now — This check has started...
+Required
+Loading
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/42786769002/job/129729850351?pr=438)
+Started now — This check has started...
+Required
+Merging is blocked
+A conversation must be resolved before this pull request can be merged.
+
+please pass all the coverages and gemini pr and AI review and merge in  test-v3
+```
+
+---
+
+### Prompt 96
+
+**Timestamp**: 2026-11-10T15:19:45+05:30
+
+```text
+continue fix all the coverages 
+```
+
+---
+
+### Prompt 97
+
+**Timestamp**: 2026-11-10T15:38:40+05:30
+
+```text
+fast bro the backend and frontend coverages fail pass that merge the pr
+```
+
+---
+
+### Prompt 98
+
+**Timestamp**: 2026-11-10T16:12:46+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 99
+
+**Timestamp**: 2026-11-10T16:38:15+05:30
+
+```text
+### Fix Approval Workflow & Database Synchronization
+
+1. **Approval Status:** After Approve/Reject, immediately update the request status in the database and refresh the UI. Do not show success unless the database confirms the update.
+2. **Password Verification:** Require password confirmation before both Approve and Reject actions. Validate securely against the configured approver credentials for Srinu Sir and Sudheer Sir. Never hardcode or expose passwords.  use Procucev@2026 as passsword
+3. **Credit Synchronization:** After approval, add the requested credits to the respective buyer/vendor account in the database and ensure the updated balance and transaction history appear immediately in their profiles.
+4. **End-to-End Validation:** Verify that approved/rejected status, credit balances, and transactions remain consistent across Category Manager, Buyer, and Vendor accounts.
+
+Use existing APIs, authentication, and database models. Fix the root cause without breaking existing functionality. Remove all mock responses.
+```
+
+---
+
+### Prompt 100
+
+**Timestamp**: 2026-11-10T17:02:18+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 101
+
+**Timestamp**: 2026-11-10T17:14:14+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 102
+
+**Timestamp**: 2026-11-10T17:44:02+05:30
+
+```text
+please fix this issue it running almost 5 hr please completed  very fast
+```
