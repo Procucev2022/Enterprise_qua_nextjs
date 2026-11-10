@@ -49,7 +49,7 @@
     "CHASER_CALL_DELAY_MS": "21600000",
     "CHASER_WHATSAPP_DELAY_MS": "43200000",
     "CHASER_EMAIL_DELAY_MS": "86400000",
-        "VENDOR_SMTP_USER": "heynavin.im@gmail.com",
+    "VENDOR_SMTP_USER": "heynavin.im@gmail.com",
     "ZOHO_CLIENT_ID": "1000.TG6BL83MLH7SLYFK4LLUWH6Y6NCPOD",
     "LOG_LEVEL": "INFO",
     "LOG_RETENTION_DAYS": "30",
@@ -114,8 +114,7 @@
   },
   "env": {
     "dev": {
-      "name": "procucev-enterprise-backend-test",
-      "account_id": "97a5dd65ad21c0f5dcd8547de147c806",
+      "name": "procucev-enterprise-backend-stage",
       "vars": {
         "NODE_ENV": "development",
         "EMAIL_GATEWAY_ENABLED": "true",
@@ -173,14 +172,14 @@
       "d1_databases": [
         {
           "binding": "DB",
-          "database_name": "enterprise-qua-d1",
-      "database_id": "6d7e68be-0e96-47be-b8c7-69aae903adf1"
+          "database_name": "enterprise-qua-stage-d1",
+          "database_id": "2af43b13-796d-4968-a3ca-57f21b9c27f3"
         }
       ],
       "r2_buckets": [
         {
           "binding": "R2_BUCKET",
-          "bucket_name": "enterprise-qua-dev"
+          "bucket_name": "enterprise-qua-stage"
         }
       ]
     },
@@ -248,7 +247,7 @@
       "r2_buckets": [
         {
           "binding": "R2_BUCKET",
-"bucket_name": "procucev-prod"
+          "bucket_name": "procucev-prod"
         }
       ]
     },
