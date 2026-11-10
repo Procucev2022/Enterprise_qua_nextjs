@@ -47,7 +47,9 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
     jest.spyOn(emailGatewayQueries, 'countRecentOutcomes').mockResolvedValue(0);
     jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
     jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue('audit-log-101');
+    jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgement').mockResolvedValue('initial-dispatch-claim');
     jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
+    jest.spyOn(emailGatewayQueries, 'releaseClaimedAcknowledgement').mockResolvedValue(true);
     jest.spyOn(emailGatewayQueries, 'updateClaimedAcknowledgement').mockResolvedValue(true);
     jest.spyOn(mailerService, 'isConfigured').mockReturnValue(true);
     jest.spyOn(mailerService, 'sendBuyerOnboardingWithRfqEmail').mockResolvedValue({ success: true, messageId: 'msg-onboard-101' });
