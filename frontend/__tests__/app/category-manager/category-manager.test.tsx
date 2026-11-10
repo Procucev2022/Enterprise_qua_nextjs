@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import KanbanBoard from '@/app/category-manager/kanban-board';
-import SpendDashboard from '@/app/category-manager/spend-dashboard';
+import SpendDashboard, { normalizeModeToken, calculateTurnaround, calculateModeMetrics } from '@/app/category-manager/spend-dashboard';
 import BuyerConsole from '@/app/category-manager/buyer-console';
 import VendorConsole from '@/app/category-manager/vendor-console';
 import CategorySummaryDashboard from '@/app/category-manager/category-summary-dashboard';
@@ -890,6 +890,79 @@ describe('Category Manager Screens Suite', () => {
       expect(screen.getByText('Hybrid Base Network')).toBeInTheDocument();
       expect(screen.getByText('360° AI Evaluated Roster')).toBeInTheDocument();
     });
+
+    test('SpendDashboard pure helpers and back button coverage', () => {
+      // 1. normalizeModeToken
+      expect(normalizeModeToken('mode_1')).toBe('MODE1');
+      expect(normalizeModeToken('MODE 2')).toBe('MODE2');
+      expect(normalizeModeToken('v-0')).toBe('V0');
+      expect(normalizeModeToken('')).toBe('');
+
+      // 2. calculateTurnaround
+      expect(calculateTurnaround([], '3.6 Days')).toBe('—');
+      const rfqWithQuotes: any = {
+        id: 'rfq-t1',
+        createdAt: '2026-08-01T00:00:00Z',
+        quotes: [
+          { submittedAt: '2026-08-03T12:00:00Z' },
+        ],
+      };
+      expect(calculateTurnaround([rfqWithQuotes], '3.6 Days')).toBe('2.5 Days');
+
+      const rfqInvalidDate: any = {
+        id: 'rfq-t2',
+        createdAt: 'invalid-date',
+        quotes: [{ submittedAt: 'also-invalid' }],
+      };
+      expect(calculateTurnaround([rfqInvalidDate], '4.0 Days')).toBe('4.0 Days');
+
+      const rfqNoQuotes: any = {
+        id: 'rfq-t3',
+        createdAt: '2026-08-01',
+      };
+      expect(calculateTurnaround([rfqNoQuotes], '5.0 Days')).toBe('5.0 Days');
+
+      // 3. calculateModeMetrics
+      const rfqV0: any = {
+        id: 'rfq-v0',
+        rfqNumber: 'RFQ-V0',
+        sourcingMode: 'V0',
+        followUpData: { totalInvited: 4, respondedCount: 2 },
+      };
+      const al: any = {
+        id: 'al-1',
+        action: 'Vendor downloaded RFQ specification for RFQ-V0',
+        rfqNumber: 'RFQ-V0',
+      };
+      const metricsV0 = calculateModeMetrics([rfqV0], [al], 'MODE 1');
+      expect(metricsV0.rfqs.length).toBe(1);
+      expect(metricsV0.downloads).toBe(1);
+      expect(metricsV0.efficiency).toBe(50);
+
+      // Audit log matching by action string without rfqNumber
+      const alActionOnly: any = {
+        id: 'al-2',
+        action: 'downloaded RFQ specification rfq-v0',
+      };
+      const metricsActionOnly = calculateModeMetrics([rfqV0], [alActionOnly], 'MODE 1');
+      expect(metricsActionOnly.downloads).toBe(1);
+
+      // Audit log with non-matching action
+      const alOther: any = {
+        id: 'al-3',
+        action: 'viewed RFQ details',
+      };
+      const metricsOther = calculateModeMetrics([rfqV0], [alOther], 'MODE 1');
+      expect(metricsOther.downloads).toBe(0);
+    });
+
+    test('SpendDashboard calls onBackToKanban on back button click', async () => {
+      const onBack = jest.fn();
+      renderWithProvider(<SpendDashboard onBackToKanban={onBack} />);
+      const backBtn = screen.getByText(/Back to Operational Monitoring Kanban/i);
+      fireEvent.click(backBtn);
+      expect(onBack).toHaveBeenCalled();
+    });
   });
 
   describe('BuyerConsole Screen', () => {
@@ -1127,6 +1200,90 @@ describe('Category Manager Screens Suite', () => {
       // throwing.
       expect(() => fireEvent.click(screen.getByText('Sparse RFQ Missing Line Items'))).not.toThrow();
       expect(screen.getByText(/BOQ Specifications & Item Roster \(0 items\)/)).toBeInTheDocument();
+    });
+
+    test('BuyerConsole matches RFQs by raisedByEmail, buyerEmail, buyerAccountName and calculates quotes spend', async () => {
+      const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+      global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                buyerAccounts: [
+                  {
+                    id: 'ba-match-1',
+                    organizationName: 'Alpha Corp',
+                    corporateEmail: 'alpha@proc.com',
+                    contactPerson: 'Alpha Lead',
+                    sourcingMode: 'mode_1',
+                  },
+                ],
+                vendors: [],
+                evaluations: [],
+                auditLogs: [],
+                aiFeed: [],
+                systemConfig: {},
+              },
+            }),
+          });
+        }
+        if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: [
+                {
+                  id: 'rfq-by-raised',
+                  rfqNumber: 'RFQ-RAISED',
+                  title: 'Raised By Match',
+                  sourcingMode: 'mode_1',
+                  status: 'Quotes Pending',
+                  raisedByEmail: 'alpha@proc.com',
+                  budget: null,
+                  quotes: [{ totalPrice: 15000 }],
+                },
+                {
+                  id: 'rfq-by-buyer-email',
+                  rfqNumber: 'RFQ-BUYER-EMAIL',
+                  title: 'Buyer Email Match',
+                  sourcingMode: 'mode_1',
+                  status: 'Quotes Pending',
+                  buyerEmail: 'alpha@proc.com',
+                  budget: 0,
+                  quotes: [{ totalPrice: null, unitPrice: 25000 }],
+                },
+                {
+                  id: 'rfq-by-org-name',
+                  rfqNumber: 'RFQ-ORG-NAME',
+                  title: 'Org Name Match',
+                  sourcingMode: 'mode_1',
+                  status: 'PO Generated',
+                  buyerAccountName: 'Alpha Corp',
+                  budget: 50000,
+                },
+              ],
+            }),
+          });
+        }
+        return baseImpl(url, init);
+      });
+
+      renderWithProvider(<BuyerConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+      await waitFor(() => expect(screen.getByText('Alpha Lead')).toBeInTheDocument());
+      expect(screen.getAllByText(/Alpha Corp/i).length).toBeGreaterThan(0);
+
+      fireEvent.click(screen.getByText('Alpha Lead'));
+      fireEvent.click(screen.getByRole('button', { name: /Review RFQ Details/i }));
+
+      expect(screen.getByText('Raised By Match')).toBeInTheDocument();
+      expect(screen.getByText('Buyer Email Match')).toBeInTheDocument();
+      expect(screen.getByText('Org Name Match')).toBeInTheDocument();
+      (global.fetch as jest.Mock).mockImplementation(baseImpl);
     });
   });
 

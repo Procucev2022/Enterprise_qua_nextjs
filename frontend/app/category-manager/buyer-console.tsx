@@ -64,9 +64,13 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
       const rfqsList = rfqs.filter((r) =>
         (r.buyerAccountId && r.buyerAccountId === account.id) ||
         (r.raisedByEmail && account.corporateEmail && r.raisedByEmail.toLowerCase() === account.corporateEmail.toLowerCase()) ||
+        (r.buyerEmail && account.corporateEmail && r.buyerEmail.toLowerCase() === account.corporateEmail.toLowerCase()) ||
         (r.buyerAccountName && account.organizationName && r.buyerAccountName.toLowerCase() === account.organizationName.toLowerCase())
       );
-      const totalSpend = rfqsList.reduce((sum, r) => sum + (r.budget || 0), 0);
+      const totalSpend = rfqsList.reduce((sum, r) => {
+        const val = r.budget || (r.quotes && r.quotes.length > 0 ? (r.quotes[0].totalPrice || r.quotes[0].unitPrice || 0) : 0);
+        return sum + (typeof val === 'number' && Number.isFinite(val) ? val : 0);
+      }, 0);
       const activeCount = rfqsList.filter((r) => r.status !== 'PO Generated').length;
       const totalQuotes = rfqsList.reduce((sum, r) => sum + (r.quotesCount || 0), 0);
       const avgQuotesPerRfq = rfqsList.length > 0 ? Math.round((totalQuotes / rfqsList.length) * 10) / 10 : null;

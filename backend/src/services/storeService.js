@@ -437,6 +437,24 @@ class StoreService {
     return (this.buyerAccounts || []).slice(0, 500);
   }
 
+  async syncBuyerAccountsFromDB(limit = 500) {
+    if (!pool.hasStorage()) return this.buyerAccounts;
+    try {
+      const res = await domainQueries.getBuyerAccountsFromDB(limit);
+      if (res && Array.isArray(res.accounts)) {
+        this.buyerAccounts = res.accounts;
+        if (res.activeId) {
+          this.activeBuyerAccount = this.buyerAccounts.find((a) => a.id === res.activeId) || this.buyerAccounts[0] || null;
+        } else if (!this.activeBuyerAccount && this.buyerAccounts.length > 0) {
+          this.activeBuyerAccount = this.buyerAccounts[0];
+        }
+      }
+    } catch (err) {
+      logger.warn('Failed to sync buyer accounts from DB', { error: err.message }, 'STORE_SERVICE');
+    }
+    return this.buyerAccounts;
+  }
+
   getActiveBuyerAccount() {
     return this.activeBuyerAccount;
   }
@@ -7196,13 +7214,47 @@ class StoreService {
       scopedCatalogue = (this.vendorCatalogue || []).slice(0, 50);
     }
 
+    let buyerAccounts = this.buyerAccounts;
+    let activeBuyerAccount = this.activeBuyerAccount;
+    if ((!Array.isArray(buyerAccounts) || buyerAccounts.length === 0) && pool.hasStorage()) {
+      try {
+        const buyerAccountsResult = await domainQueries.getBuyerAccountsFromDB(500);
+        buyerAccounts = buyerAccountsResult.accounts || [];
+        activeBuyerAccount = buyerAccounts.find((a) => a.id === buyerAccountsResult.activeId) || buyerAccounts[0] || null;
+        this.buyerAccounts = buyerAccounts;
+        this.activeBuyerAccount = activeBuyerAccount;
+      } catch (err) {
+        buyerAccounts = this.buyerAccounts || [];
+      }
+    }
+
+    let evaluations = this.evaluations;
+    if ((!Array.isArray(evaluations) || evaluations.length === 0) && pool.hasStorage()) {
+      try {
+        evaluations = await domainQueries.getEvaluationsFromDB(50);
+        this.evaluations = evaluations || [];
+      } catch (err) {
+        evaluations = this.evaluations || [];
+      }
+    }
+
+    let auditLogs = this.auditLogs;
+    if ((!Array.isArray(auditLogs) || auditLogs.length === 0) && pool.hasStorage()) {
+      try {
+        auditLogs = await domainQueries.getAuditLogsFromDB(100);
+        this.auditLogs = auditLogs || [];
+      } catch (err) {
+        auditLogs = this.auditLogs || [];
+      }
+    }
+
     return {
-      buyerAccounts: (this.buyerAccounts || []).slice(0, 500),
-      activeBuyerAccount: this.activeBuyerAccount,
+      buyerAccounts: (buyerAccounts || []).slice(0, 500),
+      activeBuyerAccount,
       vendors,
       vendorsTotal,
-      evaluations: (this.evaluations || []).slice(0, 50),
-      auditLogs: (this.auditLogs || []).slice(0, 50),
+      evaluations: (evaluations || []).slice(0, 50),
+      auditLogs: (auditLogs || []).slice(0, 100),
       aiFeed: [],
       systemConfig: this.systemConfig,
       azureHealth: this.azureHealth,

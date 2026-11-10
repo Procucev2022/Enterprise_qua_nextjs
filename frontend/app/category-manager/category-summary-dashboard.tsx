@@ -54,6 +54,13 @@ export function parseTimestamp(value: string): number {
   return Number.isNaN(t) ? 0 : t;
 }
 
+export function doesCategoryMatch(rfqCategory?: string, majorCategory?: string): boolean {
+  if (!rfqCategory || !majorCategory) return false;
+  const cleanRfq = rfqCategory.trim().toLowerCase().replace(/[–—]/g, '-');
+  const cleanTarget = majorCategory.trim().toLowerCase().replace(/[–—]/g, '-');
+  return cleanRfq === cleanTarget || cleanRfq.includes(cleanTarget) || cleanTarget.includes(cleanRfq);
+}
+
 // RFQs created in the real-time window [now - offsetDays - days, now - offsetDays),
 // optionally scoped to one major category.
 export function rfqsInWindow(rfqs: RFQItem[], days: number, offsetDays: number, majorCategory?: string): RFQItem[] {
@@ -61,7 +68,7 @@ export function rfqsInWindow(rfqs: RFQItem[], days: number, offsetDays: number, 
   const end = now - offsetDays * 86400000;
   const start = end - days * 86400000;
   return rfqs.filter((r) => {
-    if (majorCategory && r.category !== majorCategory) return false;
+    if (majorCategory && !doesCategoryMatch(r.category, majorCategory)) return false;
     const t = parseTimestamp(r.createdAt);
     return t >= start && t < end;
   });
@@ -236,13 +243,13 @@ export default function CategorySummaryDashboard() {
       const activeBuyers = Array.from(
         new Set(
           rfqs
-            .filter((r) => (r.category || '').trim().toLowerCase() === majorCategory.trim().toLowerCase() && r.buyerAccountName)
+            .filter((r) => doesCategoryMatch(r.category, majorCategory) && r.buyerAccountName)
             .map((r) => r.buyerAccountName as string)
         )
       );
 
       const vendorsInCategory = buyerVendors.filter(
-        (v) => (v.majorCategory || '').trim().toLowerCase() === majorCategory.trim().toLowerCase()
+        (v) => doesCategoryMatch(v.majorCategory, majorCategory)
       );
       const featuredVendors = [...vendorsInCategory]
         .sort((a, b) => (b.rating || 0) - (a.rating || 0))

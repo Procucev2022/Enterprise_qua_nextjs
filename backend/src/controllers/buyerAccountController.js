@@ -5,6 +5,7 @@ const zohoReconciliationService = require('../services/zohoReconciliationService
 const { generateReceiptPdf } = require('../services/invoiceService');
 const { logger } = require('../services/loggerService');
 const { ZOHO_CONFIG, computeZohoBuyerPlanAmount, BUYER_SUBSCRIPTION_PLANS, getSubscriptionPricingConfig } = require('../config/constants');
+const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
 
 /**
@@ -69,11 +70,14 @@ function assertBuyerAccountRole(req, res) {
   return false;
 }
 
-function getBuyerAccounts(req, res, next) {
+async function getBuyerAccounts(req, res, next) {
   try {
     logger.info('Fetching buyer accounts', {}, 'BUYER_ACCOUNT_CONTROLLER');
     const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
     const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
+    if ((!storeService.buyerAccounts || storeService.buyerAccounts.length === 0) && pool.hasStorage()) {
+      await storeService.syncBuyerAccountsFromDB(limit);
+    }
     const accounts = storeService.getBuyerAccounts(limit);
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: accounts });
   } catch (err) {
