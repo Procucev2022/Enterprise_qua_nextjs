@@ -1034,6 +1034,7 @@ class StoreService {
       id: `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       buyerId: resolvedBuyerId,
       buyerAccountId: resolvedBuyerId,
+      buyerEmail: vendorData.buyerEmail || null,
       rating: vendorData.rating || 4.5,
       score: vendorData.score || 85.0,
       source: vendorData.source || (resolvedBuyerId || vendorData.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
@@ -1519,6 +1520,15 @@ class StoreService {
       return true;
     }
 
+    // Normalized company name match (stripping punctuation/symbols)
+    if (rfqBuyerName && vAddedBy) {
+      const cleanRfqName = rfqBuyerName.replace(/[^a-z0-9]/g, '');
+      const cleanAddedBy = vAddedBy.replace(/[^a-z0-9]/g, '');
+      if (cleanRfqName && cleanAddedBy && (cleanRfqName === cleanAddedBy || cleanRfqName.includes(cleanAddedBy) || cleanAddedBy.includes(cleanRfqName))) {
+        return true;
+      }
+    }
+
     // Direct email match
     if (rfqBuyerEmail && vBuyerEmail && vBuyerEmail === rfqBuyerEmail) {
       return true;
@@ -1530,6 +1540,24 @@ class StoreService {
       : (Array.isArray(vendor.buyerIds) ? vendor.buyerIds : []);
     if (rfqBuyerId && mappedIds.some((id) => String(id).trim().toLowerCase() === rfqBuyerId)) {
       return true;
+    }
+
+    // Check if another in-memory vendor profile with the same email has the buyer mapping
+    const vEmail = vendor.email ? String(vendor.email).trim().toLowerCase() : null;
+    const vId = vendor.id ? String(vendor.id).trim().toLowerCase() : null;
+    const vName = vendor.name ? String(vendor.name).trim().toLowerCase() : null;
+    if (vEmail && Array.isArray(this.vendors)) {
+      const peer = this.vendors.find(
+        (v) =>
+          v &&
+          v !== vendor &&
+          v.email &&
+          String(v.email).trim().toLowerCase() === vEmail &&
+          ((rfqBuyerId && (String(v.buyerId || '').trim().toLowerCase() === rfqBuyerId || String(v.buyerAccountId || '').trim().toLowerCase() === rfqBuyerId)) ||
+            (rfqBuyerName && v.addedByBuyerCompany && String(v.addedByBuyerCompany).trim().toLowerCase() === rfqBuyerName) ||
+            (rfqBuyerEmail && v.buyerEmail && String(v.buyerEmail).trim().toLowerCase() === rfqBuyerEmail))
+      );
+      if (peer) return true;
     }
 
     // Fallback: check buyerAccount lookup if one side only has email/id and the other has company name
@@ -1546,10 +1574,6 @@ class StoreService {
     }
 
     // Direct invitation match: buyer specifically assigned or invited this vendor to this private RFQ
-    const vId = vendor.id ? String(vendor.id).trim().toLowerCase() : null;
-    const vEmail = vendor.email ? String(vendor.email).trim().toLowerCase() : null;
-    const vName = vendor.name ? String(vendor.name).trim().toLowerCase() : null;
-
     if (Array.isArray(rfq.assignedVendors)) {
       const isAssigned = rfq.assignedVendors.some((av) => {
         if (!av) return false;
@@ -1944,8 +1968,6 @@ class StoreService {
 
     const isBuyerMapped = Boolean(
       rfq &&
-      !isNetworkMode &&
-      !this.isProcucevVendor(vendor) &&
       this.isVendorMappedToRfqBuyer(vendor, rfq)
     );
 
@@ -5087,33 +5109,26 @@ class StoreService {
       return this._isInvitedVendor(vendor, rfq);
     }
 
-    // Enterprise QUA – V0 Flow: When RFQ is raised from V0 (mode_0), it reaches ONLY Procucev vendors.
-    if (rfq.sourcingMode === 'mode_0' || rfq.sourcingMode === 'v0' || rfq.sourcingMode === 'version_0') {
-      if (!this.isProcucevVendor(vendor)) {
-        return false;
-      }
+    const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+
+    // V0 (Free Starter): category-matched vendors, uncategorized vendors, or invited vendors
+    if (isV0) {
+      const isUncategorized = !vendor.majorCategory || String(vendor.majorCategory).toLowerCase().includes('uncategorized');
       const signals = this._rfqCategorySignals(rfq);
-      if (signals.length > 0 && signals.some((c) => this.vendorCoversCategory(vendor, c))) {
+      if (signals.length === 0 || isUncategorized || signals.some((c) => this.vendorCoversCategory(vendor, c))) {
         return true;
       }
       return this._isInvitedVendor(vendor, rfq);
     }
 
-    // Same-buyer-company match alone used to grant a private-roster vendor
-    // blanket access to every RFQ that buyer ever creates, regardless of
-    // whether the vendor's own category has anything to do with the RFQ —
-    // a Version 1 (Mode 1) RFQ for one category was reaching every vendor
-    // the buyer had ever uploaded, not just the ones actually relevant to
-    // it. Now also requires the vendor's own category to cover the RFQ,
-    // same rule candidateVendorsForRFQ/vendorCoversCategory already apply
-    // to the network-wide invite pool — a private roster relationship
-    // grants eligibility, it never bypasses relevance.
     // Buyer-specific vendor access rule:
-    // When a buyer uploads or adds a vendor to their vendor list, that vendor can view
-    // RFQs created by that respective buyer.
+    // When a buyer uploads or adds a vendor to their vendor list, that vendor can view and cover
+    // RFQs created by that respective buyer across all modes.
     if (this.isVendorMappedToRfqBuyer(vendor, rfq)) {
+      const isUncategorized = !vendor.majorCategory || String(vendor.majorCategory).toLowerCase().includes('uncategorized');
       const signals = this._rfqCategorySignals(rfq);
-      if (signals.length === 0 || !vendor.majorCategory || signals.some((c) => this.vendorCoversCategory(vendor, c))) {
+      if (signals.length === 0 || isUncategorized || signals.some((c) => this.vendorCoversCategory(vendor, c))) {
         return true;
       }
       return this._isInvitedVendor(vendor, rfq);
@@ -5124,8 +5139,9 @@ class StoreService {
       rfq.buyerAccountName &&
       vendor.addedByBuyerCompany.trim().toLowerCase() === rfq.buyerAccountName.trim().toLowerCase()
     ) {
+      const isUncategorized = !vendor.majorCategory || String(vendor.majorCategory).toLowerCase().includes('uncategorized');
       const signals = this._rfqCategorySignals(rfq);
-      if (signals.some((c) => this.vendorCoversCategory(vendor, c))) {
+      if (signals.length === 0 || isUncategorized || signals.some((c) => this.vendorCoversCategory(vendor, c))) {
         return true;
       }
     }
@@ -6700,6 +6716,9 @@ class StoreService {
       onboardingEmailStatus: 'pending',
       profileCompletionStatus: 'pending',
       addedByBuyerCompany: vendorData.addedByBuyerCompany || null,
+      buyerId: vendorData.buyerId || vendorData.buyerAccountId || null,
+      buyerAccountId: vendorData.buyerAccountId || vendorData.buyerId || null,
+      buyerEmail: vendorData.buyerEmail || actorEmail || null,
       subscriptionPlan: 'premium',
       rfqDownloadsUsed: 0,
     };

@@ -8514,3 +8514,503 @@ PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>
 ```text
 complete
 ```
+
+
+---
+
+### Prompt 90
+
+**Timestamp**: 2026-11-10T15:03:19+05:30
+
+```text
+Buyer-uploaded vendor login is working in Dev, but no RFQs are visible under Bid Quotes. Please check the vendor mapping, RFQ assignment, and visibility logic and resolve this issue. is this is a real issue ot just any other thing check
+```
+
+
+---
+
+### Prompt 91
+
+**Timestamp**: 2026-11-10T15:24:49+05:30
+
+```text
+check fast and fix the issue
+```
+
+
+---
+
+### Prompt 92
+
+**Timestamp**: 2026-11-10T15:33:38+05:30
+
+```text
+not completed still not visible
+```
+
+
+---
+
+### Prompt 93
+
+**Timestamp**: 2026-11-10T15:44:32+05:30
+
+```text
+still now able to any bidding rfq and also is that buyer uploaed vendor can only see the rfq created ?? in code or just work as regular vendor ??
+```
+
+
+---
+
+### Prompt 94
+
+**Timestamp**: 2026-11-10T10:18:00+05:30
+
+```text
+buyer uploaed vendor should behave as normal vendor they should able to see and bid for rfq
+```
+
+
+---
+
+### Prompt 95
+
+**Timestamp**: 2026-11-10T16:17:11+05:30
+
+`	ext
+complete the task take this in mind  the vendor created by buyer has 
+special features unlimited rfq bid for that own buyer that as it implement next complete the task
+`
+
+
+---
+
+### Prompt 96
+
+**Timestamp**: 2026-11-10T16:28:47+05:30
+
+`	ext
+SS  __tests__/buyerSpecificVendorAccess.test.js (17.413 s)
+ PASS  __tests__/v0RfqWorkflow.test.js (23.011 s)
+ PASS  __tests__/vendorCreditFlow.test.js (31.886 s)
+A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
+
+Summary of all failing tests
+ FAIL  __tests__/storeService.test.js (15.864 s)
+  ● Store Service & Business Operations › Vendor RFQ visibility (vendorCoversRFQ / candidateVendorsForRFQ / getRFQsForVendor) › mode_0 (Version 0) RFQ assigns and is visible ONLY to Procucev platform vendors, excluding private buyer-uploaded vendors
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: false
+    Received: true
+
+      1664 |       // Verify vendorCoversRFQ for mode_0
+      1665 |       expect(storeService.vendorCoversRFQ(procucevVendor, rfq)).toBe(true);
+    > 1666 |       expect(storeService.vendorCoversRFQ(privateVendor, rfq)).toBe(false);
+           |                                                                ^
+      1667 |
+      1668 |       // Verify assignedVendors contains only Procucev vendors
+      1669 |       const assignedIds = (rfq.assignedVendors || []).map((v) => v.id);
+
+      at Object.toBe (__tests__/storeService.test.js:1666:64)
+
+
+Test Suites: 1 failed, 153 passed, 154 total
+Tests:       1 failed, 4712 passed, 4713 total
+Snapshots:   0 total
+Time:        365.257 s
+Ran all test suites.
+Force exiting Jest: Have you considered using --detectOpenHandles to detect async operations that kept running after all tests finished?
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs> 
+`
+
+
+---
+
+### Prompt 97
+
+**Timestamp**: 2026-11-10T16:40:39+05:30
+
+`	ext
+just complete
+`
+
+
+---
+
+### Prompt 98
+
+**Timestamp**: 2026-11-10T17:08:20+05:30
+
+```text
+complete
+```
+
+---
+
+### Prompt 99
+
+**Timestamp**: 2026-11-10T17:38:15+05:30
+
+```text
+  ● Console
+
+    console.log
+      [2026-11-10 12:07:35.223 UTC] [INFO] [UI_ACTION] Remote dispatch test { key: 'value' } 
+
+      at ClientLogger.log (lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/lib/logger.ts:73:17)
+
+    console.warn
+      [2026-11-10 12:07:35.235 UTC] [WARN] [UI_ACTION] Warning test {}
+
+      at ClientLogger.warn [as log] (lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/lib/logger.ts:71:17)
+      at ClientLogger.log [as warn] (lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/lib/logger.ts:108:17)
+      at Object.warn (__tests__/lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/__tests__/lib/logger.test.ts:89:16)
+
+    console.error
+      [2026-11-10 12:07:35.237 UTC] [ERROR] [UI_ACTION] Error test {}
+
+      at ClientLogger.error [as log] (lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/lib/logger.ts:69:17)
+      at ClientLogger.log [as error] (lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/lib/logger.ts:112:17)
+      at Object.error (__tests__/lib/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/__tests__/lib/logger.test.ts:90:16)
+
+ PASS  __tests__/app/components/Footer.test.tsx
+ PASS  __tests__/lib/types.test.ts                                                           
+
+Summary of all failing tests
+ FAIL  __tests__/app/category-manager/ActionCenterComposeModal.test.tsx (13.62 s)
+  ● ActionCenterComposeModal › handles submission error from API result
+
+    Unable to find role="alert"
+
+    Ignored nodes: comments, script, style
+    <body>
+      <div>
+        <div
+          aria-labelledby="compose-modal-title"
+          aria-modal="true"
+          class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200"
+          role="dialog"
+        >
+          <div
+            class="bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden"
+          >
+            <div
+              class="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/80"
+            >
+              <div
+                class="flex items-center gap-2.5"
+              >
+                <div
+                  class="p-2 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-lg"
+                >
+                  <svg
+                    class="lucide lucide-message-square"
+                    fill="none"
+                    height="18"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                    width="18"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+                    />
+                  </svg>
+                </div>
+                <div>
+                  <h2
+                    class="text-base font-semibold text-slate-900 dark:text-white"
+                    id="compose-modal-title"
+                  >
+                    Action Center Communication
+                  </h2>
+                  <p
+                    class="text-xs text-slate-500 dark:text-slate-400"
+                  >
+                    Directly dispatch SMS alerts, official transactional emails, or multi-channel notices with real-time audit logging.
+                  </p>
+                </div>
+              </div>
+              <button
+                aria-label="Cancel"
+                class="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg transition-colors cursor-pointer"
+                type="button"
+              >
+                <svg
+                  class="lucide lucide-x"
+                  fill="none"
+                  height="18"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="18"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M18 6 6 18"
+                  />
+                  <path
+                    d="m6 6 12 12"
+                  />
+                </svg>
+              </button>
+            </div>
+            <form
+              class="flex-1 overflow-y-auto p-6 space-y-4"
+            >
+              <div>
+                <label
+                  class="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-2"
+                >
+                  Notification Channel
+                </label>
+                <div
+                  class="grid grid-cols-3 gap-2"
+                >
+                  <button
+                    class="flex items-center justify-center gap-2 py-2 px-3 text-xs font-medium rounded-lg border transition-all cursor-pointer border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-50"
+                    type="button"
+                  >
+                    <svg
+                      class="lucide lucide-mail text-slate-400"
+                      fill="none"
+                      height="14"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      viewBox="0 0 24 24"
+                      width="14"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <rect
+                        height="16"
+                        rx="2"
+                        width="20"
+                        x="2"
+                        y="4"
+                      />
+                      <path
+                        d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"
+                      />
+                    </svg>
+                    <span>
+                      Email
+                    </span>
+                  </button>
+                  <button
+                    class="flex items-center justify-center gap-2 py-2 px-3 text-xs font-medium rounded-lg border transition-all cursor-pointer border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-600 font-semibold shadow-sm"
+                    type="button"
+                  >
+                    <svg
+                      class="lucide lucide-smartphone text-indigo-600"
+                      fill="none"
+                      height="14"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      viewBox="0 0 24 24"
+                      width="14"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <rect
+                        height="20"
+                        rx="2"
+                        ry="2"
+                        width="14"
+                        x="5"
+                        y="2"
+                      />
+                      <path
+                        d="M12 18h.01"
+                      />
+                    </svg>
+                    <span>
+                      SMS Direct
+                    </span>
+                  </button>
+                  <button
+                    class="flex items-center justify-center gap-2 py-2 px-3 text-xs font-medium rounded-lg border transition-all cursor-pointer border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-50"
+                    type="button"
+                  >
+                    <svg
+                      class="lucide lucide-send text-slate-400"
+                      fill="none"
+                      height="14"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      viewBox="0 0 24 24"
+                      width="14"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"
+                      />
+                      <path
+                        d="m21.854 2.147-10.94 10.939"
+                      />
+                    </svg>
+                    <span>
+                      Both (Email & SMS)
+                    </span>
+                  </button>
+                </div>
+              </div>
+              <div
+                class="grid grid-cols-1 sm:grid-cols-2 gap-3"
+              >
+                <div>
+                  <label
+                    class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+                    for="compose-recipient-name"
+                  >
+                    Recipient Name
+                  </label>
+                  <input
+                    class="w-full text-xs px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    id="compose-recipient-name"
+                    placeholder="Client / Decision Maker"
+                    type="text"
+                    value=""
+                  />
+                </div>
+                <div>
+                  <label
+                    class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
+                    for="compose-recipient-phone"
+                  >
+                    Recipient Phone (+91)
+
+                    <span
+                      class="text-rose-500"
+                    >
+                      *
+                    </span>
+                  </label>
+                  <input
+                    class="w-full text-xs px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    id="compose-recipient-phone"
+                    placeholder="9876543210"
+                    required=""
+                    type="tel"
+                    value="9876543210"
+                  />
+                </div>
+              </div>
+              <div>
+                <div
+                  class="flex items-center justify-between mb-1"
+                >
+                  <label
+                    class="block text-xs font-medium text-slate-700 dark:text-slate-300"     
+                    for="compose-message"
+                  >
+                    Message Content
+
+                    <span
+                      class="text-rose-500"
+                    >
+                      *
+                    </span>
+                  </label>
+                  <span
+                    class="text-[11px] font-mono text-slate-500 dark:text-slate-400"
+                  >
+                    12 characters (1 SMS unit)
+                  </span>
+                </div>
+                <textarea
+                  class="w-full text-xs px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  id="compose-message"
+                  placeholder="Compose your official notification or alert message..."
+                  required=""
+                  rows="4"
+                >
+                  Test failure
+                </textarea>
+              </div>
+              <div
+                class="pt-2 border-t border-slate-100 dark:border-slate-800"
+              >
+                <label
+                  class="flex items-center gap-2 cursor-pointer"
+                >
+                  <input
+                    class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    type="checkbox"
+                  />
+                  <span
+                    class="text-xs font-medium text-slate-700 dark:text-slate-300"
+                  >
+                    Schedule an automated follow-up internal task
+                  </span>
+                </label>
+              </div>
+              <div
+                class="flex items-center justify-end gap-2 pt-4 border-t border-slate-200 dark:border-slate-800"
+              >
+                <button
+                  class="px-4 py-2 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                  disabled=""
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  class="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg shadow-sm transition-colors cursor-pointer"
+                  disabled=""
+                  type="submit"
+                >
+                  <svg
+                    class="lucide lucide-clock animate-spin"
+                    fill="none"
+                    height="13"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                    width="13"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="10"
+                    />
+                    <polyline
+                      points="12 6 12 12 16 14"
+                    />
+                  </svg>
+                  <span>
+                    Dispatching...
+                  </span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </body>
+
+      at waitForWrapper (node_modules/@testing-library/dom/dist/wait-for.js:163:27)
+      at Object.<anonymous> (__tests__/app/category-manager/S:/procucev/Precucev-github/Enterprise_qua_nextjs/frontend/__tests__/app/category-manager/ActionCenterComposeModal.test.tsx:396:18)
+
+
+Test Suites: 1 failed, 146 passed, 147 total
+Tests:       1 failed, 3731 passed, 3732 total
+Snapshots:   0 total
+Time:        621.984 s
+Ran all test suites.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>  just pass faiiled test only with out disturbing code
+```
