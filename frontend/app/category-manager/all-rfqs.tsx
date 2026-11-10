@@ -124,6 +124,16 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
     void load();
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && vendorListModalData) {
+        setVendorListModalData(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [vendorListModalData]);
+
   const buyerNames = useMemo(() => {
     const names = new Set<string>();
     for (const r of rfqs) {
@@ -553,11 +563,12 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setVendorListModalData(null);
-          }}
+          onClick={() => setVendorListModalData(null)}
         >
-          <div className="relative w-full max-w-lg max-h-[85vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-2xl overflow-hidden">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-lg max-h-[85vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-2xl overflow-hidden"
+          >
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 px-5 py-4 bg-white/95 dark:bg-gray-900/95">
               <div className="flex items-center gap-2.5 min-w-0">
                 <div className="rounded-xl bg-teal-50 dark:bg-teal-950/70 p-2 text-teal-600 dark:text-teal-400 shrink-0">

@@ -1616,6 +1616,21 @@ export const CREDIT_APPROVAL_APPROVERS = [
   'Sudheer Sir',
 ] as const;
 
+export const APPROVER_CONFIG = [
+  {
+    id: 'srinu_sir',
+    name: 'Srinu Sir',
+    email: 'srinivas.mukku@procucev.com',
+    title: 'Director / Management Authority',
+  },
+  {
+    id: 'sudheer_sir',
+    name: 'Sudheer Sir',
+    email: 'sudheer.kangala@procucev.com',
+    title: 'Management Authority',
+  },
+] as const;
+
 export type CreditApprovalApprover = (typeof CREDIT_APPROVAL_APPROVERS)[number];
 
 export const CREDIT_APPROVAL_INITIATORS = [

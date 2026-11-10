@@ -8,6 +8,7 @@
 
 const pool = require('./pool');
 const crypto = require('crypto');
+const { queryCache } = require('./queryCache');
 
 const memoryApprovals = [
   {
@@ -415,8 +416,8 @@ async function getApprovals({
 
   // Sort
   filtered.sort((a, b) => {
-    let valA = a[sortBy] ?? a.created_at ?? '';
-    let valB = b[sortBy] ?? b.created_at ?? '';
+    let valA = a[sortBy] || a.created_at || '';
+    let valB = b[sortBy] || b.created_at || '';
     if (typeof valA === 'string') valA = valA.toLowerCase();
     if (typeof valB === 'string') valB = valB.toLowerCase();
     if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
@@ -597,12 +598,22 @@ async function createApproval(data, actor = {}) {
 
 /**
  * Process approval or rejection action.
- * For Buyer Credit Additions, updates buyer credit balance and synchronizes corresponding internal task.
+ * For Buyer Credit Additions and Seller Credit Additions, updates credit balance and synchronizes corresponding internal task.
  */
-async function processApprovalAction(id, { action, remarks = '' }, actor = {}) {
+async function processApprovalAction(id, { action, remarks = '', password, approverName }, actor = {}) {
+  // 1. Password Verification (Rule 2)
+  const constants = require('../config/constants');
+  const approverToCheck = approverName || actor.name || actor.fullName || 'Srinu Sir';
+  const isPasswordValid = constants.verifyApproverPassword(approverToCheck, password);
+  if (!isPasswordValid) {
+    const err = new Error('Invalid approver password. Please check your credentials.');
+    err.statusCode = 401;
+    throw err;
+  }
+
   let item = memoryApprovals.find((a) => a.id === id || a.request_number === id);
 
-  if (!item && pool.hasStorage()) {
+  if (pool.hasStorage()) {
     try {
       const dbRes = await pool.query(
         'SELECT * FROM approvals WHERE id = $1 OR request_number = $1 LIMIT 1',
@@ -611,7 +622,12 @@ async function processApprovalAction(id, { action, remarks = '' }, actor = {}) {
       );
       if (dbRes?.rows?.length) {
         item = hydrateApprovalRow(dbRes.rows[0]);
-        memoryApprovals.push(item);
+        const memIdx = memoryApprovals.findIndex((a) => a.id === item.id || a.request_number === item.request_number);
+        if (memIdx >= 0) {
+          memoryApprovals[memIdx] = item;
+        } else {
+          memoryApprovals.push(item);
+        }
       }
     } catch {
       // non-fatal
@@ -622,36 +638,104 @@ async function processApprovalAction(id, { action, remarks = '' }, actor = {}) {
 
   const now = new Date().toISOString();
   const normalizedAction = (action || '').toUpperCase().includes('APPROV') ? 'Approved' : 'Rejected';
-  const approverName = actor.name || actor.fullName || actor.email || 'Management Authority';
+  const finalApproverName = approverToCheck;
   const cleanRemarks = remarks ? String(remarks).trim() : '';
 
   item.status = normalizedAction;
-  item.approver_name = approverName;
+  item.approver_name = finalApproverName;
   item.approver_remarks = cleanRemarks;
   item.updated_at = now;
 
   if (!Array.isArray(item.history)) item.history = [];
   item.history.push({
     action: normalizedAction.toUpperCase(),
-    actor_name: approverName,
+    actor_name: finalApproverName,
     actor_role: actor.role || 'Executive Approver',
     timestamp: now,
-    remarks: cleanRemarks || `Request ${normalizedAction.toLowerCase()} by ${approverName}.`,
+    remarks: cleanRemarks || `Request ${normalizedAction.toLowerCase()} by ${finalApproverName}.`,
   });
 
-  // Buyer Credit Addition Workflow Integration (Section 8)
+  const rawObj = item.raw && typeof item.raw === 'object' ? { ...item.raw } : {};
+  rawObj.history = item.history;
+  rawObj.status = normalizedAction;
+  rawObj.approver_name = finalApproverName;
+  rawObj.approver_remarks = cleanRemarks;
+  rawObj.updated_at = now;
+  item.raw = rawObj;
+  const rawStr = JSON.stringify(rawObj);
+
+  // 2. Authoritative Database Update (Rule 1)
+  if (pool.hasStorage()) {
+    const updateSql = `
+      UPDATE approvals
+      SET status = $1, approver_name = $2, approver_remarks = $3, updated_at = $4, raw = $5::jsonb
+      WHERE id = $6 OR request_number = $6
+    `;
+    const d1UpdateSql = `
+      UPDATE approvals
+      SET status = $1, approver_name = $2, approver_remarks = $3, updated_at = $4, raw = $5
+      WHERE id = $6 OR request_number = $6
+    `;
+    try {
+      const updateRes = await pool.query(
+        updateSql,
+        [normalizedAction, finalApproverName, cleanRemarks, now, rawStr, item.id],
+        { d1: true, d1Text: d1UpdateSql }
+      );
+      if (updateRes && typeof updateRes.rowCount === 'number' && updateRes.rowCount === 0) {
+        const insertSql = `
+          INSERT INTO approvals (
+            id, request_number, module, project, applicant_name, applicant_email,
+            value_impact, maker_name, maker_role, status, details, approver_name, approver_remarks, raw, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16)
+        `;
+        const d1InsertSql = `
+          INSERT INTO approvals (
+            id, request_number, module, project, applicant_name, applicant_email,
+            value_impact, maker_name, maker_role, status, details, approver_name, approver_remarks, raw, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        `;
+        await pool.query(
+          insertSql,
+          [
+            item.id,
+            item.request_number,
+            item.module,
+            item.project,
+            item.applicant_name,
+            item.applicant_email,
+            item.value_impact,
+            item.maker_name,
+            item.maker_role,
+            normalizedAction,
+            item.details,
+            finalApproverName,
+            cleanRemarks,
+            rawStr,
+            item.created_at,
+            now,
+          ],
+          { d1: true, d1Text: d1InsertSql }
+        );
+      }
+    } catch (dbErr) {
+      // Do NOT show success unless database confirms update!
+      throw dbErr;
+    }
+  }
+
+  // 3. Credit Synchronization & Internal Task Integration (Rule 3)
+  const modLower = String(item.module || item.request_type || '').toLowerCase();
   const isCreditAddition =
-    String(item.module || '').toLowerCase().includes('credit') ||
-    String(item.request_type || '').toLowerCase().includes('credit') ||
-    Boolean(item.internal_task_id) ||
-    Boolean(item.buyer_id);
+    modLower.includes('credit') ||
+    Boolean(item.internal_task_id || item.buyer_id || item.seller_id);
 
   if (isCreditAddition && item.internal_task_id) {
     try {
       const internalTaskQueries = require('./internalTaskQueries');
-      if (normalizedAction === 'Approved' && internalTaskQueries.approveCreditTask) {
+      if (normalizedAction === 'Approved') {
         await internalTaskQueries.approveCreditTask(item.internal_task_id, actor, cleanRemarks);
-      } else if (normalizedAction === 'Rejected' && internalTaskQueries.rejectCreditTask) {
+      } else {
         await internalTaskQueries.rejectCreditTask(item.internal_task_id, actor, cleanRemarks);
       }
     } catch {
@@ -659,26 +743,107 @@ async function processApprovalAction(id, { action, remarks = '' }, actor = {}) {
     }
   }
 
-  // Update in database if pool is active
-  if (pool.hasStorage()) {
-    try {
-      const updateSql = `
-        UPDATE approvals
-        SET status = $1, approver_name = $2, approver_remarks = $3, updated_at = $4,
-            raw = jsonb_set(coalesce(raw, '{}'::jsonb), '{history}', $5::jsonb)
-        WHERE id = $6 OR request_number = $6
-      `;
-      await pool.query(
-        updateSql,
-        [normalizedAction, approverName, cleanRemarks, now, JSON.stringify(item.history), id],
-        { d1: true, d1Text: updateSql }
-      );
-    } catch {
-      // non-fatal if table not yet populated
+  if (normalizedAction === 'Approved' && pool.hasStorage()) {
+    const domainQueries = require('./domainQueries');
+    const creditQty = Number(item.amount || item.quantity) || 5;
+    const isSellerCredit = modLower.includes('seller') || Boolean(item.seller_id);
+    const isBuyerCredit = modLower.includes('buyer') || Boolean(item.buyer_id);
+
+    if (isSellerCredit) {
+      try {
+        const vRes = await pool.query(
+          'SELECT id, raw FROM vendors WHERE id = $1 OR email = $2 OR raw LIKE $3 LIMIT 1',
+          [
+            item.seller_id || item.id,
+            item.applicant_email || '',
+            `%${item.project || item.applicant_name}%`,
+          ],
+          { d1: true }
+        );
+        if (vRes?.rows?.length) {
+          const vRow = vRes.rows[0];
+          const vRaw = typeof vRow.raw === 'string' ? JSON.parse(vRow.raw || '{}') : (vRow.raw || {});
+          const currentBal = Number(vRaw.credits || vRaw.freeQuotationCredits || 0);
+          const newBal = currentBal + creditQty;
+          vRaw.freeQuotationCredits = newBal;
+          vRaw.freeRfqDownloadCredits = newBal;
+          vRaw.credits = newBal;
+          const vRawStr = JSON.stringify(vRaw);
+          const vSql = 'UPDATE vendors SET raw = $1::jsonb, updated_at = now() WHERE id = $2';
+          const vD1Sql = 'UPDATE vendors SET raw = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
+          await pool.query(vSql, [vRawStr, vRow.id], { d1: true, d1Text: vD1Sql });
+
+          const txId = `vtx-appr-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+          await domainQueries.recordCreditTransactionInDB({
+            id: txId,
+            vendorId: vRow.id,
+            rfqId: null,
+            transactionType: 'CREDIT_GRANT',
+            amount: creditQty,
+            balanceAfter: newBal,
+            idempotencyKey: `appr-${item.id}`,
+          });
+        }
+      } catch {
+        // non-fatal
+      }
+    } else if (isBuyerCredit) {
+      try {
+        const bRes = await pool.query(
+          'SELECT id, raw FROM buyer_accounts WHERE id = $1 OR corporate_email = $2 OR raw LIKE $3 LIMIT 1',
+          [
+            item.buyer_id || item.id,
+            item.applicant_email || '',
+            `%${item.project || item.applicant_name}%`,
+          ],
+          { d1: true }
+        );
+        if (bRes?.rows?.length) {
+          const bRow = bRes.rows[0];
+          const bRaw = typeof bRow.raw === 'string' ? JSON.parse(bRow.raw || '{}') : (bRow.raw || {});
+          const currentBal = Number(bRaw.creditBalance || bRow.available_credits || 0);
+          const newBal = currentBal + creditQty;
+          bRaw.creditBalance = newBal;
+          bRaw.available_credits = newBal;
+          bRaw.remainingFreeRFQs = newBal;
+          const bRawStr = JSON.stringify(bRaw);
+          const bSql = 'UPDATE buyer_accounts SET raw = $1::jsonb, updated_at = now() WHERE id = $2';
+          const bD1Sql = 'UPDATE buyer_accounts SET raw = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
+          await pool.query(bSql, [bRawStr, bRow.id], { d1: true, d1Text: bD1Sql });
+
+          const txId = `ctx-appr-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+          await domainQueries.recordBuyerCreditTransactionInDB({
+            id: txId,
+            buyerId: bRow.id,
+            rfqId: null,
+            transactionType: 'Admin Credit Addition',
+            creditSource: 'Action Center Approvals',
+            creditsAdded: creditQty,
+            creditsConsumed: 0,
+            previousBalance: currentBal,
+            updatedBalance: newBal,
+            status: 'COMPLETED',
+            description: `Approval ${item.request_number} granted ${creditQty} credits: ${cleanRemarks}`,
+            idempotencyKey: `appr-${item.id}`,
+          });
+        }
+      } catch {
+        // non-fatal
+      }
     }
   }
 
-  // Dispatch notification to requester if communication service is present
+  // 4. Invalidate Cache
+  if (queryCache && typeof queryCache.invalidate === 'function') {
+    queryCache.invalidate('approvals');
+    queryCache.invalidate('vendors');
+    queryCache.invalidate('vendor_credits');
+    queryCache.invalidate('buyer_accounts');
+    queryCache.invalidate('buyer_credits');
+    queryCache.invalidate('internal_tasks');
+  }
+
+  // 5. Dispatch notification to requester if communication service is present
   try {
     const actionCenterNotificationService = require('../services/actionCenterNotificationService');
     if (actionCenterNotificationService && actionCenterNotificationService.dispatchActionCenterCommunication) {
@@ -690,7 +855,7 @@ async function processApprovalAction(id, { action, remarks = '' }, actor = {}) {
           recipientEmail: item.applicant_email || 'requester@procucev.com',
           recipientName: item.maker_name || 'Requester',
           subject: `[Approval Update] Request ${item.request_number} has been ${normalizedAction}`,
-          message: `Your approval request ${item.request_number} (${item.value_impact}) has been ${normalizedAction.toLowerCase()} by ${approverName}. Remarks: ${cleanRemarks || 'None'}.`,
+          message: `Your approval request ${item.request_number} (${item.value_impact}) has been ${normalizedAction.toLowerCase()} by ${finalApproverName}. Remarks: ${cleanRemarks || 'None'}.`,
         },
         actor
       );
@@ -699,7 +864,7 @@ async function processApprovalAction(id, { action, remarks = '' }, actor = {}) {
     // Non-fatal notification error
   }
 
-  // Audit log insertion
+  // 6. Audit log insertion
   if (pool.hasStorage()) {
     try {
       const logId = `audit_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;

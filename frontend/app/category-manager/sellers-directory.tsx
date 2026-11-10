@@ -487,6 +487,22 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     records: [],
   });
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showColumnSettings) {
+          setShowColumnSettings(false);
+        } else if (summaryModalState.isOpen) {
+          setSummaryModalState((prev) => ({ ...prev, isOpen: false }));
+        } else if (activeSeller) {
+          setActiveSeller(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showColumnSettings, summaryModalState.isOpen, activeSeller]);
+
   const supplierPopupColumns = useMemo<ActionCenterSummaryPopupColumn<Record<string, unknown>>[]>(() => [
     {
       key: 'name',
@@ -879,8 +895,12 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           aria-modal="true"
           aria-label="Customize Columns"
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setShowColumnSettings(false)}
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]"
+          >
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
               <div className="flex items-center gap-2">
                 <Settings className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />

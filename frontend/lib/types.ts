@@ -483,8 +483,20 @@ export interface RFQItem {
   category: string;
   sourcingMode: SourcingMode;
   status: 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' | 'Quotes Pending' | 'Quotes Received' | 'Closed' | 'Expired';
+  isCancelled?: boolean;
   quotesCount: number;
   targetDeliveryDate: string;
+  submissionDeadline?: string;
+  majorCategory?: string;
+  minorCategory?: string;
+  minorCategories?: string[];
+  lineItems?: Array<{ description?: string; quantity?: number; targetPrice?: number; unit?: string; [key: string]: unknown }>;
+  dealTitle?: string;
+  productName?: string;
+  buyerOrganization?: string;
+  companyName?: string;
+  estimatedBudget?: number;
+  targetPrice?: number;
   /**
    * Budget ceiling, optional. Zero means the buyer did not state one: a document
    * that prices nothing yields no figure, and forcing a number there would put a
@@ -3013,6 +3025,8 @@ export interface SupplierCreditSummary {
   currentCreditBalance: number;
   isSubscribed: boolean;
   subscriptionPlan: string;
+  utilizationRate?: number;
+  totalQuotesSubmitted?: number;
 }
 
 export interface SupplierCreditTransaction {

@@ -164,6 +164,20 @@ export default function LoginLogsDashboard() {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectedLogForDetails) {
+          setSelectedLogForDetails(null);
+        } else if (showColumnSettings) {
+          setShowColumnSettings(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedLogForDetails, showColumnSettings]);
+
   // Real-time polling effect (every 15 seconds when active)
   useEffect(() => {
     if (!realtimeActive) return;
@@ -908,8 +922,16 @@ export default function LoginLogsDashboard() {
 
       {/* Session Details Modal */}
       {selectedLogForDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-xl relative animate-in fade-in zoom-in-95 duration-150">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4"
+          onClick={() => setSelectedLogForDetails(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-xl relative animate-in fade-in zoom-in-95 duration-150"
+          >
             <button
               type="button"
               onClick={() => setSelectedLogForDetails(null)}

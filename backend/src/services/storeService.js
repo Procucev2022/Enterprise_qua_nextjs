@@ -2008,6 +2008,20 @@ class StoreService {
       unlockedRfqIds: unlockedList,
     });
 
+    if (newCredits !== eligibility.freeCreditsRemaining) {
+      domainQueries.recordCreditTransactionInDB({
+        id: `vtx-quote-${vendor.id.slice(0, 5)}-${String(rfqId || Date.now()).slice(0, 8)}`,
+        vendorId: vendor.id,
+        rfqId: rfqId ? String(rfqId) : null,
+        transactionType: 'QUOTE_SUBMISSION',
+        amount: -1,
+        balanceAfter: newCredits,
+        idempotencyKey: `quote-${vendor.id}-${rfqId || Date.now()}`,
+      }).catch((err) => {
+        logger.warn('Failed to record credit transaction for quote submission', { vendorId: vendor.id, rfqId, error: err.message }, 'STORE_SERVICE');
+      });
+    }
+
     logger.info(
       `Quotation credit updated for vendor ${vendor.name || vendor.id}: remaining ${newCredits} (RFQ ${rfqId || 'N/A'}, subscribed: ${eligibility.isSubscribed}, buyerMapped: ${isBuyerMapped})`,
       { vendorId: vendor.id, freeQuotationCredits: newCredits, isSubscribed: eligibility.isSubscribed, isBuyerMapped },

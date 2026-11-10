@@ -1101,15 +1101,16 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
           role="dialog"
           aria-modal="true"
           aria-labelledby="vendor-modal-title"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setSelectedVendorId(null);
-              setDrillDownDismissed(true);
-            }
+          onClick={() => {
+            setSelectedVendorId(null);
+            setDrillDownDismissed(true);
           }}
           className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-fade-in"
         >
-          <div className="relative w-full max-w-4xl bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col animate-scale-in">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-4xl bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col animate-scale-in"
+          >
             {/* Modal Header */}
             <div className="p-5 border-b border-slate-100 dark:border-gray-800 flex items-start justify-between gap-3 bg-gradient-to-r from-slate-50 via-white to-slate-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
               <div className="flex items-start gap-3 min-w-0 flex-1">
