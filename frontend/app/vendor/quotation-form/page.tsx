@@ -10,15 +10,17 @@ function VendorQuotationFormContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const targetRfqParam = searchParams.get('rfq') || searchParams.get('id');
-  const { selectedVendorOpportunity, vendorOpportunities, rfqs, refreshRFQs, isLoadingDB } = useApp();
+  const { selectedVendorOpportunity, vendorOpportunities, rfqs, refreshRFQs, ensureRFQs, isLoadingDB } = useApp();
   const backToFeed = () => router.push('/vendor/opportunity-feed');
   const backToBidQuotes = () => router.push('/vendor/quotation-form');
 
+  const hasFetchedRef = React.useRef(false);
   React.useEffect(() => {
-    if (vendorOpportunities.length === 0 && typeof refreshRFQs === 'function') {
-      void refreshRFQs();
+    if (!hasFetchedRef.current && vendorOpportunities.length === 0 && typeof ensureRFQs === 'function') {
+      hasFetchedRef.current = true;
+      void ensureRFQs();
     }
-  }, [vendorOpportunities.length, refreshRFQs]);
+  }, [vendorOpportunities.length, ensureRFQs]);
 
   // Match targeted RFQ by query parameter if present
   let opportunity: VendorOpportunity | undefined = undefined;

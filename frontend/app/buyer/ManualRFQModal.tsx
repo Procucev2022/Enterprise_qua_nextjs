@@ -587,68 +587,6 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     if (!validateManualRFQForm(form).isValid) return;
 
     setIsSaving(true);
-    let mode1AssignedVendors: Array<{
-      id?: string;
-      name: string;
-      email?: string | null;
-      contactPerson?: string | null;
-      phone?: string | null;
-    }> | undefined = undefined;
-
-    if (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') {
-      if (Array.isArray(buyerVendors)) {
-        const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
-          ? buyerVendors.filter((v) => isBuyerUploaded(v))
-          : buyerVendors;
-        const { signals } = extractRfqCategorySignals(form);
-        const candidatePool = selectedVendorIds.length > 0
-          ? pool.filter((v) => selectedVendorIds.includes(v.id))
-          : pool;
-
-        const matchingVendors: typeof candidatePool = [];
-        const mismatchedVendors: typeof candidatePool = [];
-
-        for (const v of candidatePool) {
-          if (signals.length === 0 || matchVendorAgainstSignals(v, signals).isMatch) {
-            matchingVendors.push(v);
-          } else {
-            mismatchedVendors.push(v);
-          }
-        }
-
-        if (mismatchedVendors.length > 0) {
-          store?.showToast?.(
-            'Shortlist Adjusted',
-            `${mismatchedVendors.length} vendor(s) have category mismatches and were excluded from RFQ shortlist. Update request email dispatched.`,
-            'info'
-          );
-        }
-
-        const finalMatching = signals.length > 0
-          ? selectVendorsForCategories(
-              matchingVendors,
-              signals,
-              VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-              { location: form.deliveryLocation, pincode: form.deliveryPincode }
-            ).map((r) => r.vendor)
-          : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
-
-        if (finalMatching.length > 0) {
-          mode1AssignedVendors = finalMatching.map((v) => ({
-            id: v.id,
-            name: v.name || 'Enterprise Vendor',
-            email: v.email || null,
-            contactPerson: v.contactPerson || v.name || null,
-            phone: v.phone || (v as any).mobile || (v as any).mobileNumber || null,
-          }));
-        }
-      }
-      if (form.sourcingMode === RFQ_MODES.MODE_1 && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
-        setIsSaving(false);
-        setSubmitError(`${RFQ_MODE_LABELS[RFQ_MODES.MODE_1]} (Client Sourcing) requires at least one private vendor to be selected before creating the RFQ.`);
-        return;
-      }
-    }
 
     // Upload any pending attached documents to R2 on final RFQ submission if they were not already uploaded
     const alreadyUploadedFileNames = new Set((form.attachments || []).map((a) => a.fileName));
@@ -670,7 +608,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     const formWithFinalAttachments = { ...form, attachments: finalAttachments };
 
     const result = await createRFQ(
-      toRFQCreatePayload(formWithFinalAttachments, mode1AssignedVendors, hasExtracted ? 'ai_extraction' : 'manual_entry')
+      toRFQCreatePayload(formWithFinalAttachments, undefined, hasExtracted ? 'ai_extraction' : 'manual_entry')
     );
     setIsSaving(false);
 

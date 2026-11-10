@@ -3940,27 +3940,24 @@ class StoreService {
    * alone would route nothing.
    */
   _rfqCategorySignals(rfq) {
+    if (!rfq) return [];
+    const items = [
+      ...(Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []),
+      ...(Array.isArray(rfq.lineItems) ? rfq.lineItems : []),
+    ];
+
     const rawSignals = [];
     if (rfq.category) rawSignals.push(rfq.category);
-    for (const ent of Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []) {
+    if (rfq.minorCategory) rawSignals.push(rfq.minorCategory);
+    if (Array.isArray(rfq.minorCategories)) rawSignals.push(...rfq.minorCategories);
+
+    for (const ent of items) {
+      if (!ent) continue;
       if (ent.majorCategory) rawSignals.push(ent.majorCategory);
       if (ent.minorCategory) rawSignals.push(ent.minorCategory);
+      if (ent.subCategory) rawSignals.push(ent.subCategory);
       if (ent.category) rawSignals.push(ent.category);
       const text = [ent.description, ent.itemName, ent.name, ent.materialDescription].filter(Boolean).join(' ').toLowerCase();
-      if (text) {
-        if (text.includes('pipe') || text.includes('plumbing') || text.includes('fitting') || text.includes('flange') || text.includes('pvc')) {
-          rawSignals.push('Pipes & Pipe Fittings', 'Plumbing');
-        }
-        if (text.includes('bubble roll') || text.includes('bubble wrap') || text.includes('packing') || text.includes('corrugated')) {
-          rawSignals.push('Packing Material', 'Packaging Material');
-        }
-      }
-    }
-    for (const item of Array.isArray(rfq.lineItems) ? rfq.lineItems : []) {
-      if (item.majorCategory) rawSignals.push(item.majorCategory);
-      if (item.minorCategory) rawSignals.push(item.minorCategory);
-      if (item.category) rawSignals.push(item.category);
-      const text = [item.description, item.itemName, item.name, item.materialDescription].filter(Boolean).join(' ').toLowerCase();
       if (text) {
         if (text.includes('pipe') || text.includes('plumbing') || text.includes('fitting') || text.includes('flange') || text.includes('pvc')) {
           rawSignals.push('Pipes & Pipe Fittings', 'Plumbing');
@@ -3997,11 +3994,7 @@ class StoreService {
           if (m) expanded.add(m);
         }
       }
-
-      const parentMajor = MINOR_TO_MAJOR_MAP.get(lower);
-      if (parentMajor) {
-        expanded.add(parentMajor);
-      }
+      // Strictly do not expand minor category to parent major category.
     }
 
     return Array.from(expanded);
@@ -4112,18 +4105,15 @@ class StoreService {
     for (const ent of items) {
       if (!ent) continue;
       const minor = ent.minorCategory || ent.subCategory;
-      const major = ent.majorCategory || ent.category || rfq.majorCategory || rfq.category;
       if (minor && typeof minor === 'string' && minor.trim()) {
         const mTrimmed = minor.trim();
         const mKey = mTrimmed.toLowerCase();
         if (!seenMinors.has(mKey)) {
           seenMinors.add(mKey);
-          const resolvedMajor = (major && typeof major === 'string' && major.trim())
-            ? major.trim()
-            : (MINOR_TO_MAJOR_MAP.get(mKey) || null);
+          const parentMajor = MINOR_TO_MAJOR_MAP.get(mKey);
           groups.push({
             minorCategory: mTrimmed,
-            majorCategory: resolvedMajor,
+            majorCategory: ent.majorCategory || parentMajor || null,
           });
         }
       }
@@ -4135,10 +4125,10 @@ class StoreService {
       const mKey = mTrimmed.toLowerCase();
       if (!seenMinors.has(mKey)) {
         seenMinors.add(mKey);
-        const resolvedMajor = (rfq.majorCategory || rfq.category || MINOR_TO_MAJOR_MAP.get(mKey) || null);
+        const parentMajor = MINOR_TO_MAJOR_MAP.get(mKey);
         groups.push({
           minorCategory: mTrimmed,
-          majorCategory: resolvedMajor ? String(resolvedMajor).trim() : null,
+          majorCategory: parentMajor || null,
         });
       }
     }
@@ -4149,10 +4139,10 @@ class StoreService {
           const mKey = mTrimmed.toLowerCase();
           if (!seenMinors.has(mKey)) {
             seenMinors.add(mKey);
-            const resolvedMajor = (rfq.majorCategory || rfq.category || MINOR_TO_MAJOR_MAP.get(mKey) || null);
+            const parentMajor = MINOR_TO_MAJOR_MAP.get(mKey);
             groups.push({
               minorCategory: mTrimmed,
-              majorCategory: resolvedMajor ? String(resolvedMajor).trim() : null,
+              majorCategory: parentMajor || null,
             });
           }
         }
@@ -4183,8 +4173,8 @@ class StoreService {
   }
 
   /**
-   * Helper that extracts taxonomy groups (unique minor categories + fallback major category)
-   * from an RFQ and selects vendors according to the 25 per minor category + major fallback rule.
+   * Helper that extracts taxonomy groups (unique minor categories)
+   * from an RFQ and selects vendors strictly based on the Minor Category (capped at 25 per minor).
    *
    * @param {Array<Object>} candidatePool
    * @param {Object} rfq
@@ -4203,10 +4193,9 @@ class StoreService {
   }
 
   /**
-   * Selects candidate vendors for an RFQ ensuring balanced representation per unique category/minor category:
+   * Selects candidate vendors for an RFQ strictly based on Minor Category:
    * - Invites up to `maxPerCategory` (default 25) vendors per unique minor category.
-   * - Fallback: If fewer than `maxPerCategory` minor category vendors exist (e.g. 21 vendors),
-   *   the remaining (e.g. 4) are matched from the major category.
+   * - No fallback to major category: if fewer than 25 minor category vendors exist, exactly that count is invited.
    * - Prioritization within each category: Delivery location proximity (pincode, city, state), then vendor rating.
    * - Deduplicated across categories.
    *
@@ -4231,9 +4220,10 @@ class StoreService {
     for (const item of categories) {
       if (!item) continue;
       if (typeof item === 'object') {
+        const minor = item.minorCategory || null;
         groups.push({
-          minorCategory: item.minorCategory || null,
-          majorCategory: item.majorCategory || item.category || null,
+          minorCategory: minor,
+          majorCategory: minor ? null : (item.majorCategory || item.category || null),
         });
       } else if (typeof item === 'string' && item.trim()) {
         const str = item.trim();
@@ -4242,7 +4232,7 @@ class StoreService {
         if (parentMajor) {
           groups.push({
             minorCategory: str,
-            majorCategory: parentMajor,
+            majorCategory: null,
           });
         } else {
           groups.push({
@@ -4276,7 +4266,7 @@ class StoreService {
       const groupSeenKeys = new Set();
 
       if (minorCategory) {
-        // Step 1: Minor category matching
+        // Step 1: Minor category matching strictly
         const minorCandidates = candidatePool.filter((candidate) => {
           const v = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null) || candidate;
           return this.vendorCoversMinorCategory(v, minorCategory);
@@ -4292,29 +4282,9 @@ class StoreService {
             groupSelected.push(v);
           }
         }
-
-        // Step 2: Fallback to major category if minor count < limit
-        if (groupSelected.length < limit && majorCategory) {
-          const majorCandidates = candidatePool.filter((candidate) => {
-            const v = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null) || candidate;
-            const key = (v.id || v.email || v.name || '').toLowerCase().trim();
-            if (groupSeenKeys.has(key)) return false;
-            return this.vendorCoversCategory(v, majorCategory);
-          });
-
-          sortCandidates(majorCandidates);
-
-          for (const v of majorCandidates) {
-            if (groupSelected.length >= limit) break;
-            const key = (v.id || v.email || v.name || '').toLowerCase().trim();
-            if (key && !groupSeenKeys.has(key)) {
-              groupSeenKeys.add(key);
-              groupSelected.push(v);
-            }
-          }
-        }
+        // Major category fallback removed: strictly match minor category
       } else if (majorCategory) {
-        // Pure major category matching (no minor category specified)
+        // Pure major category matching (used only when no minor category is present)
         const majorCandidates = candidatePool.filter((candidate) => {
           const v = (candidate && candidate.id ? this.getVendorById(candidate.id, 'all') : null) || candidate;
           const hasCategory = Boolean(
@@ -4549,7 +4519,6 @@ class StoreService {
           );
         }
       }
-      // 2. Fallback: if category matching in DB returned nothing, fetch public vendors page
       if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
         try {
           const page = await domainQueries.getVendorsPageFromDB({
@@ -4577,8 +4546,12 @@ class StoreService {
     if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
       const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
       if (existing.length === 0) {
-        this.updateRFQ(rfq.id, { needsCategoryManagerAssignment: true });
+        this.updateRFQ(rfq.id, {
+          needsCategoryManagerAssignment: true,
+          procucevVendorCount: 0,
+        });
         rfq.needsCategoryManagerAssignment = true;
+        rfq.procucevVendorCount = 0;
       }
       return rfq;
     }
@@ -4821,23 +4794,6 @@ class StoreService {
           { rfqNumber: rfq.rfqNumber, error: err.message },
           'STORE_SERVICE'
         );
-      }
-      if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
-        try {
-          const page = await domainQueries.getVendorsPageFromDB({
-            limit,
-            offset: 0,
-            publicOnly: true,
-            skipCount: true,
-          });
-          dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
-        } catch (err) {
-          logger.warn(
-            'Auto-assign DB-backed network fallback query failed',
-            { rfqNumber: rfq.rfqNumber, error: err.message },
-            'STORE_SERVICE'
-          );
-        }
       }
     }
 
@@ -5157,9 +5113,21 @@ class StoreService {
       pincode: rfq?.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
       location: rfq?.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
     };
+    const hasMinorSignals = Boolean(
+      (rfq && rfq.minorCategory) ||
+      (rfq && Array.isArray(rfq.minorCategories) && rfq.minorCategories.length > 0) ||
+      (rfq && Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.some((e) => e && e.minorCategory)) ||
+      (rfq && Array.isArray(rfq.lineItems) && rfq.lineItems.some((e) => e && e.minorCategory))
+    );
     const candidates = this.vendors
       .filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq))
-      .filter((v) => signals.some((c) => this.vendorCoversCategory(v, c)))
+      .filter((v) => {
+        if (signals.length === 0) return true;
+        if (hasMinorSignals) {
+          return signals.some((sig) => this.vendorCoversMinorCategory(v, sig));
+        }
+        return signals.some((c) => this.vendorCoversCategory(v, c));
+      })
       .map((v) => ({ ...v, alreadyInvited: this._isInvitedVendor(v, rfq) }));
 
     if (destination.pincode || destination.location) {
@@ -5275,7 +5243,19 @@ class StoreService {
         (Array.isArray(vendor.vendorSelectedCategories) && vendor.vendorSelectedCategories.length > 0) ||
         (Array.isArray(vendor.clientMappedCategories) && vendor.clientMappedCategories.length > 0)
       );
-      const isMatch = signals.length === 0 || (hasCategory && signals.some((c) => this.vendorCoversCategory(vendor, c)));
+      const hasMinorSignals = Boolean(
+        (rfq && rfq.minorCategory) ||
+        (rfq && Array.isArray(rfq.minorCategories) && rfq.minorCategories.length > 0) ||
+        (rfq && Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.some((e) => e && e.minorCategory)) ||
+        (rfq && Array.isArray(rfq.lineItems) && rfq.lineItems.some((e) => e && e.minorCategory))
+      );
+      const isMatch = signals.length === 0 || (
+        hasCategory && (
+          hasMinorSignals
+            ? signals.some((c) => this.vendorCoversMinorCategory(vendor, c))
+            : signals.some((c) => this.vendorCoversCategory(vendor, c))
+        )
+      );
 
       if (!isMatch) {
         overrideVendors.push(vendor);

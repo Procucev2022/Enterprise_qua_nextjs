@@ -512,7 +512,10 @@ export interface RFQItem {
    * which is how the details page decides whether to show an "edited" timestamp.
    */
   updatedAt?: string;
+  minorCategory?: string;
+  minorCategories?: string[];
   extractedEntities: ExtractedEntity[];
+  lineItems?: any[];
   quotes: QuoteComparison[];
   chasingActive: boolean;
   chaserMethod?: 'WhatsApp' | 'Email' | 'SMS' | 'Call' | 'Multi-Channel';
