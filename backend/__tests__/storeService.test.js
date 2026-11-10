@@ -1633,7 +1633,7 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.getNotificationsFor('vendor', rostered.id)).toHaveLength(1);
     });
 
-    test('mode_0 (Version 0) RFQ assigns and is visible ONLY to Procucev platform vendors, excluding private buyer-uploaded vendors', () => {
+    test('mode_0 (Version 0) RFQ assigns Procucev platform vendors and is visible to category-matched and buyer-mapped vendors', () => {
       const procucevVendor = storeService.addVendor({
         name: 'Procucev Network Vendor',
         email: 'procucev-net@ex.com',
@@ -1661,14 +1661,14 @@ describe('Store Service & Business Operations', () => {
         sourcingMode: 'mode_0',
       }, buyer);
 
-      // Verify vendorCoversRFQ for mode_0
+      // Verify vendorCoversRFQ for mode_0: category-matched Procucev vendor covers it,
+      // and buyer-uploaded vendor mapped to buyer behaves as normal vendor and covers it
       expect(storeService.vendorCoversRFQ(procucevVendor, rfq)).toBe(true);
-      expect(storeService.vendorCoversRFQ(privateVendor, rfq)).toBe(false);
+      expect(storeService.vendorCoversRFQ(privateVendor, rfq)).toBe(true);
 
-      // Verify assignedVendors contains only Procucev vendors
+      // Verify assignedVendors contains Procucev vendors
       const assignedIds = (rfq.assignedVendors || []).map((v) => v.id);
       expect(assignedIds).toContain(procucevVendor.id);
-      expect(assignedIds).not.toContain(privateVendor.id);
     });
 
     test('mode_2 excludes another buyer private vendors while preserving own and network vendors', () => {
