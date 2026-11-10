@@ -115,6 +115,7 @@
   "env": {
     "dev": {
       "name": "procucev-enterprise-backend-stage",
+      "account_id": "0f0b77c43d76a2c5c5282e7e0f80b607",
       "vars": {
         "NODE_ENV": "development",
         "EMAIL_GATEWAY_ENABLED": "true",
