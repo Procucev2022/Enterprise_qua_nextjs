@@ -688,21 +688,21 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                           followUp?.whatsappStats?.delivered || 0,
                           Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
                         );
-                        const waRead = waDue ? (rawWaRead === 0 ? waTotal : rawWaRead) : rawWaRead;
+                        const waRead = waDue ? (rawWaRead > 0 ? rawWaRead : waTotal) : 0;
 
                         const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
                         const rawSmsDelivered = Math.max(
                           followUp?.smsStats?.delivered || 0,
                           Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
                         );
-                        const smsDelivered = smsDue ? (rawSmsDelivered === 0 ? smsTotal : rawSmsDelivered) : rawSmsDelivered;
+                        const smsDelivered = smsDue ? (rawSmsDelivered > 0 ? rawSmsDelivered : smsTotal) : 0;
 
                         const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
                         const rawEmailDelivered = Math.max(
                           followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
                           Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
                         );
-                        const emailDelivered = emailDue ? (rawEmailDelivered === 0 ? emailTotal : rawEmailDelivered) : rawEmailDelivered;
+                        const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
                         const totalInvited = Math.max(followUp?.totalInvited || 0, vCount);
                         const responded = followUp?.respondedCount || 0;
 
@@ -712,17 +712,17 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
                         return (
                           <>
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-300 border border-emerald-100 dark:border-emerald-800 flex items-center gap-1">
+                            <span title={`WhatsApp: ${waRead}/${waTotal}`} className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-300 border border-emerald-100 dark:border-emerald-800 flex items-center gap-1">
                               <MessageSquare size={10} className="shrink-0" />
-                              <span>{waRead}/{waTotal}</span>
+                              <span>WA {waRead}/{waTotal}</span>
                             </span>
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-sky-50 dark:bg-cyan-950/50 text-sky-600 dark:text-cyan-300 border border-sky-100 dark:border-cyan-800 flex items-center gap-1">
+                            <span title={`SMS: ${smsDelivered}/${smsTotal}`} className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-sky-50 dark:bg-cyan-950/50 text-sky-600 dark:text-cyan-300 border border-sky-100 dark:border-cyan-800 flex items-center gap-1">
                               <Smartphone size={10} className="shrink-0" />
-                              <span>{smsDelivered}/{smsTotal}</span>
+                              <span>SMS {smsDelivered}/{smsTotal}</span>
                             </span>
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-300 border border-amber-100 dark:border-amber-800 flex items-center gap-1">
+                            <span title={`Email: ${emailDelivered}/${emailTotal}`} className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-300 border border-amber-100 dark:border-amber-800 flex items-center gap-1">
                               <Mail size={10} className="shrink-0" />
-                              <span>{emailDelivered}/{emailTotal}</span>
+                              <span>Email {emailDelivered}/{emailTotal}</span>
                             </span>
                             <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-medium ml-1">
                               {responded}/{totalInvited} responded

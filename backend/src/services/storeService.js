@@ -2320,12 +2320,19 @@ class StoreService {
         if (emailDue) {
           v.emailSent = true;
           v.email24h = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        } else {
+          v.emailSent = false;
+          v.email24h = { status: 'pending' };
         }
         if (smsDue) {
           v.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        } else {
+          v.sms = { status: 'pending' };
         }
         if (waDue) {
           v.whatsapp = { status: 'delivered', lastAttempt: new Date().toISOString() };
+        } else {
+          v.whatsapp = { status: 'pending' };
         }
       });
     }
@@ -4587,11 +4594,12 @@ class StoreService {
         }
         if (vendor.email) {
           vEntry.email = vendor.email;
-          vEntry.emailSent = true;
-          vEntry.email24h = { status: 'delivered', lastAttempt: new Date().toISOString() };
+          vEntry.emailSent = false;
+          vEntry.email24h = { status: 'pending' };
         }
         if (vendor.phone) {
-          vEntry.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
+          vEntry.sms = { status: 'pending' };
+          vEntry.whatsapp = { status: 'pending' };
         }
       }
 
@@ -4837,14 +4845,12 @@ class StoreService {
           }
           if (vendor.email) {
             vEntry.email = vendor.email;
-            vEntry.emailSent = true;
-            vEntry.email24h = { status: 'delivered', lastAttempt: new Date().toISOString() };
+            vEntry.emailSent = false;
+            vEntry.email24h = { status: 'pending' };
           }
           if (vendor.phone) {
-            vEntry.sms = { status: 'delivered', lastAttempt: new Date().toISOString() };
-            if (updated.sourcingMode === 'mode_2' || updated.sourcingMode === 'mode_3') {
-              vEntry.whatsapp = { status: 'delivered', lastAttempt: new Date().toISOString() };
-            }
+            vEntry.sms = { status: 'pending' };
+            vEntry.whatsapp = { status: 'pending' };
           }
         }
 

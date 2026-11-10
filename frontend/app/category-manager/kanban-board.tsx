@@ -470,7 +470,7 @@ export default function KanbanBoard({
                     followUp?.whatsappStats?.delivered || 0,
                     Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v.whatsapp?.status === 'delivered' || v.whatsapp?.status === 'read').length : 0
                   );
-                  const waDelivered = waDue ? (rawWaDelivered === 0 ? waTotal : Math.max(rawWaDelivered, waTotal)) : rawWaDelivered;
+                  const waDelivered = waDue ? (rawWaDelivered > 0 ? rawWaDelivered : waTotal) : 0;
                   
                   const smsTotal = Math.max(followUp?.smsStats?.total || 0, totalVendors);
                   const vendorSmsCount = Array.isArray(followUp?.vendors)
@@ -480,7 +480,7 @@ export default function KanbanBoard({
                     followUp?.smsStats?.delivered || 0,
                     vendorSmsCount
                   );
-                  const smsDelivered = smsDue ? (rawSmsDelivered === 0 ? smsTotal : Math.max(rawSmsDelivered, smsTotal)) : rawSmsDelivered;
+                  const smsDelivered = smsDue ? (rawSmsDelivered > 0 ? rawSmsDelivered : smsTotal) : 0;
 
                   const emailTotal = Math.max(followUp?.emailStats?.total || 0, totalVendors);
                   const vendorEmailCount = Array.isArray(followUp?.vendors)
@@ -490,7 +490,7 @@ export default function KanbanBoard({
                     followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
                     vendorEmailCount
                   );
-                  const emailDelivered = emailDue ? (rawEmailDelivered === 0 ? emailTotal : Math.max(rawEmailDelivered, emailTotal)) : rawEmailDelivered;
+                  const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
 
                   return (
                     <div className="p-2 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-100 dark:border-gray-800/80 space-y-1.5 text-[10px]">

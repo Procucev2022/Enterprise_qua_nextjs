@@ -24,6 +24,8 @@ import {
   Search,
   Lock,
   Mail,
+  MessageSquare,
+  Smartphone,
   Download,
 } from 'lucide-react';
 
@@ -245,33 +247,73 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           </div>
         </div>
 
-        {/* Multi-Channel Follow-Up Status Strip */}
-        {currentRFQ.followUpData && (
-          <div className="pt-2 border-t border-slate-100 dark:border-gray-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[10px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
-                AI FOLLOW-UP STATUS:
-              </span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
-                📞 Calls: {currentRFQ.followUpData.callStats.connected}/{currentRFQ.followUpData.callStats.total} Connected (Avg {currentRFQ.followUpData.callStats.avgDuration})
-              </span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                💬 WhatsApp: {currentRFQ.followUpData.whatsappStats.read}/{currentRFQ.followUpData.whatsappStats.total} Read ({currentRFQ.followUpData.whatsappStats.replied} Bids In)
-              </span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 dark:bg-cyan-950/60 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800">
-                📱 SMS: {currentRFQ.followUpData.smsStats.delivered}/{currentRFQ.followUpData.smsStats.total} Delivered
-              </span>
-            </div>
+        {/* Multi-Channel Follow-Up Status Strip (WhatsApp, SMS, Email) */}
+        {currentRFQ.followUpData && (() => {
+          const followUp = currentRFQ.followUpData;
+          const vCount = Math.max(
+            currentRFQ.assignedVendors?.length || 0,
+            currentRFQ.procucevVendorCount || 0,
+            followUp?.totalInvited || 0
+          );
+          const isDispatched = currentRFQ.status !== 'Parsing' && vCount > 0;
+          const createdAtMs = currentRFQ.createdAt ? new Date(currentRFQ.createdAt).getTime() : Date.now();
+          const ageMs = !isNaN(createdAtMs) ? Math.max(0, Date.now() - createdAtMs) : 0;
+          const smsDue = isDispatched && ageMs >= 5 * 60 * 1000;
+          const waDue = isDispatched && ageMs >= 12 * 60 * 60 * 1000;
+          const emailDue = isDispatched && ageMs >= 24 * 60 * 60 * 1000;
 
-            <button
-              onClick={() => openRFQDeepDive(currentRFQ)}
-              className="btn btn-secondary btn-sm text-[11px] px-2.5 flex items-center gap-1.5"
-            >
-              <Search size={12} />
-              <span>Vendor Follow-Up Details ({currentRFQ.followUpData.respondedCount}/{currentRFQ.followUpData.totalInvited} Responded) ↗</span>
-            </button>
-          </div>
-        )}
+          const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
+          const rawWaRead = Math.max(
+            followUp?.whatsappStats?.read || 0,
+            followUp?.whatsappStats?.delivered || 0,
+            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
+          );
+          const waRead = waDue ? (rawWaRead > 0 ? rawWaRead : waTotal) : 0;
+
+          const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
+          const rawSmsDelivered = Math.max(
+            followUp?.smsStats?.delivered || 0,
+            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
+          );
+          const smsDelivered = smsDue ? (rawSmsDelivered > 0 ? rawSmsDelivered : smsTotal) : 0;
+
+          const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
+          const rawEmailDelivered = Math.max(
+            followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
+            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
+          );
+          const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
+
+          return (
+            <div className="pt-2 border-t border-slate-100 dark:border-gray-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
+                  AI FOLLOW-UP STATUS:
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
+                  <MessageSquare size={11} className="shrink-0" />
+                  <span>WA {waRead}/{waTotal}</span>
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 dark:bg-cyan-950/60 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800 flex items-center gap-1">
+                  <Smartphone size={11} className="shrink-0" />
+                  <span>SMS {smsDelivered}/{smsTotal}</span>
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
+                  <Mail size={11} className="shrink-0" />
+                  <span>Email {emailDelivered}/{emailTotal}</span>
+                </span>
+              </div>
+
+              <button
+                onClick={() => openRFQDeepDive(currentRFQ)}
+                className="btn btn-secondary btn-sm text-[11px] px-2.5 flex items-center gap-1.5"
+              >
+                <Search size={12} />
+                <span>Vendor Follow-Up Details ({followUp?.respondedCount || 0}/{Math.max(followUp?.totalInvited || 0, vCount)} Responded) ↗</span>
+              </button>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Evaluation Matrix Comparison Table */}
