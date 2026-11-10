@@ -440,6 +440,93 @@ describe('Backend LoggerService Unit Tests', () => {
     }
   });
 
+  test('records database log sink failures to disk and throttles fallback diagnostics', async () => {
+    const prevNodeEnv = process.env.NODE_ENV;
+    const pool = require('../src/db/pool');
+    const d1Bridge = require('../src/db/d1Bridge');
+    const querySpy = jest.spyOn(pool, 'query').mockRejectedValue(new Error('Database sink failed for admin@example.com'));
+    const storageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const overloadSpy = jest.spyOn(d1Bridge, 'isD1Overloaded').mockReturnValue(false);
+    const waitUntilSpy = jest.spyOn(d1Bridge, 'getWaitUntil').mockReturnValue(null);
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const initialTime = Date.now();
+    let currentTime = initialTime;
+    const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => currentTime);
+
+    try {
+      process.env.NODE_ENV = 'production';
+      LoggerService.resetDbLoggingRateLimit();
+      const sourceEntry = {
+        id: 'source-error-1',
+        level: 'ERROR',
+        category: 'AUTH',
+        message: 'Authentication record failed',
+        metadata: {},
+      };
+
+      await testLogger.persistToDatabase(sourceEntry);
+      await testLogger.persistToDatabase(sourceEntry);
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+
+      currentTime += 60 * 1000 + 1;
+      await testLogger.persistToDatabase(sourceEntry);
+      querySpy.mockImplementationOnce(() => {
+        throw new Error('Synchronous database sink failure');
+      });
+      currentTime += 60 * 1000 + 1;
+      await testLogger.persistToDatabase(sourceEntry);
+      querySpy.mockRejectedValueOnce('Non-error database sink failure');
+      currentTime += 60 * 1000 + 1;
+      await testLogger.persistToDatabase({ ...sourceEntry, level: undefined, category: undefined, correlationId: 'sink-correlation-1' });
+
+      const diagnostics = fs.readFileSync(path.join(testLogsDir, 'error.log'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(4);
+      expect(diagnostics).toHaveLength(4);
+      expect(diagnostics[0]).toEqual(expect.objectContaining({
+        category: 'DATABASE_LOG_STORAGE',
+        metadata: expect.objectContaining({
+          operation: 'persist_critical_log',
+          sourceCategory: 'AUTH',
+          errorName: 'Error',
+        }),
+      }));
+      expect(diagnostics[0].metadata.errorMessage).toContain('a***@example.com');
+      expect(diagnostics[1].metadata.suppressedFailures).toBe(1);
+      expect(diagnostics[2].metadata.errorMessage).toBe('Synchronous database sink failure');
+      expect(diagnostics[3].metadata).toEqual(expect.objectContaining({
+        sourceLevel: 'UNKNOWN',
+        sourceCategory: 'SYSTEM',
+        errorMessage: 'Non-error database sink failure',
+      }));
+      expect(diagnostics[3].correlationId).toBe('sink-correlation-1');
+      expect(JSON.stringify(diagnostics)).not.toContain('admin@example.com');
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+      querySpy.mockRestore();
+      storageSpy.mockRestore();
+      overloadSpy.mockRestore();
+      waitUntilSpy.mockRestore();
+      consoleErrorSpy.mockRestore();
+      nowSpy.mockRestore();
+      LoggerService.resetDbLoggingRateLimit();
+    }
+  });
+
+  test('does not report database sink fallback failures inside tests', () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      testLogger.reportDatabaseFailure(new Error('test database sink failure'), { category: 'TEST' });
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(testLogsDir, 'error.log'))).toBe(false);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   test('handles readdirSync failure in getLogStats and directory resolution fallback', () => {
     const readdirSpy = jest.spyOn(fs, 'readdirSync').mockImplementation(() => {
       throw new Error('Disk unreadable');

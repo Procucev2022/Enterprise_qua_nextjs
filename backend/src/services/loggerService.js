@@ -85,6 +85,8 @@ class LoggerService {
     this.writesSincePurge = 0;
     this.lastPurgeAt = 0;
     this.lastDiskFailureNotificationAt = 0;
+    this.lastDatabaseFailureNotificationAt = 0;
+    this.suppressedDatabaseFailureCount = 0;
 
     this.ensureLogsDirectory();
   }
@@ -127,6 +129,45 @@ class LoggerService {
       ? { errorName: error.name, errorMessage: error.message, stackTrace: error.stack }
       : { errorMessage: String(error) };
     console.error(`[ERROR] [LOCAL_LOG_STORAGE] ${operation} failed ${JSON.stringify(detail)}`);
+  }
+
+  reportDatabaseFailure(error, entry = {}) {
+    if (process.env.NODE_ENV === 'test') return;
+
+    const now = Date.now();
+    if (now - this.lastDatabaseFailureNotificationAt < 60 * 1000) {
+      this.suppressedDatabaseFailureCount += 1;
+      return;
+    }
+    this.lastDatabaseFailureNotificationAt = now;
+
+    const errorDetails = error instanceof Error
+      ? { errorName: error.name, errorMessage: error.message }
+      : { errorMessage: String(error) };
+    const metadata = redactLogValue({
+      operation: 'persist_critical_log',
+      sourceLevel: entry.level || 'UNKNOWN',
+      sourceCategory: entry.category || 'SYSTEM',
+      ...errorDetails,
+      ...(this.suppressedDatabaseFailureCount > 0
+        ? { suppressedFailures: this.suppressedDatabaseFailureCount }
+        : {}),
+    });
+    this.suppressedDatabaseFailureCount = 0;
+
+    const diagnosticEntry = {
+      id: `log-db-storage-${now}-${crypto.randomBytes(3).toString('hex')}`,
+      timestamp: this.formatTimestamp(),
+      level: 'ERROR',
+      category: 'DATABASE_LOG_STORAGE',
+      message: 'Failed to persist a critical application log to the database',
+      metadata,
+      correlationId: entry.correlationId || `corr-${now}`,
+      userEmail: 'system@procucev.ai',
+      ipAddress: '127.0.0.1 (Local Environment)',
+    };
+    this.writeToDisk(diagnosticEntry);
+    console.error(`[ERROR] [DATABASE_LOG_STORAGE] ${diagnosticEntry.message} ${JSON.stringify(metadata)}`);
   }
 
   formatTimestamp(date = new Date()) {
@@ -298,12 +339,15 @@ class LoggerService {
         metaStr,
         entry.timestamp || new Date().toISOString(),
       ];
-      const p = pool.query(sql, params, { d1: true, d1Text: sql }).catch(() => {});
+      const p = pool.query(sql, params, { d1: true, d1Text: sql }).catch((error) => {
+        this.reportDatabaseFailure(error, entry);
+      });
       const { getWaitUntil } = require('../db/d1Bridge');
       const waitUntil = getWaitUntil();
       if (waitUntil) waitUntil(p);
-    } catch {
-      // Safe non-fatal error log persistence
+      return p;
+    } catch (error) {
+      this.reportDatabaseFailure(error, entry);
     }
   }
 

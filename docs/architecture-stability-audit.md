@@ -553,3 +553,10 @@ Latest full `npm run check:quality` after these fixes passed. Backend: 5,168 tes
 - HTTP failures now log the operation and status; rejected requests log the operation and error class. Both paths omit the vendor email and retain the existing feed fallback.
 - Regression coverage verifies both failure classes, metadata privacy, and continued RFQ rendering.
 - Focused frontend coverage passed 44 tests. The full quality gate passed on 2026-11-10: backend 208 suites / 5,935 tests and frontend 149 suites / 3,778 tests; all 161 backend and 171 frontend executable files met every 90% per-file threshold. Build, typecheck, lint, schema parity, schema checker regressions, and schema-file verification passed. Live database migration was skipped by the quality pipeline.
+
+## Database log sink failure visibility
+
+- Critical log persistence previously ignored both asynchronous database rejections and synchronous sink setup failures. The original error remained in the application logger, but the failure to save it to `system_error_logs` was invisible.
+- Database sink failures now generate a redacted, rate-limited fallback diagnostic. The diagnostic is appended to local `app.log`/`error.log` when disk logging is available and emitted to stdout; repeated failures are summarized in the next diagnostic.
+- Regression coverage exercises asynchronous and synchronous failure paths, redaction, local fallback persistence, and throttling.
+- Full workspace quality gate passed on 2026-11-10: backend 208 suites / 5,937 tests and frontend 149 suites / 3,778 tests; all 161 backend and 171 frontend executable files met every per-file 90% threshold. Build, typecheck, lint, schema parity, schema checker regressions, and schema-file verification passed. Live database migration was skipped by the quality pipeline.
